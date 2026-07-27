@@ -110,6 +110,15 @@ surface, since with zero sessions there are no orbs to right-click:
   (see the pruning note below).
 - **Quit Claude Buddy**.
 
+On macOS the menu opens on a left-click of the menu-bar icon. On Windows it's
+a **right-click**, and there's one wrinkle worth knowing: Windows 11 does not
+put newly registered tray icons on the taskbar. It files them in the hidden
+overflow behind the **`^`** chevron, so after the first launch you'll find
+Claude Buddy there — drag it onto the taskbar once to pin it (that's what
+sets `IsPromoted` in `HKCU\Control Panel\NotifyIconSettings`, which Windows
+then remembers). Nothing to configure in the app; it's how Windows 11 treats
+every new icon.
+
 It works by watching a small folder in the OS temp directory
 (`%TEMP%\claude_buddy\` on Windows, `$TMPDIR/claude_buddy/` on macOS) that
 fills up with one JSON status file per session — `<session_id>.txt`,
@@ -292,6 +301,18 @@ with `grep`.
 records as the bash one, but a WSL session's `transcript_path` is a Linux path
 that `powershell.exe` can't open, so those orbs keep the folder-name fallback
 and the plain border. Native Windows sessions get both normally.
+
+**Encoding, on Windows PowerShell 5.1 specifically**: the hook reads the
+transcript with `-Encoding UTF8` and writes its status file with
+`[System.IO.File]::WriteAllText` and a no-BOM `UTF8Encoding`, rather than
+`Get-Content`/`Set-Content` defaults. Both are load-bearing and were caught on
+a real Windows box: 5.1 reads UTF-8 as the ANSI codepage (turning `café` into
+`cafÃ©`) and writes ANSI on the way out (turning it into `caf?` — actual data
+loss, since chat names carry em dashes and accents far more often than paths
+do). The BOM matters too: `System.Text.Json` treats a leading BOM as an
+invalid start of value, so a BOM would make the app skip the file and drop
+that orb entirely. PowerShell 7 defaults are already correct; being explicit
+is right on both.
 
 **WSL** (hooks execute via a Linux shell that then calls out to Windows):
 `claude-hooks-snippet-wsl.json` uses `powershell.exe`'s full path
