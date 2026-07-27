@@ -8,11 +8,53 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 $sessionId = 'unknown'
 $cwd = ''
+$transcript = ''
 try {
     $payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
     if ($payload.session_id) { $sessionId = $payload.session_id }
     if ($payload.cwd) { $cwd = $payload.cwd }
+    if ($payload.transcript_path) { $transcript = $payload.transcript_path }
 } catch {}
+
+# What the chat is called and what color it's been given. Claude Code keeps
+# all three of these in the transcript, re-emitting them as the session goes:
+#   {"type":"custom-title","customTitle":"claude-buddy",...}   <- /rename
+#   {"type":"ai-title","aiTitle":"Package app with a tray",...} <- auto-named
+#   {"type":"agent-color","agentColor":"green",...}             <- /color
+# A name set with /rename wins over the generated one regardless of which was
+# written last; a session with neither falls back to the directory name.
+#
+# WSL sessions land here with a Linux transcript path this script can't read,
+# so they keep the folder-name fallback — see the platform notes in README.
+$title = ''
+$color = ''
+if ($State -ne 'ended' -and $transcript -and (Test-Path $transcript)) {
+    try {
+        # Read the tail first: transcripts reach tens of MB and this runs on
+        # every tool call. Only scan the whole file when a long run of tool
+        # output has pushed all three records out of that window.
+        $pattern = '^\{"type":"(custom-title|ai-title|agent-color)"'
+        $meta = Get-Content -Path $transcript -Tail 400 | Where-Object { $_ -match $pattern }
+        if (-not $meta) {
+            $meta = Get-Content -Path $transcript | Where-Object { $_ -match $pattern }
+        }
+
+        $newest = {
+            param($type)
+            $meta | Where-Object { $_.StartsWith('{"type":"' + $type + '"') } | Select-Object -Last 1
+        }
+
+        $line = & $newest 'custom-title'
+        if ($line) { $title = ($line | ConvertFrom-Json).customTitle }
+        if (-not $title) {
+            $line = & $newest 'ai-title'
+            if ($line) { $title = ($line | ConvertFrom-Json).aiTitle }
+        }
+
+        $line = & $newest 'agent-color'
+        if ($line) { $color = ($line | ConvertFrom-Json).agentColor }
+    } catch {}
+}
 
 $dir = Join-Path $env:TEMP 'claude_buddy'
 if (-not (Test-Path $dir)) {
@@ -54,6 +96,8 @@ try {
 $status = @{
     state        = $State
     cwd          = $cwd
+    title        = $title
+    color        = $color
     term_program = $termProgram
     term_pid     = $termPid
 } | ConvertTo-Json -Compress
