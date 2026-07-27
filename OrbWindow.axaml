@@ -18,7 +18,10 @@
     <Grid x:Name="Root" Background="Transparent">
         <Grid.ContextMenu>
             <ContextMenu>
+                <!-- Chat name, then its directory. The path row hides itself
+                     when there's no name yet, since it'd just repeat. -->
                 <MenuItem x:Name="SessionInfoItem" IsEnabled="False"/>
+                <MenuItem x:Name="SessionPathItem" IsEnabled="False"/>
                 <Separator/>
                 <MenuItem Header="Reset this session to idle" Click="ResetIdle_Click"/>
                 <MenuItem Header="Exit Claude Buddy" Click="Exit_Click"/>

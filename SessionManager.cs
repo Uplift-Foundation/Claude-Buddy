@@ -16,6 +16,18 @@ namespace ClaudeBuddy
         [JsonPropertyName("cwd")]
         public string Cwd { get; set; } = "";
 
+        // What Claude Code calls this chat (its own generated title), empty
+        // until a session has been going long enough to be named. Everything
+        // user-facing prefers it and falls back to the cwd's folder name.
+        [JsonPropertyName("title")]
+        public string Title { get; set; } = "";
+
+        // The session's /color, as a name ("green"). Empty when it hasn't been
+        // given one. Drives the orb's border and letter — never its fill,
+        // which stays reserved for state. See OrbWindow.ApplyAccent.
+        [JsonPropertyName("color")]
+        public string Color { get; set; } = "";
+
         // Where the session's terminal lives (macOS hook only; empty on
         // Windows or with an older hook script). See TerminalFocuser.
         [JsonPropertyName("term_program")]
@@ -26,6 +38,20 @@ namespace ClaudeBuddy
 
         [JsonPropertyName("tty")]
         public string Tty { get; set; } = "";
+
+        // Set only when the session runs inside tmux (macOS hook). The pane id
+        // ("%3") is server-unique and outlives window/session renames; the
+        // socket pins which tmux server, and tmux_bin is where the hook found
+        // the tmux binary (the app can't rely on PATH — launched from Finder
+        // it doesn't have Homebrew's). See TerminalFocuser.
+        [JsonPropertyName("tmux_socket")]
+        public string TmuxSocket { get; set; } = "";
+
+        [JsonPropertyName("tmux_pane")]
+        public string TmuxPane { get; set; } = "";
+
+        [JsonPropertyName("tmux_bin")]
+        public string TmuxBin { get; set; } = "";
 
         // Windows hook only: PID of the terminal process that owns a window.
         [JsonPropertyName("term_pid")]
@@ -48,7 +74,14 @@ namespace ClaudeBuddy
             Path.Combine(Path.GetTempPath(), "claude_buddy");
 
         private readonly Dictionary<string, OrbWindow> _windows = new();
+        private readonly Dictionary<string, SessionStatus> _statuses = new();
         private readonly List<string> _order = new(); // stable stacking order
+
+        private TrayController? _tray;
+
+        // Orbs can be hidden from the tray menu; sessions keep being tracked
+        // either way, so the tray icon and its menu stay accurate.
+        public bool OrbsVisible { get; private set; } = true;
 
         private FileSystemWatcher? _watcher;
         private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -58,6 +91,8 @@ namespace ClaudeBuddy
         {
             Instance = this;
             Directory.CreateDirectory(_statusDir);
+
+            _tray = new TrayController();
 
             StartWatching();
 
@@ -156,13 +191,14 @@ namespace ClaudeBuddy
                 }
 
                 seen.Add(sessionId);
+                _statuses[sessionId] = status;
 
                 if (!_windows.TryGetValue(sessionId, out var window))
                 {
                     window = new OrbWindow(sessionId);
                     _windows[sessionId] = window;
                     _order.Add(sessionId);
-                    window.Show();
+                    if (OrbsVisible) window.Show();
                     setChanged = true;
                 }
 
@@ -174,6 +210,7 @@ namespace ClaudeBuddy
             {
                 _windows[id].Close();
                 _windows.Remove(id);
+                _statuses.Remove(id);
                 _order.Remove(id);
                 setChanged = true;
             }
@@ -182,11 +219,38 @@ namespace ClaudeBuddy
             {
                 ReflowPositions();
             }
+
+            UpdateTray();
+        }
+
+        private void UpdateTray()
+        {
+            // Feed the tray in stacking order so the menu reads top-to-bottom
+            // like the orbs do on screen.
+            _tray?.Update(_order
+                .Where(_statuses.ContainsKey)
+                .Select(id => new TrayController.SessionEntry(id, _statuses[id]))
+                .ToList());
+        }
+
+        public void SetOrbsVisible(bool visible)
+        {
+            if (OrbsVisible == visible) return;
+            OrbsVisible = visible;
+
+            foreach (var window in _windows.Values)
+            {
+                if (visible) window.Show();
+                else window.Hide();
+            }
+
+            if (visible) ReflowPositions();
+            UpdateTray();
         }
 
         private void ReflowPositions()
         {
-            if (_order.Count == 0) return;
+            if (_order.Count == 0 || !OrbsVisible) return;
 
             var first = _windows[_order[0]];
             var screen = first.Screens.Primary ?? first.Screens.All.FirstOrDefault();
@@ -228,9 +292,21 @@ namespace ClaudeBuddy
             }
             catch { }
 
+            _statuses[sessionId] = reset;
+
             if (_windows.TryGetValue(sessionId, out var window))
             {
                 window.UpdateFrom(reset);
+            }
+
+            UpdateTray();
+        }
+
+        public void ResetAllSessionsToIdle()
+        {
+            foreach (var sessionId in _order.ToList())
+            {
+                ResetSessionToIdle(sessionId);
             }
         }
     }
