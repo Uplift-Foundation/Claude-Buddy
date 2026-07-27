@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json.Serialization;
-using System.Windows;
-using System.Windows.Threading;
+using Avalonia;
+using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
@@ -15,6 +15,21 @@ namespace ClaudeBuddy
 
         [JsonPropertyName("cwd")]
         public string Cwd { get; set; } = "";
+
+        // Where the session's terminal lives (macOS hook only; empty on
+        // Windows or with an older hook script). See TerminalFocuser.
+        [JsonPropertyName("term_program")]
+        public string TermProgram { get; set; } = "";
+
+        [JsonPropertyName("term_id")]
+        public string TermId { get; set; } = "";
+
+        [JsonPropertyName("tty")]
+        public string Tty { get; set; } = "";
+
+        // Windows hook only: PID of the terminal process that owns a window.
+        [JsonPropertyName("term_pid")]
+        public int TermPid { get; set; }
     }
 
     // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude
@@ -67,9 +82,9 @@ namespace ClaudeBuddy
                     NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.FileName,
                     EnableRaisingEvents = true
                 };
-                _watcher.Changed += (_, _) => Application.Current.Dispatcher.Invoke(RestartDebounce);
-                _watcher.Created += (_, _) => Application.Current.Dispatcher.Invoke(RestartDebounce);
-                _watcher.Deleted += (_, _) => Application.Current.Dispatcher.Invoke(RestartDebounce);
+                _watcher.Changed += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+                _watcher.Created += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
+                _watcher.Deleted += (_, _) => Dispatcher.UIThread.Post(RestartDebounce);
             }
             catch
             {
@@ -171,31 +186,42 @@ namespace ClaudeBuddy
 
         private void ReflowPositions()
         {
-            var workArea = SystemParameters.WorkArea;
-            const double size = 56;
-            const double spacing = 12;
-            const double margin = 24;
+            if (_order.Count == 0) return;
+
+            var first = _windows[_order[0]];
+            var screen = first.Screens.Primary ?? first.Screens.All.FirstOrDefault();
+            if (screen is null) return;
+
+            // WorkingArea and Window.Position are in physical pixels; the
+            // 56/12/24 design sizes are DIPs, so scale them.
+            var work = screen.WorkingArea;
+            var scale = screen.Scaling;
+            int size = (int)(56 * scale);
+            int spacing = (int)(12 * scale);
+            int margin = (int)(24 * scale);
 
             for (int i = 0; i < _order.Count; i++)
             {
                 var window = _windows[_order[i]];
-                window.Left = workArea.Right - size - margin;
-                window.Top = workArea.Top + margin + i * (size + spacing);
+                window.Position = new PixelPoint(
+                    work.Right - size - margin,
+                    work.Y + margin + i * (size + spacing));
             }
         }
 
         public void ResetSessionToIdle(string sessionId)
         {
             var file = Path.Combine(_statusDir, sessionId + ".txt");
-            var cwd = "";
+            SessionStatus? existing = null;
             try
             {
-                var existing = System.Text.Json.JsonSerializer.Deserialize<SessionStatus>(File.ReadAllText(file));
-                if (existing is not null) cwd = existing.Cwd;
+                existing = System.Text.Json.JsonSerializer.Deserialize<SessionStatus>(File.ReadAllText(file));
             }
             catch { }
 
-            var reset = new SessionStatus { State = "idle", Cwd = cwd };
+            // Keep everything but the state (cwd, terminal info) intact.
+            var reset = existing ?? new SessionStatus();
+            reset.State = "idle";
             try
             {
                 File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(reset));
