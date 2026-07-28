@@ -102,8 +102,10 @@ namespace ClaudeBuddy
 
             // No client attached anywhere: the pane is now selected, so the
             // session is waiting correctly for whenever it's next attached,
-            // but there's no window to bring forward.
-            if (client is null) return true;
+            // but there's no window to bring forward. Report that we didn't
+            // activate anything so the caller can still try its own heuristics
+            // rather than treating the click as handled.
+            if (client is null) return false;
 
             var (clientTty, controlMode) = client.Value;
             var app = ResolveAppBundleForTty(clientTty);
@@ -123,10 +125,22 @@ namespace ClaudeBuddy
                 _ => null
             };
 
-            if (script is not null) RunOsaScript(script);
-            else if (app is not null) ActivateApp(app);
+            if (script is not null)
+            {
+                RunOsaScript(script);
+                return true;
+            }
 
-            return true;
+            if (app is not null)
+            {
+                ActivateApp(app);
+                return true;
+            }
+
+            // Couldn't work out which app owns the client's tty. The pane is
+            // selected, but nothing was brought forward — say so, so the
+            // caller falls through instead of swallowing the click.
+            return false;
         }
 
         // Works for any terminal without a case per app: `open -a` on a running
@@ -276,7 +290,13 @@ namespace ClaudeBuddy
                 using var process = Process.Start(psi);
                 if (process is null) return false;
 
-                stdout = process.StandardOutput.ReadToEnd();
+                // Read both pipes concurrently and only then wait. Doing a
+                // blocking ReadToEnd() first would make the timeout below
+                // unreachable — it returns when the pipe closes, which a wedged
+                // child never does — and leaving stderr undrained can deadlock
+                // a chatty one once its pipe buffer fills.
+                var outTask = process.StandardOutput.ReadToEndAsync();
+                var errTask = process.StandardError.ReadToEndAsync();
 
                 // A wedged tmux server would otherwise hang this click forever.
                 if (!process.WaitForExit(3000))
@@ -284,6 +304,9 @@ namespace ClaudeBuddy
                     try { process.Kill(true); } catch { }
                     return false;
                 }
+
+                stdout = outTask.GetAwaiter().GetResult();
+                errTask.GetAwaiter().GetResult();
 
                 return process.ExitCode == 0;
             }
@@ -366,11 +389,17 @@ namespace ClaudeBuddy
 
         // property is "id" (a session UUID recorded by the hook) or "tty" (the
         // live tty of an attached tmux client). Both are iTerm2 session
-        // properties; a no-match just leaves iTerm activated, which is still
-        // better than nothing.
+        // properties; a no-match still activates, which is better than nothing.
+        //
+        // `activate` MUST come last, after the selects — this is load-bearing,
+        // not style. Activating first and then selecting focuses the window in
+        // place and macOS never follows to the Space that window lives on, so a
+        // click from another desktop appears to do nothing. Selecting first and
+        // activating last makes macOS switch Spaces. (Verified from a second
+        // desktop: activate-only switches, activate-then-select doesn't,
+        // select-then-activate does.)
         private static string ITermSelectScript(string property, string value) => $$"""
             tell application "iTerm"
-                activate
                 repeat with w in windows
                     repeat with t in tabs of w
                         repeat with s in sessions of t
@@ -378,28 +407,33 @@ namespace ClaudeBuddy
                                 select w
                                 select t
                                 select s
+                                activate
                                 return
                             end if
                         end repeat
                     end repeat
                 end repeat
+                activate
             end tell
             """;
 
         // Accepts either form the two paths produce: a bare "ttys004" from the
         // hook, or a "/dev/ttys004" client tty from tmux.
+        //
+        // `activate` last, for the same Spaces reason as ITermSelectScript.
         private static string TerminalSelectScript(string tty) => $$"""
             tell application "Terminal"
-                activate
                 repeat with w in windows
                     repeat with t in tabs of w
                         if tty of t is "{{(tty.StartsWith("/dev/") ? tty : "/dev/" + tty)}}" then
                             set selected of t to true
                             set index of w to 1
+                            activate
                             return
                         end if
                     end repeat
                 end repeat
+                activate
             end tell
             """;
     }
