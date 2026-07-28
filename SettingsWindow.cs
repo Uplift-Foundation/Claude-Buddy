@@ -307,6 +307,13 @@ namespace ClaudeBuddy
 
         public static void SetRegular()
         {
+            // Apply() no-ops on non-macOS, but SharedApplication() below goes
+            // straight to a P/Invoke against libobjc with no such guard — on
+            // Windows that's a DllNotFoundException with nothing upstream to
+            // catch it, which took the whole app down the first time Settings
+            // was opened on a real Windows box.
+            if (!OperatingSystem.IsMacOS()) return;
+
             Apply(Regular);
 
             // Regular alone doesn't bring us forward; without this the window
