@@ -91,3 +91,24 @@ removed before moving to item 2 (Profile-2 via its own Force quit; Profile-1,
 stuck, via a direct process kill since the UI path was unreachable). Verified
 `%APPDATA%\Claude` (Default) was never launched, quit, or force-quit —
 untouched throughout, still running as Owner's live signed-in instance.
+
+## 2. Menu swatch — PASS, whole dot again
+
+Confirmed with cropped, heavily zoomed (10x nearest-neighbor) screenshots of
+the swatch icon in the Claude Desktop section of the tray menu, for both
+states observed live during item 1's testing and again independently
+afterward:
+
+- **Filled (running):** Default's swatch — a clean, complete filled circle.
+  No cropping to a quadrant; the diagnosis (16 dip / 32 physical-pixel
+  mismatch reading 1:1) and the fix (16px @ 96 dpi, 1:1 geometry) both hold up
+  on this real Windows menu render.
+- **Hollow (not running):** Profile-2's swatch, captured right after Force
+  quit settled it to not-running — a clean, complete ring outline, same
+  geometry, correctly unfilled.
+
+Filled-vs-hollow still reads unambiguously as running-vs-not, and the colour
+itself now correctly differs per profile (Profile-1 was blue, Profile-2 was
+green, Default a third blue-grey — colour is per-folder identity, as
+designed) rather than the shape distinguishing profiles. No further defect
+found here; the diagnosis in the brief was correct and the fix resolved it.
