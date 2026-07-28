@@ -90,6 +90,63 @@ Details worth knowing:
   Items it gets the bare system `PATH`, with no Homebrew in it — so the hook
   records the tmux binary's location, with the usual install paths as
   fallbacks.
+- **The Claude Desktop profile switcher is macOS-only today — but not, as this
+  file previously claimed, impossible on Windows.** There, Claude Desktop installs
+  as an **MSIX package** (`C:\Program Files\WindowsApps\Claude_...`, ACL'd so the
+  payload is readable but not executable). All of the following was measured on a
+  real Windows 11 box:
+  - **The app itself supports profiles.** The Windows build honors
+    `CLAUDE_USER_DATA_DIR` exactly as macOS does — it's the same branch in the
+    same bundle, with no platform guard:
+    ```js
+    if (process.env.CLAUDE_USER_DATA_DIR) {
+      const A = process.env.CLAUDE_USER_DATA_DIR;
+      app.setPath("userData", A); app.setPath("logs", resolve(A, "Logs"));
+    }
+    ```
+  - **The environment variable is the wrong lever on Windows.** Package
+    activation doesn't inherit the launching process's environment (probe
+    directory created, stayed empty), and setting it as a *user* environment
+    variable in the registry doesn't reach it either, because the activation
+    broker builds its environment at logon. Executing the packaged binary
+    directly fails with `Access is denied`.
+  - **A command-line argument is the right lever, and it works.** Being Electron,
+    the app honors `--user-data-dir=<path>` at the Chromium level, with no
+    environment variable involved — verified by launching with the flag alone and
+    watching a complete 27-entry Electron userData tree appear in the target
+    directory. And a packaged app *can* be handed a command line, unelevated, via
+    `IApplicationActivationManager::ActivateApplication` (AUMID
+    `Claude_pzs8sxrjxfjjc!Claude`). Verified end to end: `ACTIVATED pid=12604`,
+    27 entries in the profile directory, while the already-running packaged
+    instance carried on untouched — so the single-instance lock is per profile
+    directory here as on macOS.
+
+    The catch that hid this: `ActivateApplication` is a shell API and returns
+    `E_ACCESSDENIED` from a non-interactive logon, which is what an SSH session
+    gets. So does `Invoke-CommandInDesktopPackage`. Both work from the user's
+    interactive session, which is where a tray app already lives. An earlier
+    revision of this file concluded from those denials that the whole approach
+    was impossible, and then that a 577 MB unpackaged copy was the only way
+    through. Neither is true; no copy is needed.
+
+    A bonus over the macOS path: because the argument sits on the main process's
+    command line, working out which profile a running instance belongs to is just
+    `Win32_Process.CommandLine` — no `KERN_PROCARGS2` equivalent, no memory
+    reading.
+
+    Not yet verified: two accounts signed in side by side on Windows. What's
+    verified is that the profile directory is honored and a second instance runs
+    against it.
+  - **Icons can't be tinted.** No Dock, and the taskbar icon comes from the signed
+    package, so the APFS-clone trick has no analogue.
+
+  What does port cleanly, and what Windows gets today: session orbs, the tray icon
+  and menu, click-to-focus, chat names and colours, the settings window, and
+  persisted settings under `%APPDATA%\ClaudeBuddy`. The profile section simply
+  doesn't appear. One thing that *would* work if the mechanism were ever
+  reachable: profile detection, since Electron's `crashpad-handler` child carries
+  `--user-data-dir=` in its command line and `Win32_Process` exposes `CommandLine`
+  — the equivalent of `KERN_PROCARGS2` on macOS, with no memory reading needed.
 - **WSL + tmux is not covered.** The Windows hook is PowerShell running
   outside the Linux environment, so it never sees `$TMUX`; clicks on those
   orbs behave as they always have (activate the terminal window).
@@ -118,6 +175,112 @@ Claude Buddy there — drag it onto the taskbar once to pin it (that's what
 sets `IsPromoted` in `HKCU\Control Panel\NotifyIconSettings`, which Windows
 then remembers). Nothing to configure in the app; it's how Windows 11 treats
 every new icon.
+
+### Claude Desktop profiles (macOS)
+
+Unrelated to session monitoring, and sharing nothing with it but the menu:
+the status-bar menu can run several copies of the **Claude Desktop** app side
+by side, each signed into a different Anthropic account. Claude Desktop signs
+into one account at a time and keeps that login in its user-data directory
+(`Cookies` → `sessionKey`, `config.json` → `oauth:tokenCache`) rather than the
+Keychain, so a second account is a second directory — selected with
+`CLAUDE_USER_DATA_DIR`, which the app honors, and it takes no single-instance
+lock, so the instances genuinely coexist.
+
+Profiles are **discovered from disk**, not configured: any directory in
+`~/Library/Application Support` named `Claude` or `Claude-<something>` that
+looks like a real profile (or is empty). `Claude` shows as **Default**,
+`Claude-work` as **work**. Each gets a submenu with launch/bring-to-front,
+quit, and reveal logs; a filled dot means it's running. **New profile**
+creates `Claude-Profile-N` and launches it — sign in there with the second
+account. Renaming one means quitting it and renaming the folder, which is
+what **Reveal profiles folder** is for. The section is hidden entirely if
+`Claude.app` isn't installed.
+
+Each profile gets a **colour**, derived from its folder name so it survives
+restarts and needs no config, and that one colour shows up on four surfaces:
+
+- **The tray menu** — a real swatch beside each row (filled = running, hollow =
+  stopped). Colour is identity, fill is state, exactly as with the orbs.
+- **The Dock** — each created profile launches from its own APFS clone of
+  `Claude.app` whose icon is Claude's mark recoloured. 1.5 MB of real disk for a
+  754 MB bundle. Default keeps the bundle you installed, icon and all.
+- **The window itself** — the frontmost instance gets a coloured border and a
+  faint wash, drawn by a click-through overlay pinned to its frame.
+- **Light or dark** — each profile's own `userThemeMode`, set from its submenu
+  while it's stopped.
+
+Details worth knowing:
+
+- **Why the Dock clone is safe.** A custom Finder icon lives in an `Icon\r` file
+  at the bundle root plus a `com.apple.FinderInfo` xattr — both *outside*
+  `Contents/`, which is what the code signature seals. The result: `codesign
+  --verify` passes, `spctl` still reports "Notarized Developer ID", and the
+  CDHash is byte-identical to Anthropic's. That last part is the point — the
+  running code identity is unchanged, so the `Claude Safe Storage` keychain ACL
+  still matches (stored logins keep decrypting) and existing TCC grants still
+  apply. Renaming the app would mean editing `Info.plist`, which forces a
+  re-sign and loses all of it, so every clone still calls itself "Claude".
+  Only `codesign --verify --strict` objects, over the xattr.
+- **Clones go stale after a Claude update.** Squirrel only updates
+  `/Applications/Claude.app`, so **Dock icons → Rebuild after a Claude update**
+  re-clones. Bundles live in `~/Library/Application Support/ClaudeBuddy/bundles/`
+  and are pure cache — deleting them only costs the colours. Each is named
+  exactly `Claude.app` inside a per-profile directory, because the process scan
+  matches on the path suffix `/Claude.app/Contents/MacOS/Claude`; naming bundles
+  after profiles would silently break running-detection for cloned instances.
+- **Why the window tint is an overlay rather than real theming.** There is no way
+  in: the app has no accent-colour concept (its theme is a `body` class driven by
+  `prefers-color-scheme`), Chromium removed `--user-stylesheet` years ago (0
+  occurrences in the shipped Electron binary), and remote debugging — the one
+  route that could inject CSS — is refused unless `CLAUDE_CDP_AUTH` carries an
+  Ed25519 signature over `timestamp.base64(userDataDir)`, verified against a key
+  embedded in `app.asar`, bound to that exact profile path and valid for five
+  minutes. So the tint is drawn over the app instead. Frames come from
+  `CGWindowListCopyWindowInfo`, which gives bounds and owner pid with **no**
+  permission prompt (only titles and images need Screen Recording).
+- **The tint only follows the frontmost instance.** The overlay is topmost, so
+  showing it for a background window would drop a coloured rectangle on top of
+  whatever app you were actually using. Windows on other Spaces are skipped too:
+  they still count as "on screen" to CGWindowList but report coordinates in that
+  Space's frame, far outside any display. Toggle it under **Dock icons → Tint the
+  active window**; like the orb toggle, it resets on relaunch. Verified
+  pixel-exact against a live window, and click-through, so clicks reach Claude.
+  Only tested on a single display.
+- **`Claude-3p` and `Claude-dev` are skipped.** `-3p` is Claude Desktop's own
+  sidecar config directory (`configLibrary/`, `deploymentMode`) that a normally
+  launched instance reads and writes — offering it as a profile would point a
+  second Chromium at a directory the running app is already using, and
+  concurrent access to one user-data directory corrupts leveldb and SQLite.
+- **Default is launched differently, on purpose** — plain `open -n -b`, with no
+  `CLAUDE_USER_DATA_DIR`. Setting the variable suppresses the app's own
+  resolution of that sidecar directory, so a tray launch could re-trigger the
+  enterprise deployment-mode chooser on an already-configured profile, and it
+  would start a second log history under `Claude/Logs/`. One consequence:
+  Default's logs are at `~/Library/Logs/Claude`, everyone else's are at
+  `<profile>/Logs`, and Reveal logs knows the difference.
+- **Running instances are detected by scanning processes, not by tracking the
+  ones we launched** — `proc_listallpids` + `proc_pidpath` to find Claude
+  Desktop main processes, then `sysctl KERN_PROCARGS2` to read
+  `CLAUDE_USER_DATA_DIR` out of each one's environment. So an instance you
+  started from the Dock shows up too, and the state survives restarting Claude
+  Buddy. (Not `ps eww`: it prints the environment space-separated, and every
+  profile path contains a space — `Application Support` — so its output can't
+  be parsed back into paths.)
+- **Quit is a real quit**, an Apple Event via `NSRunningApplication`, so it
+  runs the app's shutdown and can be refused — by an unsaved-work dialog, or
+  by a Cowork VM or local-agent session. A refusal shows up as *"allow
+  Automation"* if it was a permission problem, and after a timeout the item
+  becomes **Force quit**, which needs a second deliberate click. Nothing here
+  ever escalates to a kill on its own.
+- **The auto-updater is shared.**
+  `~/Library/Caches/com.anthropic.claudefordesktop.ShipIt/` is keyed by bundle
+  id, not by profile, so two instances updating at once can collide. Nothing
+  the app can do about it.
+- **Each profile is a separate device** as far as the server is concerned —
+  its own `ant-did`.
+- `CLAUDE_BUDDY_PROFILE_ROOT` overrides the directory profiles are discovered
+  in, which is how to try this out without touching your real one.
 
 It works by watching a small folder in the OS temp directory
 (`%TEMP%\claude_buddy\` on Windows, `$TMPDIR/claude_buddy/` on macOS) that
@@ -402,7 +565,16 @@ It'll then start quietly whenever you log in.
   only rebuilt when a signature of the session list actually changes —
   otherwise the 2-second poll would dismiss the menu while you're reading
   it. Icon art comes from `Assets/tray-*.png`, drawn by
-  `tools/make-icons.py`.
+  `tools/make-icons.py`. The Claude Desktop section folds its own digest into
+  that same signature, and additionally holds rebuilds back while the menu is
+  open (`NativeMenu.Opening` / `Closed`), since submenus make people linger.
+  The tray *icon* is never held back — it's the urgent half.
+- **Claude Desktop profiles**: `ClaudeDesktopManager.cs` (discovery, the
+  process scan, launch/quit/reveal), `ClaudeDesktopSection.cs` (the menu
+  block), `MacOSProcessScan.cs` (libproc + `sysctl`), `MacOSAppActivation.cs`
+  (`NSRunningApplication`). `TrayController` calls two methods on the section
+  and knows nothing else about it, so removing the feature is a small revert
+  plus deleting those four files.
 - **Bundle metadata**: `tools/build-macos-app.sh` writes `Info.plist`
   inline — bundle id, version, `LSUIElement`, and the Automation usage
   string all live there.

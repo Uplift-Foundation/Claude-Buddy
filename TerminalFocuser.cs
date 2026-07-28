@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 
 namespace ClaudeBuddy
 {
@@ -335,17 +334,10 @@ namespace ClaudeBuddy
 
         // --- Windows ---
 
-        private const int SW_RESTORE = 9;
-
-        [DllImport("user32.dll")]
-        private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
-
-        [DllImport("user32.dll")]
-        private static extern bool IsIconic(IntPtr hWnd);
-
+        // OrbWindow sets ShowActivated="False" (it's a click-to-act overlay,
+        // not something that should steal keyboard focus just by existing),
+        // so clicking it never makes ClaudeBuddy.exe the foreground process —
+        // hence WindowsForegroundWindow's AttachThreadInput dance below.
         private static void FocusWindows(SessionStatus status)
         {
             try
@@ -376,10 +368,7 @@ namespace ClaudeBuddy
                         .FirstOrDefault(h => h != IntPtr.Zero);
                 }
 
-                if (hwnd == IntPtr.Zero) return;
-
-                if (IsIconic(hwnd)) ShowWindowAsync(hwnd, SW_RESTORE);
-                SetForegroundWindow(hwnd);
+                WindowsForegroundWindow.BringToFront(hwnd);
             }
             catch
             {

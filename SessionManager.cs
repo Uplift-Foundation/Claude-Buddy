@@ -81,7 +81,7 @@ namespace ClaudeBuddy
 
         // Orbs can be hidden from the tray menu; sessions keep being tracked
         // either way, so the tray icon and its menu stay accurate.
-        public bool OrbsVisible { get; private set; } = true;
+        public bool OrbsVisible { get; private set; } = ClaudeBuddySettings.ShowOrbs;
 
         private FileSystemWatcher? _watcher;
         private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -190,6 +190,19 @@ namespace ClaudeBuddy
                     }
                 }
 
+                // A session with no terminal recorded at all can't be jumped
+                // to, so an orb for it is a dead click. This is what headless and
+                // bridged invocations look like: no tty, no terminal program, no
+                // tmux pane, no Windows terminal pid. An interactive session
+                // always has at least one of those.
+                if (string.IsNullOrEmpty(status.Tty)
+                    && string.IsNullOrEmpty(status.TermProgram)
+                    && string.IsNullOrEmpty(status.TmuxPane)
+                    && status.TermPid == 0)
+                {
+                    continue;
+                }
+
                 seen.Add(sessionId);
                 _statuses[sessionId] = status;
 
@@ -237,6 +250,7 @@ namespace ClaudeBuddy
         {
             if (OrbsVisible == visible) return;
             OrbsVisible = visible;
+            ClaudeBuddySettings.ShowOrbs = visible;
 
             foreach (var window in _windows.Values)
             {

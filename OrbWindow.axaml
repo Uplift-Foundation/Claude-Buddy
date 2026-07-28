@@ -30,13 +30,11 @@
 
         <!-- Soft glow behind the orb (fill assigned in code-behind, shared
              with the orb so color fades hit both) -->
-        <Ellipse x:Name="Glow"
-                 Width="56" Height="56"
-                 Opacity="0.35">
-            <Ellipse.Effect>
-                <BlurEffect Radius="18"/>
-            </Ellipse.Effect>
-        </Ellipse>
+        <!-- Soft glow behind the orb. A RadialGradientBrush, not a BlurEffect:
+             the orb animates continuously, and a blur next to it was re-blurred
+             every frame at ~7% of a core per orb. Fill is assigned in
+             code-behind so colour changes reach it. -->
+        <Ellipse x:Name="Glow" Width="56" Height="56"/>
 
         <!-- The buddy itself -->
         <Ellipse x:Name="Orb"

@@ -32,8 +32,30 @@ namespace ClaudeBuddy
         // something a user could actually see has changed.
         private string _lastSignature = "";
 
+        // The Claude Desktop section refreshes off its own background probe, so
+        // it needs a way back in that doesn't involve SessionManager.
+        internal static TrayController? Instance { get; private set; }
+
+        private IReadOnlyList<SessionEntry> _lastSessions = Array.Empty<SessionEntry>();
+
+        // Rebuild() clears Items, which on macOS dismisses a menu that's
+        // currently open — and people linger over submenus. Hold changes until
+        // it closes rather than yanking the menu out from under the pointer.
+        //
+        // The deadline is a safety valve, not a feature: if the platform ever
+        // raises Opening without a matching Closed, the menu would otherwise
+        // freeze permanently. A menu genuinely left open this long is rare, and
+        // a rebuild under the pointer beats a menu that stops updating.
+        private static readonly TimeSpan MenuOpenDeadline = TimeSpan.FromSeconds(60);
+
+        private bool _menuOpen;
+        private bool _pendingRebuild;
+        private long _menuOpenedAt;
+
         public TrayController()
         {
+            Instance = this;
+
             _tray = new TrayIcon
             {
                 Icon = LoadIcon("idle"),
@@ -42,10 +64,30 @@ namespace ClaudeBuddy
                 Menu = _menu
             };
 
+            _menu.Opening += (_, _) =>
+            {
+                _menuOpen = true;
+                _menuOpenedAt = Environment.TickCount64;
+                ClaudeDesktopManager.KickRefresh();
+            };
+
+            _menu.Closed += (_, _) =>
+            {
+                _menuOpen = false;
+                if (!_pendingRebuild) return;
+
+                _pendingRebuild = false;
+                Refresh();
+            };
+
             if (Application.Current is { } app)
             {
                 TrayIcon.SetIcons(app, new TrayIcons { _tray });
             }
+
+            // Tints the frontmost Claude Desktop window in its profile's colour.
+            // Owns its own timer; nothing else here depends on it.
+            ClaudeDesktopOverlay.Start();
 
             Rebuild(Array.Empty<SessionEntry>());
         }
@@ -54,22 +96,63 @@ namespace ClaudeBuddy
 
         public void Update(IReadOnlyList<SessionEntry> sessions)
         {
+            _lastSessions = sessions;
+
+            // The 2s poll is what keeps the Claude Desktop section honest: the
+            // probe runs off the UI thread and only calls back when its digest
+            // changes, so the menu-open hook below is an improvement on
+            // latency, not something the section depends on for correctness.
+            ClaudeDesktopManager.KickRefresh();
+
+            Apply(sessions);
+        }
+
+        // Re-render from the last session list we were handed.
+        // ClaudeDesktopManager posts this to the UI thread when its snapshot
+        // changes; it deliberately doesn't kick another probe, which would loop.
+        internal void Refresh() => Apply(_lastSessions);
+
+        private void Apply(IReadOnlyList<SessionEntry> sessions)
+        {
             var signature = string.Join("|",
                                 sessions.Select(s => $"{s.SessionId}:{s.Status.State}:{s.Status.Cwd}:{s.Status.Title}"))
-                            + $"|orbs={SessionManager.Instance?.OrbsVisible}";
+                            + $"|orbs={SessionManager.Instance?.OrbsVisible}"
+                            + $"|{ClaudeDesktopManager.Digest()}";
             if (signature == _lastSignature) return;
+
+            // The icon is the urgent half of this — it goes amber when a
+            // session needs you — and changing it doesn't disturb an open menu,
+            // so it's never held back.
+            UpdateIcon(sessions);
+
+            // The menu is. Leave _lastSignature stale on purpose so the change
+            // isn't lost; Closed replays it.
+            if (_menuOpen && Environment.TickCount64 - _menuOpenedAt < MenuOpenDeadline.TotalMilliseconds)
+            {
+                _pendingRebuild = true;
+                return;
+            }
+
+            _menuOpen = false;
+            _pendingRebuild = false;
+
             _lastSignature = signature;
 
             Rebuild(sessions);
         }
 
-        private void Rebuild(IReadOnlyList<SessionEntry> sessions)
+        private void UpdateIcon(IReadOnlyList<SessionEntry> sessions)
         {
             var waiting = sessions.Count(s => s.Status.State == "waiting");
             var generating = sessions.Count(s => s.Status.State == "generating");
 
             _tray.Icon = LoadIcon(waiting > 0 ? "waiting" : generating > 0 ? "generating" : "idle");
             _tray.ToolTipText = Summary(sessions.Count, waiting, generating);
+        }
+
+        private void Rebuild(IReadOnlyList<SessionEntry> sessions)
+        {
+            UpdateIcon(sessions);
 
             var menu = _menu;
             menu.Items.Clear();
@@ -97,6 +180,8 @@ namespace ClaudeBuddy
                 }
             }
 
+            ClaudeDesktopSection.Append(menu);
+
             menu.Add(new NativeMenuItemSeparator());
 
             var orbsItem = new NativeMenuItem("Show orbs")
@@ -116,6 +201,10 @@ namespace ClaudeBuddy
             menu.Add(resetItem);
 
             menu.Add(new NativeMenuItemSeparator());
+
+            var settingsItem = new NativeMenuItem("Settings…");
+            settingsItem.Click += (_, _) => SettingsWindow.Toggle();
+            menu.Add(settingsItem);
 
             var quitItem = new NativeMenuItem("Quit Claude Buddy");
             quitItem.Click += (_, _) =>
