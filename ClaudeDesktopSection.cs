@@ -176,9 +176,19 @@ namespace ClaudeBuddy
             var key = ((uint)((color.R << 16) | (color.G << 8) | color.B), filled);
             if (SwatchCache.TryGetValue(key, out var cached)) return cached;
 
-            // 32 physical pixels at 192 dpi = 16x16 dips, which is the size macOS
-            // wants for a menu item image, with retina detail to spare.
-            var bitmap = new RenderTargetBitmap(new PixelSize(32, 32), new Vector(192, 192));
+            // macOS: 32 physical pixels at 192 dpi = 16x16 dips, the size a menu
+            // item image wants, with retina detail to spare.
+            //
+            // Windows renders that as a quarter of the circle. The bitmap's dip
+            // size is 16x16 while its pixel buffer is 32x32, and Avalonia's Win32
+            // NativeMenuItem.Icon path takes the dip size but reads the pixels
+            // 1:1 — so it crops to the top-left 16x16 pixels, which is exactly
+            // the top-left quadrant of the dot. Drawing 1:1 there sidesteps the
+            // disagreement: same geometry in dips, fewer pixels, whole circle.
+            var scale = OperatingSystem.IsMacOS() ? 2 : 1;
+            var bitmap = new RenderTargetBitmap(
+                new PixelSize(16 * scale, 16 * scale),
+                new Vector(96 * scale, 96 * scale));
             using (var ctx = bitmap.CreateDrawingContext())
             {
                 var brush = new SolidColorBrush(color);
