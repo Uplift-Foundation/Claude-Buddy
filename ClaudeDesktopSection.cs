@@ -1,4 +1,7 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
 
 namespace ClaudeBuddy
 {
@@ -36,6 +39,14 @@ namespace ClaudeBuddy
         private static NativeMenuItem BuildProfileItem(ProfileView profile)
         {
             var item = new NativeMenuItem(ProfileLabel(profile));
+
+            // Colour says which profile, fill says whether it's running — the
+            // same split the orbs use, where colour is identity and never
+            // competes with state.
+            var folder = Path.GetFileName(profile.Directory);
+            item.Icon = Swatch(
+                ClaudeDesktopColors.For(folder, profile.IsDefault),
+                filled: profile.IsRunning);
 
             // The child NativeMenu *and* its owning NativeMenuItem are built
             // fresh on every rebuild. Nothing clears NativeMenu.Parent when an
@@ -79,14 +90,34 @@ namespace ClaudeBuddy
             return item;
         }
 
+        // Swatches are cached: Rebuild() runs on every menu open and there are
+        // only ever a handful of (colour, filled) combinations.
+        private static readonly Dictionary<(uint Rgb, bool Filled), Bitmap> SwatchCache = new();
+
+        private static Bitmap Swatch(Color color, bool filled)
+        {
+            var key = ((uint)((color.R << 16) | (color.G << 8) | color.B), filled);
+            if (SwatchCache.TryGetValue(key, out var cached)) return cached;
+
+            // 32 physical pixels at 192 dpi = 16x16 dips, which is the size macOS
+            // wants for a menu item image, with retina detail to spare.
+            var bitmap = new RenderTargetBitmap(new PixelSize(32, 32), new Vector(192, 192));
+            using (var ctx = bitmap.CreateDrawingContext())
+            {
+                var brush = new SolidColorBrush(color);
+                var circle = new Rect(3, 3, 10, 10);
+                if (filled) ctx.DrawEllipse(brush, null, circle);
+                else ctx.DrawEllipse(null, new Pen(brush, 2.5), circle);
+            }
+
+            SwatchCache[key] = bitmap;
+            return bitmap;
+        }
+
         private static string ProfileLabel(ProfileView profile)
         {
-            var dot = profile.Activity switch
-            {
-                ProfileActivity.Launching or ProfileActivity.Quitting => "◐",
-                _ => profile.IsRunning ? "●" : "○"
-            };
-
+            // No state glyph in the text: the swatch carries it. A dot as well
+            // would just be noise next to the icon.
             var suffix = profile.Activity switch
             {
                 ProfileActivity.Launching => "   Launching…",
@@ -96,7 +127,7 @@ namespace ClaudeBuddy
                 _ => ""
             };
 
-            return $"{dot} {Truncate(profile.DisplayName)}{suffix}";
+            return $"{Truncate(profile.DisplayName)}{suffix}";
         }
 
         // Profile names are folder names, so they can be arbitrarily long; the
