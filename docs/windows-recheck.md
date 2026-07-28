@@ -14,6 +14,25 @@ work.
 
 Short task. Don't expand it.
 
+## You get exactly one turn
+
+You are running as `claude -p`. When you stop, the process exits — there is no
+next turn, nobody re-invokes you, and anything you were "going to pick up
+afterwards" simply never happens. A previous attempt at this exact task ended by
+saying *"I'll pick this up when it completes"* while waiting on a background
+check; the run exited there, pushed nothing, and left a test profile and a live
+Claude Desktop instance behind for the Mac side to clean up.
+
+So:
+
+- **Never defer work to a later turn.** If you need to wait, wait *inside* this
+  turn — `Start-Sleep` in a foreground command, then carry on.
+- **Never end your turn with work outstanding.** Before you stop: findings
+  committed and pushed, test profiles deleted, instances you launched quit.
+- If you genuinely cannot finish something, push what you have and write down
+  what's missing. Stopping silently mid-check is the one outcome that helps
+  nobody.
+
 ## 1. Quit should no longer fall through to Force quit
 
 The previous run found Quit never worked: `Process.CloseMainWindow()` posts
@@ -73,3 +92,14 @@ Branch `windows-recheck` off `main`. Append to `docs/windows-recheck-findings.md
 commit and push **per item, not at the end** — a run died once and lost 40 minutes
 of findings. Budget ~2 cropped screenshots per item and delete them after reading.
 Don't spawn a nested `claude`. Clean up any profile you create.
+
+Push item 1 before you start item 2. The quit check is the one that matters; if
+anything goes wrong later, that result must already be safe on the remote.
+
+Cleanup checklist before you stop, since the last attempt skipped all of it:
+
+- Any profile directory you created under `%APPDATA%` is deleted.
+- Any Claude Desktop instance you launched is gone (check by command line for
+  your profile's path — and use `*` wildcards with PowerShell `-like`, not `%`).
+- `%APPDATA%\Claude` and Owner's running instance are untouched.
+- `docs/windows-recheck-findings.md` is committed and the branch is pushed.
