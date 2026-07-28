@@ -111,3 +111,60 @@ terminal info at all" check). Switching to `wt.exe` directly for a new tab —
 matching how a person actually opens Windows Terminal — fixed it completely.
 Not a code bug: it just means this specific synthetic-payload test needs a
 real terminal launch, not a bare child-process spawn, to be representative.
+
+## 5. Click-to-focus — FAIL, found and fixed one bug; one inherent limitation documented, not fixed
+
+Tested by minimizing the target terminal window, clicking the corresponding
+orb, and checking whether it restored and came to the foreground.
+
+**Bug found and fixed: clicking an orb silently did nothing.** First test:
+Windows Terminal (`wt.exe`, a genuine new-tab launch), `term_pid` correctly
+resolved to `WindowsTerminal.exe`. Minimized that window, clicked its orb —
+nothing happened; the window stayed minimized and in the background, no
+error anywhere. Root cause, found by reading `OrbWindow.axaml:12`:
+`ShowActivated="False"`. That's necessary so the orb never steals keyboard
+focus just by existing, but it means clicking it never makes
+`ClaudeBuddy.exe` itself the foreground process — and Windows silently
+refuses `SetForegroundWindow()` calls from any process that isn't already
+foreground (anti focus-stealing protection, present since Windows 2000).
+`TerminalFocuser.FocusWindows` was calling `SetForegroundWindow` bare, so
+every click was quietly rejected by the OS.
+
+Confirmed via an isolated repro script (bypassing the app, calling the same
+Win32 sequence directly) that `SetForegroundWindow` returns `false` under
+these conditions, and that wrapping it in `AttachThreadInput` — attach this
+thread's input queue to the current foreground window's thread for the
+duration of the call — is the standard fix. Implemented it as
+`TerminalFocuser.ForceForegroundWindow` (`TerminalFocuser.cs`), used in place
+of the bare call. Rebuilt, re-tested against a plain `conhost`-hosted
+terminal (unambiguous single window, see below for why that matters):
+minimized it, clicked its orb, and this time it restored from minimized and
+came to the foreground — confirmed by screenshot and by `IsIconic` reporting
+`false` afterward. Windows-only change; `TerminalFocuser`'s macOS path is
+untouched.
+
+**Limitation found, not fixed: multiple Windows Terminal windows are
+indistinguishable to this app.** While chasing the above, `Process.
+GetProcessById(pid).MainWindowHandle` for a `WindowsTerminal.exe` PID
+returned a *different* WT window than the one hosting the session being
+clicked — Owner already had one WT window open ("claude") and my test had
+opened a second, separate WT window ("WTRealTest"), both owned by the same
+single `WindowsTerminal.exe` process. `MainWindowHandle` can only ever name
+one window per process, and it isn't reliably the one you want. This is the
+same limitation `TerminalFocuser.cs:18` already documents for WT *tabs*
+("Selecting the exact Windows Terminal tab isn't possible — WT doesn't
+expose its tabs to other processes") — it turns out to extend to separate WT
+*windows* too, not just tabs within one. Not fixing this: there's no
+documented public API to ask WT which of its windows hosts a given process's
+console, so there's nothing to change in `TerminalFocuser.cs` beyond what's
+already there. Recording it because it means click-to-focus for a WT-hosted
+session is only reliable when the user has exactly one Windows Terminal
+window open — with more than one, a click may raise the wrong one.
+
+Hosts tried: Windows Terminal (works, single-window case; wrong-window risk
+with multiple WT windows as above), plain `conhost` (works cleanly, single
+unambiguous window, confirmed after the fix). VS Code's integrated terminal
+was also attempted, but the VS Code window exited on its own partway through
+setup for reasons unrelated to ClaudeBuddy (no ClaudeBuddy code was running
+against it yet) — marking that host **INCONCLUSIVE** rather than guessing at
+its behavior.

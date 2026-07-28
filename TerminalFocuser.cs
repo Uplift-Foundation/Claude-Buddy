@@ -346,6 +346,45 @@ namespace ClaudeBuddy
         [DllImport("user32.dll")]
         private static extern bool IsIconic(IntPtr hWnd);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        [DllImport("user32.dll")]
+        private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
+
+        // OrbWindow sets ShowActivated="False" (it's a click-to-act overlay,
+        // not something that should steal keyboard focus just by existing),
+        // so clicking it never makes ClaudeBuddy.exe the foreground process.
+        // Windows denies SetForegroundWindow from anything that isn't already
+        // foreground — found by clicking a synthetic orb here and watching a
+        // minimized Windows Terminal window simply stay minimized with no
+        // error. Attaching this thread's input queue to the current
+        // foreground thread for the duration of the call is the standard
+        // workaround; harmless if it's already us or the attach fails.
+        private static void ForceForegroundWindow(IntPtr hwnd)
+        {
+            var foreground = GetForegroundWindow();
+            var foregroundThread = GetWindowThreadProcessId(foreground, out _);
+            var currentThread = GetCurrentThreadId();
+
+            var attached = foregroundThread != currentThread
+                && AttachThreadInput(currentThread, foregroundThread, true);
+            try
+            {
+                SetForegroundWindow(hwnd);
+            }
+            finally
+            {
+                if (attached) AttachThreadInput(currentThread, foregroundThread, false);
+            }
+        }
+
         private static void FocusWindows(SessionStatus status)
         {
             try
@@ -379,7 +418,7 @@ namespace ClaudeBuddy
                 if (hwnd == IntPtr.Zero) return;
 
                 if (IsIconic(hwnd)) ShowWindowAsync(hwnd, SW_RESTORE);
-                SetForegroundWindow(hwnd);
+                ForceForegroundWindow(hwnd);
             }
             catch
             {
