@@ -64,9 +64,7 @@ underneath). Clicked Quit again at 16:23:33.905:
 
 **Trial: Force quit ends the tree.** Clicked Force quit at 16:25:01.042; a
 poll immediately after (~1.2s later) found 0 processes with
-`Claude-Profile-1` in their command line, down from 8. Row settled to
-not-running (confirmed via the swatch going hollow in the same check used for
-the recheck item below).
+`Claude-Profile-1` in their command line, down from 8.
 
 Cleanup: `Claude-Profile-1`'s process tree was gone before its directory was
 removed (`%APPDATA%\Claude-Profile-1`, verified absent after). `%APPDATA%\Claude`
@@ -77,3 +75,66 @@ brief asked to verify held up on a real build: the offer survives past the
 old 60s expiry, a second Quit on an already-hidden window succeeds instead of
 erroring, the escalation to Force quit is reachable again after it, and Force
 quit still reliably ends the tree.
+
+## 2. Does terminating the tree corrupt the profile? — clean across 3 cycles
+
+Measured directly rather than through the app, since this is a question about
+Chromium's own resilience, independent of ClaudeBuddy: launched a fresh
+throwaway profile (`Claude-Profile-1`, created via "New profile" as above),
+let it settle ~20s each time, then `taskkill /F /T /PID <main>` (the same
+tree-kill `Process.Kill(entireProcessTree: true)` performs), and relaunched
+the same profile directly (`Claude.exe --user-data-dir=...`) between cycles.
+
+No `sqlite3.exe` was available on this machine (checked `Get-Command`,
+absent). `Microsoft.Data.Sqlite` (8.0.2) and its native `e_sqlite3` bundle
+were already in the local NuGet cache, though, so a throwaway console app
+(built and run entirely offline, deleted afterward — never part of the repo)
+ran real `PRAGMA integrity_check;` queries rather than falling back to a
+header-only check.
+
+Five genuine SQLite databases were found under the profile root and one
+level down (identified by companion `-journal`/`-wal` files, the giveaway for
+a live SQLite store even without a `.db`/`.sqlite` extension): `Network\Cookies`
+(the minimum the brief asked for), `DIPS`, `Network\Trust Tokens`,
+`Shared Dictionary\db`, and `WebStorage\QuotaManager`. All five were locked
+(`SQLITE_BUSY` / "unable to open database file") while Claude Desktop had them
+open, as expected, so integrity was checked only after each kill, while the
+process was dead.
+
+Verbatim `PRAGMA integrity_check;` results, three kill/relaunch cycles on the
+same profile directory:
+
+| File | After kill 1 | After kill 2 | After kill 3 |
+|---|---|---|---|
+| `Network\Cookies` | `ok` | `ok` | `ok` |
+| `DIPS` | `ok` | `ok` | `ok` |
+| `Network\Trust Tokens` | `ok` | `ok` | `ok` |
+| `Shared Dictionary\db` | `ok` | `ok` | `ok` |
+| `WebStorage\QuotaManager` | `ok` | `ok` | `ok` |
+
+All 15 checks returned exactly `ok`, no other rows. Each of the three
+relaunches (plus one final relaunch after the third kill, to match the
+brief's "confirm it starts normally" step one more time) came up to the same
+plain "Get started" first-run screen — the profile never authenticated, so
+that screen recurring every time is the expected steady state, not evidence
+of a reset; nothing resembling a "profile corrupted" or repair dialog
+appeared on any relaunch, confirmed by screenshot on cycles 1 and 3.
+
+**Bottom line: terminating the process tree does not corrupt this profile.**
+Three kill/relaunch cycles, five real SQLite stores each time, zero integrity
+failures. This matches the reasoning in the brief — Chromium's leveldb and
+SQLite stores are built to survive abrupt termination — and the corruption
+risk that motivated the original caution (concurrent access to one userData
+directory from two simultaneously-running instances) is a genuinely different
+failure mode from a single instance being killed once. Item 3's fix is
+warranted.
+
+Cleanup: the final Claude-Profile-1 instance was killed, its directory
+(`%APPDATA%\Claude-Profile-1`) removed, and the scratch `sqlitecheck` console
+project (built under `%USERPROFILE%`, never inside the repo) deleted.
+`%APPDATA%\Claude` was untouched throughout.
+
+(Small correction to item 1 above: the Force-quit trial's "row settled to
+not-running" claim originally cited a swatch check that was never actually
+captured — removed. The 0-process-count observation stands as the evidence
+for that trial.)
