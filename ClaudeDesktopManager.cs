@@ -54,6 +54,12 @@ namespace ClaudeBuddy
 
         // How long a quit is given before the row offers Force quit instead.
         private const int QuitWindowMs = 20_000;
+
+        // How long WM_CLOSE gets before Windows quit escalates to WM_ENDSESSION.
+        // Comfortably inside QuitWindowMs, so the escalation happens while the
+        // row still says "Quitting…" rather than after it has given up and
+        // offered a force quit.
+        private const int WindowsQuitEscalationMs = 1_500;
         private const int ForceQuitOfferMs = 60_000;
         private const int ErrorMs = 20_000;
 
@@ -660,18 +666,40 @@ namespace ClaudeBuddy
             });
         }
 
-        // No AppleScript equivalent on Windows to ask the app to quit and
-        // show an unsaved-work prompt if it has one; CloseMainWindow() is the
-        // closest analogue — it posts WM_CLOSE to the main window, which
-        // Electron's own close handling (including any beforeunload prompt)
-        // then decides how to answer.
+        // Windows has no AppleScript equivalent for "please quit", so this is a
+        // two-step escalation rather than one call.
+        //
+        // WM_CLOSE first, via CloseMainWindow(), because it's the gentlest thing
+        // that exists and an app which does quit on it gets to run its own close
+        // handling (including any beforeunload prompt). Claude Desktop is not
+        // such an app — it hides to the tray and keeps running, which made Quit
+        // fall through to Force quit every time on a real Windows box.
+        //
+        // So if it's still alive shortly after, ask again the way Windows asks
+        // during shutdown. See WindowsAppQuit: Electron acts on WM_ENDSESSION,
+        // and that message reaches the hidden window WM_CLOSE just created.
+        //
+        // The escalation waits off the UI thread. Quit() posts this to the
+        // dispatcher, and sleeping there would freeze the menu and every orb.
         private static bool QuitWindows(int pid)
         {
             try
             {
                 using var process = Process.GetProcessById(pid);
                 WindowsForegroundWindow.BringToFront(process.MainWindowHandle);
-                return process.CloseMainWindow();
+                var closed = process.CloseMainWindow();
+
+                Task.Run(async () =>
+                {
+                    await Task.Delay(WindowsQuitEscalationMs).ConfigureAwait(false);
+                    if (!WindowsAppQuit.HasExited(pid)) WindowsAppQuit.RequestEndSession(pid);
+                });
+
+                // The transient "Quitting…" row and its force-quit fallback are
+                // driven by whether the process is still there when the window
+                // expires, so a true here is only a claim that we asked — which
+                // is all this ever promised.
+                return closed;
             }
             catch
             {
