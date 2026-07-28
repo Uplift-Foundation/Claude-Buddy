@@ -25,8 +25,13 @@ namespace ClaudeBuddy
 
         private static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
+        // %APPDATA%\ClaudeBuddy on Windows, ~/Library/Application Support/ClaudeBuddy
+        // on macOS. SpecialFolder.ApplicationData resolves to both, so this is one
+        // expression rather than a platform branch.
         public static string Directory =>
-            Path.Combine(Home, "Library", "Application Support", "ClaudeBuddy");
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "ClaudeBuddy");
 
         public static string Path_ => Path.Combine(Directory, "settings.json");
 

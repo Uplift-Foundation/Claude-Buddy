@@ -23,8 +23,6 @@ namespace ClaudeBuddy
 
         public static void Toggle()
         {
-            if (!OperatingSystem.IsMacOS()) return;
-
             if (_open is not null)
             {
                 _open.Activate();
