@@ -168,3 +168,30 @@ was also attempted, but the VS Code window exited on its own partway through
 setup for reasons unrelated to ClaudeBuddy (no ClaudeBuddy code was running
 against it yet) — marking that host **INCONCLUSIVE** rather than guessing at
 its behavior.
+
+## 6. Settings window — PASS
+
+Opened via the tray menu's `Settings…` item. No crash (confirms the
+already-committed `SetRegular()` fix for the `DllNotFoundException` on
+`libobjc` holds). Observed:
+
+- **"Claude Desktop profiles"**: "No profiles found. Create one from the menu
+  bar." — correct; this box is macOS-only and Windows has none, per the
+  ground rules.
+- **Both global toggles present**: "Show orbs" and "Tint the active Claude
+  Desktop window", both checkboxes, both checked by default.
+- **Closes on Done**.
+
+**Keyboard focus**: confirmed the window is the real foreground window
+(`GetForegroundWindow` returned its handle right after opening, no extra
+activation trick needed — unlike the macOS path, which the code comments say
+needed an activation-policy change). The brief's instruction to "actually
+type into a field" doesn't have a literal target here: the only `TextBox` in
+`SettingsWindow.cs` (`SettingsWindow.cs:166`) is per-profile, rendered only
+inside the profile list, which is empty on Windows — there's no text field
+to type into with zero profiles, and that's correct, not a gap. Substituted
+the equivalent keyboard-interactivity check: `Tab` moved a visible focus
+rectangle through "Show orbs" → "Tint…" → "Done" and wrapped back around
+(3 stops, as expected), `Space` toggled "Show orbs" off and back on (screenshot-
+confirmed both states), and `Enter` on the focused "Done" button closed the
+window. All keyboard-driven, no mouse involved after the initial menu click.
