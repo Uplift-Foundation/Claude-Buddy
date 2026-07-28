@@ -112,3 +112,34 @@ itself now correctly differs per profile (Profile-1 was blue, Profile-2 was
 green, Default a third blue-grey — colour is per-folder identity, as
 designed) rather than the shape distinguishing profiles. No further defect
 found here; the diagnosis in the brief was correct and the fix resolved it.
+
+## Smoke test — PASS, no regression found
+
+Tray icon and menu: already exercised heavily above (both items required
+opening the menu repeatedly); the icon rendered throughout and the menu
+always came up with the expected structure ("No Claude Code sessions",
+Claude Desktop section, Show orbs, Reset all sessions to idle, Settings…,
+Quit Claude Buddy).
+
+Orbs and click-to-focus: rather than spawn a nested `claude` (explicitly
+disallowed — it hangs and competes with this run's own usage), invoked
+`ClaudeBuddyHook.ps1` directly with a synthetic JSON payload on stdin
+(`-State generating`, a fake `session_id`, `cwd=C:\cb`). It wrote a status
+file to `%TEMP%\claude_buddy\<session_id>.txt` as expected. The hook's own
+parent-process walk found no window-owning ancestor in this harness's process
+tree (`term_pid` came back 0 — this session isn't hosted the way a normal
+interactive terminal session is), so to isolate the app's *rendering and
+click* behaviour from that unrelated gap, the status file was then
+overwritten directly with a known-good `term_pid` (this session's own
+`WindowsTerminal.exe`, pid 64904, the "claude"-titled window visible on
+screen throughout this run).
+
+- A violet orb appeared top-right showing "S" (first letter of the synthetic
+  title "smoke test"), matching the documented violet-while-working state.
+- Clicking it brought pid 64904 to the foreground — confirmed via
+  `GetForegroundWindow` / `GetWindowThreadProcessId`, not just visually.
+- Deleting the status file (simulating session end) made the orb disappear
+  within the next poll.
+
+No regression in any of the areas the brief called out (orbs, tray icon,
+click-to-focus, menu, settings window untouched by this branch).
