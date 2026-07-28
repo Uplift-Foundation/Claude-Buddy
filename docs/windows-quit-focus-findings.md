@@ -138,3 +138,51 @@ project (built under `%USERPROFILE%`, never inside the repo) deleted.
 not-running" claim originally cited a swatch check that was never actually
 captured — removed. The 0-process-count observation stands as the evidence
 for that trial.)
+
+## 3. Make Quit actually quit — done, verified end-to-end
+
+Item 2 came out clean, so per the brief this change was made: `Quit`'s
+Windows path in `ClaudeDesktopManager.cs` now asks first (`QuitWindows`,
+unchanged — `WindowsAppQuit.RequestClose`, posts `WM_CLOSE` to every window
+of the process), then hands a delayed check to `Task.Run` — `await
+Task.Delay(WindowsQuitGraceMs)` (2.5s), then if the process is still alive,
+`ForceQuitWindows(pid)`, the same `Process.Kill(entireProcessTree: true)`
+Force quit already uses. The delay runs on a thread-pool thread, not the UI
+thread: `Quit()` reaches this code via `Dispatcher.UIThread.Post`, and a
+blocking sleep there would freeze the tray menu and every orb until it woke
+up. Added a small `ProcessAlive(pid)` helper (`Process.GetProcessById` +
+`HasExited`, catch → false) so a build that does honour the close request
+within the grace period is left alone rather than killed out from under it.
+The macOS branch of `Quit()` is untouched — diffed to confirm — and
+`QuitWindows`/`ForceQuitWindows` keep their existing `[SupportedOSPlatform]`
+guards. Force quit stays in the menu unchanged, as the brief asked, as a
+fallback for the (now much narrower) case where the grace-period kill itself
+somehow doesn't land.
+
+Rebuilding required stopping the running `ClaudeBuddy.exe` via its own "Quit
+Claude Buddy" menu item first (same file-lock reason as before item 1), then
+relaunching the freshly built binary.
+
+Re-verified item 1's flow end-to-end against the new behaviour, on a fresh
+throwaway profile:
+
+- First trial: clicked Quit, then polled process count. By the first poll
+  (~9s later, tool round-trip overhead) the tree was already gone; the tray
+  row had settled to a plain, hollow-ringed "Profile-1" — not running, no
+  error, and never reached "won't quit" at all.
+- Second, tightly-timed trial (click and poll issued from the same script, no
+  gap): the process count (8 processes) stayed put through 2.1s, then read 0
+  at the 3.16s poll. So the tree ended roughly 2.5–3.2s after the click —
+  consistent with the 2.5s grace period plus the time to post `WM_CLOSE`,
+  wake the delayed task, and tear down 8 processes. "Within a few seconds,"
+  as the brief asked for.
+- Tray row confirmed hollow/not-running by screenshot after both trials.
+
+**Bottom line: Quit now actually quits on Windows**, ending the instance in
+about 3 seconds without the user ever needing to reach for Force quit, while
+Force quit remains available unchanged if a future build's close handling
+ever needs more than the grace period allows.
+
+Cleanup: the throwaway profile used for re-verification was force-ended
+before this write-up and its directory removed. `%APPDATA%\Claude` was not
+touched at any point in this item.

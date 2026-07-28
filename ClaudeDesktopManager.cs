@@ -58,6 +58,14 @@ namespace ClaudeBuddy
         private const int ForceQuitOfferMs = 60_000;
         private const int ErrorMs = 20_000;
 
+        // How long Quit waits, on Windows, for the close request it just sent
+        // to actually end the app before terminating the tree itself. Measured
+        // safe on a real profile (docs/windows-quit-focus-findings.md item 2):
+        // three kill/relaunch cycles, no corruption. Long enough that a build
+        // which does honour the close request gets a real chance; short enough
+        // that Quit still reads as quitting, not hanging.
+        private const int WindowsQuitGraceMs = 2_500;
+
         private const int ProcessTimeoutMs = 5_000;
 
         // Directories that mark a folder as a real Claude Desktop profile.
@@ -661,7 +669,22 @@ namespace ClaudeBuddy
                     if (!QuitWindows(pid))
                     {
                         SetTransient(directory, ProfileActivity.Error, ErrorMs, "couldn't quit");
+                        return;
                     }
+
+                    // Give a close request a real chance before assuming it
+                    // won't be honoured. Off the UI thread: this method reaches
+                    // here via Dispatcher.UIThread.Post, and sleeping there
+                    // freezes the menu and every orb. See WindowsQuitGraceMs and
+                    // docs/windows-quit-focus-findings.md item 2 for why
+                    // terminating afterward is safe rather than merely
+                    // reachable.
+                    Task.Run(async () =>
+                    {
+                        await Task.Delay(WindowsQuitGraceMs);
+                        if (!ProcessAlive(pid)) return;
+                        ForceQuitWindows(pid);
+                    });
                     return;
                 }
 
@@ -676,18 +699,20 @@ namespace ClaudeBuddy
             });
         }
 
-        // Windows has no AppleScript equivalent for "please quit", and Claude
-        // Desktop can't be made to quit from outside at all — WM_CLOSE hides it
-        // to the tray and WM_ENDSESSION is ignored, both measured on a real
-        // build. See WindowsAppQuit for what was tried.
+        // Claude Desktop can't be made to quit gracefully from outside on this
+        // build — WM_CLOSE hides it to the tray and WM_ENDSESSION is ignored,
+        // both measured on a real installed build. See WindowsAppQuit for what
+        // was tried. So Quit's Windows path asks first (this method), waits a
+        // couple of seconds off the UI thread for a build that does honour the
+        // close request, then terminates the tree itself exactly as Force quit
+        // does — verified safe to a live profile in
+        // docs/windows-quit-focus-findings.md item 2.
         //
-        // Which makes this method's real job keeping the force-quit offer
-        // reachable, not succeeding. It posts WM_CLOSE to every window of the
-        // process rather than calling Process.CloseMainWindow(), because that
-        // only finds *visible* windows: after the first Quit hid the app, it
-        // returned false, the row said "couldn't quit", and the state machine
-        // never reached ForceQuitOffered — leaving an instance that couldn't be
-        // ended from the app at all. Asking a hidden window works fine.
+        // Posts WM_CLOSE to every window of the process rather than calling
+        // Process.CloseMainWindow(), because that only finds *visible*
+        // windows: after a first Quit hid the app, it returned false and the
+        // row said "couldn't quit" without ever reaching a state that could
+        // terminate the tree. Asking a hidden window works fine.
         [SupportedOSPlatform("windows")]
         private static bool QuitWindows(int pid)
         {
@@ -703,6 +728,19 @@ namespace ClaudeBuddy
                 // ever promised — whether the app honours it is up to the app,
                 // and here it reliably doesn't.
                 return WindowsAppQuit.RequestClose(pid);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool ProcessAlive(int pid)
+        {
+            try
+            {
+                using var process = Process.GetProcessById(pid);
+                return !process.HasExited;
             }
             catch
             {
