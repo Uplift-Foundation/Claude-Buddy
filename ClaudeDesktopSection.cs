@@ -82,11 +82,52 @@ namespace ClaudeBuddy
             };
             submenu.Add(quit);
 
+            submenu.Add(BuildThemeItem(profile));
+
             var logs = new NativeMenuItem("Reveal logs");
             logs.Click += (_, _) => ClaudeDesktopManager.RevealLogs(profile);
             submenu.Add(logs);
 
             item.Menu = submenu;
+            return item;
+        }
+
+        // Claude Desktop's light/dark choice lives in each profile's own
+        // config.json, so it's already per-profile — the one way to make the app
+        // windows themselves differ, since the app has no accent colour.
+        //
+        // A nested submenu rather than three more rows, so the parent submenu
+        // keeps a fixed length whatever the state. Writing while the instance is
+        // running would be discarded when it exits, so it's offered only while
+        // stopped, and the label says why rather than leaving a dead item.
+        private static NativeMenuItem BuildThemeItem(ProfileView profile)
+        {
+            if (profile.IsRunning)
+            {
+                return new NativeMenuItem("Theme — quit to change") { IsEnabled = false };
+            }
+
+            var item = new NativeMenuItem("Theme");
+            var choices = new NativeMenu();
+
+            foreach (var (mode, label) in new[]
+                     {
+                         ("system", "Match system"),
+                         ("light", "Light"),
+                         ("dark", "Dark")
+                     })
+            {
+                var choice = new NativeMenuItem(label)
+                {
+                    ToggleType = NativeMenuItemToggleType.CheckBox,
+                    IsChecked = string.Equals(profile.ThemeMode, mode, StringComparison.OrdinalIgnoreCase)
+                };
+                var captured = mode;
+                choice.Click += (_, _) => ClaudeDesktopManager.SetTheme(profile, captured);
+                choices.Add(choice);
+            }
+
+            item.Menu = choices;
             return item;
         }
 

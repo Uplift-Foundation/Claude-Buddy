@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Avalonia.Threading;
 
 namespace ClaudeBuddy
@@ -19,7 +22,8 @@ namespace ClaudeBuddy
         bool IsRunning,
         int Pid,
         ProfileActivity Activity,
-        string? Message);
+        string? Message,
+        string ThemeMode);
 
     internal sealed record DesktopSnapshot(bool AppInstalled, IReadOnlyList<ProfileView> Profiles);
 
@@ -176,7 +180,7 @@ namespace ClaudeBuddy
             if (!snapshot.AppInstalled) return "cd=off";
 
             return "cd=" + string.Join(",", snapshot.Profiles
-                .Select(p => $"{p.DisplayName}:{(p.IsRunning ? 1 : 0)}:{p.Activity}:{p.Message}")
+                .Select(p => $"{p.DisplayName}:{(p.IsRunning ? 1 : 0)}:{p.Activity}:{p.Message}:{p.ThemeMode}")
                 .OrderBy(entry => entry, StringComparer.Ordinal));
         }
 
@@ -198,7 +202,8 @@ namespace ClaudeBuddy
                     isRunning,
                     isRunning ? pid : 0,
                     activity,
-                    message));
+                    message,
+                    ReadThemeMode(directory)));
             }
 
             return new DesktopSnapshot(scan.Installed, views);
@@ -545,6 +550,127 @@ namespace ClaudeBuddy
             });
         }
 
+        // ---- theme ---------------------------------------------------------
+
+        // Claude Desktop keeps its light/dark choice in each profile's own
+        // config.json, so it is already per-profile — setting different values
+        // makes the app windows themselves distinguishable, which is the only
+        // in-app differentiation available (there is no accent-colour concept
+        // anywhere in the app).
+        public const string SystemTheme = "system";
+
+        private static string ReadThemeMode(string directory)
+        {
+            try
+            {
+                var path = Path.Combine(directory, "config.json");
+                if (!File.Exists(path)) return SystemTheme;
+
+                using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+                return document.RootElement.TryGetProperty("userThemeMode", out var value)
+                       && value.ValueKind == JsonValueKind.String
+                    ? value.GetString() ?? SystemTheme
+                    : SystemTheme;
+            }
+            catch
+            {
+                return SystemTheme;
+            }
+        }
+
+        public static void SetTheme(ProfileView profile, string mode)
+        {
+            if (!OperatingSystem.IsMacOS()) return;
+
+            var directory = profile.Directory;
+
+            Task.Run(() =>
+            {
+                try
+                {
+                    // A running instance rewrites config.json from memory when it
+                    // exits, which would silently discard this — and two writers
+                    // on one file can leave it unparseable, which would cost the
+                    // profile its stored login. Re-check authoritatively rather
+                    // than trusting the menu's snapshot.
+                    if (MapInstances(MacOSProcessScan.Scan()).ContainsKey(directory))
+                    {
+                        SetTransient(directory, ProfileActivity.Error, ErrorMs, "quit it first");
+                        return;
+                    }
+
+                    var path = Path.Combine(directory, "config.json");
+                    var original = File.Exists(path) ? File.ReadAllText(path) : "{}";
+                    var root = JsonNode.Parse(original) as JsonObject;
+
+                    if (root is null)
+                    {
+                        SetTransient(directory, ProfileActivity.Error, ErrorMs, "config unreadable");
+                        return;
+                    }
+
+                    root["userThemeMode"] = mode;
+
+                    // Write beside the target and rename over it: a crash midway
+                    // through an in-place write would leave the profile without a
+                    // parseable config, taking its oauth token cache with it.
+                    // UTF-8 without a BOM, matching what the app itself writes.
+                    var temporary = path + ".claude-buddy.tmp";
+                    File.WriteAllText(temporary, root.ToJsonString(), new UTF8Encoding(false));
+
+                    // This file holds the profile's login. Prove the rewrite kept
+                    // every key before letting it replace the original, and throw
+                    // the candidate away rather than the real thing if it didn't.
+                    if (!PreservesKeys(original, temporary, mode))
+                    {
+                        try { File.Delete(temporary); } catch { }
+                        SetTransient(directory, ProfileActivity.Error, ErrorMs, "config rewrite unsafe");
+                        return;
+                    }
+
+                    File.Move(temporary, path, overwrite: true);
+                }
+                catch
+                {
+                    SetTransient(directory, ProfileActivity.Error, ErrorMs, "couldn't set theme");
+                    return;
+                }
+
+                KickRefresh();
+            });
+        }
+
+        // Every top-level key present before must still be present after, with an
+        // unchanged serialised value — except userThemeMode, which is the one we
+        // meant to change. Cheap insurance against a serialiser quirk silently
+        // dropping or rewriting the encrypted token blobs next door.
+        private static bool PreservesKeys(string originalText, string candidatePath, string expectedMode)
+        {
+            try
+            {
+                using var before = JsonDocument.Parse(originalText);
+                using var after = JsonDocument.Parse(File.ReadAllBytes(candidatePath));
+
+                if (before.RootElement.ValueKind != JsonValueKind.Object) return false;
+                if (after.RootElement.ValueKind != JsonValueKind.Object) return false;
+
+                foreach (var property in before.RootElement.EnumerateObject())
+                {
+                    if (!after.RootElement.TryGetProperty(property.Name, out var written)) return false;
+                    if (property.NameEquals("userThemeMode")) continue;
+                    if (written.GetRawText() != property.Value.GetRawText()) return false;
+                }
+
+                return after.RootElement.TryGetProperty("userThemeMode", out var themeValue)
+                       && themeValue.ValueKind == JsonValueKind.String
+                       && themeValue.GetString() == expectedMode;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public static void RevealLogs(ProfileView profile)
         {
             if (!OperatingSystem.IsMacOS()) return;
@@ -615,7 +741,8 @@ namespace ClaudeBuddy
                 // notice it — the whole point of the click is to sign in.
                 Launch(new ProfileView(
                     DisplayNameFor(name), canonical, IsDefault: false,
-                    IsRunning: false, Pid: 0, ProfileActivity.None, Message: null));
+                    IsRunning: false, Pid: 0, ProfileActivity.None, Message: null,
+                    ThemeMode: SystemTheme));
             });
         }
 
