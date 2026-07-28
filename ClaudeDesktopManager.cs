@@ -462,8 +462,17 @@ namespace ClaudeBuddy
                     // re-trigger the deployment-mode chooser on an already
                     // configured profile — and it would start a second log
                     // history under <profile>/Logs.
+                    // -n on both paths. Without it, `open -b` does not start
+                    // anything when *any* instance of the bundle is already
+                    // running — LaunchServices just activates that one — so
+                    // launching Default while a profile was up would bring the
+                    // profile's window forward and Default would never start.
+                    // Safe because the gate above has just confirmed, from a
+                    // fresh scan, that this directory has no live instance; an
+                    // env-var-less instance maps to Default there, so a
+                    // Dock-launched Default is caught too.
                     var arguments = isDefault
-                        ? new[] { "-b", BundleId }
+                        ? new[] { "-n", "-b", BundleId }
                         : new[] { "-n", "-b", BundleId, "--env", "CLAUDE_USER_DATA_DIR=" + directory };
 
                     // open(1) rather than starting Contents/MacOS/Claude
