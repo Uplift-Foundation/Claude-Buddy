@@ -207,3 +207,41 @@ re-checked the file on disk — unchanged, still `false`, still no BOM.
 Relaunched `publish\ClaudeBuddy.exe`, opened the tray menu again: "Show
 orbs" still unchecked. Toggled it back on to restore the default state I
 found the app in; file now `"showOrbs": true`, still valid, still no BOM.
+
+## 8. Idle CPU — PASS, effectively 0% (better than macOS's baseline)
+
+Machine: 8 cores / 16 logical processors. Got two idle orbs up via synthetic
+hook payloads (green "CPU Test One", blue "CPU Test Two", both `idle`,
+hosted by a real conhost terminal so they're genuine, non-degenerate
+sessions, not a headless edge case).
+
+Used a delta-based sample, not a lifetime average, per the brief's warning
+about what wasted an afternoon on the macOS side: read
+`Process.TotalProcessorTime` at $t_0$, slept 2s, read it again, repeated 6
+times, and computed each interval's CPU-time delta over its wall-clock delta
+rather than dividing total CPU time by total process lifetime.
+
+```
+sample 0 : 0% of one core (cpu delta 0ms / wall delta 2028ms)
+sample 1 : 0% of one core (cpu delta 0ms / wall delta 2042ms)
+sample 2 : 0% of one core (cpu delta 0ms / wall delta 2020ms)
+sample 3 : 0% of one core (cpu delta 0ms / wall delta 2022ms)
+sample 4 : 0% of one core (cpu delta 0ms / wall delta 2017ms)
+sample 5 : 0% of one core (cpu delta 0ms / wall delta 2018ms)
+```
+
+`TotalProcessorTime` did not advance at all (stayed at exactly
+`00:00:02.6406250`) across the entire ~12s sampling window. Cross-checked
+with an independent tool, `Get-Counter '\Process(ClaudeBuddy)\% Processor
+Time'` (Windows' counter is per-core, i.e. 100% = one full core saturated,
+same convention as the macOS number this is being compared against): 0.77%,
+0%, 0%, 0.78%, 0% across 5 samples two seconds apart — consistent with the
+delta measurement, both landing at effectively 0% of one core with two idle
+orbs up.
+
+**Windows number: ~0% of one core**, versus macOS's ~7% after its own
+optimization pass. Not claiming Windows is "faster" in any general sense —
+more likely the two idle orbs just aren't driving any continuous
+redraw/timer work on this platform's Avalonia rendering path the way they
+apparently do on macOS, but that's a hypothesis, not something I traced
+further given it's a favorable result, not a bug.
