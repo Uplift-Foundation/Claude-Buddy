@@ -90,20 +90,43 @@ Details worth knowing:
   Items it gets the bare system `PATH`, with no Homebrew in it — so the hook
   records the tmux binary's location, with the usual install paths as
   fallbacks.
-- **The Claude Desktop profile switcher is macOS-only, and not by choice.** On
-  Windows, Claude Desktop installs as an **MSIX package** (the installer produces
-  one; it lands in `C:\Program Files\WindowsApps\Claude_...`, ACL'd to
-  TrustedInstaller and mounted read-only). Two consequences, both measured on a
+- **The Claude Desktop profile switcher is macOS-only today — but not, as this
+  file previously claimed, impossible on Windows.** There, Claude Desktop installs
+  as an **MSIX package** (`C:\Program Files\WindowsApps\Claude_...`, ACL'd so the
+  payload is readable but not executable). All of the following was measured on a
   real Windows 11 box:
-  - **Profiles can't be selected.** The whole mechanism is
-    `CLAUDE_USER_DATA_DIR` per launch, and there is no way to set it. There's no
-    app execution alias, so the only launch route is package activation — and
-    activation does not inherit the launching process's environment (probe
-    directory created, stayed empty). Setting it as a *user* environment variable
-    in the registry doesn't reach it either, because the activation broker builds
-    its environment at logon. `Invoke-CommandInDesktopPackage` would work but
-    needs elevation on every launch, which is not something a tray app should ask
-    for.
+  - **The app itself supports profiles.** The Windows build honors
+    `CLAUDE_USER_DATA_DIR` exactly as macOS does — it's the same branch in the
+    same bundle, with no platform guard:
+    ```js
+    if (process.env.CLAUDE_USER_DATA_DIR) {
+      const A = process.env.CLAUDE_USER_DATA_DIR;
+      app.setPath("userData", A); app.setPath("logs", resolve(A, "Logs"));
+    }
+    ```
+  - **What's blocked is the launch, not the feature.** Package activation doesn't
+    inherit the launching process's environment (probe directory created, stayed
+    empty), and setting it as a *user* environment variable in the registry
+    doesn't reach it either, because the activation broker builds its environment
+    at logon. Executing the packaged binary directly fails with `Access is
+    denied`, and `Invoke-CommandInDesktopPackage` fails with `E_ACCESSDENIED`
+    unless elevated — which is not something a tray app should ask for on every
+    launch.
+  - **One route does work, at a price.** Copy the package payload (577 MB, 2166
+    files — `robocopy` reads it fine even though it won't execute in place) to a
+    writable location and launch *that* with the variable set. Verified: the
+    target profile directory filled with a complete Electron userData tree
+    (`blob_storage`, `Cache`, `Crashpad`, `GPUCache`, …) while the packaged
+    instance kept running untouched, so the single-instance lock is per
+    profile directory here as it is on macOS. One copy serves every profile,
+    since only the variable changes per launch. The costs are why it isn't
+    shipped: 577 MB duplicated, the copy receives no MSIX updates so it goes
+    stale when Claude updates (macOS has the same problem and answers it with
+    "Rebuild after a Claude update"), and the copy runs without package
+    identity — whose effect on notifications, protocol handlers and the
+    sign-in flow was *not* tested. Two accounts have never actually been
+    signed in side by side on Windows; what's verified is that the profile
+    directory is honored and a second instance runs.
   - **Icons can't be tinted.** No Dock, and the taskbar icon comes from the signed
     package, so the APFS-clone trick has no analogue.
 
