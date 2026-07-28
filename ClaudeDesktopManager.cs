@@ -634,6 +634,20 @@ namespace ClaudeBuddy
                 var source = AppPath();
                 if (source is null) return;
 
+                var directory = Path.Combine(ProfileRoot, folder);
+
+                // Recolouring rebuilds the clone, and deleting a bundle out from
+                // under a running instance is asking for trouble — it survives in
+                // practice, because the open inodes stay alive, but anything the
+                // app loads lazily afterwards would be gone. So defer: the clone
+                // records the colour it was built with, and Ensure() treats a
+                // mismatch as stale, so the next launch picks it up.
+                if (MapInstances(MacOSProcessScan.Scan()).ContainsKey(directory))
+                {
+                    SetTransient(directory, ProfileActivity.Error, ErrorMs, "icon changes on relaunch");
+                    return;
+                }
+
                 ClaudeDesktopBundles.Retint(
                     folder, source, ClaudeDesktopColors.For(folder, isDefault: false));
             });

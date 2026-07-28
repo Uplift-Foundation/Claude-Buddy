@@ -32,6 +32,9 @@ namespace ClaudeBuddy
     // profile would silently break running-detection for every cloned instance.
     internal static class ClaudeDesktopBundles
     {
+        // False when the last icon write was refused by macOS.
+        public static bool IconApplied { get; private set; } = true;
+
         private static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         // A cache, not configuration: everything here is regenerable from
@@ -59,7 +62,12 @@ namespace ClaudeBuddy
             {
                 var clone = PathFor(profileFolder);
 
-                if (Directory.Exists(clone) && !IsStale(clone, sourceApp)) return clone;
+                if (Directory.Exists(clone)
+                    && !IsStale(clone, sourceApp)
+                    && ColourMatches(profileFolder, tint))
+                {
+                    return clone;
+                }
 
                 Directory.CreateDirectory(DirectoryFor(profileFolder));
                 if (Directory.Exists(clone)) DeleteDirectory(clone);
@@ -87,6 +95,19 @@ namespace ClaudeBuddy
             var sourceVersion = BundleVersion(sourceApp);
             if (cloneVersion is null || sourceVersion is null) return true;
             return !string.Equals(cloneVersion, sourceVersion, StringComparison.Ordinal);
+        }
+
+        private static bool ColourMatches(string profileFolder, Color tint)
+        {
+            try
+            {
+                var marker = Path.Combine(DirectoryFor(profileFolder), "icon-colour");
+                return File.Exists(marker) && File.ReadAllText(marker).Trim() == tint.ToString();
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public static bool IsStaleFor(string profileFolder, string sourceApp) =>
@@ -118,7 +139,16 @@ namespace ClaudeBuddy
             if (!Run("/usr/bin/sips", "-s", "format", "png", "-Z", "512", source, "--out", flat)) return;
 
             WriteTinted(flat, tinted, tint);
-            MacOSCustomIcon.Set(tinted, clone);
+
+            // Record what colour this clone was built with. Ensure() treats a
+            // mismatch as stale, which is how a recolour deferred while the
+            // instance was running gets applied at its next launch.
+            try { File.WriteAllText(Path.Combine(work, "icon-colour"), tint.ToString()); } catch { }
+
+            // A false here means macOS refused the write — see the note on
+            // Retint. Worth knowing about rather than leaving the user with a
+            // wrong-coloured Dock tile and no explanation.
+            IconApplied = MacOSCustomIcon.Set(tinted, clone);
 
             try { File.Delete(flat); } catch { }
         }
@@ -190,10 +220,17 @@ namespace ClaudeBuddy
             output.Save(destinationPng);
         }
 
-        // A clone's icon is tinted once when it's created, so changing a profile's
-        // colour has to regenerate it. Re-tinting is just the icon step — no
-        // re-cloning, so it costs a sips call and an NSWorkspace.setIcon rather
-        // than another copy of the bundle.
+        // Changing a profile's colour has to change its Dock icon, and the icon
+        // is baked into the clone when the clone is made.
+        //
+        // Re-setting the icon on an existing bundle is what you'd expect to do,
+        // and it does not work: on current macOS, writing into an app bundle you
+        // did not just create trips the *App Management* privacy permission, and
+        // NSWorkspace.setIcon fails — silently, leaving the FinderInfo flag set
+        // with no Icon resource behind it, so the Dock keeps showing a stale
+        // cached icon. Rebuilding the clone instead re-runs the path that already
+        // works (create, then set the icon on something we just made) and needs no
+        // permission. An APFS clone costs ~0.3s and ~0 disk, so this is cheap.
         public static bool Retint(string profileFolder, string sourceApp, Color tint)
         {
             if (!OperatingSystem.IsMacOS()) return false;
@@ -201,12 +238,8 @@ namespace ClaudeBuddy
 
             try
             {
-                ApplyTintedIcon(PathFor(profileFolder), sourceApp, profileFolder, tint);
-
-                // Finder and the Dock cache icons aggressively; touching the
-                // bundle nudges them to re-read it.
-                System.IO.Directory.SetLastWriteTimeUtc(PathFor(profileFolder), DateTime.UtcNow);
-                return true;
+                Remove(profileFolder);
+                return Ensure(profileFolder, sourceApp, tint) is not null;
             }
             catch
             {

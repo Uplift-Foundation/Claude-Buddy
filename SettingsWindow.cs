@@ -183,20 +183,38 @@ namespace ClaudeBuddy
             };
             Add(grid, 0, name);
 
+            // "auto" first, mapping to a null stored colour, so a profile can go
+            // back to its name-derived colour. Without it a colour is a one-way
+            // door — including one set by a stray keystroke.
+            var options = new List<string> { AutoColour };
+            options.AddRange(ClaudeDesktopColors.Names);
+
+            var stored = settings.Color;
+            var selected = 0;
+            if (stored is { Length: > 0 })
+            {
+                var found = options.FindIndex(o =>
+                    string.Equals(o, stored, StringComparison.OrdinalIgnoreCase));
+                if (found > 0) selected = found;
+            }
+
             var colour = new ComboBox
             {
-                ItemsSource = ClaudeDesktopColors.Names.Select(SwatchItem).ToList(),
-                SelectedIndex = Math.Max(0, ClaudeDesktopColors.Names
-                    .ToList()
-                    .IndexOf(ClaudeDesktopColors.NameFor(folder, profile.IsDefault))),
+                ItemsSource = options
+                    .Select(name => name == AutoColour
+                        ? SwatchItem(AutoColour, ClaudeDesktopColors.For(folder, profile.IsDefault))
+                        : SwatchItem(name, ClaudeDesktopColors.ByName(name)))
+                    .ToList(),
+                SelectedIndex = selected,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 10, 0)
             };
             colour.SelectionChanged += (_, _) =>
             {
-                if (colour.SelectedIndex < 0) return;
+                var index = colour.SelectedIndex;
+                if (index < 0) return;
 
-                var chosen = ClaudeDesktopColors.Names[colour.SelectedIndex];
+                var chosen = index == 0 ? null : options[index];
                 ClaudeBuddySettings.Update(folder, entry => entry.Color = chosen);
 
                 // The Dock icon was tinted when its clone was built, so it needs
@@ -221,10 +239,10 @@ namespace ClaudeBuddy
             return grid;
         }
 
-        private static Control SwatchItem(string colourName)
-        {
-            var color = ClaudeDesktopColors.ByName(colourName);
+        private const string AutoColour = "auto";
 
+        private static Control SwatchItem(string colourName, Color color)
+        {
             return new StackPanel
             {
                 Orientation = Orientation.Horizontal,
