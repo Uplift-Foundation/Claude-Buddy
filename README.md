@@ -140,14 +140,62 @@ account. Renaming one means quitting it and renaming the folder, which is
 what **Reveal profiles folder** is for. The section is hidden entirely if
 `Claude.app` isn't installed.
 
+Each profile gets a **colour**, derived from its folder name so it survives
+restarts and needs no config, and that one colour shows up on four surfaces:
+
+- **The tray menu** — a real swatch beside each row (filled = running, hollow =
+  stopped). Colour is identity, fill is state, exactly as with the orbs.
+- **The Dock** — each created profile launches from its own APFS clone of
+  `Claude.app` whose icon is Claude's mark recoloured. 1.5 MB of real disk for a
+  754 MB bundle. Default keeps the bundle you installed, icon and all.
+- **The window itself** — the frontmost instance gets a coloured border and a
+  faint wash, drawn by a click-through overlay pinned to its frame.
+- **Light or dark** — each profile's own `userThemeMode`, set from its submenu
+  while it's stopped.
+
 Details worth knowing:
 
+- **Why the Dock clone is safe.** A custom Finder icon lives in an `Icon\r` file
+  at the bundle root plus a `com.apple.FinderInfo` xattr — both *outside*
+  `Contents/`, which is what the code signature seals. The result: `codesign
+  --verify` passes, `spctl` still reports "Notarized Developer ID", and the
+  CDHash is byte-identical to Anthropic's. That last part is the point — the
+  running code identity is unchanged, so the `Claude Safe Storage` keychain ACL
+  still matches (stored logins keep decrypting) and existing TCC grants still
+  apply. Renaming the app would mean editing `Info.plist`, which forces a
+  re-sign and loses all of it, so every clone still calls itself "Claude".
+  Only `codesign --verify --strict` objects, over the xattr.
+- **Clones go stale after a Claude update.** Squirrel only updates
+  `/Applications/Claude.app`, so **Dock icons → Rebuild after a Claude update**
+  re-clones. Bundles live in `~/Library/Application Support/ClaudeBuddy/bundles/`
+  and are pure cache — deleting them only costs the colours. Each is named
+  exactly `Claude.app` inside a per-profile directory, because the process scan
+  matches on the path suffix `/Claude.app/Contents/MacOS/Claude`; naming bundles
+  after profiles would silently break running-detection for cloned instances.
+- **Why the window tint is an overlay rather than real theming.** There is no way
+  in: the app has no accent-colour concept (its theme is a `body` class driven by
+  `prefers-color-scheme`), Chromium removed `--user-stylesheet` years ago (0
+  occurrences in the shipped Electron binary), and remote debugging — the one
+  route that could inject CSS — is refused unless `CLAUDE_CDP_AUTH` carries an
+  Ed25519 signature over `timestamp.base64(userDataDir)`, verified against a key
+  embedded in `app.asar`, bound to that exact profile path and valid for five
+  minutes. So the tint is drawn over the app instead. Frames come from
+  `CGWindowListCopyWindowInfo`, which gives bounds and owner pid with **no**
+  permission prompt (only titles and images need Screen Recording).
+- **The tint only follows the frontmost instance.** The overlay is topmost, so
+  showing it for a background window would drop a coloured rectangle on top of
+  whatever app you were actually using. Windows on other Spaces are skipped too:
+  they still count as "on screen" to CGWindowList but report coordinates in that
+  Space's frame, far outside any display. Toggle it under **Dock icons → Tint the
+  active window**; like the orb toggle, it resets on relaunch. Verified
+  pixel-exact against a live window, and click-through, so clicks reach Claude.
+  Only tested on a single display.
 - **`Claude-3p` and `Claude-dev` are skipped.** `-3p` is Claude Desktop's own
   sidecar config directory (`configLibrary/`, `deploymentMode`) that a normally
   launched instance reads and writes — offering it as a profile would point a
   second Chromium at a directory the running app is already using, and
   concurrent access to one user-data directory corrupts leveldb and SQLite.
-- **Default is launched differently, on purpose** — plain `open -b`, with no
+- **Default is launched differently, on purpose** — plain `open -n -b`, with no
   `CLAUDE_USER_DATA_DIR`. Setting the variable suppresses the app's own
   resolution of that sidecar directory, so a tray launch could re-trigger the
   enterprise deployment-mode chooser on an already-configured profile, and it

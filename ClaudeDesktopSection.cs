@@ -50,6 +50,14 @@ namespace ClaudeBuddy
             revealBundles.Click += (_, _) => ClaudeDesktopManager.RevealDockIconBundles();
             iconMenu.Add(revealBundles);
 
+            var tint = new NativeMenuItem("Tint the active window")
+            {
+                ToggleType = NativeMenuItemToggleType.CheckBox,
+                IsChecked = ClaudeDesktopOverlay.Enabled
+            };
+            tint.Click += (_, _) => ClaudeDesktopOverlay.SetEnabled(!ClaudeDesktopOverlay.Enabled);
+            iconMenu.Add(tint);
+
             icons.Menu = iconMenu;
             menu.Add(icons);
         }

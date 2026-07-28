@@ -85,6 +85,10 @@ namespace ClaudeBuddy
                 TrayIcon.SetIcons(app, new TrayIcons { _tray });
             }
 
+            // Tints the frontmost Claude Desktop window in its profile's colour.
+            // Owns its own timer; nothing else here depends on it.
+            ClaudeDesktopOverlay.Start();
+
             Rebuild(Array.Empty<SessionEntry>());
         }
 
