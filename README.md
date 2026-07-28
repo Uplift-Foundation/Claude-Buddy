@@ -90,6 +90,30 @@ Details worth knowing:
   Items it gets the bare system `PATH`, with no Homebrew in it — so the hook
   records the tmux binary's location, with the usual install paths as
   fallbacks.
+- **The Claude Desktop profile switcher is macOS-only, and not by choice.** On
+  Windows, Claude Desktop installs as an **MSIX package** (the installer produces
+  one; it lands in `C:\Program Files\WindowsApps\Claude_...`, ACL'd to
+  TrustedInstaller and mounted read-only). Two consequences, both measured on a
+  real Windows 11 box:
+  - **Profiles can't be selected.** The whole mechanism is
+    `CLAUDE_USER_DATA_DIR` per launch, and there is no way to set it. There's no
+    app execution alias, so the only launch route is package activation — and
+    activation does not inherit the launching process's environment (probe
+    directory created, stayed empty). Setting it as a *user* environment variable
+    in the registry doesn't reach it either, because the activation broker builds
+    its environment at logon. `Invoke-CommandInDesktopPackage` would work but
+    needs elevation on every launch, which is not something a tray app should ask
+    for.
+  - **Icons can't be tinted.** No Dock, and the taskbar icon comes from the signed
+    package, so the APFS-clone trick has no analogue.
+
+  What does port cleanly, and what Windows gets today: session orbs, the tray icon
+  and menu, click-to-focus, chat names and colours, the settings window, and
+  persisted settings under `%APPDATA%\ClaudeBuddy`. The profile section simply
+  doesn't appear. One thing that *would* work if the mechanism were ever
+  reachable: profile detection, since Electron's `crashpad-handler` child carries
+  `--user-data-dir=` in its command line and `Win32_Process` exposes `CommandLine`
+  — the equivalent of `KERN_PROCARGS2` on macOS, with no memory reading needed.
 - **WSL + tmux is not covered.** The Windows hook is PowerShell running
   outside the Linux environment, so it never sees `$TMUX`; clicks on those
   orbs behave as they always have (activate the terminal window).
