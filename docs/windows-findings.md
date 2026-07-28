@@ -54,3 +54,60 @@ own popup-menu host clipping a row. Judgement call: not fixing this, since
 there's nothing in `TrayController.cs` to fix — the item is always added. If
 it recurs for Owner, the workaround is dragging the icon out of the overflow
 (Settings → Personalization → Taskbar → Other system tray icons).
+
+## 4. Orbs via synthetic hook payload — PASS
+
+`$PSVersionTable.PSVersion` for `powershell.exe` (what the shipped hook
+snippets actually invoke) on this box: **5.1.26100.5710** — the exact
+Windows PowerShell 5.1 the encoding fix in `ClaudeBuddyHook.ps1` targets, not
+just PowerShell 7. Confirmed this is what's used by re-reading
+`claude-hooks-snippet-windows.json`, which shells out to `powershell.exe`
+directly.
+
+Per the brief, avoided spawning a nested `claude`; instead ran
+`ClaudeBuddyHook.ps1` directly with synthetic stdin JSON from inside a real
+Windows Terminal tab (`wt.exe` new tab, not an ad-hoc `cmd.exe`, so the
+terminal-resolution fields come out the way a real session would produce
+them). Payload:
+`{"session_id":"synthtest2","cwd":"C:\\cb","transcript_path":"...\\transcript.jsonl"}`,
+transcript pre-seeded with `ai-title` / `agent-color` lines, piped through
+`type payload.json | powershell.exe -File ClaudeBuddyHook.ps1 -State <state>`.
+
+Resulting status file for `-State generating`:
+`{"term_program":"WindowsTerminal","color":"green","term_pid":39068,"state":"generating","cwd":"C:\\cb","title":"Test Orb Session"}`
+— `term_pid` correctly resolved to the real `WindowsTerminal.exe` PID via the
+hook's parent-process walk.
+
+Cycled the same session through all four states and screenshotted the orb
+(cropped to a 150x150 top-right corner, zoomed 2x) after each:
+
+- `generating` — violet fill, green ring (from `agent-color`), "T" (from the
+  title "Test Orb Session")
+- `waiting` — amber/orange fill
+- `idle` — slate fill
+- `ended` — status file removed, orb gone, confirmed via directory listing
+
+All match the brief's description exactly.
+
+**Encoding fix re-verified under real PS 5.1, not just read in the diff.**
+Ran a second synthetic session with a transcript title containing an accent
+and an em dash (`café — résumé`) through the same `powershell.exe` 5.1 path.
+The written status file round-tripped as clean UTF-8 with no BOM:
+`"title":"café — résumé"` (bytes confirmed with a hex dump — `c3 a9` for
+`é`, `e2 80 94` for the em dash, first two bytes of the file are `7b 22`
+i.e. `{"`, no `ef bb bf`). The orb rendered "C" with no mangling or `?`
+placeholder. The `-Encoding UTF8` / `UTF8Encoding(false)` fix from the code
+comments holds up in practice on the PowerShell version that's actually
+wired into the hooks.
+
+One thing worth recording as a process-model gotcha, not a defect: my first
+attempt at this test used `Start-Process cmd.exe` directly (not through
+`wt.exe`), which Windows 11's "default terminal application" setting silently
+re-hosts inside Windows Terminal anyway — but taking that path instead of a
+normal interactive `wt.exe` launch left `WT_SESSION` unset and the parent-walk
+landing on a process that had already exited, so `term_pid` came back `0` and
+the orb never appeared at all (filtered out by `SessionManager`'s "no
+terminal info at all" check). Switching to `wt.exe` directly for a new tab —
+matching how a person actually opens Windows Terminal — fixed it completely.
+Not a code bug: it just means this specific synthetic-payload test needs a
+real terminal launch, not a bare child-process spawn, to be representative.
