@@ -23,10 +23,22 @@ namespace ClaudeBuddy
     // did before this gate existed.
     internal static class ClaudeDesktopOverlay
     {
-        // Fast enough to feel attached to the window while dragging, cheap enough
-        // to leave running: the window list is a couple of milliseconds.
-        private static readonly TimeSpan ActivePoll = TimeSpan.FromMilliseconds(250);
+        // A sample — frontmost pid plus the window list — measures at 0.4 ms, so
+        // tracking at 60 Hz costs about 2.4% of one core. That's affordable while
+        // a window is actually moving and wasteful when it isn't, hence three
+        // rates: chase at 60 Hz for a moment after anything changes, 30 Hz while a
+        // Claude instance is in front but still — so the *first* sample of a drag
+        // is never the bottleneck — and ~1 Hz when it isn't in front at all.
+        private static readonly TimeSpan MotionPoll = TimeSpan.FromMilliseconds(16);
+        private static readonly TimeSpan ActivePoll = TimeSpan.FromMilliseconds(33);
         private static readonly TimeSpan IdlePoll = TimeSpan.FromMilliseconds(900);
+
+        // How long to keep chasing at 60 Hz after the last observed change, so a
+        // drag that pauses mid-flight doesn't drop back to the slow rate and lag
+        // when it resumes.
+        private static readonly TimeSpan MotionLinger = TimeSpan.FromMilliseconds(600);
+
+        private static long _lastMotionAt;
 
         private static readonly Dictionary<uint, OverlayWindow> Overlays = new();
         private static DispatcherTimer? _timer;
@@ -70,13 +82,12 @@ namespace ClaudeBuddy
                 return;
             }
 
-            if (_timer is not null) _timer.Interval = ActivePoll;
-
             var colour = ClaudeDesktopColors.For(
                 Path.GetFileName(profile.Directory), profile.IsDefault);
 
             var frames = MacOSWindowList.ForPid(frontmost);
             var live = new HashSet<uint>();
+            var moved = false;
 
             foreach (var frame in frames)
             {
@@ -93,9 +104,20 @@ namespace ClaudeBuddy
                 {
                     overlay = new OverlayWindow();
                     Overlays[frame.WindowId] = overlay;
+                    moved = true;
                 }
 
-                overlay.Apply(colour, frame);
+                if (overlay.Apply(colour, frame)) moved = true;
+            }
+
+            var now = Environment.TickCount64;
+            if (moved) _lastMotionAt = now;
+
+            if (_timer is not null)
+            {
+                _timer.Interval = now - _lastMotionAt < MotionLinger.TotalMilliseconds
+                    ? MotionPoll
+                    : ActivePoll;
             }
 
             // Windows that closed, moved to another Space, or belong to an
@@ -178,13 +200,27 @@ namespace ClaudeBuddy
                 Opened += (_, _) => MakeClickThrough();
             }
 
-            public void Apply(Color colour, MacOSWindowList.WindowFrame frame)
-            {
-                _frame.BorderBrush = new SolidColorBrush(colour);
+            private Color _colour;
+            private MacOSWindowList.WindowFrame _applied;
 
-                // A wash this faint reads as a tint without costing text contrast;
-                // the border is what actually identifies the window.
-                _frame.Background = new SolidColorBrush(colour, 0.07);
+            // Returns whether anything actually changed, which is what drives the
+            // poll rate. Everything here is skipped when the frame is unchanged:
+            // at 60 Hz a static window should cost only the sample, not a layout
+            // pass and a native setFrame every tick.
+            public bool Apply(Color colour, MacOSWindowList.WindowFrame frame)
+            {
+                if (colour != _colour)
+                {
+                    _colour = colour;
+                    _frame.BorderBrush = new SolidColorBrush(colour);
+
+                    // A wash this faint reads as a tint without costing text
+                    // contrast; the border is what identifies the window.
+                    _frame.Background = new SolidColorBrush(colour, 0.07);
+                }
+
+                if (_shown && frame == _applied) return false;
+                _applied = frame;
 
                 var scale = Screens.Primary?.Scaling ?? 1.0;
 
@@ -192,9 +228,10 @@ namespace ClaudeBuddy
                 Height = frame.Height;
                 Position = new PixelPoint((int)(frame.X * scale), (int)(frame.Y * scale));
 
-                if (_shown) return;
+                if (_shown) return true;
                 _shown = true;
                 Show();
+                return true;
             }
 
             // Without this the tint would swallow every click meant for Claude.
