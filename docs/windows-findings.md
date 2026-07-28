@@ -195,3 +195,15 @@ rectangle through "Show orbs" → "Tint…" → "Done" and wrapped back around
 (3 stops, as expected), `Space` toggled "Show orbs" off and back on (screenshot-
 confirmed both states), and `Enter` on the focused "Done" button closed the
 window. All keyboard-driven, no mouse involved after the initial menu click.
+
+## 7. Settings persist — PASS
+
+Toggled "Show orbs" off from the tray menu's own checkbox (equivalent to the
+Settings window's toggle — same `SessionManager.SetOrbsVisible` call).
+Checked `%APPDATA%\ClaudeBuddy\settings.json` immediately after: `"showOrbs":
+false`, valid JSON, first bytes `7b 0d 0a` (`{` + CRLF, no `ef bb bf` BOM).
+Quit via `Quit Claude Buddy`, confirmed the process was gone (`tasklist`),
+re-checked the file on disk — unchanged, still `false`, still no BOM.
+Relaunched `publish\ClaudeBuddy.exe`, opened the tray menu again: "Show
+orbs" still unchecked. Toggled it back on to restore the default state I
+found the app in; file now `"showOrbs": true`, still valid, still no BOM.
