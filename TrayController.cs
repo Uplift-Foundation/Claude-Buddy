@@ -202,6 +202,10 @@ namespace ClaudeBuddy
 
             menu.Add(new NativeMenuItemSeparator());
 
+            var settingsItem = new NativeMenuItem("Settings…");
+            settingsItem.Click += (_, _) => SettingsWindow.Toggle();
+            menu.Add(settingsItem);
+
             var quitItem = new NativeMenuItem("Quit Claude Buddy");
             quitItem.Click += (_, _) =>
             {

@@ -81,7 +81,7 @@ namespace ClaudeBuddy
 
         // Orbs can be hidden from the tray menu; sessions keep being tracked
         // either way, so the tray icon and its menu stay accurate.
-        public bool OrbsVisible { get; private set; } = true;
+        public bool OrbsVisible { get; private set; } = ClaudeBuddySettings.ShowOrbs;
 
         private FileSystemWatcher? _watcher;
         private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -237,6 +237,7 @@ namespace ClaudeBuddy
         {
             if (OrbsVisible == visible) return;
             OrbsVisible = visible;
+            ClaudeBuddySettings.ShowOrbs = visible;
 
             foreach (var window in _windows.Values)
             {

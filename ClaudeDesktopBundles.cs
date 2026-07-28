@@ -190,6 +190,30 @@ namespace ClaudeBuddy
             output.Save(destinationPng);
         }
 
+        // A clone's icon is tinted once when it's created, so changing a profile's
+        // colour has to regenerate it. Re-tinting is just the icon step — no
+        // re-cloning, so it costs a sips call and an NSWorkspace.setIcon rather
+        // than another copy of the bundle.
+        public static bool Retint(string profileFolder, string sourceApp, Color tint)
+        {
+            if (!OperatingSystem.IsMacOS()) return false;
+            if (!Exists(profileFolder)) return false;
+
+            try
+            {
+                ApplyTintedIcon(PathFor(profileFolder), sourceApp, profileFolder, tint);
+
+                // Finder and the Dock cache icons aggressively; touching the
+                // bundle nudges them to re-read it.
+                System.IO.Directory.SetLastWriteTimeUtc(PathFor(profileFolder), DateTime.UtcNow);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public static void Remove(string profileFolder)
         {
             if (!OperatingSystem.IsMacOS()) return;

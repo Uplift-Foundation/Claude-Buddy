@@ -70,9 +70,12 @@ namespace ClaudeBuddy
             // same split the orbs use, where colour is identity and never
             // competes with state.
             var folder = Path.GetFileName(profile.Directory);
-            item.Icon = Swatch(
-                ClaudeDesktopColors.For(folder, profile.IsDefault),
-                filled: profile.IsRunning);
+            if (ClaudeBuddySettings.For(folder).ShowSwatch)
+            {
+                item.Icon = Swatch(
+                    ClaudeDesktopColors.For(folder, profile.IsDefault),
+                    filled: profile.IsRunning);
+            }
 
             // The child NativeMenu *and* its owning NativeMenuItem are built
             // fresh on every rebuild. Nothing clears NativeMenu.Parent when an

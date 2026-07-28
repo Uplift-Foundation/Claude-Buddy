@@ -54,7 +54,7 @@ namespace ClaudeBuddy
         private const int MaxParked = 6;
         private static DispatcherTimer? _timer;
 
-        public static bool Enabled { get; private set; } = true;
+        public static bool Enabled { get; private set; } = ClaudeBuddySettings.TintActiveWindow;
 
         public static void Start()
         {
@@ -69,6 +69,7 @@ namespace ClaudeBuddy
         {
             if (Enabled == enabled) return;
             Enabled = enabled;
+            ClaudeBuddySettings.TintActiveWindow = enabled;
 
             if (!enabled) HideAll();
             TrayController.Instance?.Refresh();
@@ -86,7 +87,10 @@ namespace ClaudeBuddy
             var profile = ClaudeDesktopManager.Snapshot.Profiles
                 .FirstOrDefault(p => p.IsRunning && p.Pid == frontmost && p.Pid != 0);
 
-            if (profile is null)
+            // A profile can opt out of the window tint while keeping its swatch
+            // and Dock icon, so treat an opted-out instance as "nothing in front".
+            if (profile is null
+                || !ClaudeBuddySettings.For(Path.GetFileName(profile.Directory)).TintWindow)
             {
                 if (_timer is not null) _timer.Interval = IdlePoll;
                 HideAll();

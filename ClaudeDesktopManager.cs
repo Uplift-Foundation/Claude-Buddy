@@ -180,7 +180,17 @@ namespace ClaudeBuddy
             if (!snapshot.AppInstalled) return "cd=off";
 
             return "cd=" + string.Join(",", snapshot.Profiles
-                .Select(p => $"{p.DisplayName}:{(p.IsRunning ? 1 : 0)}:{p.Activity}:{p.Message}:{p.ThemeMode}")
+                .Select(p =>
+                {
+                    // Settings-derived values belong in here too: change a colour
+                    // or hide a swatch and the menu has to repaint, which it only
+                    // does when this string changes.
+                    var folder = Path.GetFileName(p.Directory);
+                    var settings = ClaudeBuddySettings.For(folder);
+                    var colour = ClaudeDesktopColors.NameFor(folder, p.IsDefault);
+                    return $"{p.DisplayName}:{(p.IsRunning ? 1 : 0)}:{p.Activity}:{p.Message}"
+                           + $":{p.ThemeMode}:{colour}:{(settings.ShowSwatch ? 1 : 0)}";
+                })
                 .OrderBy(entry => entry, StringComparer.Ordinal));
         }
 
@@ -195,8 +205,10 @@ namespace ClaudeBuddy
                 var isRunning = scan.Running.TryGetValue(directory, out var pid);
                 var (activity, message) = ResolveTransient(directory, isRunning, now);
 
+                var chosenName = ClaudeBuddySettings.For(name).Name;
+
                 views.Add(new ProfileView(
-                    DisplayNameFor(name),
+                    chosenName is { Length: > 0 } ? chosenName : DisplayNameFor(name),
                     directory,
                     string.Equals(directory, defaultDirectory, StringComparison.Ordinal),
                     isRunning,
@@ -485,7 +497,7 @@ namespace ClaudeBuddy
                     // and all. A failure here just means no colour — we fall back
                     // to the real bundle rather than not launching.
                     var folder = Path.GetFileName(directory);
-                    var clone = isDefault
+                    var clone = isDefault || !ClaudeBuddySettings.For(folder).TintDockIcon
                         ? null
                         : ClaudeDesktopBundles.Ensure(
                             folder,
@@ -607,6 +619,23 @@ namespace ClaudeBuddy
                 }
 
                 KickRefresh();
+            });
+        }
+
+        // Called when a profile's colour changes: the clone's Dock icon was baked
+        // at creation time and would otherwise keep the old colour until the next
+        // rebuild.
+        public static void RecolourDockIcon(string folder)
+        {
+            if (!OperatingSystem.IsMacOS()) return;
+
+            Task.Run(() =>
+            {
+                var source = AppPath();
+                if (source is null) return;
+
+                ClaudeDesktopBundles.Retint(
+                    folder, source, ClaudeDesktopColors.For(folder, isDefault: false));
             });
         }
 
