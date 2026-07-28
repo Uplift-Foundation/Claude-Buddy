@@ -60,9 +60,14 @@ $b = New-Object Drawing.Bitmap $s.Width, $s.Height
 $b.Save('C:\cb\shot.png')
 ```
 
-Then Read `C:\cb\shot.png` — you can look at images directly. Crop to a region
-when you need detail, and take a fresh shot after every action rather than
-reasoning about what the screen probably looks like now.
+Then Read `C:\cb\shot.png` — you can look at images directly.
+
+**Budget your screenshots: roughly two per numbered item, and crop before you
+Read.** A previous run took 35 full-screen captures of a 4K desktop and died
+silently partway through, almost certainly from exhausting its usage on image
+tokens — it lost every finding it hadn't committed. Crop to the region you care
+about (the notification area, the orb, the settings window) rather than reading a
+whole desktop to look at a 16x16 icon, and delete each file once you've read it.
 
 `System.Windows.Automation` is available if you need to drive or inspect
 controls. Avalonia implements UIA on Windows, so its own windows should be
@@ -86,12 +91,14 @@ notification-area app. Record PASS / FAIL / INCONCLUSIVE plus details for each:
 4. **Orbs.** An orb should appear near the top-right per session, showing the
    first letter of the chat name, falling back to the folder name; violet while
    Claude works, slate when idle, gone when the session ends.
-   - The state comes from `ClaudeBuddyHook.ps1` writing a status file. The
-     deterministic way to test the app is to invoke that hook yourself with a
-     synthetic payload and watch what the app does — that isolates the app from
-     Claude Code's own hook wiring. Then, separately, confirm the real path works
-     by running a nested `claude -p` in another directory with the hooks
-     configured per the README.
+   - The state comes from `ClaudeBuddyHook.ps1` writing a status file. Test the
+     app by invoking that hook yourself with a synthetic payload and watching
+     what the app does — that isolates the app from Claude Code's own hook
+     wiring and is fully deterministic.
+   - **Do not spawn a nested `claude` process.** A previous run did, to generate
+     a "real" session; the child hung at zero CPU and had to be killed. It also
+     shares this machine's account and usage with you, so it competes with the
+     run that spawned it. Synthetic hook payloads cover the same ground.
    - That hook had a genuine PowerShell 5.1 encoding bug, fixed by reading with
      `-Encoding UTF8` and writing via `UTF8Encoding(false)`. If titles or
      colours come through mangled, start there — and record which PowerShell
@@ -130,9 +137,16 @@ Rebuild and re-verify after each fix. A fix you didn't run isn't a fix.
 
 ## Reporting back
 
-Commit `docs/windows-findings.md` on the `windows-verification` branch — one short
-section per numbered item, with the CPU number and exact errors — then **push the
-branch**. That's the channel the Mac side reads, through GitHub.
+**Commit and push after every single numbered item — not at the end.** Append that
+item's section to `docs/windows-findings.md`, commit it along with any fix you
+made for it, and push the `windows-verification` branch immediately. That's the
+channel the Mac side reads, through GitHub.
+
+This is not a style preference. The previous run worked for 40 minutes, found two
+genuine bugs including a crash, and then died without committing or pushing any
+of it. The fixes survived only because the Mac side went looking through your
+working tree over SSH and reconstructed the diffs by hand. Push early and often
+and a death costs you one item instead of everything.
 
 `gh` works in this interactive session. It does not work over SSH, because its
 token is DPAPI-protected and a key-based SSH logon has no password-derived master
