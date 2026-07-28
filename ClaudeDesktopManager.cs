@@ -497,12 +497,22 @@ namespace ClaudeBuddy
                     // and all. A failure here just means no colour — we fall back
                     // to the real bundle rather than not launching.
                     var folder = Path.GetFileName(directory);
-                    var clone = isDefault || !ClaudeBuddySettings.For(folder).TintDockIcon
-                        ? null
-                        : ClaudeDesktopBundles.Ensure(
+                    var profileSettings = ClaudeBuddySettings.For(folder);
+
+                    // Default gets a tinted clone too, but only once you've
+                    // actually picked a colour for it. Left on "auto" it launches
+                    // the bundle you installed, with Anthropic's icon — changing
+                    // that unasked would be presumptuous, and it's also what you
+                    // see when you launch Claude from the Dock yourself.
+                    var wantsClone = profileSettings.TintDockIcon
+                                     && (!isDefault || profileSettings.Color is { Length: > 0 });
+
+                    var clone = wantsClone
+                        ? ClaudeDesktopBundles.Ensure(
                             folder,
                             AppPath() ?? "/Applications/Claude.app",
-                            ClaudeDesktopColors.For(folder, isDefault: false));
+                            ClaudeDesktopColors.For(folder, isDefault))
+                        : null;
 
                     // -n on every path. Without it, `open` does not start anything
                     // when *any* instance of the bundle is already running —
@@ -517,11 +527,16 @@ namespace ClaudeBuddy
                     // Clones are addressed by path, not bundle id: several bundles
                     // now share com.anthropic.claudefordesktop, so -b would be
                     // ambiguous.
+                    var target = clone is not null
+                        ? new[] { "-n", "-a", clone }
+                        : new[] { "-n", "-b", BundleId };
+
+                    // Default is launched without CLAUDE_USER_DATA_DIR whether or
+                    // not it runs from a clone, so the app resolves its own
+                    // userData and sidecar config exactly as a Dock launch does.
                     var arguments = isDefault
-                        ? new[] { "-n", "-b", BundleId }
-                        : clone is not null
-                            ? new[] { "-n", "-a", clone, "--env", "CLAUDE_USER_DATA_DIR=" + directory }
-                            : new[] { "-n", "-b", BundleId, "--env", "CLAUDE_USER_DATA_DIR=" + directory };
+                        ? target
+                        : target.Concat(new[] { "--env", "CLAUDE_USER_DATA_DIR=" + directory }).ToArray();
 
                     // open(1) rather than starting Contents/MacOS/Claude
                     // directly: a direct child would inherit Claude Buddy's
@@ -648,8 +663,18 @@ namespace ClaudeBuddy
                     return;
                 }
 
+                var isDefault = string.Equals(directory, DefaultDirectory(), StringComparison.Ordinal);
+
+                // On "auto" there is nothing to tint Default with — it goes back
+                // to the installed bundle, so drop any clone it had.
+                if (isDefault && ClaudeBuddySettings.For(folder).Color is not { Length: > 0 })
+                {
+                    ClaudeDesktopBundles.Remove(folder);
+                    return;
+                }
+
                 ClaudeDesktopBundles.Retint(
-                    folder, source, ClaudeDesktopColors.For(folder, isDefault: false));
+                    folder, source, ClaudeDesktopColors.For(folder, isDefault));
             });
         }
 
