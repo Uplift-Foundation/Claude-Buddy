@@ -283,9 +283,21 @@ namespace ClaudeBuddy
 
         // ---- discovery -----------------------------------------------------
 
-        private static bool AppInstalled() =>
-            Directory.Exists("/Applications/Claude.app") ||
-            Directory.Exists(Path.Combine(Home, "Applications", "Claude.app"));
+        private static bool AppInstalled() => AppPath() is not null;
+
+        private static string? AppPath()
+        {
+            foreach (var candidate in new[]
+                     {
+                         "/Applications/Claude.app",
+                         Path.Combine(Home, "Applications", "Claude.app")
+                     })
+            {
+                if (Directory.Exists(candidate)) return candidate;
+            }
+
+            return null;
+        }
 
         private static string DefaultDirectory() =>
             Canonicalise(Path.Combine(ProfileRoot, DefaultProfileFolder))
@@ -467,18 +479,37 @@ namespace ClaudeBuddy
                     // re-trigger the deployment-mode chooser on an already
                     // configured profile — and it would start a second log
                     // history under <profile>/Logs.
-                    // -n on both paths. Without it, `open -b` does not start
-                    // anything when *any* instance of the bundle is already
-                    // running — LaunchServices just activates that one — so
-                    // launching Default while a profile was up would bring the
-                    // profile's window forward and Default would never start.
-                    // Safe because the gate above has just confirmed, from a
-                    // fresh scan, that this directory has no live instance; an
-                    // env-var-less instance maps to Default there, so a
-                    // Dock-launched Default is caught too.
+                    // A cloned bundle with a tinted icon, so this instance gets
+                    // its own colour in the Dock. Only for created profiles:
+                    // Default deliberately stays the bundle you installed, icon
+                    // and all. A failure here just means no colour — we fall back
+                    // to the real bundle rather than not launching.
+                    var folder = Path.GetFileName(directory);
+                    var clone = isDefault
+                        ? null
+                        : ClaudeDesktopBundles.Ensure(
+                            folder,
+                            AppPath() ?? "/Applications/Claude.app",
+                            ClaudeDesktopColors.For(folder, isDefault: false));
+
+                    // -n on every path. Without it, `open` does not start anything
+                    // when *any* instance of the bundle is already running —
+                    // LaunchServices just activates that one — so launching
+                    // Default while a profile was up would bring the profile's
+                    // window forward and Default would never start. Safe because
+                    // the gate above has just confirmed, from a fresh scan, that
+                    // this directory has no live instance; an env-var-less
+                    // instance maps to Default there, so a Dock-launched Default
+                    // is caught too.
+                    //
+                    // Clones are addressed by path, not bundle id: several bundles
+                    // now share com.anthropic.claudefordesktop, so -b would be
+                    // ambiguous.
                     var arguments = isDefault
                         ? new[] { "-n", "-b", BundleId }
-                        : new[] { "-n", "-b", BundleId, "--env", "CLAUDE_USER_DATA_DIR=" + directory };
+                        : clone is not null
+                            ? new[] { "-n", "-a", clone, "--env", "CLAUDE_USER_DATA_DIR=" + directory }
+                            : new[] { "-n", "-b", BundleId, "--env", "CLAUDE_USER_DATA_DIR=" + directory };
 
                     // open(1) rather than starting Contents/MacOS/Claude
                     // directly: a direct child would inherit Claude Buddy's
@@ -547,6 +578,47 @@ namespace ClaudeBuddy
                 {
                     SetTransient(directory, ProfileActivity.Error, ErrorMs, "couldn't force quit");
                 }
+            });
+        }
+
+        // ---- Dock icon bundles ---------------------------------------------
+
+        // Squirrel only ever updates the bundle in /Applications, so clones go
+        // stale after a Claude update and would keep running the old version.
+        // Rebuilding is a clone plus an icon, so it's cheap enough to just redo
+        // for every profile that has one.
+        public static void RebuildDockIcons()
+        {
+            if (!OperatingSystem.IsMacOS()) return;
+
+            Task.Run(() =>
+            {
+                var source = AppPath();
+                if (source is null) return;
+
+                foreach (var profile in Snapshot.Profiles)
+                {
+                    if (profile.IsDefault) continue;
+
+                    var folder = Path.GetFileName(profile.Directory);
+                    ClaudeDesktopBundles.Remove(folder);
+                    ClaudeDesktopBundles.Ensure(
+                        folder, source, ClaudeDesktopColors.For(folder, isDefault: false));
+                }
+
+                KickRefresh();
+            });
+        }
+
+        public static void RevealDockIconBundles()
+        {
+            if (!OperatingSystem.IsMacOS()) return;
+
+            Task.Run(() =>
+            {
+                var root = ClaudeDesktopBundles.Root;
+                Directory.CreateDirectory(root);
+                Run("/usr/bin/open", root);
             });
         }
 

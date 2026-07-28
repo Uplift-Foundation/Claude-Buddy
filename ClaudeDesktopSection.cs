@@ -34,6 +34,24 @@ namespace ClaudeBuddy
             var revealRoot = new NativeMenuItem("Reveal profiles folder");
             revealRoot.Click += (_, _) => ClaudeDesktopManager.RevealProfilesFolder();
             menu.Add(revealRoot);
+
+            // Coloured Dock icons come from a cloned bundle per profile, and
+            // Claude's updater only touches the one in /Applications — so clones
+            // need rebuilding after an update or they keep running the old
+            // version. Tucked in a submenu: it's maintenance, not everyday use.
+            var icons = new NativeMenuItem("Dock icons");
+            var iconMenu = new NativeMenu();
+
+            var rebuild = new NativeMenuItem("Rebuild after a Claude update");
+            rebuild.Click += (_, _) => ClaudeDesktopManager.RebuildDockIcons();
+            iconMenu.Add(rebuild);
+
+            var revealBundles = new NativeMenuItem("Reveal bundles folder");
+            revealBundles.Click += (_, _) => ClaudeDesktopManager.RevealDockIconBundles();
+            iconMenu.Add(revealBundles);
+
+            icons.Menu = iconMenu;
+            menu.Add(icons);
         }
 
         private static NativeMenuItem BuildProfileItem(ProfileView profile)
