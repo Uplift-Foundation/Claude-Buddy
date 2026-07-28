@@ -55,12 +55,6 @@ namespace ClaudeBuddy
 
         // How long a quit is given before the row offers Force quit instead.
         private const int QuitWindowMs = 20_000;
-
-        // How long WM_CLOSE gets before Windows quit escalates to WM_ENDSESSION.
-        // Comfortably inside QuitWindowMs, so the escalation happens while the
-        // row still says "Quitting…" rather than after it has given up and
-        // offered a force quit.
-        private const int WindowsQuitEscalationMs = 1_500;
         private const int ForceQuitOfferMs = 60_000;
         private const int ErrorMs = 20_000;
 
@@ -274,11 +268,26 @@ namespace ClaudeBuddy
                         return (ProfileActivity.Quitting, null);
 
                     case ProfileActivity.ForceQuitOffered:
-                        if (!isRunning || now > transient.Deadline)
+                        if (!isRunning)
                         {
                             Transients.Remove(directory);
                             return (ProfileActivity.None, null);
                         }
+
+                        // The offer expires on macOS because a graceful quit
+                        // works there, so a lapsed offer just means "ask nicely
+                        // again". On Windows nothing can end the app except this
+                        // offer, so letting it expire stranded the instance:
+                        // the row fell back to Quit, that click could no longer
+                        // find a window to close, and there was no route left to
+                        // the only thing that does work. Keep offering while it
+                        // is alive.
+                        if (!OperatingSystem.IsWindows() && now > transient.Deadline)
+                        {
+                            Transients.Remove(directory);
+                            return (ProfileActivity.None, null);
+                        }
+
                         return (ProfileActivity.ForceQuitOffered, null);
 
                     default:
@@ -667,45 +676,33 @@ namespace ClaudeBuddy
             });
         }
 
-        // Windows has no AppleScript equivalent for "please quit", so this is a
-        // two-step escalation rather than one call.
+        // Windows has no AppleScript equivalent for "please quit", and Claude
+        // Desktop can't be made to quit from outside at all — WM_CLOSE hides it
+        // to the tray and WM_ENDSESSION is ignored, both measured on a real
+        // build. See WindowsAppQuit for what was tried.
         //
-        // WM_CLOSE first, via CloseMainWindow(), because it's the gentlest thing
-        // that exists and an app which does quit on it gets to run its own close
-        // handling (including any beforeunload prompt). Claude Desktop is not
-        // such an app — it hides to the tray and keeps running, which made Quit
-        // fall through to Force quit every time on a real Windows box.
-        //
-        // So if it's still alive shortly after, ask again the way Windows asks
-        // during shutdown. See WindowsAppQuit: Electron acts on WM_ENDSESSION,
-        // and that message reaches the hidden window WM_CLOSE just created.
-        //
-        // The escalation waits off the UI thread. Quit() posts this to the
-        // dispatcher, and sleeping there would freeze the menu and every orb.
-        // Attributed rather than relying on the caller's OperatingSystem.IsWindows()
-        // check: the escalation below runs inside a Task.Run closure, and the
-        // analyzer can't see a guard through one. Without this, CA1416 correctly
-        // reports the user32 P/Invokes as reachable on every platform.
+        // Which makes this method's real job keeping the force-quit offer
+        // reachable, not succeeding. It posts WM_CLOSE to every window of the
+        // process rather than calling Process.CloseMainWindow(), because that
+        // only finds *visible* windows: after the first Quit hid the app, it
+        // returned false, the row said "couldn't quit", and the state machine
+        // never reached ForceQuitOffered — leaving an instance that couldn't be
+        // ended from the app at all. Asking a hidden window works fine.
         [SupportedOSPlatform("windows")]
         private static bool QuitWindows(int pid)
         {
             try
             {
                 using var process = Process.GetProcessById(pid);
+
+                // Only meaningful while a window is actually on screen; harmless
+                // once hidden, when MainWindowHandle is zero.
                 WindowsForegroundWindow.BringToFront(process.MainWindowHandle);
-                var closed = process.CloseMainWindow();
 
-                Task.Run(async () =>
-                {
-                    await Task.Delay(WindowsQuitEscalationMs).ConfigureAwait(false);
-                    if (!WindowsAppQuit.HasExited(pid)) WindowsAppQuit.RequestEndSession(pid);
-                });
-
-                // The transient "Quitting…" row and its force-quit fallback are
-                // driven by whether the process is still there when the window
-                // expires, so a true here is only a claim that we asked — which
-                // is all this ever promised.
-                return closed;
+                // True only claims we found windows to ask, which is all this
+                // ever promised — whether the app honours it is up to the app,
+                // and here it reliably doesn't.
+                return WindowsAppQuit.RequestClose(pid);
             }
             catch
             {
