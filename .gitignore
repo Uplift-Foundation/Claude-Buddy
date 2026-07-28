@@ -6,3 +6,8 @@ obj/
 Obj/
 
 .claude/
+
+# Windows mark-of-the-web metadata. These are NTFS alternate data streams, and
+# the ":" in the name is an illegal path character on Windows — committing one
+# makes the whole repository impossible to check out there.
+*:Zone.Identifier
