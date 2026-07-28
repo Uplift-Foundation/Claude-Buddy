@@ -245,3 +245,32 @@ more likely the two idle orbs just aren't driving any continuous
 redraw/timer work on this platform's Avalonia rendering path the way they
 apparently do on macOS, but that's a hypothesis, not something I traced
 further given it's a favorable result, not a bug.
+
+## Summary
+
+8 of 8 items verified. 6 PASS outright (1, 2, 3, 4, 6, 7, 8 — see the note on
+item 3's overflow-flyout quirk, which is real but not a code defect). 1 item
+(5, click-to-focus) started as a genuine FAIL — clicking an orb did nothing —
+and was fixed in `TerminalFocuser.cs` (Windows-only change, macOS path
+untouched); re-verified working after the fix. Also carried forward two
+fixes from the run before this one, already on this branch when I started:
+the Settings-window `DllNotFoundException` crash (`4756a16`) and the
+Zone.Identifier / `:mshield` ADS cleanup that broke checkouts (`9492627`,
+`5fbfe28`).
+
+Known, undismissable limitation (not a defect, nothing to change): when more
+than one Windows Terminal window is open, click-to-focus can raise the wrong
+one, because `Process.MainWindowHandle` only ever names one window per
+process and there's no public API to ask WT which window hosts a given
+session. Documented in item 5.
+
+One host, VS Code's integrated terminal, is INCONCLUSIVE — its window
+exited on its own before ClaudeBuddy-specific testing began, for reasons
+that looked unrelated to this app. Worth another look in a future run, but
+I'm not fabricating a result for it here.
+
+Left the machine with: `ClaudeBuddy.exe` running (PID may differ by the time
+this is read), `%APPDATA%\ClaudeBuddy\settings.json` back at its defaults
+(`showOrbs: true`, `tintActiveWindow: true`), no synthetic session files left
+in `%TEMP%\claude_buddy`, and no extra windows open beyond what was there
+before I started (Owner's pre-existing "claude" Windows Terminal tab).
