@@ -14,7 +14,7 @@ namespace ClaudeBuddy
 
         public static void Append(NativeMenu menu)
         {
-            if (!OperatingSystem.IsMacOS()) return;
+            if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsWindows()) return;
 
             var snapshot = ClaudeDesktopManager.Snapshot;
             if (!snapshot.AppInstalled) return;
@@ -34,6 +34,13 @@ namespace ClaudeBuddy
             var revealRoot = new NativeMenuItem("Reveal profiles folder");
             revealRoot.Click += (_, _) => ClaudeDesktopManager.RevealProfilesFolder();
             menu.Add(revealRoot);
+
+            // Tinted Dock icons and the window-tint overlay have no Windows
+            // analogue (no Dock, and the overlay is built on
+            // CGWindowListCopyWindowInfo) — out of scope for the port, so this
+            // whole submenu stays macOS-only rather than offering controls
+            // that would do nothing there.
+            if (!OperatingSystem.IsMacOS()) return;
 
             // Coloured Dock icons come from a cloned bundle per profile, and
             // Claude's updater only touches the one in /Applications — so clones

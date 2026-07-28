@@ -44,10 +44,6 @@ namespace ClaudeBuddy
 
         private const string UserDataDirKey = "CLAUDE_USER_DATA_DIR=";
 
-        // UserDataDir is null when the instance was launched without the
-        // override — a Dock launch, or our own launch of the Default profile.
-        public readonly record struct ClaudeInstance(int Pid, string? UserDataDir);
-
         [DllImport(LibSystem, SetLastError = true)]
         private static extern int proc_listallpids(int[]? buffer, int buffersize);
 

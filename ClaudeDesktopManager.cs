@@ -91,15 +91,24 @@ namespace ClaudeBuddy
 
         public static DesktopSnapshot Snapshot => _snapshot;
 
+        private static bool SupportedPlatform => OperatingSystem.IsMacOS() || OperatingSystem.IsWindows();
+
         // Folded into TrayController's rebuild signature. Deliberately carries
         // no pid, timestamp or countdown: anything volatile in here would force
         // a menu rebuild on every 2-second tick.
-        public static string Digest() => OperatingSystem.IsMacOS() ? _digest : "cd=off";
+        public static string Digest() => SupportedPlatform ? _digest : "cd=off";
 
+        // %APPDATA% on Windows, ~/Library/Application Support on macOS.
+        // Environment.SpecialFolder.ApplicationData already resolves
+        // correctly on both — that's how ClaudeBuddySettings.Directory does
+        // it — so this only needs a scratch-override branch, not a platform
+        // one.
         public static string ProfileRoot =>
             Environment.GetEnvironmentVariable("CLAUDE_BUDDY_PROFILE_ROOT") is { Length: > 0 } scratch
                 ? scratch
-                : Path.Combine(Home, "Library", "Application Support");
+                : OperatingSystem.IsWindows()
+                    ? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
+                    : Path.Combine(Home, "Library", "Application Support");
 
         private static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
@@ -110,7 +119,7 @@ namespace ClaudeBuddy
         // which is what keeps Refresh() from looping back into another scan.
         public static void KickRefresh()
         {
-            if (!OperatingSystem.IsMacOS()) return;
+            if (!SupportedPlatform) return;
             if (Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0) return;
 
             Task.Run(() =>
@@ -128,12 +137,15 @@ namespace ClaudeBuddy
             IReadOnlyList<(string Name, string Directory)> profiles =
                 installed ? Discover() : Array.Empty<(string Name, string Directory)>();
             IReadOnlyDictionary<string, int> running =
-                installed ? MapInstances(MacOSProcessScan.Scan()) : EmptyRunning;
+                installed ? MapInstances(ScanProcesses()) : EmptyRunning;
 
             var scan = new ScanResult(installed, DefaultDirectory(), profiles, running);
             _lastScan = scan;
             Publish(Compose(scan));
         }
+
+        private static IReadOnlyList<ClaudeInstance> ScanProcesses() =>
+            OperatingSystem.IsWindows() ? WindowsProcessScan.Scan() : MacOSProcessScan.Scan();
 
         private static readonly IReadOnlyDictionary<string, int> EmptyRunning =
             new Dictionary<string, int>(StringComparer.Ordinal);
@@ -295,8 +307,11 @@ namespace ClaudeBuddy
 
         // ---- discovery -----------------------------------------------------
 
-        private static bool AppInstalled() => AppPath() is not null;
+        private static bool AppInstalled() =>
+            OperatingSystem.IsWindows() ? WindowsAppLookup.ResolveAumid() is not null : AppPath() is not null;
 
+        // macOS only: the bundle path backs cloned, tinted Dock icons, which
+        // have no Windows analogue (out of scope — see ClaudeDesktopBundles).
         private static string? AppPath()
         {
             foreach (var candidate in new[]
@@ -425,7 +440,7 @@ namespace ClaudeBuddy
             folderName == DefaultProfileFolder ? DefaultDisplayName : folderName["Claude-".Length..];
 
         private static IReadOnlyDictionary<string, int> MapInstances(
-            IReadOnlyList<MacOSProcessScan.ClaudeInstance> instances)
+            IReadOnlyList<ClaudeInstance> instances)
         {
             var defaultDirectory = DefaultDirectory();
             var running = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -461,7 +476,7 @@ namespace ClaudeBuddy
 
         public static void Launch(ProfileView profile)
         {
-            if (!OperatingSystem.IsMacOS()) return;
+            if (!SupportedPlatform) return;
 
             var directory = profile.Directory;
             var isDefault = profile.IsDefault;
@@ -477,7 +492,7 @@ namespace ClaudeBuddy
                     // Chromium access to one userData directory corrupts
                     // leveldb and SQLite, and this app takes no single-instance
                     // lock of its own, so this is the last line of defence.
-                    var running = MapInstances(MacOSProcessScan.Scan());
+                    var running = MapInstances(ScanProcesses());
                     if (running.TryGetValue(directory, out var pid))
                     {
                         ClearTransient(directory);
@@ -485,66 +500,11 @@ namespace ClaudeBuddy
                         return;
                     }
 
-                    // The Default profile is launched *without* the variable.
-                    // Setting it suppresses the app's own resolution of its
-                    // sidecar config directory, so a tray launch could
-                    // re-trigger the deployment-mode chooser on an already
-                    // configured profile — and it would start a second log
-                    // history under <profile>/Logs.
-                    // A cloned bundle with a tinted icon, so this instance gets
-                    // its own colour in the Dock. Only for created profiles:
-                    // Default deliberately stays the bundle you installed, icon
-                    // and all. A failure here just means no colour — we fall back
-                    // to the real bundle rather than not launching.
-                    var folder = Path.GetFileName(directory);
-                    var profileSettings = ClaudeBuddySettings.For(folder);
+                    var launched = OperatingSystem.IsWindows()
+                        ? LaunchWindows(directory, isDefault)
+                        : LaunchMac(directory, isDefault);
 
-                    // Default gets a tinted clone too, but only once you've
-                    // actually picked a colour for it. Left on "auto" it launches
-                    // the bundle you installed, with Anthropic's icon — changing
-                    // that unasked would be presumptuous, and it's also what you
-                    // see when you launch Claude from the Dock yourself.
-                    var wantsClone = profileSettings.TintDockIcon
-                                     && (!isDefault || profileSettings.Color is { Length: > 0 });
-
-                    var clone = wantsClone
-                        ? ClaudeDesktopBundles.Ensure(
-                            folder,
-                            AppPath() ?? "/Applications/Claude.app",
-                            ClaudeDesktopColors.For(folder, isDefault))
-                        : null;
-
-                    // -n on every path. Without it, `open` does not start anything
-                    // when *any* instance of the bundle is already running —
-                    // LaunchServices just activates that one — so launching
-                    // Default while a profile was up would bring the profile's
-                    // window forward and Default would never start. Safe because
-                    // the gate above has just confirmed, from a fresh scan, that
-                    // this directory has no live instance; an env-var-less
-                    // instance maps to Default there, so a Dock-launched Default
-                    // is caught too.
-                    //
-                    // Clones are addressed by path, not bundle id: several bundles
-                    // now share com.anthropic.claudefordesktop, so -b would be
-                    // ambiguous.
-                    var target = clone is not null
-                        ? new[] { "-n", "-a", clone }
-                        : new[] { "-n", "-b", BundleId };
-
-                    // Default is launched without CLAUDE_USER_DATA_DIR whether or
-                    // not it runs from a clone, so the app resolves its own
-                    // userData and sidecar config exactly as a Dock launch does.
-                    var arguments = isDefault
-                        ? target
-                        : target.Concat(new[] { "--env", "CLAUDE_USER_DATA_DIR=" + directory }).ToArray();
-
-                    // open(1) rather than starting Contents/MacOS/Claude
-                    // directly: a direct child would inherit Claude Buddy's
-                    // whole environment, land in its process group (so Ctrl-C
-                    // during a dotnet run would SIGHUP every instance), and
-                    // have its privacy prompts attributed to Claude Buddy,
-                    // whose ad-hoc signature changes on every build.
-                    if (!Run("/usr/bin/open", arguments))
+                    if (!launched)
                     {
                         SetTransient(directory, ProfileActivity.Error, ErrorMs, "couldn't launch");
                     }
@@ -561,16 +521,117 @@ namespace ClaudeBuddy
             });
         }
 
+        private static bool LaunchMac(string directory, bool isDefault)
+        {
+            // The Default profile is launched *without* the variable.
+            // Setting it suppresses the app's own resolution of its
+            // sidecar config directory, so a tray launch could
+            // re-trigger the deployment-mode chooser on an already
+            // configured profile — and it would start a second log
+            // history under <profile>/Logs.
+            // A cloned bundle with a tinted icon, so this instance gets
+            // its own colour in the Dock. Only for created profiles:
+            // Default deliberately stays the bundle you installed, icon
+            // and all. A failure here just means no colour — we fall back
+            // to the real bundle rather than not launching.
+            var folder = Path.GetFileName(directory);
+            var profileSettings = ClaudeBuddySettings.For(folder);
+
+            // Default gets a tinted clone too, but only once you've
+            // actually picked a colour for it. Left on "auto" it launches
+            // the bundle you installed, with Anthropic's icon — changing
+            // that unasked would be presumptuous, and it's also what you
+            // see when you launch Claude from the Dock yourself.
+            var wantsClone = profileSettings.TintDockIcon
+                             && (!isDefault || profileSettings.Color is { Length: > 0 });
+
+            var clone = wantsClone
+                ? ClaudeDesktopBundles.Ensure(
+                    folder,
+                    AppPath() ?? "/Applications/Claude.app",
+                    ClaudeDesktopColors.For(folder, isDefault))
+                : null;
+
+            // -n on every path. Without it, `open` does not start anything
+            // when *any* instance of the bundle is already running —
+            // LaunchServices just activates that one — so launching
+            // Default while a profile was up would bring the profile's
+            // window forward and Default would never start. Safe because
+            // the gate above has just confirmed, from a fresh scan, that
+            // this directory has no live instance; an env-var-less
+            // instance maps to Default there, so a Dock-launched Default
+            // is caught too.
+            //
+            // Clones are addressed by path, not bundle id: several bundles
+            // now share com.anthropic.claudefordesktop, so -b would be
+            // ambiguous.
+            var target = clone is not null
+                ? new[] { "-n", "-a", clone }
+                : new[] { "-n", "-b", BundleId };
+
+            // Default is launched without CLAUDE_USER_DATA_DIR whether or
+            // not it runs from a clone, so the app resolves its own
+            // userData and sidecar config exactly as a Dock launch does.
+            var arguments = isDefault
+                ? target
+                : target.Concat(new[] { "--env", "CLAUDE_USER_DATA_DIR=" + directory }).ToArray();
+
+            // open(1) rather than starting Contents/MacOS/Claude
+            // directly: a direct child would inherit Claude Buddy's
+            // whole environment, land in its process group (so Ctrl-C
+            // during a dotnet run would SIGHUP every instance), and
+            // have its privacy prompts attributed to Claude Buddy,
+            // whose ad-hoc signature changes on every build.
+            return Run("/usr/bin/open", arguments);
+        }
+
+        // Default is launched with no arguments at all — passing
+        // --user-data-dir pointed at the app's own default directory is not
+        // the same thing to Chromium as omitting the flag, and risks
+        // re-triggering the deployment-mode chooser the same way an
+        // unnecessary CLAUDE_USER_DATA_DIR does on macOS (see LaunchMac).
+        // A created profile gets the flag pointed at its own directory.
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+        private static bool LaunchWindows(string directory, bool isDefault)
+        {
+            var aumid = WindowsAppLookup.ResolveAumid();
+            if (aumid is null) return false;
+
+            var arguments = isDefault ? "" : $"--user-data-dir=\"{directory}\"";
+            return WindowsAppActivation.TryActivate(aumid, arguments, out _);
+        }
+
         public static void Focus(int pid)
         {
-            if (!OperatingSystem.IsMacOS() || pid <= 0) return;
+            if (!SupportedPlatform || pid <= 0) return;
 
-            Dispatcher.UIThread.Post(() => MacOSAppActivation.Activate(pid));
+            if (OperatingSystem.IsWindows())
+            {
+                Dispatcher.UIThread.Post(() => FocusWindows(pid));
+            }
+            else
+            {
+                Dispatcher.UIThread.Post(() => MacOSAppActivation.Activate(pid));
+            }
+        }
+
+        private static void FocusWindows(int pid)
+        {
+            try
+            {
+                using var process = Process.GetProcessById(pid);
+                WindowsForegroundWindow.BringToFront(process.MainWindowHandle);
+            }
+            catch
+            {
+                // The process may have exited between the scan and the
+                // click; focusing is a convenience, never worth an error row.
+            }
         }
 
         public static void Quit(ProfileView profile)
         {
-            if (!OperatingSystem.IsMacOS() || profile.Pid <= 0) return;
+            if (!SupportedPlatform || profile.Pid <= 0) return;
 
             var pid = profile.Pid;
             var directory = profile.Directory;
@@ -579,6 +640,15 @@ namespace ClaudeBuddy
 
             Dispatcher.UIThread.Post(() =>
             {
+                if (OperatingSystem.IsWindows())
+                {
+                    if (!QuitWindows(pid))
+                    {
+                        SetTransient(directory, ProfileActivity.Error, ErrorMs, "couldn't quit");
+                    }
+                    return;
+                }
+
                 // Activate first, so an "unsaved work" sheet ends up on screen
                 // instead of behind whatever you were looking at.
                 MacOSAppActivation.Activate(pid);
@@ -590,9 +660,28 @@ namespace ClaudeBuddy
             });
         }
 
+        // No AppleScript equivalent on Windows to ask the app to quit and
+        // show an unsaved-work prompt if it has one; CloseMainWindow() is the
+        // closest analogue — it posts WM_CLOSE to the main window, which
+        // Electron's own close handling (including any beforeunload prompt)
+        // then decides how to answer.
+        private static bool QuitWindows(int pid)
+        {
+            try
+            {
+                using var process = Process.GetProcessById(pid);
+                WindowsForegroundWindow.BringToFront(process.MainWindowHandle);
+                return process.CloseMainWindow();
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public static void ForceQuit(ProfileView profile)
         {
-            if (!OperatingSystem.IsMacOS() || profile.Pid <= 0) return;
+            if (!SupportedPlatform || profile.Pid <= 0) return;
 
             var pid = profile.Pid;
             var directory = profile.Directory;
@@ -601,11 +690,26 @@ namespace ClaudeBuddy
 
             Dispatcher.UIThread.Post(() =>
             {
-                if (!MacOSAppActivation.ForceTerminate(pid))
+                var ok = OperatingSystem.IsWindows() ? ForceQuitWindows(pid) : MacOSAppActivation.ForceTerminate(pid);
+
+                if (!ok)
                 {
                     SetTransient(directory, ProfileActivity.Error, ErrorMs, "couldn't force quit");
                 }
             });
+        }
+
+        private static bool ForceQuitWindows(int pid)
+        {
+            try
+            {
+                Process.GetProcessById(pid).Kill(entireProcessTree: true);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         // ---- Dock icon bundles ---------------------------------------------
@@ -720,7 +824,7 @@ namespace ClaudeBuddy
 
         public static void SetTheme(ProfileView profile, string mode)
         {
-            if (!OperatingSystem.IsMacOS()) return;
+            if (!SupportedPlatform) return;
 
             var directory = profile.Directory;
 
@@ -733,7 +837,7 @@ namespace ClaudeBuddy
                     // on one file can leave it unparseable, which would cost the
                     // profile its stored login. Re-check authoritatively rather
                     // than trusting the menu's snapshot.
-                    if (MapInstances(MacOSProcessScan.Scan()).ContainsKey(directory))
+                    if (MapInstances(ScanProcesses()).ContainsKey(directory))
                     {
                         SetTransient(directory, ProfileActivity.Error, ErrorMs, "quit it first");
                         return;
@@ -813,24 +917,37 @@ namespace ClaudeBuddy
 
         public static void RevealLogs(ProfileView profile)
         {
-            if (!OperatingSystem.IsMacOS()) return;
+            if (!SupportedPlatform) return;
 
             var directory = profile.Directory;
             var isDefault = profile.IsDefault;
 
             Task.Run(() =>
             {
-                // Only an env-launched instance writes <profile>/Logs; a plain
-                // launch — which is what Default deliberately gets — writes
-                // Electron's default path instead.
-                var candidates = isDefault
-                    ? new[] { Path.Combine(Home, "Library", "Logs", DefaultProfileFolder), directory }
-                    : new[] { Path.Combine(directory, "Logs"), directory };
+                IEnumerable<string> candidates;
+
+                if (OperatingSystem.IsWindows())
+                {
+                    // Unlike macOS, Electron's userData resolves to the same
+                    // directory whether or not --user-data-dir was passed —
+                    // Default's userData is just %APPDATA%\Claude — so there's
+                    // one candidate rather than a Default/created split.
+                    candidates = new[] { Path.Combine(directory, "logs") };
+                }
+                else
+                {
+                    // Only an env-launched instance writes <profile>/Logs; a
+                    // plain launch — which is what Default deliberately gets —
+                    // writes Electron's default path instead.
+                    candidates = isDefault
+                        ? new[] { Path.Combine(Home, "Library", "Logs", DefaultProfileFolder), directory }
+                        : new[] { Path.Combine(directory, "Logs"), directory };
+                }
 
                 foreach (var candidate in candidates)
                 {
                     if (!Directory.Exists(candidate)) continue;
-                    Run("/usr/bin/open", candidate);
+                    OpenFolder(candidate);
                     return;
                 }
 
@@ -840,18 +957,37 @@ namespace ClaudeBuddy
 
         public static void RevealProfilesFolder()
         {
-            if (!OperatingSystem.IsMacOS()) return;
+            if (!SupportedPlatform) return;
 
             Task.Run(() =>
             {
                 var root = ProfileRoot;
-                if (Directory.Exists(root)) Run("/usr/bin/open", root);
+                if (Directory.Exists(root)) OpenFolder(root);
             });
+        }
+
+        private static void OpenFolder(string path)
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                try
+                {
+                    using var explorer = Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"")
+                    {
+                        UseShellExecute = false
+                    });
+                }
+                catch { }
+            }
+            else
+            {
+                Run("/usr/bin/open", path);
+            }
         }
 
         public static void NewProfile()
         {
-            if (!OperatingSystem.IsMacOS()) return;
+            if (!SupportedPlatform) return;
 
             Task.Run(() =>
             {
