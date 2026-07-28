@@ -186,3 +186,96 @@ ever needs more than the grace period allows.
 Cleanup: the throwaway profile used for re-verification was force-ended
 before this write-up and its directory removed. `%APPDATA%\Claude` was not
 touched at any point in this item.
+
+## 4. Click-to-focus loose ends
+
+### VS Code integrated terminal — PASS
+
+Retried per the brief (previously `INCONCLUSIVE` — the VS Code window had
+closed mid-test for unrelated reasons). This time: launched a fresh VS Code
+window on a throwaway folder (`%USERPROFILE%\vscode-focus-test`, never
+`C:\cb`), opened its integrated terminal (a Git Bash shell), and — rather
+than spawning a nested `claude` (forbidden) — invoked `ClaudeBuddyHook.ps1`
+directly with a synthetic JSON payload piped to a real external
+`powershell.exe` process (piping into an in-process `&` call doesn't reach
+`[Console]::In` the way the hook expects; had to switch to that after the
+first attempt threw `ParameterBindingException`).
+
+The resulting status file recorded `"term_program":"vscode","term_pid":67408`
+— `67408` was confirmed (via `Get-Process | Where MainWindowHandle -ne 0`) to
+be the exact `Code.exe` process owning the visible window, so the hook's
+parent-process walk correctly climbed past the pty host and the shell to the
+real VS Code window in one hop. ClaudeBuddy picked up the status file and
+showed an orb ("V", from the folder name) at the top-right within a few
+seconds.
+
+Test: minimized the VS Code window, confirmed via screenshot it was gone,
+then clicked the orb. VS Code restored from minimized and came to the
+foreground immediately. Cleaned up with a `state: ended` payload (status file
+removed) and closed the throwaway VS Code instance.
+
+**Click-to-focus works correctly for VS Code's integrated terminal.**
+
+### Multiple Windows Terminal windows — confirmed unfixable, not fixed
+
+Bounded look, per the brief. First reproduced the actual mechanism: opened a
+second Windows Terminal window (`wt.exe -w -1 new-tab`) alongside the one
+hosting this very session. `Get-CimInstance Win32_Process -Filter
+"Name='WindowsTerminal.exe'"` showed **one process for both windows** —
+confirms Windows Terminal's monarch/peasant model puts every window of a
+given launch context in a single process, which is exactly why
+`Process.MainWindowHandle` (one handle per process) can't name the right one.
+
+Then checked the two routes the brief suggested:
+
+- **`EnumWindows` + title, the same technique `WindowsAppQuit` already uses
+  for quit.** Works mechanically — enumerating that one pid's top-level
+  windows returned both (`MINGW64:/c/Users/warre` and `claude`), each with
+  its actual window title.
+- **UI Automation.** Also works mechanically, and better than expected: WT's
+  tab strip exposes real `TabItem` UIA elements with live `Name` properties
+  for every tab, not just the active one — `AutomationElement.FindAll` on
+  each top-level window returned its tab(s) by name correctly.
+
+So both routes can enumerate windows/tabs and read their titles. The problem
+is upstream of that: **Claude Code sets its console/tab title to the literal,
+static string `"claude"` — not anything session-specific.** That's directly
+visible in the test above: the window hosting this very session (a live
+Claude Code CLI run) shows exactly `claude` as both its window title and its
+WT tab title, with no cwd, session id, or chat name in it. Two or more
+concurrent Claude Code sessions in separate WT windows — the exact scenario
+orb-focus exists for — would therefore present **identical** titles to any
+matching heuristic. Title-matching can't disambiguate them, mechanically
+capable or not, so it isn't a heuristic worth shipping: a confidently wrong
+window is worse than today's "best-effort, sometimes wrong" behaviour, per
+the brief.
+
+The only way around that would be to make the hook stamp something
+session-unique into the console title at status-write time (the console
+title is shared by everything attached to one conpty, so a child process
+*can* set it) and have the focuser match on that marker. That's not a
+correctness fix, though — it would visibly rename tabs/windows the user
+never asked to rename, and fight with any title the user (or their shell
+prompt) already set. Flagging it as a product-behaviour option rather than
+picking it:
+
+- **Option A (status quo):** leave Windows Terminal multi-window as a
+  documented limitation — click focuses *a* window belonging to the right
+  process, not provably the right one.
+- **Option B:** hook writes a unique marker into the console title (e.g. via
+  a Win32 `SetConsoleTitle` call framed so it's restored afterward), focuser
+  matches on it. Fixes the disambiguation but is a visible, standing product
+  change to what the user sees in their own title bar, not merely an
+  internal implementation detail — needs sign-off, not a unilateral call
+  here.
+
+No public API from Windows Terminal itself exists to ask "which window/tab
+is running pid X" — confirmed no such surface while checking the above, only
+the generic top-level-window enumeration already used for quit. **Bottom
+line: still unfixable within this brief's bounds, now with the mechanism and
+the reason confirmed empirically rather than assumed. Left undone**, per the
+instruction not to ship an undefendable heuristic.
+
+Cleanup: the extra Windows Terminal window opened for this test was closed
+via a targeted `WM_CLOSE` to its own hwnd only, leaving the window hosting
+this session (and every other window/instance on the machine) untouched.
