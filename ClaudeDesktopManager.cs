@@ -1,0 +1,657 @@
+using System.Diagnostics;
+using Avalonia.Threading;
+
+namespace ClaudeBuddy
+{
+    internal enum ProfileActivity
+    {
+        None,
+        Launching,
+        Quitting,
+        ForceQuitOffered,
+        Error
+    }
+
+    internal sealed record ProfileView(
+        string DisplayName,
+        string Directory,
+        bool IsDefault,
+        bool IsRunning,
+        int Pid,
+        ProfileActivity Activity,
+        string? Message);
+
+    internal sealed record DesktopSnapshot(bool AppInstalled, IReadOnlyList<ProfileView> Profiles);
+
+    // Running several Claude Desktop instances side by side, one per Anthropic
+    // account, and switching between them from the status-bar menu.
+    //
+    // Claude Desktop signs into one account at a time and keeps that login in
+    // its userData directory (Cookies -> sessionKey, config.json ->
+    // oauth:tokenCache), not the Keychain — so a second account is a second
+    // userData directory, selected with CLAUDE_USER_DATA_DIR. The app honours
+    // that variable (app.setPath("userData", ...)) and takes no single-instance
+    // lock, so instances genuinely can coexist.
+    //
+    // Everything here is independent of the session-monitoring side of the app:
+    // no SessionStatus, no SessionManager, no OrbWindow. The only seam is
+    // TrayController calling Digest() and ClaudeDesktopSection.Append().
+    internal static class ClaudeDesktopManager
+    {
+        private const string BundleId = "com.anthropic.claudefordesktop";
+        private const string DefaultProfileFolder = "Claude";
+        private const string DefaultDisplayName = "Default";
+
+        // Claude Desktop takes seconds to show a window. Without a sticky
+        // "Launching…" the user clicks again and gets a second instance on the
+        // same directory — the single most likely real-world failure, and the
+        // one that corrupts leveldb/SQLite.
+        private const int LaunchWindowMs = 30_000;
+
+        // How long a quit is given before the row offers Force quit instead.
+        private const int QuitWindowMs = 20_000;
+        private const int ForceQuitOfferMs = 60_000;
+        private const int ErrorMs = 20_000;
+
+        private const int ProcessTimeoutMs = 5_000;
+
+        // Directories that mark a folder as a real Claude Desktop profile.
+        private static readonly string[] MarkerFiles =
+            { "config.json", "Cookies", "Local State", "Preferences", "ant-did" };
+
+        private static readonly string[] MarkerDirectories =
+            { Path.Combine("Local Storage", "leveldb"), "Crashpad" };
+
+        private sealed record Transient(ProfileActivity Kind, long Deadline, string? Message);
+
+        // DefaultDirectory resolves symlinks, so it touches the filesystem.
+        // It's captured here rather than recomputed in Compose, which also runs
+        // on the UI thread when a click changes transient state.
+        private sealed record ScanResult(
+            bool Installed,
+            string DefaultDirectory,
+            IReadOnlyList<(string Name, string Directory)> Profiles,
+            IReadOnlyDictionary<string, int> Running);
+
+        private static readonly Dictionary<string, Transient> Transients = new(StringComparer.Ordinal);
+        private static readonly object TransientGate = new();
+
+        // Only ever one launch in flight, so two clicks in the same tick can't
+        // both clear the "is it already running" gate below.
+        private static readonly SemaphoreSlim LaunchGate = new(1, 1);
+
+        private static volatile DesktopSnapshot _snapshot = new(false, Array.Empty<ProfileView>());
+        private static volatile ScanResult? _lastScan;
+        private static volatile string _digest = "cd=off";
+        private static int _refreshing;
+
+        public static DesktopSnapshot Snapshot => _snapshot;
+
+        // Folded into TrayController's rebuild signature. Deliberately carries
+        // no pid, timestamp or countdown: anything volatile in here would force
+        // a menu rebuild on every 2-second tick.
+        public static string Digest() => OperatingSystem.IsMacOS() ? _digest : "cd=off";
+
+        public static string ProfileRoot =>
+            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_PROFILE_ROOT") is { Length: > 0 } scratch
+                ? scratch
+                : Path.Combine(Home, "Library", "Application Support");
+
+        private static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        // ---- refresh -------------------------------------------------------
+
+        // Cheap to call on every poll tick: at most one scan is ever in flight,
+        // and the result is only pushed back to the UI when the digest changes,
+        // which is what keeps Refresh() from looping back into another scan.
+        public static void KickRefresh()
+        {
+            if (!OperatingSystem.IsMacOS()) return;
+            if (Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0) return;
+
+            Task.Run(() =>
+            {
+                try { RefreshCore(); }
+                catch { /* a stalled network home must never take the tray down */ }
+                finally { Volatile.Write(ref _refreshing, 0); }
+            });
+        }
+
+        private static void RefreshCore()
+        {
+            var installed = AppInstalled();
+
+            IReadOnlyList<(string Name, string Directory)> profiles =
+                installed ? Discover() : Array.Empty<(string Name, string Directory)>();
+            IReadOnlyDictionary<string, int> running =
+                installed ? MapInstances(MacOSProcessScan.Scan()) : EmptyRunning;
+
+            var scan = new ScanResult(installed, DefaultDirectory(), profiles, running);
+            _lastScan = scan;
+            Publish(Compose(scan));
+        }
+
+        private static readonly IReadOnlyDictionary<string, int> EmptyRunning =
+            new Dictionary<string, int>(StringComparer.Ordinal);
+
+        // Recompose from the last scan without re-scanning — for when a click
+        // has changed transient state and the menu should say so immediately.
+        private static void Recompose()
+        {
+            var scan = _lastScan;
+            if (scan is null)
+            {
+                KickRefresh();
+                return;
+            }
+
+            Publish(Compose(scan));
+        }
+
+        // Two writers: the background scan, and Recompose on the UI thread when
+        // a click changes transient state. Serialised so the snapshot and the
+        // digest can't come from different composes — the tray reads them
+        // separately, and a mismatched pair means a menu that doesn't match its
+        // own rebuild signature.
+        private static readonly object PublishGate = new();
+
+        private static void Publish(DesktopSnapshot next)
+        {
+            bool changed;
+
+            lock (PublishGate)
+            {
+                var digest = DigestOf(next);
+                changed = digest != _digest;
+
+                _snapshot = next;
+                _digest = digest;
+            }
+
+            if (changed) Dispatcher.UIThread.Post(() => TrayController.Instance?.Refresh());
+        }
+
+        private static string DigestOf(DesktopSnapshot snapshot)
+        {
+            if (!snapshot.AppInstalled) return "cd=off";
+
+            return "cd=" + string.Join(",", snapshot.Profiles
+                .Select(p => $"{p.DisplayName}:{(p.IsRunning ? 1 : 0)}:{p.Activity}:{p.Message}")
+                .OrderBy(entry => entry, StringComparer.Ordinal));
+        }
+
+        private static DesktopSnapshot Compose(ScanResult scan)
+        {
+            var now = Environment.TickCount64;
+            var defaultDirectory = scan.DefaultDirectory;
+            var views = new List<ProfileView>(scan.Profiles.Count);
+
+            foreach (var (name, directory) in scan.Profiles)
+            {
+                var isRunning = scan.Running.TryGetValue(directory, out var pid);
+                var (activity, message) = ResolveTransient(directory, isRunning, now);
+
+                views.Add(new ProfileView(
+                    DisplayNameFor(name),
+                    directory,
+                    string.Equals(directory, defaultDirectory, StringComparison.Ordinal),
+                    isRunning,
+                    isRunning ? pid : 0,
+                    activity,
+                    message));
+            }
+
+            return new DesktopSnapshot(scan.Installed, views);
+        }
+
+        private static (ProfileActivity, string?) ResolveTransient(string directory, bool isRunning, long now)
+        {
+            lock (TransientGate)
+            {
+                if (!Transients.TryGetValue(directory, out var transient)) return (ProfileActivity.None, null);
+
+                switch (transient.Kind)
+                {
+                    case ProfileActivity.Launching:
+                        if (isRunning || now > transient.Deadline)
+                        {
+                            Transients.Remove(directory);
+                            return (ProfileActivity.None, null);
+                        }
+                        return (ProfileActivity.Launching, null);
+
+                    case ProfileActivity.Quitting:
+                        if (!isRunning)
+                        {
+                            Transients.Remove(directory);
+                            return (ProfileActivity.None, null);
+                        }
+                        if (now > transient.Deadline)
+                        {
+                            // No automatic escalation. SIGTERM isn't graceful
+                            // for Electron, and a refusal is often legitimate —
+                            // so offer Force quit and make the user mean it.
+                            Transients[directory] =
+                                new Transient(ProfileActivity.ForceQuitOffered, now + ForceQuitOfferMs, null);
+                            return (ProfileActivity.ForceQuitOffered, null);
+                        }
+                        return (ProfileActivity.Quitting, null);
+
+                    case ProfileActivity.ForceQuitOffered:
+                        if (!isRunning || now > transient.Deadline)
+                        {
+                            Transients.Remove(directory);
+                            return (ProfileActivity.None, null);
+                        }
+                        return (ProfileActivity.ForceQuitOffered, null);
+
+                    default:
+                        if (now > transient.Deadline)
+                        {
+                            Transients.Remove(directory);
+                            return (ProfileActivity.None, null);
+                        }
+                        return (ProfileActivity.Error, transient.Message);
+                }
+            }
+        }
+
+        private static void SetTransient(string directory, ProfileActivity kind, int lifetimeMs, string? message = null)
+        {
+            lock (TransientGate)
+            {
+                Transients[directory] = new Transient(kind, Environment.TickCount64 + lifetimeMs, message);
+            }
+
+            Recompose();
+        }
+
+        private static void ClearTransient(string directory)
+        {
+            lock (TransientGate)
+            {
+                Transients.Remove(directory);
+            }
+
+            Recompose();
+        }
+
+        // ---- discovery -----------------------------------------------------
+
+        private static bool AppInstalled() =>
+            Directory.Exists("/Applications/Claude.app") ||
+            Directory.Exists(Path.Combine(Home, "Applications", "Claude.app"));
+
+        private static string DefaultDirectory() =>
+            Canonicalise(Path.Combine(ProfileRoot, DefaultProfileFolder))
+            ?? Path.Combine(ProfileRoot, DefaultProfileFolder);
+
+        private static IReadOnlyList<(string Name, string Directory)> Discover()
+        {
+            var found = new List<(string Name, string Directory)>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+
+            string[] entries;
+            try { entries = Directory.GetDirectories(ProfileRoot); }
+            catch { return found; }
+
+            // Directory order is whatever the filesystem feels like, and the
+            // dedupe below is first-one-wins — so without this, a symlinked
+            // alias could beat the real directory to the row and supply the
+            // display name. Real directories first, then by name.
+            Array.Sort(entries, (a, b) =>
+            {
+                var aLink = IsSymlink(a);
+                var bLink = IsSymlink(b);
+                if (aLink != bLink) return aLink ? 1 : -1;
+                return string.Compare(a, b, StringComparison.Ordinal);
+            });
+
+            foreach (var entry in entries)
+            {
+                var name = Path.GetFileName(entry);
+
+                // Case-sensitive on purpose. The app's own directories are
+                // exactly "Claude" and "Claude-*"; matching case-insensitively
+                // on a case-insensitive volume sweeps in unrelated vendors.
+                if (name != DefaultProfileFolder && !name.StartsWith("Claude-", StringComparison.Ordinal)) continue;
+
+                // "Claude-3p" is Claude Desktop's *own* sidecar config
+                // directory (configLibrary/, deploymentMode), which a normally
+                // launched instance reads and writes. Offering it as a profile
+                // would point a second Chromium at a live directory.
+                if (name.EndsWith("-3p", StringComparison.Ordinal)) continue;
+
+                // The unpackaged-build suffix.
+                if (name.EndsWith("-dev", StringComparison.Ordinal)) continue;
+
+                var directory = Canonicalise(entry);
+                if (directory is null) continue;
+                if (!LooksLikeProfile(directory)) continue;
+
+                // Without this, a symlink or a case variant yields two menu
+                // rows for one directory and defeats the launch guard.
+                if (!seen.Add(directory)) continue;
+
+                found.Add((name, directory));
+            }
+
+            var defaultDirectory = DefaultDirectory();
+            found.Sort((a, b) =>
+            {
+                var aDefault = string.Equals(a.Directory, defaultDirectory, StringComparison.Ordinal);
+                var bDefault = string.Equals(b.Directory, defaultDirectory, StringComparison.Ordinal);
+                if (aDefault != bDefault) return aDefault ? -1 : 1;
+                return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+            });
+
+            return found;
+        }
+
+        private static bool IsSymlink(string path)
+        {
+            try { return new DirectoryInfo(path).LinkTarget is not null; }
+            catch { return false; }
+        }
+
+        private static string? Canonicalise(string path)
+        {
+            try
+            {
+                var info = new DirectoryInfo(path);
+                if (!info.Exists) return null;
+
+                var target = info.ResolveLinkTarget(returnFinalTarget: true);
+                var full = Path.GetFullPath(target?.FullName ?? info.FullName);
+                return full.Length > 1 ? full.TrimEnd('/') : full;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // Accept a real profile, or an empty directory — New profile creates
+        // them empty, so a brand-new one has to be adoptable. Anything else
+        // called "Claude-something" is somebody else's folder.
+        private static bool LooksLikeProfile(string directory)
+        {
+            try
+            {
+                var populated = Directory.EnumerateFileSystemEntries(directory).Any();
+                if (!populated) return true;
+
+                var hits = MarkerFiles.Count(marker => File.Exists(Path.Combine(directory, marker)))
+                         + MarkerDirectories.Count(marker => Directory.Exists(Path.Combine(directory, marker)));
+
+                return hits >= 2;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string DisplayNameFor(string folderName) =>
+            folderName == DefaultProfileFolder ? DefaultDisplayName : folderName["Claude-".Length..];
+
+        private static IReadOnlyDictionary<string, int> MapInstances(
+            IReadOnlyList<MacOSProcessScan.ClaudeInstance> instances)
+        {
+            var defaultDirectory = DefaultDirectory();
+            var running = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            foreach (var instance in instances)
+            {
+                string? directory;
+
+                if (instance.UserDataDir is null)
+                {
+                    // No override in the environment means the app resolved its
+                    // own default location — which is what a Dock launch does,
+                    // and what we deliberately do for the Default profile.
+                    directory = defaultDirectory;
+                }
+                else
+                {
+                    directory = Canonicalise(instance.UserDataDir);
+                    if (directory is null)
+                    {
+                        try { directory = Path.GetFullPath(instance.UserDataDir).TrimEnd('/'); }
+                        catch { continue; }
+                    }
+                }
+
+                running.TryAdd(directory, instance.Pid);
+            }
+
+            return running;
+        }
+
+        // ---- actions -------------------------------------------------------
+
+        public static void Launch(ProfileView profile)
+        {
+            if (!OperatingSystem.IsMacOS()) return;
+
+            var directory = profile.Directory;
+            var isDefault = profile.IsDefault;
+
+            SetTransient(directory, ProfileActivity.Launching, LaunchWindowMs);
+
+            Task.Run(() =>
+            {
+                LaunchGate.Wait();
+                try
+                {
+                    // Authoritative re-check inside the gate. Concurrent
+                    // Chromium access to one userData directory corrupts
+                    // leveldb and SQLite, and this app takes no single-instance
+                    // lock of its own, so this is the last line of defence.
+                    var running = MapInstances(MacOSProcessScan.Scan());
+                    if (running.TryGetValue(directory, out var pid))
+                    {
+                        ClearTransient(directory);
+                        Focus(pid);
+                        return;
+                    }
+
+                    // The Default profile is launched *without* the variable.
+                    // Setting it suppresses the app's own resolution of its
+                    // sidecar config directory, so a tray launch could
+                    // re-trigger the deployment-mode chooser on an already
+                    // configured profile — and it would start a second log
+                    // history under <profile>/Logs.
+                    var arguments = isDefault
+                        ? new[] { "-b", BundleId }
+                        : new[] { "-n", "-b", BundleId, "--env", "CLAUDE_USER_DATA_DIR=" + directory };
+
+                    // open(1) rather than starting Contents/MacOS/Claude
+                    // directly: a direct child would inherit Claude Buddy's
+                    // whole environment, land in its process group (so Ctrl-C
+                    // during a dotnet run would SIGHUP every instance), and
+                    // have its privacy prompts attributed to Claude Buddy,
+                    // whose ad-hoc signature changes on every build.
+                    if (!Run("/usr/bin/open", arguments))
+                    {
+                        SetTransient(directory, ProfileActivity.Error, ErrorMs, "couldn't launch");
+                    }
+                }
+                catch
+                {
+                    SetTransient(directory, ProfileActivity.Error, ErrorMs, "couldn't launch");
+                }
+                finally
+                {
+                    LaunchGate.Release();
+                    KickRefresh();
+                }
+            });
+        }
+
+        public static void Focus(int pid)
+        {
+            if (!OperatingSystem.IsMacOS() || pid <= 0) return;
+
+            Dispatcher.UIThread.Post(() => MacOSAppActivation.Activate(pid));
+        }
+
+        public static void Quit(ProfileView profile)
+        {
+            if (!OperatingSystem.IsMacOS() || profile.Pid <= 0) return;
+
+            var pid = profile.Pid;
+            var directory = profile.Directory;
+
+            SetTransient(directory, ProfileActivity.Quitting, QuitWindowMs);
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                // Activate first, so an "unsaved work" sheet ends up on screen
+                // instead of behind whatever you were looking at.
+                MacOSAppActivation.Activate(pid);
+
+                if (!MacOSAppActivation.Terminate(pid))
+                {
+                    SetTransient(directory, ProfileActivity.Error, ErrorMs, "allow Automation to quit");
+                }
+            });
+        }
+
+        public static void ForceQuit(ProfileView profile)
+        {
+            if (!OperatingSystem.IsMacOS() || profile.Pid <= 0) return;
+
+            var pid = profile.Pid;
+            var directory = profile.Directory;
+
+            SetTransient(directory, ProfileActivity.Quitting, QuitWindowMs);
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!MacOSAppActivation.ForceTerminate(pid))
+                {
+                    SetTransient(directory, ProfileActivity.Error, ErrorMs, "couldn't force quit");
+                }
+            });
+        }
+
+        public static void RevealLogs(ProfileView profile)
+        {
+            if (!OperatingSystem.IsMacOS()) return;
+
+            var directory = profile.Directory;
+            var isDefault = profile.IsDefault;
+
+            Task.Run(() =>
+            {
+                // Only an env-launched instance writes <profile>/Logs; a plain
+                // launch — which is what Default deliberately gets — writes
+                // Electron's default path instead.
+                var candidates = isDefault
+                    ? new[] { Path.Combine(Home, "Library", "Logs", DefaultProfileFolder), directory }
+                    : new[] { Path.Combine(directory, "Logs"), directory };
+
+                foreach (var candidate in candidates)
+                {
+                    if (!Directory.Exists(candidate)) continue;
+                    Run("/usr/bin/open", candidate);
+                    return;
+                }
+
+                RevealProfilesFolder();
+            });
+        }
+
+        public static void RevealProfilesFolder()
+        {
+            if (!OperatingSystem.IsMacOS()) return;
+
+            Task.Run(() =>
+            {
+                var root = ProfileRoot;
+                if (Directory.Exists(root)) Run("/usr/bin/open", root);
+            });
+        }
+
+        public static void NewProfile()
+        {
+            if (!OperatingSystem.IsMacOS()) return;
+
+            Task.Run(() =>
+            {
+                string directory;
+                string name;
+
+                try
+                {
+                    var root = ProfileRoot;
+                    Directory.CreateDirectory(root);
+
+                    var n = 1;
+                    while (Directory.Exists(Path.Combine(root, $"Claude-Profile-{n}"))) n++;
+
+                    name = $"Claude-Profile-{n}";
+                    directory = Path.Combine(root, name);
+                    Directory.CreateDirectory(directory);
+                }
+                catch
+                {
+                    return;
+                }
+
+                var canonical = Canonicalise(directory) ?? directory;
+
+                // Launch straight away rather than waiting for the next scan to
+                // notice it — the whole point of the click is to sign in.
+                Launch(new ProfileView(
+                    DisplayNameFor(name), canonical, IsDefault: false,
+                    IsRunning: false, Pid: 0, ProfileActivity.None, Message: null));
+            });
+        }
+
+        // ---- process runner ------------------------------------------------
+
+        // Local rather than shared with TerminalFocuser.TryRun, which is private
+        // to the session-monitoring side of the app and does the same thing.
+        // Keeping this feature's only dependency on the tray menu is what makes
+        // it deletable in one revert; a shared runner would mean editing an
+        // unrelated file to widen a helper's visibility. The two agree on the
+        // part that matters: both reads have to be in flight *before* the wait,
+        // or the timeout is unreachable (a blocking read returns when the pipe
+        // closes, which a wedged child never does) and an undrained stderr can
+        // deadlock a chatty one once its pipe buffer fills.
+        private static bool Run(string executable, params string[] arguments)
+        {
+            try
+            {
+                var startInfo = new ProcessStartInfo(executable)
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+
+                using var process = Process.Start(startInfo);
+                if (process is null) return false;
+
+                var stdout = process.StandardOutput.ReadToEndAsync();
+                var stderr = process.StandardError.ReadToEndAsync();
+
+                if (!process.WaitForExit(ProcessTimeoutMs))
+                {
+                    try { process.Kill(true); } catch { /* already gone */ }
+                    return false;
+                }
+
+                Task.WaitAll(new Task[] { stdout, stderr }, 1_000);
+                return process.ExitCode == 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
+}

@@ -119,6 +119,64 @@ sets `IsPromoted` in `HKCU\Control Panel\NotifyIconSettings`, which Windows
 then remembers). Nothing to configure in the app; it's how Windows 11 treats
 every new icon.
 
+### Claude Desktop profiles (macOS)
+
+Unrelated to session monitoring, and sharing nothing with it but the menu:
+the status-bar menu can run several copies of the **Claude Desktop** app side
+by side, each signed into a different Anthropic account. Claude Desktop signs
+into one account at a time and keeps that login in its user-data directory
+(`Cookies` → `sessionKey`, `config.json` → `oauth:tokenCache`) rather than the
+Keychain, so a second account is a second directory — selected with
+`CLAUDE_USER_DATA_DIR`, which the app honors, and it takes no single-instance
+lock, so the instances genuinely coexist.
+
+Profiles are **discovered from disk**, not configured: any directory in
+`~/Library/Application Support` named `Claude` or `Claude-<something>` that
+looks like a real profile (or is empty). `Claude` shows as **Default**,
+`Claude-work` as **work**. Each gets a submenu with launch/bring-to-front,
+quit, and reveal logs; a filled dot means it's running. **New profile**
+creates `Claude-Profile-N` and launches it — sign in there with the second
+account. Renaming one means quitting it and renaming the folder, which is
+what **Reveal profiles folder** is for. The section is hidden entirely if
+`Claude.app` isn't installed.
+
+Details worth knowing:
+
+- **`Claude-3p` and `Claude-dev` are skipped.** `-3p` is Claude Desktop's own
+  sidecar config directory (`configLibrary/`, `deploymentMode`) that a normally
+  launched instance reads and writes — offering it as a profile would point a
+  second Chromium at a directory the running app is already using, and
+  concurrent access to one user-data directory corrupts leveldb and SQLite.
+- **Default is launched differently, on purpose** — plain `open -b`, with no
+  `CLAUDE_USER_DATA_DIR`. Setting the variable suppresses the app's own
+  resolution of that sidecar directory, so a tray launch could re-trigger the
+  enterprise deployment-mode chooser on an already-configured profile, and it
+  would start a second log history under `Claude/Logs/`. One consequence:
+  Default's logs are at `~/Library/Logs/Claude`, everyone else's are at
+  `<profile>/Logs`, and Reveal logs knows the difference.
+- **Running instances are detected by scanning processes, not by tracking the
+  ones we launched** — `proc_listallpids` + `proc_pidpath` to find Claude
+  Desktop main processes, then `sysctl KERN_PROCARGS2` to read
+  `CLAUDE_USER_DATA_DIR` out of each one's environment. So an instance you
+  started from the Dock shows up too, and the state survives restarting Claude
+  Buddy. (Not `ps eww`: it prints the environment space-separated, and every
+  profile path contains a space — `Application Support` — so its output can't
+  be parsed back into paths.)
+- **Quit is a real quit**, an Apple Event via `NSRunningApplication`, so it
+  runs the app's shutdown and can be refused — by an unsaved-work dialog, or
+  by a Cowork VM or local-agent session. A refusal shows up as *"allow
+  Automation"* if it was a permission problem, and after a timeout the item
+  becomes **Force quit**, which needs a second deliberate click. Nothing here
+  ever escalates to a kill on its own.
+- **The auto-updater is shared.**
+  `~/Library/Caches/com.anthropic.claudefordesktop.ShipIt/` is keyed by bundle
+  id, not by profile, so two instances updating at once can collide. Nothing
+  the app can do about it.
+- **Each profile is a separate device** as far as the server is concerned —
+  its own `ant-did`.
+- `CLAUDE_BUDDY_PROFILE_ROOT` overrides the directory profiles are discovered
+  in, which is how to try this out without touching your real one.
+
 It works by watching a small folder in the OS temp directory
 (`%TEMP%\claude_buddy\` on Windows, `$TMPDIR/claude_buddy/` on macOS) that
 fills up with one JSON status file per session — `<session_id>.txt`,
@@ -402,7 +460,16 @@ It'll then start quietly whenever you log in.
   only rebuilt when a signature of the session list actually changes —
   otherwise the 2-second poll would dismiss the menu while you're reading
   it. Icon art comes from `Assets/tray-*.png`, drawn by
-  `tools/make-icons.py`.
+  `tools/make-icons.py`. The Claude Desktop section folds its own digest into
+  that same signature, and additionally holds rebuilds back while the menu is
+  open (`NativeMenu.Opening` / `Closed`), since submenus make people linger.
+  The tray *icon* is never held back — it's the urgent half.
+- **Claude Desktop profiles**: `ClaudeDesktopManager.cs` (discovery, the
+  process scan, launch/quit/reveal), `ClaudeDesktopSection.cs` (the menu
+  block), `MacOSProcessScan.cs` (libproc + `sysctl`), `MacOSAppActivation.cs`
+  (`NSRunningApplication`). `TrayController` calls two methods on the section
+  and knows nothing else about it, so removing the feature is a small revert
+  plus deleting those four files.
 - **Bundle metadata**: `tools/build-macos-app.sh` writes `Info.plist`
   inline — bundle id, version, `LSUIElement`, and the Automation usage
   string all live there.
