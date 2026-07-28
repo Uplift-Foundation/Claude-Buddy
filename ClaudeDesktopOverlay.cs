@@ -41,6 +41,17 @@ namespace ClaudeBuddy
         private static long _lastMotionAt;
 
         private static readonly Dictionary<uint, OverlayWindow> Overlays = new();
+
+        // Overlays are parked and reused, never closed. Constructing and
+        // destroying these windows as focus moves crashed the app: Avalonia's
+        // renderer segfaulted in ~AvnGlRenderingSession while presenting a
+        // surface belonging to a window that had just been torn down. Hiding is
+        // also far cheaper than rebuilding a native render target.
+        private static readonly Stack<OverlayWindow> Parked = new();
+
+        // Enough for a few windows across a few instances; beyond that, extra
+        // overlays are simply not reused.
+        private const int MaxParked = 6;
         private static DispatcherTimer? _timer;
 
         public static bool Enabled { get; private set; } = true;
@@ -102,7 +113,7 @@ namespace ClaudeBuddy
 
                 if (!Overlays.TryGetValue(frame.WindowId, out var overlay))
                 {
-                    overlay = new OverlayWindow();
+                    overlay = Parked.Count > 0 ? Parked.Pop() : new OverlayWindow();
                     Overlays[frame.WindowId] = overlay;
                     moved = true;
                 }
@@ -125,7 +136,7 @@ namespace ClaudeBuddy
             foreach (var (id, overlay) in Overlays.ToList())
             {
                 if (live.Contains(id)) continue;
-                overlay.Close();
+                Park(overlay);
                 Overlays.Remove(id);
             }
         }
@@ -165,8 +176,14 @@ namespace ClaudeBuddy
         {
             if (Overlays.Count == 0) return;
 
-            foreach (var overlay in Overlays.Values) overlay.Close();
+            foreach (var overlay in Overlays.Values) Park(overlay);
             Overlays.Clear();
+        }
+
+        private static void Park(OverlayWindow overlay)
+        {
+            overlay.Park();
+            if (Parked.Count < MaxParked) Parked.Push(overlay);
         }
 
         private sealed class OverlayWindow : Window
@@ -207,6 +224,14 @@ namespace ClaudeBuddy
             // poll rate. Everything here is skipped when the frame is unchanged:
             // at 60 Hz a static window should cost only the sample, not a layout
             // pass and a native setFrame every tick.
+            // Hidden, not closed — see the note on Parked.
+            public void Park()
+            {
+                Hide();
+                _shown = false;
+                _applied = default;
+            }
+
             public bool Apply(Color colour, MacOSWindowList.WindowFrame frame)
             {
                 if (colour != _colour)
