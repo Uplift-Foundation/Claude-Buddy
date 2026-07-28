@@ -104,29 +104,39 @@ Details worth knowing:
       app.setPath("userData", A); app.setPath("logs", resolve(A, "Logs"));
     }
     ```
-  - **What's blocked is the launch, not the feature.** Package activation doesn't
-    inherit the launching process's environment (probe directory created, stayed
-    empty), and setting it as a *user* environment variable in the registry
-    doesn't reach it either, because the activation broker builds its environment
-    at logon. Executing the packaged binary directly fails with `Access is
-    denied`, and `Invoke-CommandInDesktopPackage` fails with `E_ACCESSDENIED`
-    unless elevated — which is not something a tray app should ask for on every
-    launch.
-  - **One route does work, at a price.** Copy the package payload (577 MB, 2166
-    files — `robocopy` reads it fine even though it won't execute in place) to a
-    writable location and launch *that* with the variable set. Verified: the
-    target profile directory filled with a complete Electron userData tree
-    (`blob_storage`, `Cache`, `Crashpad`, `GPUCache`, …) while the packaged
-    instance kept running untouched, so the single-instance lock is per
-    profile directory here as it is on macOS. One copy serves every profile,
-    since only the variable changes per launch. The costs are why it isn't
-    shipped: 577 MB duplicated, the copy receives no MSIX updates so it goes
-    stale when Claude updates (macOS has the same problem and answers it with
-    "Rebuild after a Claude update"), and the copy runs without package
-    identity — whose effect on notifications, protocol handlers and the
-    sign-in flow was *not* tested. Two accounts have never actually been
-    signed in side by side on Windows; what's verified is that the profile
-    directory is honored and a second instance runs.
+  - **The environment variable is the wrong lever on Windows.** Package
+    activation doesn't inherit the launching process's environment (probe
+    directory created, stayed empty), and setting it as a *user* environment
+    variable in the registry doesn't reach it either, because the activation
+    broker builds its environment at logon. Executing the packaged binary
+    directly fails with `Access is denied`.
+  - **A command-line argument is the right lever, and it works.** Being Electron,
+    the app honors `--user-data-dir=<path>` at the Chromium level, with no
+    environment variable involved — verified by launching with the flag alone and
+    watching a complete 27-entry Electron userData tree appear in the target
+    directory. And a packaged app *can* be handed a command line, unelevated, via
+    `IApplicationActivationManager::ActivateApplication` (AUMID
+    `Claude_pzs8sxrjxfjjc!Claude`). Verified end to end: `ACTIVATED pid=12604`,
+    27 entries in the profile directory, while the already-running packaged
+    instance carried on untouched — so the single-instance lock is per profile
+    directory here as on macOS.
+
+    The catch that hid this: `ActivateApplication` is a shell API and returns
+    `E_ACCESSDENIED` from a non-interactive logon, which is what an SSH session
+    gets. So does `Invoke-CommandInDesktopPackage`. Both work from the user's
+    interactive session, which is where a tray app already lives. An earlier
+    revision of this file concluded from those denials that the whole approach
+    was impossible, and then that a 577 MB unpackaged copy was the only way
+    through. Neither is true; no copy is needed.
+
+    A bonus over the macOS path: because the argument sits on the main process's
+    command line, working out which profile a running instance belongs to is just
+    `Win32_Process.CommandLine` — no `KERN_PROCARGS2` equivalent, no memory
+    reading.
+
+    Not yet verified: two accounts signed in side by side on Windows. What's
+    verified is that the profile directory is honored and a second instance runs
+    against it.
   - **Icons can't be tinted.** No Dock, and the taskbar icon comes from the signed
     package, so the APFS-clone trick has no analogue.
 
