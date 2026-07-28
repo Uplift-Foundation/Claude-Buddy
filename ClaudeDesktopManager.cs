@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -681,6 +682,11 @@ namespace ClaudeBuddy
         //
         // The escalation waits off the UI thread. Quit() posts this to the
         // dispatcher, and sleeping there would freeze the menu and every orb.
+        // Attributed rather than relying on the caller's OperatingSystem.IsWindows()
+        // check: the escalation below runs inside a Task.Run closure, and the
+        // analyzer can't see a guard through one. Without this, CA1416 correctly
+        // reports the user32 P/Invokes as reachable on every platform.
+        [SupportedOSPlatform("windows")]
         private static bool QuitWindows(int pid)
         {
             try
