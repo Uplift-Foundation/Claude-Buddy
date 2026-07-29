@@ -6,6 +6,12 @@ obj/
 Obj/
 
 .claude/
+
+# Finder metadata. Written into any directory a Mac user so much as looks at, so
+# a `git add -A` picks it up without anyone noticing — which is exactly how one
+# got committed in 186b4ac.
+.DS_Store
+
 # NTFS alternate data streams, which arrive as "<file>:<stream>" — mark-of-the-web
 # (":Zone.Identifier") and antivirus scan records (":mshield") are the usual ones.
 # ":" is an illegal path character on Windows, so committing a single one of these
