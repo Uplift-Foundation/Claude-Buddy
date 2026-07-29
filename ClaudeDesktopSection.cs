@@ -214,6 +214,18 @@ namespace ClaudeBuddy
                 _ => ""
             };
 
+            // Two processes on one profile directory corrupts leveldb and
+            // SQLite, and it used to be invisible here: instances were counted
+            // with TryAdd, so a duplicate collapsed into the same single
+            // "running" row. It can happen without this app's involvement —
+            // launching Claude from the Dock while a tinted clone of the same
+            // profile is already up does it — so the menu has to be able to say
+            // so, otherwise nothing ever will.
+            if (suffix.Length == 0 && profile.InstanceCount > 1)
+            {
+                suffix = $"   ⚠ {profile.InstanceCount} instances — quit one";
+            }
+
             return $"{Truncate(profile.DisplayName)}{suffix}";
         }
 

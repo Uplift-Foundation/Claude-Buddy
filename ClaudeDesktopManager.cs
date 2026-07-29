@@ -24,7 +24,12 @@ namespace ClaudeBuddy
         int Pid,
         ProfileActivity Activity,
         string? Message,
-        string ThemeMode);
+        string ThemeMode,
+        // How many processes are using this profile directory. Should always be
+        // 0 or 1; more than that is the concurrent-access case that corrupts
+        // leveldb and SQLite, and the menu says so rather than hiding it behind
+        // a single "running" row.
+        int InstanceCount = 1);
 
     internal sealed record DesktopSnapshot(bool AppInstalled, IReadOnlyList<ProfileView> Profiles);
 
@@ -77,6 +82,10 @@ namespace ClaudeBuddy
 
         private sealed record Transient(ProfileActivity Kind, long Deadline, string? Message);
 
+        // First pid seen for a profile directory, and how many processes are on
+        // it. Count > 1 is the concurrent-access hazard, not a normal state.
+        private readonly record struct InstanceGroup(int Pid, int Count);
+
         // DefaultDirectory resolves symlinks, so it touches the filesystem.
         // It's captured here rather than recomputed in Compose, which also runs
         // on the UI thread when a click changes transient state.
@@ -84,7 +93,7 @@ namespace ClaudeBuddy
             bool Installed,
             string DefaultDirectory,
             IReadOnlyList<(string Name, string Directory)> Profiles,
-            IReadOnlyDictionary<string, int> Running);
+            IReadOnlyDictionary<string, InstanceGroup> Running);
 
         private static readonly Dictionary<string, Transient> Transients = new(StringComparer.Ordinal);
         private static readonly object TransientGate = new();
@@ -145,7 +154,7 @@ namespace ClaudeBuddy
 
             IReadOnlyList<(string Name, string Directory)> profiles =
                 installed ? Discover() : Array.Empty<(string Name, string Directory)>();
-            IReadOnlyDictionary<string, int> running =
+            IReadOnlyDictionary<string, InstanceGroup> running =
                 installed ? MapInstances(ScanProcesses()) : EmptyRunning;
 
             var scan = new ScanResult(installed, DefaultDirectory(), profiles, running);
@@ -156,8 +165,8 @@ namespace ClaudeBuddy
         private static IReadOnlyList<ClaudeInstance> ScanProcesses() =>
             OperatingSystem.IsWindows() ? WindowsProcessScan.Scan() : MacOSProcessScan.Scan();
 
-        private static readonly IReadOnlyDictionary<string, int> EmptyRunning =
-            new Dictionary<string, int>(StringComparer.Ordinal);
+        private static readonly IReadOnlyDictionary<string, InstanceGroup> EmptyRunning =
+            new Dictionary<string, InstanceGroup>(StringComparer.Ordinal);
 
         // Recompose from the last scan without re-scanning — for when a click
         // has changed transient state and the menu should say so immediately.
@@ -209,8 +218,13 @@ namespace ClaudeBuddy
                     var folder = Path.GetFileName(p.Directory);
                     var settings = ClaudeBuddySettings.For(folder);
                     var colour = ClaudeDesktopColors.NameFor(folder, p.IsDefault);
+                    // InstanceCount belongs here even though it's a count: it's
+                    // stable while the processes are, and without it a profile
+                    // going from one instance to two would never repaint the
+                    // menu, so the duplicate warning would never appear.
                     return $"{p.DisplayName}:{(p.IsRunning ? 1 : 0)}:{p.Activity}:{p.Message}"
-                           + $":{p.ThemeMode}:{colour}:{(settings.ShowSwatch ? 1 : 0)}";
+                           + $":{p.ThemeMode}:{colour}:{(settings.ShowSwatch ? 1 : 0)}"
+                           + $":{p.InstanceCount}";
                 })
                 .OrderBy(entry => entry, StringComparer.Ordinal));
         }
@@ -223,7 +237,7 @@ namespace ClaudeBuddy
 
             foreach (var (name, directory) in scan.Profiles)
             {
-                var isRunning = scan.Running.TryGetValue(directory, out var pid);
+                var isRunning = scan.Running.TryGetValue(directory, out var group);
                 var (activity, message) = ResolveTransient(directory, isRunning, now);
 
                 var chosenName = ClaudeBuddySettings.For(name).Name;
@@ -233,10 +247,11 @@ namespace ClaudeBuddy
                     directory,
                     string.Equals(directory, defaultDirectory, StringComparison.Ordinal),
                     isRunning,
-                    isRunning ? pid : 0,
+                    isRunning ? group.Pid : 0,
                     activity,
                     message,
-                    ReadThemeMode(directory)));
+                    ReadThemeMode(directory),
+                    isRunning ? group.Count : 0));
             }
 
             return new DesktopSnapshot(scan.Installed, views);
@@ -463,11 +478,11 @@ namespace ClaudeBuddy
         private static string DisplayNameFor(string folderName) =>
             folderName == DefaultProfileFolder ? DefaultDisplayName : folderName["Claude-".Length..];
 
-        private static IReadOnlyDictionary<string, int> MapInstances(
+        private static IReadOnlyDictionary<string, InstanceGroup> MapInstances(
             IReadOnlyList<ClaudeInstance> instances)
         {
             var defaultDirectory = DefaultDirectory();
-            var running = new Dictionary<string, int>(StringComparer.Ordinal);
+            var running = new Dictionary<string, InstanceGroup>(StringComparer.Ordinal);
 
             foreach (var instance in instances)
             {
@@ -490,7 +505,20 @@ namespace ClaudeBuddy
                     }
                 }
 
-                running.TryAdd(directory, instance.Pid);
+                // Count them rather than keeping only the first. Two processes
+                // on one profile directory is the failure this whole feature is
+                // built to avoid, and TryAdd used to make it invisible: the menu
+                // showed a single "running" row and nothing suggested anything
+                // was wrong. Keep the first pid — that's the one Focus and Quit
+                // act on — and remember how many there were.
+                if (running.TryGetValue(directory, out var existing))
+                {
+                    running[directory] = existing with { Count = existing.Count + 1 };
+                }
+                else
+                {
+                    running[directory] = new InstanceGroup(instance.Pid, 1);
+                }
             }
 
             return running;
@@ -517,10 +545,10 @@ namespace ClaudeBuddy
                     // leveldb and SQLite, and this app takes no single-instance
                     // lock of its own, so this is the last line of defence.
                     var running = MapInstances(ScanProcesses());
-                    if (running.TryGetValue(directory, out var pid))
+                    if (running.TryGetValue(directory, out var group))
                     {
                         ClearTransient(directory);
-                        Focus(pid);
+                        Focus(group.Pid);
                         return;
                     }
 
