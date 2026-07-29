@@ -89,9 +89,11 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key>   <true/>
     <!-- Menu-bar-only: no Dock icon, no Cmd-Tab entry. -->
     <key>LSUIElement</key>               <true/>
-    <!-- Shown in the Automation prompt the first time an orb is clicked. -->
+    <!-- Shown in the Automation prompt the first time an orb is clicked, and
+         again for Claude Desktop the first time a profile is quit from the
+         menu (quitting sends a quit Apple Event, which is TCC-gated). -->
     <key>NSAppleEventsUsageDescription</key>
-    <string>Claude Buddy uses automation to bring the terminal window of a Claude Code session to the front when you click its orb.</string>
+    <string>Claude Buddy uses automation to bring the terminal window of a Claude Code session to the front when you click its orb, and to quit a Claude Desktop profile when you choose Quit from its menu.</string>
 </dict>
 </plist>
 PLIST

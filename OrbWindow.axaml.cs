@@ -6,7 +6,10 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Controls.Shapes;
 using Avalonia.Styling;
+using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
@@ -57,9 +60,16 @@ namespace ClaudeBuddy
         private string _lastColor = "";
 
         private readonly SolidColorBrush _orbBrush = new(IdleColor);
+
+        private readonly RadialGradientBrush _glowBrush = new()
+        {
+            GradientOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),
+            Center = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),
+            GradientStops = GlowStops(IdleColor)
+        };
+
         private readonly ColorTransition _colorTransition;
         private readonly ScaleTransform _orbScale = new();
-        private CancellationTokenSource? _pulseCts;
 
         public OrbWindow(string sessionId)
         {
@@ -75,7 +85,8 @@ namespace ClaudeBuddy
             _orbBrush.Transitions = new Transitions { _colorTransition };
 
             Orb.Fill = _orbBrush;
-            Glow.Fill = _orbBrush;
+
+            Glow.Fill = _glowBrush;
             Orb.RenderTransform = _orbScale;
 
             // Unlike WPF, Loaded fires *after* the first UpdateFrom here, so
@@ -83,6 +94,9 @@ namespace ClaudeBuddy
             Loaded += (_, _) => ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
 
             Opened += (_, _) => this.ShowOnAllSpaces();
+
+            // A closed orb must leave the shared ticker or it keeps being ticked.
+            Closed += (_, _) => Pulsing.Remove(this);
         }
 
         public void UpdateFrom(SessionStatus status)
@@ -174,51 +188,97 @@ namespace ClaudeBuddy
         {
             _colorTransition.Duration = duration;
             _orbBrush.Color = to;
+            _glowBrush.GradientStops = GlowStops(to);
         }
+
+        // Opaque at the centre, gone by the edge — the same falloff a blur gave,
+        // without re-blurring 56x56 pixels sixty times a second.
+        // The glow's gradient offsets are fractions of the *radius* (28px), and
+        // the orb covers the inner 18px — so anything before offset 0.64 is hidden
+        // behind the orb and contributes nothing. Hold the colour flat out to
+        // there and fade over the visible ring, which is where the blur used to
+        // put its bloom.
+        private static GradientStops GlowStops(Color color) => new()
+        {
+            new GradientStop(Color.FromArgb(150, color.R, color.G, color.B), 0.0),
+            new GradientStop(Color.FromArgb(150, color.R, color.G, color.B), 0.64),
+            new GradientStop(Color.FromArgb(95, color.R, color.G, color.B), 0.82),
+            new GradientStop(Color.FromArgb(0, color.R, color.G, color.B), 1.0)
+        };
+
+        // One shared ticker drives every orb's pulse instead of an Avalonia
+        // Animation per window. Avalonia animations run at the display's frame
+        // rate, and each frame re-renders the whole (transparent, topmost) orb
+        // window — measured at roughly 8% of a core per orb at 60Hz. The pulse is
+        // a slow breath, so a much lower rate is indistinguishable and costs a
+        // third as much. Hidden orbs are skipped entirely, which the old
+        // animation never did: Hide() left it running.
+        private const double PulseFps = 20;
+
+        private static readonly List<OrbWindow> Pulsing = new();
+        private static DispatcherTimer? _ticker;
+
+        private double _pulseTo = 1.0;
+        private double _pulsePeriodMs = 2200;
+        private long _pulseStartedAt;
 
         private void StartPulse(double to, TimeSpan duration, Easing easing)
         {
-            _pulseCts?.Cancel();
-            _pulseCts = new CancellationTokenSource();
+            // Duration is a half-cycle in the old alternating animation, so a full
+            // breath is twice it. Easing is implied by the cosine below.
+            _pulseTo = to;
+            _pulsePeriodMs = duration.TotalMilliseconds * 2;
+            _pulseStartedAt = Environment.TickCount64;
 
-            var animation = new Animation
+            if (!Pulsing.Contains(this)) Pulsing.Add(this);
+            EnsureTicker();
+        }
+
+        private static void EnsureTicker()
+        {
+            // Restart as well as create: the tick handler stops the timer once the
+            // last orb stops pulsing, so a returning session has to be able to
+            // wake it again.
+            if (_ticker is not null)
             {
-                Duration = duration,
-                IterationCount = IterationCount.Infinite,
-                PlaybackDirection = PlaybackDirection.Alternate,
-                Easing = easing,
-                Children =
-                {
-                    new KeyFrame
-                    {
-                        Cue = new Cue(0d),
-                        Setters =
-                        {
-                            new Setter(ScaleTransform.ScaleXProperty, 1.0),
-                            new Setter(ScaleTransform.ScaleYProperty, 1.0)
-                        }
-                    },
-                    new KeyFrame
-                    {
-                        Cue = new Cue(1d),
-                        Setters =
-                        {
-                            new Setter(ScaleTransform.ScaleXProperty, to),
-                            new Setter(ScaleTransform.ScaleYProperty, to)
-                        }
-                    }
-                }
-            };
+                if (!_ticker.IsEnabled) _ticker.Start();
+                return;
+            }
 
-            // Run against the Orb visual; Avalonia's transform animator finds
-            // the ScaleTransform via the visual's RenderTransform.
-            _ = animation.RunAsync(Orb, _pulseCts.Token);
+            _ticker = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(1000.0 / PulseFps)
+            };
+            _ticker.Tick += (_, _) =>
+            {
+                for (var i = Pulsing.Count - 1; i >= 0; i--) Pulsing[i].TickPulse();
+                if (Pulsing.Count == 0) _ticker!.Stop();
+            };
+            _ticker.Start();
+        }
+
+        private void TickPulse()
+        {
+            // Nothing on screen, nothing to animate — the whole point of the
+            // "Show orbs" toggle was to stop this work, and it never did.
+            if (!IsVisible)
+            {
+                _orbScale.ScaleX = _orbScale.ScaleY = 1.0;
+                return;
+            }
+
+            var phase = (Environment.TickCount64 - _pulseStartedAt) % _pulsePeriodMs / _pulsePeriodMs;
+            var eased = (1 - Math.Cos(phase * 2 * Math.PI)) / 2;   // 0 -> 1 -> 0, smooth at both ends
+            var scale = 1.0 + (_pulseTo - 1.0) * eased;
+
+            _orbScale.ScaleX = scale;
+            _orbScale.ScaleY = scale;
         }
 
         private void StopPulse()
         {
-            _pulseCts?.Cancel();
-            _pulseCts = null;
+            Pulsing.Remove(this);
+            _orbScale.ScaleX = _orbScale.ScaleY = 1.0;
         }
 
         // --- Click, dragging & context menu ---
