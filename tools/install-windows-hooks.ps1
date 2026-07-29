@@ -48,10 +48,40 @@ if (-not (Test-Path -LiteralPath $SettingsPath)) {
     Write-Host "Created $SettingsPath"
 }
 
+# ConvertFrom-Json -AsHashtable is PowerShell 6+, and the powershell.exe Claude
+# Code invokes on Windows is 5.1, so convert the object graph by hand. Recursive
+# because settings.json nests: hooks -> event -> groups -> hooks -> command.
+function ConvertTo-HashtableDeep($value) {
+    if ($null -eq $value) { return $null }
+
+    if ($value -is [System.Collections.IDictionary]) {
+        $copy = @{}
+        foreach ($key in @($value.Keys)) { $copy[$key] = ConvertTo-HashtableDeep $value[$key] }
+        return $copy
+    }
+
+    if ($value -is [System.Management.Automation.PSCustomObject]) {
+        $copy = @{}
+        foreach ($property in $value.PSObject.Properties) {
+            $copy[$property.Name] = ConvertTo-HashtableDeep $property.Value
+        }
+        return $copy
+    }
+
+    # Strings are enumerable; check them before the array branch.
+    if ($value -is [string]) { return $value }
+
+    if ($value -is [System.Collections.IEnumerable]) {
+        return @(foreach ($item in $value) { ConvertTo-HashtableDeep $item })
+    }
+
+    return $value
+}
+
 # Read with -Raw and parse: this preserves every existing setting, which matters
 # because this file holds the user's model, permissions, status line and so on.
 $json = Get-Content -LiteralPath $SettingsPath -Raw -Encoding UTF8
-$settings = if ([string]::IsNullOrWhiteSpace($json)) { [ordered]@{} } else { $json | ConvertFrom-Json -AsHashtable }
+$settings = if ([string]::IsNullOrWhiteSpace($json)) { @{} } else { ConvertTo-HashtableDeep ($json | ConvertFrom-Json) }
 
 $backup = "$SettingsPath.claudebuddy-backup"
 Copy-Item -LiteralPath $SettingsPath -Destination $backup -Force
@@ -86,16 +116,18 @@ $wanted = @(
 
 # Strip our own entries wherever they appear, so re-running repairs rather than
 # duplicating, and -Uninstall leaves other tools' hooks untouched.
-foreach ($event in @($hooks.Keys)) {
-    $groups = @($hooks[$event])
+# $event is an automatic variable in PowerShell; using it as a loop variable
+# here would shadow it and can misbehave.
+foreach ($eventName in @($hooks.Keys)) {
+    $groups = @($hooks[$eventName])
     $kept = @()
 
     foreach ($group in $groups) {
         if ($null -eq $group) { continue }
 
-        $inner = @($group['hooks']) | Where-Object {
+        $inner = @(@($group['hooks']) | Where-Object {
             $_ -and ($_['command'] -notlike '*ClaudeBuddyHook.ps1*')
-        }
+        })
 
         if ($inner.Count -gt 0) {
             $group['hooks'] = $inner
@@ -103,7 +135,7 @@ foreach ($event in @($hooks.Keys)) {
         }
     }
 
-    if ($kept.Count -gt 0) { $hooks[$event] = $kept } else { $hooks.Remove($event) }
+    if ($kept.Count -gt 0) { $hooks[$eventName] = $kept } else { $hooks.Remove($eventName) }
 }
 
 if (-not $Uninstall) {
@@ -112,7 +144,7 @@ if (-not $Uninstall) {
         if ($entry.Matcher) { $group['matcher'] = $entry.Matcher }
 
         $existing = if ($hooks.ContainsKey($entry.Event)) { @($hooks[$entry.Event]) } else { @() }
-        $hooks[$entry.Event] = $existing + $group
+        $hooks[$entry.Event] = @($existing) + @($group)
     }
 }
 
