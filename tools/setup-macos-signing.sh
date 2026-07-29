@@ -34,9 +34,26 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 step() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 ask()  { printf '\033[1;33m??\033[0m %s' "$*"; }
+
+# This script is a conversation — it asks for a name, waits while you use a
+# browser, then asks for a password. Without a terminal on stdin every `read`
+# gets EOF instantly and it would appear to do nothing at all, which is a
+# baffling way to fail. Say so instead.
+if [[ ! -t 0 ]]; then
+  cat >&2 <<'NO_TTY'
+This script needs an interactive terminal: it prompts for a certificate name,
+waits while you upload a CSR in your browser, and then asks for an app-specific
+password. Run it directly in Terminal or iTerm:
+
+    cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+    ./tools/setup-macos-signing.sh
+
+Nothing has been changed.
+NO_TTY
+  exit 1
+fi
 
 mkdir -p "$WORK"
 chmod 700 "$WORK"
