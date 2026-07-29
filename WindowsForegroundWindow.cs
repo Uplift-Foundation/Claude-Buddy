@@ -37,6 +37,32 @@ namespace ClaudeBuddy
         [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
         private static extern int GetWindowLong(IntPtr hWnd, int index);
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Rect
+        {
+            public int Left, Top, Right, Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Point
+        {
+            public int X, Y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WindowPlacement
+        {
+            public int Length;
+            public int Flags;
+            public int ShowCmd;
+            public Point MinPosition;
+            public Point MaxPosition;
+            public Rect NormalPosition;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowPlacement(IntPtr hWnd, ref WindowPlacement placement);
+
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
 
@@ -75,14 +101,25 @@ namespace ClaudeBuddy
         //
         // Chromium processes own a fair number of top-level windows that are
         // not the app (message-only windows, drag helpers), so candidates must
-        // have a title and must not be tool windows. Preference order is
-        // visible, then minimized, then hidden: with several real windows open
-        // the one already on screen is the one the user means, and a hidden
-        // window is the last resort rather than the first match.
+        // have a title and must not be tool windows.
+        //
+        // Among what's left, the biggest window wins. Sorting by visibility
+        // first looks reasonable and is wrong: Claude Desktop's quick-ask bar is
+        // a separate titled top-level window, and it is usually *visible* while
+        // the main window sits hidden in the tray — so "prefer visible" brought
+        // the little bar forward and left the app where it was. Size separates
+        // them unambiguously, and visibility is only a tie-break for two windows
+        // of genuinely similar size, where the one already on screen is the one
+        // the user meant.
+        //
+        // Size comes from GetWindowPlacement's normal position rather than
+        // GetWindowRect, because that reports the *restored* rectangle: a
+        // minimized window's live rect is off-screen junk (around -32000), and a
+        // hidden window still needs to be measured at the size it will return
+        // to.
         public static bool ShowAndFocus(int pid)
         {
-            var best = IntPtr.Zero;
-            var bestRank = int.MaxValue;
+            var candidates = new List<(IntPtr Handle, long Area, int Visibility)>();
 
             EnumWindows((hwnd, _) =>
             {
@@ -92,20 +129,42 @@ namespace ClaudeBuddy
                 if (GetWindowTextLength(hwnd) == 0) return true;
                 if ((GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) return true;
 
-                var rank = IsWindowVisible(hwnd)
-                    ? (IsIconic(hwnd) ? 1 : 0)
-                    : 2;
-
-                if (rank < bestRank)
-                {
-                    bestRank = rank;
-                    best = hwnd;
-                }
+                candidates.Add((
+                    hwnd,
+                    RestoredArea(hwnd),
+                    IsWindowVisible(hwnd) ? (IsIconic(hwnd) ? 1 : 0) : 2));
 
                 return true;
             }, IntPtr.Zero);
 
-            return BringToFront(best);
+            if (candidates.Count == 0) return false;
+
+            // Largest first, then anything within three quarters of it counts as
+            // the same size and is decided by which is already on screen.
+            var largest = candidates.Max(c => c.Area);
+            var threshold = largest * 3 / 4;
+
+            var pick = candidates
+                .Where(c => c.Area >= threshold)
+                .OrderBy(c => c.Visibility)
+                .ThenByDescending(c => c.Area)
+                .First();
+
+            return BringToFront(pick.Handle);
+        }
+
+        private static long RestoredArea(IntPtr hwnd)
+        {
+            var placement = new WindowPlacement();
+            placement.Length = Marshal.SizeOf<WindowPlacement>();
+
+            if (!GetWindowPlacement(hwnd, ref placement)) return 0;
+
+            var rect = placement.NormalPosition;
+            var width = (long)(rect.Right - rect.Left);
+            var height = (long)(rect.Bottom - rect.Top);
+
+            return width > 0 && height > 0 ? width * height : 0;
         }
 
         // Windows denies SetForegroundWindow from anything that isn't already
