@@ -6,10 +6,8 @@ obj/
 Obj/
 
 .claude/
-
 # NTFS alternate data streams, which arrive as "<file>:<stream>" — mark-of-the-web
 # (":Zone.Identifier") and antivirus scan records (":mshield") are the usual ones.
 # ":" is an illegal path character on Windows, so committing a single one of these
-# makes the entire repository impossible to check out there. No filename in a
-# cross-platform repo has a legitimate reason to contain a colon, so ignore all of them.
+# makes the entire repository impossible to check out there.
 *:*
