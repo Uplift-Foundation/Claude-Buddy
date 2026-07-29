@@ -319,21 +319,86 @@ namespace ClaudeBuddy
             }
         }
 
+        // Fire-and-forget on purpose — a click must not wait on AppleScript — but
+        // *not* blind. Process.Start succeeds whenever osascript merely launches,
+        // so the previous version reported success for every outcome, including
+        // the one that matters: error -1743, errAEEventNotPermitted, which is what
+        // macOS returns when the app's Automation consent is missing or has been
+        // invalidated (any change to the app's code identity does that — a
+        // re-signed or replaced bundle counts).
+        //
+        // That failure is otherwise undetectable from the outside. It looks
+        // exactly like a click landing on a terminal that is already frontmost,
+        // so with a single terminal window it is invisible on the current Space
+        // and only shows up as "clicking does nothing" from another one. It cost
+        // a long hunt through a focus path that turned out to be correct.
+        //
+        // So drain stderr on a background task and say so once. Still never
+        // throws into the caller: focusing is a convenience, not worth the app.
         private static void RunOsaScript(string? script)
         {
             if (script is null) return;
 
             try
             {
-                var psi = new ProcessStartInfo("/usr/bin/osascript") { UseShellExecute = false };
+                var psi = new ProcessStartInfo("/usr/bin/osascript")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardError = true
+                };
                 psi.ArgumentList.Add("-e");
                 psi.ArgumentList.Add(script);
-                Process.Start(psi);
+
+                var process = Process.Start(psi);
+                if (process is null) return;
+
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        // Read before waiting: a full stderr pipe would otherwise
+                        // block the child while we block on its exit.
+                        var stderr = await process.StandardError.ReadToEndAsync();
+                        await process.WaitForExitAsync();
+                        if (process.ExitCode != 0) ReportFocusFailure(stderr);
+                    }
+                    catch { }
+                    finally { process.Dispose(); }
+                });
             }
             catch
             {
                 // Focusing is a convenience; never let it take the app down.
             }
+        }
+
+        // Once per app run, not per click: a denied grant fails on every click,
+        // and a message per click would bury everything else in the log.
+        private static int _focusFailureReported;
+
+        private static void ReportFocusFailure(string stderr)
+        {
+            if (Interlocked.Exchange(ref _focusFailureReported, 1) != 0) return;
+
+            var detail = stderr.Trim();
+
+            // -1743 is the one worth naming, because the user can actually fix it
+            // and the wording macOS uses ("Not authorized to send Apple events")
+            // does not say where to go.
+            if (detail.Contains("-1743") || detail.Contains("Not authorized to send Apple events"))
+            {
+                Console.Error.WriteLine(
+                    "Claude Buddy: clicking an orb can't focus your terminal — macOS has not " +
+                    "granted Automation permission.\n" +
+                    "  Fix: System Settings > Privacy & Security > Automation, and enable the " +
+                    "terminal under Claude Buddy.\n" +
+                    "  If Claude Buddy isn't listed, its permission was invalidated by a rebuild. Run:\n" +
+                    "    tccutil reset AppleEvents io.github.wtvamp.claudebuddy\n" +
+                    "  then click an orb again and approve the prompt.");
+                return;
+            }
+
+            Console.Error.WriteLine($"Claude Buddy: focusing the terminal failed: {detail}");
         }
 
         // --- Windows ---
