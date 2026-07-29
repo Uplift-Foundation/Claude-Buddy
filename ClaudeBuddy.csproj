@@ -7,10 +7,33 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>ClaudeBuddy</AssemblyName>
     <RootNamespace>ClaudeBuddy</RootNamespace>
+    <!-- The single source of truth for the shipped version. The packaging
+         scripts and the release workflow all parse this element out of this
+         file rather than carrying their own copy, so a release is a one-line
+         edit here plus a matching tag.
+
+         Keep the "-beta" style suffix on Version only: AssemblyVersion and
+         FileVersion must be plain four-part numbers, so they are set
+         explicitly from the numeric part. Version flows into
+         AssemblyInformationalVersion, which is what actually shows the
+         prerelease label. -->
+    <Version>0.1.0-beta</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+    <Product>Claude Buddy</Product>
+    <Authors>Kawika Miller, Repo Owner</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/wtvamp/Claude-Buddy</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/wtvamp/Claude-Buddy</RepositoryUrl>
     <!-- Run on whatever newer runtime is installed (e.g. .NET 10 SDK only) -->
     <RollForward>LatestMajor</RollForward>
     <!-- Single-file, self-contained output when publishing; pick the RID on
          the command line: dotnet publish -c Release -r win-x64|osx-arm64|osx-x64 -->
+    <!-- Embedded as the Win32 icon resource, so ClaudeBuddy.exe has a real icon
+         in Explorer, the Start menu and the notification area's overflow. The
+         SDK does this cross-platform, so a Mac can still produce the win-x64
+         build. Ignored when targeting macOS, which uses Resources/*.icns. -->
+    <ApplicationIcon>Assets/ClaudeBuddy.ico</ApplicationIcon>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>

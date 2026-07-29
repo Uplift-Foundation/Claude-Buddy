@@ -4,11 +4,14 @@ by hand. Regenerate with:
 
     python3 tools/make-icons.py
 
-Outputs (all PNG, RGBA, straight alpha):
+Outputs (PNG, RGBA, straight alpha — except the .ico, noted below):
   Assets/tray-idle.png        menu-bar / notification-area icon, one per state
   Assets/tray-generating.png
   Assets/tray-waiting.png
   Assets/appicon-1024.png     source art for the .app bundle's .icns
+  Assets/ClaudeBuddy.ico      multi-size Windows icon: the .exe's embedded icon
+                              (csproj ApplicationIcon) and the installer's
+                              SetupIconFile
 
 Pure stdlib (zlib + struct) — no Pillow, so it runs on a stock macOS python3.
 Everything is drawn by supersampling signed distance fields, which is plenty
@@ -31,7 +34,7 @@ WAITING = (0xE8, 0x98, 0x3B)
 SS = 4  # supersampling factor per axis
 
 
-def write_png(path, size, pixels):
+def png_bytes(size, pixels):
     """pixels: flat list of (r, g, b, a) tuples, row-major, length size*size."""
     raw = bytearray()
     for y in range(size):
@@ -45,14 +48,53 @@ def write_png(path, size, pixels):
         return out + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
 
     ihdr = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)  # 8-bit RGBA
-    png = (
+    return (
         b"\x89PNG\r\n\x1a\n"
         + chunk(b"IHDR", ihdr)
         + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
         + chunk(b"IEND", b"")
     )
+
+
+def write_png(path, size, pixels):
     with open(path, "wb") as fh:
-        fh.write(png)
+        fh.write(png_bytes(size, pixels))
+
+
+def write_ico(path, images):
+    """images: list of (size, png_data). Writes a PNG-compressed .ico.
+
+    An .ico is just a directory of images, and since Vista each entry may be a
+    whole PNG rather than the old BMP-with-AND-mask layout — which is what lets
+    this stay in stdlib, because the PNG encoder above already exists. Windows 10
+    and 11 and Inno Setup both read this form.
+    """
+    count = len(images)
+    # 6-byte ICONDIR, then one 16-byte ICONDIRENTRY per image, then the payloads.
+    offset = 6 + 16 * count
+    directory = bytearray()
+    payloads = bytearray()
+
+    for size, data in images:
+        directory += struct.pack(
+            "<BBBBHHII",
+            # 0 means 256 in a single byte field, which is why 256 is the cap.
+            0 if size >= 256 else size,
+            0 if size >= 256 else size,
+            0,  # palette size: 0 for truecolor
+            0,  # reserved
+            1,  # color planes
+            32,  # bits per pixel
+            len(data),
+            offset,
+        )
+        payloads += data
+        offset += len(data)
+
+    with open(path, "wb") as fh:
+        fh.write(struct.pack("<HHH", 0, 1, count))  # reserved, type 1 = icon
+        fh.write(bytes(directory))
+        fh.write(bytes(payloads))
 
 
 def render(size, shade):
@@ -144,6 +186,14 @@ def main():
     path = os.path.join(ASSETS, "appicon-1024.png")
     write_png(path, 1024, render(1024, appicon_shader()))
     print("wrote", os.path.relpath(path, HERE))
+
+    # Rendered at each size rather than downscaled from one bitmap, so the small
+    # entries stay crisp — Explorer and the Start menu pick whichever size they
+    # need, and 16px is the one that shows up most.
+    shader = appicon_shader()
+    ico = os.path.join(ASSETS, "ClaudeBuddy.ico")
+    write_ico(ico, [(s, png_bytes(s, render(s, shader))) for s in (16, 32, 48, 64, 128, 256)])
+    print("wrote", os.path.relpath(ico, HERE))
 
 
 if __name__ == "__main__":

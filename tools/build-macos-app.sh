@@ -6,6 +6,12 @@
 #   ./tools/build-macos-app.sh --install    # ...and copy to /Applications
 #   ./tools/build-macos-app.sh --rid osx-x64
 #
+# Signing: set MACOS_SIGNING_IDENTITY to a "Developer ID Application: ..."
+# identity in the keychain to produce a distributable, notarizable build.
+# Without it the bundle is ad-hoc signed, which is fine locally but cannot be
+# notarized or opened on someone else's Mac without a Gatekeeper override.
+# tools/build-macos-dmg.sh is the packaging entry point and sets this up for you.
+#
 # Why a bundle rather than the bare published binary:
 #   * Finder/Dock/Login Items treat it as an application.
 #   * LSUIElement makes it a menu-bar-only app at the OS level (no Dock icon,
@@ -22,9 +28,21 @@ cd "$(dirname "$0")/.."
 
 APP_NAME="Claude Buddy"
 BUNDLE_ID="io.github.wtvamp.claudebuddy"
-VERSION="1.0.0"
 DIST="dist"
 INSTALL=0
+
+# The csproj owns the version; parse it out rather than keeping a second copy
+# here that would silently drift from the one compiled into the binary.
+VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' ClaudeBuddy.csproj | head -1)"
+[[ -n "$VERSION" ]] || { echo "Could not read <Version> from ClaudeBuddy.csproj" >&2; exit 1; }
+
+# CFBundleVersion must be a plain dotted number — a "-beta" suffix in it makes
+# the bundle unlaunchable — so strip any prerelease label for that key while
+# CFBundleShortVersionString keeps the full label users should see.
+VERSION_NUMERIC="${VERSION%%-*}"
+
+SIGN_IDENTITY="${MACOS_SIGNING_IDENTITY:-}"
+ENTITLEMENTS="tools/ClaudeBuddy.entitlements"
 
 # Default to this Mac's architecture; override for cross-building.
 case "$(uname -m)" in
@@ -59,6 +77,15 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp -R "$DIST/publish-$RID/." "$CONTENTS/MacOS/"
 chmod +x "$CONTENTS/MacOS/ClaudeBuddy"
 
+# Ship the hook and its installer inside the bundle. Orbs only appear once the
+# hook is wired into Claude Code's settings.json, so carrying both means a user
+# who downloaded a DMG (and has no clone) can still finish setup with one
+# command against a stable path under /Applications. install-macos-hooks.sh
+# prefers a hook script sitting alongside it, which is this layout.
+cp ClaudeBuddyHook.sh tools/install-macos-hooks.sh "$CONTENTS/Resources/"
+chmod +x "$CONTENTS/Resources/ClaudeBuddyHook.sh" \
+         "$CONTENTS/Resources/install-macos-hooks.sh"
+
 echo "==> Building icon"
 ICONSET="$DIST/ClaudeBuddy.iconset"
 rm -rf "$ICONSET"; mkdir -p "$ICONSET"
@@ -84,7 +111,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>CFBundleIconFile</key>          <string>ClaudeBuddy</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
-    <key>CFBundleVersion</key>           <string>$VERSION</string>
+    <key>CFBundleVersion</key>           <string>$VERSION_NUMERIC</string>
     <key>LSMinimumSystemVersion</key>    <string>11.0</string>
     <key>NSHighResolutionCapable</key>   <true/>
     <!-- Menu-bar-only: no Dock icon, no Cmd-Tab entry. -->
@@ -98,11 +125,53 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "==> Signing (ad-hoc)"
-# Ad-hoc is enough for running locally and gives the bundle a code identity
-# that macOS can hang the Automation grant on. Note that every rebuild
-# changes the signature, so macOS may ask for Automation permission again.
-codesign --force --deep --sign - "$APP" 2>/dev/null
+# Sign from the inside out, nested code first, bundle last. `codesign --deep`
+# looks like it does this in one step but Apple explicitly does not support it
+# for distribution: it applies the *bundle's* entitlements to every nested
+# binary and seals in an order the notary service rejects. A self-contained
+# publish drops ~16 dylibs plus the `createdump` helper next to the executable,
+# and an unsigned nested Mach-O is a hard notarization failure, so each one has
+# to be signed on its own.
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  echo "==> Signing (Developer ID: $SIGN_IDENTITY)"
+  SIGN_ARGS=(--force --timestamp --options runtime --sign "$SIGN_IDENTITY")
+else
+  echo "==> Signing (ad-hoc — not distributable, see --help)"
+  # No --timestamp or --options runtime: a timestamp needs Apple's server and
+  # the hardened runtime without a real identity just breaks the app locally.
+  SIGN_ARGS=(--force --sign -)
+fi
+
+# Everything in Contents/MacOS, not just the obvious binaries. Contents/MacOS is
+# the bundle's *executable* directory, so codesign treats every file in it as
+# nested code and refuses to seal the bundle while any one of them is unsigned
+# ("code object is not signed at all"). For a self-contained .NET publish that
+# means all ~200 files: the dylibs, the extensionless `createdump` helper, the
+# managed .dll assemblies (PE32, which sign as Format=generic), and even
+# ClaudeBuddy.runtimeconfig.json — .NET's apphost requires those sit next to the
+# executable, so they cannot be moved to Resources/ to sidestep this.
+#
+# The main executable is skipped: signing the bundle covers it, and it has to
+# come last so the entitlements land on it.
+#
+# Resources/ is untouched by this loop on purpose. It is not an executable
+# directory, so the hook scripts there are sealed as ordinary resources.
+MAIN_EXE="$APP/Contents/MacOS/ClaudeBuddy"
+while IFS= read -r nested; do
+  [[ "$nested" == "$MAIN_EXE" ]] && continue
+  codesign "${SIGN_ARGS[@]}" "$nested" >/dev/null 2>&1 ||
+    { echo "    failed to sign $nested" >&2; exit 1; }
+done < <(find "$APP/Contents/MacOS" -type f -print)
+
+# The bundle last, and only here do the entitlements apply — they describe what
+# the app as a whole is allowed to do (JIT, unsigned exec memory, Apple Events).
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  codesign "${SIGN_ARGS[@]}" --entitlements "$ENTITLEMENTS" "$APP"
+  echo "==> Verifying signature"
+  codesign --verify --strict --deep --verbose=1 "$APP"
+else
+  codesign "${SIGN_ARGS[@]}" "$APP" 2>/dev/null
+fi
 
 rm -rf "$DIST/publish-$RID"
 
