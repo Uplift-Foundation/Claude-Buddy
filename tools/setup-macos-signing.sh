@@ -217,20 +217,85 @@ command -v gh >/dev/null || { echo "The GitHub CLI (gh) is required." >&2; exit 
 gh auth status >/dev/null 2>&1 || { echo "Run 'gh auth login' first." >&2; exit 1; }
 
 cat <<'NOTARY'
-Two more values come from Apple, and neither is your Apple ID password:
+Notarization needs credentials of its own — signing and notarizing are separate
+things to Apple. There are two kinds, and the first is the better one for CI:
 
-  * An app-specific password. Create one at https://appleid.apple.com under
-    Sign-In and Security > App-Specific Passwords. Notarization rejects the
-    real account password outright.
-  * Your 10-character Team ID, shown at
-    https://developer.apple.com/account under Membership details.
+  1. An App Store Connect API key (recommended). It belongs to the team, not to
+     one person's Apple ID, so it survives that person changing their password
+     or leaving, and it can be revoked on its own without touching anything
+     else. This is the current path for automated builds.
+
+  2. An Apple ID plus an app-specific password. Older, still supported. Tied to
+     an individual account.
 
 NOTARY
 
-ask "App-specific password: "; read -rs NOTARY_PASSWORD; echo
-[[ -n "$NOTARY_PASSWORD" ]] || { echo "Required." >&2; exit 1; }
-ask "Team ID: "; read -r TEAM_ID
-[[ -n "$TEAM_ID" ]] || { echo "Required." >&2; exit 1; }
+ask "Use an API key? [Y/n] "; read -r use_key
+if [[ "$use_key" =~ ^[Nn]$ ]]; then
+  NOTARY_METHOD=appleid
+else
+  NOTARY_METHOD=apikey
+fi
+
+if [[ "$NOTARY_METHOD" == apikey ]]; then
+  cat <<'APIKEY'
+
+Create the key:
+  1. Open  https://appstoreconnect.apple.com/access/integrations/api
+  2. Team Keys tab > "+" to generate a key. Give it a name and at least the
+     "Developer" role — notarization is refused for anything less.
+  3. Download the AuthKey_XXXXXXXXXX.p8. Apple lets you download it ONCE.
+  4. Note the Key ID (next to the key) and the Issuer ID (above the list).
+
+Only the Account Holder can generate team keys. If the "+" is greyed out,
+that is why.
+
+APIKEY
+  ask "Open that page now? [y/N] "; read -r reply
+  [[ "$reply" =~ ^[Yy]$ ]] && open "https://appstoreconnect.apple.com/access/integrations/api"
+
+  echo
+  ask "Path to the downloaded .p8 file: "; read -r P8_PATH
+  # Tolerate a path pasted with surrounding quotes, and expand a leading ~,
+  # since both are what actually happens when dragging a file into a terminal.
+  P8_PATH="${P8_PATH%\"}"; P8_PATH="${P8_PATH#\"}"
+  P8_PATH="${P8_PATH%\'}"; P8_PATH="${P8_PATH#\'}"
+  P8_PATH="${P8_PATH/#\~/$HOME}"
+  [[ -f "$P8_PATH" ]] || { echo "No file at $P8_PATH" >&2; exit 1; }
+  grep -q 'BEGIN PRIVATE KEY' "$P8_PATH" || {
+    echo "$P8_PATH does not look like a .p8 private key." >&2; exit 1; }
+
+  # Apple names the download AuthKey_<KEYID>.p8, so offer that as the default
+  # rather than making someone re-read it off the website.
+  GUESSED_KEY_ID="$(basename "$P8_PATH" | sed -n 's/^AuthKey_\(.*\)\.p8$/\1/p')"
+  if [[ -n "$GUESSED_KEY_ID" ]]; then
+    ask "Key ID [$GUESSED_KEY_ID]: "; read -r KEY_ID
+    KEY_ID="${KEY_ID:-$GUESSED_KEY_ID}"
+  else
+    ask "Key ID: "; read -r KEY_ID
+  fi
+  [[ -n "$KEY_ID" ]] || { echo "Required." >&2; exit 1; }
+
+  # Required for a Team key, and notarytool rejects it outright for an
+  # Individual key, so an empty answer is a legitimate one.
+  echo
+  echo "The Issuer ID applies to Team keys (the usual case for an organization)."
+  echo "Leave it blank if this is an Individual key."
+  ask "Issuer ID [blank for Individual]: "; read -r ISSUER_ID
+else
+  cat <<'APPLEID'
+
+Create an app-specific password at https://appleid.apple.com under
+Sign-In and Security > App-Specific Passwords. Notarization rejects your real
+account password outright. Your Team ID is shown at
+https://developer.apple.com/account under Membership details.
+
+APPLEID
+  ask "App-specific password: "; read -rs NOTARY_PASSWORD; echo
+  [[ -n "$NOTARY_PASSWORD" ]] || { echo "Required." >&2; exit 1; }
+  ask "Team ID: "; read -r TEAM_ID
+  [[ -n "$TEAM_ID" ]] || { echo "Required." >&2; exit 1; }
+fi
 
 # tr -d '\n' so the secret is one long line. base64 --decode in CI copes with
 # wrapped input either way, but a single line keeps the secret free of embedded
@@ -238,9 +303,27 @@ ask "Team ID: "; read -r TEAM_ID
 base64 -i "$P12" | tr -d '\n' | gh secret set MACOS_CERTIFICATE_P12_BASE64
 printf '%s' "$MACOS_CERTIFICATE_PASSWORD" | gh secret set MACOS_CERTIFICATE_PASSWORD
 printf '%s' "$MACOS_SIGNING_IDENTITY"     | gh secret set MACOS_SIGNING_IDENTITY
-printf '%s' "$MACOS_NOTARY_APPLE_ID"      | gh secret set MACOS_NOTARY_APPLE_ID
-printf '%s' "$NOTARY_PASSWORD"            | gh secret set MACOS_NOTARY_PASSWORD
-printf '%s' "$TEAM_ID"                    | gh secret set MACOS_NOTARY_TEAM_ID
+
+if [[ "$NOTARY_METHOD" == apikey ]]; then
+  base64 -i "$P8_PATH" | tr -d '\n' | gh secret set MACOS_NOTARY_KEY_P8_BASE64
+  printf '%s' "$KEY_ID" | gh secret set MACOS_NOTARY_KEY_ID
+  if [[ -n "$ISSUER_ID" ]]; then
+    printf '%s' "$ISSUER_ID" | gh secret set MACOS_NOTARY_ISSUER_ID
+  else
+    # An Individual key must not send --issuer, and the build script decides that
+    # by whether the secret is set, so a leftover value would break it.
+    gh secret delete MACOS_NOTARY_ISSUER_ID >/dev/null 2>&1 || true
+  fi
+  # Clear any stale Apple ID credentials, so the fallback can't quietly take
+  # over later with a password that has since been revoked.
+  for stale in MACOS_NOTARY_APPLE_ID MACOS_NOTARY_PASSWORD MACOS_NOTARY_TEAM_ID; do
+    gh secret delete "$stale" >/dev/null 2>&1 || true
+  done
+else
+  printf '%s' "$MACOS_NOTARY_APPLE_ID" | gh secret set MACOS_NOTARY_APPLE_ID
+  printf '%s' "$NOTARY_PASSWORD"       | gh secret set MACOS_NOTARY_PASSWORD
+  printf '%s' "$TEAM_ID"               | gh secret set MACOS_NOTARY_TEAM_ID
+fi
 
 step "Done"
 gh secret list

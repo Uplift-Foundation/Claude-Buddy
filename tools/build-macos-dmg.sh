@@ -11,6 +11,18 @@
 # Mac, which is useful for testing the packaging itself but not for shipping.
 #
 #   MACOS_SIGNING_IDENTITY   "Developer ID Application: Name (TEAMID)"
+#
+# Notarization takes either credential set. An App Store Connect API key is
+# preferred and checked first: it belongs to the team rather than to one
+# person's Apple ID, survives that person changing their password or leaving,
+# and can be revoked on its own.
+#
+#   MACOS_NOTARY_KEY_P8_BASE64  the .p8 private key, base64-encoded
+#   MACOS_NOTARY_KEY_ID         the key's 10-character Key ID
+#   MACOS_NOTARY_ISSUER_ID      the issuer UUID (one per team)
+#
+# Or the older Apple ID route, kept as a fallback:
+#
 #   MACOS_NOTARY_APPLE_ID    Apple ID email for notarytool
 #   MACOS_NOTARY_PASSWORD    app-specific password (NOT the Apple ID password)
 #   MACOS_NOTARY_TEAM_ID     10-character team ID
@@ -167,18 +179,42 @@ if [[ $SKIP_NOTARIZE -eq 1 ]]; then
   exit 0
 fi
 
-: "${MACOS_NOTARY_APPLE_ID:?set MACOS_NOTARY_APPLE_ID (or pass --skip-notarize)}"
-: "${MACOS_NOTARY_PASSWORD:?set MACOS_NOTARY_PASSWORD (or pass --skip-notarize)}"
-: "${MACOS_NOTARY_TEAM_ID:?set MACOS_NOTARY_TEAM_ID (or pass --skip-notarize)}"
+# Pick the credential set. API key first — see the header for why.
+if [[ -n "${MACOS_NOTARY_KEY_P8_BASE64:-}" ]]; then
+  : "${MACOS_NOTARY_KEY_ID:?MACOS_NOTARY_KEY_P8_BASE64 is set, so MACOS_NOTARY_KEY_ID is required too}"
 
-echo "==> Notarizing (this usually takes a few minutes)"
+  echo "==> Notarizing with an App Store Connect API key"
+  # notarytool wants a file path, so the key has to touch disk. Keep it in a
+  # 0700 temp directory and delete it on any exit path, including failure —
+  # a leaked .p8 is a credential someone else can notarize with.
+  KEY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/claudebuddy-notary.XXXXXX")"
+  chmod 700 "$KEY_DIR"
+  trap 'rm -rf "$KEY_DIR"' EXIT
+  KEY_FILE="$KEY_DIR/AuthKey.p8"
+  printf '%s' "$MACOS_NOTARY_KEY_P8_BASE64" | base64 --decode > "$KEY_FILE"
+  chmod 600 "$KEY_FILE"
+
+  NOTARY_AUTH=(--key "$KEY_FILE" --key-id "$MACOS_NOTARY_KEY_ID")
+  # --issuer is required for a Team key and must NOT be passed for an Individual
+  # key, so it is appended only when set rather than always.
+  if [[ -n "${MACOS_NOTARY_ISSUER_ID:-}" ]]; then
+    NOTARY_AUTH+=(--issuer "$MACOS_NOTARY_ISSUER_ID")
+  fi
+else
+  : "${MACOS_NOTARY_APPLE_ID:?set MACOS_NOTARY_KEY_P8_BASE64 (preferred) or MACOS_NOTARY_APPLE_ID (or pass --skip-notarize)}"
+  : "${MACOS_NOTARY_PASSWORD:?set MACOS_NOTARY_PASSWORD (or pass --skip-notarize)}"
+  : "${MACOS_NOTARY_TEAM_ID:?set MACOS_NOTARY_TEAM_ID (or pass --skip-notarize)}"
+
+  echo "==> Notarizing with an Apple ID and app-specific password"
+  NOTARY_AUTH=(--apple-id "$MACOS_NOTARY_APPLE_ID"
+               --password "$MACOS_NOTARY_PASSWORD"
+               --team-id "$MACOS_NOTARY_TEAM_ID")
+fi
+
+echo "    (this usually takes a few minutes)"
 # --wait blocks until Apple returns a verdict. Without it the staple below would
 # race the notary service and fail with "does not have a ticket".
-xcrun notarytool submit "$DMG" \
-  --apple-id "$MACOS_NOTARY_APPLE_ID" \
-  --password "$MACOS_NOTARY_PASSWORD" \
-  --team-id "$MACOS_NOTARY_TEAM_ID" \
-  --wait
+xcrun notarytool submit "$DMG" "${NOTARY_AUTH[@]}" --wait
 
 # Stapling writes the ticket into the image, so Gatekeeper can approve it
 # offline. Skip this and a user with no network sees the same "damaged" error

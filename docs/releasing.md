@@ -64,13 +64,38 @@ the workflow still succeeds but produces ad-hoc signed DMGs that Gatekeeper
 rejects on other Macs — the difference between a testable artifact and a
 shippable one.
 
+Signing always needs these three:
+
 | Secret | What it is |
 | --- | --- |
 | `MACOS_CERTIFICATE_P12_BASE64` | Developer ID Application cert + key + intermediate, as `.p12`, base64-encoded |
 | `MACOS_CERTIFICATE_PASSWORD` | the export password for that `.p12` |
 | `MACOS_SIGNING_IDENTITY` | full identity name, e.g. `Developer ID Application: Name (AB12CD34EF)` |
+
+Notarization is separate, and takes either credential set. `build-macos-dmg.sh`
+checks for the API key first and falls back to the Apple ID, so whichever set is
+populated is the one used.
+
+**App Store Connect API key — preferred.** It belongs to the team rather than to
+one person's Apple ID, so it survives that person rotating their password or
+leaving, and it can be revoked on its own. Generate it under
+[Users and Access → Integrations](https://appstoreconnect.apple.com/access/integrations/api),
+Team Keys, with at least the **Developer** role — notarization refuses anything
+less, and only the Account Holder can create team keys. The `.p8` downloads
+once.
+
+| Secret | What it is |
+| --- | --- |
+| `MACOS_NOTARY_KEY_P8_BASE64` | the `AuthKey_*.p8` private key, base64-encoded |
+| `MACOS_NOTARY_KEY_ID` | the key's 10-character Key ID (also in the filename) |
+| `MACOS_NOTARY_ISSUER_ID` | issuer UUID — **Team keys only**; leave unset for an Individual key, which `notarytool` rejects `--issuer` for |
+
+**Apple ID and app-specific password — fallback.** Tied to one person's account.
+
+| Secret | What it is |
+| --- | --- |
 | `MACOS_NOTARY_APPLE_ID` | Apple ID email used for notarization |
-| `MACOS_NOTARY_PASSWORD` | app-specific password — *not* the Apple ID password |
+| `MACOS_NOTARY_PASSWORD` | [app-specific password](https://appleid.apple.com) — *not* the Apple ID password |
 | `MACOS_NOTARY_TEAM_ID` | 10-character team ID |
 
 Windows installers ship unsigned; SmartScreen shows a "More info → Run anyway"
