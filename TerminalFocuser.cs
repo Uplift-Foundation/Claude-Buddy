@@ -484,20 +484,20 @@ namespace ClaudeBuddy
             $tabCond = New-Object System.Windows.Automation.PropertyCondition(
                 [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
                 [System.Windows.Automation.ControlType]::TabItem)
-            $matches = @()
+            $found = @()
             foreach ($win in $windows) {
                 foreach ($tab in $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)) {
                     if ([string]::Equals($tab.Current.Name, $target, [System.StringComparison]::Ordinal)) {
-                        $matches += $tab
+                        $found += $tab
                     }
                 }
             }
-            if ($matches.Count -eq 1) {
-                $pattern = $matches[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+            if ($found.Count -eq 1) {
+                $pattern = $found[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
                 $pattern.Select()
                 Write-Output "SELECTED"
             } else {
-                Write-Output "NOMATCH:$($matches.Count)"
+                Write-Output "NOMATCH:$($found.Count)"
             }
             """;
 
