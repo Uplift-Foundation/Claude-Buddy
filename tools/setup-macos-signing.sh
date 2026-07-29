@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+# Walks you through Developer ID signing setup and does every part that can be
+# automated. Run it once; after that, releases sign themselves in CI.
+#
+#   ./tools/setup-macos-signing.sh            # full walkthrough
+#   ./tools/setup-macos-signing.sh --secrets  # only push secrets to GitHub
+#
+# What it automates:
+#   * generating the private key and CSR (no Keychain Access "Request a
+#     Certificate From a Certificate Authority" menu-diving)
+#   * bundling the issued certificate, its private key and Apple's intermediate
+#     CA into a .p12
+#   * base64-encoding it and setting all six repository secrets with `gh`
+#   * verifying the result actually signs
+#
+# What it can't: Apple's website needs a human with a browser. The script stops
+# and tells you exactly which page to open and what to click.
+#
+# Everything is written to a gitignored scratch directory, and the private key
+# never leaves your machine except as an encrypted .p12 in a GitHub secret.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+WORK="dist/signing"
+SECRETS_ONLY=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --secrets) SECRETS_ONLY=1; shift ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+bold() { printf '\033[1m%s\033[0m\n' "$*"; }
+step() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
+ask()  { printf '\033[1;33m??\033[0m %s' "$*"; }
+
+mkdir -p "$WORK"
+chmod 700 "$WORK"
+
+KEY="$WORK/developerID.key"
+CSR="$WORK/developerID.csr"
+CER="$WORK/developerID_application.cer"
+INTERMEDIATE="$WORK/DeveloperIDG2CA.cer"
+P12="$WORK/developerID.p12"
+
+if [[ $SECRETS_ONLY -eq 0 ]]; then
+
+  step "Step 1 of 6 — prerequisites"
+  cat <<'PREREQ'
+You need:
+  * A paid Apple Developer Program membership ($99/yr). A free Apple ID cannot
+    issue Developer ID certificates.
+  * The Account Holder or Admin role on that team. Only those roles may create
+    a "Developer ID Application" certificate — if you are a Developer-role
+    member the option simply will not appear, which is confusing rather than
+    explanatory.
+
+Note: Apple caps how many Developer ID Application certificates a team may
+have at once. If you have hit the cap, revoke an unused one before continuing.
+PREREQ
+  ask "Ready? [y/N] "; read -r reply
+  [[ "$reply" =~ ^[Yy]$ ]] || { echo "Nothing has been changed."; exit 0; }
+
+  step "Step 2 of 6 — generating your private key and CSR"
+  if [[ -f "$KEY" ]]; then
+    echo "Reusing the existing key at $KEY"
+  else
+    # 2048-bit RSA is what Apple requires for Developer ID.
+    openssl genrsa -out "$KEY" 2048 2>/dev/null
+    chmod 600 "$KEY"
+    echo "Wrote $KEY  (private — never commit or share this)"
+  fi
+
+  ask "Your name or company, as it should appear in the certificate: "
+  read -r COMMON_NAME
+  [[ -n "$COMMON_NAME" ]] || { echo "A name is required." >&2; exit 1; }
+  ask "Your Apple ID email: "
+  read -r APPLE_ID
+  [[ -n "$APPLE_ID" ]] || { echo "An email is required." >&2; exit 1; }
+
+  openssl req -new -key "$KEY" -out "$CSR" \
+    -subj "/emailAddress=$APPLE_ID/CN=$COMMON_NAME/C=US" 2>/dev/null
+  echo "Wrote $CSR"
+
+  step "Step 3 of 6 — upload the CSR to Apple (browser required)"
+  cat <<UPLOAD
+  1. Open  https://developer.apple.com/account/resources/certificates/add
+  2. Choose  Software > "Developer ID Application"
+     (not "Developer ID Installer" — that one signs .pkg files, which this
+      project does not produce.)
+  3. If asked which profile type, pick the G2 Sub-CA option.
+  4. Upload this file:
+
+       $(pwd)/$CSR
+
+  5. Download the issued certificate and save it as:
+
+       $(pwd)/$CER
+
+UPLOAD
+  # The macOS "open" command is right here and saves a copy-paste.
+  ask "Open that page in your browser now? [y/N] "; read -r reply
+  [[ "$reply" =~ ^[Yy]$ ]] && open "https://developer.apple.com/account/resources/certificates/add"
+
+  echo
+  ask "Press Return once $CER exists. "; read -r _
+
+  if [[ ! -f "$CER" ]]; then
+    echo "Still no file at $CER — rerun this script when you have it." >&2
+    exit 1
+  fi
+
+  step "Step 4 of 6 — building the .p12"
+  # Apple's intermediate has to travel with the leaf. Without it, codesign on a
+  # fresh CI runner fails with "unable to build chain to self-signed root",
+  # because a GitHub runner's keychain has no reason to already trust the
+  # Developer ID G2 CA the way your Mac (with Xcode or CLT) does.
+  if [[ ! -f "$INTERMEDIATE" ]]; then
+    echo "Fetching Apple's Developer ID G2 intermediate CA"
+    curl -fsSL -o "$INTERMEDIATE" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+  fi
+
+  # Apple hands back DER; openssl's pkcs12 builder wants PEM.
+  openssl x509 -inform DER -in "$CER" -out "$WORK/leaf.pem" 2>/dev/null
+  openssl x509 -inform DER -in "$INTERMEDIATE" -out "$WORK/intermediate.pem" 2>/dev/null
+
+  IDENTITY="$(openssl x509 -in "$WORK/leaf.pem" -noout -subject \
+              | sed -n 's/.*CN *= *\([^,/]*\).*/\1/p' | sed 's/ *$//')"
+  echo "Certificate identity: $IDENTITY"
+
+  # A random password rather than a prompt: it only has to survive being pasted
+  # into a GitHub secret, and a strong random one removes any temptation to
+  # reuse something memorable.
+  P12_PASSWORD="$(openssl rand -base64 24)"
+
+  openssl pkcs12 -export \
+    -inkey "$KEY" \
+    -in "$WORK/leaf.pem" \
+    -certfile "$WORK/intermediate.pem" \
+    -out "$P12" \
+    -passout "pass:$P12_PASSWORD" \
+    -legacy 2>/dev/null ||
+  # -legacy exists only in OpenSSL 3; LibreSSL (what stock macOS ships as
+  # /usr/bin/openssl) rejects the flag outright. Retry without it.
+  openssl pkcs12 -export \
+    -inkey "$KEY" \
+    -in "$WORK/leaf.pem" \
+    -certfile "$WORK/intermediate.pem" \
+    -out "$P12" \
+    -passout "pass:$P12_PASSWORD"
+
+  chmod 600 "$P12"
+  echo "Wrote $P12"
+
+  step "Step 5 of 6 — verifying it signs locally"
+  # Import into your login keychain so local builds can sign too, and so a
+  # broken certificate is caught here rather than in CI.
+  security import "$P12" -k ~/Library/Keychains/login.keychain-db \
+    -P "$P12_PASSWORD" -T /usr/bin/codesign 2>/dev/null ||
+    echo "  (already imported, or import declined — continuing)"
+
+  if security find-identity -v -p codesigning | grep -q "$IDENTITY"; then
+    echo "Found a valid codesigning identity for $IDENTITY"
+  else
+    echo "WARNING: no valid codesigning identity found for $IDENTITY." >&2
+    echo "The certificate may not have imported. Check Keychain Access." >&2
+  fi
+
+  # Stash what step 6 needs, so --secrets can be rerun without redoing any of
+  # the above. 600 because it holds the .p12 password.
+  cat > "$WORK/values.env" <<VALUES
+MACOS_SIGNING_IDENTITY=$IDENTITY
+MACOS_CERTIFICATE_PASSWORD=$P12_PASSWORD
+MACOS_NOTARY_APPLE_ID=$APPLE_ID
+VALUES
+  chmod 600 "$WORK/values.env"
+fi
+
+step "Step 6 of 6 — pushing secrets to GitHub"
+
+[[ -f "$WORK/values.env" ]] || { echo "Run without --secrets first." >&2; exit 1; }
+[[ -f "$P12" ]] || { echo "Missing $P12 — run without --secrets first." >&2; exit 1; }
+# shellcheck disable=SC1090
+source "$WORK/values.env"
+
+command -v gh >/dev/null || { echo "The GitHub CLI (gh) is required." >&2; exit 1; }
+gh auth status >/dev/null 2>&1 || { echo "Run 'gh auth login' first." >&2; exit 1; }
+
+cat <<'NOTARY'
+Two more values come from Apple, and neither is your Apple ID password:
+
+  * An app-specific password. Create one at https://appleid.apple.com under
+    Sign-In and Security > App-Specific Passwords. Notarization rejects the
+    real account password outright.
+  * Your 10-character Team ID, shown at
+    https://developer.apple.com/account under Membership details.
+
+NOTARY
+
+ask "App-specific password: "; read -rs NOTARY_PASSWORD; echo
+[[ -n "$NOTARY_PASSWORD" ]] || { echo "Required." >&2; exit 1; }
+ask "Team ID: "; read -r TEAM_ID
+[[ -n "$TEAM_ID" ]] || { echo "Required." >&2; exit 1; }
+
+base64 -i "$P12" | gh secret set MACOS_CERTIFICATE_P12_BASE64
+printf '%s' "$MACOS_CERTIFICATE_PASSWORD" | gh secret set MACOS_CERTIFICATE_PASSWORD
+printf '%s' "$MACOS_SIGNING_IDENTITY"     | gh secret set MACOS_SIGNING_IDENTITY
+printf '%s' "$MACOS_NOTARY_APPLE_ID"      | gh secret set MACOS_NOTARY_APPLE_ID
+printf '%s' "$NOTARY_PASSWORD"            | gh secret set MACOS_NOTARY_PASSWORD
+printf '%s' "$TEAM_ID"                    | gh secret set MACOS_NOTARY_TEAM_ID
+
+step "Done"
+gh secret list
+
+cat <<DONE
+
+Signing identity: $MACOS_SIGNING_IDENTITY
+
+Local signed builds:
+  MACOS_SIGNING_IDENTITY="$MACOS_SIGNING_IDENTITY" ./tools/build-macos-dmg.sh --skip-notarize
+
+A full signed + notarized run, without publishing anything:
+  gh workflow run release.yml
+
+$WORK holds your private key and .p12. It is inside the gitignored dist/
+directory, so it will not be committed — but back it up somewhere safe and
+keep it off shared machines. Losing it just means generating a new certificate;
+leaking it means someone else can sign software as you.
+DONE

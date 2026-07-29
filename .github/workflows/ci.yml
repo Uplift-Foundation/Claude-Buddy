@@ -1,0 +1,60 @@
+name: CI
+
+# Builds every push and PR on both platforms. The point is to catch a break in
+# the packaging path before a tag is pushed, because a Release run that fails
+# halfway leaves a tag with no assets attached to it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            rid: osx-arm64
+          - os: windows-latest
+            rid: win-x64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build
+        run: dotnet publish ClaudeBuddy.csproj -c Release -r ${{ matrix.rid }} -p:DebugType=none --nologo
+
+      # Packaging is where the fiddly, platform-specific work lives (inside-out
+      # codesigning, Inno Setup), so exercise it here rather than discovering a
+      # break during a release. Signing and notarization are skipped: no secrets
+      # are exposed to pull requests.
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: ./tools/build-macos-dmg.sh --rid ${{ matrix.rid }}
+
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        run: choco install innosetup --no-progress -y
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: .\tools\build-windows-installer.ps1 -SkipPublish
+        shell: pwsh
+
+      # Not attached to a release, just kept so a failed build can be inspected
+      # and so the installer can be smoke-tested from a PR.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-${{ matrix.rid }}
+          path: |
+            dist/*.dmg
+            dist/*.exe
+          if-no-files-found: error
+          retention-days: 14
