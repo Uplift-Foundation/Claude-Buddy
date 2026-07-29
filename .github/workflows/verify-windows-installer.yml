@@ -1,0 +1,349 @@
+name: Verify Windows installer
+
+# CI proves the installer *compiles*; this proves it *works*. It installs
+# silently on a real Windows runner, then checks the things a user would notice
+# if they were wrong — where files land, whether the shortcuts exist, and above
+# all whether the hook the installer wired into Claude Code actually produces a
+# status file when invoked. That last one is the difference between orbs
+# appearing and an app that runs perfectly while displaying nothing.
+#
+# Runs on real Windows PowerShell 5.1, which is what Claude Code invokes and
+# what install-windows-hooks.ps1 is written against — a pwsh 7 test would not
+# exercise the same interpreter.
+#
+# What this deliberately does NOT cover, because it needs a human at a desktop:
+# the wizard's appearance, the task checkboxes as rendered, and the tray icon and
+# orbs on screen. See docs/windows-installer-verify.md for that half.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Verify a published release asset (e.g. v0.1.0-beta) instead of building from this ref'
+        required: false
+        type: string
+  pull_request:
+    paths:
+      - 'tools/ClaudeBuddy.iss'
+      - 'tools/build-windows-installer.ps1'
+      - 'tools/install-windows-hooks.ps1'
+      - 'ClaudeBuddyHook.ps1'
+      - '.github/workflows/verify-windows-installer.yml'
+
+jobs:
+  verify:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install Inno Setup
+        if: inputs.release_tag == ''
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        if: inputs.release_tag == ''
+        run: .\tools\build-windows-installer.ps1
+        shell: pwsh
+
+      - name: Download released installer
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          gh release download '${{ inputs.release_tag }}' --repo '${{ github.repository }}' --pattern '*-win-x64-setup.exe' --dir dist
+          Get-ChildItem dist
+        shell: pwsh
+
+      # A settings.json that already holds unrelated config and another tool's
+      # hook. The installer must add to this, not flatten it — losing someone's
+      # model and permissions to an installer is far worse than not installing.
+      - name: Seed a realistic settings.json
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:USERPROFILE '.claude'
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          $seed = @{
+            model       = 'opus'
+            permissions = @{ allow = @('Bash(ls:*)') }
+            hooks       = @{
+              Stop = @(@{ hooks = @(@{ type = 'command'; command = 'some-other-tool.ps1' }) })
+            }
+          } | ConvertTo-Json -Depth 10
+          [System.IO.File]::WriteAllText((Join-Path $dir 'settings.json'), $seed, (New-Object System.Text.UTF8Encoding($false)))
+          Get-Content (Join-Path $dir 'settings.json')
+
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = (Get-ChildItem dist\*-win-x64-setup.exe | Select-Object -First 1).FullName
+          Write-Host "Installer: $setup"
+
+          # /VERYSILENT so no wizard, /SUPPRESSMSGBOXES so a dialog can't hang the
+          # job forever, /LOG so a failure is diagnosable rather than just an exit
+          # code. Tasks are left at their defaults on purpose: this asserts that a
+          # user who clicks straight through gets hooks and startup, which is the
+          # path almost everyone takes.
+          $log = Join-Path $env:RUNNER_TEMP 'install.log'
+          $p = Start-Process -FilePath $setup -Wait -PassThru `
+                 -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$log"
+
+          Write-Host "--- installer log ---"
+          if (Test-Path $log) { Get-Content $log | Select-Object -Last 60 }
+
+          if ($p.ExitCode -ne 0) { throw "Installer exited $($p.ExitCode)" }
+
+      - name: Check what landed on disk
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $failures = @()
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy'
+
+          # The layout matters beyond tidiness: install-windows-hooks.ps1 resolves
+          # the hook as ..\ClaudeBuddyHook.ps1 relative to itself, so tools\ sitting
+          # one level below the hook is what makes it work unmodified.
+          $expected = @(
+            (Join-Path $app 'ClaudeBuddy.exe'),
+            (Join-Path $app 'ClaudeBuddyHook.ps1'),
+            (Join-Path $app 'tools\install-windows-hooks.ps1'),
+            (Join-Path $app 'LICENSE.txt'),
+            (Join-Path $app 'README.md'),
+            (Join-Path $app 'unins000.exe'),
+            # The hook is copied out of the install dir on purpose, so it keeps
+            # working if the app is moved or removed.
+            (Join-Path $env:LOCALAPPDATA 'ClaudeBuddy\ClaudeBuddyHook.ps1'),
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Claude Buddy\Claude Buddy.lnk'),
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\Claude Buddy.lnk')
+          )
+
+          foreach ($path in $expected) {
+            if (Test-Path -LiteralPath $path) { Write-Host "  ok      $path" }
+            else { $failures += "missing: $path"; Write-Host "  MISSING $path" }
+          }
+
+          # Per-user install, so the Apps & Features entry is under HKCU. Inno
+          # suffixes the AppId with _is1.
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{4046CFD2-79A9-4270-8302-21B87A92C0A5}_is1'
+          if (Test-Path $key) {
+            $entry = Get-ItemProperty $key
+            Write-Host "  ok      Apps & Features: $($entry.DisplayName) $($entry.DisplayVersion)"
+            if (-not $entry.DisplayVersion) { $failures += 'Apps & Features entry has no DisplayVersion' }
+          } else {
+            $failures += "missing uninstall registry key: $key"
+            Write-Host "  MISSING $key"
+          }
+
+          # No UAC prompt is a feature, and it only holds while nothing lands in
+          # Program Files.
+          if (Test-Path (Join-Path $env:ProgramFiles 'ClaudeBuddy')) {
+            $failures += 'installed into Program Files — this is supposed to be a per-user install'
+          }
+
+          if ($failures.Count) { $failures | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
+          Write-Host 'All expected files, shortcuts and registry entries present.'
+
+      - name: Check the hooks were wired without trampling existing settings
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $failures = @()
+          $settingsPath = Join-Path $env:USERPROFILE '.claude\settings.json'
+
+          $raw = Get-Content -LiteralPath $settingsPath -Raw
+          # A BOM here would make Claude Code and the app both reject the file, and
+          # PowerShell 5.1's Set-Content adds one by default — this has bitten the
+          # project before, so it is worth asserting rather than assuming.
+          $bytes = [System.IO.File]::ReadAllBytes($settingsPath)
+          if ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $failures += 'settings.json was written with a UTF-8 BOM'
+          }
+
+          $settings = $raw | ConvertFrom-Json
+
+          if ($settings.model -ne 'opus') { $failures += "clobbered 'model' (got '$($settings.model)')" }
+          if ($settings.permissions.allow -notcontains 'Bash(ls:*)') { $failures += "clobbered 'permissions'" }
+
+          $ours = 0; $foreign = 0
+          foreach ($event in $settings.hooks.PSObject.Properties.Name) {
+            foreach ($group in @($settings.hooks.$event)) {
+              foreach ($h in @($group.hooks)) {
+                if ($h.command -like '*ClaudeBuddyHook.ps1*') { $ours++ } else { $foreign++ }
+              }
+            }
+          }
+          Write-Host "Claude Buddy hook entries: $ours   other tools' entries: $foreign"
+
+          # 8 entries over 6 events: Notification carries three matchers.
+          if ($ours -ne 8) { $failures += "expected 8 Claude Buddy hook entries, found $ours" }
+          if ($foreign -ne 1) { $failures += "expected the pre-existing foreign hook to survive, found $foreign" }
+
+          foreach ($event in @('SessionStart','UserPromptSubmit','PreToolUse','Stop','SessionEnd','Notification')) {
+            if (-not $settings.hooks.PSObject.Properties.Name.Contains($event)) {
+              $failures += "no $event hook registered"
+            }
+          }
+
+          $backup = "$settingsPath.claudebuddy-backup"
+          if (Test-Path $backup) { Write-Host "  ok      backup written: $backup" }
+          else { $failures += 'no settings.json backup was written' }
+
+          if ($failures.Count) { $failures | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
+          Write-Host 'Hooks wired correctly and existing settings preserved.'
+
+      # The payoff. Everything above could pass while the command string in
+      # settings.json is subtly wrong — a bad path, a quoting mistake, an
+      # execution-policy block — and the symptom would be an app that shows
+      # nothing. So run the exact command the installer wrote, the way Claude Code
+      # runs it, and look for the status file the app reads.
+      - name: Run the wired hook command for real
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $settings = Get-Content -LiteralPath (Join-Path $env:USERPROFILE '.claude\settings.json') -Raw | ConvertFrom-Json
+
+          function Get-HookCommand($event) {
+            foreach ($group in @($settings.hooks.$event)) {
+              foreach ($h in @($group.hooks)) {
+                if ($h.command -like '*ClaudeBuddyHook.ps1*') { return $h.command }
+              }
+            }
+            throw "no Claude Buddy command found for $event"
+          }
+
+          $sessionId = 'ci-verify-1111-2222-3333'
+          $payload = @{
+            session_id      = $sessionId
+            cwd             = 'C:\Users\runneradmin\some-project'
+            transcript_path = ''
+          } | ConvertTo-Json -Compress
+
+          $statusFile = Join-Path $env:TEMP "claude_buddy\$sessionId.txt"
+          if (Test-Path $statusFile) { Remove-Item $statusFile -Force }
+
+          # cmd /c so the command line is parsed by a shell, as it is when Claude
+          # Code runs it — this is what catches a quoting error in the path.
+          $cmd = Get-HookCommand 'SessionStart'
+          Write-Host "SessionStart command: $cmd"
+          $payload | & cmd /c $cmd
+          Write-Host "hook exit code: $LASTEXITCODE"
+
+          if (-not (Test-Path $statusFile)) {
+            Write-Host "::error::The hook ran but wrote no status file at $statusFile — orbs would never appear."
+            Get-ChildItem (Join-Path $env:TEMP 'claude_buddy') -ErrorAction SilentlyContinue
+            exit 1
+          }
+
+          $status = Get-Content -LiteralPath $statusFile -Raw
+          Write-Host "status file: $status"
+          $parsed = $status | ConvertFrom-Json
+          if ($parsed.state -ne 'idle') { Write-Host "::error::expected state 'idle', got '$($parsed.state)'"; exit 1 }
+          if ($parsed.cwd -notlike '*some-project') { Write-Host "::error::cwd not recorded: '$($parsed.cwd)'"; exit 1 }
+
+          $bytes = [System.IO.File]::ReadAllBytes($statusFile)
+          if ($bytes[0] -eq 0xEF) { Write-Host '::error::status file has a UTF-8 BOM; the app would skip it'; exit 1 }
+
+          # SessionEnd is what makes an orb disappear, so verify the file is
+          # removed rather than merely rewritten.
+          $endCmd = Get-HookCommand 'SessionEnd'
+          Write-Host "SessionEnd command: $endCmd"
+          $payload | & cmd /c $endCmd
+          if (Test-Path $statusFile) {
+            Write-Host '::error::SessionEnd left the status file behind; the orb would never disappear'
+            exit 1
+          }
+
+          Write-Host 'Hook produces and removes the status file exactly as the app expects.'
+
+      # CloseApplications=force is what lets an upgrade replace a running
+      # ClaudeBuddy.exe. Best-effort: a GUI app may not start on a headless
+      # runner, and that is a runner limitation rather than an installer bug, so
+      # this reports without failing the job.
+      - name: Reinstall over a running instance (best effort)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy\ClaudeBuddy.exe'
+          $proc = Start-Process -FilePath $app -PassThru
+          Start-Sleep -Seconds 8
+
+          if ($proc.HasExited) {
+            Write-Host "::warning::ClaudeBuddy.exe exited on its own (code $($proc.ExitCode)) — headless runner, so the Restart Manager path was not exercised."
+            exit 0
+          }
+
+          Write-Host "Running as pid $($proc.Id); reinstalling over it."
+          $setup = (Get-ChildItem dist\*-win-x64-setup.exe | Select-Object -First 1).FullName
+          $log = Join-Path $env:RUNNER_TEMP 'upgrade.log'
+          $p = Start-Process -FilePath $setup -Wait -PassThru `
+                 -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$log"
+
+          if (Test-Path $log) { Get-Content $log | Select-String -Pattern 'Restart Manager|in use|Closing|process' | Select-Object -Last 15 }
+
+          if ($p.ExitCode -ne 0) { Write-Host "::error::Upgrade over a running instance failed with $($p.ExitCode)"; exit 1 }
+          Get-Process ClaudeBuddy -ErrorAction SilentlyContinue | Stop-Process -Force
+          Write-Host 'Upgrade over a running instance succeeded.'
+
+      - name: Uninstall silently and check it cleaned up
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\ClaudeBuddy'
+          $uninstaller = Join-Path $app 'unins000.exe'
+
+          # Inno's uninstaller copies itself to temp and relaunches, so -Wait
+          # returns while the real work is still going. Poll for the install
+          # directory to disappear instead of trusting the exit.
+          Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' | Out-Null
+          $deadline = (Get-Date).AddMinutes(3)
+          while ((Get-Date) -lt $deadline) {
+            if (-not (Test-Path (Join-Path $app 'ClaudeBuddy.exe'))) { break }
+            Start-Sleep -Seconds 3
+          }
+          Start-Sleep -Seconds 5
+
+          $failures = @()
+          if (Test-Path (Join-Path $app 'ClaudeBuddy.exe')) { $failures += 'ClaudeBuddy.exe still present after uninstall' }
+
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{4046CFD2-79A9-4270-8302-21B87A92C0A5}_is1'
+          if (Test-Path $key) { $failures += 'Apps & Features entry survived uninstall' }
+
+          foreach ($lnk in @(
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Claude Buddy\Claude Buddy.lnk'),
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\Claude Buddy.lnk'))) {
+            if (Test-Path -LiteralPath $lnk) { $failures += "shortcut survived uninstall: $lnk" }
+          }
+
+          # The important one: Claude Code must stop invoking a script that no
+          # longer exists, and the other tool's hook must survive.
+          $settings = Get-Content -LiteralPath (Join-Path $env:USERPROFILE '.claude\settings.json') -Raw | ConvertFrom-Json
+          $ours = 0; $foreign = 0
+          foreach ($event in $settings.hooks.PSObject.Properties.Name) {
+            foreach ($group in @($settings.hooks.$event)) {
+              foreach ($h in @($group.hooks)) {
+                if ($h.command -like '*ClaudeBuddyHook.ps1*') { $ours++ } else { $foreign++ }
+              }
+            }
+          }
+          Write-Host "after uninstall — ours: $ours  foreign: $foreign"
+          if ($ours -ne 0) { $failures += "$ours Claude Buddy hook entries left in settings.json" }
+          if ($foreign -ne 1) { $failures += "uninstall damaged another tool's hooks (foreign=$foreign)" }
+          if ($settings.model -ne 'opus') { $failures += 'uninstall clobbered model' }
+
+          if ($failures.Count) { $failures | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
+          Write-Host 'Uninstall removed the app, shortcuts, registry entry and hook wiring, leaving other settings intact.'
+
+      - name: Collect logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installer-logs
+          path: |
+            ${{ runner.temp }}/install.log
+            ${{ runner.temp }}/upgrade.log
+          if-no-files-found: ignore
