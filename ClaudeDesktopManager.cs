@@ -639,12 +639,15 @@ namespace ClaudeBuddy
             }
         }
 
+        // Not Process.MainWindowHandle: it only reports *visible* windows, so a
+        // profile whose window is hidden in the tray — which is where Claude
+        // Desktop goes when you close it — had nothing to focus and the click
+        // did nothing at all. ShowAndFocus finds the hidden window and shows it.
         private static void FocusWindows(int pid)
         {
             try
             {
-                using var process = Process.GetProcessById(pid);
-                WindowsForegroundWindow.BringToFront(process.MainWindowHandle);
+                WindowsForegroundWindow.ShowAndFocus(pid);
             }
             catch
             {
