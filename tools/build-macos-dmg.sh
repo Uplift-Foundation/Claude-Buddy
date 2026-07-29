@@ -139,7 +139,7 @@ Uninstalling: drag the app to the Trash, and run
   "Install Claude Code Hooks.command" --uninstall
 from a Terminal to take the hook entries back out of settings.json.
 
-Source, issues and docs: https://github.com/wtvamp/Claude-Buddy
+Source, issues and docs: https://github.com/KawikaMiller/Claude-Buddy
 MIT licensed.
 READ_ME
 

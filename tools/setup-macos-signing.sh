@@ -4,6 +4,13 @@
 #
 #   ./tools/setup-macos-signing.sh            # full walkthrough
 #   ./tools/setup-macos-signing.sh --secrets  # only push secrets to GitHub
+#   ./tools/setup-macos-signing.sh --secrets --repo OWNER/NAME
+#
+# --repo targets a different repository, which is what you want when the same
+# Apple team ships from more than one: one Developer ID certificate and one API
+# key serve every repository the team publishes from, so the same values are
+# simply pushed again. Setting secrets needs *admin* on the target, which is
+# stricter than the push access needed to open a pull request against it.
 #
 # What it automates:
 #   * generating the private key and CSR (no Keychain Access "Request a
@@ -25,14 +32,28 @@ cd "$(dirname "$0")/.."
 
 WORK="dist/signing"
 SECRETS_ONLY=0
+TARGET_REPO=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --secrets) SECRETS_ONLY=1; shift ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    --repo) TARGET_REPO="$2"; shift 2 ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+
+# A function rather than an args array, because macOS ships bash 3.2 as both
+# /bin/bash and whatever `env bash` finds by default, and expanding an empty array
+# as "${arr[@]}" under `set -u` there fails outright with "unbound variable" —
+# so the no---repo case, which is the normal one, would have been the broken one.
+gh_secret() {
+  if [[ -n "$TARGET_REPO" ]]; then
+    gh secret "$@" --repo "$TARGET_REPO"
+  else
+    gh secret "$@"
+  fi
+}
 
 step() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 ask()  { printf '\033[1;33m??\033[0m %s' "$*"; }
@@ -300,33 +321,33 @@ fi
 # tr -d '\n' so the secret is one long line. base64 --decode in CI copes with
 # wrapped input either way, but a single line keeps the secret free of embedded
 # newlines that other tooling might trim differently.
-base64 -i "$P12" | tr -d '\n' | gh secret set MACOS_CERTIFICATE_P12_BASE64
-printf '%s' "$MACOS_CERTIFICATE_PASSWORD" | gh secret set MACOS_CERTIFICATE_PASSWORD
-printf '%s' "$MACOS_SIGNING_IDENTITY"     | gh secret set MACOS_SIGNING_IDENTITY
+base64 -i "$P12" | tr -d '\n' | gh_secret set MACOS_CERTIFICATE_P12_BASE64
+printf '%s' "$MACOS_CERTIFICATE_PASSWORD" | gh_secret set MACOS_CERTIFICATE_PASSWORD
+printf '%s' "$MACOS_SIGNING_IDENTITY"     | gh_secret set MACOS_SIGNING_IDENTITY
 
 if [[ "$NOTARY_METHOD" == apikey ]]; then
-  base64 -i "$P8_PATH" | tr -d '\n' | gh secret set MACOS_NOTARY_KEY_P8_BASE64
-  printf '%s' "$KEY_ID" | gh secret set MACOS_NOTARY_KEY_ID
+  base64 -i "$P8_PATH" | tr -d '\n' | gh_secret set MACOS_NOTARY_KEY_P8_BASE64
+  printf '%s' "$KEY_ID" | gh_secret set MACOS_NOTARY_KEY_ID
   if [[ -n "$ISSUER_ID" ]]; then
-    printf '%s' "$ISSUER_ID" | gh secret set MACOS_NOTARY_ISSUER_ID
+    printf '%s' "$ISSUER_ID" | gh_secret set MACOS_NOTARY_ISSUER_ID
   else
     # An Individual key must not send --issuer, and the build script decides that
     # by whether the secret is set, so a leftover value would break it.
-    gh secret delete MACOS_NOTARY_ISSUER_ID >/dev/null 2>&1 || true
+    gh_secret delete MACOS_NOTARY_ISSUER_ID >/dev/null 2>&1 || true
   fi
   # Clear any stale Apple ID credentials, so the fallback can't quietly take
   # over later with a password that has since been revoked.
   for stale in MACOS_NOTARY_APPLE_ID MACOS_NOTARY_PASSWORD MACOS_NOTARY_TEAM_ID; do
-    gh secret delete "$stale" >/dev/null 2>&1 || true
+    gh_secret delete "$stale" >/dev/null 2>&1 || true
   done
 else
-  printf '%s' "$MACOS_NOTARY_APPLE_ID" | gh secret set MACOS_NOTARY_APPLE_ID
-  printf '%s' "$NOTARY_PASSWORD"       | gh secret set MACOS_NOTARY_PASSWORD
-  printf '%s' "$TEAM_ID"               | gh secret set MACOS_NOTARY_TEAM_ID
+  printf '%s' "$MACOS_NOTARY_APPLE_ID" | gh_secret set MACOS_NOTARY_APPLE_ID
+  printf '%s' "$NOTARY_PASSWORD"       | gh_secret set MACOS_NOTARY_PASSWORD
+  printf '%s' "$TEAM_ID"               | gh_secret set MACOS_NOTARY_TEAM_ID
 fi
 
 step "Done"
-gh secret list
+gh_secret list
 
 cat <<DONE
 

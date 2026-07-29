@@ -41,6 +41,26 @@ the issued certificate into a `.p12`, imports it locally so your own builds sign
 too, and sets all six repository secrets with `gh`. `--secrets` re-pushes just
 the secrets, e.g. after rotating the app-specific password.
 
+### More than one repository
+
+One Developer ID certificate and one App Store Connect key cover every repository
+the same Apple team publishes from, so a second repo needs the same values pushed
+again rather than new credentials:
+
+```bash
+./tools/setup-macos-signing.sh --secrets --repo OWNER/NAME
+```
+
+Note that this needs **admin** on the target repository. Push access — enough to
+open a pull request against it — is not enough to set secrets, so whoever holds
+admin has to run it.
+
+A tag push into a repository with no signing secrets **fails** rather than
+publishing unsigned installers. That is deliberate: an unsigned macOS build isn't
+a lesser download, it's one macOS reports as *damaged* on every user's Mac.
+`workflow_dispatch` runs and forks still build unsigned, since they have no
+access to secrets and only produce artifacts.
+
 Two steps need a browser and the script pauses at each:
 
 - **Create the certificate** at

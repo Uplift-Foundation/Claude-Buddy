@@ -37,6 +37,11 @@ are what matters:
 gh release download v0.1.0-beta --repo wtvamp/Claude-Buddy --pattern '*-win-x64-setup.exe'
 ```
 
+That is `wtvamp/Claude-Buddy` on purpose, not the canonical repo: `v0.1.0-beta`
+was cut from the fork before the packaging work was upstreamed, so it is the only
+place those bytes exist. Later versions will come from
+`KawikaMiller/Claude-Buddy`.
+
 Then double-click it. Not `/SILENT` — the point is the wizard.
 
 - Does SmartScreen appear, and what exactly does it say? It's unsigned, so a

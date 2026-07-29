@@ -23,8 +23,8 @@
     <Product>Claude Buddy</Product>
     <Authors>Kawika Miller, Repo Owner</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/wtvamp/Claude-Buddy</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/wtvamp/Claude-Buddy</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/KawikaMiller/Claude-Buddy</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/KawikaMiller/Claude-Buddy</RepositoryUrl>
     <!-- Run on whatever newer runtime is installed (e.g. .NET 10 SDK only) -->
     <RollForward>LatestMajor</RollForward>
     <!-- Single-file, self-contained output when publishing; pick the RID on
