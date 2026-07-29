@@ -189,11 +189,20 @@ UPLOAD
 
   # Stash what step 6 needs, so --secrets can be rerun without redoing any of
   # the above. 600 because it holds the .p12 password.
-  cat > "$WORK/values.env" <<VALUES
-MACOS_SIGNING_IDENTITY=$IDENTITY
-MACOS_CERTIFICATE_PASSWORD=$P12_PASSWORD
-MACOS_NOTARY_APPLE_ID=$APPLE_ID
-VALUES
+  #
+  # Every value is single-quoted, which is not optional: a Developer ID identity
+  # looks like "Developer ID Application: Name (TEAMID)", and sourcing that
+  # unquoted is a bash syntax error on the parenthesis. The random .p12 password
+  # is base64 and can contain "+" and "/" for the same reason.
+  shell_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+  }
+
+  {
+    printf 'MACOS_SIGNING_IDENTITY=%s\n'     "$(shell_quote "$IDENTITY")"
+    printf 'MACOS_CERTIFICATE_PASSWORD=%s\n' "$(shell_quote "$P12_PASSWORD")"
+    printf 'MACOS_NOTARY_APPLE_ID=%s\n'      "$(shell_quote "$APPLE_ID")"
+  } > "$WORK/values.env"
   chmod 600 "$WORK/values.env"
 fi
 
@@ -223,7 +232,10 @@ ask "App-specific password: "; read -rs NOTARY_PASSWORD; echo
 ask "Team ID: "; read -r TEAM_ID
 [[ -n "$TEAM_ID" ]] || { echo "Required." >&2; exit 1; }
 
-base64 -i "$P12" | gh secret set MACOS_CERTIFICATE_P12_BASE64
+# tr -d '\n' so the secret is one long line. base64 --decode in CI copes with
+# wrapped input either way, but a single line keeps the secret free of embedded
+# newlines that other tooling might trim differently.
+base64 -i "$P12" | tr -d '\n' | gh secret set MACOS_CERTIFICATE_P12_BASE64
 printf '%s' "$MACOS_CERTIFICATE_PASSWORD" | gh secret set MACOS_CERTIFICATE_PASSWORD
 printf '%s' "$MACOS_SIGNING_IDENTITY"     | gh secret set MACOS_SIGNING_IDENTITY
 printf '%s' "$MACOS_NOTARY_APPLE_ID"      | gh secret set MACOS_NOTARY_APPLE_ID
