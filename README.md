@@ -45,11 +45,27 @@ session's terminal**, best-effort:
   otherwise just activating the terminal app. **tmux sessions land on the
   right pane** — see below. The first click asks for macOS Automation
   permission to control your terminal — approve it once.
-- Windows: the terminal window the session runs in (native sessions);
-  WSL sessions fall back to activating Windows Terminal / VS Code, since
-  the Windows-side parent chain can't be traced from inside WSL. Jumping
-  to the exact Windows Terminal *tab* isn't possible — WT doesn't expose
-  its tabs to other processes.
+- Windows: the terminal window the session runs in — verified for Windows
+  Terminal, plain `conhost`, and VS Code's integrated terminal, including
+  restoring a minimized window. WSL sessions fall back to activating Windows
+  Terminal / VS Code, since the Windows-side parent chain can't be traced from
+  inside WSL.
+
+  **With more than one Windows Terminal window open, a click may raise the
+  wrong one**, and this is a dead end rather than a to-do. WT's
+  monarch/peasant model puts every window of a launch context in a *single*
+  process, so `Process.MainWindowHandle` — one handle per process — can't name
+  the right one, and no WT API answers "which window hosts pid X".
+  Enumerating the process's windows and reading their titles does work
+  mechanically (both `EnumWindows` and UI Automation, which even exposes
+  per-tab names), but Claude Code sets every console title to the same literal
+  string `claude`, so there is nothing to match on. The hook could stamp a
+  unique marker into the console title, except that the title is shared
+  per-conpty and any prompt that rewrites it — oh-my-posh, most bash prompts —
+  would erase the marker between the hook write and the click. An unreliable
+  fix that also visibly renames your tabs is worse than a click that lands on
+  a window of the right process. Selecting the exact *tab* is out for the same
+  reason.
 
 Click-to-focus needs the hook script from this version; sessions started
 under an older copy just won't respond to clicks until they're restarted.
@@ -267,12 +283,39 @@ Details worth knowing:
   Buddy. (Not `ps eww`: it prints the environment space-separated, and every
   profile path contains a space — `Application Support` — so its output can't
   be parsed back into paths.)
-- **Quit is a real quit**, an Apple Event via `NSRunningApplication`, so it
-  runs the app's shutdown and can be refused — by an unsaved-work dialog, or
-  by a Cowork VM or local-agent session. A refusal shows up as *"allow
+- **Quit is a real quit on macOS**, an Apple Event via `NSRunningApplication`,
+  so it runs the app's shutdown and can be refused — by an unsaved-work dialog,
+  or by a Cowork VM or local-agent session. A refusal shows up as *"allow
   Automation"* if it was a permission problem, and after a timeout the item
-  becomes **Force quit**, which needs a second deliberate click. Nothing here
-  ever escalates to a kill on its own.
+  becomes **Force quit**, which needs a second deliberate click. Nothing on
+  macOS ever escalates to a kill on its own.
+- **On Windows there is no such thing, so Quit asks and then terminates.**
+  Measured on a real installed build: `WM_CLOSE` makes Claude Desktop hide to
+  the tray and keep running, and `WM_ENDSESSION` — the message Windows' own
+  shutdown sequence uses, which Electron is documented to honour where
+  `WM_QUERYENDSESSION` is ignored — did nothing across two instances. There is
+  no external "please quit" for this app. So Quit posts `WM_CLOSE` to every
+  window of the process, waits 2.5s off the UI thread in case a future build
+  does honour it, and otherwise ends the process tree. Measured end to end at
+  ~2.5–3.2s from click to gone.
+
+  That is safe, and it was measured rather than assumed: three
+  kill-and-relaunch cycles on a live profile, `PRAGMA integrity_check` on all
+  five of its real SQLite stores (`Network\Cookies`, `DIPS`,
+  `Network\Trust Tokens`, `Shared Dictionary\db`, `WebStorage\QuotaManager`),
+  15 checks, every one `ok`, and the profile started clean each time. Chromium
+  is built to survive abrupt termination — it has to survive power loss. The
+  corruption this project is careful about is a *different* failure: two
+  instances sharing one userData directory, which is what `LaunchGate` and the
+  re-scan inside it exist to prevent. Conflating the two is what kept Quit
+  broken longer than it needed to be.
+
+  **Force quit stays in the menu**, now as a fallback rather than the routine
+  path. It also can no longer strand an instance: the offer used to expire
+  after 60s while the app was still running, and because
+  `Process.CloseMainWindow()` only finds *visible* windows, a second Quit on an
+  already-hidden instance failed with *"couldn't quit"* and left no route to
+  end it from the app at all.
 - **The auto-updater is shared.**
   `~/Library/Caches/com.anthropic.claudefordesktop.ShipIt/` is keyed by bundle
   id, not by profile, so two instances updating at once can collide. Nothing
