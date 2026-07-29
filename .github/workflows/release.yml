@@ -72,6 +72,35 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      # A tagged release must not be allowed to ship unsigned. Without a
+      # notarization ticket macOS reports the app as *damaged*, so an accidental
+      # unsigned release is not a degraded download — it is one that fails on
+      # every user's Mac and reads as a corrupt file. Building unsigned stays fine
+      # for workflow_dispatch and for forks, which have no access to secrets.
+      - name: Require signing credentials for a tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -uo pipefail
+          missing=()
+          [[ -n "${MACOS_SIGNING_IDENTITY:-}" ]]     || missing+=(MACOS_SIGNING_IDENTITY)
+          [[ -n "${MACOS_CERTIFICATE_P12_BASE64:-}" ]] || missing+=(MACOS_CERTIFICATE_P12_BASE64)
+          [[ -n "${MACOS_CERTIFICATE_PASSWORD:-}" ]] || missing+=(MACOS_CERTIFICATE_PASSWORD)
+
+          # Notarization accepts either credential set, so require one of them
+          # rather than both.
+          if [[ -z "${MACOS_NOTARY_KEY_P8_BASE64:-}" && -z "${MACOS_NOTARY_APPLE_ID:-}" ]]; then
+            missing+=("MACOS_NOTARY_KEY_P8_BASE64 (preferred) or MACOS_NOTARY_APPLE_ID")
+          fi
+
+          if (( ${#missing[@]} )); then
+            for name in "${missing[@]}"; do
+              echo "::error::Missing repository secret: $name"
+            done
+            echo "::error::Refusing to publish $GITHUB_REF_NAME unsigned. See docs/releasing.md, or run tools/setup-macos-signing.sh."
+            exit 1
+          fi
+          echo "All signing and notarization credentials present."
+
       - name: Import Developer ID certificate
         # Skipped when the secret is absent so the workflow still produces
         # (unsigned, un-notarized) images before the signing secrets are set up.

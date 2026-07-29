@@ -18,7 +18,7 @@
 
 #define AppName "Claude Buddy"
 #define AppPublisher "Kawika Miller and Repo Owner"
-#define AppUrl "https://github.com/wtvamp/Claude-Buddy"
+#define AppUrl "https://github.com/KawikaMiller/Claude-Buddy"
 #define AppExe "ClaudeBuddy.exe"
 
 ; CFBundleVersion's Windows equivalent: VersionInfoVersion must be a plain
