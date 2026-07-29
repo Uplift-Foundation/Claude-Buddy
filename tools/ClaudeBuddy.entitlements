@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the notarized build.
+
+  Notarization requires the hardened runtime, and the hardened runtime turns
+  off several things a self-contained .NET app depends on. Every key below is
+  load-bearing: drop one and the app either fails to start or silently loses
+  click-to-focus, which is the whole point of the app. Notarization would
+  still succeed in both cases, so these can only be caught by running the
+  signed build.
+-->
+<plist version="1.0">
+<dict>
+    <!-- CoreCLR JITs managed code at runtime. Without this the app dies at
+         startup with a Mach exception before Avalonia is even initialized. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- The JIT writes to memory pages it then executes. allow-jit alone
+         covers MAP_JIT; CoreCLR also maps executable memory that the hardened
+         runtime rejects without this. -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- A self-contained publish ships ~16 dylibs (CoreCLR, Skia, HarfBuzz,
+         libAvaloniaNative). Library validation demands every loaded library be
+         signed by the same Team ID; these are signed by us at packaging time,
+         but the loader checks them against the *main executable's* team before
+         our signature is considered, so validation has to be off. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- Click-to-focus and "Quit" on a Claude Desktop profile both work by
+         sending Apple Events (via /usr/bin/osascript, whose responsible
+         process is this app). Under the hardened runtime an app without this
+         entitlement gets errAEEventNotPermitted (-1743) instead of the
+         Automation consent prompt, so focusing a terminal would fail
+         permanently with no way for the user to grant permission. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>

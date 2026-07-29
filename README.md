@@ -357,12 +357,44 @@ This is just a matter of wiring more hook configs, not a hard limitation —
 a different WSL user's install is the one combination left unwired, since
 that would need hooks added inside *their* Linux user account.
 
-## 1. Build and launch it
+## 1. Install it
+
+Either download an installer or build from source — both are fully supported,
+and the installers are just the build scripts run in CI.
+
+### Download an installer
+
+Grab the latest from
+[**Releases**](https://github.com/KawikaMiller/Claude-Buddy/releases). Nothing else
+is needed; the .NET runtime is bundled.
+
+| Platform | File |
+| --- | --- |
+| macOS, Apple silicon | `ClaudeBuddy-<version>-osx-arm64.dmg` |
+| macOS, Intel | `ClaudeBuddy-<version>-osx-x64.dmg` |
+| Windows 10/11, 64-bit | `ClaudeBuddy-<version>-win-x64-setup.exe` |
+
+**macOS**: open the DMG, drag Claude Buddy to Applications, then double-click
+**Install Claude Code Hooks.command** — that runs step 2 below for you. The
+builds are signed and notarized, so they open without a Gatekeeper override.
+
+**Windows**: run the setup. It installs per-user under
+`%LOCALAPPDATA%\Programs\ClaudeBuddy`, so there is no UAC prompt, and it
+offers to do step 2 and to start the app at sign-in. It is **not** code-signed
+yet, so SmartScreen shows a warning — choose *More info → Run anyway*.
+Uninstall through Apps & Features; that also removes the hook entries from
+`settings.json`.
+
+Either way, **don't skip step 2**. Orbs come from a Claude Code hook, and until
+it's wired up the app runs correctly and displays nothing, which looks broken
+but isn't. The installers offer to do it; let them.
+
+### Build from source
 
 Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download) or newer,
 on either platform.
 
-### macOS — build the app bundle
+#### macOS — build the app bundle
 
 ```bash
 ./tools/build-macos-app.sh             # -> dist/Claude Buddy.app
@@ -385,10 +417,12 @@ menu-bar app; it declares `NSAppleEventsUsageDescription`, without which
 macOS won't even offer the Automation prompt that click-to-focus depends on;
 and it has a stable code identity, so that Automation grant attaches to
 "Claude Buddy" rather than to whichever terminal launched a bare binary.
-It's ad-hoc signed, which means each rebuild changes the signature and macOS
-may ask for Automation permission again — expected, not a bug.
+A local build is ad-hoc signed, which means each rebuild changes the signature
+and macOS may ask for Automation permission again — expected, not a bug. Set
+`MACOS_SIGNING_IDENTITY` to a "Developer ID Application: …" identity to get a
+stable, distributable signature instead.
 
-### Windows (and the loose-binary route on macOS)
+#### Windows (and the loose-binary route on macOS)
 
 ```
 dotnet publish -c Release -r win-x64     # Windows
@@ -411,13 +445,62 @@ back to its default layout.
 
 The icons are generated, not checked in as hand-drawn art — rerun
 `python3 tools/make-icons.py` (stdlib only) after editing it to regenerate
-`Assets/`.
+`Assets/` (the tray PNGs, the `.app` icon source, and `ClaudeBuddy.ico` for
+the Windows executable and installer).
+
+#### Build the installers
+
+The same scripts CI runs, so a local run reproduces a release artifact:
+
+```bash
+./tools/build-macos-dmg.sh                    # -> dist/ClaudeBuddy-<ver>-osx-arm64.dmg
+./tools/build-macos-dmg.sh --rid osx-x64      # Intel
+```
+
+```powershell
+.\tools\build-windows-installer.ps1           # -> dist\ClaudeBuddy-<ver>-win-x64-setup.exe
+```
+
+The Windows one needs [Inno Setup 6](https://jrsoftware.org/isdl.php)
+(`winget install -e --id JRSoftware.InnoSetup`). Both work unsigned for local
+testing — see [Releasing](#releasing) for what CI adds on top.
 
 ## 2. Wire up Claude Code
 
 Each Claude Code install you want tracked (WSL, native Windows, macOS, ...)
 needs its own copy of these hooks added to *its own* `settings.json` —
 installs don't share config. Repeat this section once per install.
+
+### The scripted way
+
+There's a script per platform, and it's the recommended route: it backs up
+`settings.json` first, preserves everything already in it (including other
+tools' hooks), and converges rather than duplicating, so re-running it repairs
+a broken setup. Pass `--uninstall` / `-Uninstall` to remove just our entries.
+
+```bash
+./tools/install-macos-hooks.sh
+# installed from a DMG instead of a clone? the script ships inside the app:
+"/Applications/Claude Buddy.app/Contents/Resources/install-macos-hooks.sh"
+```
+
+```powershell
+.\tools\install-windows-hooks.ps1
+# or, installed from the setup:
+& "$env:LOCALAPPDATA\Programs\ClaudeBuddy\tools\install-windows-hooks.ps1"
+```
+
+The Windows installer runs this for you if you leave the checkbox ticked, and
+the macOS DMG's **Install Claude Code Hooks.command** is a wrapper around it.
+Neither covers a Claude Code install inside WSL — for that, run the Windows
+script (WSL hooks call out to `powershell.exe` anyway) and use the WSL snippet
+below to check the result.
+
+Whichever route you take, **restart any Claude Code sessions you already have
+open** — hooks are read once at session start, so existing sessions won't
+produce orbs until they're restarted.
+
+### By hand
 
 Pick the snippet that matches where the Claude Code session you're wiring
 up actually runs, then open **that install's** `~/.claude/settings.json`
@@ -558,13 +641,50 @@ Windows.
 
 ## 3. (Optional) Launch it automatically
 
-- **Windows**: press `Win+R`, type `shell:startup`, and drop a shortcut to
-  `ClaudeBuddy.exe` in the folder that opens.
-- **macOS**: install the bundle (`./tools/build-macos-app.sh --install`),
-  then System Settings → General → Login Items → **+** → pick
-  **Claude Buddy** from /Applications.
+- **Windows**: the installer does this if you tick "Start Claude Buddy
+  automatically when I sign in". By hand: press `Win+R`, type `shell:startup`,
+  and drop a shortcut to `ClaudeBuddy.exe` in the folder that opens.
+- **macOS**: install the app (from the DMG, or
+  `./tools/build-macos-app.sh --install`), then System Settings → General →
+  Login Items → **+** → pick **Claude Buddy** from /Applications.
 
 It'll then start quietly whenever you log in.
+
+## Releasing
+
+Releases are built by `.github/workflows/release.yml` and triggered by a tag.
+`ClaudeBuddy.csproj`'s `<Version>` is the single source of truth — the
+packaging scripts and the installer filenames all read it, and CI refuses to
+publish if the tag disagrees with it.
+
+```bash
+# 1. bump <Version> in ClaudeBuddy.csproj, e.g. to 0.2.0-beta
+# 2. write .github/release-notes/v0.2.0-beta.md
+# 3. commit, then:
+git tag v0.2.0-beta && git push origin v0.2.0-beta
+```
+
+CI then builds both DMGs and the Windows setup, signs and notarizes the macOS
+ones, generates `SHA256SUMS.txt`, and publishes a release using those notes.
+A tag containing a hyphen is marked as a prerelease automatically.
+
+`workflow_dispatch` runs the same build without publishing, which is the way to
+test packaging changes. Every push and PR also builds and packages via
+`.github/workflows/ci.yml`, unsigned — so a break in the packaging path shows
+up before a tag exists rather than halfway through a release.
+
+Signing and notarization are handled by repository secrets, so they happen
+automatically for maintainers and need no setup to contribute — a fork or a PR
+builds unsigned and that's fine. Maintainer-side certificate setup lives in
+[`docs/releasing.md`](docs/releasing.md).
+
+One consequence worth knowing while working on the macOS side: notarization
+requires the hardened runtime, and the hardened runtime requires the
+entitlements in `tools/ClaudeBuddy.entitlements` — JIT and unsigned executable
+memory for CoreCLR, library validation off for the bundled native libs, and
+Apple Events for click-to-focus. Removing any of them still notarizes cleanly
+but breaks the app at runtime, so they can only be validated by running a
+signed build.
 
 ## Notes / things you might want to tweak
 

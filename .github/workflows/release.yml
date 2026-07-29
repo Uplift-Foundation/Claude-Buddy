@@ -1,0 +1,232 @@
+name: Release
+
+# Tag-driven: push a v-tag whose number matches <Version> in ClaudeBuddy.csproj
+# and this builds, signs and publishes the installers.
+#
+#   git tag v0.1.0-beta && git push origin v0.1.0-beta
+#
+# workflow_dispatch is here so the packaging can be exercised without minting a
+# tag; those runs upload artifacts but publish no release.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the release and upload assets
+
+jobs:
+  # Runs first and gates everything else. A tag whose number disagrees with the
+  # csproj would ship installers named one version while reporting another in
+  # Add/Remove Programs and About — cheaper to fail here than to delete a
+  # published release and re-tag.
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compare tag to <Version>
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          CSPROJ_VERSION="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' ClaudeBuddy.csproj | head -1)"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "csproj: $CSPROJ_VERSION"
+          echo "tag:    $TAG_VERSION"
+          if [ "$CSPROJ_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match <Version>$CSPROJ_VERSION</Version> in ClaudeBuddy.csproj"
+            exit 1
+          fi
+
+  macos:
+    needs: check-version
+    # Both architectures build on the arm64 runner: .NET cross-publishes osx-x64
+    # happily, and codesign/notarytool do not care which host they run on. One
+    # runner image instead of pinning a legacy Intel image that keeps getting
+    # deprecated out from under us.
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [osx-arm64, osx-x64]
+
+    # Job-level so the step `if` below can read them. Secrets are not expanded
+    # into the runner environment unless they are mapped like this.
+    env:
+      MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      # Notarization: App Store Connect API key preferred, Apple ID as fallback.
+      # build-macos-dmg.sh picks whichever set is populated.
+      MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+      MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+
+      # A tagged release must not be allowed to ship unsigned. Without a
+      # notarization ticket macOS reports the app as *damaged*, so an accidental
+      # unsigned release is not a degraded download — it is one that fails on
+      # every user's Mac and reads as a corrupt file. Building unsigned stays fine
+      # for workflow_dispatch and for forks, which have no access to secrets.
+      - name: Require signing credentials for a tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -uo pipefail
+          missing=()
+          [[ -n "${MACOS_SIGNING_IDENTITY:-}" ]]     || missing+=(MACOS_SIGNING_IDENTITY)
+          [[ -n "${MACOS_CERTIFICATE_P12_BASE64:-}" ]] || missing+=(MACOS_CERTIFICATE_P12_BASE64)
+          [[ -n "${MACOS_CERTIFICATE_PASSWORD:-}" ]] || missing+=(MACOS_CERTIFICATE_PASSWORD)
+
+          # Notarization accepts either credential set, so require one of them
+          # rather than both.
+          if [[ -z "${MACOS_NOTARY_KEY_P8_BASE64:-}" && -z "${MACOS_NOTARY_APPLE_ID:-}" ]]; then
+            missing+=("MACOS_NOTARY_KEY_P8_BASE64 (preferred) or MACOS_NOTARY_APPLE_ID")
+          fi
+
+          if (( ${#missing[@]} )); then
+            for name in "${missing[@]}"; do
+              echo "::error::Missing repository secret: $name"
+            done
+            echo "::error::Refusing to publish $GITHUB_REF_NAME unsigned. See docs/releasing.md, or run tools/setup-macos-signing.sh."
+            exit 1
+          fi
+          echo "All signing and notarization credentials present."
+
+      - name: Import Developer ID certificate
+        # Skipped when the secret is absent so the workflow still produces
+        # (unsigned, un-notarized) images before the signing secrets are set up.
+        if: env.MACOS_CERTIFICATE_P12_BASE64 != ''
+        run: |
+          set -euo pipefail
+          # A dedicated throwaway keychain, not the login one: it is unlocked
+          # non-interactively here and thrown away with the runner.
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          PASSWORD="$(uuidgen)"
+
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+
+          echo "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+          # Without this, codesign blocks on a GUI prompt for keychain access and
+          # the job just hangs until it times out.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$PASSWORD" "$KEYCHAIN" >/dev/null
+
+          # Prepend to the search list rather than replacing it, so system roots
+          # stay available for verifying the certificate chain.
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
+      - name: Build DMG (${{ matrix.rid }})
+        run: |
+          set -euo pipefail
+          # The script itself decides what it can do with the environment it is
+          # given: identity present means hardened-runtime signing, notary
+          # credentials present means submit and staple. Warn loudly when the
+          # result would not be distributable, since a silently unsigned DMG
+          # fails on the *user's* Mac rather than here.
+          if [ -z "${MACOS_SIGNING_IDENTITY:-}" ]; then
+            echo "::warning::MACOS_SIGNING_IDENTITY is not set — this DMG is ad-hoc signed and Gatekeeper will reject it on other Macs."
+          fi
+          ./tools/build-macos-dmg.sh --rid "${{ matrix.rid }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dmg-${{ matrix.rid }}
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  windows:
+    needs: check-version
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        run: .\tools\build-windows-installer.ps1
+        shell: pwsh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-setup
+          path: dist/*.exe
+          if-no-files-found: error
+
+  publish:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    # Only a tag push publishes; workflow_dispatch runs stop after building.
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd artifacts
+          ls -la
+          # Named extensions rather than `*`, so the output file can never end up
+          # listed inside itself depending on glob-vs-redirection ordering.
+          sha256sum *.dmg *.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ARGS=(release create "$TAG" artifacts/*
+                --title "Claude Buddy $TAG"
+                # Guards against publishing a release for a tag that was never
+                # actually pushed to the repo.
+                --verify-tag)
+
+          # A hyphen is exactly what separates a semver prerelease label from the
+          # version (v0.1.0-beta, v0.2.0-rc.1), so its presence is the test. Marking
+          # it keeps GitHub showing the last stable release as "Latest".
+          case "$TAG" in
+            *-*) ARGS+=(--prerelease) ;;
+          esac
+
+          # Notes come from a checked-in file so they are reviewable in the diff
+          # rather than typed into the web UI at publish time.
+          NOTES=".github/release-notes/$TAG.md"
+          if [ -f "$NOTES" ]; then
+            ARGS+=(-F "$NOTES")
+          else
+            echo "::warning::No release notes at $NOTES — using generated notes."
+            ARGS+=(--generate-notes)
+          fi
+
+          gh "${ARGS[@]}"
