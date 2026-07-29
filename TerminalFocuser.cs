@@ -11,11 +11,11 @@ namespace ClaudeBuddy
     // Terminal.app tab (via tty), otherwise just activate the terminal app;
     // the first click triggers a macOS Automation permission prompt for
     // controlling the terminal — that's expected; approve it once.
-    // Windows: the terminal window whose PID the hook recorded, otherwise
-    // any window of the app named by term_program (the WSL case, where the
-    // Windows-side parent chain dead-ends in an interop bridge). Selecting
-    // the exact Windows Terminal *tab* isn't possible — WT doesn't expose
-    // its tabs to other processes.
+    // Windows: for Windows Terminal, the exact tab when its title
+    // unambiguously identifies the session (see TrySelectWindowsTerminalTab);
+    // otherwise the terminal window whose PID the hook recorded, or any
+    // window of the app named by term_program (the WSL case, where the
+    // Windows-side parent chain dead-ends in an interop bridge).
     internal static class TerminalFocuser
     {
         public static void Focus(SessionStatus? status)
@@ -273,7 +273,10 @@ namespace ClaudeBuddy
 
         // --- process helpers ---
 
-        private static bool TryRun(string exe, out string stdout, params string[] args)
+        private static bool TryRun(string exe, out string stdout, params string[] args) =>
+            TryRun(exe, 3000, out stdout, args);
+
+        private static bool TryRun(string exe, int timeoutMs, out string stdout, params string[] args)
         {
             stdout = "";
             try
@@ -297,8 +300,9 @@ namespace ClaudeBuddy
                 var outTask = process.StandardOutput.ReadToEndAsync();
                 var errTask = process.StandardError.ReadToEndAsync();
 
-                // A wedged tmux server would otherwise hang this click forever.
-                if (!process.WaitForExit(3000))
+                // A wedged tmux server (or, on Windows, a slow UIA broker)
+                // would otherwise hang this click forever.
+                if (!process.WaitForExit(timeoutMs))
                 {
                     try { process.Kill(true); } catch { }
                     return false;
@@ -342,6 +346,15 @@ namespace ClaudeBuddy
         {
             try
             {
+                // Tab-exact beats window-exact: if there's an unambiguous tab
+                // to select, selecting it also raises its window (verified —
+                // see docs/windows-wt-tabs-findings.md), so this either fully
+                // replaces the fallback below or changes nothing at all.
+                if (status.TermProgram == "WindowsTerminal" && TrySelectWindowsTerminalTab(status))
+                {
+                    return;
+                }
+
                 var hwnd = IntPtr.Zero;
 
                 if (status.TermPid > 0)
@@ -375,6 +388,118 @@ namespace ClaudeBuddy
                 // Same convenience-only rule as macOS.
             }
         }
+
+        // WT puts every window of one launch context in a single process, so
+        // Process.MainWindowHandle can't tell tabs apart — but UI Automation
+        // enumerates the real TabItem elements of every window that process
+        // owns, each with a live Name, and a TabItem's SelectionItemPattern
+        // genuinely switches to it (confirmed against a real interactive
+        // session; both the window and the tab change in one call — see
+        // docs/windows-wt-tabs-findings.md). A titled session's tab Name is
+        // "✳ " + the chat title.
+        //
+        // Deliberately NOT matching on a bare "claude" when status.Title is
+        // empty, even though a single such tab would in principle be
+        // unambiguous: measured live, a fresh session reads literally
+        // "claude" for well under a second before Claude Code sets its own
+        // "✳ Claude Code" placeholder title, and that placeholder (not
+        // "claude") is what an untitled session sits at indefinitely
+        // afterwards. So by the time a human actually clicks an orb, a bare
+        // "claude" tab is never that session's own tab — it can only be some
+        // other session caught mid-startup — and matching it would pick the
+        // wrong window's tab with confidence. See findings doc for the
+        // second-by-second trace. status.Title empty means: don't attempt
+        // tab selection at all, just fall through to window activation.
+        //
+        // Shelling out to (Windows) PowerShell rather than adding a
+        // System.Windows.Automation package reference keeps this file's
+        // approach consistent with the macOS side (osascript) and avoids
+        // pulling Windows Desktop framework assemblies into a project that
+        // also builds for macOS.
+        //
+        // Never worse than today: this only returns true when exactly one
+        // tab matched and Select() ran. Anything else — zero matches, more
+        // than one, PowerShell missing, UIA slow, any exception — returns
+        // false and FocusWindows falls through to its existing
+        // window-activation path unchanged.
+        private static bool TrySelectWindowsTerminalTab(SessionStatus status)
+        {
+            if (status.TermPid <= 0 || string.IsNullOrEmpty(status.Title)) return false;
+
+            var target = "✳ " + status.Title;
+
+            // The script has to reach powershell.exe as a *file* (-File), not
+            // as -Command text with trailing arguments — verified the hard
+            // way: powershell.exe's -Command greedily joins every remaining
+            // argument onto the script text and reparses the lot as one
+            // command line, so $args never receives them; the title just
+            // gets spliced onto the end of the script and fails to parse.
+            // -File is the only form where trailing arguments actually
+            // arrive as $args.
+            string scriptPath;
+            try
+            {
+                scriptPath = Path.Combine(Path.GetTempPath(), $"cb-wt-tab-select-{Guid.NewGuid():N}.ps1");
+                File.WriteAllText(scriptPath, SelectTabScript);
+            }
+            catch
+            {
+                return false;
+            }
+
+            try
+            {
+                // -NonInteractive: this must never pop a console of its own.
+                // Bounded well under the "second or two" budget from
+                // docs/windows-wt-tabs.md — a full round trip through a fresh
+                // powershell.exe measured ~400ms for a handful of windows/tabs.
+                var ok = TryRun("powershell.exe", 1500, out var stdout,
+                    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
+                    status.TermPid.ToString(), target);
+
+                return ok && stdout.Trim() == "SELECTED";
+            }
+            finally
+            {
+                try { File.Delete(scriptPath); } catch { }
+            }
+        }
+
+        // $args[0] = target process id, $args[1] = exact tab name to select.
+        // Passed as process arguments rather than interpolated into this
+        // script text — a session title is arbitrary user text (could
+        // contain quotes, `$`, etc.) and splicing it into the script source
+        // would be a PowerShell injection risk, not just an escaping
+        // nuisance. -ceq is a case-sensitive exact match: the glyph prefix
+        // and title must match verbatim, not fuzzily.
+        private const string SelectTabScript = """
+            $targetPid = [int]$args[0]
+            $target = $args[1]
+            Add-Type -AssemblyName UIAutomationClient
+            Add-Type -AssemblyName UIAutomationTypes
+            $root = [System.Windows.Automation.AutomationElement]::RootElement
+            $procCond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $targetPid)
+            $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $procCond)
+            $tabCond = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::TabItem)
+            $matches = @()
+            foreach ($win in $windows) {
+                foreach ($tab in $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)) {
+                    if ([string]::Equals($tab.Current.Name, $target, [System.StringComparison]::Ordinal)) {
+                        $matches += $tab
+                    }
+                }
+            }
+            if ($matches.Count -eq 1) {
+                $pattern = $matches[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                $pattern.Select()
+                Write-Output "SELECTED"
+            } else {
+                Write-Output "NOMATCH:$($matches.Count)"
+            }
+            """;
 
         // property is "id" (a session UUID recorded by the hook) or "tty" (the
         // live tty of an attached tmux client). Both are iTerm2 session

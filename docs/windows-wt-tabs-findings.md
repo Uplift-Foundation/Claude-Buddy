@@ -77,3 +77,128 @@ implementation.
 attempt**, matching on `"✳ " + status.Title` when `status.Title` is non-empty,
 and falling back to the existing window-activation path otherwise (including
 the untitled/placeholder-title cases above).
+
+**Correction to the "~2 minutes" timing above**, found while implementing
+item 2: that delay was an artifact of a broken test, not real behavior. The
+`cmd /k claude` launch was run through this agent's Bash tool (Git Bash), which
+silently mangled `/k` into a drive path (`cmd K:/ claude`) — MSYS's automatic
+`/x` → `X:/` conversion for anything that looks like a Unix absolute path
+starting a command-line token. `claude.exe` never actually started; the tab
+just sat on `cmd`'s own default title indefinitely. Once launched correctly
+(via the PowerShell tool, no path mangling), a fresh session reads bare
+`"claude"` for **well under a second**, then flips to `"✳ Claude Code"` and
+stays there indefinitely with no further prompt. This matters a lot for item
+2's matching strategy — see below.
+
+## Item 2: implementation
+
+Wired into `TerminalFocuser.FocusWindows` (Windows-only, per the ground
+rules): before the existing hwnd-resolution/`BringToFront` fallback, try
+`TrySelectWindowsTerminalTab(status)`. Only on a confirmed unambiguous select
+does it return and skip the fallback; every other outcome (title empty, zero
+matches, ambiguous matches, PowerShell missing, timeout, any exception) falls
+straight through to the pre-existing, completely unmodified code path. Also
+updated the stale file-header comment claiming tab selection was impossible.
+
+**Deviated from the doc's suggested "bare `claude` with exactly one match is
+still worth handling" fallback — deliberately left it out.** The doc's
+reasoning assumed a session with no title sits at a stable `"claude"` tab
+name indefinitely (that's what the original, since-corrected finding
+implied). Timing it for real (see correction above) shows the opposite: by
+the time a human reacts to an orb and clicks it, that session's own tab has
+already moved on to `"✳ Claude Code"` in under a second. A bare `"claude"`
+tab present at click time therefore almost certainly belongs to some *other*
+session that happens to be mid-startup at that exact instant — matching it
+would confidently activate the wrong window, which is exactly the outcome
+item 2's "never worse than today" rule forbids. So: `status.Title` empty →
+don't attempt tab selection at all, fall straight to window activation. This
+is a judgment call, recorded here because it contradicts what the task doc
+itself suggested trying.
+
+Injection safety: the chat title is arbitrary text a user can influence (it's
+LLM-generated from conversation content, so not fully trusted). The pid and
+target tab name are passed as genuine process arguments to a `-File` script,
+never spliced into the PowerShell script's source text, so there's no way
+for a title containing quotes, `$`, backticks, etc. to be interpreted as
+script code.
+
+**A real bug caught only by end-to-end testing, not code review:** the first
+version invoked `powershell.exe -NoProfile -NonInteractive -Command
+<script-text> <pid> <target>`, expecting `<pid>`/`<target>` to arrive as
+`$args` inside the script — that's how `-File <script> <pid> <target>` works,
+and it's what every manual test in item 1 used. It is **not** how `-Command`
+works: `powershell.exe` treats everything after `-Command` as one command
+line and joins all remaining argv tokens onto the end of the script text,
+then reparses the whole thing as PowerShell source. The title ends up
+appended as bare script tokens, not delivered as `$args`, and it reliably
+failed to parse (`Unexpected token '?' in expression or statement` — the
+glyph itself, mangled by the re-parse). `dotnet build` and a plain read of
+the code both looked correct; only running it against a real WT process
+caught it. Fixed by writing `SelectTabScript` to a temp `.ps1` file per
+invocation (unique GUID name, deleted in a `finally`) and invoking with
+`-File`, which is the only form where trailing arguments actually become
+`$args`.
+
+Verification method: rather than run a second `ClaudeBuddy.exe` (this app has
+no per-instance isolation the way Claude Desktop does — one settings file, one
+`%TEMP%\claude_buddy` watcher — so a second copy would just create duplicate
+orbs for Owner's real sessions, a needless disruption for a focus-only
+feature with no destructive side effects to justify it), built a throwaway
+console harness containing an unmodified copy of `TerminalFocuser.cs` (plus
+its `WindowsForegroundWindow.cs` dependency and a minimal `SessionStatus`
+stand-in) and called the real, public `TerminalFocuser.Focus(status)` —
+the exact method `OrbWindow`'s click handler calls — directly. This is the
+same production code the orb's `OnPointerReleased` invokes, just triggered
+without a simulated click, consistent with "prefer resolving by pid/hwnd
+over simulating clicks" from the ground rules. Harness deleted after use.
+
+## Item 3: verify
+
+All four scenarios run via the harness described above, against real WT
+windows (Owner's two pre-existing ones, plus disposable windows/tabs of my
+own for the cases that needed a second identically-titled tab — cleaned up
+after each check, confirmed by re-enumerating until the tab/window list
+matched the original baseline exactly):
+
+- **Background tab in a background window, unambiguous title.** Foregrounded
+  a different window first (baseline), then called `Focus()` with
+  `TermProgram="WindowsTerminal"`, `TermPid=61364`, `Title="Test asking
+  question"` (Owner's real second window/tab, untouched otherwise).
+  `GetForegroundWindow()` came back as hwnd `59772442` — the right window,
+  raised by the tab select alone. PASS.
+- **Ambiguous case.** Built two tabs with an identical synthetic title
+  (`$Host.UI.RawUI.WindowTitle`, a plain non-Claude way to get two tabs with
+  the same glyph-prefixed name without needing two real hours-long
+  conversations) in a throwaway window, foregrounded something else, then
+  called `Focus()` targeting that title. Script reported `NOMATCH:2`,
+  `TrySelectWindowsTerminalTab` returned `false`, and control fell into the
+  **same unmodified `MainWindowHandle`-based fallback** the empty-title
+  baseline call had just used — same window came forward both times. Not a
+  new kind of wrongness: bit-for-bit the pre-existing behavior, exercised via
+  a path that used to be unreachable by title but is now reached by ambiguity
+  too. PASS (falls back correctly, doesn't guess).
+- **Single-tab / untitled regression check.** `Title=""` (Owner's real
+  single-tab window). Guard clause returns `false` immediately —
+  `TrySelectWindowsTerminalTab` body never runs, zero PowerShell spawned —
+  and the existing `MainWindowHandle`/`BringToFront` path runs exactly as it
+  did before this change. PASS, and by construction can't regress since the
+  code is untouched on this path.
+- **Different WT window than the currently-active one.** Covered by the
+  first bullet — the target window (`59772442`) was not the foreground window
+  when `Focus()` was called.
+- **Non-WT hosts.** `status.TermProgram == "WindowsTerminal"` gates the new
+  code entirely; called `Focus()` with `TermProgram="vscode"` and it returned
+  having done nothing beyond what the pre-existing VS Code fallback already
+  does (by inspection: the guard short-circuits before `TrySelectWindowsTerminalTab`
+  is ever called, so this is a code guarantee, not something that needed a
+  live VS Code/`conhost` re-check the way a shared code path would have).
+
+macOS: untouched. The new code lives entirely inside the existing
+`OperatingSystem.IsWindows()` branch; the one shared helper touched
+(`TryRun`) keeps its original 3-argument overload with the same default
+3000ms timeout, so every macOS call site is unaffected.
+
+Cleanup: all throwaway WT windows/tabs, the console test harness, the
+interactive `claude` sessions started for testing, and their processes were
+removed; final UIA enumeration matched the original two-window baseline
+exactly before stopping.
