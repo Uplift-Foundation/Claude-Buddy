@@ -110,7 +110,40 @@ the code comment says it would (rank ordering, not "only candidate by
 default"). Worth having on record since the brief specifically asked whether
 the ranking logic would matter in practice — here it did, if only barely.
 
-## Also: Quit still works
+## Also: Quit still works — PASS, undisturbed
 
-Pushing this file now, before touching Quit, per the brief. Quit result
-appended below once checked.
+Clicked **Quit** on `Profile-1`'s submenu (same resolve-by-name-then-click
+sequence, confirmed open before the click). Timed with a stopwatch from click
+to the main pid disappearing: **3.37s**. That's past `WindowsQuitGraceMs`
+(2.5s), consistent with the known behaviour that `WM_CLOSE` alone only hides
+the window — the process was still alive at the 2.5s mark, and `Quit`'s
+internal escalation to `ForceQuitWindows` is what actually ended the tree just
+after. Confirmed no `Claude.exe` process for this profile's `--user-data-dir`
+survived (`Win32_Process` query came back empty). This fix did not disturb
+Quit's existing behaviour.
+
+## Cleanup
+
+- `publish-test\ClaudeBuddy.exe` (pid 68436, the isolated test instance) was
+  stopped.
+- The scratch profile root (`%TEMP%\claude-buddy-showhidden-test`, including
+  `Claude-Profile-1`) was deleted.
+- Confirmed no leftover process anywhere had a command line referencing
+  `showhidden-test` or `Claude-Profile-1`.
+- `%APPDATA%\Claude` (Default) was never touched — `CLAUDE_BUDDY_PROFILE_ROOT`
+  kept every scan pointed at the scratch directory for the whole session.
+- The original `publish\ClaudeBuddy.exe` (same build that was already running
+  before this session started, containing this same fix) was relaunched
+  identically, restoring the machine to the state it was found in.
+- `publish-test\` build output directory was left in place (untracked, not
+  committed) in case a future session wants to reuse it; it holds no profile
+  data and is safe to delete at will.
+
+## Bottom line
+
+All four numbered verification items PASS, and Quit is unaffected. The Mac-side
+diagnosis and fix both hold up against a real installed Claude Desktop build:
+`Process.MainWindowHandle` did read 0 for the hidden window exactly as
+predicted, and `ShowAndFocus`'s enumerate-and-rank approach recovered it every
+time, without disturbing the minimized or already-visible cases that already
+worked.
