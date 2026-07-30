@@ -52,6 +52,18 @@ namespace ClaudeBuddy
             public bool TintActiveWindow { get; set; } = true;
             public Dictionary<string, ProfileSettings> Profiles { get; init; } =
                 new(StringComparer.Ordinal);
+
+            // Distinct from Profiles above (Claude Desktop, the Electron app):
+            // these are Claude Code *CLI* config directory names — e.g.
+            // ".claude-work" for a CLAUDE_CONFIG_DIR=~/.claude-work alias
+            // managing a second account — that the user has explicitly opted
+            // into also wiring Claude Buddy hooks for, beyond the default
+            // ~/.claude. install-windows-hooks.ps1 reads this same list (via
+            // this file) as its default -ProfileDir/-WslProfileDir value, so
+            // configuring it here is also what "configure via the installer"
+            // means in practice: a repair/reinstall re-reads whatever's saved
+            // here rather than needing its own separate wizard UI for it.
+            public List<string> ClaudeCodeProfileDirs { get; init; } = new();
         }
 
         // ---- app-wide -------------------------------------------------------
@@ -66,6 +78,35 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.TintActiveWindow; }
             set { Load(); lock (Gate) _model.TintActiveWindow = value; Save(); }
+        }
+
+        // ---- extra Claude Code (CLI) profile directories ---------------------
+
+        // A copy, so callers can't mutate the store without going through
+        // Add/Remove — same guard rail as ProfileSettings.For below.
+        public static IReadOnlyList<string> ClaudeCodeProfileDirs
+        {
+            get { Load(); lock (Gate) return _model.ClaudeCodeProfileDirs.ToList(); }
+        }
+
+        public static void AddClaudeCodeProfileDir(string dirName)
+        {
+            Load();
+            lock (Gate)
+            {
+                if (!_model.ClaudeCodeProfileDirs.Contains(dirName, StringComparer.Ordinal))
+                {
+                    _model.ClaudeCodeProfileDirs.Add(dirName);
+                }
+            }
+            Save();
+        }
+
+        public static void RemoveClaudeCodeProfileDir(string dirName)
+        {
+            Load();
+            lock (Gate) { _model.ClaudeCodeProfileDirs.Remove(dirName); }
+            Save();
         }
 
         // ---- per profile ----------------------------------------------------
@@ -129,6 +170,17 @@ namespace ClaudeBuddy
                         TintActiveWindow = root["tintActiveWindow"]?.GetValue<bool>() ?? true
                     };
 
+                    if (root["claudeCodeProfileDirs"] is JsonArray profileDirs)
+                    {
+                        foreach (var node in profileDirs)
+                        {
+                            if (node?.GetValue<string>() is { Length: > 0 } dirName)
+                            {
+                                model.ClaudeCodeProfileDirs.Add(dirName);
+                            }
+                        }
+                    }
+
                     if (root["profiles"] is JsonObject profiles)
                     {
                         foreach (var (folder, node) in profiles)
@@ -180,11 +232,15 @@ namespace ClaudeBuddy
                         };
                     }
 
+                    var profileDirs = new JsonArray();
+                    foreach (var dirName in _model.ClaudeCodeProfileDirs) profileDirs.Add(dirName);
+
                     root = new JsonObject
                     {
                         ["version"] = CurrentVersion,
                         ["showOrbs"] = _model.ShowOrbs,
                         ["tintActiveWindow"] = _model.TintActiveWindow,
+                        ["claudeCodeProfileDirs"] = profileDirs,
                         ["profiles"] = profiles
                     };
                 }

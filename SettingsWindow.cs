@@ -1,9 +1,12 @@
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using Avalonia;
 using Avalonia.Controls;
 using Shapes = Avalonia.Controls.Shapes;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
@@ -108,6 +111,14 @@ namespace ClaudeBuddy
                 ClaudeDesktopOverlay.Enabled,
                 ClaudeDesktopOverlay.SetEnabled));
 
+            if (OperatingSystem.IsWindows())
+            {
+                root.Children.Add(ClaudeCodeProfilesSection());
+
+                var wslRows = WslSection();
+                if (wslRows is not null) root.Children.Add(wslRows);
+            }
+
             var done = new Button
             {
                 Content = "Done",
@@ -118,6 +129,230 @@ namespace ClaudeBuddy
             root.Children.Add(done);
 
             return root;
+        }
+
+        // Distinct from "Claude Desktop profiles" above (the Electron app) —
+        // these are Claude Code *CLI* config directory names, for a second
+        // (or third...) account managed via CLAUDE_CONFIG_DIR, e.g. an alias
+        // like `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"`. Each
+        // one is wired in *addition* to the default ~/.claude, on native
+        // Windows and every WSL distro below — never a replacement for it,
+        // and never auto-discovered: only names added here (or passed
+        // explicitly to install-windows-hooks.ps1's -ProfileDir/
+        // -WslProfileDir) are ever touched. Always shown, unlike WslSection:
+        // native wiring applies regardless of whether WSL is even installed.
+        [SupportedOSPlatform("windows")]
+        private static Control ClaudeCodeProfilesSection()
+        {
+            var section = new StackPanel { Spacing = 8 };
+            section.Children.Add(new Separator { Margin = new Thickness(0, 6) });
+            section.Children.Add(Header("Claude Code profiles"));
+            section.Children.Add(new TextBlock
+            {
+                Text = "Wire Claude Buddy hooks into additional Claude Code accounts managed via "
+                       + "CLAUDE_CONFIG_DIR, alongside the default ~/.claude.",
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.6,
+                FontSize = 11
+            });
+
+            var itemsPanel = new StackPanel { Spacing = 4 };
+            foreach (var dirName in ClaudeBuddySettings.ClaudeCodeProfileDirs)
+            {
+                itemsPanel.Children.Add(ProfileDirRow(dirName, itemsPanel));
+            }
+            section.Children.Add(itemsPanel);
+
+            var input = new TextBox { Watermark = ".claude-work", Width = 220 };
+            var browseButton = new Button { Content = "Browse…" };
+            var addButton = new Button { Content = "Add" };
+            var status = new TextBlock { FontSize = 11, Opacity = 0.7 };
+
+            // A folder picker is the more discoverable way to do this, but
+            // typing stays available too: CLAUDE_CONFIG_DIR can point at a
+            // directory that doesn't exist yet (Claude Code creates it on
+            // first use with that alias), which a picker — browsing existing
+            // folders only — can't select.
+            browseButton.Click += async (_, _) =>
+            {
+                var picked = await BrowseForProfileDir(browseButton, status);
+                if (picked is not null) input.Text = picked;
+            };
+
+            addButton.Click += (_, _) =>
+            {
+                var name = input.Text?.Trim();
+                if (string.IsNullOrEmpty(name)) return;
+
+                status.Text = "";
+                ClaudeBuddySettings.AddClaudeCodeProfileDir(name);
+                itemsPanel.Children.Add(ProfileDirRow(name, itemsPanel));
+                input.Text = "";
+
+                // Off the UI thread: this shells out (native wiring, plus a
+                // re-run for every already-wired WSL distro), and the window
+                // must stay responsive the whole time — ReapplyProfiles'
+                // own internal timeouts guarantee it eventually returns
+                // either way.
+                addButton.IsEnabled = false;
+                input.IsEnabled = false;
+                Task.Run(WslIntegration.ReapplyProfiles).ContinueWith(_ =>
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        addButton.IsEnabled = true;
+                        input.IsEnabled = true;
+                    });
+                });
+            };
+
+            section.Children.Add(new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                Children = { input, browseButton, addButton }
+            });
+            section.Children.Add(status);
+
+            section.Children.Add(new TextBlock
+            {
+                Text = "Removing a profile stops it from being wired on future changes; it doesn't "
+                       + "remove hooks already written to that profile's own settings.json.",
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.5,
+                FontSize = 11
+            });
+
+            return section;
+        }
+
+        // Returns the picked folder's bare name (e.g. ".claude-work"), or
+        // null if the user cancelled or picked something invalid — in which
+        // case `status` is set to say why, since a folder outside the home
+        // directory would resolve to the wrong place on both native Windows
+        // and WSL (see ClaudeCodeProfilesSection's own doc comment).
+        [SupportedOSPlatform("windows")]
+        private static async Task<string?> BrowseForProfileDir(Control owner, TextBlock status)
+        {
+            var storageProvider = TopLevel.GetTopLevel(owner)?.StorageProvider;
+            if (storageProvider is null) return null;
+
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var startLocation = await storageProvider.TryGetFolderFromPathAsync(home);
+
+            var result = await storageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Select a Claude Code config directory",
+                SuggestedStartLocation = startLocation,
+                AllowMultiple = false
+            });
+
+            if (result.Count == 0) return null;
+
+            var pickedPath = result[0].TryGetLocalPath();
+            if (pickedPath is null)
+            {
+                status.Text = "Couldn't resolve that selection to a local folder.";
+                return null;
+            }
+
+            // Must be a *direct* child of home, not just nested somewhere
+            // under it — the underlying model (-ProfileDir/-WslProfileDir,
+            // and their WSL twin) only ever takes a single path segment
+            // relative to home, so picking e.g. ~/work/claude-work would
+            // silently keep only "claude-work" and resolve to the wrong,
+            // nonexistent ~/claude-work instead.
+            var trimmedHome = home.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var trimmedPicked = pickedPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var parent = Path.GetDirectoryName(trimmedPicked);
+            if (!string.Equals(parent, trimmedHome, StringComparison.OrdinalIgnoreCase))
+            {
+                status.Text = "Must be a folder directly inside your home directory (" + home + "), not a nested subfolder.";
+                return null;
+            }
+
+            status.Text = "";
+            return Path.GetFileName(trimmedPicked);
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static Control ProfileDirRow(string dirName, StackPanel itemsPanel)
+        {
+            var label = new TextBlock
+            {
+                Text = dirName,
+                VerticalAlignment = VerticalAlignment.Center,
+                Width = 220
+            };
+            var remove = new Button { Content = "Remove" };
+
+            var row = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                Children = { label, remove }
+            };
+
+            remove.Click += (_, _) =>
+            {
+                ClaudeBuddySettings.RemoveClaudeCodeProfileDir(dirName);
+                itemsPanel.Children.Remove(row);
+            };
+
+            return row;
+        }
+
+        // Null when there's nothing to show (no WSL, or no distros besides
+        // Docker Desktop's plumbing ones) — Body() omits the section entirely
+        // in that case rather than showing an empty header.
+        [SupportedOSPlatform("windows")]
+        private static Control? WslSection()
+        {
+            var distros = WslIntegration.ListDistros();
+            if (distros.Count == 0) return null;
+
+            var section = new StackPanel { Spacing = 8 };
+            section.Children.Add(new Separator { Margin = new Thickness(0, 6) });
+            section.Children.Add(Header("WSL integration"));
+            section.Children.Add(new TextBlock
+            {
+                Text = "Wire or unwire Claude Buddy's hooks for Claude Code running inside each WSL distro.",
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.6,
+                FontSize = 11
+            });
+
+            foreach (var distro in distros) section.Children.Add(WslDistroRow(distro));
+
+            return section;
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static Control WslDistroRow(string distro)
+        {
+            var box = new CheckBox { Content = distro, IsChecked = WslIntegration.IsWired(distro) };
+
+            box.IsCheckedChanged += (_, _) =>
+            {
+                var desired = box.IsChecked ?? false;
+                // Prevent a re-entrant click while the script from the last
+                // one is still running — SetWired has its own ~10s timeout,
+                // so this can't disable the box forever even on failure.
+                box.IsEnabled = false;
+
+                Task.Run(() => WslIntegration.SetWired(distro, desired)).ContinueWith(task =>
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        box.IsEnabled = true;
+                        // Revert on failure rather than show a checked state
+                        // that doesn't match settings.json's real contents.
+                        if (!task.Result) box.IsChecked = !desired;
+                    });
+                });
+            };
+
+            return box;
         }
 
         private static TextBlock Header(string text) => new()
