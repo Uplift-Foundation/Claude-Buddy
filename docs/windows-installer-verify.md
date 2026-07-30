@@ -40,7 +40,7 @@ gh release download v0.1.0-beta --repo wtvamp/Claude-Buddy --pattern '*-win-x64-
 That is `wtvamp/Claude-Buddy` on purpose, not the canonical repo: `v0.1.0-beta`
 was cut from the fork before the packaging work was upstreamed, so it is the only
 place those bytes exist. Later versions will come from
-`KawikaMiller/Claude-Buddy`.
+`Uplift-Foundation/Claude-Buddy`.
 
 Then double-click it. Not `/SILENT` — the point is the wizard.
 

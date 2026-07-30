@@ -385,7 +385,7 @@ and the installers are just the build scripts run in CI.
 ### Download an installer
 
 Grab the latest from
-[**Releases**](https://github.com/KawikaMiller/Claude-Buddy/releases). Nothing else
+[**Releases**](https://github.com/Uplift-Foundation/Claude-Buddy/releases). Nothing else
 is needed; the .NET runtime is bundled.
 
 | Platform | File |
