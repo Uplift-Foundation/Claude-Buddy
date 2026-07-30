@@ -17,9 +17,9 @@
          explicitly from the numeric part. Version flows into
          AssemblyInformationalVersion, which is what actually shows the
          prerelease label. -->
-    <Version>0.1.0-beta</Version>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
-    <FileVersion>0.1.0.0</FileVersion>
+    <Version>0.1.1-beta</Version>
+    <AssemblyVersion>0.1.1.0</AssemblyVersion>
+    <FileVersion>0.1.1.0</FileVersion>
     <Product>Claude Buddy</Product>
     <Authors>Kawika Miller, Repo Owner</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
