@@ -285,10 +285,21 @@ namespace ClaudeBuddy
         // Left-press starts as a potential click; it becomes a drag once the
         // pointer moves past a small threshold. A clean click jumps to the
         // session's terminal (macOS, best-effort — see TerminalFocuser).
-        // Dragged position is only honored until the next time the active
-        // session set changes (add/remove), at which point SessionManager
-        // reflows the whole stack. That's an intentional tradeoff to keep
-        // the stack tidy as sessions come and go.
+        //
+        // Dragging an orb pins it: it keeps that spot as sessions come and go
+        // (SessionManager.ReflowPositions steps over pinned orbs) and the spot
+        // is remembered across restarts, keyed by the session's directory. The
+        // context menu's "Return this orb to the stack" undoes both.
+
+        // Where the user dragged this orb is remembered against this key — the
+        // session's cwd, set by SessionManager. Empty for a session with no cwd
+        // reported, which pins for this run only since there's nothing stable
+        // to remember it against.
+        public string PositionKey { get; set; } = "";
+
+        // True once the user has placed this orb by hand, whether in this run or
+        // in an earlier one.
+        public bool IsPinned { get; private set; }
 
         private SessionStatus? _lastStatus;
         private bool _pressed;
@@ -332,15 +343,42 @@ namespace ClaudeBuddy
             _pressed = false;
             e.Pointer.Capture(null);
 
-            if (!_dragging)
+            if (_dragging)
+            {
+                SetPinned(true);
+                SessionManager.Instance?.RememberOrbPosition(this);
+            }
+            else
             {
                 TerminalFocuser.Focus(_lastStatus);
             }
         }
 
+        // Put the orb at a position it was dragged to in an earlier run, without
+        // treating it as a fresh drag (nothing to write back).
+        public void PinAt(PixelPoint position)
+        {
+            Position = position;
+            SetPinned(true);
+        }
+
+        public void Unpin() => SetPinned(false);
+
+        private void SetPinned(bool pinned)
+        {
+            IsPinned = pinned;
+            // Only worth offering once there's something to undo.
+            ResetPositionItem.IsVisible = pinned;
+        }
+
         private void ResetIdle_Click(object? sender, RoutedEventArgs e)
         {
             SessionManager.Instance?.ResetSessionToIdle(SessionId);
+        }
+
+        private void ResetPosition_Click(object? sender, RoutedEventArgs e)
+        {
+            SessionManager.Instance?.ReturnOrbToStack(SessionId);
         }
 
         private void Exit_Click(object? sender, RoutedEventArgs e)

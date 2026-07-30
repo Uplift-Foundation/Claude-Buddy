@@ -206,7 +206,8 @@ namespace ClaudeBuddy
                 seen.Add(sessionId);
                 _statuses[sessionId] = status;
 
-                if (!_windows.TryGetValue(sessionId, out var window))
+                var isNew = !_windows.TryGetValue(sessionId, out var window);
+                if (isNew)
                 {
                     window = new OrbWindow(sessionId);
                     _windows[sessionId] = window;
@@ -215,7 +216,12 @@ namespace ClaudeBuddy
                     setChanged = true;
                 }
 
-                window.UpdateFrom(status);
+                window!.UpdateFrom(status);
+
+                // After UpdateFrom, so the window is already showing something
+                // if the position turns out to be unusable. Before the reflow
+                // below, which steps over whatever this pins.
+                if (isNew) RestoreOrbPosition(window, status);
             }
 
             var gone = _windows.Keys.Where(id => !seen.Contains(id)).ToList();
@@ -278,13 +284,86 @@ namespace ClaudeBuddy
             int spacing = (int)(12 * scale);
             int margin = (int)(24 * scale);
 
-            for (int i = 0; i < _order.Count; i++)
+            // Orbs the user has placed by hand keep their spot and don't take up
+            // a slot, so the rest of the stack closes up behind them.
+            int slot = 0;
+            foreach (var id in _order)
             {
-                var window = _windows[_order[i]];
+                var window = _windows[id];
+                if (window.IsPinned) continue;
+
                 window.Position = new PixelPoint(
                     work.Right - size - margin,
-                    work.Y + margin + i * (size + spacing));
+                    work.Y + margin + slot * (size + spacing));
+                slot++;
             }
+        }
+
+        // --- dragged orb positions -------------------------------------------
+        // A dragged orb stays where it was put. Within a run that's the pinned
+        // flag above; across runs it's settings.json, keyed by the session's
+        // directory — session ids are new every time, so they'd remember
+        // nothing. Two live sessions in one directory therefore share a key:
+        // the first orb to appear claims the saved spot, the others stack
+        // normally, and whichever one you drag last is what gets remembered.
+
+        private static string PositionKeyFor(SessionStatus status) =>
+            string.IsNullOrEmpty(status.Cwd) ? "" : status.Cwd.TrimEnd('\\', '/');
+
+        private void RestoreOrbPosition(OrbWindow window, SessionStatus status)
+        {
+            var key = PositionKeyFor(status);
+            window.PositionKey = key;
+            if (string.IsNullOrEmpty(key)) return;
+
+            // A sibling session in the same directory already sits there;
+            // stacking a second orb on top of it would just hide one.
+            if (_windows.Values.Any(other => other != window
+                                             && other.IsPinned
+                                             && other.PositionKey == key))
+            {
+                return;
+            }
+
+            var saved = ClaudeBuddySettings.OrbPositionFor(key);
+            if (saved is null) return;
+
+            var point = new PixelPoint(saved.X, saved.Y);
+
+            // The monitor it was dragged onto may be gone, or its layout
+            // changed. Anything that no longer lands on a screen falls back to
+            // the default stack rather than being stranded off-canvas.
+            var screen = window.Screens.ScreenFromPoint(point);
+            if (screen is null) return;
+
+            var work = screen.WorkingArea;
+            int size = (int)(56 * screen.Scaling);
+            point = new PixelPoint(
+                Math.Clamp(point.X, work.X, Math.Max(work.X, work.Right - size)),
+                Math.Clamp(point.Y, work.Y, Math.Max(work.Y, work.Bottom - size)));
+
+            window.PinAt(point);
+        }
+
+        public void RememberOrbPosition(OrbWindow window)
+        {
+            if (string.IsNullOrEmpty(window.PositionKey)) return;
+
+            var position = window.Position;
+            ClaudeBuddySettings.SetOrbPosition(window.PositionKey, position.X, position.Y);
+        }
+
+        public void ReturnOrbToStack(string sessionId)
+        {
+            if (!_windows.TryGetValue(sessionId, out var window)) return;
+
+            window.Unpin();
+            if (!string.IsNullOrEmpty(window.PositionKey))
+            {
+                ClaudeBuddySettings.ClearOrbPosition(window.PositionKey);
+            }
+
+            ReflowPositions();
         }
 
         public void ResetSessionToIdle(string sessionId)
