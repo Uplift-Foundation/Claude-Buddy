@@ -208,10 +208,19 @@ sessions that end up with the same label get a short session-id suffix so you
 can tell which is which. The menu is also the app's only permanent control
 surface, since with zero sessions there are no orbs to right-click:
 - **Show orbs** — hide the orbs and run status-bar-only. Sessions keep being
-  tracked, so the icon and menu stay live. Resets to shown on relaunch.
+  tracked, so the icon and menu stay live. Remembered across relaunches, along
+  with everything else in the settings window.
 - **Reset all sessions to idle** — the bulk version of an orb's
   right-click reset, for clearing out orbs left behind by Ctrl+C'd sessions
   (see the pruning note below).
+- **Settings…** — a small preferences window, grouped the way macOS groups
+  its own: **Orbs** (show them at all, and **"Keep orbs for"** — 1 minute
+  through 4 hours, or **Forever**, covered under pruning below), **Claude
+  Desktop** (window tinting) and **Profiles** (per-profile name, colour and
+  what the colour applies to). Everything applies as you change it and is
+  written to disk immediately; there's no OK or Cancel, and on macOS no Done
+  button either — Escape, Cmd-W or the window's close button, like any other
+  Mac window.
 - **Quit Claude Buddy**.
 
 On macOS the menu opens on a left-click of the menu-bar icon. On Windows it's
@@ -291,7 +300,8 @@ Details worth knowing:
   whatever app you were actually using. Windows on other Spaces are skipped too:
   they still count as "on screen" to CGWindowList but report coordinates in that
   Space's frame, far outside any display. Toggle it under **Dock icons → Tint the
-  active window**; like the orb toggle, it resets on relaunch. Verified
+  active window**, or in the settings window; like the orb toggle, it's
+  remembered across relaunches. Verified
   pixel-exact against a live window, and click-through, so clicks reach Claude.
   Only tested on a single display.
 - **`Claude-3p` and `Claude-dev` are skipped.** `-3p` is Claude Desktop's own
@@ -368,13 +378,16 @@ Code itself, no persistent process beyond the hook calls themselves.
 A session's orb disappears when its `SessionEnd` hook fires (clean exits
 like `/exit`) or — since `SessionEnd` is documented as unreliable on
 ungraceful termination, notably Ctrl+C — once its file hasn't been touched
-in 5 minutes, whichever comes first. **Exception**: a session sitting on
-`waiting` (amber) is never pruned by the 5-minute timer, deliberately —
-nothing else refreshes that file while you're away from an unanswered
-prompt, so timing it out would hide the orb exactly when it's trying hardest
-to get your attention. If a session gets Ctrl+C'd right at a prompt, its
-orb will sit there indefinitely; right-click → "Reset this session to idle"
-clears it manually, after which the normal 5-minute rule applies.
+for however long **Settings → Orbs → "Keep orbs for"** says, whichever comes
+first. That's 5 minutes out of the box, anything from a minute to four hours,
+or **Forever**, which leaves an orb up until its session exits cleanly or you
+clear it by hand. **Exception**: a session sitting on `waiting` (amber) is
+never pruned by that timer, deliberately — nothing else refreshes that file
+while you're away from an unanswered prompt, so timing it out would hide the
+orb exactly when it's trying hardest to get your attention. If a session gets
+Ctrl+C'd right at a prompt, its orb will sit there indefinitely; right-click →
+"Reset this session to idle" clears it manually, after which the normal timer
+applies.
 
 **Scope**: this only tracks Claude Code sessions that read a `settings.json`
 you've wired up per step 2 below. Each Claude Code install — WSL (per Linux
@@ -602,7 +615,8 @@ status file:
   mechanism — it's documented as unreliable on ungraceful termination
   (Ctrl+C notably; the hook gets cancelled before it can run), so the app
   still prunes stale files as a fallback (see `StaleAfter` in
-  `SessionManager.cs`, and the "waiting is never pruned" note above).
+  `SessionManager.cs`, which reads the "Keep orbs for" setting, and the
+  "waiting is never pruned" note above).
 
 Run `/hooks` inside Claude Code afterward to confirm all six events are
 registered — do this separately for each install, since `/hooks` only
@@ -746,9 +760,20 @@ signed build.
 - **Stacking layout and staleness**: `SessionManager.cs` has the stacking
   math (`ReflowPositions()`, which steps over orbs the user has dragged —
   those live in `orbPositions` in `settings.json`, keyed by the session's
-  directory; see `RestoreOrbPosition()`) and the `StaleAfter` constant (5 minutes)
-  that controls how long an idle/generating session's orb sticks around
-  before being pruned — `waiting` is exempt, see above.
+  directory; see `RestoreOrbPosition()`) and `StaleAfter`, which is read from
+  the "Keep orbs for" setting rather than hard-coded — it controls how long an
+  idle/generating session's orb sticks around before being pruned, and is
+  `null` for Forever. `waiting` is exempt either way, see above. The choices
+  the settings window offers live in `LifetimeChoices` in
+  `SettingsWindow.cs`.
+- **The settings window**: `SettingsWindow.cs`, built in code rather than
+  XAML. It's styled to sit alongside macOS's Liquid Glass surfaces —
+  `TransparencyLevelHint` asks for the vibrant material (`AcrylicBlur` maps
+  to `NSVisualEffectView`; Windows takes Mica), and the card/hairline
+  brushes are mixed per theme variant in one place at the top of the "Mac-ish
+  chrome" section. `ClaudeBuddy --settings` opens it straight at launch,
+  which beats clicking through the status-bar menu when the window itself is
+  what you're editing.
 - **macOS + Spaces**: orbs follow you across Spaces and show alongside
   full-screen apps. Avalonia doesn't expose `NSWindow.collectionBehavior`,
   so `MacOSWindowExtensions.cs` sets it (`canJoinAllSpaces` +

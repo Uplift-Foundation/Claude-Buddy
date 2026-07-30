@@ -68,7 +68,20 @@ namespace ClaudeBuddy
     {
         public static SessionManager? Instance { get; private set; }
 
-        private static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(5);
+        // How long an orb outlives its session's last hook write. Settable in the
+        // settings window, and null means never — an orb then lasts until its
+        // status file is deleted (SessionEnd) or you reset it by hand. Read per
+        // scan rather than cached, so a change applies on the next tick.
+        private static TimeSpan? StaleAfter
+        {
+            get
+            {
+                var minutes = ClaudeBuddySettings.OrbLifetimeMinutes;
+                return minutes == ClaudeBuddySettings.OrbLifetimeForever
+                    ? null
+                    : TimeSpan.FromMinutes(minutes);
+            }
+        }
 
         private readonly string _statusDir =
             Path.Combine(Path.GetTempPath(), "claude_buddy");
@@ -172,7 +185,8 @@ namespace ClaudeBuddy
                 // away. Pruning it would hide the orb exactly when it matters
                 // most. Use "Reset this session to idle" to clear a genuinely
                 // abandoned one manually.
-                if (status.State != "waiting")
+                var staleAfter = StaleAfter;
+                if (staleAfter is not null && status.State != "waiting")
                 {
                     DateTime lastWrite;
                     try
@@ -184,7 +198,7 @@ namespace ClaudeBuddy
                         continue; // file vanished mid-scan
                     }
 
-                    if (now - lastWrite > StaleAfter)
+                    if (now - lastWrite > staleAfter)
                     {
                         continue; // treat as gone; cleaned up in the removal pass below
                     }
