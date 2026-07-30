@@ -6,6 +6,11 @@ and "Ground rules" sections of `docs/windows-verification.md` first; they apply
 here unchanged, including never touching `%APPDATA%\Claude` with a second
 instance.
 
+> **Done — see `windows-installer-verify-findings.md`.** Kawika ran the wizard on a
+> real machine and it worked. Kept here because it lists what was *not* captured
+> (SmartScreen's wording, whether the `.ico` renders, sign-out/in startup), which
+> is still worth collecting next time someone installs on a fresh machine.
+
 The installer shipped in `v0.1.0-beta` and was never run by a human. CI does
 verify a lot of it — `.github/workflows/verify-windows-installer.yml` installs
 silently on a runner and checks the file layout, the shortcuts, the registry
