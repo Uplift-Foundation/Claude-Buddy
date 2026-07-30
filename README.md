@@ -45,6 +45,26 @@ session's terminal**, best-effort:
   otherwise just activating the terminal app. **tmux sessions land on the
   right pane** — see below. The first click asks for macOS Automation
   permission to control your terminal — approve it once.
+
+  **If clicks silently stop working**, that grant has been invalidated —
+  macOS ties it to the app's code identity, and re-signing or replacing the
+  bundle (any local rebuild, or switching between a locally built copy and an
+  installed release) counts as a change. It is easy to misread, because a
+  denied click looks exactly like one that landed on a terminal that was
+  already frontmost: with a single terminal window you notice nothing until
+  you click from *another desktop*, and then it looks like a Spaces bug.
+  Worse, System Settings → Privacy & Security → **Automation** won't list an
+  app whose consent was invalidated, so there is nothing there to re-tick.
+  Force a fresh prompt:
+
+  ```bash
+  tccutil reset AppleEvents io.github.wtvamp.claudebuddy
+  ```
+
+  Then click an orb and approve. Running an installed copy from
+  `/Applications` rather than out of `dist/` avoids this entirely, since its
+  Developer ID identity is stable across rebuilds. The app now also logs this
+  case explicitly rather than failing silently.
 - Windows: the terminal window the session runs in — verified for Windows
   Terminal, plain `conhost`, and VS Code's integrated terminal, including
   restoring a minimized window. WSL sessions fall back to activating Windows
@@ -365,7 +385,7 @@ and the installers are just the build scripts run in CI.
 ### Download an installer
 
 Grab the latest from
-[**Releases**](https://github.com/KawikaMiller/Claude-Buddy/releases). Nothing else
+[**Releases**](https://github.com/Uplift-Foundation/Claude-Buddy/releases). Nothing else
 is needed; the .NET runtime is bundled.
 
 | Platform | File |

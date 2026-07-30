@@ -27,13 +27,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP_NAME="Claude Buddy"
-# Kept as-is even though the canonical repo is KawikaMiller/Claude-Buddy, and
+# Kept as-is even though the canonical repo is Uplift-Foundation/Claude-Buddy, and
 # deliberately so: macOS keys the Automation (Apple Events) consent a user grants
 # to the bundle identifier. Renaming it makes every existing install look like a
 # brand-new app, so click-to-focus silently stops working until each user
-# re-approves it in System Settings. Not worth it for a cosmetic rename, and the
-# signing certificate is a team one — UPLIFT FOUNDATION — so it signs this
-# identifier from either repository.
+# re-approves it in System Settings — and that grant is invisible when it breaks,
+# which cost a long debugging session once already (see the Automation note in the
+# README). Not worth it for a cosmetic rename. The signing certificate belongs to
+# the UPLIFT FOUNDATION team, so it signs this identifier regardless of which
+# repository builds it. If it is ever renamed, do it in a release whose notes say
+# plainly that click-to-focus needs re-approving.
 BUNDLE_ID="io.github.wtvamp.claudebuddy"
 DIST="dist"
 INSTALL=0
