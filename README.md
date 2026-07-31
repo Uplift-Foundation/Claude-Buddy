@@ -208,10 +208,19 @@ sessions that end up with the same label get a short session-id suffix so you
 can tell which is which. The menu is also the app's only permanent control
 surface, since with zero sessions there are no orbs to right-click:
 - **Show orbs** — hide the orbs and run status-bar-only. Sessions keep being
-  tracked, so the icon and menu stay live. Resets to shown on relaunch.
+  tracked, so the icon and menu stay live. Remembered across relaunches, along
+  with everything else in the settings window.
 - **Reset all sessions to idle** — the bulk version of an orb's
   right-click reset, for clearing out orbs left behind by Ctrl+C'd sessions
   (see the pruning note below).
+- **Settings…** — a small preferences window, grouped the way macOS groups
+  its own: **Orbs** (show them at all, and **"Keep orbs for"** — 1 minute
+  through 4 hours, or **Forever**, covered under pruning below), **Claude
+  Desktop** (window tinting) and **Profiles** (per-profile name, colour and
+  what the colour applies to). Everything applies as you change it and is
+  written to disk immediately; there's no OK or Cancel, and on macOS no Done
+  button either — Escape, Cmd-W or the window's close button, like any other
+  Mac window.
 - **Quit Claude Buddy**.
 
 On macOS the menu opens on a left-click of the menu-bar icon. On Windows it's
@@ -291,7 +300,8 @@ Details worth knowing:
   whatever app you were actually using. Windows on other Spaces are skipped too:
   they still count as "on screen" to CGWindowList but report coordinates in that
   Space's frame, far outside any display. Toggle it under **Dock icons → Tint the
-  active window**; like the orb toggle, it resets on relaunch. Verified
+  active window**, or in the settings window; like the orb toggle, it's
+  remembered across relaunches. Verified
   pixel-exact against a live window, and click-through, so clicks reach Claude.
   Only tested on a single display.
 - **`Claude-3p` and `Claude-dev` are skipped.** `-3p` is Claude Desktop's own
@@ -365,16 +375,29 @@ containing `{"state": "...", "cwd": "...", "title": "...", "color": "...", ...}`
 `ClaudeBuddyHook.sh` (bash, macOS). No network calls, no polling of Claude
 Code itself, no persistent process beyond the hook calls themselves.
 
-A session's orb disappears when its `SessionEnd` hook fires (clean exits
-like `/exit`) or — since `SessionEnd` is documented as unreliable on
-ungraceful termination, notably Ctrl+C — once its file hasn't been touched
-in 5 minutes, whichever comes first. **Exception**: a session sitting on
-`waiting` (amber) is never pruned by the 5-minute timer, deliberately —
-nothing else refreshes that file while you're away from an unanswered
-prompt, so timing it out would hide the orb exactly when it's trying hardest
-to get your attention. If a session gets Ctrl+C'd right at a prompt, its
-orb will sit there indefinitely; right-click → "Reset this session to idle"
-clears it manually, after which the normal 5-minute rule applies.
+An orb goes away when any of three things happens.
+
+1. **Its `SessionEnd` hook fires** — a clean exit like `/exit` — which deletes
+   the status file outright.
+2. **Its `claude` process is gone.** Both hooks record that process's pid
+   (`session_pid`), and every scan checks whether it still exists; if it
+   doesn't, the orb goes regardless of the lifetime below, including under
+   Forever, and including a session sitting on `waiting`. This is the Ctrl+C
+   case: `SessionEnd` is documented as unreliable on ungraceful termination, so
+   the file survives its session, and the pid is what tells "still running"
+   from "left behind". A session started under a hook older than this field has
+   no pid recorded and falls back to the timer alone.
+3. **The lifetime expires** — its file hasn't been touched for however long
+   **Settings → Orbs → "Keep orbs for"** says. That's 5 minutes out of the box,
+   anything from a minute to four hours, or **Forever**, which never prunes on
+   time at all. A session on `waiting` (amber) is exempt from *this* rule
+   deliberately: nothing refreshes that file while you're away from an
+   unanswered prompt, so timing it out would hide the orb exactly when it's
+   trying hardest to get your attention. Rule 2 still applies to it, which is
+   what keeps a Ctrl+C'd prompt from sitting on screen forever.
+
+Right-click → "Reset this session to idle" is still there for a session whose
+process is alive but whose orb is stuck amber.
 
 **Scope**: this only tracks Claude Code sessions that read a `settings.json`
 you've wired up per step 2 below. Each Claude Code install — WSL (per Linux
@@ -461,7 +484,7 @@ dotnet publish -c Release -r osx-arm64   # macOS on Apple silicon
 dotnet publish -c Release -r osx-x64     # macOS on Intel
 ```
 
-The binary lands in `bin/Release/net8.0/<rid>/publish/ClaudeBuddy` (`.exe`
+The binary lands in `bin/Release/net10.0/<rid>/publish/ClaudeBuddy` (`.exe`
 on Windows) — it's self-contained, so you can copy that one file anywhere
 (e.g. a `Tools` folder) and run it without needing .NET installed
 separately. For local hacking on either platform, plain `dotnet run` works
@@ -602,7 +625,8 @@ status file:
   mechanism — it's documented as unreliable on ungraceful termination
   (Ctrl+C notably; the hook gets cancelled before it can run), so the app
   still prunes stale files as a fallback (see `StaleAfter` in
-  `SessionManager.cs`, and the "waiting is never pruned" note above).
+  `SessionManager.cs`, which reads the "Keep orbs for" setting, and the
+  "waiting is never pruned" note above).
 
 Run `/hooks` inside Claude Code afterward to confirm all six events are
 registered — do this separately for each install, since `/hooks` only
@@ -743,12 +767,50 @@ signed build.
   `GeneratingColor` / `WaitingColor` at the top, and the breathing/pulse
   timings live in `ApplyState()` / `StartPulse()` — easy to retune speed,
   scale, or swap in different colors.
+- **When an orb goes away**: `SessionManager.ScanAndUpdate()` has all three
+  rules in order — process-gone (`ProcessLiveness.IsRunning`, a `kill(pid, 0)`
+  on Unix and `Process.GetProcessById` on Windows), then the `waiting`
+  exemption, then the lifetime timer. A recycled pid reads as alive, which
+  errs toward keeping an orb rather than dropping a live session's, and the
+  timer still catches that unless the lifetime is Forever.
 - **Stacking layout and staleness**: `SessionManager.cs` has the stacking
   math (`ReflowPositions()`, which steps over orbs the user has dragged —
   those live in `orbPositions` in `settings.json`, keyed by the session's
-  directory; see `RestoreOrbPosition()`) and the `StaleAfter` constant (5 minutes)
-  that controls how long an idle/generating session's orb sticks around
-  before being pruned — `waiting` is exempt, see above.
+  directory; see `RestoreOrbPosition()`) and `StaleAfter`, which is read from
+  the "Keep orbs for" setting rather than hard-coded — it controls how long an
+  idle/generating session's orb sticks around before being pruned, and is
+  `null` for Forever. `waiting` is exempt either way, see above. The choices
+  the settings window offers live in `LifetimeChoices` in
+  `SettingsWindow.cs`.
+- **The settings window**: `SettingsWindow.cs`, built in code rather than
+  XAML. `ClaudeBuddy --settings` opens it straight at launch, which beats
+  clicking through the status-bar menu when the window itself is what you're
+  editing.
+
+  Controls are **not** styled here. On macOS the app loads
+  [Devolutions' MIT AppKit theme](https://github.com/Devolutions/avalonia-extensions/tree/master/src/Devolutions.AvaloniaTheme.MacOS)
+  (`<DevolutionsMacOsTheme />` in `App.axaml`) and Windows swaps back to
+  Fluent in `App.Initialize`. Avalonia draws every control itself — it has no
+  native AppKit controls to use — so the alternative was hand-restyling
+  switches, pop-ups and checkboxes, which kept landing close-but-wrong because
+  AppKit's metrics and states aren't published anywhere to copy from. What
+  *is* still hand-built is the layout around them: the grouped cards, the
+  hairlines and the window tint, since no control theme has an opinion about
+  those. `TransparencyLevelHint` asks for the vibrant material (`AcrylicBlur`
+  maps to `NSVisualEffectView`; Windows takes Mica) and the card brushes are
+  mixed per theme variant in one place at the top of the "Mac-ish chrome"
+  section.
+
+  Two things to know before touching this. The theme must be declared **in
+  XAML**: added from code its templates render nothing at all — labels appear
+  and every switch, field and pop-up comes out invisible. And its
+  `ToggleSwitch` template is broken against Avalonia's control, which demands
+  a `Panel` named `PART_MovingKnobs`; the first switch measured throws and
+  takes the app down. Confirmed on Avalonia 11.3.7 *and* 12.0.2 with the
+  theme's newest build for each, so it isn't a version mismatch.
+  `BorrowFluentToggleSwitch()` lends Fluent's switch template to this one
+  window as the workaround, and `Switch()` degrades to a checkbox if even that
+  stops working. Delete both once upstream fixes it.
 - **macOS + Spaces**: orbs follow you across Spaces and show alongside
   full-screen apps. Avalonia doesn't expose `NSWindow.collectionBehavior`,
   so `MacOSWindowExtensions.cs` sets it (`canJoinAllSpaces` +
@@ -776,7 +838,7 @@ signed build.
   string all live there.
 - **Click-to-focus coverage**: `TerminalFocuser.cs` maps what the hook
   scripts record (`term_program`, iTerm session UUID, tty, tmux socket/pane
-  on macOS; `term_pid` on Windows) to an AppleScript that selects the right
+  on macOS; `term_pid` on Windows; `session_pid` on both) to an AppleScript that selects the right
   window, an `open -a` activation, or a `SetForegroundWindow` call. Adding a
   terminal only means adding a case if you want *exact tab* selection for it
   — plain activation already works for anything that lives in an `.app`.

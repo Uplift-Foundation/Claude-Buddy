@@ -70,7 +70,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       # A tagged release must not be allowed to ship unsigned. Without a
       # notarization ticket macOS reports the app as *damaged*, so an accidental
@@ -161,7 +161,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y

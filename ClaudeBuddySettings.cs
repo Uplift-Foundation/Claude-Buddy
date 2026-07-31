@@ -53,10 +53,17 @@ namespace ClaudeBuddy
             public bool TintWindow { get; set; } = true;
         }
 
+        // How long an orb outlives its session's last hook write, in minutes,
+        // with 0 meaning "never prune". Five matches what the app did when this
+        // was a hard-coded constant.
+        public const int DefaultOrbLifetimeMinutes = 5;
+        public const int OrbLifetimeForever = 0;
+
         private sealed class Model
         {
             public bool ShowOrbs { get; set; } = true;
             public bool TintActiveWindow { get; set; } = true;
+            public int OrbLifetimeMinutes { get; set; } = DefaultOrbLifetimeMinutes;
             public Dictionary<string, ProfileSettings> Profiles { get; init; } =
                 new(StringComparer.Ordinal);
 
@@ -79,6 +86,27 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.TintActiveWindow; }
             set { Load(); lock (Gate) _model.TintActiveWindow = value; Save(); }
+        }
+
+        // Minutes an orb sticks around after its session stops reporting;
+        // OrbLifetimeForever (0) keeps it until the session's status file goes
+        // away. Anything negative would silently mean "prune immediately", which
+        // no setting should be able to say, so it reads as forever too.
+        public static int OrbLifetimeMinutes
+        {
+            get
+            {
+                Load();
+                lock (Gate) return _model.OrbLifetimeMinutes < 0
+                    ? OrbLifetimeForever
+                    : _model.OrbLifetimeMinutes;
+            }
+            set
+            {
+                Load();
+                lock (Gate) _model.OrbLifetimeMinutes = value < 0 ? OrbLifetimeForever : value;
+                Save();
+            }
         }
 
         // ---- orb positions --------------------------------------------------
@@ -171,7 +199,9 @@ namespace ClaudeBuddy
                     var model = new Model
                     {
                         ShowOrbs = root["showOrbs"]?.GetValue<bool>() ?? true,
-                        TintActiveWindow = root["tintActiveWindow"]?.GetValue<bool>() ?? true
+                        TintActiveWindow = root["tintActiveWindow"]?.GetValue<bool>() ?? true,
+                        OrbLifetimeMinutes =
+                            root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes
                     };
 
                     if (root["profiles"] is JsonObject profiles)
@@ -254,6 +284,7 @@ namespace ClaudeBuddy
                         ["version"] = CurrentVersion,
                         ["showOrbs"] = _model.ShowOrbs,
                         ["tintActiveWindow"] = _model.TintActiveWindow,
+                        ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
                         ["profiles"] = profiles,
                         ["orbPositions"] = positions
                     };

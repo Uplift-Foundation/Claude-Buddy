@@ -2,7 +2,12 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="ClaudeBuddy.App"
              Name="Claude Buddy">
+    <!-- The macOS theme is declared here rather than added from code: added from
+         code its control templates render as nothing at all (labels appear, every
+         switch, field and pop-up comes out invisible), because the XAML loader is
+         what wires up a theme's resource dictionaries. Windows swaps this back to
+         Fluent in App.Initialize, which Fluent is happy to do from code. -->
     <Application.Styles>
-        <FluentTheme />
+        <DevolutionsMacOsTheme />
     </Application.Styles>
 </Application>

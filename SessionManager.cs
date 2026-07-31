@@ -56,6 +56,12 @@ namespace ClaudeBuddy
         // Windows hook only: PID of the terminal process that owns a window.
         [JsonPropertyName("term_pid")]
         public int TermPid { get; set; }
+
+        // The claude process running this session. Recorded by both hooks; 0
+        // from a hook older than this field, in which case liveness can't be
+        // checked and only the lifetime timer applies. See SessionGone.
+        [JsonPropertyName("session_pid")]
+        public int SessionPid { get; set; }
     }
 
     // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude
@@ -68,7 +74,20 @@ namespace ClaudeBuddy
     {
         public static SessionManager? Instance { get; private set; }
 
-        private static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(5);
+        // How long an orb outlives its session's last hook write. Settable in the
+        // settings window, and null means never — an orb then lasts until its
+        // status file is deleted (SessionEnd) or you reset it by hand. Read per
+        // scan rather than cached, so a change applies on the next tick.
+        private static TimeSpan? StaleAfter
+        {
+            get
+            {
+                var minutes = ClaudeBuddySettings.OrbLifetimeMinutes;
+                return minutes == ClaudeBuddySettings.OrbLifetimeForever
+                    ? null
+                    : TimeSpan.FromMinutes(minutes);
+            }
+        }
 
         private readonly string _statusDir =
             Path.Combine(Path.GetTempPath(), "claude_buddy");
@@ -166,13 +185,25 @@ namespace ClaudeBuddy
 
                 if (status is null) continue;
 
+                // Gone is gone: if the claude process that wrote this file has
+                // exited, no lifetime setting should keep its orb — that's the
+                // Ctrl+C case, which fires no SessionEnd and so leaves the file
+                // behind. This applies to `waiting` as well, which the timer
+                // below deliberately never touches; an unanswered prompt whose
+                // session was killed used to sit on screen indefinitely.
+                if (!ProcessLiveness.IsRunning(status.SessionPid))
+                {
+                    continue;   // removed in the pass below
+                }
+
                 // A session waiting on you (permission prompt / question) never
                 // goes stale on its own — no further hook fires until you
                 // respond, so the file's mtime is frozen for as long as you're
                 // away. Pruning it would hide the orb exactly when it matters
                 // most. Use "Reset this session to idle" to clear a genuinely
                 // abandoned one manually.
-                if (status.State != "waiting")
+                var staleAfter = StaleAfter;
+                if (staleAfter is not null && status.State != "waiting")
                 {
                     DateTime lastWrite;
                     try
@@ -184,7 +215,7 @@ namespace ClaudeBuddy
                         continue; // file vanished mid-scan
                     }
 
-                    if (now - lastWrite > StaleAfter)
+                    if (now - lastWrite > staleAfter)
                     {
                         continue; // treat as gone; cleaned up in the removal pass below
                     }

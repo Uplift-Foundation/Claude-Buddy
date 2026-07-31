@@ -87,8 +87,14 @@ if ($env:WT_SESSION) { $termProgram = 'WindowsTerminal' }
 elseif ($env:TERM_PROGRAM) { $termProgram = $env:TERM_PROGRAM }
 
 $termPid = 0
+# The claude process itself, recorded so the app can tell a running session from
+# a status file left behind by one that never exited cleanly (Ctrl+C fires no
+# SessionEnd). It is this script's immediate parent: Claude Code spawns the hook
+# directly. See SessionManager.SessionGone.
+$sessionPid = 0
 try {
     $cur = Get-CimInstance Win32_Process -Filter "ProcessId=$PID"
+    if ($cur -and $cur.ParentProcessId) { $sessionPid = [int]$cur.ParentProcessId }
     for ($i = 0; $i -lt 10 -and $cur; $i++) {
         $parentId = $cur.ParentProcessId
         if (-not $parentId) { break }
@@ -106,6 +112,7 @@ $status = @{
     color        = $color
     term_program = $termProgram
     term_pid     = $termPid
+    session_pid  = $sessionPid
 } | ConvertTo-Json -Compress
 
 # Not Set-Content: on Windows PowerShell 5.1 it writes the ANSI codepage and

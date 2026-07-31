@@ -87,7 +87,7 @@ Name: "wirehooks"; Description: "Wire up Claude Code hooks (required for orbs to
 Name: "startup"; Description: "Start {#AppName} automatically when I sign in"; GroupDescription: "Setup:"
 
 [Files]
-Source: "..\bin\Release\net8.0\win-x64\publish\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\bin\Release\net10.0\win-x64\publish\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 ; The hook script sits at {app}\ and its installer at {app}\tools\, mirroring the
 ; repo layout. install-windows-hooks.ps1 resolves the hook as ..\ClaudeBuddyHook.ps1
 ; relative to itself, so this layout is what makes it work unmodified.

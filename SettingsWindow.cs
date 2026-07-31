@@ -2,8 +2,10 @@ using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Shapes = Avalonia.Controls.Shapes;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Styling;
 
 namespace ClaudeBuddy
 {
@@ -50,12 +52,97 @@ namespace ClaudeBuddy
         private SettingsWindow()
         {
             Title = "Claude Buddy Settings";
-            Width = 560;
+            Width = 520;
             SizeToContent = SizeToContent.Height;
-            MinHeight = 220;
+            MinHeight = 240;
             MaxHeight = 760;
             CanResize = false;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
+
+            // Escape and Cmd-W close it, the way any Mac window does. That's
+            // also what lets the Done button go away on macOS, where a
+            // preferences window with one would look wrong.
+            KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Escape
+                    || (e.Key == Key.W && e.KeyModifiers.HasFlag(KeyModifiers.Meta)))
+                {
+                    Close();
+                }
+            };
+
+            // Liquid Glass: the window is a translucent material, not a filled
+            // rectangle. AcrylicBlur is what Avalonia maps to NSVisualEffectView
+            // on macOS — confirmed granted here, ActualTransparencyLevel reports
+            // it back. The fallbacks matter: Windows takes Mica, and anything that
+            // can end up with None still reads, because the text all sits on cards
+            // that carry their own translucent fill rather than on bare glass.
+            TransparencyLevelHint = new[]
+            {
+                WindowTransparencyLevel.AcrylicBlur,
+                WindowTransparencyLevel.Mica,
+                WindowTransparencyLevel.Blur,
+                WindowTransparencyLevel.None
+            };
+
+            BorrowFluentToggleSwitch();
+
+            Rebuild();
+
+            // Every card colour below is mixed for the current variant, so a
+            // system-wide switch to dark while the window is open would otherwise
+            // leave white cards on a dark window. Rebuilding is safe because
+            // nothing here holds uncommitted state — each control writes its
+            // setting as it changes.
+            ActualThemeVariantChanged += (_, _) => Rebuild();
+        }
+
+        // The macOS theme's ToggleSwitch template is broken against the stock
+        // control: Avalonia's ToggleSwitch demands a Panel named
+        // PART_MovingKnobs and its template doesn't satisfy that, so the first
+        // switch to be measured throws KeyNotFoundException and takes the app
+        // down. Confirmed on Avalonia 11.3.7 *and* 12.0.2, with the theme's
+        // newest build for each — so it's the template, not a version mismatch,
+        // and upgrading Avalonia doesn't help.
+        //
+        // Rather than give up switches (checkboxes would be the fallback) or
+        // hand-write a template for one control, borrow Fluent's ToggleSwitch
+        // ControlTheme into this window's resources. Everything else here stays
+        // AppKit-styled by the theme. Remove this once upstream fixes it.
+        private void BorrowFluentToggleSwitch()
+        {
+            try
+            {
+                var fluent = new Avalonia.Themes.Fluent.FluentTheme();
+                if (fluent.TryGetResource(typeof(ToggleSwitch), ActualThemeVariant, out var found)
+                    && found is ControlTheme fluentSwitch)
+                {
+                    Resources.Add(typeof(ToggleSwitch), fluentSwitch);
+                }
+            }
+            catch
+            {
+                // Worst case the switches keep the theme's own template, which
+                // is the crash this exists to avoid — so if this ever stops
+                // working, Switch() below falls back to a CheckBox.
+            }
+        }
+
+        private bool HasSwitchTheme => Resources.ContainsKey(typeof(ToggleSwitch))
+                                       || !OperatingSystem.IsMacOS();
+
+        private void Rebuild()
+        {
+            // Held against System Settings side by side, Apple's content pane is
+            // *not* very transparent — the glass in Tahoe lives in sidebars,
+            // popovers and menus, while a settings pane behind grouped rows stays
+            // a near-opaque light surface. A near-clear wash here (the first
+            // attempt at fixing the opposite mistake) let the wallpaper through
+            // and read as murky rather than glassy. This sits at 85%: the material
+            // still lifts the window's edges, the content still reads crisp.
+            Background = new SolidColorBrush(IsDark
+                ? Color.FromArgb(0xD9, 0x1E, 0x1E, 0x20)
+                : Color.FromArgb(0xD9, 0xF2, 0xF2, 0xF5));
 
             Content = new ScrollViewer
             {
@@ -64,67 +151,251 @@ namespace ClaudeBuddy
             };
         }
 
+        // No control metrics here on purpose. Heights, corner radii, fills and
+        // borders for fields and pop-ups come from the macOS theme on macOS and
+        // from Fluent on Windows; pinning them by hand is what produced capsule
+        // pop-ups and 20pt checkboxes in the first place.
+
         private Control Body()
         {
-            var root = new StackPanel { Margin = new Thickness(20), Spacing = 14 };
+            var root = new StackPanel { Margin = new Thickness(20, 18), Spacing = 18 };
 
-            var snapshot = ClaudeDesktopManager.Snapshot;
+            root.Children.Add(Group("Orbs", Card(
+                Row("Show orbs",
+                    Switch(SessionManager.Instance?.OrbsVisible ?? ClaudeBuddySettings.ShowOrbs,
+                        value => SessionManager.Instance?.SetOrbsVisible(value))),
+                Row("Keep orbs for", LifetimePicker(),
+                    "How long an orb stays after its session goes quiet. A session that's "
+                    + "waiting on you is never removed, however long this is — those only go "
+                    + "away when you answer it or reset it from the orb's menu."))));
 
-            root.Children.Add(Header("Claude Desktop profiles"));
+            root.Children.Add(Group("Claude Desktop", Card(
+                Row("Tint the active window",
+                    Switch(ClaudeDesktopOverlay.Enabled, ClaudeDesktopOverlay.SetEnabled)))));
 
-            if (snapshot.Profiles.Count == 0)
+            root.Children.Add(Group("Profiles", ProfilesCard()));
+
+            // macOS preference windows are dismissed by the window's own close
+            // button, not by a Done inside the content. Windows expects the
+            // button, so it keeps it.
+            if (!OperatingSystem.IsMacOS())
             {
-                root.Children.Add(new TextBlock
+                var done = new Button
                 {
-                    Text = "No profiles found. Create one from the menu bar.",
-                    Opacity = 0.7
-                });
+                    Content = "Done",
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    MinWidth = 90
+                };
+                done.Click += (_, _) => Close();
+                root.Children.Add(done);
             }
-            else
-            {
-                root.Children.Add(ColumnLabels());
-                foreach (var profile in snapshot.Profiles) root.Children.Add(Row(profile));
-
-                root.Children.Add(new TextBlock
-                {
-                    Text = "Colour applies to the menu swatch, the Dock icon and the window tint. "
-                           + "Leave a name empty to use the folder name.",
-                    TextWrapping = TextWrapping.Wrap,
-                    Opacity = 0.6,
-                    FontSize = 11
-                });
-            }
-
-            root.Children.Add(new Separator { Margin = new Thickness(0, 6) });
-            root.Children.Add(Header("Claude Buddy"));
-
-            root.Children.Add(Toggle(
-                "Show orbs",
-                SessionManager.Instance?.OrbsVisible ?? ClaudeBuddySettings.ShowOrbs,
-                value => SessionManager.Instance?.SetOrbsVisible(value)));
-
-            root.Children.Add(Toggle(
-                "Tint the active Claude Desktop window",
-                ClaudeDesktopOverlay.Enabled,
-                ClaudeDesktopOverlay.SetEnabled));
-
-            var done = new Button
-            {
-                Content = "Done",
-                HorizontalAlignment = HorizontalAlignment.Right,
-                MinWidth = 90
-            };
-            done.Click += (_, _) => Close();
-            root.Children.Add(done);
 
             return root;
         }
 
-        private static TextBlock Header(string text) => new()
+        // --- Mac-ish chrome ---------------------------------------------------
+        // System Settings' shape: a small dimmed label, then a rounded card whose
+        // rows are label-left / control-right and divided by hairlines that stop
+        // short of the left edge. Built from brushes derived off the live theme
+        // variant rather than hard-coded greys, so the window doesn't invert
+        // badly when someone switches to light mode.
+
+        private bool IsDark => ActualThemeVariant == ThemeVariant.Dark;
+
+        // Apple's grouped cards are flat, crisp and *unbordered* — the fill
+        // against the pane is the whole edge treatment, no rim and no gradient
+        // sheen. A gradient plus a bright border, which is what a search for
+        // "glass" produces, is visibly not what System Settings does.
+        private IBrush CardBackground => new SolidColorBrush(
+            IsDark ? Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xF7, 0xFF, 0xFF, 0xFF));
+
+        private IBrush Hairline => new SolidColorBrush(
+            IsDark ? Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x0F, 0x00, 0x00, 0x00));
+
+        private Control Group(string title, Control card) => new StackPanel
         {
-            Text = text,
-            FontWeight = FontWeight.SemiBold
+            Children =
+            {
+                // "Theme" and "Windows" in System Settings are semibold and full
+                // strength, not the dimmed 12pt caption this had. They read as
+                // headings; a dimmed caption reads as a hint.
+                new TextBlock
+                {
+                    Text = title,
+                    FontSize = 13,
+                    FontWeight = FontWeight.SemiBold,
+                    Opacity = 0.9,
+                    // Left inset matches the rows' own 14, because in System
+                    // Settings the group heading sits directly above the first
+                    // row's label rather than out to the left of it.
+                    Margin = new Thickness(14, 0, 0, 7)
+                },
+                card
+            }
         };
+
+        private Control Card(params Control[] rows)
+        {
+            var stack = new StackPanel();
+
+            for (var i = 0; i < rows.Length; i++)
+            {
+                if (i > 0)
+                {
+                    stack.Children.Add(new Border
+                    {
+                        Height = 1,
+                        Background = Hairline,
+                        Margin = new Thickness(14, 0, 0, 0)
+                    });
+                }
+
+                stack.Children.Add(rows[i]);
+            }
+
+            // 12, measured off System Settings' own groups — 18 plus a drop
+            // shadow made these read as floating panels, which is a popover's
+            // treatment, not a grouped row's.
+            return new Border
+            {
+                Background = CardBackground,
+                CornerRadius = new CornerRadius(12),
+                ClipToBounds = true,
+                Child = stack
+            };
+        }
+
+        private static Control Row(string label, Control control, string? help = null)
+        {
+            var grid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                RowDefinitions = new RowDefinitions(help is null ? "Auto" : "Auto,Auto"),
+                Margin = new Thickness(14, 10)
+            };
+
+            var text = new TextBlock
+            {
+                Text = label,
+                FontSize = 13,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            grid.Children.Add(text);
+
+            control.HorizontalAlignment = HorizontalAlignment.Right;
+            control.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetColumn(control, 1);
+            grid.Children.Add(control);
+
+            if (help is not null)
+            {
+                var hint = new TextBlock
+                {
+                    Text = help,
+                    FontSize = 11,
+                    Opacity = 0.55,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 6, 0, 0)
+                };
+                Grid.SetRow(hint, 1);
+                Grid.SetColumnSpan(hint, 2);
+                grid.Children.Add(hint);
+            }
+
+            return grid;
+        }
+
+        // A bare switch: Avalonia's default writes "On"/"Off" beside it, which no
+        // Mac control does. Falls back to a checkbox if there is no usable switch
+        // template — see BorrowFluentToggleSwitch — because a settings row with a
+        // working checkbox beats one that crashes the app.
+        private Control Switch(bool value, Action<bool> onChange)
+        {
+            if (!HasSwitchTheme) return Check(value, onChange);
+
+            var toggle = new ToggleSwitch
+            {
+                IsChecked = value,
+                OnContent = null,
+                OffContent = null
+            };
+            toggle.IsCheckedChanged += (_, _) => onChange(toggle.IsChecked ?? false);
+            return toggle;
+        }
+
+        // Minutes, with 0 for forever. Coarse on purpose: the useful answers are
+        // "a few minutes", "the rest of the afternoon" and "never", and a spinner
+        // asking for a number would invite precision that doesn't mean anything
+        // when the input is a hook that fires every couple of seconds.
+        private static readonly (string Label, int Minutes)[] LifetimeChoices =
+        {
+            ("1 minute", 1),
+            ("5 minutes", 5),
+            ("15 minutes", 15),
+            ("30 minutes", 30),
+            ("1 hour", 60),
+            ("4 hours", 240),
+            ("Forever", ClaudeBuddySettings.OrbLifetimeForever)
+        };
+
+        private Control LifetimePicker()
+        {
+            var current = ClaudeBuddySettings.OrbLifetimeMinutes;
+            var choices = LifetimeChoices.ToList();
+
+            // A number hand-written into settings.json shows as itself instead of
+            // being silently rounded to whatever is on the list — opening this
+            // window shouldn't quietly change a setting.
+            if (choices.All(choice => choice.Minutes != current))
+            {
+                choices.Insert(choices.Count - 1, ($"{current} minutes", current));
+            }
+
+            var combo = new ComboBox
+            {
+                ItemsSource = choices.Select(choice => choice.Label).ToList(),
+                SelectedIndex = choices.FindIndex(choice => choice.Minutes == current),
+                MinWidth = 132
+            };
+            combo.SelectionChanged += (_, _) =>
+            {
+                var index = combo.SelectedIndex;
+                if (index < 0) return;
+
+                ClaudeBuddySettings.OrbLifetimeMinutes = choices[index].Minutes;
+            };
+            return combo;
+        }
+
+        private Control ProfilesCard()
+        {
+            var snapshot = ClaudeDesktopManager.Snapshot;
+
+            if (snapshot.Profiles.Count == 0)
+            {
+                return Card(new TextBlock
+                {
+                    Text = "No profiles found. Create one from the menu bar.",
+                    FontSize = 13,
+                    Opacity = 0.6,
+                    Margin = new Thickness(14, 12)
+                });
+            }
+
+            var rows = new List<Control> { ColumnLabels() };
+            rows.AddRange(snapshot.Profiles.Select(Row));
+            rows.Add(new TextBlock
+            {
+                Text = "Colour applies to the menu swatch, the Dock icon and the window tint. "
+                       + "Leave a name empty to use the folder name.",
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.55,
+                FontSize = 11,
+                Margin = new Thickness(14, 10)
+            });
+
+            return Card(rows.ToArray());
+        }
 
         private static Control ColumnLabels()
         {
@@ -148,7 +419,7 @@ namespace ClaudeBuddy
         private static Grid RowGrid() => new()
         {
             ColumnDefinitions = new ColumnDefinitions("*,130,64,54,44"),
-            Margin = new Thickness(0, 2)
+            Margin = new Thickness(14, 8)
         };
 
         private static void Add(Grid grid, int column, Control child)
@@ -267,13 +538,6 @@ namespace ClaudeBuddy
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            box.IsCheckedChanged += (_, _) => onChange(box.IsChecked ?? false);
-            return box;
-        }
-
-        private static Control Toggle(string text, bool value, Action<bool> onChange)
-        {
-            var box = new CheckBox { Content = text, IsChecked = value };
             box.IsCheckedChanged += (_, _) => onChange(box.IsChecked ?? false);
             return box;
         }
