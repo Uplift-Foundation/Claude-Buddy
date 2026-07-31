@@ -73,9 +73,10 @@ namespace ClaudeBuddy
 
             // Liquid Glass: the window is a translucent material, not a filled
             // rectangle. AcrylicBlur is what Avalonia maps to NSVisualEffectView
-            // on macOS, and the fallbacks matter — Windows takes Mica, and a
-            // machine that can't do either lands on the opaque tint below, which
-            // is why the tints are near-opaque rather than 50%.
+            // on macOS — confirmed granted here, ActualTransparencyLevel reports
+            // it back. The fallbacks matter: Windows takes Mica, and anything that
+            // can end up with None still reads, because the text all sits on cards
+            // that carry their own translucent fill rather than on bare glass.
             TransparencyLevelHint = new[]
             {
                 WindowTransparencyLevel.AcrylicBlur,
@@ -96,13 +97,16 @@ namespace ClaudeBuddy
 
         private void Rebuild()
         {
-            // A tint over the blur rather than a solid fill: enough to keep 13pt
-            // text legible over a busy window behind, little enough that the
-            // material still reads as glass. Fluent's default would paint the
-            // window the same white it paints a card and lose both.
+            // Barely a tint. macOS has already put a frosted NSVisualEffectView
+            // behind this window (verified: ActualTransparencyLevel comes back
+            // AcrylicBlur), and that frost *is* the glass — painting 75% opaque
+            // grey over it, which is what this did first, produces a flat panel
+            // that happens to sit on a blur nobody can see. Everything legible
+            // here rides on the cards below instead, which is also how Tahoe does
+            // it: the window is a material, the content is on top of it.
             Background = new SolidColorBrush(IsDark
-                ? Color.FromArgb(0xCC, 0x1C, 0x1C, 0x1E)
-                : Color.FromArgb(0xBF, 0xF5, 0xF5, 0xF7));
+                ? Color.FromArgb(0x33, 0x0A, 0x0A, 0x0C)
+                : Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF));
 
             Content = new ScrollViewer
             {
@@ -116,24 +120,35 @@ namespace ClaudeBuddy
         // thing, which also brings the rows down to a Mac row height.
         private const double ControlHeight = 26;
 
-        private static TextBox Slim(TextBox box)
+        // Capsules, not rectangles with the corners taken off: Liquid Glass rounds
+        // a control to its own half-height, and that shape is most of what
+        // separates a Tahoe pop-up from a Fluent one.
+        private static CornerRadius Capsule => new(ControlHeight / 2);
+
+        private TextBox Slim(TextBox box)
         {
             box.Height = ControlHeight;
             box.MinHeight = ControlHeight;
             box.FontSize = 13;
-            box.Padding = new Thickness(8, 0);
-            box.CornerRadius = new CornerRadius(7);
+            box.Padding = new Thickness(10, 0);
+            box.CornerRadius = Capsule;
+            box.Background = FieldBackground;
+            box.BorderBrush = FieldBorder;
+            box.BorderThickness = new Thickness(1);
             box.VerticalContentAlignment = VerticalAlignment.Center;
             return box;
         }
 
-        private static ComboBox Slim(ComboBox combo)
+        private ComboBox Slim(ComboBox combo)
         {
             combo.Height = ControlHeight;
             combo.MinHeight = ControlHeight;
             combo.FontSize = 13;
-            combo.Padding = new Thickness(9, 0, 4, 0);
-            combo.CornerRadius = new CornerRadius(7);
+            combo.Padding = new Thickness(11, 0, 4, 0);
+            combo.CornerRadius = Capsule;
+            combo.Background = FieldBackground;
+            combo.BorderBrush = FieldBorder;
+            combo.BorderThickness = new Thickness(1);
             return combo;
         }
 
@@ -183,17 +198,41 @@ namespace ClaudeBuddy
 
         private bool IsDark => ActualThemeVariant == ThemeVariant.Dark;
 
-        // Glass, not paint: a card is a light-lifted layer over the material, so
-        // both variants use translucent white rather than a solid fill, and the
-        // border is a thin bright edge — the highlight a real glass panel gets.
-        private IBrush CardBackground => new SolidColorBrush(
-            IsDark ? Color.FromArgb(0x1C, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xAA, 0xFF, 0xFF, 0xFF));
+        // Glass, not paint. A card is a lit sheet of it: brighter at the top than
+        // the bottom, because that's the cheap trick that reads as a curved
+        // surface catching light, and edged with a gradient that goes from a
+        // near-white highlight down to almost nothing — the specular rim Liquid
+        // Glass puts on everything. Both variants build from translucent white so
+        // the frost behind still comes through.
+        private IBrush CardBackground => VerticalGradient(
+            IsDark ? Color.FromArgb(0x3A, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x8C, 0xFF, 0xFF, 0xFF),
+            IsDark ? Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x4D, 0xFF, 0xFF, 0xFF));
 
-        private IBrush CardBorder => new SolidColorBrush(
-            IsDark ? Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x60, 0xFF, 0xFF, 0xFF));
+        private IBrush CardBorder => VerticalGradient(
+            IsDark ? Color.FromArgb(0x59, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xB3, 0xFF, 0xFF, 0xFF),
+            IsDark ? Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
 
         private IBrush Hairline => new SolidColorBrush(
-            IsDark ? Color.FromArgb(0x18, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x14, 0x00, 0x00, 0x00));
+            IsDark ? Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x0F, 0x00, 0x00, 0x00));
+
+        // Glass on glass: a field or pop-up is its own small pane rather than an
+        // opaque white box punched through the card.
+        private IBrush FieldBackground => new SolidColorBrush(
+            IsDark ? Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF));
+
+        private IBrush FieldBorder => new SolidColorBrush(
+            IsDark ? Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x26, 0x00, 0x00, 0x00));
+
+        private static IBrush VerticalGradient(Color top, Color bottom) => new LinearGradientBrush
+        {
+            StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
+            EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
+            GradientStops =
+            {
+                new GradientStop(top, 0),
+                new GradientStop(bottom, 1)
+            }
+        };
 
         private Control Group(string title, Control card) => new StackPanel
         {
@@ -203,7 +242,11 @@ namespace ClaudeBuddy
                 {
                     Text = title,
                     FontSize = 12,
-                    Opacity = 0.6,
+                    FontWeight = FontWeight.Medium,
+                    // Higher than you would use on an opaque panel: this label is
+                    // the one piece of text sitting directly on the glass, with
+                    // whatever is behind the window showing through it.
+                    Opacity = 0.75,
                     Margin = new Thickness(6, 0, 0, 6)
                 },
                 card
@@ -229,15 +272,22 @@ namespace ClaudeBuddy
                 stack.Children.Add(rows[i]);
             }
 
-            // Liquid Glass rounds harder than Fluent does; 14 is about where a
-            // grouped panel sits in Tahoe's own settings surfaces.
+            // Liquid Glass rounds hard and floats: 18 rather than Fluent's 4, and
+            // a soft shadow, because a pane of glass sits *above* the material
+            // instead of being drawn into it.
             return new Border
             {
                 Background = CardBackground,
                 BorderBrush = CardBorder,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(14),
+                CornerRadius = new CornerRadius(18),
                 ClipToBounds = true,
+                BoxShadow = new BoxShadows(new BoxShadow
+                {
+                    OffsetY = 2,
+                    Blur = 14,
+                    Color = Color.FromArgb(IsDark ? (byte)0x4D : (byte)0x1F, 0, 0, 0)
+                }),
                 Child = stack
             };
         }
@@ -311,7 +361,7 @@ namespace ClaudeBuddy
             ("Forever", ClaudeBuddySettings.OrbLifetimeForever)
         };
 
-        private static Control LifetimePicker()
+        private Control LifetimePicker()
         {
             var current = ClaudeBuddySettings.OrbLifetimeMinutes;
             var choices = LifetimeChoices.ToList();
