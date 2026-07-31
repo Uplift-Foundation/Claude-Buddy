@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Shapes = Avalonia.Controls.Shapes;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Media;
@@ -396,22 +397,54 @@ namespace ClaudeBuddy
             // No Width or Height here: the picker's metrics are the theme's
             // business, the same as the combo box's — see the note above Body().
 
-            // Subscribed after Color is seeded above, deliberately: the initial
-            // value must not look like an edit.
+            // ColorChanged is not trustworthy until the user has touched the
+            // control, and this is not theoretical: seeding Color and subscribing
+            // afterwards is not enough, because the macOS theme's template raises
+            // ColorChanged *after* that with a colour of its own — a palette entry,
+            // by the look of the values. It wrote #2C273C / #50D140 / #E82323 into
+            // settings.json on the first launch that ever opened this window, so
+            // three colours nobody chose became the user's colours, the swatches
+            // re-seeded from them on the next build, and nothing anywhere looked
+            // like an error.
+            //
+            // Comparing against the stored value can't catch that on its own: a
+            // spurious change is a genuine difference. What distinguishes a real
+            // edit is that a real one is preceded by a click or a focus — you
+            // cannot pick a colour without opening the drop down first. So arm on
+            // that, and treat everything before it as the template talking to
+            // itself.
+            var armed = false;
+
+            // Tunnelling, so it arrives before the template's own button handles
+            // it and marks it handled. GotFocus covers tabbing in without a click.
+            picker.AddHandler(
+                PointerPressedEvent,
+                (object? _, PointerPressedEventArgs _) => armed = true,
+                RoutingStrategies.Tunnel);
+            picker.GotFocus += (_, _) => armed = true;
+
             picker.ColorChanged += (_, e) =>
             {
-                // The control can raise this while it's being templated, and again
-                // during Rebuild. A no-op change must not write anything: writing
-                // the current colour as an explicit hex would freeze today's
-                // default into the file and light up the Reset button for a colour
-                // nobody touched. Compare RGB only — alpha isn't ours (see above).
                 var current = OrbColors.For(state);
-                if (e.NewColor.R == current.R
-                    && e.NewColor.G == current.G
-                    && e.NewColor.B == current.B)
+                var same = e.NewColor.R == current.R
+                           && e.NewColor.G == current.G
+                           && e.NewColor.B == current.B;
+
+                if (!armed)
                 {
+                    // Put ours back rather than just declining to save it,
+                    // otherwise the swatch sits there showing a colour the app is
+                    // not using. Self-correcting and terminating: the assignment
+                    // raises this again, and that pass is a no-op.
+                    if (!same) picker.Color = current;
                     return;
                 }
+
+                // A real edit that changes nothing still must not write. Writing
+                // the current colour as an explicit hex would freeze today's
+                // default into the file and light up the Reset button for a colour
+                // nobody chose. Compare RGB only — alpha isn't ours (see above).
+                if (same) return;
 
                 OrbColors.Set(state, OrbColors.ToHex(e.NewColor));
 
