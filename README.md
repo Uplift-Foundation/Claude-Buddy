@@ -474,7 +474,7 @@ dotnet publish -c Release -r osx-arm64   # macOS on Apple silicon
 dotnet publish -c Release -r osx-x64     # macOS on Intel
 ```
 
-The binary lands in `bin/Release/net8.0/<rid>/publish/ClaudeBuddy` (`.exe`
+The binary lands in `bin/Release/net10.0/<rid>/publish/ClaudeBuddy` (`.exe`
 on Windows) — it's self-contained, so you can copy that one file anywhere
 (e.g. a `Tools` folder) and run it without needing .NET installed
 separately. For local hacking on either platform, plain `dotnet run` works
@@ -767,13 +767,34 @@ signed build.
   the settings window offers live in `LifetimeChoices` in
   `SettingsWindow.cs`.
 - **The settings window**: `SettingsWindow.cs`, built in code rather than
-  XAML. It's styled to sit alongside macOS's Liquid Glass surfaces —
-  `TransparencyLevelHint` asks for the vibrant material (`AcrylicBlur` maps
-  to `NSVisualEffectView`; Windows takes Mica), and the card/hairline
-  brushes are mixed per theme variant in one place at the top of the "Mac-ish
-  chrome" section. `ClaudeBuddy --settings` opens it straight at launch,
-  which beats clicking through the status-bar menu when the window itself is
-  what you're editing.
+  XAML. `ClaudeBuddy --settings` opens it straight at launch, which beats
+  clicking through the status-bar menu when the window itself is what you're
+  editing.
+
+  Controls are **not** styled here. On macOS the app loads
+  [Devolutions' MIT AppKit theme](https://github.com/Devolutions/avalonia-extensions/tree/master/src/Devolutions.AvaloniaTheme.MacOS)
+  (`<DevolutionsMacOsTheme />` in `App.axaml`) and Windows swaps back to
+  Fluent in `App.Initialize`. Avalonia draws every control itself — it has no
+  native AppKit controls to use — so the alternative was hand-restyling
+  switches, pop-ups and checkboxes, which kept landing close-but-wrong because
+  AppKit's metrics and states aren't published anywhere to copy from. What
+  *is* still hand-built is the layout around them: the grouped cards, the
+  hairlines and the window tint, since no control theme has an opinion about
+  those. `TransparencyLevelHint` asks for the vibrant material (`AcrylicBlur`
+  maps to `NSVisualEffectView`; Windows takes Mica) and the card brushes are
+  mixed per theme variant in one place at the top of the "Mac-ish chrome"
+  section.
+
+  Two things to know before touching this. The theme must be declared **in
+  XAML**: added from code its templates render nothing at all — labels appear
+  and every switch, field and pop-up comes out invisible. And its
+  `ToggleSwitch` template is broken against Avalonia's control, which demands
+  a `Panel` named `PART_MovingKnobs`; the first switch measured throws and
+  takes the app down. Confirmed on Avalonia 11.3.7 *and* 12.0.2 with the
+  theme's newest build for each, so it isn't a version mismatch.
+  `BorrowFluentToggleSwitch()` lends Fluent's switch template to this one
+  window as the workaround, and `Switch()` degrades to a checkbox if even that
+  stops working. Delete both once upstream fixes it.
 - **macOS + Spaces**: orbs follow you across Spaces and show alongside
   full-screen apps. Avalonia doesn't expose `NSWindow.collectionBehavior`,
   so `MacOSWindowExtensions.cs` sets it (`canJoinAllSpaces` +

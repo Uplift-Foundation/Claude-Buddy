@@ -85,6 +85,8 @@ namespace ClaudeBuddy
                 WindowTransparencyLevel.None
             };
 
+            BorrowFluentToggleSwitch();
+
             Rebuild();
 
             // Every card colour below is mixed for the current variant, so a
@@ -94,6 +96,40 @@ namespace ClaudeBuddy
             // setting as it changes.
             ActualThemeVariantChanged += (_, _) => Rebuild();
         }
+
+        // The macOS theme's ToggleSwitch template is broken against the stock
+        // control: Avalonia's ToggleSwitch demands a Panel named
+        // PART_MovingKnobs and its template doesn't satisfy that, so the first
+        // switch to be measured throws KeyNotFoundException and takes the app
+        // down. Confirmed on Avalonia 11.3.7 *and* 12.0.2, with the theme's
+        // newest build for each — so it's the template, not a version mismatch,
+        // and upgrading Avalonia doesn't help.
+        //
+        // Rather than give up switches (checkboxes would be the fallback) or
+        // hand-write a template for one control, borrow Fluent's ToggleSwitch
+        // ControlTheme into this window's resources. Everything else here stays
+        // AppKit-styled by the theme. Remove this once upstream fixes it.
+        private void BorrowFluentToggleSwitch()
+        {
+            try
+            {
+                var fluent = new Avalonia.Themes.Fluent.FluentTheme();
+                if (fluent.TryGetResource(typeof(ToggleSwitch), ActualThemeVariant, out var found)
+                    && found is ControlTheme fluentSwitch)
+                {
+                    Resources.Add(typeof(ToggleSwitch), fluentSwitch);
+                }
+            }
+            catch
+            {
+                // Worst case the switches keep the theme's own template, which
+                // is the crash this exists to avoid — so if this ever stops
+                // working, Switch() below falls back to a CheckBox.
+            }
+        }
+
+        private bool HasSwitchTheme => Resources.ContainsKey(typeof(ToggleSwitch))
+                                       || !OperatingSystem.IsMacOS();
 
         private void Rebuild()
         {
@@ -115,42 +151,10 @@ namespace ClaudeBuddy
             };
         }
 
-        // Fluent's controls are sized for touch; AppKit's are not. Every text
-        // field and pop-up here is pinned to roughly the height of the real
-        // thing, which also brings the rows down to a Mac row height.
-        private const double ControlHeight = 26;
-
-        // Capsules are for search fields and pills. A pop-up button or a table's
-        // text field is a rounded rectangle at about 8 — going full capsule on
-        // these was the most obviously un-Mac thing in the first pass.
-        private static CornerRadius FieldCorner => new(8);
-
-        private TextBox Slim(TextBox box)
-        {
-            box.Height = ControlHeight;
-            box.MinHeight = ControlHeight;
-            box.FontSize = 13;
-            box.Padding = new Thickness(10, 0);
-            box.CornerRadius = FieldCorner;
-            box.Background = FieldBackground;
-            box.BorderBrush = FieldBorder;
-            box.BorderThickness = new Thickness(1);
-            box.VerticalContentAlignment = VerticalAlignment.Center;
-            return box;
-        }
-
-        private ComboBox Slim(ComboBox combo)
-        {
-            combo.Height = ControlHeight;
-            combo.MinHeight = ControlHeight;
-            combo.FontSize = 13;
-            combo.Padding = new Thickness(11, 0, 4, 0);
-            combo.CornerRadius = FieldCorner;
-            combo.Background = FieldBackground;
-            combo.BorderBrush = FieldBorder;
-            combo.BorderThickness = new Thickness(1);
-            return combo;
-        }
+        // No control metrics here on purpose. Heights, corner radii, fills and
+        // borders for fields and pop-ups come from the macOS theme on macOS and
+        // from Fluent on Windows; pinning them by hand is what produced capsule
+        // pop-ups and 20pt checkboxes in the first place.
 
         private Control Body()
         {
@@ -207,14 +211,6 @@ namespace ClaudeBuddy
 
         private IBrush Hairline => new SolidColorBrush(
             IsDark ? Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x0F, 0x00, 0x00, 0x00));
-
-        // On a crisp card, a translucent field just looks dirty. Apple's are a
-        // solid fill with a hairline edge.
-        private IBrush FieldBackground => new SolidColorBrush(
-            IsDark ? Color.FromArgb(0x1A, 0xFF, 0xFF, 0xFF) : Colors.White);
-
-        private IBrush FieldBorder => new SolidColorBrush(
-            IsDark ? Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x22, 0x00, 0x00, 0x00));
 
         private Control Group(string title, Control card) => new StackPanel
         {
@@ -310,9 +306,13 @@ namespace ClaudeBuddy
         }
 
         // A bare switch: Avalonia's default writes "On"/"Off" beside it, which no
-        // Mac control does.
-        private static ToggleSwitch Switch(bool value, Action<bool> onChange)
+        // Mac control does. Falls back to a checkbox if there is no usable switch
+        // template — see BorrowFluentToggleSwitch — because a settings row with a
+        // working checkbox beats one that crashes the app.
+        private Control Switch(bool value, Action<bool> onChange)
         {
+            if (!HasSwitchTheme) return Check(value, onChange);
+
             var toggle = new ToggleSwitch
             {
                 IsChecked = value,
@@ -351,12 +351,12 @@ namespace ClaudeBuddy
                 choices.Insert(choices.Count - 1, ($"{current} minutes", current));
             }
 
-            var combo = Slim(new ComboBox
+            var combo = new ComboBox
             {
                 ItemsSource = choices.Select(choice => choice.Label).ToList(),
                 SelectedIndex = choices.FindIndex(choice => choice.Minutes == current),
                 MinWidth = 132
-            });
+            };
             combo.SelectionChanged += (_, _) =>
             {
                 var index = combo.SelectedIndex;
@@ -434,13 +434,13 @@ namespace ClaudeBuddy
             var settings = ClaudeBuddySettings.For(folder);
             var grid = RowGrid();
 
-            var name = Slim(new TextBox
+            var name = new TextBox
             {
                 Text = settings.Name ?? "",
                 Watermark = profile.DisplayName,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 10, 0)
-            });
+            };
             // On every keystroke rather than on commit: there is no OK button to
             // commit at, and the tray picks it up on its next rebuild.
             name.TextChanged += (_, _) =>
@@ -467,7 +467,7 @@ namespace ClaudeBuddy
                 if (found > 0) selected = found;
             }
 
-            var colour = Slim(new ComboBox
+            var colour = new ComboBox
             {
                 ItemsSource = options
                     .Select(name => name == AutoColour
@@ -477,7 +477,7 @@ namespace ClaudeBuddy
                 SelectedIndex = selected,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 10, 0)
-            });
+            };
             colour.SelectionChanged += (_, _) =>
             {
                 var index = colour.SelectedIndex;
@@ -536,11 +536,7 @@ namespace ClaudeBuddy
             {
                 IsChecked = value,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                // Fluent's box is 20pt against AppKit's 14, and next to Apple's
-                // it looked like a touch target. The template's geometry is fixed,
-                // so scaling the rendered control is the only way down.
-                RenderTransform = new ScaleTransform(0.8, 0.8)
+                VerticalAlignment = VerticalAlignment.Center
             };
             box.IsCheckedChanged += (_, _) => onChange(box.IsChecked ?? false);
             return box;

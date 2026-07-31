@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>ClaudeBuddy</AssemblyName>
@@ -45,10 +45,16 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="11.3.2" />
-    <PackageReference Include="Avalonia.Desktop" Version="11.3.2" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.2" />
+    <PackageReference Include="Avalonia" Version="11.3.7" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.7" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.7" />
     <PackageReference Include="System.Management" Version="8.0.0" />
+    <!-- AppKit-shaped control styles (MIT, Devolutions). Loaded only on macOS —
+         see App.Initialize — with Fluent kept for Windows. Hand-rolling this was
+         a losing game: the shapes, metrics and states of AppKit's controls are
+         not published anywhere, and a drawn imitation maintained here drifts
+         every time Apple moves. Requires Avalonia >= 11.3.7. -->
+    <PackageReference Include="Devolutions.AvaloniaTheme.MacOS" Version="2026.6.16.1" />
   </ItemGroup>
 
 </Project>

@@ -12,6 +12,17 @@ namespace ClaudeBuddy
         public override void Initialize()
         {
             AvaloniaXamlLoader.Load(this);
+
+            // App.axaml declares the macOS theme, which is right for a Mac and
+            // wrong for Windows. Fluent is Microsoft's own design language, so
+            // it's the correct answer there — and restyling AppKit's controls by
+            // hand was the alternative, which kept landing close-but-wrong
+            // because their metrics and states aren't published anywhere to copy.
+            if (!OperatingSystem.IsMacOS())
+            {
+                Styles.Clear();
+                Styles.Add(new Avalonia.Themes.Fluent.FluentTheme());
+            }
         }
 
         public override void OnFrameworkInitializationCompleted()
