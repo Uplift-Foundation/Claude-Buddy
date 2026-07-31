@@ -56,6 +56,12 @@ namespace ClaudeBuddy
         // Windows hook only: PID of the terminal process that owns a window.
         [JsonPropertyName("term_pid")]
         public int TermPid { get; set; }
+
+        // The claude process running this session. Recorded by both hooks; 0
+        // from a hook older than this field, in which case liveness can't be
+        // checked and only the lifetime timer applies. See SessionGone.
+        [JsonPropertyName("session_pid")]
+        public int SessionPid { get; set; }
     }
 
     // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude
@@ -178,6 +184,17 @@ namespace ClaudeBuddy
                 }
 
                 if (status is null) continue;
+
+                // Gone is gone: if the claude process that wrote this file has
+                // exited, no lifetime setting should keep its orb — that's the
+                // Ctrl+C case, which fires no SessionEnd and so leaves the file
+                // behind. This applies to `waiting` as well, which the timer
+                // below deliberately never touches; an unanswered prompt whose
+                // session was killed used to sit on screen indefinitely.
+                if (!ProcessLiveness.IsRunning(status.SessionPid))
+                {
+                    continue;   // removed in the pass below
+                }
 
                 // A session waiting on you (permission prompt / question) never
                 // goes stale on its own — no further hook fires until you

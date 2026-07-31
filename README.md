@@ -375,19 +375,29 @@ containing `{"state": "...", "cwd": "...", "title": "...", "color": "...", ...}`
 `ClaudeBuddyHook.sh` (bash, macOS). No network calls, no polling of Claude
 Code itself, no persistent process beyond the hook calls themselves.
 
-A session's orb disappears when its `SessionEnd` hook fires (clean exits
-like `/exit`) or — since `SessionEnd` is documented as unreliable on
-ungraceful termination, notably Ctrl+C — once its file hasn't been touched
-for however long **Settings → Orbs → "Keep orbs for"** says, whichever comes
-first. That's 5 minutes out of the box, anything from a minute to four hours,
-or **Forever**, which leaves an orb up until its session exits cleanly or you
-clear it by hand. **Exception**: a session sitting on `waiting` (amber) is
-never pruned by that timer, deliberately — nothing else refreshes that file
-while you're away from an unanswered prompt, so timing it out would hide the
-orb exactly when it's trying hardest to get your attention. If a session gets
-Ctrl+C'd right at a prompt, its orb will sit there indefinitely; right-click →
-"Reset this session to idle" clears it manually, after which the normal timer
-applies.
+An orb goes away when any of three things happens.
+
+1. **Its `SessionEnd` hook fires** — a clean exit like `/exit` — which deletes
+   the status file outright.
+2. **Its `claude` process is gone.** Both hooks record that process's pid
+   (`session_pid`), and every scan checks whether it still exists; if it
+   doesn't, the orb goes regardless of the lifetime below, including under
+   Forever, and including a session sitting on `waiting`. This is the Ctrl+C
+   case: `SessionEnd` is documented as unreliable on ungraceful termination, so
+   the file survives its session, and the pid is what tells "still running"
+   from "left behind". A session started under a hook older than this field has
+   no pid recorded and falls back to the timer alone.
+3. **The lifetime expires** — its file hasn't been touched for however long
+   **Settings → Orbs → "Keep orbs for"** says. That's 5 minutes out of the box,
+   anything from a minute to four hours, or **Forever**, which never prunes on
+   time at all. A session on `waiting` (amber) is exempt from *this* rule
+   deliberately: nothing refreshes that file while you're away from an
+   unanswered prompt, so timing it out would hide the orb exactly when it's
+   trying hardest to get your attention. Rule 2 still applies to it, which is
+   what keeps a Ctrl+C'd prompt from sitting on screen forever.
+
+Right-click → "Reset this session to idle" is still there for a session whose
+process is alive but whose orb is stuck amber.
 
 **Scope**: this only tracks Claude Code sessions that read a `settings.json`
 you've wired up per step 2 below. Each Claude Code install — WSL (per Linux
@@ -757,6 +767,12 @@ signed build.
   `GeneratingColor` / `WaitingColor` at the top, and the breathing/pulse
   timings live in `ApplyState()` / `StartPulse()` — easy to retune speed,
   scale, or swap in different colors.
+- **When an orb goes away**: `SessionManager.ScanAndUpdate()` has all three
+  rules in order — process-gone (`ProcessLiveness.IsRunning`, a `kill(pid, 0)`
+  on Unix and `Process.GetProcessById` on Windows), then the `waiting`
+  exemption, then the lifetime timer. A recycled pid reads as alive, which
+  errs toward keeping an orb rather than dropping a live session's, and the
+  timer still catches that unless the lifetime is Forever.
 - **Stacking layout and staleness**: `SessionManager.cs` has the stacking
   math (`ReflowPositions()`, which steps over orbs the user has dragged —
   those live in `orbPositions` in `settings.json`, keyed by the session's
@@ -822,7 +838,7 @@ signed build.
   string all live there.
 - **Click-to-focus coverage**: `TerminalFocuser.cs` maps what the hook
   scripts record (`term_program`, iTerm session UUID, tty, tmux socket/pane
-  on macOS; `term_pid` on Windows) to an AppleScript that selects the right
+  on macOS; `term_pid` on Windows; `session_pid` on both) to an AppleScript that selects the right
   window, an `open -a` activation, or a `SetForegroundWindow` call. Adding a
   terminal only means adding a case if you want *exact tab* selection for it
   — plain activation already works for anything that lives in an `.app`.
