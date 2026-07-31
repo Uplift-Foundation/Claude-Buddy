@@ -15,6 +15,8 @@
 #   .\tools\install-windows-hooks.ps1 -UninstallWsl -WslDistro Ubuntu   # unwire just that one distro
 #   .\tools\install-windows-hooks.ps1 -ProfileDir .claude-work                # + a second native account
 #   .\tools\install-windows-hooks.ps1 -Wsl -WslProfileDir .claude-work,.claude-personal
+#   .\tools\install-windows-hooks.ps1 -UninstallWsl -WslDistro Ubuntu -WslProfileDir .claude-work -WslProfileDirOnly
+#     # unwire just that one extra WSL profile, leaving the distro's default ~/.claude alone
 #
 # Safe to re-run: it strips any existing Claude Buddy entries before adding
 # fresh ones, so it converges rather than accumulating duplicates.
@@ -55,6 +57,15 @@ param(
     # Restrict -Wsl / -UninstallWsl to specific distro name(s). Default is
     # every distro Get-WslDistros reports.
     [string[]] $WslDistro,
+
+    # Touch only the -WslProfileDir entries, leaving each distro's own
+    # default ~/.claude untouched — the "clean up just this one extra
+    # profile" case. Without this, -UninstallWsl -WslProfileDir X always
+    # unwired the distro's default profile too, on the way to unwiring X,
+    # which is surprising and was found to actually happen: a one-off
+    # cleanup of a single stale extra profile silently took the distro's
+    # main orb down with it.
+    [switch] $WslProfileDirOnly,
 
     # Wire a WSL distro even though Claude Code wasn't detected on its PATH.
     # Without this, a distro nobody has installed Claude Code into is silently
@@ -603,8 +614,10 @@ if ($Uninstall -or $Wsl -or $UninstallWsl) {
             "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$installed`" -State $State -TempDir `"$resolvedTempDir`""
         }.GetNewClosure()
 
-        Write-Host "--- WSL distro: $distro ---"
-        Set-ClaudeBuddyHooks -SettingsPath $wslSettingsPath -CommandBuilder $wslCommandBuilder -Uninstall:$removeWsl
+        if (-not $WslProfileDirOnly) {
+            Write-Host "--- WSL distro: $distro ---"
+            Set-ClaudeBuddyHooks -SettingsPath $wslSettingsPath -CommandBuilder $wslCommandBuilder -Uninstall:$removeWsl
+        }
 
         foreach ($entry in $WslProfileDir) {
             $extraWslSettingsPath = Get-WslSettingsPath $distro $info.Home $entry
