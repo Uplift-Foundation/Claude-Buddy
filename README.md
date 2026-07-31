@@ -373,9 +373,12 @@ The app itself doesn't care where a status file came from. On Windows, both
 WSL and native Windows hooks ultimately run `powershell.exe` as a normal
 Windows process, so `$env:TEMP` resolves to the same real folder either way
 and their orbs happily stack together in one running `ClaudeBuddy.exe`.
-This is just a matter of wiring more hook configs, not a hard limitation —
-a different WSL user's install is the one combination left unwired, since
-that would need hooks added inside *their* Linux user account.
+This is just a matter of wiring more hook configs, not a hard limitation — the
+Windows installer, `install-windows-hooks.ps1 -Wsl`, and the running app's
+Settings window (see below) all reach every WSL distro's *default* Linux user
+automatically. A second Linux user account inside the same distro is the one
+combination left unwired, since that needs hooks added inside *their* account
+specifically — the "By hand" section further down still covers that case.
 
 ## 1. Install it
 
@@ -512,9 +515,52 @@ a broken setup. Pass `--uninstall` / `-Uninstall` to remove just our entries.
 
 The Windows installer runs this for you if you leave the checkbox ticked, and
 the macOS DMG's **Install Claude Code Hooks.command** is a wrapper around it.
-Neither covers a Claude Code install inside WSL — for that, run the Windows
-script (WSL hooks call out to `powershell.exe` anyway) and use the WSL snippet
-below to check the result.
+
+**WSL** is covered by the same script, opt-in via a couple of extra flags —
+native Windows wiring is unaffected either way:
+
+```powershell
+.\tools\install-windows-hooks.ps1 -Wsl                       # every WSL distro that has Claude Code
+.\tools\install-windows-hooks.ps1 -Wsl -WslDistro Ubuntu      # just one distro
+.\tools\install-windows-hooks.ps1 -UninstallWsl -WslDistro Ubuntu   # unwire just that one
+```
+
+`-Wsl` skips a distro it doesn't detect `claude` on the PATH of (pass `-Force`
+to wire it anyway); `-Uninstall` (the full teardown, as opposed to
+`-UninstallWsl`) always sweeps every WSL distro regardless of how it was
+originally wired, so an uninstall never leaves a dangling hook pointing at a
+deleted script. The Windows installer offers a matching **"Also wire up hooks
+for Claude Code running under WSL"** checkbox (shown only when it detects
+`wsl.exe`), and once Claude Buddy is running, its **Settings window** lists
+every WSL distro with a checkbox per distro to wire or unwire it on the spot —
+no script or installer re-run needed for that. Both routes only reach each
+distro's *default* Linux user (see the Scope note above).
+
+**Multiple Claude Code accounts** managed via `CLAUDE_CONFIG_DIR` — e.g. an
+alias like `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"` for a
+second account — are a separate `settings.json` each, invisible to the
+default `~/.claude` wiring above. Note that `claude`'s own PATH detection
+(the `-Wsl` skip/`-Force` logic just above) tries several shells before
+giving up specifically because of this: nvm/pyenv/rustup-style installs put
+their PATH line in `~/.bashrc` or `~/.zshrc` depending on which shell you
+use, both of which only get read by an *interactive* shell, not the login
+shell a fresh `wsl.exe -d <distro> --` invocation starts as — so a
+single-shell-mode check would silently and incorrectly report `claude` as
+missing for a large share of real setups. Extra accounts aren't
+auto-discovered (only `~/.claude` is touched by default), but can be added
+explicitly:
+
+```powershell
+.\tools\install-windows-hooks.ps1 -ProfileDir .claude-work                    # native, in addition to the default
+.\tools\install-windows-hooks.ps1 -Wsl -WslProfileDir .claude-work,.claude-personal
+```
+
+or, easier for ongoing use, the **Settings window**'s **"Claude Code
+profiles"** section — add a directory name there once, and it's wired on
+native Windows immediately and re-applied to every already-wired WSL distro,
+with no need to pass either flag by hand again. A repair or reinstall through
+the Windows installer also picks up whatever's saved there automatically,
+since the script reads the same file the Settings window writes to.
 
 Whichever route you take, **restart any Claude Code sessions you already have
 open** — hooks are read once at session start, so existing sessions won't
@@ -534,8 +580,12 @@ up actually runs, then open **that install's** `~/.claude/settings.json`
   chmod +x ~/.claude/claude-buddy/ClaudeBuddyHook.sh
   ```
   The snippet references it via `$HOME`, so there's no username to replace.
-- **Claude Code running inside WSL** → `claude-hooks-snippet-wsl.json`.
-  Copy `ClaudeBuddyHook.ps1` to a local Windows folder (e.g.
+- **Claude Code running inside WSL** → `claude-hooks-snippet-wsl.json`. Only
+  needed for a second Linux user account inside a distro — `install-windows-
+  hooks.ps1 -Wsl`, the installer checkbox, and the app's Settings window (see
+  "The scripted way" above) all handle a distro's *default* user
+  automatically, and are the easier route for that case. For a second account:
+  copy `ClaudeBuddyHook.ps1` to a local Windows folder (e.g.
   `%LOCALAPPDATA%\ClaudeBuddy\`) and replace every `<YOUR_USERNAME>` in the
   snippet with your Windows username. `~/.claude/settings.json` here means
   the Linux user's home directory (e.g. `/home/<user>/.claude/settings.json`)

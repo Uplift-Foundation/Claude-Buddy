@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 
 namespace ClaudeBuddy
 {
@@ -22,6 +23,28 @@ namespace ClaudeBuddy
         private static readonly object Gate = new();
         private static Model _model = new();
         private static bool _loaded;
+
+        // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
+        // options it's given — it doesn't fall back to
+        // JsonSerializerOptions.Default's own resolver just because that one
+        // has one. In a normal `dotnet build` this project's own
+        // reflection-based JsonSerializerOptions() default silently covers
+        // that gap, but SelfContained + PublishSingleFile (this app's actual
+        // shipped Windows build) implicitly trims, which turns the missing
+        // resolver into a hard InvalidOperationException on every single
+        // Save() call. Confirmed by publishing a minimal repro with this
+        // project's exact trimming settings and running it for real: it
+        // threw with a bare `new JsonSerializerOptions { WriteIndented =
+        // true }, and stopped throwing only once TypeInfoResolver was set
+        // explicitly like this — the values here are plain bool/string
+        // primitives, so reflection over them is always safe regardless of
+        // trimming. This is why settings.json silently never got written on
+        // a real machine while every local build/run looked fine.
+        private static readonly JsonSerializerOptions SaveOptions = new()
+        {
+            WriteIndented = true,
+            TypeInfoResolver = new DefaultJsonTypeInfoResolver()
+        };
 
         private static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
@@ -52,6 +75,18 @@ namespace ClaudeBuddy
             public bool TintActiveWindow { get; set; } = true;
             public Dictionary<string, ProfileSettings> Profiles { get; init; } =
                 new(StringComparer.Ordinal);
+
+            // Distinct from Profiles above (Claude Desktop, the Electron app):
+            // these are Claude Code *CLI* config directory names — e.g.
+            // ".claude-work" for a CLAUDE_CONFIG_DIR=~/.claude-work alias
+            // managing a second account — that the user has explicitly opted
+            // into also wiring Claude Buddy hooks for, beyond the default
+            // ~/.claude. install-windows-hooks.ps1 reads this same list (via
+            // this file) as its default -ProfileDir/-WslProfileDir value, so
+            // configuring it here is also what "configure via the installer"
+            // means in practice: a repair/reinstall re-reads whatever's saved
+            // here rather than needing its own separate wizard UI for it.
+            public List<string> ClaudeCodeProfileDirs { get; init; } = new();
         }
 
         // ---- app-wide -------------------------------------------------------
@@ -66,6 +101,35 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.TintActiveWindow; }
             set { Load(); lock (Gate) _model.TintActiveWindow = value; Save(); }
+        }
+
+        // ---- extra Claude Code (CLI) profile directories ---------------------
+
+        // A copy, so callers can't mutate the store without going through
+        // Add/Remove — same guard rail as ProfileSettings.For below.
+        public static IReadOnlyList<string> ClaudeCodeProfileDirs
+        {
+            get { Load(); lock (Gate) return _model.ClaudeCodeProfileDirs.ToList(); }
+        }
+
+        public static void AddClaudeCodeProfileDir(string dirName)
+        {
+            Load();
+            lock (Gate)
+            {
+                if (!_model.ClaudeCodeProfileDirs.Contains(dirName, StringComparer.Ordinal))
+                {
+                    _model.ClaudeCodeProfileDirs.Add(dirName);
+                }
+            }
+            Save();
+        }
+
+        public static void RemoveClaudeCodeProfileDir(string dirName)
+        {
+            Load();
+            lock (Gate) { _model.ClaudeCodeProfileDirs.Remove(dirName); }
+            Save();
         }
 
         // ---- per profile ----------------------------------------------------
@@ -129,6 +193,17 @@ namespace ClaudeBuddy
                         TintActiveWindow = root["tintActiveWindow"]?.GetValue<bool>() ?? true
                     };
 
+                    if (root["claudeCodeProfileDirs"] is JsonArray profileDirs)
+                    {
+                        foreach (var node in profileDirs)
+                        {
+                            if (node?.GetValue<string>() is { Length: > 0 } dirName)
+                            {
+                                model.ClaudeCodeProfileDirs.Add(dirName);
+                            }
+                        }
+                    }
+
                     if (root["profiles"] is JsonObject profiles)
                     {
                         foreach (var (folder, node) in profiles)
@@ -148,11 +223,14 @@ namespace ClaudeBuddy
 
                     _model = model;
                 }
-                catch
+                catch (Exception ex)
                 {
                     // A corrupt or half-written settings file must never stop the
                     // app starting; defaults are always a valid answer. The next
-                    // Save() overwrites it.
+                    // Save() overwrites it. Logged for the same reason as Save's
+                    // catch above — a silent reset to defaults looks identical
+                    // to "nothing was ever saved" otherwise.
+                    LogFailure("Load", ex);
                     _model = new Model();
                 }
             }
@@ -180,11 +258,15 @@ namespace ClaudeBuddy
                         };
                     }
 
+                    var profileDirs = new JsonArray();
+                    foreach (var dirName in _model.ClaudeCodeProfileDirs) profileDirs.Add(dirName);
+
                     root = new JsonObject
                     {
                         ["version"] = CurrentVersion,
                         ["showOrbs"] = _model.ShowOrbs,
                         ["tintActiveWindow"] = _model.TintActiveWindow,
+                        ["claudeCodeProfileDirs"] = profileDirs,
                         ["profiles"] = profiles
                     };
                 }
@@ -196,13 +278,38 @@ namespace ClaudeBuddy
                 var temporary = Path_ + ".tmp";
                 File.WriteAllText(
                     temporary,
-                    root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+                    root.ToJsonString(SaveOptions),
                     new UTF8Encoding(false));
                 File.Move(temporary, Path_, overwrite: true);
             }
+            catch (Exception ex)
+            {
+                // Losing a preference is not worth taking the app down for,
+                // but silently losing it with zero trace is exactly the "no
+                // error, just doesn't work" trap this project's own hook
+                // script goes out of its way to avoid elsewhere (see
+                // ClaudeBuddyHook.ps1's header comment) — so leave a
+                // breadcrumb somewhere known-writable rather than nothing.
+                // Added after hitting a real machine where this path
+                // silently failed on every single attempt, with no way to
+                // tell why short of adding this.
+                LogFailure("Save", ex);
+            }
+        }
+
+        private static void LogFailure(string what, Exception ex)
+        {
+            try
+            {
+                var dir = Path.Combine(Path.GetTempPath(), "claude_buddy");
+                System.IO.Directory.CreateDirectory(dir);
+                File.AppendAllText(
+                    Path.Combine(dir, "settings-errors.log"),
+                    $"{DateTime.Now:O} {what} failed: {ex}{Environment.NewLine}");
+            }
             catch
             {
-                // Losing a preference is not worth taking the app down for.
+                // If even this fails, there's nowhere left to report it.
             }
         }
     }
