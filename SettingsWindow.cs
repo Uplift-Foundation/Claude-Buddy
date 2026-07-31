@@ -97,16 +97,16 @@ namespace ClaudeBuddy
 
         private void Rebuild()
         {
-            // Barely a tint. macOS has already put a frosted NSVisualEffectView
-            // behind this window (verified: ActualTransparencyLevel comes back
-            // AcrylicBlur), and that frost *is* the glass — painting 75% opaque
-            // grey over it, which is what this did first, produces a flat panel
-            // that happens to sit on a blur nobody can see. Everything legible
-            // here rides on the cards below instead, which is also how Tahoe does
-            // it: the window is a material, the content is on top of it.
+            // Held against System Settings side by side, Apple's content pane is
+            // *not* very transparent — the glass in Tahoe lives in sidebars,
+            // popovers and menus, while a settings pane behind grouped rows stays
+            // a near-opaque light surface. A near-clear wash here (the first
+            // attempt at fixing the opposite mistake) let the wallpaper through
+            // and read as murky rather than glassy. This sits at 85%: the material
+            // still lifts the window's edges, the content still reads crisp.
             Background = new SolidColorBrush(IsDark
-                ? Color.FromArgb(0x33, 0x0A, 0x0A, 0x0C)
-                : Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF));
+                ? Color.FromArgb(0xD9, 0x1E, 0x1E, 0x20)
+                : Color.FromArgb(0xD9, 0xF2, 0xF2, 0xF5));
 
             Content = new ScrollViewer
             {
@@ -120,10 +120,10 @@ namespace ClaudeBuddy
         // thing, which also brings the rows down to a Mac row height.
         private const double ControlHeight = 26;
 
-        // Capsules, not rectangles with the corners taken off: Liquid Glass rounds
-        // a control to its own half-height, and that shape is most of what
-        // separates a Tahoe pop-up from a Fluent one.
-        private static CornerRadius Capsule => new(ControlHeight / 2);
+        // Capsules are for search fields and pills. A pop-up button or a table's
+        // text field is a rounded rectangle at about 8 — going full capsule on
+        // these was the most obviously un-Mac thing in the first pass.
+        private static CornerRadius FieldCorner => new(8);
 
         private TextBox Slim(TextBox box)
         {
@@ -131,7 +131,7 @@ namespace ClaudeBuddy
             box.MinHeight = ControlHeight;
             box.FontSize = 13;
             box.Padding = new Thickness(10, 0);
-            box.CornerRadius = Capsule;
+            box.CornerRadius = FieldCorner;
             box.Background = FieldBackground;
             box.BorderBrush = FieldBorder;
             box.BorderThickness = new Thickness(1);
@@ -145,7 +145,7 @@ namespace ClaudeBuddy
             combo.MinHeight = ControlHeight;
             combo.FontSize = 13;
             combo.Padding = new Thickness(11, 0, 4, 0);
-            combo.CornerRadius = Capsule;
+            combo.CornerRadius = FieldCorner;
             combo.Background = FieldBackground;
             combo.BorderBrush = FieldBorder;
             combo.BorderThickness = new Thickness(1);
@@ -198,56 +198,41 @@ namespace ClaudeBuddy
 
         private bool IsDark => ActualThemeVariant == ThemeVariant.Dark;
 
-        // Glass, not paint. A card is a lit sheet of it: brighter at the top than
-        // the bottom, because that's the cheap trick that reads as a curved
-        // surface catching light, and edged with a gradient that goes from a
-        // near-white highlight down to almost nothing — the specular rim Liquid
-        // Glass puts on everything. Both variants build from translucent white so
-        // the frost behind still comes through.
-        private IBrush CardBackground => VerticalGradient(
-            IsDark ? Color.FromArgb(0x3A, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x8C, 0xFF, 0xFF, 0xFF),
-            IsDark ? Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x4D, 0xFF, 0xFF, 0xFF));
-
-        private IBrush CardBorder => VerticalGradient(
-            IsDark ? Color.FromArgb(0x59, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xB3, 0xFF, 0xFF, 0xFF),
-            IsDark ? Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
+        // Apple's grouped cards are flat, crisp and *unbordered* — the fill
+        // against the pane is the whole edge treatment, no rim and no gradient
+        // sheen. A gradient plus a bright border, which is what a search for
+        // "glass" produces, is visibly not what System Settings does.
+        private IBrush CardBackground => new SolidColorBrush(
+            IsDark ? Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xF7, 0xFF, 0xFF, 0xFF));
 
         private IBrush Hairline => new SolidColorBrush(
             IsDark ? Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x0F, 0x00, 0x00, 0x00));
 
-        // Glass on glass: a field or pop-up is its own small pane rather than an
-        // opaque white box punched through the card.
+        // On a crisp card, a translucent field just looks dirty. Apple's are a
+        // solid fill with a hairline edge.
         private IBrush FieldBackground => new SolidColorBrush(
-            IsDark ? Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF));
+            IsDark ? Color.FromArgb(0x1A, 0xFF, 0xFF, 0xFF) : Colors.White);
 
         private IBrush FieldBorder => new SolidColorBrush(
-            IsDark ? Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x26, 0x00, 0x00, 0x00));
-
-        private static IBrush VerticalGradient(Color top, Color bottom) => new LinearGradientBrush
-        {
-            StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
-            EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
-            GradientStops =
-            {
-                new GradientStop(top, 0),
-                new GradientStop(bottom, 1)
-            }
-        };
+            IsDark ? Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x22, 0x00, 0x00, 0x00));
 
         private Control Group(string title, Control card) => new StackPanel
         {
             Children =
             {
+                // "Theme" and "Windows" in System Settings are semibold and full
+                // strength, not the dimmed 12pt caption this had. They read as
+                // headings; a dimmed caption reads as a hint.
                 new TextBlock
                 {
                     Text = title,
-                    FontSize = 12,
-                    FontWeight = FontWeight.Medium,
-                    // Higher than you would use on an opaque panel: this label is
-                    // the one piece of text sitting directly on the glass, with
-                    // whatever is behind the window showing through it.
-                    Opacity = 0.75,
-                    Margin = new Thickness(6, 0, 0, 6)
+                    FontSize = 13,
+                    FontWeight = FontWeight.SemiBold,
+                    Opacity = 0.9,
+                    // Left inset matches the rows' own 14, because in System
+                    // Settings the group heading sits directly above the first
+                    // row's label rather than out to the left of it.
+                    Margin = new Thickness(14, 0, 0, 7)
                 },
                 card
             }
@@ -272,22 +257,14 @@ namespace ClaudeBuddy
                 stack.Children.Add(rows[i]);
             }
 
-            // Liquid Glass rounds hard and floats: 18 rather than Fluent's 4, and
-            // a soft shadow, because a pane of glass sits *above* the material
-            // instead of being drawn into it.
+            // 12, measured off System Settings' own groups — 18 plus a drop
+            // shadow made these read as floating panels, which is a popover's
+            // treatment, not a grouped row's.
             return new Border
             {
                 Background = CardBackground,
-                BorderBrush = CardBorder,
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(18),
+                CornerRadius = new CornerRadius(12),
                 ClipToBounds = true,
-                BoxShadow = new BoxShadows(new BoxShadow
-                {
-                    OffsetY = 2,
-                    Blur = 14,
-                    Color = Color.FromArgb(IsDark ? (byte)0x4D : (byte)0x1F, 0, 0, 0)
-                }),
                 Child = stack
             };
         }
@@ -559,7 +536,11 @@ namespace ClaudeBuddy
             {
                 IsChecked = value,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                // Fluent's box is 20pt against AppKit's 14, and next to Apple's
+                // it looked like a touch target. The template's geometry is fixed,
+                // so scaling the rendered control is the only way down.
+                RenderTransform = new ScaleTransform(0.8, 0.8)
             };
             box.IsCheckedChanged += (_, _) => onChange(box.IsChecked ?? false);
             return box;
