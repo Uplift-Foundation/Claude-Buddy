@@ -15,10 +15,10 @@ namespace ClaudeBuddy
 {
     public partial class OrbWindow : Window
     {
-        private static readonly Color IdleColor = Color.Parse("#5B7A94");       // calm slate blue
-        private static readonly Color GeneratingColor = Color.Parse("#8B6FD1"); // violet
-        private static readonly Color WaitingColor = Color.Parse("#E8983B");    // amber
-
+        // The three state colours live in OrbColors now — they're settable, and
+        // the tray icon reads the same three, so a static field here would have
+        // been a second copy for both reasons.
+        //
         // A session's /color goes on the orb's border and letter, leaving the
         // fill to mean what it always has.
         //
@@ -59,13 +59,15 @@ namespace ClaudeBuddy
         private string _lastState = "";
         private string _lastColor = "";
 
-        private readonly SolidColorBrush _orbBrush = new(IdleColor);
+        // Seeded from the settings-backed colour at field-init time, the same way
+        // SessionManager seeds OrbsVisible from ClaudeBuddySettings.ShowOrbs.
+        private readonly SolidColorBrush _orbBrush = new(OrbColors.Idle);
 
         private readonly RadialGradientBrush _glowBrush = new()
         {
             GradientOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),
             Center = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),
-            GradientStops = GlowStops(IdleColor)
+            GradientStops = GlowStops(OrbColors.Idle)
         };
 
         private readonly ColorTransition _colorTransition;
@@ -164,24 +166,56 @@ namespace ClaudeBuddy
             return first.ToUpperInvariant();
         }
 
+        // The colour comes from OrbColors so this switch is about *motion* only —
+        // one state-to-colour mapping in the app, not two that can drift apart.
         private void ApplyState(string state)
         {
+            var color = OrbColors.For(state);
+
             switch (state)
             {
                 case "waiting":
-                    AnimateColor(WaitingColor, TimeSpan.FromMilliseconds(300));
+                    AnimateColor(color, TimeSpan.FromMilliseconds(300));
                     StartPulse(1.22, TimeSpan.FromMilliseconds(500), new QuadraticEaseOut());
                     break;
                 case "generating":
-                    AnimateColor(GeneratingColor, TimeSpan.FromMilliseconds(300));
+                    AnimateColor(color, TimeSpan.FromMilliseconds(300));
                     StartPulse(1.14, TimeSpan.FromMilliseconds(900), new SineEaseInOut());
                     break;
                 default:
                     StopPulse();
-                    AnimateColor(IdleColor, TimeSpan.FromMilliseconds(400));
+                    AnimateColor(color, TimeSpan.FromMilliseconds(400));
                     StartPulse(1.06, TimeSpan.FromSeconds(2.2), new SineEaseInOut());
                     break;
             }
+        }
+
+        // Changing a colour in settings is not a state change, and UpdateFrom only
+        // calls ApplyState when status.State actually differs — so without this an
+        // orb would keep its old fill until its session next did something, which
+        // for a quiet session is never.
+        //
+        // Two things it deliberately doesn't do. It doesn't re-run ApplyState:
+        // StartPulse resets the breath's phase, so every orb on screen would jerk
+        // in step with the pointer. And it barely fades — 60ms, not the 300-400ms
+        // a real state change gets — because the picker raises its change event on
+        // every pointer move, and a third of a second of easing leaves the orb
+        // trailing the cursor, reading as lag rather than as a live preview. At
+        // 60ms each frame lands most of the way there and the orb tracks the
+        // spectrum. The glow already snaps, since GlowStops is assigned rather
+        // than animated, so this also stops the two disagreeing mid-drag.
+        private static readonly TimeSpan SettingsColorFade = TimeSpan.FromMilliseconds(60);
+
+        public void ReapplyStateColors()
+        {
+            // Not up yet: the Loaded handler applies _lastState with the new
+            // colours anyway, which also covers an orb created while orbs were
+            // hidden.
+            if (!IsLoaded) return;
+
+            AnimateColor(
+                OrbColors.For(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState),
+                SettingsColorFade);
         }
 
         private void AnimateColor(Color to, TimeSpan duration)

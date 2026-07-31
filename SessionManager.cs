@@ -299,6 +299,23 @@ namespace ClaudeBuddy
             UpdateTray();
         }
 
+        // A colour change isn't a session change, so nothing on the scan path
+        // would notice one: ScanAndUpdate calls UpdateFrom, and UpdateFrom only
+        // calls ApplyState when the state actually differs. Same shape as
+        // SetOrbsVisible above — whoever changed the setting says so.
+        //
+        // Hidden orbs get walked too. They're still loaded windows, and they'll
+        // be right when they come back.
+        public void ReapplyStateColors()
+        {
+            foreach (var window in _windows.Values)
+            {
+                window.ReapplyStateColors();
+            }
+
+            _tray?.ReapplyStateColors();
+        }
+
         private void ReflowPositions()
         {
             if (_order.Count == 0 || !OrbsVisible) return;

@@ -37,6 +37,11 @@ orb's **border and letter**. The fill is left alone deliberately — it's the
 state signal, and amber-means-Claude-needs-you only works if it means that on
 every orb. So color says *which* session, fill says *what it's doing*.
 
+The three state colors are **yours to pick** — slate, violet and amber are only
+the defaults. See **Orb colours** in the settings window; the rest of this file
+calls them by their default names, since that's what you'll see until you change
+them.
+
 **Only colors you set with `/color` show up.** Claude Code also gives every
 session an automatic accent (the color of its prompt border and name chip),
 but that one is per-process and isn't written to the transcript — or anywhere
@@ -201,7 +206,8 @@ Details worth knowing:
 There's also a **status-bar icon** — macOS menu bar, Windows notification
 area — that's there whether or not any session is running. Its color tracks
 the most urgent session (amber if any session needs you, violet if any is
-working, otherwise slate), and its menu lists the live sessions by chat name
+working, otherwise slate — or whatever you've set those three to, since the
+icon is re-tinted to match), and its menu lists the live sessions by chat name
 (falling back to folder name, same as the orbs, and truncated if it runs
 long) — click one to jump to its terminal, same as clicking its orb. Two
 sessions that end up with the same label get a short session-id suffix so you
@@ -215,12 +221,23 @@ surface, since with zero sessions there are no orbs to right-click:
   (see the pruning note below).
 - **Settings…** — a small preferences window, grouped the way macOS groups
   its own: **Orbs** (show them at all, and **"Keep orbs for"** — 1 minute
-  through 4 hours, or **Forever**, covered under pruning below), **Claude
-  Desktop** (window tinting) and **Profiles** (per-profile name, colour and
-  what the colour applies to). Everything applies as you change it and is
-  written to disk immediately; there's no OK or Cancel, and on macOS no Done
+  through 4 hours, or **Forever**, covered under pruning below), **Orb
+  colours** (one colour picker per state, plus a **Reset** that puts the
+  shipped three back), **Claude Desktop** (window tinting) and **Profiles**
+  (per-profile name, colour and what the colour applies to). Everything applies
+  as you change it and is written to disk immediately — the colour pickers wait
+  a quarter-second after you stop dragging, since they'd otherwise rewrite the
+  file on every pointer move, but the orbs and the menu-bar icon follow the
+  spectrum live either way. There's no OK or Cancel, and on macOS no Done
   button either — Escape, Cmd-W or the window's close button, like any other
   Mac window.
+
+  Two things a custom colour doesn't reach. The orb's letter and its plain
+  hairline border stay near-white, so a very pale fill makes the letter hard to
+  read — the fills are meant to be saturated. And the **app icon** (Dock,
+  Finder, the .exe) keeps the defaults permanently: it's baked into the bundle
+  at build time, and rewriting an installed app at runtime is exactly the
+  privacy wall the Claude Desktop Dock-icon tinting already has to work around.
 - **Quit Claude Buddy**.
 
 On macOS the menu opens on a left-click of the menu-bar icon. On Windows it's
@@ -763,10 +780,23 @@ signed build.
   `tmux capture-pane -p -e | grep -o $'\033\[38;5;[0-9]*m'`. An unrecognized
   name (one added to Claude Code later) falls back to the plain border and
   white letter, so add a line there rather than expecting a crash.
-- **Colors and animation**: `OrbWindow.axaml.cs` has `IdleColor` /
-  `GeneratingColor` / `WaitingColor` at the top, and the breathing/pulse
-  timings live in `ApplyState()` / `StartPulse()` — easy to retune speed,
-  scale, or swap in different colors.
+- **Colors and animation**: `OrbColors.cs` is the one place that answers "what
+  colour is this state" — `DefaultIdle` / `DefaultGenerating` / `DefaultWaiting`
+  are the shipped three, and the live values are a projection over the
+  `orbColors` block in `settings.json` (`null` there means "use the default", so
+  retuning a shipped colour still reaches anyone who never picked their own).
+  Three things read it: `OrbWindow`'s fill and glow, `TrayController.Tinted()`,
+  which recolours the baked tray PNGs at runtime, and the settings window's
+  pickers. Nothing observes it, so a writer calls
+  `SessionManager.ReapplyStateColors()` — needed because `UpdateFrom` only
+  re-applies a colour when the *state* changes, so a quiet orb would otherwise
+  keep the old fill forever. The breathing/pulse timings stay in `ApplyState()`
+  / `StartPulse()`, and `ApplyState`'s switch is now about motion only.
+
+  `tools/make-icons.py` still holds a hand-synced copy of the three defaults,
+  but what matters at runtime is the *alpha* channel of `Assets/tray-*.png`:
+  each is a single colour over an alpha mask, which is what makes an exact
+  re-tint possible — redrawing the ring in C# instead would change its shape.
 - **When an orb goes away**: `SessionManager.ScanAndUpdate()` has all three
   rules in order — process-gone (`ProcessLiveness.IsRunning`, a `kill(pid, 0)`
   on Unix and `Process.GetProcessById` on Windows), then the `waiting`
@@ -782,6 +812,13 @@ signed build.
   `null` for Forever. `waiting` is exempt either way, see above. The choices
   the settings window offers live in `LifetimeChoices` in
   `SettingsWindow.cs`.
+- **Reading `settings.json` by hand**: `ClaudeBuddySettings.cs` maps every field
+  itself rather than deserializing a type, and the whole read sits in one
+  `catch` that falls back to *all* defaults — so a wrong-typed value costs you
+  the entire file, profile names and dragged orb positions included. The
+  `orbColors` block is read through `Text()` for exactly that reason: a
+  `"idle": 5` there degrades to the default colour and nothing else. The older
+  fields still use `GetValue<T>()` and still have the sharp edge.
 - **The settings window**: `SettingsWindow.cs`, built in code rather than
   XAML. `ClaudeBuddy --settings` opens it straight at launch, which beats
   clicking through the status-bar menu when the window itself is what you're
