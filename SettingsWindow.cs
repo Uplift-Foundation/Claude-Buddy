@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Avalonia;
@@ -256,18 +257,28 @@ namespace ClaudeBuddy
                 return null;
             }
 
-            // Must be a *direct* child of home, not just nested somewhere
-            // under it — the underlying model (-ProfileDir/-WslProfileDir,
-            // and their WSL twin) only ever takes a single path segment
-            // relative to home, so picking e.g. ~/work/claude-work would
-            // silently keep only "claude-work" and resolve to the wrong,
-            // nonexistent ~/claude-work instead.
-            var trimmedHome = home.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            // Must be a *direct* child of a recognized home, not just nested
+            // somewhere under it — the underlying model (-ProfileDir/
+            // -WslProfileDir) only ever takes a single path segment relative
+            // to home, so picking e.g. ~/work/claude-work would silently
+            // keep only "claude-work" and resolve to the wrong, nonexistent
+            // ~/claude-work instead. "A recognized home" is deliberately not
+            // just the Windows one: the same dir name gets wired under every
+            // WSL distro's home too (see the section's own doc comment), and
+            // a profile can be WSL-only with no Windows-side counterpart at
+            // all — e.g. a second Linux-only account — so a folder picked
+            // from \\wsl.localhost\<distro>\home\<user>\ must validate the
+            // same way a native one does, not be rejected just because it
+            // isn't under C:\Users\....
+            var validHomes = new[] { home }.Concat(WslIntegration.GetWslHomeUncPaths())
+                .Select(h => h.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+                .ToList();
             var trimmedPicked = pickedPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             var parent = Path.GetDirectoryName(trimmedPicked);
-            if (!string.Equals(parent, trimmedHome, StringComparison.OrdinalIgnoreCase))
+            if (!validHomes.Any(h => string.Equals(parent, h, StringComparison.OrdinalIgnoreCase)))
             {
-                status.Text = "Must be a folder directly inside your home directory (" + home + "), not a nested subfolder.";
+                status.Text = "Must be a folder directly inside your home directory (" + home
+                    + ") or a WSL distro's home directory, not a nested subfolder.";
                 return null;
             }
 

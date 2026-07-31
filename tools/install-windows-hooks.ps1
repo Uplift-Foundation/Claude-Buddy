@@ -102,14 +102,28 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $repoRoot 'ClaudeBuddyHook.ps1'
 $installed = Join-Path $InstallDir 'ClaudeBuddyHook.ps1'
 
-if (-not $Uninstall) {
-    if (-not (Test-Path -LiteralPath $source)) {
-        throw "Can't find ClaudeBuddyHook.ps1 next to the repo root ($source)."
-    }
+# -UninstallWsl on its own is documented above as touching only WSL, leaving
+# native Windows hooks exactly as they were. Every other combination still
+# (re)wires native, matching a bare invocation's existing behavior — that's
+# what WslIntegration.ReapplyProfiles and the Settings window's per-distro
+# checkbox (SetWired, which passes bare -Wsl) rely on. Without this guard,
+# -UninstallWsl alone fell through to the "not $Uninstall" branch below and
+# silently re-copied the hook script and re-wired native hooks — invisible
+# whenever native was already wired (the re-wire is idempotent), but
+# confirmed to reactivate native hooks that had just been fully removed by
+# -Uninstall, when later cleaning up a WSL-only profile by hand.
+$touchNative = $Uninstall -or $Wsl -or (-not $UninstallWsl)
 
-    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    Copy-Item -LiteralPath $source -Destination $installed -Force
-    Write-Host "Hook installed: $installed"
+if ($touchNative) {
+    if (-not $Uninstall) {
+        if (-not (Test-Path -LiteralPath $source)) {
+            throw "Can't find ClaudeBuddyHook.ps1 next to the repo root ($source)."
+        }
+
+        New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+        Copy-Item -LiteralPath $source -Destination $installed -Force
+        Write-Host "Hook installed: $installed"
+    }
 }
 
 # ConvertFrom-Json -AsHashtable is PowerShell 6+, and the powershell.exe Claude
@@ -272,17 +286,19 @@ $nativeCommandBuilder = {
     "powershell.exe -NoProfile -ExecutionPolicy Bypass -File $quoted -State $State -TempDir $tempQuoted"
 }
 
-Set-ClaudeBuddyHooks -SettingsPath $SettingsPath -CommandBuilder $nativeCommandBuilder -Uninstall:$Uninstall
+if ($touchNative) {
+    Set-ClaudeBuddyHooks -SettingsPath $SettingsPath -CommandBuilder $nativeCommandBuilder -Uninstall:$Uninstall
 
-foreach ($entry in $ProfileDir) {
-    $extraPath = if ([System.IO.Path]::IsPathRooted($entry)) {
-        Join-Path $entry 'settings.json'
+    foreach ($entry in $ProfileDir) {
+        $extraPath = if ([System.IO.Path]::IsPathRooted($entry)) {
+            Join-Path $entry 'settings.json'
+        }
+        else {
+            Join-Path (Join-Path $env:USERPROFILE $entry) 'settings.json'
+        }
+        Write-Host "--- Additional Claude Code profile: $entry ---"
+        Set-ClaudeBuddyHooks -SettingsPath $extraPath -CommandBuilder $nativeCommandBuilder -Uninstall:$Uninstall
     }
-    else {
-        Join-Path (Join-Path $env:USERPROFILE $entry) 'settings.json'
-    }
-    Write-Host "--- Additional Claude Code profile: $entry ---"
-    Set-ClaudeBuddyHooks -SettingsPath $extraPath -CommandBuilder $nativeCommandBuilder -Uninstall:$Uninstall
 }
 
 # ---------------------------------------------------------------------------

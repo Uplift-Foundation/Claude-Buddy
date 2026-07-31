@@ -223,6 +223,30 @@ namespace ClaudeBuddy
             return $@"\\wsl$\{distro}\{rel}";
         }
 
+        // UNC home-directory paths for every listed distro, e.g.
+        // \\wsl.localhost\Ubuntu\home\kmart — lets the Settings window's
+        // profile folder picker validate a WSL-only profile (one with no
+        // Windows-side counterpart, like a second Linux-only account) the
+        // same way it validates a native one: by requiring the picked folder
+        // to be a direct child of *some* recognized home directory, not just
+        // the Windows one.
+        public static IReadOnlyList<string> GetWslHomeUncPaths()
+        {
+            if (!OperatingSystem.IsWindows()) return Array.Empty<string>();
+
+            var result = new List<string>();
+            foreach (var distro in ListDistros())
+            {
+                var home = ResolveLinuxHome(distro);
+                if (home is null) continue;
+
+                var rel = home.TrimStart('/').Replace('/', '\\');
+                result.Add($@"\\wsl.localhost\{distro}\{rel}");
+            }
+
+            return result;
+        }
+
         private static string? ResolveLinuxHome(string distro)
         {
             uint defaultUid;
