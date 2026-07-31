@@ -21,6 +21,17 @@ sessions in one repo stop looking identical. Hover for the name and the full
 path; the right-click menu leads with both (plus reset that session to idle /
 exit Claude Buddy entirely).
 
+**Left-click-drag an orb to put it wherever you want**, and it stays there:
+it holds that spot as other sessions come and go (the rest of the stack
+closes up behind it), and it's remembered across restarts of Claude Buddy —
+per working directory, since session ids are new every time. Right-click →
+**"Return this orb to the stack"** to give the placement up and have that
+orb rejoin the default top-right column. Two live sessions in the same
+directory share one remembered spot: the first orb to appear takes it and
+the other stacks normally, so they never land on top of each other. An orb
+whose remembered spot is on a monitor you no longer have starts out back in
+the stack.
+
 If you've given a session a color with **`/color`**, that color becomes the
 orb's **border and letter**. The fill is left alone deliberately — it's the
 state signal, and amber-means-Claude-needs-you only works if it means that on
@@ -459,9 +470,9 @@ too.
 Run it once to sanity-check: until a session writes a status file you should
 see **zero orbs** and a slate-colored status-bar icon whose menu says "No
 Claude Code sessions" — that's correct, not broken. Left-click-drag an orb
-to reposition it once one appears; dragging is only honored until the next
-time a session is added or removed, at which point the whole stack reflows
-back to its default layout.
+to reposition it once one appears; where you drop it is remembered (see
+above), so a test run leaves `orbPositions` entries in `settings.json` for
+whatever directories you dragged.
 
 The icons are generated, not checked in as hand-drawn art — rerun
 `python3 tools/make-icons.py` (stdlib only) after editing it to regenerate
@@ -733,7 +744,9 @@ signed build.
   timings live in `ApplyState()` / `StartPulse()` — easy to retune speed,
   scale, or swap in different colors.
 - **Stacking layout and staleness**: `SessionManager.cs` has the stacking
-  math (`ReflowPositions()`) and the `StaleAfter` constant (5 minutes)
+  math (`ReflowPositions()`, which steps over orbs the user has dragged —
+  those live in `orbPositions` in `settings.json`, keyed by the session's
+  directory; see `RestoreOrbPosition()`) and the `StaleAfter` constant (5 minutes)
   that controls how long an idle/generating session's orb sticks around
   before being pruned — `waiting` is exempt, see above.
 - **macOS + Spaces**: orbs follow you across Spaces and show alongside

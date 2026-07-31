@@ -37,6 +37,13 @@ namespace ClaudeBuddy
 
         // ---- shape ----------------------------------------------------------
 
+        // Where a dragged orb sits, in the same coordinate space as
+        // Window.Position: physical pixels on the virtual desktop. Storing DIPs
+        // instead would survive a scaling change, but there's no coherent
+        // desktop-wide DIP space on a mixed-DPI setup, so raw pixels it is —
+        // SessionManager clamps a restored point back onto a real screen.
+        internal sealed record OrbPlacement(int X, int Y);
+
         internal sealed class ProfileSettings
         {
             public string? Name { get; set; }          // display name; null = folder name
@@ -52,6 +59,12 @@ namespace ClaudeBuddy
             public bool TintActiveWindow { get; set; } = true;
             public Dictionary<string, ProfileSettings> Profiles { get; init; } =
                 new(StringComparer.Ordinal);
+
+            // Keyed by the session's cwd — see SessionManager.PositionKeyFor.
+            // Case-insensitive because Windows paths are, and the same repo
+            // shouldn't get two entries over a capitalization difference.
+            public Dictionary<string, OrbPlacement> OrbPositions { get; init; } =
+                new(StringComparer.OrdinalIgnoreCase);
         }
 
         // ---- app-wide -------------------------------------------------------
@@ -66,6 +79,38 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.TintActiveWindow; }
             set { Load(); lock (Gate) _model.TintActiveWindow = value; Save(); }
+        }
+
+        // ---- orb positions --------------------------------------------------
+
+        public static OrbPlacement? OrbPositionFor(string key)
+        {
+            Load();
+            lock (Gate) return _model.OrbPositions.GetValueOrDefault(key);
+        }
+
+        public static void SetOrbPosition(string key, int x, int y)
+        {
+            Load();
+            lock (Gate)
+            {
+                var existing = _model.OrbPositions.GetValueOrDefault(key);
+                if (existing is not null && existing.X == x && existing.Y == y) return;
+                _model.OrbPositions[key] = new OrbPlacement(x, y);
+            }
+
+            Save();
+        }
+
+        public static void ClearOrbPosition(string key)
+        {
+            Load();
+            lock (Gate)
+            {
+                if (!_model.OrbPositions.Remove(key)) return;
+            }
+
+            Save();
         }
 
         // ---- per profile ----------------------------------------------------
@@ -146,6 +191,20 @@ namespace ClaudeBuddy
                         }
                     }
 
+                    if (root["orbPositions"] is JsonObject positions)
+                    {
+                        foreach (var (key, node) in positions)
+                        {
+                            if (node is not JsonObject entry) continue;
+
+                            var x = entry["x"]?.GetValue<int>();
+                            var y = entry["y"]?.GetValue<int>();
+                            if (x is null || y is null) continue;
+
+                            model.OrbPositions[key] = new OrbPlacement(x.Value, y.Value);
+                        }
+                    }
+
                     _model = model;
                 }
                 catch
@@ -180,12 +239,23 @@ namespace ClaudeBuddy
                         };
                     }
 
+                    var positions = new JsonObject();
+                    foreach (var (key, placement) in _model.OrbPositions)
+                    {
+                        positions[key] = new JsonObject
+                        {
+                            ["x"] = placement.X,
+                            ["y"] = placement.Y
+                        };
+                    }
+
                     root = new JsonObject
                     {
                         ["version"] = CurrentVersion,
                         ["showOrbs"] = _model.ShowOrbs,
                         ["tintActiveWindow"] = _model.TintActiveWindow,
-                        ["profiles"] = profiles
+                        ["profiles"] = profiles,
+                        ["orbPositions"] = positions
                     };
                 }
 

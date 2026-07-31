@@ -23,6 +23,12 @@
                 <MenuItem x:Name="SessionInfoItem" IsEnabled="False"/>
                 <MenuItem x:Name="SessionPathItem" IsEnabled="False"/>
                 <Separator/>
+                <!-- Only shown for an orb the user has dragged; see
+                     OrbWindow.SetPinned. -->
+                <MenuItem x:Name="ResetPositionItem"
+                          Header="Return this orb to the stack"
+                          IsVisible="False"
+                          Click="ResetPosition_Click"/>
                 <MenuItem Header="Reset this session to idle" Click="ResetIdle_Click"/>
                 <MenuItem Header="Exit Claude Buddy" Click="Exit_Click"/>
             </ContextMenu>
