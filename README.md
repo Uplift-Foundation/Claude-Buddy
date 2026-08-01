@@ -392,11 +392,22 @@ containing `{"state": "...", "cwd": "...", "title": "...", "color": "...", ...}`
 `ClaudeBuddyHook.sh` (bash, macOS). No network calls, no polling of Claude
 Code itself, no persistent process beyond the hook calls themselves.
 
-An orb goes away when any of three things happens.
+An orb goes away when any of four things happens.
 
 1. **Its `SessionEnd` hook fires** — a clean exit like `/exit` — which deletes
    the status file outright.
-2. **Its `claude` process is gone.** Both hooks record that process's pid
+2. **Another session id from the same process has overtaken it.** A `claude`
+   process mints a new session id whenever you `/clear`, resume, or start a new
+   conversation, and the hook writes a *new* status file each time — nothing
+   deletes the old one, because `SessionEnd` only fires when the process itself
+   exits. Within one pid only the most recently written file is the live
+   session, so the rest go immediately. Without this they were invisible to
+   rules 3 and 4 alike (the pid is live, the file exists) and one terminal
+   showed several orbs for a whole lifetime, some of them stuck on a `generating`
+   they'd never be told to leave. Sessions running side by side are separate
+   processes with separate pids, so this never merges two real ones; files from
+   a hook too old to record a pid are left out of it entirely.
+3. **Its `claude` process is gone.** Both hooks record that process's pid
    (`session_pid`), and every scan checks whether it still exists; if it
    doesn't, the orb goes regardless of the lifetime below, including under
    Forever, and including a session sitting on `waiting`. This is the Ctrl+C
@@ -404,14 +415,15 @@ An orb goes away when any of three things happens.
    the file survives its session, and the pid is what tells "still running"
    from "left behind". A session started under a hook older than this field has
    no pid recorded and falls back to the timer alone.
-3. **The lifetime expires** — its file hasn't been touched for however long
+4. **The lifetime expires** — its file hasn't been touched for however long
    **Settings → Orbs → "Keep orbs for"** says. That's 5 minutes out of the box,
    anything from a minute to four hours, or **Forever**, which never prunes on
    time at all. A session on `waiting` (amber) is exempt from *this* rule
    deliberately: nothing refreshes that file while you're away from an
    unanswered prompt, so timing it out would hide the orb exactly when it's
-   trying hardest to get your attention. Rule 2 still applies to it, which is
-   what keeps a Ctrl+C'd prompt from sitting on screen forever.
+   trying hardest to get your attention. Rules 2 and 3 still apply to it, which
+   is what keeps a Ctrl+C'd prompt — or a `/clear`ed one — from sitting on
+   screen forever.
 
 Right-click → "Reset this session to idle" is still there for a session whose
 process is alive but whose orb is stuck amber.
@@ -797,12 +809,17 @@ signed build.
   but what matters at runtime is the *alpha* channel of `Assets/tray-*.png`:
   each is a single colour over an alpha mask, which is what makes an exact
   re-tint possible — redrawing the ring in C# instead would change its shape.
-- **When an orb goes away**: `SessionManager.ScanAndUpdate()` has all three
-  rules in order — process-gone (`ProcessLiveness.IsRunning`, a `kill(pid, 0)`
-  on Unix and `Process.GetProcessById` on Windows), then the `waiting`
-  exemption, then the lifetime timer. A recycled pid reads as alive, which
-  errs toward keeping an orb rather than dropping a live session's, and the
-  timer still catches that unless the lifetime is Forever.
+- **When an orb goes away**: `SessionManager.ScanAndUpdate()` has all four rules
+  in order — superseded-session-id (`Superseded()`, newest file wins per
+  `session_pid`), then process-gone (`ProcessLiveness.IsRunning`, a
+  `kill(pid, 0)` on Unix and `Process.GetProcessById` on Windows), then the
+  `waiting` exemption, then the lifetime timer. The scan reads every status file
+  into a `ScanEntry` list *before* judging any of them, because `Superseded`
+  needs to compare files against each other; that pre-pass is also where the
+  mtime the timer uses comes from, so it's read once per file per scan rather
+  than twice. A recycled pid reads as alive, which errs toward keeping an orb
+  rather than dropping a live session's, and the timer still catches that unless
+  the lifetime is Forever.
 - **Stacking layout and staleness**: `SessionManager.cs` has the stacking
   math (`ReflowPositions()`, which steps over orbs the user has dragged —
   those live in `orbPositions` in `settings.json`, keyed by the session's

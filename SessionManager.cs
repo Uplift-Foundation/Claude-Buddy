@@ -152,6 +152,69 @@ namespace ClaudeBuddy
             _debounce.Start();
         }
 
+        // One status file, already parsed. Written is the file's mtime, which is
+        // what "how long since this session last said anything" means throughout.
+        private sealed record ScanEntry(string SessionId, SessionStatus Status, DateTime Written);
+
+        // Session ids one process has already moved on from.
+        //
+        // A Claude Code process mints a new session id every time you /clear,
+        // resume, or start a new conversation, and the hook writes a *new*
+        // <session-id>.txt for each. Nothing deletes the old ones: SessionEnd only
+        // fires when the process exits, and it hasn't. So one terminal accumulates
+        // several files that all name a live pid — the process-gone rule can't
+        // touch them, and the lifetime timer was the only thing that ever would.
+        //
+        // That put duplicate orbs on screen for a whole lifetime. Observed with
+        // four files on one pid: three orbs for one terminal, two of them showing
+        // `generating`, because a superseded id keeps whatever state it was last
+        // written with and no further hook ever corrects it. The stale one is
+        // indistinguishable from real work.
+        //
+        // Within one process only the newest file is the live session, so the rest
+        // go now. Two genuinely concurrent sessions are two processes with two
+        // pids, so this can't collapse them into one.
+        //
+        // A pid of 0 means a hook older than the session_pid field. Grouping those
+        // would put every such file in one bucket and drop all but one, so they're
+        // left alone and keep the old behaviour — the same reason
+        // ProcessLiveness.IsRunning treats 0 as alive.
+        private static HashSet<string> Superseded(List<ScanEntry> found)
+        {
+            var newest = new Dictionary<int, ScanEntry>();
+
+            foreach (var entry in found)
+            {
+                var pid = entry.Status.SessionPid;
+                if (pid <= 0) continue;
+
+                // The ordinal tie-break only matters if two files somehow share an
+                // mtime, and exists so the choice doesn't depend on the order the
+                // directory happened to enumerate in.
+                if (!newest.TryGetValue(pid, out var best)
+                    || entry.Written > best.Written
+                    || (entry.Written == best.Written
+                        && string.CompareOrdinal(entry.SessionId, best.SessionId) > 0))
+                {
+                    newest[pid] = entry;
+                }
+            }
+
+            var stale = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entry in found)
+            {
+                var pid = entry.Status.SessionPid;
+                if (pid <= 0) continue;
+
+                if (newest.TryGetValue(pid, out var best) && best.SessionId != entry.SessionId)
+                {
+                    stale.Add(entry.SessionId);
+                }
+            }
+
+            return stale;
+        }
+
         private void ScanAndUpdate()
         {
             var seen = new HashSet<string>();
@@ -168,22 +231,40 @@ namespace ClaudeBuddy
                 files = Enumerable.Empty<string>();
             }
 
+            // Read everything before judging any of it: whether a file is live can
+            // depend on the *other* files — see Superseded.
+            var found = new List<ScanEntry>();
             foreach (var file in files)
             {
-                var sessionId = Path.GetFileNameWithoutExtension(file);
-
                 SessionStatus? status;
+                DateTime written;
                 try
                 {
+                    written = File.GetLastWriteTimeUtc(file);
                     using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                     status = System.Text.Json.JsonSerializer.Deserialize<SessionStatus>(stream);
                 }
                 catch
                 {
-                    continue; // mid-write; retry next tick
+                    continue; // mid-write or vanished; retry next tick
                 }
 
                 if (status is null) continue;
+
+                found.Add(new ScanEntry(Path.GetFileNameWithoutExtension(file), status, written));
+            }
+
+            var superseded = Superseded(found);
+
+            foreach (var (sessionId, status, written) in found)
+            {
+                // An id this process has already moved on from. Dropped here
+                // rather than left to the lifetime timer, which is the only other
+                // thing that would ever catch it.
+                if (superseded.Contains(sessionId))
+                {
+                    continue;   // removed in the pass below
+                }
 
                 // Gone is gone: if the claude process that wrote this file has
                 // exited, no lifetime setting should keep its orb — that's the
@@ -203,22 +284,11 @@ namespace ClaudeBuddy
                 // most. Use "Reset this session to idle" to clear a genuinely
                 // abandoned one manually.
                 var staleAfter = StaleAfter;
-                if (staleAfter is not null && status.State != "waiting")
+                if (staleAfter is not null
+                    && status.State != "waiting"
+                    && now - written > staleAfter)
                 {
-                    DateTime lastWrite;
-                    try
-                    {
-                        lastWrite = File.GetLastWriteTimeUtc(file);
-                    }
-                    catch
-                    {
-                        continue; // file vanished mid-scan
-                    }
-
-                    if (now - lastWrite > staleAfter)
-                    {
-                        continue; // treat as gone; cleaned up in the removal pass below
-                    }
+                    continue; // treat as gone; cleaned up in the removal pass below
                 }
 
                 // A session with no terminal recorded at all can't be jumped
