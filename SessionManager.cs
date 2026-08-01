@@ -33,10 +33,15 @@ namespace ClaudeBuddy
         // isn't in a team, so a non-empty value is also the app's only "this
         // is a team member" signal — see OrbWindow.SetTeamRole and TeamLinks.
         //
+        // Filled in by the app during the scan, from the member process's own
+        // command line (AgentTeam.LeadOf) — the hooks know nothing about teams
+        // and write no such field. It lives here anyway because everything that
+        // consumes a session's state consumes it through this object.
+        //
         // Nothing guarantees the lead is on screen: it can have ended, or been
         // filtered out, and the member outlives it either way. So this is a
         // hint, not a reference — everything that follows it checks.
-        [JsonPropertyName("lead")]
+        [JsonIgnore]
         public string Lead { get; set; } = "";
 
         // Where the session's terminal lives (macOS hook only; empty on
@@ -267,6 +272,21 @@ namespace ClaudeBuddy
 
             var superseded = Superseded(found);
 
+            // Note on what is deliberately *not* here: agent teams get no
+            // exemption from the lifetime timer, in either direction. A quiet
+            // lead is pruned like any other quiet session, and so is a member
+            // whose agent has finished and gone silent — even though its
+            // process is still alive and its file's mtime is frozen because
+            // nothing fires a hook for a session that isn't doing anything.
+            //
+            // Both were tried and taken back out. "Keep orbs for" is the user's
+            // statement about how long a quiet session stays on screen, and a
+            // team is not a special enough case to quietly overrule it; a team
+            // that should stay visible is a reason to set a longer lifetime,
+            // not a reason for the app to keep its own exceptions. The visible
+            // consequence is that a team shows the agents that are working,
+            // and an arrow disappears with the lead it pointed at.
+
             foreach (var (sessionId, status, written) in found)
             {
                 // An id this process has already moved on from. Dropped here
@@ -317,12 +337,26 @@ namespace ClaudeBuddy
 
                 seen.Add(sessionId);
 
+                // Whether this session is an agent-team member, and whose. Read
+                // from its process rather than its status file — see AgentTeam.
+                // Asked after the liveness rules above so a dead session never
+                // costs a lookup.
+                var membership = AgentTeam.Of(status.SessionPid);
+                status.Lead = membership.Lead == sessionId ? "" : membership.Lead;
+
+                // The colour Claude Code gave this agent when the team was
+                // built. Only used when the session hasn't set one itself: a
+                // `/color` run inside the agent is a deliberate choice and
+                // outranks the assigned one. This is not the automatic per-
+                // process accent the README declines to guess at — that one is
+                // nowhere on disk, whereas this was passed to the process on
+                // its command line and is what Claude Code's own team UI shows.
+                if (string.IsNullOrEmpty(status.Color)) status.Color = membership.Color;
+
                 // Joining or leaving a team changes where this orb belongs in
                 // the stack, not just what it looks like, so it has to reflow.
-                // It isn't a set change and would otherwise go unnoticed: a
-                // team member's first hook fires at SessionStart, before it has
-                // written the message record that names its team, so every
-                // member arrives teamless and acquires its lead a moment later.
+                // It isn't a set change and would otherwise go unnoticed — a
+                // team member can appear before its lead does.
                 if (_statuses.TryGetValue(sessionId, out var previous)
                     && previous.Lead != status.Lead)
                 {
@@ -431,6 +465,12 @@ namespace ClaudeBuddy
 
             return order;
         }
+
+        // The last known state of another session — what an orb needs to hand
+        // its team lead to TerminalFocuser. Null for a session that isn't
+        // tracked, including the empty id a non-member passes in.
+        public SessionStatus? StatusFor(string? sessionId) =>
+            string.IsNullOrEmpty(sessionId) ? null : _statuses.GetValueOrDefault(sessionId);
 
         // The orbs that follow this one when it's dragged: the members of the
         // team it leads. Empty for everything else, including a member — a

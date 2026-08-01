@@ -63,13 +63,22 @@ you arranged them in. Dragging a *member* moves only that member, which is how
 you pull one out to look at it; its arrow stretches to follow. The arrows are
 click-through, so they never eat a click meant for the desktop underneath.
 
-Nothing about this is guessed. A team member's transcript records the team it
-belongs to on every message (`"teamName":"session-6a6fcb43"`), and
-`~/.claude/teams/<team>/config.json` holds the lead's full session id — the
-hook reads both and writes a `lead` field into the member's status file. The
-lead's own transcript says nothing about the team, which is why the lookup goes
-through the config rather than the transcript alone. Sessions that aren't in a
-team are completely unaffected: no `lead`, no arrow, full-size orb.
+Nothing about this is guessed, and **no hook change is needed** — Claude Code
+spawns each member as its own `claude` process and hands it
+`--parent-session-id <lead>` and `--agent-color <name>` on the command line, so
+the app reads both off the process it is already tracking. That colour is used
+for the orb's ring and its arrow when the agent hasn't run `/color` itself; it
+is not the automatic accent described above, which really is nowhere on disk.
+Sessions that aren't in a team are completely unaffected: no arrow, full-size
+orb, nothing read that wasn't already being read.
+
+Team orbs obey **"Keep orbs for"** like everything else. An agent that has
+finished its work goes quiet, and a quiet session fires no hooks, so its file
+stops being touched and its orb is pruned on the usual schedule even though the
+process is still alive — a team of three that has finished two of them shows
+one. That's deliberate: the lifetime setting is yours, and a team isn't special
+enough to overrule it. Raise it (or set **Forever**) if you'd rather watch a
+whole team sit there.
 
 Names and colors come out of the session's own transcript, where Claude Code
 records them as `{"type":"custom-title",...}`, `{"type":"ai-title",...}` and
@@ -100,6 +109,33 @@ session's terminal**, best-effort:
   `/Applications` rather than out of `dist/` avoids this entirely, since its
   Developer ID identity is stable across rebuilds. The app now also logs this
   case explicitly rather than failing silently.
+
+  **Crossing desktops takes two rules to get right**, both of them macOS's
+  rather than ours, and both learned the hard way from clicks that appeared to
+  do nothing:
+
+  1. *The click has to arrive at all.* macOS spends the click that activates an
+     inactive app: the window comes forward, the view never sees it, unless it
+     answers `YES` to `acceptsFirstMouse:`. Claude Buddy is a background app and
+     is essentially never the active one when you're on another desktop, so the
+     first click was always the one being eaten — it looked exactly like "single
+     click does nothing, double click works". Avalonia's view doesn't implement
+     it and exposes no hook, so the answer is installed onto its class through
+     the Objective-C runtime (`MacOSWindowExtensions.AcceptFirstClick`).
+  2. *Activating is not the same as being taken there.* Activating an app raises
+     whichever of its windows are on the desktop you're looking at, and only
+     follows it to another one when it has none here. Ordering a specific window
+     front does pull you across — but only once the app is **already active**;
+     an activation still in flight lands afterwards and raises the local window,
+     undoing it. So the scripts activate, wait for that to land, then select.
+     Read them in `ITermSelectScript`: the comment there records both readings
+     of this, because testing from a desktop with no terminal on it gives the
+     opposite answer and looks conclusive.
+
+  A related dead end, recorded so it isn't retried: `[NSApp deactivate]` before
+  activating the terminal. Giving up active status hands it to whatever app was
+  frontmost on the desktop you were *on*, and macOS follows that app — pulling
+  you back where you started.
 - Windows: the terminal window the session runs in — verified for Windows
   Terminal, plain `conhost`, and VS Code's integrated terminal, including
   restoring a minimized window. WSL sessions fall back to activating Windows
@@ -802,15 +838,26 @@ signed build.
   names and the plain orb. Consumers: `OrbWindow.UpdateFrom` (glyph, tooltip,
   context menu), `OrbWindow.ApplyAccent` (border + letter color) and
   `TrayController.DisplayName`.
-- **Agent teams**: the hook adds one field, `lead` — the session id of the team
-  lead — read from the member's transcript (`teamName`, present on every message
-  record) and then out of `~/.claude/teams/<team>/config.json`
-  (`leadSessionId`), which is the only place the lead's *full* id appears. That
-  scan can't be line-anchored the way the title records are, and doesn't need to
-  be: message content is JSON-escaped, so a transcript quoting `"teamName":"`
-  contains `\"teamName\":\"` and can't match. `CLAUDE_CONFIG_DIR` is honoured.
-  In the app, `lead` does three things — `OrbWindow.SetTeamRole` draws a member
-  smaller (the *window* stays 56x56, so stacking, dragging and remembered
+- **Agent teams**: `AgentTeam.cs` answers "which session leads this one", by
+  reading `--parent-session-id` (and `--agent-color`) off the member's own
+  process — `KERN_PROCARGS2` on macOS via `MacOSProcessScan.ArgumentValues`,
+  WMI on Windows — keyed by the `session_pid` the liveness check already uses,
+  cached per pid with a one-minute valve so a recycled pid can't pin a wrong
+  answer. These are Claude Code internals rather than an interface; if they
+  change, the lookup returns nothing and orbs are drawn the way they were
+  before teams existed.
+
+  The first version asked the hooks instead: `teamName` out of the member's
+  transcript, then `leadSessionId` out of `~/.claude/teams/<team>/config.json`.
+  It worked, and it was still wrong — a hook only learns the answer when one
+  next *fires*, so an agent that had gone quiet, or was already running when the
+  hook was updated, kept a status file with no team in it and sat there looking
+  unrelated. Found exactly that way, with two live agents and no arrows. Reading
+  the process is true the moment the orb appears and needs no hook at all, which
+  is also why the hook scripts carry nothing about teams.
+
+  Downstream, that one value does three things: `OrbWindow.SetTeamRole` draws a
+  member smaller (the *window* stays 56x56, so stacking, dragging and remembered
   positions are untouched), `SessionManager.DisplayOrder()` gathers each team
   behind its lead, and `TeamLinks.cs` draws the arrows, one click-through window
   per arrow, parked and reused rather than closed (see `ClaudeDesktopOverlay`

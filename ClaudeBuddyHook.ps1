@@ -28,7 +28,6 @@ try {
 # so they keep the folder-name fallback — see the platform notes in README.
 $title = ''
 $color = ''
-$lead = ''
 if ($State -ne 'ended' -and $transcript -and (Test-Path $transcript)) {
     try {
         # Read the tail first: transcripts reach tens of MB and this runs on
@@ -39,8 +38,8 @@ if ($State -ne 'ended' -and $transcript -and (Test-Path $transcript)) {
         # turns a name like "café" into "cafÃ©". PowerShell 7 already defaults
         # to UTF-8; being explicit is correct on both.
         $pattern = '^\{"type":"(custom-title|ai-title|agent-color)"'
-        $tail = Get-Content -Path $transcript -Tail 400 -Encoding UTF8
-        $meta = $tail | Where-Object { $_ -match $pattern }
+        $meta = Get-Content -Path $transcript -Tail 400 -Encoding UTF8 |
+            Where-Object { $_ -match $pattern }
         if (-not $meta) {
             $meta = Get-Content -Path $transcript -Encoding UTF8 |
                 Where-Object { $_ -match $pattern }
@@ -60,36 +59,6 @@ if ($State -ne 'ended' -and $transcript -and (Test-Path $transcript)) {
 
         $line = & $newest 'agent-color'
         if ($line) { $color = ($line | ConvertFrom-Json).agentColor }
-
-        # Agent teams. A team member runs as its own claude process, so it gets
-        # its own orb with nothing to say it belongs to anyone — which is what
-        # the arrow the app draws is for. The member's transcript is the only
-        # thing on disk naming its team, and it names it on every message:
-        #   {"parentUuid":null,...,"teamName":"session-6a6fcb43","agentName":"..."}
-        # Unlike the title records this isn't a whole line and can't be
-        # anchored, but message content is JSON-escaped — a transcript quoting
-        # this comment holds \"teamName\":\", which the contiguous pattern below
-        # can't match. No whole-file fallback: every message carries it.
-        $team = ''
-        foreach ($line in $tail) {
-            if ($line -match '"teamName":"([A-Za-z0-9._-]+)"') { $team = $Matches[1] }
-        }
-
-        # Only members record a team; the lead records nothing, so its full
-        # session id has to come from the team's config (the team *name* holds
-        # only the first eight characters of it). The character class above is
-        # what keeps this off any path but a team's own. A lead naming itself is
-        # dropped — an orb with an arrow to itself is worse than no arrow.
-        if ($team) {
-            $configDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR }
-                         else { Join-Path $env:USERPROFILE '.claude' }
-            $teamConfig = Join-Path $configDir "teams\$team\config.json"
-            if (Test-Path $teamConfig) {
-                $lead = (Get-Content -Path $teamConfig -Raw -Encoding UTF8 |
-                    ConvertFrom-Json).leadSessionId
-            }
-            if ($lead -eq $sessionId) { $lead = '' }
-        }
     } catch {}
 }
 
@@ -141,7 +110,6 @@ $status = @{
     cwd          = $cwd
     title        = $title
     color        = $color
-    lead         = $lead
     term_program = $termProgram
     term_pid     = $termPid
     session_pid  = $sessionPid

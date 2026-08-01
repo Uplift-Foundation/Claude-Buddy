@@ -103,7 +103,14 @@ namespace ClaudeBuddy
             // honor any state that already arrived instead of stomping it.
             Loaded += (_, _) => ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
 
-            Opened += (_, _) => this.ShowOnAllSpaces();
+            Opened += (_, _) =>
+            {
+                this.ShowOnAllSpaces();
+
+                // Otherwise the first click on an orb is spent activating the
+                // app and never reaches it — see AcceptFirstClick.
+                this.AcceptFirstClick();
+            };
 
             // A closed orb must leave the shared ticker or it keeps being ticked.
             Closed += (_, _) => Pulsing.Remove(this);
@@ -471,7 +478,13 @@ namespace ClaudeBuddy
             }
             else
             {
-                TerminalFocuser.Focus(_lastStatus);
+                // A team member has no window of its own — its tmux server has
+                // no client attached anywhere — so a click that finds nothing
+                // falls through to the session leading it. See
+                // TerminalFocuser.Focus.
+                TerminalFocuser.Focus(
+                    _lastStatus,
+                    SessionManager.Instance?.StatusFor(_lastStatus?.Lead));
             }
 
             _followers.Clear();
