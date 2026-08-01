@@ -28,6 +28,17 @@ namespace ClaudeBuddy
         [JsonPropertyName("color")]
         public string Color { get; set; } = "";
 
+        // Set only on an agent-team member: the session id of the team lead
+        // this session answers to. Empty for a lead and for any session that
+        // isn't in a team, so a non-empty value is also the app's only "this
+        // is a team member" signal — see OrbWindow.SetTeamRole and TeamLinks.
+        //
+        // Nothing guarantees the lead is on screen: it can have ended, or been
+        // filtered out, and the member outlives it either way. So this is a
+        // hint, not a reference — everything that follows it checks.
+        [JsonPropertyName("lead")]
+        public string Lead { get; set; } = "";
+
         // Where the session's terminal lives (macOS hook only; empty on
         // Windows or with an older hook script). See TerminalFocuser.
         [JsonPropertyName("term_program")]
@@ -305,6 +316,19 @@ namespace ClaudeBuddy
                 }
 
                 seen.Add(sessionId);
+
+                // Joining or leaving a team changes where this orb belongs in
+                // the stack, not just what it looks like, so it has to reflow.
+                // It isn't a set change and would otherwise go unnoticed: a
+                // team member's first hook fires at SessionStart, before it has
+                // written the message record that names its team, so every
+                // member arrives teamless and acquires its lead a moment later.
+                if (_statuses.TryGetValue(sessionId, out var previous)
+                    && previous.Lead != status.Lead)
+                {
+                    setChanged = true;
+                }
+
                 _statuses[sessionId] = status;
 
                 var isNew = !_windows.TryGetValue(sessionId, out var window);
@@ -340,6 +364,10 @@ namespace ClaudeBuddy
                 ReflowPositions();
             }
 
+            // Not only on setChanged: an orb that was already on screen can
+            // gain or lose a lead, and the arrows have to follow either way.
+            UpdateTeamLinks();
+
             UpdateTray();
         }
 
@@ -347,10 +375,96 @@ namespace ClaudeBuddy
         {
             // Feed the tray in stacking order so the menu reads top-to-bottom
             // like the orbs do on screen.
-            _tray?.Update(_order
-                .Where(_statuses.ContainsKey)
+            _tray?.Update(DisplayOrder()
                 .Select(id => new TrayController.SessionEntry(id, _statuses[id]))
                 .ToList());
+        }
+
+        // --- agent teams ------------------------------------------------------
+
+        // Stacking order with each team gathered: a lead, then its members,
+        // then whatever came next. _order stays in first-seen order and is
+        // still the tie-breaker between teams — this only moves members up
+        // behind their lead, which keeps a team's arrows short and stops them
+        // crossing the unrelated sessions that happened to appear in between.
+        //
+        // A member whose lead isn't on screen (ended, or filtered out) is left
+        // exactly where it was: there's nothing to gather it under.
+        private List<string> DisplayOrder()
+        {
+            var byLead = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+            foreach (var id in _order)
+            {
+                if (!_statuses.TryGetValue(id, out var status)) continue;
+
+                var lead = status.Lead;
+                if (string.IsNullOrEmpty(lead) || lead == id) continue;
+                if (!_statuses.ContainsKey(lead)) continue;
+
+                if (!byLead.TryGetValue(lead, out var members))
+                {
+                    byLead[lead] = members = new List<string>();
+                }
+                members.Add(id);
+            }
+
+            var gathered = new HashSet<string>(byLead.Values.SelectMany(m => m), StringComparer.Ordinal);
+
+            var order = new List<string>(_order.Count);
+            foreach (var id in _order)
+            {
+                if (!_statuses.ContainsKey(id)) continue;
+                if (gathered.Contains(id)) continue;   // emitted under its lead below
+
+                order.Add(id);
+                if (byLead.TryGetValue(id, out var members)) order.AddRange(members);
+            }
+
+            // A team whose lead is itself a member of another team would leave
+            // its members unemitted above; nesting isn't a thing today, but a
+            // dropped orb would be a silent one, so sweep up anything missed.
+            foreach (var id in _order)
+            {
+                if (_statuses.ContainsKey(id) && !order.Contains(id)) order.Add(id);
+            }
+
+            return order;
+        }
+
+        // The orbs that follow this one when it's dragged: the members of the
+        // team it leads. Empty for everything else, including a member — a
+        // member is dragged on its own, which is how you pull one out of the
+        // group to look at it.
+        public List<OrbWindow> MembersOf(string leadSessionId)
+        {
+            var members = new List<OrbWindow>();
+
+            foreach (var id in _order)
+            {
+                if (!_statuses.TryGetValue(id, out var status)) continue;
+                if (status.Lead != leadSessionId || id == leadSessionId) continue;
+                if (_windows.TryGetValue(id, out var window)) members.Add(window);
+            }
+
+            return members;
+        }
+
+        private void UpdateTeamLinks()
+        {
+            TeamLinks.SetVisible(OrbsVisible);
+
+            var pairs = new List<(OrbWindow Member, OrbWindow Lead)>();
+            foreach (var (id, status) in _statuses)
+            {
+                if (string.IsNullOrEmpty(status.Lead) || status.Lead == id) continue;
+                if (!_windows.TryGetValue(id, out var member)) continue;
+                if (!_windows.TryGetValue(status.Lead, out var lead)) continue;
+
+                pairs.Add((member, lead));
+            }
+
+            TeamLinks.Update(pairs);
         }
 
         public void SetOrbsVisible(bool visible)
@@ -364,6 +478,10 @@ namespace ClaudeBuddy
                 if (visible) window.Show();
                 else window.Hide();
             }
+
+            // Arrows go with the orbs they join — two invisible orbs joined by a
+            // visible arrow is a line from nowhere to nowhere.
+            TeamLinks.SetVisible(visible);
 
             if (visible) ReflowPositions();
             UpdateTray();
@@ -405,7 +523,7 @@ namespace ClaudeBuddy
             // Orbs the user has placed by hand keep their spot and don't take up
             // a slot, so the rest of the stack closes up behind them.
             int slot = 0;
-            foreach (var id in _order)
+            foreach (var id in DisplayOrder())
             {
                 var window = _windows[id];
                 if (window.IsPinned) continue;
@@ -415,6 +533,9 @@ namespace ClaudeBuddy
                     work.Y + margin + slot * (size + spacing));
                 slot++;
             }
+
+            // Every arrow's geometry just moved.
+            TeamLinks.Refresh();
         }
 
         // --- dragged orb positions -------------------------------------------

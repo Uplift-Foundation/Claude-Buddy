@@ -52,6 +52,25 @@ showing, and a ring is more useful when it always means "I chose this". Run
 `/color` in a session and its orb picks the color up on the next hook fire,
 within a couple of seconds.
 
+**Agent teams get drawn as teams.** Every member of a team is a separate
+`claude` process with its own session id, so a team of four arrives as four
+unrelated-looking orbs. Instead, each member's orb is drawn **smaller** and
+**points a tapered arrow at the orb of the session leading the team**, tinted
+with the member's own `/color` so several arrows into one lead stay apart. The
+stack gathers each team together — a lead, then its members, then whatever came
+next — and **dragging a lead moves its whole team with it**, keeping the shape
+you arranged them in. Dragging a *member* moves only that member, which is how
+you pull one out to look at it; its arrow stretches to follow. The arrows are
+click-through, so they never eat a click meant for the desktop underneath.
+
+Nothing about this is guessed. A team member's transcript records the team it
+belongs to on every message (`"teamName":"session-6a6fcb43"`), and
+`~/.claude/teams/<team>/config.json` holds the lead's full session id — the
+hook reads both and writes a `lead` field into the member's status file. The
+lead's own transcript says nothing about the team, which is why the lookup goes
+through the config rather than the transcript alone. Sessions that aren't in a
+team are completely unaffected: no `lead`, no arrow, full-size orb.
+
 Names and colors come out of the session's own transcript, where Claude Code
 records them as `{"type":"custom-title",...}`, `{"type":"ai-title",...}` and
 `{"type":"agent-color","agentColor":"green"}` — the hook reads the newest of
@@ -783,6 +802,25 @@ signed build.
   names and the plain orb. Consumers: `OrbWindow.UpdateFrom` (glyph, tooltip,
   context menu), `OrbWindow.ApplyAccent` (border + letter color) and
   `TrayController.DisplayName`.
+- **Agent teams**: the hook adds one field, `lead` — the session id of the team
+  lead — read from the member's transcript (`teamName`, present on every message
+  record) and then out of `~/.claude/teams/<team>/config.json`
+  (`leadSessionId`), which is the only place the lead's *full* id appears. That
+  scan can't be line-anchored the way the title records are, and doesn't need to
+  be: message content is JSON-escaped, so a transcript quoting `"teamName":"`
+  contains `\"teamName\":\"` and can't match. `CLAUDE_CONFIG_DIR` is honoured.
+  In the app, `lead` does three things — `OrbWindow.SetTeamRole` draws a member
+  smaller (the *window* stays 56x56, so stacking, dragging and remembered
+  positions are untouched), `SessionManager.DisplayOrder()` gathers each team
+  behind its lead, and `TeamLinks.cs` draws the arrows, one click-through window
+  per arrow, parked and reused rather than closed (see `ClaudeDesktopOverlay`
+  for why closing them is unsafe). Arrow geometry measures the screen-coordinate
+  units per DIP with `PointToScreen` instead of reading `Scaling`: on macOS
+  Avalonia hands out points, not pixels, and assuming otherwise put every arrow
+  half an orb off on a Retina display. Dragging a lead moves its members with it
+  (`SessionManager.MembersOf`, captured on press in `OrbWindow`); their new spots
+  are only *remembered* when their `PositionKey` differs from the lead's, since
+  a team usually shares one directory and positions are keyed by directory.
 - **Color palette**: `AgentColors` at the top of `OrbWindow.axaml.cs` maps
   `/color` names to hex. Claude Code renders its accents as xterm-256 indices,
   so these are the matching cube values — but only `green` (index 35) and the

@@ -32,6 +32,7 @@ TRANSCRIPT=$(printf '%s' "$PAYLOAD" | sed -n 's/.*"transcript_path"[[:space:]]*:
 # inside a message is JSON-escaped, so only a real record can start this way.
 TITLE=""
 COLOR=""
+LEAD=""
 if [ "$STATE" != "ended" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
     # Transcripts reach tens of MB and this runs on every tool call, so pull
     # all three record types out of the tail in one read — each is normally
@@ -60,6 +61,37 @@ if [ "$STATE" != "ended" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
 
     # Color names only — letters, nothing that could need escaping.
     COLOR=$(cb_value "$(cb_pick agent-color)" agentColor | tr -cd 'a-zA-Z')
+
+    # Agent teams. A team member is a *separate* claude process in its own
+    # tmux pane, so it writes its own status file and gets its own orb with
+    # nothing to say it belongs to anyone — which is what the arrow the app
+    # draws is for. The member's transcript is the only thing on disk that
+    # names its team, and it names it on every message record:
+    #   {"parentUuid":null,...,"teamName":"session-6a6fcb43","agentName":"..."}
+    #
+    # Unlike the title records above this isn't a whole line, so it can't be
+    # anchored — but it doesn't need to be. Message *content* is JSON-escaped,
+    # so a transcript quoting this very paragraph contains \"teamName\":\", and
+    # the pattern below (quote, colon, quote, contiguous) can only match a real
+    # field. There's also no whole-file fallback: every message carries it, so
+    # if it's not in the tail this session has said nothing recently and the
+    # next hook fire will pick it up.
+    TEAM=$(tail -c 262144 "$TRANSCRIPT" 2>/dev/null \
+        | grep -o '"teamName":"[^"]*"' | tail -1 \
+        | sed 's/.*:"//; s/"$//' | tr -cd 'A-Za-z0-9._-')
+
+    # The lead's own transcript records no team at all — only members do — so
+    # the lead is identified from the team's config, which is where the full
+    # session id lives (the team's *name* only carries the first eight
+    # characters). tr above already stripped anything that could escape the
+    # directory. A lead that somehow named itself is dropped: an orb with an
+    # arrow to itself is worse than no arrow.
+    if [ -n "$TEAM" ]; then
+        TEAM_CONFIG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/teams/$TEAM/config.json"
+        LEAD=$(sed -n 's/.*"leadSessionId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            "$TEAM_CONFIG" 2>/dev/null | tail -1 | tr -cd 'A-Za-z0-9-')
+        [ "$LEAD" = "$SESSION_ID" ] && LEAD=""
+    fi
 fi
 
 # Identify the terminal hosting this session so a click on the orb can jump
@@ -116,8 +148,8 @@ if [ "$STATE" = "ended" ]; then
     rm -f "$FILE"
 else
     mkdir -p "$DIR"
-    printf '{"state":"%s","cwd":"%s","title":"%s","color":"%s","term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s","tmux_pane":"%s","tmux_bin":"%s","session_pid":%s}' \
-        "$STATE" "$CWD" "$TITLE" "$COLOR" "$TERM_PROGRAM" "$TERM_ID" "$TTY" \
+    printf '{"state":"%s","cwd":"%s","title":"%s","color":"%s","lead":"%s","term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s","tmux_pane":"%s","tmux_bin":"%s","session_pid":%s}' \
+        "$STATE" "$CWD" "$TITLE" "$COLOR" "$LEAD" "$TERM_PROGRAM" "$TERM_ID" "$TTY" \
         "$TMUX_SOCKET" "$TMUX_PANE_ID" "$TMUX_BIN" "${SESSION_PID:-0}" > "$FILE"
 fi
 
