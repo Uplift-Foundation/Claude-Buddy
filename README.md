@@ -3,14 +3,20 @@
 One tiny always-on-top orb per running Claude Code session, stacked in the
 top-right corner of your screen. Runs on **Windows and macOS** (Avalonia,
 one codebase). Each orb has three states:
-- **Slate-blue, gentle breathing** — truly idle, nothing happening.
-- **Violet, medium pulse** — Claude is actively generating a response or
-  running tools.
-- **Amber, fast pulse** — Claude needs something from you specifically: a
-  tool-permission approval, or an answer to an interactive question.
+- **Slate-blue, gentle breathing, flat** — truly idle, nothing happening.
+- **Violet, medium pulse, glowing** — Claude is actively generating a response
+  or running tools.
+- **Amber, fast pulse, glowing** — Claude needs something from you specifically:
+  a tool-permission approval, or an answer to an interactive question.
   Claude finishing a response and waiting for you to type whatever's next
   does *not* trigger this — that's deliberate, not a bug; see the matcher
   note below if you want it back.
+
+Only the two active states carry the halo. Idle is what most orbs are in most
+of the time, so glowing about it spends the screen's attention on the one state
+that wants none of it — the slow breath already says the session is there. It
+matters more once you've picked your own colours: a dark idle colour renders a
+halo as a smudge that darkens what's under it rather than as light.
 
 Each orb shows the first letter of **what the chat is named**, in preference
 order: the name you gave it with `/rename`, else the title Claude Code

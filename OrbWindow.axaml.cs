@@ -221,20 +221,36 @@ namespace ClaudeBuddy
             switch (state)
             {
                 case "waiting":
-                    AnimateColor(color, TimeSpan.FromMilliseconds(300));
+                    AnimateColor(color, TimeSpan.FromMilliseconds(300), state);
                     StartPulse(1.22, TimeSpan.FromMilliseconds(500), new QuadraticEaseOut());
                     break;
                 case "generating":
-                    AnimateColor(color, TimeSpan.FromMilliseconds(300));
+                    AnimateColor(color, TimeSpan.FromMilliseconds(300), state);
                     StartPulse(1.14, TimeSpan.FromMilliseconds(900), new SineEaseInOut());
                     break;
                 default:
                     StopPulse();
-                    AnimateColor(color, TimeSpan.FromMilliseconds(400));
+                    AnimateColor(color, TimeSpan.FromMilliseconds(400), state);
                     StartPulse(1.06, TimeSpan.FromSeconds(2.2), new SineEaseInOut());
                     break;
             }
         }
+
+        // The halo is a claim on your attention, so only the two states that
+        // have something to say make it. Idle is what most orbs are in most of
+        // the time, and glowing about it spends the screen's whole attention
+        // budget on the one state that wants none of it — the slow breath is
+        // enough to say the session is still there, and the fill and hairline
+        // still say where it is.
+        //
+        // A custom idle colour makes the point sharply: a dark one (the default
+        // is already nearly black) renders as a smudge that darkens whatever
+        // sits under it rather than as light.
+        //
+        // Asked in one place, from the state alone, because it's read both by
+        // ApplyState and by ReapplyStateColors and the two must not drift —
+        // the same reason the colours themselves live in OrbColors.
+        private static bool GlowsFor(string state) => state is "waiting" or "generating";
 
         // Changing a colour in settings is not a state change, and UpdateFrom only
         // calls ApplyState when status.State actually differs — so without this an
@@ -259,16 +275,20 @@ namespace ClaudeBuddy
             // hidden.
             if (!IsLoaded) return;
 
-            AnimateColor(
-                OrbColors.For(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState),
-                SettingsColorFade);
+            var state = string.IsNullOrEmpty(_lastState) ? "idle" : _lastState;
+            AnimateColor(OrbColors.For(state), SettingsColorFade, state);
         }
 
-        private void AnimateColor(Color to, TimeSpan duration)
+        private void AnimateColor(Color to, TimeSpan duration, string state)
         {
             _colorTransition.Duration = duration;
             _orbBrush.Color = to;
-            _glowBrush.GradientStops = GlowStops(to);
+
+            // Hidden rather than made transparent: an invisible ellipse isn't
+            // rendered at all, and there's no point rebuilding four gradient
+            // stops for something nobody can see.
+            Glow.IsVisible = GlowsFor(state);
+            if (Glow.IsVisible) _glowBrush.GradientStops = GlowStops(to);
         }
 
         // Opaque at the centre, gone by the edge — the same falloff a blur gave,
