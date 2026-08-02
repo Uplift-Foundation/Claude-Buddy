@@ -231,6 +231,63 @@ namespace ClaudeBuddy
             return stale;
         }
 
+        // Whether a status file says anything about where its session can be
+        // seen. A tty alone doesn't count here: it's the one field the walk
+        // always fills in, and on its own it can name a tmux pane's pty, which
+        // belongs to a detached server rather than to any window.
+        private static bool KnowsATerminal(SessionStatus status) =>
+            !string.IsNullOrEmpty(status.TmuxPane)
+            || !string.IsNullOrEmpty(status.TermProgram)
+            || !string.IsNullOrEmpty(status.TermId)
+            || status.TermPid != 0;
+
+        // Terminal coordinates belong to the *process*, not to the session id,
+        // so a status file that has none can take them from a sibling with the
+        // same pid.
+        //
+        // Background sessions are why this is needed. Claude Code spawns one
+        // through `claude daemon run`, which has no controlling terminal, so
+        // the hook's walk up the process tree goes straight past it to the
+        // interactive session that started it — recording *that* pid and tty
+        // while carrying none of its environment, because the daemon has no
+        // TMUX or TERM_PROGRAM to inherit. The result is a second, thinner file
+        // for a pid that already had a good one, and being newer it wins the
+        // superseded rule below and replaces a clickable orb with a dead one.
+        //
+        // Observed exactly that way: one pid with three files, the oldest
+        // naming tmux pane %7 and the two newest naming nothing, and an orb
+        // that had quietly stopped going anywhere. The inheritance is sound
+        // because the pid is the same process: same window, same tmux pane.
+        //
+        // Only the empty fields are filled, so a file that knows its own
+        // terminal is never overwritten by an older one's idea of it.
+        private static void InheritTerminalInfo(List<ScanEntry> found)
+        {
+            foreach (var group in found.Where(e => e.Status.SessionPid > 0)
+                                       .GroupBy(e => e.Status.SessionPid))
+            {
+                var donor = group.Where(e => KnowsATerminal(e.Status))
+                                 .OrderByDescending(e => e.Written)
+                                 .FirstOrDefault();
+                if (donor is null) continue;
+
+                foreach (var entry in group)
+                {
+                    var status = entry.Status;
+                    if (KnowsATerminal(status)) continue;
+
+                    status.TermProgram = donor.Status.TermProgram;
+                    status.TermId = donor.Status.TermId;
+                    status.TermPid = donor.Status.TermPid;
+                    status.TmuxSocket = donor.Status.TmuxSocket;
+                    status.TmuxPane = donor.Status.TmuxPane;
+                    status.TmuxBin = donor.Status.TmuxBin;
+
+                    if (string.IsNullOrEmpty(status.Tty)) status.Tty = donor.Status.Tty;
+                }
+            }
+        }
+
         private void ScanAndUpdate()
         {
             var seen = new HashSet<string>();
@@ -269,6 +326,8 @@ namespace ClaudeBuddy
 
                 found.Add(new ScanEntry(Path.GetFileNameWithoutExtension(file), status, written));
             }
+
+            InheritTerminalInfo(found);
 
             var superseded = Superseded(found);
 
