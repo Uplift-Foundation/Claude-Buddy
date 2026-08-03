@@ -129,15 +129,27 @@ namespace ClaudeBuddy
             // identical. Falls back to the folder until Claude Code names it.
             var label = string.IsNullOrEmpty(status.Title) ? folder : status.Title;
 
-            ToolTip.SetTip(Root, string.IsNullOrEmpty(status.Cwd)
-                ? (string.IsNullOrEmpty(label) ? SessionId : label)
-                : $"{label}\n{status.Cwd}");
+            // An agent's own name beats all of it. Every member of a team
+            // inherits the team session's title, so a team of four drew the
+            // same letter four times and said nothing about which agent was
+            // which — while the terminal had been calling them MenuUX,
+            // Narrative and HitReactSpec the whole time. The title still gets
+            // said, in the tooltip, because "which team" is worth knowing too.
+            var name = string.IsNullOrEmpty(status.Agent) ? label : status.Agent;
 
-            Glyph.Text = GlyphFor(label);
+            var described = string.IsNullOrEmpty(status.Agent) || string.IsNullOrEmpty(label)
+                ? name
+                : $"{status.Agent} · {label}";
+
+            ToolTip.SetTip(Root, string.IsNullOrEmpty(status.Cwd)
+                ? (string.IsNullOrEmpty(described) ? SessionId : described)
+                : $"{described}\n{status.Cwd}");
+
+            Glyph.Text = GlyphFor(name);
             ApplyAccent(status.Color);
             SetTeamRole(!string.IsNullOrEmpty(status.Lead));
 
-            SessionInfoItem.Header = string.IsNullOrEmpty(label) ? SessionId : label;
+            SessionInfoItem.Header = string.IsNullOrEmpty(described) ? SessionId : described;
             SessionPathItem.Header = status.Cwd;
             SessionPathItem.IsVisible = !string.IsNullOrEmpty(status.Title)
                                         && !string.IsNullOrEmpty(status.Cwd);

@@ -44,6 +44,14 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public string Lead { get; set; } = "";
 
+        // What this agent is called inside its team — MenuUX, HitReactSpec.
+        // Empty for everything that isn't a team member, and filled in beside
+        // Lead from the same read of the process. Everything user-facing
+        // prefers it over the title, because a team's members all inherit the
+        // team session's title and would otherwise be indistinguishable.
+        [JsonIgnore]
+        public string Agent { get; set; } = "";
+
         // Where the session's terminal lives (macOS hook only; empty on
         // Windows or with an older hook script). See TerminalFocuser.
         [JsonPropertyName("term_program")]
@@ -437,6 +445,7 @@ namespace ClaudeBuddy
                 // costs a lookup.
                 var membership = AgentTeam.Of(status.SessionPid);
                 status.Lead = membership.Lead == sessionId ? "" : membership.Lead;
+                status.Agent = string.IsNullOrEmpty(status.Lead) ? "" : membership.Name;
 
                 // The colour Claude Code gave this agent when the team was
                 // built. Only used when the session hasn't set one itself: a

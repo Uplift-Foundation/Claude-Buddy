@@ -35,10 +35,16 @@ namespace ClaudeBuddy
     {
         private const string ParentSessionFlag = "--parent-session-id";
         private const string ColorFlag = "--agent-color";
+        private const string NameFlag = "--agent-name";
 
         // What the app wants to know about a session that turns out to be an
-        // agent-team member. Both empty for everything else.
-        internal readonly record struct Membership(string Lead, string Color);
+        // agent-team member. All empty for everything else.
+        //
+        // Name is what the agent is called within its team — MenuUX, Narrative,
+        // HitReactSpec. Every member of a team inherits the team's *session*
+        // title, so without this every agent's orb showed the same letter and
+        // the team read as four copies of one thing.
+        internal readonly record struct Membership(string Lead, string Color, string Name);
 
         // A live process's arguments never change, so this is a cache with a
         // safety valve rather than a poll: re-read after a minute so a recycled
@@ -69,7 +75,8 @@ namespace ClaudeBuddy
             var args = Read(pid);
             var membership = new Membership(
                 Sanitize(args.GetValueOrDefault(ParentSessionFlag)),
-                Sanitize(args.GetValueOrDefault(ColorFlag)));
+                Sanitize(args.GetValueOrDefault(ColorFlag)),
+                SanitizeName(args.GetValueOrDefault(NameFlag)));
 
             lock (Gate)
             {
@@ -98,7 +105,7 @@ namespace ClaudeBuddy
         {
             if (OperatingSystem.IsMacOS())
             {
-                return MacOSProcessScan.ArgumentValues(pid, ParentSessionFlag, ColorFlag);
+                return MacOSProcessScan.ArgumentValues(pid, ParentSessionFlag, ColorFlag, NameFlag);
             }
 
             if (OperatingSystem.IsWindows()) return WindowsArguments(pid);
@@ -123,6 +130,22 @@ namespace ClaudeBuddy
             return value;
         }
 
+        // Names are shown, not matched, so this keeps what it can rather than
+        // rejecting the whole value: anything that isn't a letter, digit or
+        // ordinary separator is dropped, and what's left is trimmed. A name
+        // that survives as nothing is treated as no name at all.
+        private static string SanitizeName(string? value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+
+            var kept = new string(value
+                .Where(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' or ' ')
+                .ToArray())
+                .Trim();
+
+            return kept.Length > 48 ? kept[..48].TrimEnd() : kept;
+        }
+
         [SupportedOSPlatform("windows")]
         private static Dictionary<string, string> WindowsArguments(int pid)
         {
@@ -139,7 +162,7 @@ namespace ClaudeBuddy
                     var command = process["CommandLine"] as string;
                     if (string.IsNullOrEmpty(command)) continue;
 
-                    foreach (var flag in new[] { ParentSessionFlag, ColorFlag })
+                    foreach (var flag in new[] { ParentSessionFlag, ColorFlag, NameFlag })
                     {
                         var match = Regex.Match(command,
                             Regex.Escape(flag) + @"[= ]""?([^""\s]+)");

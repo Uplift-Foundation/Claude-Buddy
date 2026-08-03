@@ -19,7 +19,8 @@ matters more once you've picked your own colours: a dark idle colour renders a
 halo as a smudge that darkens what's under it rather than as light.
 
 Each orb shows the first letter of **what the chat is named**, in preference
-order: the name you gave it with `/rename`, else the title Claude Code
+order: the agent's own name if it's a member of an agent team (see below),
+else the name you gave it with `/rename`, else the title Claude Code
 generates once there's enough conversation to summarize, else the working
 directory's name. A `/rename` wins even if Claude Code has since re-titled
 the session, and the letter changes over as soon as a name appears — so two
@@ -69,12 +70,19 @@ you arranged them in. Dragging a *member* moves only that member, which is how
 you pull one out to look at it; its arrow stretches to follow. The arrows are
 click-through, so they never eat a click meant for the desktop underneath.
 
+Each agent orb is lettered and labelled with **the agent's own name** —
+`MenuUX`, `Narrative`, `HitReactSpec` — not the team's. Every member inherits
+the team session's title, so a team of four otherwise drew the same letter four
+times while your terminal had been calling them by name all along. Hover for
+the agent and its team; the tray menu lists them by agent name too.
+
 Nothing about this is guessed, and **no hook change is needed** — Claude Code
 spawns each member as its own `claude` process and hands it
-`--parent-session-id <lead>` and `--agent-color <name>` on the command line, so
-the app reads both off the process it is already tracking. That colour is used
-for the orb's ring and its arrow when the agent hasn't run `/color` itself; it
-is not the automatic accent described above, which really is nowhere on disk.
+`--parent-session-id <lead>`, `--agent-name <name>` and `--agent-color <name>`
+on the command line, so the app reads all three off the process it is already
+tracking. The assigned colour becomes the orb's ring and its arrow when the
+agent hasn't run `/color` itself; it is not the automatic accent described
+above, which really is nowhere on disk.
 Sessions that aren't in a team are completely unaffected: no arrow, full-size
 orb, nothing read that wasn't already being read.
 
@@ -845,8 +853,8 @@ signed build.
   context menu), `OrbWindow.ApplyAccent` (border + letter color) and
   `TrayController.DisplayName`.
 - **Agent teams**: `AgentTeam.cs` answers "which session leads this one", by
-  reading `--parent-session-id` (and `--agent-color`) off the member's own
-  process — `KERN_PROCARGS2` on macOS via `MacOSProcessScan.ArgumentValues`,
+  reading `--parent-session-id` (plus `--agent-name` and `--agent-color`) off
+  the member's own process — `KERN_PROCARGS2` on macOS via `MacOSProcessScan.ArgumentValues`,
   WMI on Windows — keyed by the `session_pid` the liveness check already uses,
   cached per pid with a one-minute valve so a recycled pid can't pin a wrong
   answer. These are Claude Code internals rather than an interface; if they

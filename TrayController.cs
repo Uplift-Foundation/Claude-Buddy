@@ -250,9 +250,14 @@ namespace ClaudeBuddy
             return "Claude Buddy — " + string.Join(", ", parts);
         }
 
-        // Chat name if Claude Code has named the session, else its folder.
+        // An agent's name within its team if it has one, else the chat name if
+        // Claude Code has named the session, else its folder. The agent name
+        // comes first because a team's members all inherit the team session's
+        // title, and four identical rows only differed by the id this menu
+        // appends when it can't tell them apart.
         private static string DisplayName(SessionEntry session)
         {
+            if (!string.IsNullOrEmpty(session.Status.Agent)) return session.Status.Agent;
             if (!string.IsNullOrEmpty(session.Status.Title)) return session.Status.Title;
 
             var cwd = session.Status.Cwd;
