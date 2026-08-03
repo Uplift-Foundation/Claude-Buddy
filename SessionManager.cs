@@ -331,6 +331,22 @@ namespace ClaudeBuddy
 
             var superseded = Superseded(found);
 
+            // Sessions that live agents name as their lead. Used for two things
+            // below, and for nothing else — in particular *not* to excuse a
+            // lead from the lifetime timer, which is the user's setting to make.
+            var leadsWithLiveAgents = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entry in found)
+            {
+                if (superseded.Contains(entry.SessionId)) continue;
+                if (!ProcessLiveness.IsRunning(entry.Status.SessionPid)) continue;
+
+                var agentLead = AgentTeam.LeadOf(entry.Status.SessionPid);
+                if (!string.IsNullOrEmpty(agentLead) && agentLead != entry.SessionId)
+                {
+                    leadsWithLiveAgents.Add(agentLead);
+                }
+            }
+
             // Note on what is deliberately *not* here: agent teams get no
             // exemption from the lifetime timer, in either direction. A quiet
             // lead is pruned like any other quiet session, and so is a member
@@ -381,15 +397,34 @@ namespace ClaudeBuddy
                     continue; // treat as gone; cleaned up in the removal pass below
                 }
 
+                // A team lead can be a background session with no terminal of
+                // its own — run inside `claude daemon run`, which has none, and
+                // reparented to launchd once the session that started it went
+                // away. You watch it through `claude agents`, a separate
+                // process in a real window that nothing in the lead's own
+                // process tree points at, so the hook could never have recorded
+                // it. See AgentTeamViewer, which finds it by directory.
+                if (leadsWithLiveAgents.Contains(sessionId) && !KnowsATerminal(status))
+                {
+                    AgentTeamViewer.TryAdopt(status);
+                }
+
                 // A session with no terminal recorded at all can't be jumped
                 // to, so an orb for it is a dead click. This is what headless and
                 // bridged invocations look like: no tty, no terminal program, no
                 // tmux pane, no Windows terminal pid. An interactive session
                 // always has at least one of those.
+                //
+                // Except a lead with live agents, which is exempt whether or not
+                // the viewer above was found: agents on screen pointing at
+                // nothing is a worse lie than an orb you might not be able to
+                // click. It's also a session you can see is running, which is
+                // what an orb is for.
                 if (string.IsNullOrEmpty(status.Tty)
                     && string.IsNullOrEmpty(status.TermProgram)
                     && string.IsNullOrEmpty(status.TmuxPane)
-                    && status.TermPid == 0)
+                    && status.TermPid == 0
+                    && !leadsWithLiveAgents.Contains(sessionId))
                 {
                     continue;
                 }
