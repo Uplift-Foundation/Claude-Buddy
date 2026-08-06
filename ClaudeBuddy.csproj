@@ -48,6 +48,11 @@
     <PackageReference Include="Avalonia" Version="11.3.7" />
     <PackageReference Include="Avalonia.Desktop" Version="11.3.7" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.7" />
+    <!-- ColorPicker, for the orb-colour rows in the settings window. It arrives
+         transitively via the macOS theme below, but is named here on purpose: a
+         theme bump that dropped it would otherwise break the build for a reason
+         with nothing to do with theming. -->
+    <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.3.7" />
     <PackageReference Include="System.Management" Version="8.0.0" />
     <!-- AppKit-shaped control styles (MIT, Devolutions). Loaded only on macOS —
          see App.Initialize — with Fluent kept for Windows. Hand-rolling this was

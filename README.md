@@ -3,17 +3,24 @@
 One tiny always-on-top orb per running Claude Code session, stacked in the
 top-right corner of your screen. Runs on **Windows and macOS** (Avalonia,
 one codebase). Each orb has three states:
-- **Slate-blue, gentle breathing** — truly idle, nothing happening.
-- **Violet, medium pulse** — Claude is actively generating a response or
-  running tools.
-- **Amber, fast pulse** — Claude needs something from you specifically: a
-  tool-permission approval, or an answer to an interactive question.
+- **Slate-blue, gentle breathing, flat** — truly idle, nothing happening.
+- **Violet, medium pulse, glowing** — Claude is actively generating a response
+  or running tools.
+- **Amber, fast pulse, glowing** — Claude needs something from you specifically:
+  a tool-permission approval, or an answer to an interactive question.
   Claude finishing a response and waiting for you to type whatever's next
   does *not* trigger this — that's deliberate, not a bug; see the matcher
   note below if you want it back.
 
+Only the two active states carry the halo. Idle is what most orbs are in most
+of the time, so glowing about it spends the screen's attention on the one state
+that wants none of it — the slow breath already says the session is there. It
+matters more once you've picked your own colours: a dark idle colour renders a
+halo as a smudge that darkens what's under it rather than as light.
+
 Each orb shows the first letter of **what the chat is named**, in preference
-order: the name you gave it with `/rename`, else the title Claude Code
+order: the agent's own name if it's a member of an agent team (see below),
+else the name you gave it with `/rename`, else the title Claude Code
 generates once there's enough conversation to summarize, else the working
 directory's name. A `/rename` wins even if Claude Code has since re-titled
 the session, and the letter changes over as soon as a name appears — so two
@@ -37,6 +44,11 @@ orb's **border and letter**. The fill is left alone deliberately — it's the
 state signal, and amber-means-Claude-needs-you only works if it means that on
 every orb. So color says *which* session, fill says *what it's doing*.
 
+The three state colors are **yours to pick** — slate, violet and amber are only
+the defaults. See **Orb colours** in the settings window; the rest of this file
+calls them by their default names, since that's what you'll see until you change
+them.
+
 **Only colors you set with `/color` show up.** Claude Code also gives every
 session an automatic accent (the color of its prompt border and name chip),
 but that one is per-process and isn't written to the transcript — or anywhere
@@ -46,6 +58,41 @@ derived stand-in would end up disagreeing with the color the terminal is
 showing, and a ring is more useful when it always means "I chose this". Run
 `/color` in a session and its orb picks the color up on the next hook fire,
 within a couple of seconds.
+
+**Agent teams get drawn as teams.** Every member of a team is a separate
+`claude` process with its own session id, so a team of four arrives as four
+unrelated-looking orbs. Instead, each member's orb is drawn **smaller** and
+**points a tapered arrow at the orb of the session leading the team**, tinted
+with the member's own `/color` so several arrows into one lead stay apart. The
+stack gathers each team together — a lead, then its members, then whatever came
+next — and **dragging a lead moves its whole team with it**, keeping the shape
+you arranged them in. Dragging a *member* moves only that member, which is how
+you pull one out to look at it; its arrow stretches to follow. The arrows are
+click-through, so they never eat a click meant for the desktop underneath.
+
+Each agent orb is lettered and labelled with **the agent's own name** —
+`MenuUX`, `Narrative`, `HitReactSpec` — not the team's. Every member inherits
+the team session's title, so a team of four otherwise drew the same letter four
+times while your terminal had been calling them by name all along. Hover for
+the agent and its team; the tray menu lists them by agent name too.
+
+Nothing about this is guessed, and **no hook change is needed** — Claude Code
+spawns each member as its own `claude` process and hands it
+`--parent-session-id <lead>`, `--agent-name <name>` and `--agent-color <name>`
+on the command line, so the app reads all three off the process it is already
+tracking. The assigned colour becomes the orb's ring and its arrow when the
+agent hasn't run `/color` itself; it is not the automatic accent described
+above, which really is nowhere on disk.
+Sessions that aren't in a team are completely unaffected: no arrow, full-size
+orb, nothing read that wasn't already being read.
+
+Team orbs obey **"Keep orbs for"** like everything else. An agent that has
+finished its work goes quiet, and a quiet session fires no hooks, so its file
+stops being touched and its orb is pruned on the usual schedule even though the
+process is still alive — a team of three that has finished two of them shows
+one. That's deliberate: the lifetime setting is yours, and a team isn't special
+enough to overrule it. Raise it (or set **Forever**) if you'd rather watch a
+whole team sit there.
 
 Names and colors come out of the session's own transcript, where Claude Code
 records them as `{"type":"custom-title",...}`, `{"type":"ai-title",...}` and
@@ -76,6 +123,33 @@ session's terminal**, best-effort:
   `/Applications` rather than out of `dist/` avoids this entirely, since its
   Developer ID identity is stable across rebuilds. The app now also logs this
   case explicitly rather than failing silently.
+
+  **Crossing desktops takes two rules to get right**, both of them macOS's
+  rather than ours, and both learned the hard way from clicks that appeared to
+  do nothing:
+
+  1. *The click has to arrive at all.* macOS spends the click that activates an
+     inactive app: the window comes forward, the view never sees it, unless it
+     answers `YES` to `acceptsFirstMouse:`. Claude Buddy is a background app and
+     is essentially never the active one when you're on another desktop, so the
+     first click was always the one being eaten — it looked exactly like "single
+     click does nothing, double click works". Avalonia's view doesn't implement
+     it and exposes no hook, so the answer is installed onto its class through
+     the Objective-C runtime (`MacOSWindowExtensions.AcceptFirstClick`).
+  2. *Activating is not the same as being taken there.* Activating an app raises
+     whichever of its windows are on the desktop you're looking at, and only
+     follows it to another one when it has none here. Ordering a specific window
+     front does pull you across — but only once the app is **already active**;
+     an activation still in flight lands afterwards and raises the local window,
+     undoing it. So the scripts activate, wait for that to land, then select.
+     Read them in `ITermSelectScript`: the comment there records both readings
+     of this, because testing from a desktop with no terminal on it gives the
+     opposite answer and looks conclusive.
+
+  A related dead end, recorded so it isn't retried: `[NSApp deactivate]` before
+  activating the terminal. Giving up active status hands it to whatever app was
+  frontmost on the desktop you were *on*, and macOS follows that app — pulling
+  you back where you started.
 - Windows: the terminal window the session runs in — verified for Windows
   Terminal, plain `conhost`, and VS Code's integrated terminal, including
   restoring a minimized window. WSL sessions fall back to activating Windows
@@ -201,7 +275,8 @@ Details worth knowing:
 There's also a **status-bar icon** — macOS menu bar, Windows notification
 area — that's there whether or not any session is running. Its color tracks
 the most urgent session (amber if any session needs you, violet if any is
-working, otherwise slate), and its menu lists the live sessions by chat name
+working, otherwise slate — or whatever you've set those three to, since the
+icon is re-tinted to match), and its menu lists the live sessions by chat name
 (falling back to folder name, same as the orbs, and truncated if it runs
 long) — click one to jump to its terminal, same as clicking its orb. Two
 sessions that end up with the same label get a short session-id suffix so you
@@ -215,12 +290,23 @@ surface, since with zero sessions there are no orbs to right-click:
   (see the pruning note below).
 - **Settings…** — a small preferences window, grouped the way macOS groups
   its own: **Orbs** (show them at all, and **"Keep orbs for"** — 1 minute
-  through 4 hours, or **Forever**, covered under pruning below), **Claude
-  Desktop** (window tinting) and **Profiles** (per-profile name, colour and
-  what the colour applies to). Everything applies as you change it and is
-  written to disk immediately; there's no OK or Cancel, and on macOS no Done
+  through 4 hours, or **Forever**, covered under pruning below), **Orb
+  colours** (one colour picker per state, plus a **Reset** that puts the
+  shipped three back), **Claude Desktop** (window tinting) and **Profiles**
+  (per-profile name, colour and what the colour applies to). Everything applies
+  as you change it and is written to disk immediately — the colour pickers wait
+  a quarter-second after you stop dragging, since they'd otherwise rewrite the
+  file on every pointer move, but the orbs and the menu-bar icon follow the
+  spectrum live either way. There's no OK or Cancel, and on macOS no Done
   button either — Escape, Cmd-W or the window's close button, like any other
   Mac window.
+
+  Two things a custom colour doesn't reach. The orb's letter and its plain
+  hairline border stay near-white, so a very pale fill makes the letter hard to
+  read — the fills are meant to be saturated. And the **app icon** (Dock,
+  Finder, the .exe) keeps the defaults permanently: it's baked into the bundle
+  at build time, and rewriting an installed app at runtime is exactly the
+  privacy wall the Claude Desktop Dock-icon tinting already has to work around.
 - **Quit Claude Buddy**.
 
 On macOS the menu opens on a left-click of the menu-bar icon. On Windows it's
@@ -375,11 +461,22 @@ containing `{"state": "...", "cwd": "...", "title": "...", "color": "...", ...}`
 `ClaudeBuddyHook.sh` (bash, macOS). No network calls, no polling of Claude
 Code itself, no persistent process beyond the hook calls themselves.
 
-An orb goes away when any of three things happens.
+An orb goes away when any of four things happens.
 
 1. **Its `SessionEnd` hook fires** — a clean exit like `/exit` — which deletes
    the status file outright.
-2. **Its `claude` process is gone.** Both hooks record that process's pid
+2. **Another session id from the same process has overtaken it.** A `claude`
+   process mints a new session id whenever you `/clear`, resume, or start a new
+   conversation, and the hook writes a *new* status file each time — nothing
+   deletes the old one, because `SessionEnd` only fires when the process itself
+   exits. Within one pid only the most recently written file is the live
+   session, so the rest go immediately. Without this they were invisible to
+   rules 3 and 4 alike (the pid is live, the file exists) and one terminal
+   showed several orbs for a whole lifetime, some of them stuck on a `generating`
+   they'd never be told to leave. Sessions running side by side are separate
+   processes with separate pids, so this never merges two real ones; files from
+   a hook too old to record a pid are left out of it entirely.
+3. **Its `claude` process is gone.** Both hooks record that process's pid
    (`session_pid`), and every scan checks whether it still exists; if it
    doesn't, the orb goes regardless of the lifetime below, including under
    Forever, and including a session sitting on `waiting`. This is the Ctrl+C
@@ -387,14 +484,15 @@ An orb goes away when any of three things happens.
    the file survives its session, and the pid is what tells "still running"
    from "left behind". A session started under a hook older than this field has
    no pid recorded and falls back to the timer alone.
-3. **The lifetime expires** — its file hasn't been touched for however long
+4. **The lifetime expires** — its file hasn't been touched for however long
    **Settings → Orbs → "Keep orbs for"** says. That's 5 minutes out of the box,
    anything from a minute to four hours, or **Forever**, which never prunes on
    time at all. A session on `waiting` (amber) is exempt from *this* rule
    deliberately: nothing refreshes that file while you're away from an
    unanswered prompt, so timing it out would hide the orb exactly when it's
-   trying hardest to get your attention. Rule 2 still applies to it, which is
-   what keeps a Ctrl+C'd prompt from sitting on screen forever.
+   trying hardest to get your attention. Rules 2 and 3 still apply to it, which
+   is what keeps a Ctrl+C'd prompt — or a `/clear`ed one — from sitting on
+   screen forever.
 
 Right-click → "Reset this session to idle" is still there for a session whose
 process is alive but whose orb is stuck amber.
@@ -754,6 +852,36 @@ signed build.
   names and the plain orb. Consumers: `OrbWindow.UpdateFrom` (glyph, tooltip,
   context menu), `OrbWindow.ApplyAccent` (border + letter color) and
   `TrayController.DisplayName`.
+- **Agent teams**: `AgentTeam.cs` answers "which session leads this one", by
+  reading `--parent-session-id` (plus `--agent-name` and `--agent-color`) off
+  the member's own process — `KERN_PROCARGS2` on macOS via `MacOSProcessScan.ArgumentValues`,
+  WMI on Windows — keyed by the `session_pid` the liveness check already uses,
+  cached per pid with a one-minute valve so a recycled pid can't pin a wrong
+  answer. These are Claude Code internals rather than an interface; if they
+  change, the lookup returns nothing and orbs are drawn the way they were
+  before teams existed.
+
+  The first version asked the hooks instead: `teamName` out of the member's
+  transcript, then `leadSessionId` out of `~/.claude/teams/<team>/config.json`.
+  It worked, and it was still wrong — a hook only learns the answer when one
+  next *fires*, so an agent that had gone quiet, or was already running when the
+  hook was updated, kept a status file with no team in it and sat there looking
+  unrelated. Found exactly that way, with two live agents and no arrows. Reading
+  the process is true the moment the orb appears and needs no hook at all, which
+  is also why the hook scripts carry nothing about teams.
+
+  Downstream, that one value does three things: `OrbWindow.SetTeamRole` draws a
+  member smaller (the *window* stays 56x56, so stacking, dragging and remembered
+  positions are untouched), `SessionManager.DisplayOrder()` gathers each team
+  behind its lead, and `TeamLinks.cs` draws the arrows, one click-through window
+  per arrow, parked and reused rather than closed (see `ClaudeDesktopOverlay`
+  for why closing them is unsafe). Arrow geometry measures the screen-coordinate
+  units per DIP with `PointToScreen` instead of reading `Scaling`: on macOS
+  Avalonia hands out points, not pixels, and assuming otherwise put every arrow
+  half an orb off on a Retina display. Dragging a lead moves its members with it
+  (`SessionManager.MembersOf`, captured on press in `OrbWindow`); their new spots
+  are only *remembered* when their `PositionKey` differs from the lead's, since
+  a team usually shares one directory and positions are keyed by directory.
 - **Color palette**: `AgentColors` at the top of `OrbWindow.axaml.cs` maps
   `/color` names to hex. Claude Code renders its accents as xterm-256 indices,
   so these are the matching cube values — but only `green` (index 35) and the
@@ -763,16 +891,34 @@ signed build.
   `tmux capture-pane -p -e | grep -o $'\033\[38;5;[0-9]*m'`. An unrecognized
   name (one added to Claude Code later) falls back to the plain border and
   white letter, so add a line there rather than expecting a crash.
-- **Colors and animation**: `OrbWindow.axaml.cs` has `IdleColor` /
-  `GeneratingColor` / `WaitingColor` at the top, and the breathing/pulse
-  timings live in `ApplyState()` / `StartPulse()` — easy to retune speed,
-  scale, or swap in different colors.
-- **When an orb goes away**: `SessionManager.ScanAndUpdate()` has all three
-  rules in order — process-gone (`ProcessLiveness.IsRunning`, a `kill(pid, 0)`
-  on Unix and `Process.GetProcessById` on Windows), then the `waiting`
-  exemption, then the lifetime timer. A recycled pid reads as alive, which
-  errs toward keeping an orb rather than dropping a live session's, and the
-  timer still catches that unless the lifetime is Forever.
+- **Colors and animation**: `OrbColors.cs` is the one place that answers "what
+  colour is this state" — `DefaultIdle` / `DefaultGenerating` / `DefaultWaiting`
+  are the shipped three, and the live values are a projection over the
+  `orbColors` block in `settings.json` (`null` there means "use the default", so
+  retuning a shipped colour still reaches anyone who never picked their own).
+  Three things read it: `OrbWindow`'s fill and glow, `TrayController.Tinted()`,
+  which recolours the baked tray PNGs at runtime, and the settings window's
+  pickers. Nothing observes it, so a writer calls
+  `SessionManager.ReapplyStateColors()` — needed because `UpdateFrom` only
+  re-applies a colour when the *state* changes, so a quiet orb would otherwise
+  keep the old fill forever. The breathing/pulse timings stay in `ApplyState()`
+  / `StartPulse()`, and `ApplyState`'s switch is now about motion only.
+
+  `tools/make-icons.py` still holds a hand-synced copy of the three defaults,
+  but what matters at runtime is the *alpha* channel of `Assets/tray-*.png`:
+  each is a single colour over an alpha mask, which is what makes an exact
+  re-tint possible — redrawing the ring in C# instead would change its shape.
+- **When an orb goes away**: `SessionManager.ScanAndUpdate()` has all four rules
+  in order — superseded-session-id (`Superseded()`, newest file wins per
+  `session_pid`), then process-gone (`ProcessLiveness.IsRunning`, a
+  `kill(pid, 0)` on Unix and `Process.GetProcessById` on Windows), then the
+  `waiting` exemption, then the lifetime timer. The scan reads every status file
+  into a `ScanEntry` list *before* judging any of them, because `Superseded`
+  needs to compare files against each other; that pre-pass is also where the
+  mtime the timer uses comes from, so it's read once per file per scan rather
+  than twice. A recycled pid reads as alive, which errs toward keeping an orb
+  rather than dropping a live session's, and the timer still catches that unless
+  the lifetime is Forever.
 - **Stacking layout and staleness**: `SessionManager.cs` has the stacking
   math (`ReflowPositions()`, which steps over orbs the user has dragged —
   those live in `orbPositions` in `settings.json`, keyed by the session's
@@ -782,6 +928,13 @@ signed build.
   `null` for Forever. `waiting` is exempt either way, see above. The choices
   the settings window offers live in `LifetimeChoices` in
   `SettingsWindow.cs`.
+- **Reading `settings.json` by hand**: `ClaudeBuddySettings.cs` maps every field
+  itself rather than deserializing a type, and the whole read sits in one
+  `catch` that falls back to *all* defaults — so a wrong-typed value costs you
+  the entire file, profile names and dragged orb positions included. The
+  `orbColors` block is read through `Text()` for exactly that reason: a
+  `"idle": 5` there degrades to the default colour and nothing else. The older
+  fields still use `GetValue<T>()` and still have the sharp edge.
 - **The settings window**: `SettingsWindow.cs`, built in code rather than
   XAML. `ClaudeBuddy --settings` opens it straight at launch, which beats
   clicking through the status-bar menu when the window itself is what you're

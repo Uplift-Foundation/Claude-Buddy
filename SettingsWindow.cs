@@ -3,7 +3,9 @@ using Avalonia;
 using Avalonia.Controls;
 using Shapes = Avalonia.Controls.Shapes;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Media;
 using Avalonia.Styling;
 
@@ -35,6 +37,10 @@ namespace ClaudeBuddy
             _open.Closed += (_, _) =>
             {
                 _open = null;
+
+                // The colour pickers defer their write; closing the window is the
+                // last chance to land one that's still pending.
+                ClaudeBuddySettings.FlushPendingSave();
 
                 // Back to a menu-bar-only app: no Dock icon, no Cmd-Tab entry.
                 MacOSActivation.SetAccessory();
@@ -86,6 +92,7 @@ namespace ClaudeBuddy
             };
 
             BorrowFluentToggleSwitch();
+            EnsureColorPickerTheme();
 
             Rebuild();
 
@@ -131,6 +138,55 @@ namespace ClaudeBuddy
         private bool HasSwitchTheme => Resources.ContainsKey(typeof(ToggleSwitch))
                                        || !OperatingSystem.IsMacOS();
 
+        // The same defensive shape as BorrowFluentToggleSwitch, for two different
+        // reasons — and unlike that one, half of this is a confirmed hole rather
+        // than a precaution.
+        //
+        //  - On Windows there is no ColorPicker template at all. The control lives
+        //    in its own package and Avalonia.Themes.Fluent contains no reference
+        //    to it, so the row would render as an empty gap, which is what an
+        //    untemplated TemplatedControl looks like.
+        //  - On macOS the Devolutions theme does ship /Controls/ColorPicker.axaml
+        //    and its PART names cover everything the control looks up. But its
+        //    ToggleSwitch template is already known to be broken against the stock
+        //    control, so a themed template here is something to check rather than
+        //    assume.
+        //
+        // Both are answered the same way: merge the ColorPicker package's own
+        // Fluent styles into *this window* when the live theme has no ControlTheme
+        // for the type. Window-scoped, so nothing else is restyled and no other
+        // window pays for it — and window styles beat application ones, so this
+        // can also be forced unconditionally if the themed picker turns out to be
+        // broken rather than missing.
+        //
+        // Fluent.xaml's root element is <Styles>, not <ResourceDictionary> — it
+        // wraps its sub-dictionaries in Styles.Resources — so this is a
+        // StyleInclude.
+        private void EnsureColorPickerTheme()
+        {
+            try
+            {
+                var styles = Application.Current?.Styles;
+                if (styles is not null
+                    && styles.TryGetResource(typeof(ColorPicker), ActualThemeVariant, out _))
+                {
+                    return;
+                }
+
+                Styles.Add(new StyleInclude(new Uri("avares://ClaudeBuddy/"))
+                {
+                    Source = new Uri(
+                        "avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml")
+                });
+            }
+            catch
+            {
+                // Worst case the pickers come out unstyled, which is a gap in one
+                // card rather than a crash — everything that was already in this
+                // window still works.
+            }
+        }
+
         private void Rebuild()
         {
             // Held against System Settings side by side, Apple's content pane is
@@ -168,6 +224,21 @@ namespace ClaudeBuddy
                     "How long an orb stays after its session goes quiet. A session that's "
                     + "waiting on you is never removed, however long this is — those only go "
                     + "away when you answer it or reset it from the orb's menu."))));
+
+            // Its own group rather than three more rows in Orbs: that card already
+            // has two rows and one of them carries a paragraph of help, so five
+            // would read as a list rather than a group — and System Settings
+            // groups by what a setting is *about*. The labels are the same three
+            // words the tray menu already uses for these states.
+            root.Children.Add(Group("Orb colours", Card(
+                ColorRow("Idle", "idle"),
+                ColorRow("Working", "generating"),
+                ColorRow("Needs you", "waiting"),
+                Row("Restore the built-in colours", ResetColorsButton(),
+                    "The orb's fill and its glow. The menu-bar icon follows them too — it "
+                    + "shows the most urgent state across every session, so very light or "
+                    + "very dark choices can disappear into the menu bar. A session's own "
+                    + "/color is separate: that one goes on the orb's ring and letter."))));
 
             root.Children.Add(Group("Claude Desktop", Card(
                 Row("Tint the active window",
@@ -303,6 +374,117 @@ namespace ClaudeBuddy
             }
 
             return grid;
+        }
+
+        // One row per state, seeded from the stored colour and written on change
+        // with no commit step — the same read-seed-then-write shape as
+        // LifetimePicker below.
+        private Control ColorRow(string label, string state)
+        {
+            var picker = new ColorPicker
+            {
+                Color = OrbColors.For(state),
+
+                // The orb builds its own alphas — the glow's gradient stops are
+                // 150/95/0 over the chosen RGB, and the tray icon's alpha channel
+                // is the shape of its ring — so a user-set alpha would either be
+                // thrown away silently or make the orb look broken. Hidden *and*
+                // disabled, so the control never shows a value we won't honour.
+                IsAlphaVisible = false,
+                IsAlphaEnabled = false
+            };
+
+            // No Width or Height here: the picker's metrics are the theme's
+            // business, the same as the combo box's — see the note above Body().
+
+            // ColorChanged is not trustworthy until the user has touched the
+            // control, and this is not theoretical: seeding Color and subscribing
+            // afterwards is not enough, because the macOS theme's template raises
+            // ColorChanged *after* that with a colour of its own — a palette entry,
+            // by the look of the values. It wrote #2C273C / #50D140 / #E82323 into
+            // settings.json on the first launch that ever opened this window, so
+            // three colours nobody chose became the user's colours, the swatches
+            // re-seeded from them on the next build, and nothing anywhere looked
+            // like an error.
+            //
+            // Comparing against the stored value can't catch that on its own: a
+            // spurious change is a genuine difference. What distinguishes a real
+            // edit is that a real one is preceded by a click or a focus — you
+            // cannot pick a colour without opening the drop down first. So arm on
+            // that, and treat everything before it as the template talking to
+            // itself.
+            var armed = false;
+
+            // Tunnelling, so it arrives before the template's own button handles
+            // it and marks it handled. GotFocus covers tabbing in without a click.
+            picker.AddHandler(
+                PointerPressedEvent,
+                (object? _, PointerPressedEventArgs _) => armed = true,
+                RoutingStrategies.Tunnel);
+            picker.GotFocus += (_, _) => armed = true;
+
+            picker.ColorChanged += (_, e) =>
+            {
+                var current = OrbColors.For(state);
+                var same = e.NewColor.R == current.R
+                           && e.NewColor.G == current.G
+                           && e.NewColor.B == current.B;
+
+                if (!armed)
+                {
+                    // Put ours back rather than just declining to save it,
+                    // otherwise the swatch sits there showing a colour the app is
+                    // not using. Self-correcting and terminating: the assignment
+                    // raises this again, and that pass is a no-op.
+                    if (!same) picker.Color = current;
+                    return;
+                }
+
+                // A real edit that changes nothing still must not write. Writing
+                // the current colour as an explicit hex would freeze today's
+                // default into the file and light up the Reset button for a colour
+                // nobody chose. Compare RGB only — alpha isn't ours (see above).
+                if (same) return;
+
+                OrbColors.Set(state, OrbColors.ToHex(e.NewColor));
+
+                // Nothing observes the settings store, and a colour change isn't a
+                // state change, so the orbs and the tray icon have to be told.
+                SessionManager.Instance?.ReapplyStateColors();
+            };
+
+            return Row(label, picker);
+        }
+
+        // One button rather than a reset per row: the rows are narrow already, and
+        // "put it back how it shipped" is a single intention.
+        //
+        // It writes null rather than today's default hex — see
+        // ClaudeBuddySettings.IdleColor for why that distinction matters — and then
+        // rebuilds instead of assigning each picker's Color back, because
+        // assigning Color raises ColorChanged, which would write the default hex
+        // straight into the file that was just cleared. Rebuilding re-seeds every
+        // control from the store, which this window already does on a theme
+        // change, and there's no uncommitted state to lose. It does reset the
+        // scroll position, which for a window this short isn't worth solving.
+        private Control ResetColorsButton()
+        {
+            var reset = new Button
+            {
+                Content = "Reset",
+                IsEnabled = !OrbColors.AllDefault
+            };
+
+            reset.Click += (_, _) =>
+            {
+                OrbColors.Set("idle", null);
+                OrbColors.Set("generating", null);
+                OrbColors.Set("waiting", null);
+                SessionManager.Instance?.ReapplyStateColors();
+                Rebuild();
+            };
+
+            return reset;
         }
 
         // A bare switch: Avalonia's default writes "On"/"Off" beside it, which no

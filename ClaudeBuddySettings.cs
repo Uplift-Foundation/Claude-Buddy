@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
@@ -64,6 +65,14 @@ namespace ClaudeBuddy
             public bool ShowOrbs { get; set; } = true;
             public bool TintActiveWindow { get; set; } = true;
             public int OrbLifetimeMinutes { get; set; } = DefaultOrbLifetimeMinutes;
+
+            // "#RRGGBB", or null for "use the built-in colour". Null rather than
+            // a copy of the default so that retuning a shipped colour later still
+            // reaches everyone who never touched it — see the properties below.
+            public string? IdleColor { get; set; }
+            public string? GeneratingColor { get; set; }
+            public string? WaitingColor { get; set; }
+
             public Dictionary<string, ProfileSettings> Profiles { get; init; } =
                 new(StringComparer.Ordinal);
 
@@ -107,6 +116,37 @@ namespace ClaudeBuddy
                 lock (Gate) _model.OrbLifetimeMinutes = value < 0 ? OrbLifetimeForever : value;
                 Save();
             }
+        }
+
+        // ---- orb state colours ----------------------------------------------
+
+        // "#RRGGBB", with null meaning the built-in default. OrbColors owns the
+        // three defaults and the parsing, which keeps this file free of Avalonia
+        // types the way the rest of it is — and means a hand-edited garbage hex
+        // costs one colour rather than a Load().
+        //
+        // Null matters. Storing the *effective* colour instead would bake today's
+        // slate blue into every settings.json the first time someone opened the
+        // window, and a future retune of the shipped palette would then reach
+        // nobody. It's also what the Reset button writes.
+        //
+        // These three defer their file write — see SaveSoon.
+        public static string? IdleColor
+        {
+            get { Load(); lock (Gate) return _model.IdleColor; }
+            set { Load(); lock (Gate) _model.IdleColor = value; SaveSoon(); }
+        }
+
+        public static string? GeneratingColor
+        {
+            get { Load(); lock (Gate) return _model.GeneratingColor; }
+            set { Load(); lock (Gate) _model.GeneratingColor = value; SaveSoon(); }
+        }
+
+        public static string? WaitingColor
+        {
+            get { Load(); lock (Gate) return _model.WaitingColor; }
+            set { Load(); lock (Gate) _model.WaitingColor = value; SaveSoon(); }
         }
 
         // ---- orb positions --------------------------------------------------
@@ -204,6 +244,13 @@ namespace ClaudeBuddy
                             root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes
                     };
 
+                    if (root["orbColors"] is JsonObject orbColors)
+                    {
+                        model.IdleColor = Text(orbColors["idle"]);
+                        model.GeneratingColor = Text(orbColors["generating"]);
+                        model.WaitingColor = Text(orbColors["waiting"]);
+                    }
+
                     if (root["profiles"] is JsonObject profiles)
                     {
                         foreach (var (folder, node) in profiles)
@@ -247,6 +294,23 @@ namespace ClaudeBuddy
             }
         }
 
+        // A JSON value that is a non-empty string, or null.
+        //
+        // Being defensive per field is not optional here. Load() sits inside one
+        // catch that replaces the *entire* model with defaults, so `"idle": 5`
+        // reaching GetValue<string>() — which throws on a type mismatch — would
+        // cost someone their profile names and every dragged orb position over
+        // one typo in a colour. JsonValue.TryGetValue never throws.
+        //
+        // Deliberately doesn't check that the string is a *colour*: that's
+        // OrbColors' job, since it holds the default to fall back to.
+        private static string? Text(JsonNode? node) =>
+            node is JsonValue value
+            && value.TryGetValue<string>(out var text)
+            && !string.IsNullOrWhiteSpace(text)
+                ? text
+                : null;
+
         private static void Save()
         {
             try
@@ -285,6 +349,17 @@ namespace ClaudeBuddy
                         ["showOrbs"] = _model.ShowOrbs,
                         ["tintActiveWindow"] = _model.TintActiveWindow,
                         ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
+                        // Grouped rather than three top-level keys: it reads as
+                        // one setting in the file the way it reads as one card in
+                        // the window. A null entry — which is what a colour left
+                        // at its default writes — is the same shape the profile
+                        // entries already use for "not set".
+                        ["orbColors"] = new JsonObject
+                        {
+                            ["idle"] = _model.IdleColor,
+                            ["generating"] = _model.GeneratingColor,
+                            ["waiting"] = _model.WaitingColor
+                        },
                         ["profiles"] = profiles,
                         ["orbPositions"] = positions
                     };
@@ -305,6 +380,66 @@ namespace ClaudeBuddy
             {
                 // Losing a preference is not worth taking the app down for.
             }
+        }
+
+        // ---- deferred write -------------------------------------------------
+
+        // The colour pickers raise ColorChanged on every pointer move across the
+        // spectrum rather than once on commit, and ColorPicker's drop down lives
+        // inside its own template so there is no "closed" event to commit at
+        // instead. An auto-saving setter would therefore rebuild, write and
+        // rename settings.json for as long as someone drags — hundreds of temp
+        // files and renames to land one preference, each of them rewriting every
+        // profile and every orb position too.
+        //
+        // Only the file write waits. The in-memory model is updated at once and
+        // everything reads through that (OrbColors -> the orbs and the tray
+        // icon), so the live preview is unaffected.
+        //
+        // A DispatcherTimer rather than a threadpool one on purpose: Save()
+        // writes a temp file and renames it over the target, and two of those in
+        // flight end with the second rename failing on a file the first already
+        // moved — silently, inside the catch above. Every other Save() in this
+        // class happens on the UI thread, so this one does too and the question
+        // doesn't arise.
+        private static readonly TimeSpan SaveDelay = TimeSpan.FromMilliseconds(250);
+        private static DispatcherTimer? _deferred;
+
+        private static void SaveSoon()
+        {
+            try
+            {
+                if (_deferred is null)
+                {
+                    _deferred = new DispatcherTimer { Interval = SaveDelay };
+                    _deferred.Tick += (_, _) =>
+                    {
+                        _deferred!.Stop();
+                        Save();
+                    };
+                }
+
+                // Restart rather than let it run out: keep pushing the write
+                // further off for as long as changes keep arriving.
+                _deferred.Stop();
+                _deferred.Start();
+            }
+            catch
+            {
+                // No dispatcher. Nothing calls these setters before the app is
+                // up, but a lost preference isn't worth a crash — write now.
+                Save();
+            }
+        }
+
+        // A deferred write that never happens is a preference silently lost, so
+        // anything that might be the last thing to happen calls this.
+        public static void FlushPendingSave()
+        {
+            if (_deferred is null || !_deferred.IsEnabled) return;
+
+            _deferred.Stop();
+            Save();
         }
     }
 }

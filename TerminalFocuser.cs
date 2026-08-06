@@ -18,7 +18,12 @@ namespace ClaudeBuddy
     // Windows-side parent chain dead-ends in an interop bridge).
     internal static class TerminalFocuser
     {
-        public static void Focus(SessionStatus? status)
+        // teamLead is where the click goes when this session has nowhere of its
+        // own to go: an agent-team member runs in a pane of a *detached* tmux
+        // server, so there is no window anywhere showing it, and a click on its
+        // orb otherwise did nothing at all. The session running the team is the
+        // honest answer — it's where that agent's work is being driven from.
+        public static void Focus(SessionStatus? status, SessionStatus? teamLead = null)
         {
             if (status is null) return;
 
@@ -26,22 +31,29 @@ namespace ClaudeBuddy
             // queries, ps walks, osascript) and waits on their output; doing
             // that on the UI thread would stall every orb's animation for the
             // duration of the click.
-            Task.Run(() => FocusCore(status));
+            Task.Run(() =>
+            {
+                if (FocusCore(status)) return;
+                if (teamLead is not null) FocusCore(teamLead);
+            });
         }
 
-        private static void FocusCore(SessionStatus status)
+        // Whether anything was actually brought forward. False means the click
+        // had no effect at all, which is what the team-lead fallback above is
+        // for — and what made two orbs on screen feel broken before it existed.
+        private static bool FocusCore(SessionStatus status)
         {
             if (OperatingSystem.IsWindows())
             {
                 FocusWindows(status);
-                return;
+                return true;
             }
 
-            if (!OperatingSystem.IsMacOS()) return;
+            if (!OperatingSystem.IsMacOS()) return false;
 
             // tmux first: when a session is inside tmux, nothing else the hook
             // recorded points at a window you can actually see.
-            if (!string.IsNullOrEmpty(status.TmuxPane) && FocusTmux(status)) return;
+            if (!string.IsNullOrEmpty(status.TmuxPane) && FocusTmux(status)) return true;
 
             string? script;
             if (!string.IsNullOrEmpty(status.TermId))
@@ -62,7 +74,45 @@ namespace ClaudeBuddy
                 };
             }
 
+            // Nothing named a terminal program, or tmux couldn't be reached.
+            // The tty is the one coordinate the hook always records, and the
+            // process tree above it says which app owns it — enough to select
+            // the exact iTerm2 session or Terminal.app tab, and failing that to
+            // bring the owning app forward. Without this a session whose hook
+            // recorded a tty but no TERM_PROGRAM — a background session started
+            // by another tool, which is what a team lead often is — had an orb
+            // that did nothing when clicked.
+            if (script is null) return FocusByTty(status.Tty);
+
             RunOsaScript(script);
+            return true;
+        }
+
+        private static bool FocusByTty(string tty)
+        {
+            if (string.IsNullOrEmpty(tty)) return false;
+
+            var app = ResolveAppBundleForTty(tty);
+            if (app is null) return false;
+
+            // iTerm reports the full device path, so compare like with like.
+            var device = tty.StartsWith("/dev/") ? tty : "/dev/" + tty;
+
+            var script = Path.GetFileName(app) switch
+            {
+                "iTerm.app" => ITermSelectScript("tty", device),
+                "Terminal.app" => TerminalSelectScript(device),
+                _ => null
+            };
+
+            if (script is not null)
+            {
+                RunOsaScript(script);
+                return true;
+            }
+
+            ActivateApp(app);
+            return true;
         }
 
         // --- tmux ---
@@ -146,6 +196,8 @@ namespace ClaudeBuddy
         // app just brings it forward.
         private static void ActivateApp(string appBundlePath)
         {
+            MacOSWindowExtensions.WaitForOwnActivation();
+
             try
             {
                 var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
@@ -338,6 +390,11 @@ namespace ClaudeBuddy
         private static void RunOsaScript(string? script)
         {
             if (script is null) return;
+
+            // Let our own activation land first, or the terminal this script
+            // brings forward is taken back the instant it arrives. See
+            // WaitForOwnActivation.
+            MacOSWindowExtensions.WaitForOwnActivation();
 
             try
             {
@@ -570,14 +627,39 @@ namespace ClaudeBuddy
         // live tty of an attached tmux client). Both are iTerm2 session
         // properties; a no-match still activates, which is better than nothing.
         //
-        // `activate` MUST come last, after the selects — this is load-bearing,
-        // not style. Activating first and then selecting focuses the window in
-        // place and macOS never follows to the Space that window lives on, so a
-        // click from another desktop appears to do nothing. Selecting first and
-        // activating last makes macOS switch Spaces. (Verified from a second
-        // desktop: activate-only switches, activate-then-select doesn't,
-        // select-then-activate does.)
+        // Activate, *wait*, then select. The order and the wait are both
+        // load-bearing, and this supersedes an earlier reading of the same
+        // behaviour — worth spelling out, because the obvious experiment gives
+        // the wrong answer.
+        //
+        // What macOS actually does: activating an app raises whichever of its
+        // windows are on the Space you're looking at, and only follows the app
+        // to another Space when it has none here. Ordering a specific window
+        // front (`select w`) *does* pull you to its Space — but only if the app
+        // is already active. If an activation is still in flight, it lands
+        // afterwards and raises the local window instead, undoing the select.
+        //
+        // That's why the first reading was "activate must come last": tested
+        // from a desktop with no terminal window on it, where activation alone
+        // switches Spaces and select-then-activate therefore appears to work.
+        // From a desktop that *does* have a terminal window, the same script
+        // needed two clicks — the first activating, the second selecting with
+        // the app already active. Both observations come from the same rule.
+        //
+        // So: activate, give the activation time to land, then select. The
+        // delay is what the earlier attempt was missing; a fifth of a second is
+        // unnoticeable against a click that has already spent longer querying
+        // tmux, and it is the same gap a double click was inserting by hand.
+        // `delay` sits outside the tell block on purpose: inside one it is
+        // dispatched to the application, which doesn't understand it, and the
+        // whole script fails with "Can't continue delay".
+        private static string ActivateThenSettle(string app) => $$"""
+            tell application "{{app}}" to activate
+            delay 0.2
+            """;
+
         private static string ITermSelectScript(string property, string value) => $$"""
+            {{ActivateThenSettle("iTerm")}}
             tell application "iTerm"
                 repeat with w in windows
                     repeat with t in tabs of w
@@ -586,33 +668,31 @@ namespace ClaudeBuddy
                                 select w
                                 select t
                                 select s
-                                activate
                                 return
                             end if
                         end repeat
                     end repeat
                 end repeat
-                activate
             end tell
             """;
 
         // Accepts either form the two paths produce: a bare "ttys004" from the
         // hook, or a "/dev/ttys004" client tty from tmux.
         //
-        // `activate` last, for the same Spaces reason as ITermSelectScript.
+        // Activate, settle, then select — same Spaces rule as ITermSelectScript,
+        // where it's explained.
         private static string TerminalSelectScript(string tty) => $$"""
+            {{ActivateThenSettle("Terminal")}}
             tell application "Terminal"
                 repeat with w in windows
                     repeat with t in tabs of w
                         if tty of t is "{{(tty.StartsWith("/dev/") ? tty : "/dev/" + tty)}}" then
                             set selected of t to true
                             set index of w to 1
-                            activate
                             return
                         end if
                     end repeat
                 end repeat
-                activate
             end tell
             """;
     }

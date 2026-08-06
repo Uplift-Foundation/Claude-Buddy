@@ -26,7 +26,20 @@ import zlib
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(HERE, "Assets")
 
-# Same three colors as OrbWindow.axaml.cs — keep them in sync by hand.
+# The *default* three colors — OrbColors.DefaultIdle / DefaultGenerating /
+# DefaultWaiting in OrbColors.cs. Keep them in sync by hand.
+#
+# They are only defaults now: the settings window lets you pick your own, and
+# TrayController re-tints the tray PNGs at runtime to match. That works because
+# tray_shader below returns one constant RGB and varies only alpha, which makes
+# each tray-*.png a pure alpha mask over a single color — so what actually
+# matters at runtime is the *alpha* channel, i.e. the ring geometry. Change the
+# geometry here and a custom-colored icon follows; change these colors and only
+# the shipped defaults move.
+#
+# appicon-1024.png and ClaudeBuddy.ico stay on these colors whatever the user
+# picks. Those are baked into the .app's .icns at build time and into the .exe's
+# Win32 resources, and neither can follow a live setting.
 IDLE = (0x5B, 0x7A, 0x94)
 GENERATING = (0x8B, 0x6F, 0xD1)
 WAITING = (0xE8, 0x98, 0x3B)

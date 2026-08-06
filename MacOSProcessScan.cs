@@ -205,6 +205,138 @@ namespace ClaudeBuddy
             return null;
         }
 
+        // The values following the named flags in any pid's command line, e.g.
+        // ArgumentValues(pid, "--parent-session-id", "--agent-color"). Nothing
+        // to do with Claude Desktop, but this is the file that knows how to ask
+        // KERN_PROCARGS2 — duplicating the sysctl plumbing elsewhere would be
+        // worse. See AgentTeam, the caller. All the flags a caller wants come
+        // out of one read, because the buffer is KERN_ARGMAX (typically 1 MB).
+        //
+        // Deliberately stops at the end of argv: the environment block that
+        // follows is full of user-controlled strings, and one of them starting
+        // with a flag name would otherwise be read as an argument.
+        internal static Dictionary<string, string> ArgumentValues(int pid, params string[] flags)
+        {
+            var found = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (!OperatingSystem.IsMacOS() || pid <= 0 || flags.Length == 0) return found;
+
+            try
+            {
+                var buffer = new byte[ArgMax()];
+                var length = (nuint)buffer.Length;
+
+                var mib = new[] { CTL_KERN, KERN_PROCARGS2, pid };
+                if (sysctl(mib, 3, buffer, ref length, IntPtr.Zero, 0) != 0) return found;
+
+                ParseArgumentValues(buffer, (int)length, flags, found);
+            }
+            catch
+            {
+                // A process that exited between the scan and this call, or one
+                // this app may not inspect. Either way: nothing known.
+            }
+
+            return found;
+        }
+
+        // The named environment variables of any pid. Same read as
+        // ArgumentValues, the other side of the same buffer — argv is walked
+        // past rather than examined. Used to find which tmux pane a team's
+        // viewer is sitting in; see AgentTeamViewer.
+        internal static Dictionary<string, string> EnvironmentValues(int pid, params string[] keys)
+        {
+            var found = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (!OperatingSystem.IsMacOS() || pid <= 0 || keys.Length == 0) return found;
+
+            try
+            {
+                var buffer = new byte[ArgMax()];
+                var length = (nuint)buffer.Length;
+
+                var mib = new[] { CTL_KERN, KERN_PROCARGS2, pid };
+                if (sysctl(mib, 3, buffer, ref length, IntPtr.Zero, 0) != 0) return found;
+
+                ParseEnvironmentValues(buffer, (int)length, keys, found);
+            }
+            catch
+            {
+                // Gone, or not ours to inspect.
+            }
+
+            return found;
+        }
+
+        internal static void ParseEnvironmentValues(
+            byte[] buffer, int length, string[] keys, Dictionary<string, string> into)
+        {
+            if (length < sizeof(int)) return;
+
+            var argc = BitConverter.ToInt32(buffer, 0);
+            if (argc < 0) return;
+
+            var i = sizeof(int);
+
+            while (i < length && buffer[i] != 0) i++;   // exec path
+            while (i < length && buffer[i] == 0) i++;   // its alignment padding
+
+            for (var arg = 0; arg < argc && i < length; arg++)
+            {
+                while (i < length && buffer[i] != 0) i++;
+                i++;
+            }
+
+            while (i < length)
+            {
+                var start = i;
+                while (i < length && buffer[i] != 0) i++;
+                if (i == start) break;   // empty string terminates the block
+
+                var entry = Encoding.UTF8.GetString(buffer, start, i - start);
+                i++;
+
+                var split = entry.IndexOf('=');
+                if (split <= 0) continue;
+
+                var key = entry[..split];
+                if (Array.IndexOf(keys, key) >= 0) into[key] = entry[(split + 1)..];
+            }
+        }
+
+        // Same layout as ParseUserDataDir above, but walking argv rather than
+        // skipping it.
+        internal static void ParseArgumentValues(
+            byte[] buffer, int length, string[] flags, Dictionary<string, string> into)
+        {
+            if (length < sizeof(int)) return;
+
+            var argc = BitConverter.ToInt32(buffer, 0);
+            if (argc <= 0) return;
+
+            var i = sizeof(int);
+
+            while (i < length && buffer[i] != 0) i++;   // exec path
+            while (i < length && buffer[i] == 0) i++;   // its alignment padding
+
+            string? pending = null;
+            for (var arg = 0; arg < argc && i < length; arg++)
+            {
+                var start = i;
+                while (i < length && buffer[i] != 0) i++;
+
+                var entry = Encoding.UTF8.GetString(buffer, start, i - start);
+                i++;
+
+                if (pending is not null)
+                {
+                    into[pending] = entry;
+                    pending = null;
+                    continue;
+                }
+
+                if (Array.IndexOf(flags, entry) >= 0) pending = entry;
+            }
+        }
+
         private static int ArgMax()
         {
             if (_argMax > 0) return _argMax;
