@@ -42,8 +42,28 @@ namespace ClaudeBuddy
         // has no idea what room it's in.
         private const int CalibrationFrames = 12; // ~380ms — the gap between clicking and actually starting to talk
         private const double SpeechMultiplier = 2.5;
-        private const short MinimumThreshold = 300; // a floor a near-silent room's own noise can't undercut
+        private const int MinimumThreshold = 300; // a floor a near-silent room's own noise can't undercut
         private const int SilenceHangMs = 4000;
+
+        // A ceiling on the *other* end, for a failure mode the calibration
+        // window itself can cause: someone who starts talking within that
+        // ~380ms, with no pause after clicking, has their own voice folded
+        // into the "ambient" floor — the calibration has no way to tell
+        // early speech from background noise, since both just look like
+        // "whatever's in these first few frames." That inflates the floor
+        // to roughly their own speaking volume, and multiplying an
+        // already-speech-level floor by 2.5 sets a bar their own continued
+        // speech can never clear, so _hasSpeech never latches and the
+        // recording runs the full 30s cap regardless of what was said —
+        // one sentence followed by ~25+ seconds of silence, which is
+        // exactly the shape of audio that makes Whisper hallucinate "you"
+        // (a well-known artifact for near-silent/long-trailing-silence
+        // clips). Capping the threshold means even a contaminated floor
+        // still leaves normal speaking volume able to clear it. 3000 is
+        // comfortably above ordinary room noise and comfortably below
+        // ordinary speaking volume into a laptop/headset mic — both are
+        // rough, mic-dependent numbers, same as the rest of these.
+        private const int MaximumThreshold = 3000;
 
         private readonly PvRecorder _recorder;
         private readonly List<short> _samples = new();
@@ -143,7 +163,7 @@ namespace ClaudeBuddy
                 return false;
             }
 
-            var threshold = Math.Max(MinimumThreshold, _noiseFloor * SpeechMultiplier);
+            var threshold = Math.Min(MaximumThreshold, Math.Max(MinimumThreshold, _noiseFloor * SpeechMultiplier));
 
             if (rms >= threshold)
             {
@@ -158,14 +178,18 @@ namespace ClaudeBuddy
             return Environment.TickCount64 - _silenceSinceTick >= SilenceHangMs;
         }
 
-        private static short FrameRms(short[] frame)
+        // int, not short: a short overflows (wrapping negative) for RMS
+        // values approaching int16's own ceiling, which a loud-enough frame
+        // can genuinely hit — silently corrupting the floor/threshold math
+        // above rather than throwing anywhere near the mistake.
+        private static int FrameRms(short[] frame)
         {
             if (frame.Length == 0) return 0;
 
             long sumOfSquares = 0;
             foreach (var sample in frame) sumOfSquares += (long)sample * sample;
 
-            return (short)Math.Sqrt(sumOfSquares / (double)frame.Length);
+            return (int)Math.Sqrt(sumOfSquares / (double)frame.Length);
         }
 
         // Stops capture and hands back everything recorded as 32-bit float
