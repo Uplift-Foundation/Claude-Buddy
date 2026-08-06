@@ -84,6 +84,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; without it produces an app that runs correctly and displays nothing, which
 ; reads as broken software rather than an unfinished setup.
 Name: "wirehooks"; Description: "Wire up Claude Code hooks (required for orbs to appear)"; GroupDescription: "Setup:"
+; Only offered on a machine that actually has WSL; a plain file check is
+; enough here since this runs at Windows-install time, not inside WSL itself.
+; Deliberately a sub-option of "wirehooks" rather than independent: it does
+; nothing if that box is unchecked (see WireUpHooks below), which is a
+; simpler, safer default than trying to make WSL wiring stand alone.
+Name: "wirewslhooks"; Description: "Also wire up hooks for Claude Code running under WSL"; GroupDescription: "Setup:"; Check: WslIsInstalled
 Name: "startup"; Description: "Start {#AppName} automatically when I sign in"; GroupDescription: "Setup:"
 
 [Files]
@@ -124,6 +130,11 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#AppExe}"; Flags: runhidden skipifdoesntexist; RunOnceId: "stopapp"
 
 [Code]
+function WslIsInstalled(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{sys}\wsl.exe'));
+end;
+
 { Hook wiring runs from code rather than a [Run] entry so its exit code can be
   checked. A [Run] line would fail silently, and "hooks quietly not installed"
   is precisely the confusing failure this project already goes out of its way to
@@ -132,12 +143,20 @@ procedure WireUpHooks();
 var
   ResultCode: Integer;
   Script: String;
+  Params: String;
 begin
   Script := ExpandConstant('{app}\tools\install-windows-hooks.ps1');
+  Params := '-NoProfile -ExecutionPolicy Bypass -File "' + Script + '"';
+
+  { The script's own -Wsl skips any distro it detects wsl.exe isn't ready for
+    (see install-windows-hooks.ps1's timeout-guarded WSL discovery), so this
+    can't turn a plain Windows-only install into a hang even on a machine
+    where WSL is present but misbehaving. }
+  if WizardIsTaskSelected('wirewslhooks') then
+    Params := Params + ' -Wsl';
 
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-              '-NoProfile -ExecutionPolicy Bypass -File "' + Script + '"',
-              '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+              Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
     MsgBox('Could not start PowerShell to wire up the Claude Code hooks.' + #13#10#13#10 +
            'Claude Buddy is installed and will run, but no orbs will appear until' + #13#10 +
