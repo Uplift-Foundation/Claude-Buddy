@@ -247,6 +247,8 @@ namespace ClaudeBuddy
                 Row("Tint the active window",
                     Switch(ClaudeDesktopOverlay.Enabled, ClaudeDesktopOverlay.SetEnabled)))));
 
+            root.Children.Add(Group("Voice input", Card(VoiceInputRows())));
+
             root.Children.Add(Group("Profiles", ProfilesCard()));
 
             // Native wiring for extra Claude Code (CLI) accounts, and WSL's own
@@ -276,6 +278,83 @@ namespace ClaudeBuddy
             }
 
             return root;
+        }
+
+        // --- Voice input ---
+        // Off by default (see ClaudeBuddySettings.VoiceInputEnabled) —
+        // turning it on is what triggers the one-time Whisper model download,
+        // never the first mic click on an orb, so the multi-hundred-MB
+        // fetch is always something the user just asked for here.
+
+        // Only meaningful while a download this window kicked off is still
+        // running; null the rest of the time, in which case no status row
+        // is shown at all rather than a stale one.
+        private string? _voiceModelStatus;
+
+        private Control[] VoiceInputRows()
+        {
+            var rows = new List<Control>
+            {
+                Row("Enable voice input (experimental)",
+                    Switch(ClaudeBuddySettings.VoiceInputEnabled, OnVoiceInputToggled),
+                    "Hover an orb and click the mic that appears to dictate a prompt. Speech is "
+                    + "transcribed entirely on this machine (Whisper, no cloud service) and typed "
+                    + "into that session's terminal for review — nothing is sent anywhere, and "
+                    + "Enter is never pressed for you.")
+            };
+
+            if (ClaudeBuddySettings.VoiceInputEnabled && _voiceModelStatus is not null)
+            {
+                rows.Add(Row("Voice model", new TextBlock
+                {
+                    Text = _voiceModelStatus,
+                    FontSize = 12,
+                    Opacity = 0.7,
+                    TextWrapping = TextWrapping.Wrap
+                }));
+            }
+
+            return rows.ToArray();
+        }
+
+        private void OnVoiceInputToggled(bool enabled)
+        {
+            ClaudeBuddySettings.VoiceInputEnabled = enabled;
+
+            if (!enabled || SpeechTranscriber.ModelDownloaded)
+            {
+                Rebuild();
+                return;
+            }
+
+            _voiceModelStatus = "Downloading voice model (about 150 MB)…";
+            Rebuild();
+
+            var progress = new Progress<string>(message => Dispatcher.UIThread.Post(() =>
+            {
+                // The window this download was kicked off from may already be
+                // closed (or replaced by a fresh Toggle()) by the time a
+                // progress callback lands — updating a closed window's fields
+                // and rebuilding its (torn-down) content would be pointless
+                // at best.
+                if (_open != this) return;
+
+                _voiceModelStatus = message;
+                Rebuild();
+            }));
+
+            _ = SpeechTranscriber.DownloadModelAsync(progress).ContinueWith(t =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (_open != this) return;
+
+                    _voiceModelStatus = t.IsFaulted
+                        ? "Couldn't download the voice model — check your connection and try again."
+                        : null;
+                    Rebuild();
+                });
+            });
         }
 
         // --- Mac-ish chrome ---------------------------------------------------

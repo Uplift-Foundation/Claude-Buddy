@@ -1,0 +1,57 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ClaudeBuddy.OrbFlyout"
+        Width="26" Height="26"
+        SystemDecorations="None"
+        TransparencyLevelHint="Transparent"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        CanResize="False"
+        ShowActivated="False"
+        WindowStartupLocation="Manual">
+
+    <!-- One action today (voice dictation); a home for more later, stacked
+         further from the orb as they're added — which is the reason this is
+         its own window positioned next to the orb rather than a control
+         drawn inside OrbWindow's own 56x56 bounds. That size is load-bearing
+         elsewhere (drag hit-testing, SessionManager's stacking/reflow,
+         TeamLinks' arrow anchor all assume it), so a second action would
+         have had nowhere to go without pulling this out.
+
+         A tether line to the orb, and the button itself smaller than the
+         orb (24px here vs. the orb's own 36px) — both make this read as
+         "belongs to that orb" rather than as an unrelated floating button
+         nearby, the way the connecting arrows already do for team members
+         in TeamLinks. Simpler than TeamLinks' own arrows on purpose: this
+         window's position is always the same fixed offset from its orb (see
+         OrbFlyout.OffsetX/Y), never two independently-dragged points, so the
+         line's start and end are constants rather than geometry recomputed
+         from wherever two orbs currently happen to be. -->
+    <Grid x:Name="Root">
+        <!-- EndPoint touches the button's actual circle, not its 24x24
+             bounding box: that box spans (2,2)-(26,26) (bottom-right-aligned
+             in this 26x26 window), so its centre is (14,14) with a 12px
+             radius, and the circle's true edge toward the line sits inset
+             from the box corner at roughly 14 - 12*cos(45°) ≈ 5.7 — the same
+             inscribed-circle gap corrected for on the orb end of this line
+             (see OffsetX/Y in the code-behind), just showing up at the other
+             end instead. -->
+        <Line StartPoint="0,0" EndPoint="5.7,5.7"
+              Stroke="#80FFFFFF" StrokeThickness="1.5"
+              IsHitTestVisible="False"/>
+
+        <Grid x:Name="MicButton"
+              Width="24" Height="24"
+              HorizontalAlignment="Right"
+              VerticalAlignment="Bottom"
+              Cursor="Hand">
+            <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+            <TextBlock Text="&#127908;"
+                       FontSize="13"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Grid>
+    </Grid>
+</Window>

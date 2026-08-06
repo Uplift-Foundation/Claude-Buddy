@@ -89,6 +89,11 @@ namespace ClaudeBuddy
             public bool TintActiveWindow { get; set; } = true;
             public int OrbLifetimeMinutes { get; set; } = DefaultOrbLifetimeMinutes;
 
+            // Off by default: turning this on is what triggers the one-time
+            // Whisper model download (a few hundred MB), so it must be an
+            // explicit opt-in rather than something a fresh install just has.
+            public bool VoiceInputEnabled { get; set; }
+
             // "#RRGGBB", or null for "use the built-in colour". Null rather than
             // a copy of the default so that retuning a shipped colour later still
             // reaches everyone who never touched it — see the properties below.
@@ -151,6 +156,15 @@ namespace ClaudeBuddy
                 lock (Gate) _model.OrbLifetimeMinutes = value < 0 ? OrbLifetimeForever : value;
                 Save();
             }
+        }
+
+        // Gates both the mic flyout on the orb and the one-time Whisper model
+        // download — see VoiceRecorder/SpeechTranscriber. Nothing about speech
+        // capture or transcription runs while this is false.
+        public static bool VoiceInputEnabled
+        {
+            get { Load(); lock (Gate) return _model.VoiceInputEnabled; }
+            set { Load(); lock (Gate) _model.VoiceInputEnabled = value; Save(); }
         }
 
         // ---- orb state colours ----------------------------------------------
@@ -305,7 +319,8 @@ namespace ClaudeBuddy
                         ShowOrbs = root["showOrbs"]?.GetValue<bool>() ?? true,
                         TintActiveWindow = root["tintActiveWindow"]?.GetValue<bool>() ?? true,
                         OrbLifetimeMinutes =
-                            root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes
+                            root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes,
+                        VoiceInputEnabled = root["voiceInputEnabled"]?.GetValue<bool>() ?? false
                     };
 
                     if (root["orbColors"] is JsonObject orbColors)
@@ -430,6 +445,7 @@ namespace ClaudeBuddy
                         ["showOrbs"] = _model.ShowOrbs,
                         ["tintActiveWindow"] = _model.TintActiveWindow,
                         ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
+                        ["voiceInputEnabled"] = _model.VoiceInputEnabled,
                         // Grouped rather than three top-level keys: it reads as
                         // one setting in the file the way it reads as one card in
                         // the window. A null entry — which is what a colour left

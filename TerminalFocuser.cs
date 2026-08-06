@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 
 namespace ClaudeBuddy
 {
@@ -36,6 +38,71 @@ namespace ClaudeBuddy
                 if (FocusCore(status)) return;
                 if (teamLead is not null) FocusCore(teamLead);
             });
+        }
+
+        // Types transcribed speech into the exact terminal/pane a session's
+        // orb represents — the voice-dictation mic's send path (see
+        // OrbWindow's recording state and SpeechTranscriber). Never presses
+        // Enter: the text lands in the prompt line for the user to review,
+        // same as if they'd typed it themselves.
+        //
+        // Deliberately no team-lead fallback, unlike Focus above: if this
+        // specific session has no window or pane of its own, there is
+        // nowhere safe to type. The team lead's pane belongs to a *different*
+        // session, and typing into it would land words in the wrong place
+        // rather than nowhere at all — worse than doing nothing.
+        //
+        // Unlike Focus, this is awaited rather than fire-and-forget. Focus is
+        // fired from a mouse click and must never stall the UI thread; this
+        // is the tail of an already-async pipeline (record -> transcribe ->
+        // inject) with no UI thread waiting on it, so there's nothing lost by
+        // waiting out the same settle time the focus step already needs
+        // before it's safe to start typing.
+        public static Task SendText(SessionStatus? status, string text)
+        {
+            if (status is null || string.IsNullOrEmpty(text)) return Task.CompletedTask;
+
+            return Task.Run(async () =>
+            {
+                // Reuses FocusCore as-is rather than a bespoke synchronous
+                // variant: FocusCore's own osascript calls are fire-and-forget
+                // (see RunOsaScript), so there's no return value to await
+                // here — just the same fixed settle margin the rest of this
+                // file already relies on for activation ordering (see
+                // ActivateThenSettle), sized a bit larger because this also
+                // has to cover FocusCore's own osascript process launch, not
+                // just the `tell application to activate` inside it.
+                FocusCore(status);
+                await Task.Delay(500);
+
+                if (OperatingSystem.IsWindows())
+                {
+                    SendUnicodeText(text);
+                    return;
+                }
+
+                if (!OperatingSystem.IsMacOS()) return;
+
+                if (!string.IsNullOrEmpty(status.TmuxPane) && SendTextTmux(status, text)) return;
+
+                SendTextMacKeystroke(text);
+            });
+        }
+
+        // send-keys writes directly into the pane's input buffer regardless
+        // of whether its window is on screen, but FocusCore has already been
+        // asked to bring it forward above, so the user sees it land the same
+        // way a click would show them the pane.
+        //
+        // -l is literal: without it tmux tries to interpret the text as key
+        // names ("Enter", "C-c", ...) instead of typing it verbatim, which is
+        // exactly the gap between "type this" and "run arbitrary keys".
+        private static bool SendTextTmux(SessionStatus status, string text)
+        {
+            var tmux = ResolveTmuxBinary(status.TmuxBin);
+            if (tmux is null) return false;
+
+            return TryRun(tmux, out _, TmuxArgs(status, "send-keys", "-t", status.TmuxPane, "-l", text));
         }
 
         // Whether anything was actually brought forward. False means the click
@@ -429,6 +496,99 @@ namespace ClaudeBuddy
             }
         }
 
+        // Sends System Events a keystroke command for the frontmost app —
+        // correct because SendText's caller (Task.Run above) has already
+        // asked FocusCore to bring the right window/tab forward and waited
+        // out the settle delay before reaching here.
+        //
+        // A dedicated run-and-report helper rather than reusing RunOsaScript:
+        // that one attributes every failure to the Automation permission
+        // (-1743), which is the *wrong* diagnosis here — keystroke injection
+        // needs Accessibility permission, a separate TCC grant with its own
+        // error text, and telling a user to check the wrong settings pane
+        // over a permission failure is worse than not explaining it at all.
+        private static void SendTextMacKeystroke(string text)
+        {
+            var script = $$"""
+                tell application "System Events"
+                    keystroke "{{EscapeForAppleScript(text)}}"
+                end tell
+                """;
+
+            RunOsaScriptForSendText(script);
+        }
+
+        // AppleScript string literals only need their own quote and backslash
+        // escaped — unlike the tab-selection scripts elsewhere in this file,
+        // this text is never a hook-recorded value (a tty, a UUID); it's
+        // whatever the user said, so it can contain anything a string can.
+        private static string EscapeForAppleScript(string text) =>
+            text.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+        // Mirrors RunOsaScript's fire-and-forget shape (a click, or here a
+        // dictation, must not block on an external process) but reports
+        // through ReportSendTextFailure instead — see the comment on
+        // SendTextMacKeystroke for why the two can't share one reporter.
+        private static void RunOsaScriptForSendText(string script)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("/usr/bin/osascript")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardError = true
+                };
+                psi.ArgumentList.Add("-e");
+                psi.ArgumentList.Add(script);
+
+                var process = Process.Start(psi);
+                if (process is null) return;
+
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var stderr = await process.StandardError.ReadToEndAsync();
+                        await process.WaitForExitAsync();
+                        if (process.ExitCode != 0) ReportSendTextFailure(stderr);
+                    }
+                    catch { }
+                    finally { process.Dispose(); }
+                });
+            }
+            catch
+            {
+                // Typing the transcription in is a convenience on top of a
+                // convenience; never let it take the app down.
+            }
+        }
+
+        private static int _sendTextFailureReported;
+
+        private static void ReportSendTextFailure(string stderr)
+        {
+            if (Interlocked.Exchange(ref _sendTextFailureReported, 1) != 0) return;
+
+            var detail = stderr.Trim();
+
+            if (detail.Contains("not allowed to send keystrokes", StringComparison.OrdinalIgnoreCase)
+                || detail.Contains("assistive access", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.Error.WriteLine(
+                    "Claude Buddy: the mic transcribed your speech, but typing it into the " +
+                    "terminal failed — macOS has not granted Accessibility permission (this is " +
+                    "separate from the Automation permission clicking an orb already uses).\n" +
+                    "  Fix: System Settings > Privacy & Security > Accessibility, and enable the " +
+                    "terminal app (or Claude Buddy, if System Events prompts for it there instead).\n" +
+                    "  If it was granted before a rebuild, the grant may have been invalidated. Run:\n" +
+                    "    tccutil reset Accessibility io.github.wtvamp.claudebuddy\n" +
+                    "  then dictate again and approve the prompt.");
+                return;
+            }
+
+            Console.Error.WriteLine($"Claude Buddy: typing the transcribed text failed: {detail}");
+        }
+
         // Once per app run, not per click: a denied grant fails on every click,
         // and a message per click would bury everything else in the log.
         private static int _focusFailureReported;
@@ -457,6 +617,85 @@ namespace ClaudeBuddy
 
             Console.Error.WriteLine($"Claude Buddy: focusing the terminal failed: {detail}");
         }
+
+        // --- Windows keystroke injection ---
+        //
+        // SendInput rather than SendKeys.SendWait: SendKeys reads its string
+        // as a small escaping language of its own (parentheses, braces, `+`
+        // for shift...), and arbitrary dictated text is not written in that
+        // language — every character that happens to collide with it would
+        // need escaping, which is worse than not using SendKeys at all.
+        //
+        // KEYEVENTF_UNICODE sends a raw UTF-16 code unit per event and skips
+        // virtual-key mapping entirely, so it doesn't care what's plugged in
+        // or which keyboard layout is active — including a surrogate pair,
+        // which arrives as two code units and reassembles correctly on the
+        // receiving end, the same as typing an emoji normally would.
+        [StructLayout(LayoutKind.Sequential)]
+        private struct KeyboardInput
+        {
+            public ushort VirtualKey;
+            public ushort ScanCode;
+            public uint Flags;
+            public uint Time;
+            public IntPtr ExtraInfo;
+        }
+
+        // INPUT is a C union of three keyboard/mouse/hardware shapes; this
+        // code only ever sends the keyboard one, but the union still has to
+        // be declared to get Win32's actual struct layout (and size —
+        // KEYBDINPUT's trailing IntPtr forces 8-byte alignment on x64) rather
+        // than guessing at padding by hand.
+        [StructLayout(LayoutKind.Explicit)]
+        private struct InputUnion
+        {
+            [FieldOffset(0)] public KeyboardInput Ki;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Input
+        {
+            public uint Type;
+            public InputUnion U;
+        }
+
+        private const uint InputKeyboard = 1;
+        private const uint KeyEventFUnicode = 0x0004;
+        private const uint KeyEventFKeyUp = 0x0002;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint SendInput(uint numberOfInputs, Input[] inputs, int sizeOfInputStructure);
+
+        [SupportedOSPlatform("windows")]
+        private static void SendUnicodeText(string text)
+        {
+            if (text.Length == 0) return;
+
+            var inputs = new Input[text.Length * 2];
+            for (var i = 0; i < text.Length; i++)
+            {
+                inputs[i * 2] = KeyEvent(text[i], keyUp: false);
+                inputs[i * 2 + 1] = KeyEvent(text[i], keyUp: true);
+            }
+
+            SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+        }
+
+        private static Input KeyEvent(char ch, bool keyUp) => new()
+        {
+            Type = InputKeyboard,
+            U = new InputUnion
+            {
+                Ki = new KeyboardInput
+                {
+                    VirtualKey = 0,
+                    ScanCode = ch,
+                    Flags = KeyEventFUnicode | (keyUp ? KeyEventFKeyUp : 0),
+                    Time = 0,
+                    ExtraInfo = IntPtr.Zero
+                }
+            }
+        };
 
         // --- Windows ---
 

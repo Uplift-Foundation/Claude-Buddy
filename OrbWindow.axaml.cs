@@ -81,6 +81,29 @@ namespace ClaudeBuddy
         private readonly ColorTransition _colorTransition;
         private readonly ScaleTransform _orbScale = new();
 
+        // Flat red rather than a fourth entry in OrbColors: this isn't a
+        // session state Claude Code reports, it's purely local UI feedback
+        // for "the mic is listening", so it has no reason to be user
+        // configurable the way idle/generating/waiting are.
+        private static readonly Color RecordingColor = Color.Parse("#D93B3B");
+
+        private bool _recording;
+        private VoiceRecorder? _recorder;
+        private DispatcherTimer? _recordingCap;
+
+        // Created lazily on first hover (see EnsureFlyoutShown), not here —
+        // most orbs are never hovered in a given run, and none of them should
+        // pay for a second window until one actually is.
+        private OrbFlyout? _flyout;
+
+        // Bridges hover between two separate OS windows (the orb and its
+        // flyout): a bare PointerExited on either one would hide the flyout
+        // the instant the cursor crosses from one window into the other,
+        // before it ever reaches the second window. Scheduling the hide and
+        // cancelling it if either window reports the pointer back within the
+        // grace period turns that into a single smooth handoff instead.
+        private DispatcherTimer? _hideFlyoutTimer;
+
         public OrbWindow(string sessionId)
         {
             SessionId = sessionId;
@@ -99,6 +122,13 @@ namespace ClaudeBuddy
             Glow.Fill = _glowBrush;
             Orb.RenderTransform = _orbScale;
 
+            Root.PointerEntered += (_, _) =>
+            {
+                CancelFlyoutHide();
+                EnsureFlyoutShown();
+            };
+            Root.PointerExited += (_, _) => ScheduleFlyoutHide();
+
             // Unlike WPF, Loaded fires *after* the first UpdateFrom here, so
             // honor any state that already arrived instead of stomping it.
             Loaded += (_, _) => ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
@@ -114,6 +144,21 @@ namespace ClaudeBuddy
 
             // A closed orb must leave the shared ticker or it keeps being ticked.
             Closed += (_, _) => Pulsing.Remove(this);
+
+            // A session going away mid-dictation (the window closing) must
+            // not leave a capture thread or a native mic handle running.
+            Closed += (_, _) => CancelRecording();
+
+            // The flyout is a second, independent top-level window — it
+            // outlives this one unless told otherwise. Stopping the hide
+            // timer first, not just closing the flyout, matters because a
+            // tick already queued on the dispatcher would otherwise run
+            // after this and touch a window that no longer exists.
+            Closed += (_, _) =>
+            {
+                _hideFlyoutTimer?.Stop();
+                _flyout?.Close();
+            };
         }
 
         public void UpdateFrom(SessionStatus status)
@@ -157,11 +202,15 @@ namespace ClaudeBuddy
             if (status.State != _lastState)
             {
                 _lastState = status.State;
-                if (IsLoaded)
+                if (IsLoaded && !_recording)
                 {
                     ApplyState(status.State);
                 }
-                // else: Loaded handler applies _lastState once the window is up.
+                // else if !IsLoaded: Loaded handler applies _lastState once the
+                // window is up. Else (_recording): the mic's red pulse owns
+                // the orb's colour/motion right now — StopRecording restores
+                // whatever _lastState ends up being once dictation finishes,
+                // so a state change mid-recording isn't lost, just deferred.
             }
         }
 
@@ -393,6 +442,191 @@ namespace ClaudeBuddy
             _orbScale.ScaleX = _orbScale.ScaleY = 1.0;
         }
 
+        // --- Voice dictation mic ---
+        // Hover fades in a small flyout window below-and-right of the orb
+        // (see OrbFlyout — its own window, not a control drawn inside this
+        // one, so it has room to grow into more than the mic); clicking the
+        // mic records, transcribes locally, and types the result into this
+        // session's terminal — never pressing Enter. See VoiceRecorder,
+        // SpeechTranscriber and TerminalFocuser.SendText.
+
+        // Created on first hover, not in the constructor — see the field's
+        // own comment for why. A no-op when the feature is off, so nothing
+        // here ever constructs a VoiceRecorder — and triggers macOS's
+        // mic-permission prompt — for someone who hasn't opted in.
+        private void EnsureFlyoutShown()
+        {
+            if (!ClaudeBuddySettings.VoiceInputEnabled) return;
+
+            if (_flyout is null)
+            {
+                _flyout = new OrbFlyout();
+                _flyout.MicClicked += () =>
+                {
+                    if (_recording) StopRecording();
+                    else StartRecording();
+                };
+
+                // The other half of the hover bridge described on
+                // _hideFlyoutTimer: entering the flyout must cancel a hide
+                // that Root.PointerExited already scheduled, and leaving it
+                // must schedule one of its own in case the pointer doesn't
+                // land back on the orb either.
+                _flyout.PointerEntered += (_, _) => CancelFlyoutHide();
+                _flyout.PointerExited += (_, _) => ScheduleFlyoutHide();
+            }
+
+            _flyout.ShowNear(Position);
+        }
+
+        // Immediate, not scheduled — dragging moves the orb every pointer
+        // move, and a flyout animating toward a stale position underneath a
+        // moving orb would read as broken rather than as a hover effect.
+        private void HideFlyoutNow()
+        {
+            _hideFlyoutTimer?.Stop();
+            _flyout?.Hide();
+        }
+
+        private void CancelFlyoutHide() => _hideFlyoutTimer?.Stop();
+
+        // A no-op while recording: the flyout is the only way to stop, so it
+        // must stay up regardless of where the pointer wanders.
+        private void ScheduleFlyoutHide()
+        {
+            if (_recording) return;
+
+            _hideFlyoutTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+            _hideFlyoutTimer.Stop();
+
+            // Re-subscribing on every schedule would stack a duplicate Tick
+            // handler per hover; there both is and only ever needs to be one.
+            _hideFlyoutTimer.Tick -= OnFlyoutHideTick;
+            _hideFlyoutTimer.Tick += OnFlyoutHideTick;
+            _hideFlyoutTimer.Start();
+        }
+
+        private void OnFlyoutHideTick(object? sender, EventArgs e)
+        {
+            _hideFlyoutTimer!.Stop();
+
+            // The grace period ends with the pointer having genuinely landed
+            // on one of the two windows after all (a slow, deliberate move
+            // across the gap) — nothing to hide in that case.
+            if (Root.IsPointerOver || (_flyout?.IsPointerOverFlyout ?? false)) return;
+
+            _flyout?.Hide();
+        }
+
+        private void StartRecording()
+        {
+            if (_recording) return;
+
+            try
+            {
+                _recorder = new VoiceRecorder();
+
+                // Fired from VoiceRecorder's own capture thread, so this has
+                // to hop back to the UI thread before touching anything here
+                // — StopRecording ends up updating Avalonia controls and
+                // awaiting the transcription pipeline, none of which is safe
+                // to do from off the dispatcher.
+                _recorder.SilenceDetected += () => Dispatcher.UIThread.Post(StopRecording);
+
+                _recorder.Start();
+            }
+            catch (Exception ex)
+            {
+                // No input device, permission denied, device busy — a
+                // convenience feature failing to start is not worth a crash.
+                _recorder = null;
+                Console.Error.WriteLine($"Claude Buddy: couldn't start recording: {ex.Message}");
+                return;
+            }
+
+            _recording = true;
+
+            // Flat red, fast — visibly distinct from the waiting/generating
+            // pulses, so "listening" reads as its own thing rather than as
+            // the session itself having changed state.
+            AnimateColor(RecordingColor, TimeSpan.FromMilliseconds(150), _lastState);
+            StartPulse(1.18, TimeSpan.FromMilliseconds(350), new SineEaseInOut());
+
+            // A hard cap, not just a courtesy: this runs whether or not the
+            // user remembers to click again, so a missed second click can't
+            // leave the mic — and VoiceRecorder's own capture thread — running
+            // indefinitely.
+            _recordingCap = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+            _recordingCap.Tick += (_, _) => StopRecording();
+            _recordingCap.Start();
+        }
+
+        private async void StopRecording()
+        {
+            if (!_recording || _recorder is null) return;
+
+            _recording = false;
+            _recordingCap?.Stop();
+            _recordingCap = null;
+
+            // Back to whatever the session's own state actually is —
+            // StartRecording never changed _lastState, only the pulse and
+            // colour drawn over it.
+            ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
+
+            // The pointer is very likely still over the mic right after a
+            // click, but the recording that was forcing the flyout to stay
+            // up just ended — re-derive from where the pointer actually is
+            // now rather than assuming either way.
+            if (Root.IsPointerOver || (_flyout?.IsPointerOverFlyout ?? false))
+            {
+                CancelFlyoutHide();
+            }
+            else
+            {
+                HideFlyoutNow();
+            }
+
+            var recorder = _recorder;
+            _recorder = null;
+
+            float[] pcm;
+            try
+            {
+                pcm = recorder.Stop();
+            }
+            finally
+            {
+                recorder.Dispose();
+            }
+
+            if (pcm.Length == 0) return;
+
+            var text = await SpeechTranscriber.TranscribeAsync(pcm);
+            if (string.IsNullOrWhiteSpace(text)) return;
+
+            var status = _lastStatus;
+            if (status is null) return;
+
+            await TerminalFocuser.SendText(status, text);
+        }
+
+        // Ends an in-progress recording without transcribing or sending
+        // anything — only reachable from Closed, where the orb (and the
+        // session it belongs to) is going away regardless.
+        private void CancelRecording()
+        {
+            _recordingCap?.Stop();
+            _recordingCap = null;
+
+            if (!_recording || _recorder is null) return;
+
+            _recording = false;
+            try { _recorder.Stop(); } catch { }
+            _recorder.Dispose();
+            _recorder = null;
+        }
+
         // --- Click, dragging & context menu ---
         // Left-press starts as a potential click; it becomes a drag once the
         // pointer moves past a small threshold. A clean click jumps to the
@@ -457,6 +691,12 @@ namespace ClaudeBuddy
             var dy = current.Y - _pointerStart.Y;
 
             if (!_dragging && Math.Abs(dx) < 6 && Math.Abs(dy) < 6) return;
+
+            // Only on the transition into dragging, not every move after —
+            // a flyout animating toward a stale position underneath a moving
+            // orb would read as broken, so it's simplest to just take it off
+            // screen the instant a drag actually starts.
+            if (!_dragging) HideFlyoutNow();
 
             _dragging = true;
             Position = new PixelPoint(_windowStart.X + dx, _windowStart.Y + dy);
