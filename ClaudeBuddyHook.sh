@@ -90,13 +90,20 @@ elif [ -n "$ITERM_SESSION_ID" ]; then
     TERM_ID="${ITERM_SESSION_ID#*:}"
 fi
 
+# The ancestor that owns the tty is the claude TUI process itself, so the same
+# walk that finds the tty also hands us the pid to record. The app uses it to
+# tell "this session is still running" from "this file was left behind": a
+# session killed with Ctrl+C never fires SessionEnd, so its file survives, and
+# without a pid the only way to notice is to wait out the orb lifetime — which
+# is forever if that is what you picked. See SessionManager.SessionGone.
 TTY=""
+SESSION_PID=""
 PID=$$
 for _ in 1 2 3 4 5; do
     PID=$(ps -o ppid= -p "$PID" 2>/dev/null | tr -d ' ')
     { [ -z "$PID" ] || [ "$PID" = "0" ] || [ "$PID" = "1" ]; } && break
     T=$(ps -o tty= -p "$PID" 2>/dev/null | tr -d ' ')
-    if [ -n "$T" ] && [ "$T" != "??" ]; then TTY="$T"; break; fi
+    if [ -n "$T" ] && [ "$T" != "??" ]; then TTY="$T"; SESSION_PID="$PID"; break; fi
 done
 
 # ${TMPDIR} is what .NET's Path.GetTempPath() returns on macOS, so the app
@@ -109,9 +116,9 @@ if [ "$STATE" = "ended" ]; then
     rm -f "$FILE"
 else
     mkdir -p "$DIR"
-    printf '{"state":"%s","cwd":"%s","title":"%s","color":"%s","term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s","tmux_pane":"%s","tmux_bin":"%s"}' \
+    printf '{"state":"%s","cwd":"%s","title":"%s","color":"%s","term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s","tmux_pane":"%s","tmux_bin":"%s","session_pid":%s}' \
         "$STATE" "$CWD" "$TITLE" "$COLOR" "$TERM_PROGRAM" "$TERM_ID" "$TTY" \
-        "$TMUX_SOCKET" "$TMUX_PANE_ID" "$TMUX_BIN" > "$FILE"
+        "$TMUX_SOCKET" "$TMUX_PANE_ID" "$TMUX_BIN" "${SESSION_PID:-0}" > "$FILE"
 fi
 
 exit 0

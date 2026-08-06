@@ -90,7 +90,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
     }
 
-    $exe = Join-Path $repoRoot "bin\Release\net8.0\$Rid\publish\ClaudeBuddy.exe"
+    $exe = Join-Path $repoRoot "bin\Release\net10.0\$Rid\publish\ClaudeBuddy.exe"
     if (-not (Test-Path -LiteralPath $exe)) {
         throw "Published executable not found at $exe"
     }

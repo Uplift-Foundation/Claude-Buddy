@@ -1,6 +1,8 @@
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 
 namespace ClaudeBuddy
@@ -25,6 +27,13 @@ namespace ClaudeBuddy
         // changes to that same object's Items.
         private readonly NativeMenu _menu = new();
 
+        // Keyed by state, not by colour: there are only ever three live entries,
+        // and a colour change clears the lot (see ReapplyStateColors).
+        //
+        // This cache is what keeps the re-tint's pixel loop off the 2s tick.
+        // Apply() is signature-gated, Rebuild calls UpdateIcon, and UpdateIcon
+        // asks LoadIcon every time — so remove either the gate or this cache and
+        // three PNGs start getting decoded and recoloured twice a second.
         private readonly Dictionary<string, WindowIcon> _iconCache = new();
 
         // Rebuilding a NativeMenu is visible on macOS (it can dismiss an open
@@ -150,6 +159,20 @@ namespace ClaudeBuddy
             _tray.ToolTipText = Summary(sessions.Count, waiting, generating);
         }
 
+        // A colour change doesn't change the session list, so Apply's signature is
+        // unchanged and nothing would repaint. Drop the cached icons and set one
+        // again directly — the same explicit-kick shape as
+        // ClaudeDesktopManager.KickRefresh.
+        //
+        // UpdateIcon assigns the icon unconditionally, so this repaints even with
+        // zero sessions. That matters: with nothing running, the menu-bar icon is
+        // the only live preview of the idle colour.
+        internal void ReapplyStateColors()
+        {
+            _iconCache.Clear();
+            UpdateIcon(_lastSessions);
+        }
+
         private void Rebuild(IReadOnlyList<SessionEntry> sessions)
         {
             UpdateIcon(sessions);
@@ -227,9 +250,14 @@ namespace ClaudeBuddy
             return "Claude Buddy — " + string.Join(", ", parts);
         }
 
-        // Chat name if Claude Code has named the session, else its folder.
+        // An agent's name within its team if it has one, else the chat name if
+        // Claude Code has named the session, else its folder. The agent name
+        // comes first because a team's members all inherit the team session's
+        // title, and four identical rows only differed by the id this menu
+        // appends when it can't tell them apart.
         private static string DisplayName(SessionEntry session)
         {
+            if (!string.IsNullOrEmpty(session.Status.Agent)) return session.Status.Agent;
             if (!string.IsNullOrEmpty(session.Status.Title)) return session.Status.Title;
 
             var cwd = session.Status.Cwd;
@@ -274,10 +302,93 @@ namespace ClaudeBuddy
         {
             if (_iconCache.TryGetValue(state, out var cached)) return cached;
 
-            var icon = new WindowIcon(AssetLoader.Open(
-                new Uri($"avares://ClaudeBuddy/Assets/tray-{state}.png")));
+            var icon = Tinted(state)
+                       ?? new WindowIcon(AssetLoader.Open(
+                           new Uri($"avares://ClaudeBuddy/Assets/tray-{state}.png")));
             _iconCache[state] = icon;
             return icon;
+        }
+
+        // Recolours the baked tray artwork to a chosen state colour.
+        //
+        // The three PNGs are single-colour alpha masks and always have been:
+        // make-icons.py's tray_shader returns one constant RGB and varies only
+        // alpha (opaque in the ring, 0.30 in the core, nothing outside), so every
+        // pixel with any alpha in tray-idle.png carries exactly #5B7A94.
+        // Substituting the RGB and keeping the alpha therefore reproduces the
+        // icon *exactly*, down to the supersampled rim — which redrawing the
+        // annulus with a DrawingContext would not. That would mean a second copy
+        // of the Python's geometry here, antialiased by Skia instead of
+        // supersampled, so the icon's shape would visibly change the moment
+        // someone picked a colour.
+        //
+        // Unlike ClaudeDesktopBundles.WriteTinted there's no un-premultiply round
+        // trip to do: the new colour times the existing alpha *is* the new
+        // premultiplied pixel, so nothing is lost at the antialiased edge.
+        //
+        // Null means "use the file as it is" — either this state has never been
+        // recoloured, in which case the baked PNG already is that colour, or
+        // something about the re-tint failed, and then the baked PNG is a
+        // graceful answer: the icon still says which state we're in, just not in
+        // the chosen hue.
+        private static WindowIcon? Tinted(string state)
+        {
+            if (OrbColors.IsDefault(state)) return null;
+
+            var color = OrbColors.For(state);
+
+            try
+            {
+                using var source = new Bitmap(AssetLoader.Open(
+                    new Uri($"avares://ClaudeBuddy/Assets/tray-{state}.png")));
+
+                // 64x64, which is what make-icons.py renders so the menu bar has
+                // retina pixels to downsample from.
+                var size = source.PixelSize;
+                var stride = size.Width * 4;
+                var pixels = new byte[stride * size.Height];
+
+                var pinned = GCHandle.Alloc(pixels, GCHandleType.Pinned);
+                try
+                {
+                    source.CopyPixels(new PixelRect(0, 0, size.Width, size.Height),
+                        pinned.AddrOfPinnedObject(), pixels.Length, stride);
+
+                    for (var i = 0; i < pixels.Length; i += 4)
+                    {
+                        var alpha = pixels[i + 3];
+                        if (alpha == 0) continue;
+
+                        pixels[i] = (byte)(color.B * alpha / 255);
+                        pixels[i + 1] = (byte)(color.G * alpha / 255);
+                        pixels[i + 2] = (byte)(color.R * alpha / 255);
+                    }
+                }
+                finally
+                {
+                    pinned.Free();
+                }
+
+                using var tinted = new WriteableBitmap(
+                    size, source.Dpi, PixelFormat.Bgra8888, AlphaFormat.Premul);
+                using (var frame = tinted.Lock())
+                {
+                    Marshal.Copy(pixels, 0, frame.Address, pixels.Length);
+                }
+
+                // Through a stream because that's the WindowIcon constructor this
+                // file already proves exists. Encoding 64x64 to PNG in memory
+                // costs well under a millisecond, and it happens three times per
+                // colour change rather than once per tray tick.
+                var encoded = new MemoryStream();
+                tinted.Save(encoded);
+                encoded.Position = 0;
+                return new WindowIcon(encoded);
+            }
+            catch
+            {
+                return null;
+            }
         }
     }
 }

@@ -15,10 +15,10 @@ namespace ClaudeBuddy
 {
     public partial class OrbWindow : Window
     {
-        private static readonly Color IdleColor = Color.Parse("#5B7A94");       // calm slate blue
-        private static readonly Color GeneratingColor = Color.Parse("#8B6FD1"); // violet
-        private static readonly Color WaitingColor = Color.Parse("#E8983B");    // amber
-
+        // The three state colours live in OrbColors now — they're settable, and
+        // the tray icon reads the same three, so a static field here would have
+        // been a second copy for both reasons.
+        //
         // A session's /color goes on the orb's border and letter, leaving the
         // fill to mean what it always has.
         //
@@ -50,22 +50,32 @@ namespace ClaudeBuddy
         };
 
         // What an orb looks like with no /color set: the original faint hairline
-        // and near-white letter.
+        // and near-white letter. PlainLink is the same idea for the team arrow,
+        // but brighter — the hairline works because it sits on the orb's own
+        // fill, and an arrow has nothing behind it but the desktop.
         private static readonly Color PlainStroke = Color.Parse("#22FFFFFF");
         private static readonly Color PlainGlyph = Color.Parse("#DDFFFFFF");
+        private static readonly Color PlainLink = Color.Parse("#FFCCCCCC");
 
         public string SessionId { get; }
 
         private string _lastState = "";
         private string _lastColor = "";
 
-        private readonly SolidColorBrush _orbBrush = new(IdleColor);
+        // Colour for the team arrow leaving this orb, when it has one. Follows
+        // /color so several members pointing at one lead stay apart; sessions
+        // without a colour share the neutral. See TeamLinks.
+        public Color LinkColor { get; private set; } = PlainLink;
+
+        // Seeded from the settings-backed colour at field-init time, the same way
+        // SessionManager seeds OrbsVisible from ClaudeBuddySettings.ShowOrbs.
+        private readonly SolidColorBrush _orbBrush = new(OrbColors.Idle);
 
         private readonly RadialGradientBrush _glowBrush = new()
         {
             GradientOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),
             Center = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),
-            GradientStops = GlowStops(IdleColor)
+            GradientStops = GlowStops(OrbColors.Idle)
         };
 
         private readonly ColorTransition _colorTransition;
@@ -93,7 +103,14 @@ namespace ClaudeBuddy
             // honor any state that already arrived instead of stomping it.
             Loaded += (_, _) => ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
 
-            Opened += (_, _) => this.ShowOnAllSpaces();
+            Opened += (_, _) =>
+            {
+                this.ShowOnAllSpaces();
+
+                // Otherwise the first click on an orb is spent activating the
+                // app and never reaches it — see AcceptFirstClick.
+                this.AcceptFirstClick();
+            };
 
             // A closed orb must leave the shared ticker or it keeps being ticked.
             Closed += (_, _) => Pulsing.Remove(this);
@@ -112,14 +129,27 @@ namespace ClaudeBuddy
             // identical. Falls back to the folder until Claude Code names it.
             var label = string.IsNullOrEmpty(status.Title) ? folder : status.Title;
 
+            // An agent's own name beats all of it. Every member of a team
+            // inherits the team session's title, so a team of four drew the
+            // same letter four times and said nothing about which agent was
+            // which — while the terminal had been calling them MenuUX,
+            // Narrative and HitReactSpec the whole time. The title still gets
+            // said, in the tooltip, because "which team" is worth knowing too.
+            var name = string.IsNullOrEmpty(status.Agent) ? label : status.Agent;
+
+            var described = string.IsNullOrEmpty(status.Agent) || string.IsNullOrEmpty(label)
+                ? name
+                : $"{status.Agent} · {label}";
+
             ToolTip.SetTip(Root, string.IsNullOrEmpty(status.Cwd)
-                ? (string.IsNullOrEmpty(label) ? SessionId : label)
-                : $"{label}\n{status.Cwd}");
+                ? (string.IsNullOrEmpty(described) ? SessionId : described)
+                : $"{described}\n{status.Cwd}");
 
-            Glyph.Text = GlyphFor(label);
+            Glyph.Text = GlyphFor(name);
             ApplyAccent(status.Color);
+            SetTeamRole(!string.IsNullOrEmpty(status.Lead));
 
-            SessionInfoItem.Header = string.IsNullOrEmpty(label) ? SessionId : label;
+            SessionInfoItem.Header = string.IsNullOrEmpty(described) ? SessionId : described;
             SessionPathItem.Header = status.Cwd;
             SessionPathItem.IsVisible = !string.IsNullOrEmpty(status.Title)
                                         && !string.IsNullOrEmpty(status.Cwd);
@@ -151,6 +181,36 @@ namespace ClaudeBuddy
             Orb.Stroke = new SolidColorBrush(known ? accent : PlainStroke);
             Orb.StrokeThickness = known ? 2 : 1;
             Glyph.Foreground = new SolidColorBrush(known ? accent : PlainGlyph);
+            LinkColor = known ? accent : PlainLink;
+        }
+
+        // --- agent teams ------------------------------------------------------
+        // A team member is drawn smaller than the session that leads it, so a
+        // team reads as one lead with its agents rather than as several equal
+        // sessions that happen to be next to each other. Deliberately only the
+        // *drawing* shrinks: the window stays 56x56, so the stack spacing, the
+        // drag target, and every remembered position keep working unchanged,
+        // and a member that later loses its team grows back with no relayout.
+
+        private const double MemberScale = 0.72;
+
+        // Half the orb's drawn width, in DIPs — where TeamLinks stops the arrow
+        // so it doesn't run under the orb.
+        public double OrbRadius { get; private set; } = 18;
+
+        private bool _isTeamMember;
+
+        public void SetTeamRole(bool isTeamMember)
+        {
+            if (_isTeamMember == isTeamMember) return;
+            _isTeamMember = isTeamMember;
+
+            var scale = isTeamMember ? MemberScale : 1.0;
+
+            Orb.Width = Orb.Height = 36 * scale;
+            Glow.Width = Glow.Height = 56 * scale;
+            Glyph.FontSize = 16 * scale;
+            OrbRadius = 18 * scale;
         }
 
         private static string GlyphFor(string label)
@@ -164,31 +224,83 @@ namespace ClaudeBuddy
             return first.ToUpperInvariant();
         }
 
+        // The colour comes from OrbColors so this switch is about *motion* only —
+        // one state-to-colour mapping in the app, not two that can drift apart.
         private void ApplyState(string state)
         {
+            var color = OrbColors.For(state);
+
             switch (state)
             {
                 case "waiting":
-                    AnimateColor(WaitingColor, TimeSpan.FromMilliseconds(300));
+                    AnimateColor(color, TimeSpan.FromMilliseconds(300), state);
                     StartPulse(1.22, TimeSpan.FromMilliseconds(500), new QuadraticEaseOut());
                     break;
                 case "generating":
-                    AnimateColor(GeneratingColor, TimeSpan.FromMilliseconds(300));
+                    AnimateColor(color, TimeSpan.FromMilliseconds(300), state);
                     StartPulse(1.14, TimeSpan.FromMilliseconds(900), new SineEaseInOut());
                     break;
                 default:
                     StopPulse();
-                    AnimateColor(IdleColor, TimeSpan.FromMilliseconds(400));
+                    AnimateColor(color, TimeSpan.FromMilliseconds(400), state);
                     StartPulse(1.06, TimeSpan.FromSeconds(2.2), new SineEaseInOut());
                     break;
             }
         }
 
-        private void AnimateColor(Color to, TimeSpan duration)
+        // The halo is a claim on your attention, so only the two states that
+        // have something to say make it. Idle is what most orbs are in most of
+        // the time, and glowing about it spends the screen's whole attention
+        // budget on the one state that wants none of it — the slow breath is
+        // enough to say the session is still there, and the fill and hairline
+        // still say where it is.
+        //
+        // A custom idle colour makes the point sharply: a dark one (the default
+        // is already nearly black) renders as a smudge that darkens whatever
+        // sits under it rather than as light.
+        //
+        // Asked in one place, from the state alone, because it's read both by
+        // ApplyState and by ReapplyStateColors and the two must not drift —
+        // the same reason the colours themselves live in OrbColors.
+        private static bool GlowsFor(string state) => state is "waiting" or "generating";
+
+        // Changing a colour in settings is not a state change, and UpdateFrom only
+        // calls ApplyState when status.State actually differs — so without this an
+        // orb would keep its old fill until its session next did something, which
+        // for a quiet session is never.
+        //
+        // Two things it deliberately doesn't do. It doesn't re-run ApplyState:
+        // StartPulse resets the breath's phase, so every orb on screen would jerk
+        // in step with the pointer. And it barely fades — 60ms, not the 300-400ms
+        // a real state change gets — because the picker raises its change event on
+        // every pointer move, and a third of a second of easing leaves the orb
+        // trailing the cursor, reading as lag rather than as a live preview. At
+        // 60ms each frame lands most of the way there and the orb tracks the
+        // spectrum. The glow already snaps, since GlowStops is assigned rather
+        // than animated, so this also stops the two disagreeing mid-drag.
+        private static readonly TimeSpan SettingsColorFade = TimeSpan.FromMilliseconds(60);
+
+        public void ReapplyStateColors()
+        {
+            // Not up yet: the Loaded handler applies _lastState with the new
+            // colours anyway, which also covers an orb created while orbs were
+            // hidden.
+            if (!IsLoaded) return;
+
+            var state = string.IsNullOrEmpty(_lastState) ? "idle" : _lastState;
+            AnimateColor(OrbColors.For(state), SettingsColorFade, state);
+        }
+
+        private void AnimateColor(Color to, TimeSpan duration, string state)
         {
             _colorTransition.Duration = duration;
             _orbBrush.Color = to;
-            _glowBrush.GradientStops = GlowStops(to);
+
+            // Hidden rather than made transparent: an invisible ellipse isn't
+            // rendered at all, and there's no point rebuilding four gradient
+            // stops for something nobody can see.
+            Glow.IsVisible = GlowsFor(state);
+            if (Glow.IsVisible) _glowBrush.GradientStops = GlowStops(to);
         }
 
         // Opaque at the centre, gone by the edge — the same falloff a blur gave,
@@ -285,16 +397,34 @@ namespace ClaudeBuddy
         // Left-press starts as a potential click; it becomes a drag once the
         // pointer moves past a small threshold. A clean click jumps to the
         // session's terminal (macOS, best-effort — see TerminalFocuser).
-        // Dragged position is only honored until the next time the active
-        // session set changes (add/remove), at which point SessionManager
-        // reflows the whole stack. That's an intentional tradeoff to keep
-        // the stack tidy as sessions come and go.
+        //
+        // Dragging an orb pins it: it keeps that spot as sessions come and go
+        // (SessionManager.ReflowPositions steps over pinned orbs) and the spot
+        // is remembered across restarts, keyed by the session's directory. The
+        // context menu's "Return this orb to the stack" undoes both.
+
+        // Where the user dragged this orb is remembered against this key — the
+        // session's cwd, set by SessionManager. Empty for a session with no cwd
+        // reported, which pins for this run only since there's nothing stable
+        // to remember it against.
+        public string PositionKey { get; set; } = "";
+
+        // True once the user has placed this orb by hand, whether in this run or
+        // in an earlier one.
+        public bool IsPinned { get; private set; }
 
         private SessionStatus? _lastStatus;
         private bool _pressed;
         private bool _dragging;
         private PixelPoint _windowStart;
         private PixelPoint _pointerStart;
+
+        // A team lead drags its members along with it, so a team can be moved
+        // out of the way as one thing — which is the whole point of drawing it
+        // as one thing. Captured on press, because membership can change
+        // mid-drag and an orb that joins the team while you're moving it should
+        // not jump.
+        private readonly List<(OrbWindow Orb, PixelPoint Start)> _followers = new();
 
         protected override void OnPointerPressed(PointerPressedEventArgs e)
         {
@@ -305,6 +435,14 @@ namespace ClaudeBuddy
                 _dragging = false;
                 _windowStart = Position;
                 _pointerStart = this.PointToScreen(e.GetPosition(this));
+
+                _followers.Clear();
+                foreach (var member in SessionManager.Instance?.MembersOf(SessionId)
+                                       ?? Enumerable.Empty<OrbWindow>())
+                {
+                    _followers.Add((member, member.Position));
+                }
+
                 e.Pointer.Capture(this);
             }
         }
@@ -322,6 +460,20 @@ namespace ClaudeBuddy
 
             _dragging = true;
             Position = new PixelPoint(_windowStart.X + dx, _windowStart.Y + dy);
+
+            // The team travels with its lead, keeping the shape the user
+            // arranged it in rather than being re-stacked around the new spot.
+            foreach (var (member, start) in _followers)
+            {
+                member.Position = new PixelPoint(start.X + dx, start.Y + dy);
+            }
+
+            // Drag a member away and its arrow to the lead stretches with it —
+            // which is the point of the arrow, since a dragged orb is exactly
+            // the one that no longer sits next to the team it belongs to. Cheap
+            // enough to do per pointer move: a few windows repositioned, no
+            // scan of anything.
+            TeamLinks.Refresh();
         }
 
         protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -332,15 +484,69 @@ namespace ClaudeBuddy
             _pressed = false;
             e.Pointer.Capture(null);
 
-            if (!_dragging)
+            if (_dragging)
             {
-                TerminalFocuser.Focus(_lastStatus);
+                SetPinned(true);
+                SessionManager.Instance?.RememberOrbPosition(this);
+
+                // Members carried along are pinned too, or the next reflow
+                // would pull them back into the stack and leave the lead on its
+                // own with three long arrows.
+                //
+                // Their positions are only *remembered* when they don't share
+                // the lead's key. A team usually runs in one directory, and
+                // positions are keyed by directory, so writing each member's
+                // spot would overwrite the lead's with an offset copy of
+                // itself — the group would come back scattered rather than not
+                // come back at all. See RestoreOrbPosition.
+                foreach (var (member, _) in _followers)
+                {
+                    member.SetPinned(true);
+                    if (member.PositionKey != PositionKey)
+                    {
+                        SessionManager.Instance?.RememberOrbPosition(member);
+                    }
+                }
             }
+            else
+            {
+                // A team member has no window of its own — its tmux server has
+                // no client attached anywhere — so a click that finds nothing
+                // falls through to the session leading it. See
+                // TerminalFocuser.Focus.
+                TerminalFocuser.Focus(
+                    _lastStatus,
+                    SessionManager.Instance?.StatusFor(_lastStatus?.Lead));
+            }
+
+            _followers.Clear();
+        }
+
+        // Put the orb at a position it was dragged to in an earlier run, without
+        // treating it as a fresh drag (nothing to write back).
+        public void PinAt(PixelPoint position)
+        {
+            Position = position;
+            SetPinned(true);
+        }
+
+        public void Unpin() => SetPinned(false);
+
+        private void SetPinned(bool pinned)
+        {
+            IsPinned = pinned;
+            // Only worth offering once there's something to undo.
+            ResetPositionItem.IsVisible = pinned;
         }
 
         private void ResetIdle_Click(object? sender, RoutedEventArgs e)
         {
             SessionManager.Instance?.ResetSessionToIdle(SessionId);
+        }
+
+        private void ResetPosition_Click(object? sender, RoutedEventArgs e)
+        {
+            SessionManager.Instance?.ReturnOrbToStack(SessionId);
         }
 
         private void Exit_Click(object? sender, RoutedEventArgs e)

@@ -1,12 +1,15 @@
-using System.Linq;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Avalonia;
 using Avalonia.Controls;
 using Shapes = Avalonia.Controls.Shapes;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Avalonia.Styling;
 using Avalonia.Threading;
 
 namespace ClaudeBuddy
@@ -38,6 +41,10 @@ namespace ClaudeBuddy
             {
                 _open = null;
 
+                // The colour pickers defer their write; closing the window is the
+                // last chance to land one that's still pending.
+                ClaudeBuddySettings.FlushPendingSave();
+
                 // Back to a menu-bar-only app: no Dock icon, no Cmd-Tab entry.
                 MacOSActivation.SetAccessory();
             };
@@ -54,12 +61,147 @@ namespace ClaudeBuddy
         private SettingsWindow()
         {
             Title = "Claude Buddy Settings";
-            Width = 560;
+            Width = 520;
             SizeToContent = SizeToContent.Height;
-            MinHeight = 220;
+            MinHeight = 240;
             MaxHeight = 760;
             CanResize = false;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
+
+            // Escape and Cmd-W close it, the way any Mac window does. That's
+            // also what lets the Done button go away on macOS, where a
+            // preferences window with one would look wrong.
+            KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Escape
+                    || (e.Key == Key.W && e.KeyModifiers.HasFlag(KeyModifiers.Meta)))
+                {
+                    Close();
+                }
+            };
+
+            // Liquid Glass: the window is a translucent material, not a filled
+            // rectangle. AcrylicBlur is what Avalonia maps to NSVisualEffectView
+            // on macOS — confirmed granted here, ActualTransparencyLevel reports
+            // it back. The fallbacks matter: Windows takes Mica, and anything that
+            // can end up with None still reads, because the text all sits on cards
+            // that carry their own translucent fill rather than on bare glass.
+            TransparencyLevelHint = new[]
+            {
+                WindowTransparencyLevel.AcrylicBlur,
+                WindowTransparencyLevel.Mica,
+                WindowTransparencyLevel.Blur,
+                WindowTransparencyLevel.None
+            };
+
+            BorrowFluentToggleSwitch();
+            EnsureColorPickerTheme();
+
+            Rebuild();
+
+            // Every card colour below is mixed for the current variant, so a
+            // system-wide switch to dark while the window is open would otherwise
+            // leave white cards on a dark window. Rebuilding is safe because
+            // nothing here holds uncommitted state — each control writes its
+            // setting as it changes.
+            ActualThemeVariantChanged += (_, _) => Rebuild();
+        }
+
+        // The macOS theme's ToggleSwitch template is broken against the stock
+        // control: Avalonia's ToggleSwitch demands a Panel named
+        // PART_MovingKnobs and its template doesn't satisfy that, so the first
+        // switch to be measured throws KeyNotFoundException and takes the app
+        // down. Confirmed on Avalonia 11.3.7 *and* 12.0.2, with the theme's
+        // newest build for each — so it's the template, not a version mismatch,
+        // and upgrading Avalonia doesn't help.
+        //
+        // Rather than give up switches (checkboxes would be the fallback) or
+        // hand-write a template for one control, borrow Fluent's ToggleSwitch
+        // ControlTheme into this window's resources. Everything else here stays
+        // AppKit-styled by the theme. Remove this once upstream fixes it.
+        private void BorrowFluentToggleSwitch()
+        {
+            try
+            {
+                var fluent = new Avalonia.Themes.Fluent.FluentTheme();
+                if (fluent.TryGetResource(typeof(ToggleSwitch), ActualThemeVariant, out var found)
+                    && found is ControlTheme fluentSwitch)
+                {
+                    Resources.Add(typeof(ToggleSwitch), fluentSwitch);
+                }
+            }
+            catch
+            {
+                // Worst case the switches keep the theme's own template, which
+                // is the crash this exists to avoid — so if this ever stops
+                // working, Switch() below falls back to a CheckBox.
+            }
+        }
+
+        private bool HasSwitchTheme => Resources.ContainsKey(typeof(ToggleSwitch))
+                                       || !OperatingSystem.IsMacOS();
+
+        // The same defensive shape as BorrowFluentToggleSwitch, for two different
+        // reasons — and unlike that one, half of this is a confirmed hole rather
+        // than a precaution.
+        //
+        //  - On Windows there is no ColorPicker template at all. The control lives
+        //    in its own package and Avalonia.Themes.Fluent contains no reference
+        //    to it, so the row would render as an empty gap, which is what an
+        //    untemplated TemplatedControl looks like.
+        //  - On macOS the Devolutions theme does ship /Controls/ColorPicker.axaml
+        //    and its PART names cover everything the control looks up. But its
+        //    ToggleSwitch template is already known to be broken against the stock
+        //    control, so a themed template here is something to check rather than
+        //    assume.
+        //
+        // Both are answered the same way: merge the ColorPicker package's own
+        // Fluent styles into *this window* when the live theme has no ControlTheme
+        // for the type. Window-scoped, so nothing else is restyled and no other
+        // window pays for it — and window styles beat application ones, so this
+        // can also be forced unconditionally if the themed picker turns out to be
+        // broken rather than missing.
+        //
+        // Fluent.xaml's root element is <Styles>, not <ResourceDictionary> — it
+        // wraps its sub-dictionaries in Styles.Resources — so this is a
+        // StyleInclude.
+        private void EnsureColorPickerTheme()
+        {
+            try
+            {
+                var styles = Application.Current?.Styles;
+                if (styles is not null
+                    && styles.TryGetResource(typeof(ColorPicker), ActualThemeVariant, out _))
+                {
+                    return;
+                }
+
+                Styles.Add(new StyleInclude(new Uri("avares://ClaudeBuddy/"))
+                {
+                    Source = new Uri(
+                        "avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml")
+                });
+            }
+            catch
+            {
+                // Worst case the pickers come out unstyled, which is a gap in one
+                // card rather than a crash — everything that was already in this
+                // window still works.
+            }
+        }
+
+        private void Rebuild()
+        {
+            // Held against System Settings side by side, Apple's content pane is
+            // *not* very transparent — the glass in Tahoe lives in sidebars,
+            // popovers and menus, while a settings pane behind grouped rows stays
+            // a near-opaque light surface. A near-clear wash here (the first
+            // attempt at fixing the opposite mistake) let the wallpaper through
+            // and read as murky rather than glassy. This sits at 85%: the material
+            // still lifts the window's edges, the content still reads crisp.
+            Background = new SolidColorBrush(IsDark
+                ? Color.FromArgb(0xD9, 0x1E, 0x1E, 0x20)
+                : Color.FromArgb(0xD9, 0xF2, 0xF2, 0xF5));
 
             Content = new ScrollViewer
             {
@@ -68,309 +210,388 @@ namespace ClaudeBuddy
             };
         }
 
+        // No control metrics here on purpose. Heights, corner radii, fills and
+        // borders for fields and pop-ups come from the macOS theme on macOS and
+        // from Fluent on Windows; pinning them by hand is what produced capsule
+        // pop-ups and 20pt checkboxes in the first place.
+
         private Control Body()
         {
-            var root = new StackPanel { Margin = new Thickness(20), Spacing = 14 };
+            var root = new StackPanel { Margin = new Thickness(20, 18), Spacing = 18 };
 
-            var snapshot = ClaudeDesktopManager.Snapshot;
+            root.Children.Add(Group("Orbs", Card(
+                Row("Show orbs",
+                    Switch(SessionManager.Instance?.OrbsVisible ?? ClaudeBuddySettings.ShowOrbs,
+                        value => SessionManager.Instance?.SetOrbsVisible(value))),
+                Row("Keep orbs for", LifetimePicker(),
+                    "How long an orb stays after its session goes quiet. A session that's "
+                    + "waiting on you is never removed, however long this is — those only go "
+                    + "away when you answer it or reset it from the orb's menu."))));
 
-            root.Children.Add(Header("Claude Desktop profiles"));
+            // Its own group rather than three more rows in Orbs: that card already
+            // has two rows and one of them carries a paragraph of help, so five
+            // would read as a list rather than a group — and System Settings
+            // groups by what a setting is *about*. The labels are the same three
+            // words the tray menu already uses for these states.
+            root.Children.Add(Group("Orb colours", Card(
+                ColorRow("Idle", "idle"),
+                ColorRow("Working", "generating"),
+                ColorRow("Needs you", "waiting"),
+                Row("Restore the built-in colours", ResetColorsButton(),
+                    "The orb's fill and its glow. The menu-bar icon follows them too — it "
+                    + "shows the most urgent state across every session, so very light or "
+                    + "very dark choices can disappear into the menu bar. A session's own "
+                    + "/color is separate: that one goes on the orb's ring and letter."))));
 
-            if (snapshot.Profiles.Count == 0)
-            {
-                root.Children.Add(new TextBlock
-                {
-                    Text = "No profiles found. Create one from the menu bar.",
-                    Opacity = 0.7
-                });
-            }
-            else
-            {
-                root.Children.Add(ColumnLabels());
-                foreach (var profile in snapshot.Profiles) root.Children.Add(Row(profile));
+            root.Children.Add(Group("Claude Desktop", Card(
+                Row("Tint the active window",
+                    Switch(ClaudeDesktopOverlay.Enabled, ClaudeDesktopOverlay.SetEnabled)))));
 
-                root.Children.Add(new TextBlock
-                {
-                    Text = "Colour applies to the menu swatch, the Dock icon and the window tint. "
-                           + "Leave a name empty to use the folder name.",
-                    TextWrapping = TextWrapping.Wrap,
-                    Opacity = 0.6,
-                    FontSize = 11
-                });
-            }
+            root.Children.Add(Group("Profiles", ProfilesCard()));
 
-            root.Children.Add(new Separator { Margin = new Thickness(0, 6) });
-            root.Children.Add(Header("Claude Buddy"));
-
-            root.Children.Add(Toggle(
-                "Show orbs",
-                SessionManager.Instance?.OrbsVisible ?? ClaudeBuddySettings.ShowOrbs,
-                value => SessionManager.Instance?.SetOrbsVisible(value)));
-
-            root.Children.Add(Toggle(
-                "Tint the active Claude Desktop window",
-                ClaudeDesktopOverlay.Enabled,
-                ClaudeDesktopOverlay.SetEnabled));
-
+            // Native wiring for extra Claude Code (CLI) accounts, and WSL's own
+            // per-distro toggles — neither concept exists on macOS, where the
+            // hook installer only ever touches ~/.claude.
             if (OperatingSystem.IsWindows())
             {
-                root.Children.Add(ClaudeCodeProfilesSection());
+                root.Children.Add(Group("Claude Code profiles", Card(ClaudeCodeProfilesCard())));
 
-                var wslRows = WslSection();
-                if (wslRows is not null) root.Children.Add(wslRows);
+                var wslCard = WslCard();
+                if (wslCard is not null) root.Children.Add(Group("WSL integration", Card(wslCard)));
             }
 
-            var done = new Button
+            // macOS preference windows are dismissed by the window's own close
+            // button, not by a Done inside the content. Windows expects the
+            // button, so it keeps it.
+            if (!OperatingSystem.IsMacOS())
             {
-                Content = "Done",
-                HorizontalAlignment = HorizontalAlignment.Right,
-                MinWidth = 90
-            };
-            done.Click += (_, _) => Close();
-            root.Children.Add(done);
+                var done = new Button
+                {
+                    Content = "Done",
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    MinWidth = 90
+                };
+                done.Click += (_, _) => Close();
+                root.Children.Add(done);
+            }
 
             return root;
         }
 
-        // Distinct from "Claude Desktop profiles" above (the Electron app) —
-        // these are Claude Code *CLI* config directory names, for a second
-        // (or third...) account managed via CLAUDE_CONFIG_DIR, e.g. an alias
-        // like `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"`. Each
-        // one is wired in *addition* to the default ~/.claude, on native
-        // Windows and every WSL distro below — never a replacement for it,
-        // and never auto-discovered: only names added here (or passed
-        // explicitly to install-windows-hooks.ps1's -ProfileDir/
-        // -WslProfileDir) are ever touched. Always shown, unlike WslSection:
-        // native wiring applies regardless of whether WSL is even installed.
-        [SupportedOSPlatform("windows")]
-        private static Control ClaudeCodeProfilesSection()
+        // --- Mac-ish chrome ---------------------------------------------------
+        // System Settings' shape: a small dimmed label, then a rounded card whose
+        // rows are label-left / control-right and divided by hairlines that stop
+        // short of the left edge. Built from brushes derived off the live theme
+        // variant rather than hard-coded greys, so the window doesn't invert
+        // badly when someone switches to light mode.
+
+        private bool IsDark => ActualThemeVariant == ThemeVariant.Dark;
+
+        // Apple's grouped cards are flat, crisp and *unbordered* — the fill
+        // against the pane is the whole edge treatment, no rim and no gradient
+        // sheen. A gradient plus a bright border, which is what a search for
+        // "glass" produces, is visibly not what System Settings does.
+        private IBrush CardBackground => new SolidColorBrush(
+            IsDark ? Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xF7, 0xFF, 0xFF, 0xFF));
+
+        private IBrush Hairline => new SolidColorBrush(
+            IsDark ? Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x0F, 0x00, 0x00, 0x00));
+
+        private Control Group(string title, Control card) => new StackPanel
         {
-            var section = new StackPanel { Spacing = 8 };
-            section.Children.Add(new Separator { Margin = new Thickness(0, 6) });
-            section.Children.Add(Header("Claude Code profiles"));
-            section.Children.Add(new TextBlock
+            Children =
             {
-                Text = "Wire Claude Buddy hooks into additional Claude Code accounts managed via "
-                       + "CLAUDE_CONFIG_DIR, alongside the default ~/.claude.",
-                TextWrapping = TextWrapping.Wrap,
-                Opacity = 0.6,
-                FontSize = 11
-            });
-
-            var itemsPanel = new StackPanel { Spacing = 4 };
-            foreach (var dirName in ClaudeBuddySettings.ClaudeCodeProfileDirs)
-            {
-                itemsPanel.Children.Add(ProfileDirRow(dirName, itemsPanel));
-            }
-            section.Children.Add(itemsPanel);
-
-            var input = new TextBox { Watermark = ".claude-work", Width = 220 };
-            var browseButton = new Button { Content = "Browse…" };
-            var addButton = new Button { Content = "Add" };
-            var status = new TextBlock { FontSize = 11, Opacity = 0.7 };
-
-            // A folder picker is the more discoverable way to do this, but
-            // typing stays available too: CLAUDE_CONFIG_DIR can point at a
-            // directory that doesn't exist yet (Claude Code creates it on
-            // first use with that alias), which a picker — browsing existing
-            // folders only — can't select.
-            browseButton.Click += async (_, _) =>
-            {
-                var picked = await BrowseForProfileDir(browseButton, status);
-                if (picked is not null) input.Text = picked;
-            };
-
-            addButton.Click += (_, _) =>
-            {
-                var name = input.Text?.Trim();
-                if (string.IsNullOrEmpty(name)) return;
-
-                status.Text = "";
-                ClaudeBuddySettings.AddClaudeCodeProfileDir(name);
-                itemsPanel.Children.Add(ProfileDirRow(name, itemsPanel));
-                input.Text = "";
-
-                // Off the UI thread: this shells out (native wiring, plus a
-                // re-run for every already-wired WSL distro), and the window
-                // must stay responsive the whole time — ReapplyProfiles'
-                // own internal timeouts guarantee it eventually returns
-                // either way.
-                addButton.IsEnabled = false;
-                input.IsEnabled = false;
-                Task.Run(WslIntegration.ReapplyProfiles).ContinueWith(_ =>
+                // "Theme" and "Windows" in System Settings are semibold and full
+                // strength, not the dimmed 12pt caption this had. They read as
+                // headings; a dimmed caption reads as a hint.
+                new TextBlock
                 {
-                    Dispatcher.UIThread.Post(() =>
-                    {
-                        addButton.IsEnabled = true;
-                        input.IsEnabled = true;
-                    });
-                });
-            };
-
-            section.Children.Add(new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 8,
-                Children = { input, browseButton, addButton }
-            });
-            section.Children.Add(status);
-
-            section.Children.Add(new TextBlock
-            {
-                Text = "Removing a profile stops it from being wired on future changes; it doesn't "
-                       + "remove hooks already written to that profile's own settings.json.",
-                TextWrapping = TextWrapping.Wrap,
-                Opacity = 0.5,
-                FontSize = 11
-            });
-
-            return section;
-        }
-
-        // Returns the picked folder's bare name (e.g. ".claude-work"), or
-        // null if the user cancelled or picked something invalid — in which
-        // case `status` is set to say why, since a folder outside the home
-        // directory would resolve to the wrong place on both native Windows
-        // and WSL (see ClaudeCodeProfilesSection's own doc comment).
-        [SupportedOSPlatform("windows")]
-        private static async Task<string?> BrowseForProfileDir(Control owner, TextBlock status)
-        {
-            var storageProvider = TopLevel.GetTopLevel(owner)?.StorageProvider;
-            if (storageProvider is null) return null;
-
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var startLocation = await storageProvider.TryGetFolderFromPathAsync(home);
-
-            var result = await storageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
-            {
-                Title = "Select a Claude Code config directory",
-                SuggestedStartLocation = startLocation,
-                AllowMultiple = false
-            });
-
-            if (result.Count == 0) return null;
-
-            var pickedPath = result[0].TryGetLocalPath();
-            if (pickedPath is null)
-            {
-                status.Text = "Couldn't resolve that selection to a local folder.";
-                return null;
+                    Text = title,
+                    FontSize = 13,
+                    FontWeight = FontWeight.SemiBold,
+                    Opacity = 0.9,
+                    // Left inset matches the rows' own 14, because in System
+                    // Settings the group heading sits directly above the first
+                    // row's label rather than out to the left of it.
+                    Margin = new Thickness(14, 0, 0, 7)
+                },
+                card
             }
-
-            // Must be a *direct* child of a recognized home, not just nested
-            // somewhere under it — the underlying model (-ProfileDir/
-            // -WslProfileDir) only ever takes a single path segment relative
-            // to home, so picking e.g. ~/work/claude-work would silently
-            // keep only "claude-work" and resolve to the wrong, nonexistent
-            // ~/claude-work instead. "A recognized home" is deliberately not
-            // just the Windows one: the same dir name gets wired under every
-            // WSL distro's home too (see the section's own doc comment), and
-            // a profile can be WSL-only with no Windows-side counterpart at
-            // all — e.g. a second Linux-only account — so a folder picked
-            // from \\wsl.localhost\<distro>\home\<user>\ must validate the
-            // same way a native one does, not be rejected just because it
-            // isn't under C:\Users\....
-            var validHomes = new[] { home }.Concat(WslIntegration.GetWslHomeUncPaths())
-                .Select(h => h.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
-                .ToList();
-            var trimmedPicked = pickedPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var parent = Path.GetDirectoryName(trimmedPicked);
-            if (!validHomes.Any(h => string.Equals(parent, h, StringComparison.OrdinalIgnoreCase)))
-            {
-                status.Text = "Must be a folder directly inside your home directory (" + home
-                    + ") or a WSL distro's home directory, not a nested subfolder.";
-                return null;
-            }
-
-            status.Text = "";
-            return Path.GetFileName(trimmedPicked);
-        }
-
-        [SupportedOSPlatform("windows")]
-        private static Control ProfileDirRow(string dirName, StackPanel itemsPanel)
-        {
-            var label = new TextBlock
-            {
-                Text = dirName,
-                VerticalAlignment = VerticalAlignment.Center,
-                Width = 220
-            };
-            var remove = new Button { Content = "Remove" };
-
-            var row = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 8,
-                Children = { label, remove }
-            };
-
-            remove.Click += (_, _) =>
-            {
-                ClaudeBuddySettings.RemoveClaudeCodeProfileDir(dirName);
-                itemsPanel.Children.Remove(row);
-            };
-
-            return row;
-        }
-
-        // Null when there's nothing to show (no WSL, or no distros besides
-        // Docker Desktop's plumbing ones) — Body() omits the section entirely
-        // in that case rather than showing an empty header.
-        [SupportedOSPlatform("windows")]
-        private static Control? WslSection()
-        {
-            var distros = WslIntegration.ListDistros();
-            if (distros.Count == 0) return null;
-
-            var section = new StackPanel { Spacing = 8 };
-            section.Children.Add(new Separator { Margin = new Thickness(0, 6) });
-            section.Children.Add(Header("WSL integration"));
-            section.Children.Add(new TextBlock
-            {
-                Text = "Wire or unwire Claude Buddy's hooks for Claude Code running inside each WSL distro.",
-                TextWrapping = TextWrapping.Wrap,
-                Opacity = 0.6,
-                FontSize = 11
-            });
-
-            foreach (var distro in distros) section.Children.Add(WslDistroRow(distro));
-
-            return section;
-        }
-
-        [SupportedOSPlatform("windows")]
-        private static Control WslDistroRow(string distro)
-        {
-            var box = new CheckBox { Content = distro, IsChecked = WslIntegration.IsWired(distro) };
-
-            box.IsCheckedChanged += (_, _) =>
-            {
-                var desired = box.IsChecked ?? false;
-                // Prevent a re-entrant click while the script from the last
-                // one is still running — SetWired has its own ~10s timeout,
-                // so this can't disable the box forever even on failure.
-                box.IsEnabled = false;
-
-                Task.Run(() => WslIntegration.SetWired(distro, desired)).ContinueWith(task =>
-                {
-                    Dispatcher.UIThread.Post(() =>
-                    {
-                        box.IsEnabled = true;
-                        // Revert on failure rather than show a checked state
-                        // that doesn't match settings.json's real contents.
-                        if (!task.Result) box.IsChecked = !desired;
-                    });
-                });
-            };
-
-            return box;
-        }
-
-        private static TextBlock Header(string text) => new()
-        {
-            Text = text,
-            FontWeight = FontWeight.SemiBold
         };
+
+        private Control Card(params Control[] rows)
+        {
+            var stack = new StackPanel();
+
+            for (var i = 0; i < rows.Length; i++)
+            {
+                if (i > 0)
+                {
+                    stack.Children.Add(new Border
+                    {
+                        Height = 1,
+                        Background = Hairline,
+                        Margin = new Thickness(14, 0, 0, 0)
+                    });
+                }
+
+                stack.Children.Add(rows[i]);
+            }
+
+            // 12, measured off System Settings' own groups — 18 plus a drop
+            // shadow made these read as floating panels, which is a popover's
+            // treatment, not a grouped row's.
+            return new Border
+            {
+                Background = CardBackground,
+                CornerRadius = new CornerRadius(12),
+                ClipToBounds = true,
+                Child = stack
+            };
+        }
+
+        private static Control Row(string label, Control control, string? help = null)
+        {
+            var grid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                RowDefinitions = new RowDefinitions(help is null ? "Auto" : "Auto,Auto"),
+                Margin = new Thickness(14, 10)
+            };
+
+            var text = new TextBlock
+            {
+                Text = label,
+                FontSize = 13,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            grid.Children.Add(text);
+
+            control.HorizontalAlignment = HorizontalAlignment.Right;
+            control.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetColumn(control, 1);
+            grid.Children.Add(control);
+
+            if (help is not null)
+            {
+                var hint = new TextBlock
+                {
+                    Text = help,
+                    FontSize = 11,
+                    Opacity = 0.55,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 6, 0, 0)
+                };
+                Grid.SetRow(hint, 1);
+                Grid.SetColumnSpan(hint, 2);
+                grid.Children.Add(hint);
+            }
+
+            return grid;
+        }
+
+        // One row per state, seeded from the stored colour and written on change
+        // with no commit step — the same read-seed-then-write shape as
+        // LifetimePicker below.
+        private Control ColorRow(string label, string state)
+        {
+            var picker = new ColorPicker
+            {
+                Color = OrbColors.For(state),
+
+                // The orb builds its own alphas — the glow's gradient stops are
+                // 150/95/0 over the chosen RGB, and the tray icon's alpha channel
+                // is the shape of its ring — so a user-set alpha would either be
+                // thrown away silently or make the orb look broken. Hidden *and*
+                // disabled, so the control never shows a value we won't honour.
+                IsAlphaVisible = false,
+                IsAlphaEnabled = false
+            };
+
+            // No Width or Height here: the picker's metrics are the theme's
+            // business, the same as the combo box's — see the note above Body().
+
+            // ColorChanged is not trustworthy until the user has touched the
+            // control, and this is not theoretical: seeding Color and subscribing
+            // afterwards is not enough, because the macOS theme's template raises
+            // ColorChanged *after* that with a colour of its own — a palette entry,
+            // by the look of the values. It wrote #2C273C / #50D140 / #E82323 into
+            // settings.json on the first launch that ever opened this window, so
+            // three colours nobody chose became the user's colours, the swatches
+            // re-seeded from them on the next build, and nothing anywhere looked
+            // like an error.
+            //
+            // Comparing against the stored value can't catch that on its own: a
+            // spurious change is a genuine difference. What distinguishes a real
+            // edit is that a real one is preceded by a click or a focus — you
+            // cannot pick a colour without opening the drop down first. So arm on
+            // that, and treat everything before it as the template talking to
+            // itself.
+            var armed = false;
+
+            // Tunnelling, so it arrives before the template's own button handles
+            // it and marks it handled. GotFocus covers tabbing in without a click.
+            picker.AddHandler(
+                PointerPressedEvent,
+                (object? _, PointerPressedEventArgs _) => armed = true,
+                RoutingStrategies.Tunnel);
+            picker.GotFocus += (_, _) => armed = true;
+
+            picker.ColorChanged += (_, e) =>
+            {
+                var current = OrbColors.For(state);
+                var same = e.NewColor.R == current.R
+                           && e.NewColor.G == current.G
+                           && e.NewColor.B == current.B;
+
+                if (!armed)
+                {
+                    // Put ours back rather than just declining to save it,
+                    // otherwise the swatch sits there showing a colour the app is
+                    // not using. Self-correcting and terminating: the assignment
+                    // raises this again, and that pass is a no-op.
+                    if (!same) picker.Color = current;
+                    return;
+                }
+
+                // A real edit that changes nothing still must not write. Writing
+                // the current colour as an explicit hex would freeze today's
+                // default into the file and light up the Reset button for a colour
+                // nobody chose. Compare RGB only — alpha isn't ours (see above).
+                if (same) return;
+
+                OrbColors.Set(state, OrbColors.ToHex(e.NewColor));
+
+                // Nothing observes the settings store, and a colour change isn't a
+                // state change, so the orbs and the tray icon have to be told.
+                SessionManager.Instance?.ReapplyStateColors();
+            };
+
+            return Row(label, picker);
+        }
+
+        // One button rather than a reset per row: the rows are narrow already, and
+        // "put it back how it shipped" is a single intention.
+        //
+        // It writes null rather than today's default hex — see
+        // ClaudeBuddySettings.IdleColor for why that distinction matters — and then
+        // rebuilds instead of assigning each picker's Color back, because
+        // assigning Color raises ColorChanged, which would write the default hex
+        // straight into the file that was just cleared. Rebuilding re-seeds every
+        // control from the store, which this window already does on a theme
+        // change, and there's no uncommitted state to lose. It does reset the
+        // scroll position, which for a window this short isn't worth solving.
+        private Control ResetColorsButton()
+        {
+            var reset = new Button
+            {
+                Content = "Reset",
+                IsEnabled = !OrbColors.AllDefault
+            };
+
+            reset.Click += (_, _) =>
+            {
+                OrbColors.Set("idle", null);
+                OrbColors.Set("generating", null);
+                OrbColors.Set("waiting", null);
+                SessionManager.Instance?.ReapplyStateColors();
+                Rebuild();
+            };
+
+            return reset;
+        }
+
+        // A bare switch: Avalonia's default writes "On"/"Off" beside it, which no
+        // Mac control does. Falls back to a checkbox if there is no usable switch
+        // template — see BorrowFluentToggleSwitch — because a settings row with a
+        // working checkbox beats one that crashes the app.
+        private Control Switch(bool value, Action<bool> onChange)
+        {
+            if (!HasSwitchTheme) return Check(value, onChange);
+
+            var toggle = new ToggleSwitch
+            {
+                IsChecked = value,
+                OnContent = null,
+                OffContent = null
+            };
+            toggle.IsCheckedChanged += (_, _) => onChange(toggle.IsChecked ?? false);
+            return toggle;
+        }
+
+        // Minutes, with 0 for forever. Coarse on purpose: the useful answers are
+        // "a few minutes", "the rest of the afternoon" and "never", and a spinner
+        // asking for a number would invite precision that doesn't mean anything
+        // when the input is a hook that fires every couple of seconds.
+        private static readonly (string Label, int Minutes)[] LifetimeChoices =
+        {
+            ("1 minute", 1),
+            ("5 minutes", 5),
+            ("15 minutes", 15),
+            ("30 minutes", 30),
+            ("1 hour", 60),
+            ("4 hours", 240),
+            ("Forever", ClaudeBuddySettings.OrbLifetimeForever)
+        };
+
+        private Control LifetimePicker()
+        {
+            var current = ClaudeBuddySettings.OrbLifetimeMinutes;
+            var choices = LifetimeChoices.ToList();
+
+            // A number hand-written into settings.json shows as itself instead of
+            // being silently rounded to whatever is on the list — opening this
+            // window shouldn't quietly change a setting.
+            if (choices.All(choice => choice.Minutes != current))
+            {
+                choices.Insert(choices.Count - 1, ($"{current} minutes", current));
+            }
+
+            var combo = new ComboBox
+            {
+                ItemsSource = choices.Select(choice => choice.Label).ToList(),
+                SelectedIndex = choices.FindIndex(choice => choice.Minutes == current),
+                MinWidth = 132
+            };
+            combo.SelectionChanged += (_, _) =>
+            {
+                var index = combo.SelectedIndex;
+                if (index < 0) return;
+
+                ClaudeBuddySettings.OrbLifetimeMinutes = choices[index].Minutes;
+            };
+            return combo;
+        }
+
+        private Control ProfilesCard()
+        {
+            var snapshot = ClaudeDesktopManager.Snapshot;
+
+            if (snapshot.Profiles.Count == 0)
+            {
+                return Card(new TextBlock
+                {
+                    Text = "No profiles found. Create one from the menu bar.",
+                    FontSize = 13,
+                    Opacity = 0.6,
+                    Margin = new Thickness(14, 12)
+                });
+            }
+
+            var rows = new List<Control> { ColumnLabels() };
+            rows.AddRange(snapshot.Profiles.Select(Row));
+            rows.Add(new TextBlock
+            {
+                Text = "Colour applies to the menu swatch, the Dock icon and the window tint. "
+                       + "Leave a name empty to use the folder name.",
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.55,
+                FontSize = 11,
+                Margin = new Thickness(14, 10)
+            });
+
+            return Card(rows.ToArray());
+        }
 
         private static Control ColumnLabels()
         {
@@ -394,7 +615,7 @@ namespace ClaudeBuddy
         private static Grid RowGrid() => new()
         {
             ColumnDefinitions = new ColumnDefinitions("*,130,64,54,44"),
-            Margin = new Thickness(0, 2)
+            Margin = new Thickness(14, 8)
         };
 
         private static void Add(Grid grid, int column, Control child)
@@ -517,10 +738,236 @@ namespace ClaudeBuddy
             return box;
         }
 
-        private static Control Toggle(string text, bool value, Action<bool> onChange)
+        // ---- Windows-only: extra Claude Code (CLI) profile directories ------
+
+        // Distinct from "Profiles" above (Claude Desktop, the Electron app) —
+        // these are Claude Code *CLI* config directory names, for a second
+        // (or third...) account managed via CLAUDE_CONFIG_DIR, e.g. an alias
+        // like `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"`. Each
+        // one is wired in *addition* to the default ~/.claude, on native
+        // Windows and every WSL distro below — never a replacement for it,
+        // and never auto-discovered: only names added here (or passed
+        // explicitly to install-windows-hooks.ps1's -ProfileDir/
+        // -WslProfileDir) are ever touched. Always shown, unlike the WSL card:
+        // native wiring applies regardless of whether WSL is even installed.
+        [SupportedOSPlatform("windows")]
+        private static Control ClaudeCodeProfilesCard()
         {
-            var box = new CheckBox { Content = text, IsChecked = value };
-            box.IsCheckedChanged += (_, _) => onChange(box.IsChecked ?? false);
+            var content = new StackPanel { Spacing = 8, Margin = new Thickness(14, 10) };
+
+            content.Children.Add(new TextBlock
+            {
+                Text = "Wire Claude Buddy hooks into additional Claude Code accounts managed via "
+                       + "CLAUDE_CONFIG_DIR, alongside the default ~/.claude.",
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.55,
+                FontSize = 11
+            });
+
+            var itemsPanel = new StackPanel { Spacing = 4 };
+            foreach (var dirName in ClaudeBuddySettings.ClaudeCodeProfileDirs)
+            {
+                itemsPanel.Children.Add(ProfileDirRow(dirName, itemsPanel));
+            }
+            content.Children.Add(itemsPanel);
+
+            var input = new TextBox { Watermark = ".claude-work", Width = 220 };
+            var browseButton = new Button { Content = "Browse…" };
+            var addButton = new Button { Content = "Add" };
+            var status = new TextBlock { FontSize = 11, Opacity = 0.7 };
+
+            // A folder picker is the more discoverable way to do this, but
+            // typing stays available too: CLAUDE_CONFIG_DIR can point at a
+            // directory that doesn't exist yet (Claude Code creates it on
+            // first use with that alias), which a picker — browsing existing
+            // folders only — can't select.
+            browseButton.Click += async (_, _) =>
+            {
+                var picked = await BrowseForProfileDir(browseButton, status);
+                if (picked is not null) input.Text = picked;
+            };
+
+            addButton.Click += (_, _) =>
+            {
+                var name = input.Text?.Trim();
+                if (string.IsNullOrEmpty(name)) return;
+
+                status.Text = "";
+                ClaudeBuddySettings.AddClaudeCodeProfileDir(name);
+                itemsPanel.Children.Add(ProfileDirRow(name, itemsPanel));
+                input.Text = "";
+
+                // Off the UI thread: this shells out (native wiring, plus a
+                // re-run for every already-wired WSL distro), and the window
+                // must stay responsive the whole time — ReapplyProfiles'
+                // own internal timeouts guarantee it eventually returns
+                // either way.
+                addButton.IsEnabled = false;
+                input.IsEnabled = false;
+                Task.Run(WslIntegration.ReapplyProfiles).ContinueWith(_ =>
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        addButton.IsEnabled = true;
+                        input.IsEnabled = true;
+                    });
+                });
+            };
+
+            content.Children.Add(new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                Children = { input, browseButton, addButton }
+            });
+            content.Children.Add(status);
+
+            content.Children.Add(new TextBlock
+            {
+                Text = "Removing a profile stops it from being wired on future changes; it doesn't "
+                       + "remove hooks already written to that profile's own settings.json.",
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.5,
+                FontSize = 11
+            });
+
+            return content;
+        }
+
+        // Returns the picked folder's bare name (e.g. ".claude-work"), or
+        // null if the user cancelled or picked something invalid — in which
+        // case `status` is set to say why, since a folder outside the home
+        // directory would resolve to the wrong place on both native Windows
+        // and WSL (see ClaudeCodeProfilesCard's own doc comment).
+        [SupportedOSPlatform("windows")]
+        private static async Task<string?> BrowseForProfileDir(Control owner, TextBlock status)
+        {
+            var storageProvider = TopLevel.GetTopLevel(owner)?.StorageProvider;
+            if (storageProvider is null) return null;
+
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var startLocation = await storageProvider.TryGetFolderFromPathAsync(home);
+
+            var result = await storageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Select a Claude Code config directory",
+                SuggestedStartLocation = startLocation,
+                AllowMultiple = false
+            });
+
+            if (result.Count == 0) return null;
+
+            var pickedPath = result[0].TryGetLocalPath();
+            if (pickedPath is null)
+            {
+                status.Text = "Couldn't resolve that selection to a local folder.";
+                return null;
+            }
+
+            // Must be a *direct* child of a recognized home, not just nested
+            // somewhere under it — the underlying model (-ProfileDir/
+            // -WslProfileDir) only ever takes a single path segment relative
+            // to home, so picking e.g. ~/work/claude-work would silently
+            // keep only "claude-work" and resolve to the wrong, nonexistent
+            // ~/claude-work instead. "A recognized home" is deliberately not
+            // just the Windows one: the same dir name gets wired under every
+            // WSL distro's home too (see the section's own doc comment), and
+            // a profile can be WSL-only with no Windows-side counterpart at
+            // all — e.g. a second Linux-only account — so a folder picked
+            // from \\wsl.localhost\<distro>\home\<user>\ must validate the
+            // same way a native one does, not be rejected just because it
+            // isn't under C:\Users\....
+            var validHomes = new[] { home }.Concat(WslIntegration.GetWslHomeUncPaths())
+                .Select(h => h.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+                .ToList();
+            var trimmedPicked = pickedPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var parent = Path.GetDirectoryName(trimmedPicked);
+            if (!validHomes.Any(h => string.Equals(parent, h, StringComparison.OrdinalIgnoreCase)))
+            {
+                status.Text = "Must be a folder directly inside your home directory (" + home
+                    + ") or a WSL distro's home directory, not a nested subfolder.";
+                return null;
+            }
+
+            status.Text = "";
+            return Path.GetFileName(trimmedPicked);
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static Control ProfileDirRow(string dirName, StackPanel itemsPanel)
+        {
+            var label = new TextBlock
+            {
+                Text = dirName,
+                VerticalAlignment = VerticalAlignment.Center,
+                Width = 220
+            };
+            var remove = new Button { Content = "Remove" };
+
+            var row = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                Children = { label, remove }
+            };
+
+            remove.Click += (_, _) =>
+            {
+                ClaudeBuddySettings.RemoveClaudeCodeProfileDir(dirName);
+                itemsPanel.Children.Remove(row);
+            };
+
+            return row;
+        }
+
+        // Null when there's nothing to show (no WSL, or no distros besides
+        // Docker Desktop's plumbing ones) — Body() omits the whole group in
+        // that case rather than showing an empty card.
+        [SupportedOSPlatform("windows")]
+        private static Control? WslCard()
+        {
+            var distros = WslIntegration.ListDistros();
+            if (distros.Count == 0) return null;
+
+            var content = new StackPanel { Spacing = 8, Margin = new Thickness(14, 10) };
+            content.Children.Add(new TextBlock
+            {
+                Text = "Wire or unwire Claude Buddy's hooks for Claude Code running inside each WSL distro.",
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.55,
+                FontSize = 11
+            });
+
+            foreach (var distro in distros) content.Children.Add(WslDistroRow(distro));
+
+            return content;
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static Control WslDistroRow(string distro)
+        {
+            var box = new CheckBox { Content = distro, IsChecked = WslIntegration.IsWired(distro) };
+
+            box.IsCheckedChanged += (_, _) =>
+            {
+                var desired = box.IsChecked ?? false;
+                // Prevent a re-entrant click while the script from the last
+                // one is still running — SetWired has its own ~10s timeout,
+                // so this can't disable the box forever even on failure.
+                box.IsEnabled = false;
+
+                Task.Run(() => WslIntegration.SetWired(distro, desired)).ContinueWith(task =>
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        box.IsEnabled = true;
+                        // Revert on failure rather than show a checked state
+                        // that doesn't match settings.json's real contents.
+                        if (!task.Result) box.IsChecked = !desired;
+                    });
+                });
+            };
+
             return box;
         }
     }
