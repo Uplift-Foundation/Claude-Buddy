@@ -1,7 +1,17 @@
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('idle', 'generating', 'waiting', 'ended')]
-    [string]$State
+    [string]$State,
+
+    # Baked in as a literal by install-windows-hooks.ps1 at wiring time,
+    # computed there in a normal, full environment — not re-derived here,
+    # where a WSL-interop-launched invocation's environment can't be trusted
+    # to have TEMP/TMP set at all (already known to omit PATH; found to omit
+    # TEMP too on a real machine, which silently pointed this script at an
+    # unrelated relative-path folder with no visible error). Falls back to
+    # GetTempPath() for anyone who wired this by hand via the README's JSON
+    # snippets, where it isn't passed.
+    [string]$TempDir = ''
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -62,7 +72,8 @@ if ($State -ne 'ended' -and $transcript -and (Test-Path $transcript)) {
     } catch {}
 }
 
-$dir = Join-Path $env:TEMP 'claude_buddy'
+$resolvedTempDir = if ($TempDir) { $TempDir } else { [System.IO.Path]::GetTempPath() }
+$dir = Join-Path $resolvedTempDir 'claude_buddy'
 if (-not (Test-Path $dir)) {
     New-Item -ItemType Directory -Path $dir | Out-Null
 }
