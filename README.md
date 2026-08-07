@@ -28,6 +28,11 @@ sessions in one repo stop looking identical. Hover for the name and the full
 path; the right-click menu leads with both (plus reset that session to idle /
 exit Claude Buddy entirely).
 
+Turn on **Two-letter initials** in Settings for a wider glyph: one letter
+from each of the first two words of that same name (`Menu UX` → `Mu`), or
+the first two letters of it when there's only one word. Off by default, so
+existing installs keep looking exactly as they always have.
+
 **Left-click-drag an orb to put it wherever you want**, and it stays there:
 it holds that spot as other sessions come and go (the rest of the stack
 closes up behind it), and it's remembered across restarts of Claude Buddy —

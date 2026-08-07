@@ -226,7 +226,16 @@ namespace ClaudeBuddy
                 Row("Keep orbs for", LifetimePicker(),
                     "How long an orb stays after its session goes quiet. A session that's "
                     + "waiting on you is never removed, however long this is — those only go "
-                    + "away when you answer it or reset it from the orb's menu."))));
+                    + "away when you answer it or reset it from the orb's menu."),
+                Row("Two-letter initials",
+                    Switch(ClaudeBuddySettings.TwoLetterGlyphs, value =>
+                    {
+                        ClaudeBuddySettings.TwoLetterGlyphs = value;
+                        SessionManager.Instance?.ReapplyGlyphs();
+                    }),
+                    "One letter from each of the first two words of a chat's name, or the "
+                    + "first two letters of it when there's only one word — instead of just "
+                    + "the one letter every orb shows today."))));
 
             // Its own group rather than three more rows in Orbs: that card already
             // has two rows and one of them carries a paragraph of help, so five

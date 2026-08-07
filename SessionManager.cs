@@ -647,6 +647,18 @@ namespace ClaudeBuddy
             _tray?.ReapplyStateColors();
         }
 
+        // Same shape as ReapplyStateColors, for the "Two-letter initials"
+        // toggle: a cosmetic setting change isn't a session change, so
+        // nothing on the scan path would otherwise notice it until whatever
+        // orb's session next fires a hook.
+        public void ReapplyGlyphs()
+        {
+            foreach (var window in _windows.Values)
+            {
+                window.ReapplyGlyph();
+            }
+        }
+
         private void ReflowPositions()
         {
             if (_order.Count == 0 || !OrbsVisible) return;

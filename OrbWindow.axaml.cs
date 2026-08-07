@@ -61,6 +61,7 @@ namespace ClaudeBuddy
 
         private string _lastState = "";
         private string _lastColor = "";
+        private string _lastGlyphName = "";
 
         // Colour for the team arrow leaving this orb, when it has one. Follows
         // /color so several members pointing at one lead stay apart; sessions
@@ -190,6 +191,7 @@ namespace ClaudeBuddy
                 ? (string.IsNullOrEmpty(described) ? SessionId : described)
                 : $"{described}\n{status.Cwd}");
 
+            _lastGlyphName = name;
             Glyph.Text = GlyphFor(name);
             ApplyAccent(status.Color);
             SetTeamRole(!string.IsNullOrEmpty(status.Lead));
@@ -258,8 +260,24 @@ namespace ClaudeBuddy
 
             Orb.Width = Orb.Height = 36 * scale;
             Glow.Width = Glow.Height = 56 * scale;
-            Glyph.FontSize = 16 * scale;
+            Glyph.FontSize = BaseGlyphFontSize * scale;
             OrbRadius = 18 * scale;
+        }
+
+        // Smaller with two letters than with one, so the wider glyph still
+        // fits inside the same 36px circle rather than crowding its edge.
+        private static double BaseGlyphFontSize => ClaudeBuddySettings.TwoLetterGlyphs ? 12.0 : 16.0;
+
+        // Settings' "Two-letter initials" toggle changes how every already-
+        // open orb's glyph reads without waiting for that session's next
+        // hook update — see SessionManager.ReapplyGlyphs, which calls this
+        // on each one. Re-derives from _lastGlyphName rather than the full
+        // SessionStatus: nothing else about the orb needs to change, just
+        // the text and the font size sitting under it.
+        public void ReapplyGlyph()
+        {
+            Glyph.Text = GlyphFor(_lastGlyphName);
+            Glyph.FontSize = BaseGlyphFontSize * (_isTeamMember ? MemberScale : 1.0);
         }
 
         private static string GlyphFor(string label)
@@ -267,11 +285,39 @@ namespace ClaudeBuddy
             label = label.TrimStart();
             if (label.Length == 0) return "•";
 
-            // Never cut a surrogate pair in half — a title starting with an
-            // emoji would render as a broken box.
-            var first = char.IsHighSurrogate(label[0]) && label.Length > 1 ? label[..2] : label[..1];
-            return first.ToUpperInvariant();
+            if (!ClaudeBuddySettings.TwoLetterGlyphs)
+            {
+                return FirstGrapheme(label).ToUpperInvariant();
+            }
+
+            // Two words get one letter each — the initials a person would
+            // write by hand ("Menu UX" -> "Mu") — rather than two letters
+            // from the first word alone, which reads as a typo of it
+            // ("Menu UX" -> "Me"). A single word falls back to its own
+            // first two letters, since there's nothing else to draw from.
+            //
+            // Upper then lower, not both upper: two capitals side by side
+            // reads as an acronym ("MU"), where the point here is a little
+            // word-shaped mark ("Mu") — same reason a monogram is "Mu", not
+            // "MU". Only the letter case changes; which letters are picked
+            // is exactly the same either way.
+            var words = label.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length >= 2)
+            {
+                return FirstGrapheme(words[0]).ToUpperInvariant() + FirstGrapheme(words[1]).ToLowerInvariant();
+            }
+
+            var first = FirstGrapheme(label);
+            var rest = label[first.Length..];
+            var second = rest.Length > 0 ? FirstGrapheme(rest) : "";
+            return first.ToUpperInvariant() + second.ToLowerInvariant();
         }
+
+        // One printable character, or a full surrogate pair if the string
+        // starts with one (e.g. an emoji) — never split in half, which is
+        // what renders as a broken box instead of the emoji.
+        private static string FirstGrapheme(string s) =>
+            s.Length > 1 && char.IsHighSurrogate(s[0]) ? s[..2] : s[..1];
 
         // The colour comes from OrbColors so this switch is about *motion* only —
         // one state-to-colour mapping in the app, not two that can drift apart.
@@ -476,8 +522,32 @@ namespace ClaudeBuddy
                 _flyout.PointerExited += (_, _) => ScheduleFlyoutHide();
             }
 
-            _flyout.ShowNear(Position);
+            // PointToScreen, not raw arithmetic on Position: Position is
+            // physical screen pixels, but MicFlyoutOffset is a DIP
+            // measurement — the two only line up at 100% display scaling.
+            // TeamLinks hits this exact trap for the same reason (see its
+            // own comment on measuring scale via PointToScreen) — a mic
+            // that looked right on a Mac and landed nowhere near the orb on
+            // a scaled Windows display is what not doing this looks like.
+            var target = this.PointToScreen(new Point(MicFlyoutOffset, MicFlyoutOffset));
+            _flyout.ShowNear(from: Position, to: target);
         }
+
+        // Below and to the right, touching the orb's own circle rather than
+        // its window's square bounding box: the orb is a 36px circle centred
+        // in a 56x56 window, so along the down-right diagonal its true edge
+        // sits inset from that box's corner (46,46) at roughly
+        // 28 + 18*cos(45°) ≈ 41, not 46 itself. Anchoring at the box corner
+        // — the first version of this — left a few pixels of dead space the
+        // line had to visibly cross before actually touching the orb.
+        //
+        // In DIPs, not physical pixels — see the PointToScreen comment above
+        // for why that distinction is load-bearing here. (Team-member orbs
+        // are drawn smaller — see MemberScale — so their true edge sits a
+        // little further inside this same point; not accounted for here,
+        // since the difference is a couple of pixels and not worth a
+        // per-orb-scale offset for a decorative line.)
+        private const int MicFlyoutOffset = 41;
 
         // Immediate, not scheduled — dragging moves the orb every pointer
         // move, and a flyout animating toward a stale position underneath a

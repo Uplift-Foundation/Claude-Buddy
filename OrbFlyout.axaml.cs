@@ -14,21 +14,6 @@ namespace ClaudeBuddy
     // pays for a second window.
     public partial class OrbFlyout : Window
     {
-        // Below and to the right, touching the orb's own circle rather than
-        // its window's square bounding box: the orb is a 36px circle centred
-        // in a 56x56 window, so along the down-right diagonal its true edge
-        // sits inset from that box's corner (46,46) at roughly
-        // 28 + 18*cos(45°) ≈ 41, not 46 itself. Anchoring at the box corner
-        // — the first version of this — left a few pixels of dead space the
-        // line had to visibly cross before actually touching the orb.
-        //
-        // (Team-member orbs are drawn smaller — see OrbWindow.MemberScale —
-        // so their true edge sits a little further inside this same 41,41
-        // point; not accounted for here, since the difference is a couple of
-        // pixels and not worth a per-orb-scale offset for a decorative line.)
-        private const int OffsetX = 41;
-        private const int OffsetY = 41;
-
         // One-shot, not the shared low-fps ticker OrbWindow's pulse uses —
         // that exists to keep *continuous* animation cheap across many
         // simultaneously-pulsing orbs, which doesn't apply to a ~160ms
@@ -72,29 +57,27 @@ namespace ClaudeBuddy
         // itself) never triggers a hide meant for "the pointer left both".
         public bool IsPointerOverFlyout => Root.IsPointerOver;
 
-        // Animates out from the orb's own position to its resting spot —
+        // Animates from the orb's own position to its resting spot near it —
         // the "flies out" motion the feature is named for — rather than
-        // just appearing there. Recomputed from the orb's current screen
-        // position each time, not tracked continuously: this is only ever
-        // shown while hovering or recording, both of which end before the
-        // orb could plausibly have moved again.
-        public void ShowNear(PixelPoint orbPosition)
+        // just appearing there. Both points are physical screen pixels,
+        // already computed by the caller (OrbWindow.EnsureFlyoutShown) via
+        // PointToScreen — this window has no reason to know the orb's own
+        // geometry, just where it's coming from and going to.
+        public void ShowNear(PixelPoint from, PixelPoint to)
         {
-            var target = new PixelPoint(orbPosition.X + OffsetX, orbPosition.Y + OffsetY);
-
             if (IsVisible)
             {
                 // Already up (recording kept it visible through a hover
                 // that came back) — just track, no need to replay the
                 // fly-out motion for a window that never left.
-                Position = target;
+                Position = to;
                 return;
             }
 
-            Position = orbPosition;
+            Position = from;
             Opacity = 0;
             Show();
-            AnimateTo(from: orbPosition, to: target);
+            AnimateTo(from, to);
         }
 
         // `new`, not an override — WindowBase.Hide() isn't virtual — but

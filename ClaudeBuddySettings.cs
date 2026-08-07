@@ -89,6 +89,11 @@ namespace ClaudeBuddy
             public bool TintActiveWindow { get; set; } = true;
             public int OrbLifetimeMinutes { get; set; } = DefaultOrbLifetimeMinutes;
 
+            // Off by default: one letter is what every existing orb already
+            // looks like, and changing that for everyone on upgrade would be
+            // a cosmetic surprise nobody asked for.
+            public bool TwoLetterGlyphs { get; set; }
+
             // Off by default: turning this on is what triggers the one-time
             // Whisper model download (a few hundred MB), so it must be an
             // explicit opt-in rather than something a fresh install just has.
@@ -165,6 +170,17 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.VoiceInputEnabled; }
             set { Load(); lock (Gate) _model.VoiceInputEnabled = value; Save(); }
+        }
+
+        // One letter (the default) or two initials on every orb's glyph —
+        // see OrbWindow.GlyphFor. Purely cosmetic, so there's no lifecycle
+        // to guard the way VoiceInputEnabled has; SessionManager.ReapplyGlyphs
+        // is what makes an already-open orb notice a flip without waiting
+        // for its next hook update.
+        public static bool TwoLetterGlyphs
+        {
+            get { Load(); lock (Gate) return _model.TwoLetterGlyphs; }
+            set { Load(); lock (Gate) _model.TwoLetterGlyphs = value; Save(); }
         }
 
         // ---- orb state colours ----------------------------------------------
@@ -320,7 +336,8 @@ namespace ClaudeBuddy
                         TintActiveWindow = root["tintActiveWindow"]?.GetValue<bool>() ?? true,
                         OrbLifetimeMinutes =
                             root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes,
-                        VoiceInputEnabled = root["voiceInputEnabled"]?.GetValue<bool>() ?? false
+                        VoiceInputEnabled = root["voiceInputEnabled"]?.GetValue<bool>() ?? false,
+                        TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false
                     };
 
                     if (root["orbColors"] is JsonObject orbColors)
@@ -446,6 +463,7 @@ namespace ClaudeBuddy
                         ["tintActiveWindow"] = _model.TintActiveWindow,
                         ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
                         ["voiceInputEnabled"] = _model.VoiceInputEnabled,
+                        ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
                         // Grouped rather than three top-level keys: it reads as
                         // one setting in the file the way it reads as one card in
                         // the window. A null entry — which is what a colour left
