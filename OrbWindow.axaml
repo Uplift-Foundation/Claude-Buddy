@@ -3,6 +3,9 @@
         x:Class="ClaudeBuddy.OrbWindow"
         Title="Claude Buddy"
         Width="56" Height="56"
+        MinWidth="56" MinHeight="56"
+        MaxWidth="56" MaxHeight="56"
+        SizeToContent="Manual"
         SystemDecorations="None"
         TransparencyLevelHint="Transparent"
         Background="Transparent"
@@ -11,6 +14,17 @@
         CanResize="False"
         ShowActivated="False"
         WindowStartupLocation="Manual">
+
+    <!-- Min/Max pin this to exactly 56x56 regardless of platform theme.
+         Found the hard way on OrbFlyout: the Fluent theme (Windows) applies
+         its own default Window MinWidth/MinHeight — measured at 120x39 —
+         that silently overrides a plain Width/Height, since Min/Max act as
+         a hard floor/ceiling on the final size no matter where the value
+         setting them came from. This window's 56x56 happens to already
+         clear that floor, which is exactly why the bug went unnoticed here
+         and only showed up on OrbFlyout's much smaller 26x26 — pinned
+         explicitly anyway, rather than relying on that margin staying true
+         if Fluent's own default ever changes. -->
 
     <!-- Transparent (not null) background so the whole 56x56 area is
          hit-testable: hover tooltip, drag, and right-click work anywhere

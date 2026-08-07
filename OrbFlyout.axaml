@@ -2,6 +2,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="ClaudeBuddy.OrbFlyout"
         Width="26" Height="26"
+        MinWidth="26" MinHeight="26"
+        MaxWidth="26" MaxHeight="26"
+        SizeToContent="Manual"
         SystemDecorations="None"
         TransparencyLevelHint="Transparent"
         Background="Transparent"
@@ -25,9 +28,20 @@
          nearby, the way the connecting arrows already do for team members
          in TeamLinks. Simpler than TeamLinks' own arrows on purpose: this
          window's position is always the same fixed offset from its orb (see
-         OrbFlyout.OffsetX/Y), never two independently-dragged points, so the
-         line's start and end are constants rather than geometry recomputed
-         from wherever two orbs currently happen to be. -->
+         OrbWindow.MicFlyoutOffset), never two independently-dragged points,
+         so the line's start and end are constants rather than geometry
+         recomputed from wherever two orbs currently happen to be.
+
+         MinWidth/MinHeight/MaxWidth/MaxHeight pin this to exactly 26x26 —
+         found the hard way on a real Windows machine, where the Fluent
+         theme's default Window style applies its own MinWidth/MinHeight
+         (measured there at 120x39) that silently overrides a plain
+         Width/Height, and Min/Max are enforced as a hard floor/ceiling on
+         the final size regardless of where the style setting it came from.
+         The macOS theme this app also uses doesn't do this, which is why it
+         went unnoticed until this specific window was tested on Windows —
+         OrbWindow's own 56x56 happens to clear whatever floor Fluent sets
+         and never surfaced the problem. -->
     <Grid x:Name="Root">
         <!-- EndPoint touches the button's actual circle, not its 24x24
              bounding box: that box spans (2,2)-(26,26) (bottom-right-aligned
@@ -35,7 +49,7 @@
              radius, and the circle's true edge toward the line sits inset
              from the box corner at roughly 14 - 12*cos(45°) ≈ 5.7 — the same
              inscribed-circle gap corrected for on the orb end of this line
-             (see OffsetX/Y in the code-behind), just showing up at the other
+             (see MicFlyoutOffset in OrbWindow), just showing up at the other
              end instead. -->
         <Line StartPoint="0,0" EndPoint="5.7,5.7"
               Stroke="#80FFFFFF" StrokeThickness="1.5"
