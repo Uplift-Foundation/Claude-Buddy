@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using Whisper.net;
 using Whisper.net.Ggml;
 
@@ -109,7 +110,7 @@ namespace ClaudeBuddy
                     text.Append(segment.Text);
                 }
 
-                return text.ToString().Trim();
+                return ApplySpokenPunctuation(text.ToString().Trim());
             }
             catch (Exception ex)
             {
@@ -120,6 +121,70 @@ namespace ClaudeBuddy
             {
                 TranscribeGate.Release();
             }
+        }
+
+        // Whisper is a general speech-recognition model, not a dictation
+        // system — it has no notion of "spoken punctuation commands" the way
+        // Apple/Windows/Dragon's dictation engines do, so saying "period"
+        // just transcribes the literal word "period". This is the same
+        // mapping those systems apply under the hood, done as a plain text
+        // pass afterward since Whisper itself has no instruction-following
+        // to lean on here — a WithPrompt() context nudges decoding style,
+        // it doesn't substitute words.
+        //
+        // Longer phrases first: "exclamation point" has to be tried before
+        // a hypothetical shorter "exclamation" entry would eat part of it
+        // and leave "point" behind. Case-insensitive, whole-word only, so
+        // "exposition" or "the trial period" aren't touched mid-word — but
+        // "the trial period" *said as three separate words* still becomes
+        // "the trial." like every other dictation system's version of this
+        // trade-off; there's no way to tell "spoken as punctuation" from
+        // "spoken as the actual word" from the audio alone.
+        private static readonly (string Spoken, string Symbol)[] PunctuationWords =
+        {
+            ("question mark", "?"),
+            ("exclamation point", "!"),
+            ("exclamation mark", "!"),
+            ("open paren", "("),
+            ("close paren", ")"),
+            ("open parenthesis", "("),
+            ("close parenthesis", ")"),
+            ("new paragraph", "\n\n"),
+            ("new line", "\n"),
+            ("full stop", "."),
+            ("period", "."),
+            ("comma", ","),
+            ("colon", ":"),
+            ("semicolon", ";")
+        };
+
+        // Absorbs the whitespace *before* each spoken punctuation word, not
+        // after: "fix comma then" has to become "fix, then", not "fix,then"
+        // or "fix , then" — dropping the leading space and leaving whatever
+        // followed untouched is what gets the spacing right on both sides
+        // without a separate cleanup pass.
+        private static string ApplySpokenPunctuation(string text)
+        {
+            foreach (var (spoken, symbol) in PunctuationWords)
+            {
+                text = Regex.Replace(text, @$"\s*\b{Regex.Escape(spoken)}\b", symbol, RegexOptions.IgnoreCase);
+            }
+
+            // Whisper predicts its own punctuation from the *pause* in the
+            // audio independently of what word was actually said there —
+            // saying "period" is both a word (substituted above) and a
+            // natural place to pause, so it's common for Whisper to also
+            // land a real "." of its own at the same spot. The result
+            // before this: doubled-up symbols scattered through the text
+            // ("fix this.. then" or "fix this . . then"), not just at the
+            // very end. Collapse a run of the same mark (whitespace between
+            // them and all) down to one, and drop any space left dangling
+            // right before a mark — leftover from Whisper's own token
+            // spacing once the word that used to fill that gap is gone.
+            text = Regex.Replace(text, @"\s+([.,!?;:])", "$1");
+            text = Regex.Replace(text, @"([.,!?;:])(?:\s*\1)+", "$1");
+
+            return text.Trim();
         }
 
         private static WhisperFactory? GetFactory()
