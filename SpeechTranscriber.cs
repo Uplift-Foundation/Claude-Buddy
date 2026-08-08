@@ -110,7 +110,7 @@ namespace ClaudeBuddy
                     text.Append(segment.Text);
                 }
 
-                return ApplySpokenPunctuation(text.ToString().Trim());
+                return ApplySpokenPunctuation(StripNonSpeechTags(text.ToString()).Trim());
             }
             catch (Exception ex)
             {
@@ -122,6 +122,23 @@ namespace ClaudeBuddy
                 TranscribeGate.Release();
             }
         }
+
+        // Whisper doesn't return an empty string for audio with no speech in it
+        // — it returns a literal annotation token, most often "[BLANK_AUDIO]",
+        // and also emits bracketed non-speech tags like "(clears throat)" or
+        // "[MUSIC]" mid-transcript. Confirmed by transcribing four seconds of
+        // an ordinary quiet room: the result was the six characters that would
+        // otherwise have been typed straight into someone's terminal, since
+        // OrbWindow's only guard on the way out is IsNullOrWhiteSpace and
+        // "[BLANK_AUDIO]" passes it.
+        //
+        // Dropped rather than translated to anything: these are the model
+        // describing the audio, never words the user said, so there is nothing
+        // here a caller could want. A clip that was *only* an annotation comes
+        // back empty, which is exactly the "nothing was said" signal callers
+        // already handle.
+        private static string StripNonSpeechTags(string text) =>
+            Regex.Replace(text, @"\s*[\[\(][A-Za-z0-9 _'’-]{0,40}[\]\)]", " ");
 
         // Whisper is a general speech-recognition model, not a dictation
         // system — it has no notion of "spoken punctuation commands" the way

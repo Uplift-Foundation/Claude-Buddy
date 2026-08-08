@@ -404,7 +404,30 @@ namespace ClaudeBuddy
                 {
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    RedirectStandardError = true,
+
+                    // Not cosmetic, and not implied by redirecting the pipes:
+                    // this app is a WinExe, so a console child launched from it
+                    // gets a console of its own allocated and *shown* unless
+                    // CREATE_NO_WINDOW says otherwise. Measured from a WinExe
+                    // parent with this exact ProcessStartInfo: without it the
+                    // child owns a visible PseudoConsoleWindow, with it no
+                    // window at all and identical stdout and exit code.
+                    //
+                    // On Windows that window is this file's whole reason for
+                    // shelling out gone wrong twice over. It flashes on screen
+                    // for the ~400ms the tab-selection helper runs (the "a
+                    // terminal pops up and goes away" every orb click and every
+                    // dictation produced), and while it exists it holds the
+                    // foreground — so the terminal this was supposed to bring
+                    // forward loses the race, and dictated text goes wherever
+                    // Windows hands focus once the console dies rather than
+                    // into the session.
+                    //
+                    // WslIntegration already sets this on its own launches for
+                    // the same reason; this call site simply never did. Ignored
+                    // on macOS, where every other TryRun caller lives.
+                    CreateNoWindow = true
                 };
                 foreach (var arg in args) psi.ArgumentList.Add(arg);
 
@@ -641,15 +664,47 @@ namespace ClaudeBuddy
             public IntPtr ExtraInfo;
         }
 
-        // INPUT is a C union of three keyboard/mouse/hardware shapes; this
-        // code only ever sends the keyboard one, but the union still has to
-        // be declared to get Win32's actual struct layout (and size —
-        // KEYBDINPUT's trailing IntPtr forces 8-byte alignment on x64) rather
-        // than guessing at padding by hand.
+        // MOUSEINPUT and HARDWAREINPUT are declared only to size the union
+        // below, never sent. Leaving them out is not a harmless simplification:
+        // MOUSEINPUT (32 bytes on x64) is the *largest* member, so a union
+        // holding KEYBDINPUT alone is 24 bytes instead of 32, INPUT comes out
+        // 32 bytes instead of 40, and SendInput — which validates its cbSize
+        // against its own sizeof(INPUT) and accepts nothing else — rejects
+        // every call with ERROR_INVALID_PARAMETER and inserts no events.
+        //
+        // That is exactly how this shipped: dictation recorded and transcribed
+        // correctly, the terminal even came to the front, and then nothing was
+        // typed, silently, because the return value went unchecked too (it is
+        // checked now — see SendUnicodeText). Measured directly: cbSize 32
+        // returns 0 / GetLastError 87; the same call at 40 types the text.
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MouseInput
+        {
+            public int X;
+            public int Y;
+            public uint Data;
+            public uint Flags;
+            public uint Time;
+            public IntPtr ExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct HardwareInput
+        {
+            public uint Msg;
+            public ushort ParamL;
+            public ushort ParamH;
+        }
+
+        // INPUT is a C union of three keyboard/mouse/hardware shapes. All three
+        // are declared so the union gets Win32's actual size and layout rather
+        // than the size of whichever member this code happens to use.
         [StructLayout(LayoutKind.Explicit)]
         private struct InputUnion
         {
+            [FieldOffset(0)] public MouseInput Mi;
             [FieldOffset(0)] public KeyboardInput Ki;
+            [FieldOffset(0)] public HardwareInput Hi;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -678,7 +733,43 @@ namespace ClaudeBuddy
                 inputs[i * 2 + 1] = KeyEvent(text[i], keyUp: true);
             }
 
-            SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+            // Checked, not fire-and-forget. SendInput has two failure modes
+            // that both look identical to the user — nothing gets typed — and
+            // neither throws: a cbSize Windows doesn't recognise (the bug the
+            // union above exists to prevent, which is worth catching if the
+            // layout ever regresses) and UIPI refusing to let this process
+            // send input to a more privileged one, which is what an elevated
+            // terminal looks like. Reported once per run, like the macOS
+            // permission failures — see ReportSendTextFailure.
+            var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+            if (sent == inputs.Length) return;
+
+            var error = Marshal.GetLastWin32Error();
+            ReportSendInputFailure(sent, inputs.Length, error);
+        }
+
+        private static int _sendInputFailureReported;
+
+        private static void ReportSendInputFailure(uint sent, int expected, int error)
+        {
+            if (Interlocked.Exchange(ref _sendInputFailureReported, 1) != 0) return;
+
+            // 5 is ERROR_ACCESS_DENIED, which for SendInput means UIPI: a
+            // non-elevated process cannot send input to an elevated window.
+            // The user can act on that one, so it's worth naming.
+            if (error == 5)
+            {
+                Console.Error.WriteLine(
+                    "Claude Buddy: the mic transcribed your speech, but Windows blocked typing it " +
+                    "into the terminal — the terminal is running elevated (as Administrator) and " +
+                    "Claude Buddy is not.\n" +
+                    "  Fix: run the terminal without elevation, or start Claude Buddy elevated too.");
+                return;
+            }
+
+            Console.Error.WriteLine(
+                $"Claude Buddy: typing the transcribed text failed — SendInput accepted {sent} of " +
+                $"{expected} events (GetLastError {error}).");
         }
 
         private static Input KeyEvent(char ch, bool keyUp) => new()
@@ -707,12 +798,30 @@ namespace ClaudeBuddy
         {
             try
             {
-                // Tab-exact beats window-exact: if there's an unambiguous tab
-                // to select, selecting it also raises its window (verified —
-                // see docs/windows-wt-tabs-findings.md), so this either fully
-                // replaces the fallback below or changes nothing at all.
-                if (status.TermProgram == "WindowsTerminal" && TrySelectWindowsTerminalTab(status))
+                // Tab-exact beats window-exact: an unambiguous tab is the only
+                // thing that identifies *which* session's terminal to show,
+                // since every tab of a Windows Terminal window shares one
+                // process and one MainWindowHandle.
+                //
+                // Selecting it is not enough on its own, though, and the
+                // earlier reading of this (that selecting also raises the
+                // window — docs/windows-wt-tabs-findings.md) was true only of
+                // the case it was tested in: switching *away* from some other
+                // tab. Selecting the tab that is already current is a no-op, so
+                // it raises nothing — and clicking an orb or its mic has just
+                // made Claude Buddy the foreground app, so "already on the
+                // right tab" left the terminal behind us. Dictation into a
+                // session you were already looking at typed into the flyout
+                // instead, which is exactly the shape of "it only works if
+                // you're on the wrong tab".
+                //
+                // So raise the window explicitly, and the tab's *own* window
+                // rather than MainWindowHandle — with several Windows Terminal
+                // windows in one process, that property names an arbitrary one.
+                if (status.TermProgram == "WindowsTerminal"
+                    && TrySelectWindowsTerminalTab(status, out var tabWindow))
                 {
+                    WindowsForegroundWindow.BringToFront(tabWindow);
                     return;
                 }
 
@@ -783,11 +892,38 @@ namespace ClaudeBuddy
         // than one, PowerShell missing, UIA slow, any exception — returns
         // false and FocusWindows falls through to its existing
         // window-activation path unchanged.
-        private static bool TrySelectWindowsTerminalTab(SessionStatus status)
+        // On success, tabWindow is the handle of the window that owns the matched
+        // tab — the caller needs it to actually bring that window forward, which
+        // selecting the tab does not reliably do (see FocusWindows).
+        private static bool TrySelectWindowsTerminalTab(SessionStatus status, out IntPtr tabWindow)
         {
+            tabWindow = IntPtr.Zero;
+
             if (status.TermPid <= 0 || string.IsNullOrEmpty(status.Title)) return false;
 
-            var target = "✳ " + status.Title;
+            // The title alone, with no glyph prefix — the script matches on the
+            // tab name's *ending*. "✳ " + title was the original, and it is
+            // wrong for exactly half the time an orb is worth clicking: Claude
+            // Code swaps that ✳ for an animated braille spinner while it is
+            // actually working, so a generating session's tab reads
+            // "⠐ Check Claude Code status" (and "⠂ …", and every other frame)
+            // rather than "✳ Check Claude Code status".
+            //
+            // Observed live with two sessions in one window, which is what made
+            // it look intermittent — the idle one's tab matched and its orb
+            // worked, the generating one's never matched and its orb didn't.
+            // Failing that match doesn't fail safe, either: it falls through to
+            // MainWindowHandle activation, and since every tab of a Windows
+            // Terminal window shares one process, that raises the window with
+            // whatever *other* tab was in front still showing.
+            //
+            // Matching the tail rather than adding the spinner frames to the
+            // list of accepted prefixes is deliberate: the frames are an
+            // implementation detail of somebody else's progress animation, and
+            // the next status glyph Claude Code invents would break a list
+            // again. The one-unambiguous-match rule below is what keeps this
+            // honest, and it is unchanged.
+            var target = status.Title;
 
             // The script has to reach powershell.exe as a *file* (-File), not
             // as -Command text with trailing arguments — verified the hard
@@ -818,7 +954,20 @@ namespace ClaudeBuddy
                     "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
                     status.TermPid.ToString(), target);
 
-                return ok && stdout.Trim() == "SELECTED";
+                if (!ok) return false;
+
+                // "SELECTED:<hwnd of the tab's window>". A selection that can't
+                // name its window is reported as a miss rather than a success:
+                // the caller would have nothing to raise, and falling through to
+                // window activation is a better outcome than stopping there.
+                const string prefix = "SELECTED:";
+                var reply = stdout.Trim();
+                if (!reply.StartsWith(prefix, StringComparison.Ordinal)) return false;
+
+                if (!long.TryParse(reply[prefix.Length..], out var handle) || handle == 0) return false;
+
+                tabWindow = new IntPtr(handle);
+                return true;
             }
             finally
             {
@@ -826,13 +975,34 @@ namespace ClaudeBuddy
             }
         }
 
-        // $args[0] = target process id, $args[1] = exact tab name to select.
-        // Passed as process arguments rather than interpolated into this
-        // script text — a session title is arbitrary user text (could
+        // $args[0] = target process id, $args[1] = the session title a tab name
+        // must end with. Passed as process arguments rather than interpolated
+        // into this script text — a session title is arbitrary user text (could
         // contain quotes, `$`, etc.) and splicing it into the script source
         // would be a PowerShell injection risk, not just an escaping
-        // nuisance. -ceq is a case-sensitive exact match: the glyph prefix
-        // and title must match verbatim, not fuzzily.
+        // nuisance. The comparison is ordinal (case- and byte-exact) on the
+        // title itself; only the status glyph ahead of it is allowed to vary.
+        //
+        // Two things here are about keyboard focus rather than about tabs, and
+        // both were paid for. Selecting a tab through UIA puts focus on the tab
+        // *header*, not in the terminal — measured with
+        // AutomationElement.FocusedElement either side of the call: TermControl
+        // before, TabItem/ListViewItem after. When the tab wasn't current that
+        // never showed, because switching tabs moves focus into the newly shown
+        // pane afterwards; when it was already current, Select() changes no
+        // selection and the focus jolt is all that happens. Dictated text then
+        // went to a focused tab header, which Windows Terminal takes as the
+        // start of an inline rename — "it highlights the tab title and that's
+        // it", and only ever on the tab you were already looking at.
+        //
+        // So: don't Select() a tab that is already selected, and then put focus
+        // in the pane explicitly. The SetFocus() is what makes this recover
+        // rather than merely stop breaking — a window left focused on its tab
+        // header by an earlier run would otherwise stay that way, since nothing
+        // else moves focus back. There is exactly one on-screen TermControl (WT
+        // only exposes the active tab's) so "the one that isn't offscreen" is
+        // unambiguous, and SetFocus on it was confirmed to pull focus back off
+        // a tab header.
         private const string SelectTabScript = """
             $targetPid = [int]$args[0]
             $target = $args[1]
@@ -848,15 +1018,27 @@ namespace ClaudeBuddy
             $found = @()
             foreach ($win in $windows) {
                 foreach ($tab in $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)) {
-                    if ([string]::Equals($tab.Current.Name, $target, [System.StringComparison]::Ordinal)) {
-                        $found += $tab
+                    if ($tab.Current.Name.EndsWith($target, [System.StringComparison]::Ordinal)) {
+                        $found += [pscustomobject]@{ Tab = $tab; Window = $win; Hwnd = $win.Current.NativeWindowHandle }
                     }
                 }
             }
             if ($found.Count -eq 1) {
-                $pattern = $found[0].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-                $pattern.Select()
-                Write-Output "SELECTED"
+                $pattern = $found[0].Tab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                if (-not $pattern.Current.IsSelected) {
+                    $pattern.Select()
+                    Start-Sleep -Milliseconds 120
+                }
+                $termCond = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ClassNameProperty, 'TermControl')
+                foreach ($term in $found[0].Window.FindAll(
+                        [System.Windows.Automation.TreeScope]::Descendants, $termCond)) {
+                    if (-not $term.Current.IsOffscreen) {
+                        try { $term.SetFocus() } catch { }
+                        break
+                    }
+                }
+                Write-Output "SELECTED:$($found[0].Hwnd)"
             } else {
                 Write-Output "NOMATCH:$($found.Count)"
             }
