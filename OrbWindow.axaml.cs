@@ -191,6 +191,19 @@ namespace ClaudeBuddy
                 ? (string.IsNullOrEmpty(described) ? SessionId : described)
                 : $"{described}\n{status.Cwd}");
 
+            // Above the orb, not at the pointer (Avalonia's default for a
+            // tooltip). The mic flyout sits below and to the right, which is
+            // exactly where a pointer-placed tooltip lands, and a tooltip is its
+            // own always-on-top window — so it covered the mic and swallowed the
+            // clicks meant for it. Caught with WindowFromPoint over the mic's
+            // circle: a 160x46 tooltip window owned most of it.
+            //
+            // Placement rather than suppressing the tooltip while the flyout is
+            // up: the name and path are worth having on hover whether or not
+            // you're reaching for the mic, and moving it costs nothing, while
+            // hiding it would trade one annoyance for another.
+            ToolTip.SetPlacement(Root, PlacementMode.Top);
+
             _lastGlyphName = name;
             Glyph.Text = GlyphFor(name);
             ApplyAccent(status.Color);
@@ -530,16 +543,44 @@ namespace ClaudeBuddy
             // that looked right on a Mac and landed nowhere near the orb on
             // a scaled Windows display is what not doing this looks like.
             var target = this.PointToScreen(new Point(MicFlyoutOffset, MicFlyoutOffset));
-            _flyout.ShowNear(from: Position, to: target);
+
+            // Starts concentric with the orb, so the mic reads as emerging from
+            // underneath it and sliding out. Position — this window's top-left —
+            // was the original start point, and it puts the mic's centre at the
+            // orb window's DIP (14,14) instead: up and to the left of the orb's
+            // own centre at (28,28), so the first visible frames appeared off
+            // the orb's top-left corner rather than from behind the orb.
+            //
+            // Offsetting by the flyout's own mic centre is the whole trick: the
+            // animation moves that window's *corner*, so aligning anything
+            // inside it with a point on this one means subtracting where it sits
+            // within its window. The same correction is why `target` aims at the
+            // orb's circle edge rather than the mic's resting centre.
+            const double startDip = OrbCentre - OrbFlyout.MicCentreOffset;
+            var from = this.PointToScreen(new Point(startDip, startDip));
+
+            _flyout.ShowNear(from: from, to: target, owner: this);
         }
 
+        // Centre of the orb in its own window's DIPs — half of Root's pinned
+        // 56x56. Unchanged by MemberScale: a team member is drawn smaller
+        // around this same point, never moved off it.
+        private const double OrbCentre = 28;
+
         // Below and to the right, touching the orb's own circle rather than
-        // its window's square bounding box: the orb is a 36px circle centred
-        // in a 56x56 window, so along the down-right diagonal its true edge
-        // sits inset from that box's corner (46,46) at roughly
+        // its square bounding box: the orb is a 36px circle centred in Root's
+        // 56x56 box, so along the down-right diagonal its true edge sits
+        // inset from that box's corner (46,46) at roughly
         // 28 + 18*cos(45°) ≈ 41, not 46 itself. Anchoring at the box corner
         // — the first version of this — left a few pixels of dead space the
         // line had to visibly cross before actually touching the orb.
+        //
+        // Root's box, not the window's: the two are the same on macOS but not
+        // on Windows, where the OS floors the window wider than it asks for
+        // and Root is pinned and top-left-anchored inside it to keep this
+        // number meaning what it says. See the comment on Root in
+        // OrbWindow.axaml — an orb centred in that inflated window instead is
+        // what put the mic ~60px right of where this offset aims it.
         //
         // In DIPs, not physical pixels — see the PointToScreen comment above
         // for why that distinction is load-bearing here. (Team-member orbs

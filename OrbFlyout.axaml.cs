@@ -26,6 +26,15 @@ namespace ClaudeBuddy
         private PixelPoint _flyTo;
         private long _flyStartedAt;
 
+        // Where the mic button's centre sits inside this window, in DIPs: the
+        // 24x24 button is bottom-right-aligned in Root's 26x26, so it spans
+        // (2,2)-(26,26) and its centre is (14,14). Exposed because OrbWindow
+        // needs it to line the fly-out animation's *start* up with the orb —
+        // this window's own geometry, so it's stated here rather than guessed
+        // at from the other side. See the XAML for why Root's size is what
+        // this is measured against and not the window's.
+        public const double MicCentreOffset = 14;
+
         public event Action? MicClicked;
 
         public OrbFlyout()
@@ -63,13 +72,20 @@ namespace ClaudeBuddy
         // already computed by the caller (OrbWindow.EnsureFlyoutShown) via
         // PointToScreen — this window has no reason to know the orb's own
         // geometry, just where it's coming from and going to.
-        public void ShowNear(PixelPoint from, PixelPoint to)
+        // `owner` is only used for z-order: the fly-out is meant to look like it
+        // comes out from under the orb, so this window spends the animation
+        // behind it and returns to the front on arrival. It must not stay
+        // behind — see PlaceInFront for the clicks that costs.
+        public void ShowNear(PixelPoint from, PixelPoint to, Window owner)
         {
             if (IsVisible)
             {
                 // Already up (recording kept it visible through a hover
                 // that came back) — just track, no need to replay the
-                // fly-out motion for a window that never left.
+                // fly-out motion for a window that never left. Deliberately
+                // no z-order change either: it is already in front, and
+                // dropping it behind the orb here is what would leave a
+                // window nothing ever raises again.
                 Position = to;
                 return;
             }
@@ -77,6 +93,11 @@ namespace ClaudeBuddy
             Position = from;
             Opacity = 0;
             Show();
+
+            // After Show(), which is both what gives this window a handle to
+            // order and what put it in front of the orb to begin with.
+            this.PlaceJustBehind(owner);
+
             AnimateTo(from, to);
         }
 
@@ -117,6 +138,12 @@ namespace ClaudeBuddy
                 _flyTimer!.Stop();
                 Position = _flyTo;
                 Opacity = 1;
+
+                // Arrived: back in front, so the mic is fully clickable where it
+                // has come to rest rather than only where it clears the orb's
+                // window. Done here rather than by the caller because this is
+                // the only place that knows the motion is over.
+                this.PlaceInFront();
             };
             _flyTimer.Start();
         }

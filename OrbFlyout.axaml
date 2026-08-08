@@ -2,8 +2,6 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="ClaudeBuddy.OrbFlyout"
         Width="26" Height="26"
-        MinWidth="26" MinHeight="26"
-        MaxWidth="26" MaxHeight="26"
         SizeToContent="Manual"
         SystemDecorations="None"
         TransparencyLevelHint="Transparent"
@@ -32,20 +30,33 @@
          so the line's start and end are constants rather than geometry
          recomputed from wherever two orbs currently happen to be.
 
-         MinWidth/MinHeight/MaxWidth/MaxHeight pin this to exactly 26x26 —
-         found the hard way on a real Windows machine, where the Fluent
-         theme's default Window style applies its own MinWidth/MinHeight
-         (measured there at 120x39) that silently overrides a plain
-         Width/Height, and Min/Max are enforced as a hard floor/ceiling on
-         the final size regardless of where the style setting it came from.
-         The macOS theme this app also uses doesn't do this, which is why it
-         went unnoticed until this specific window was tested on Windows —
-         OrbWindow's own 56x56 happens to clear whatever floor Fluent sets
-         and never surfaced the problem. -->
-    <Grid x:Name="Root">
+         Root is pinned to 26x26 and anchored top-left because this window
+         does not get to be 26x26 on Windows: the OS floors a top-level
+         window at SM_CXMINTRACK/SM_CYMINTRACK (136x39 on a stock Windows 11
+         desktop), which arrives here as a 120x39 client area. Measured on a
+         real machine, and not negotiable — Width/Height, MinWidth/MaxWidth,
+         and a direct SetWindowPos from outside the process all leave it at
+         the floor. macOS honours the 26x26, which is why every symptom of
+         this was Windows-only.
+
+         Anchoring at the top-left is what makes that harmless: the corner is
+         the one point of this window whose screen location the app actually
+         controls (OrbWindow sets Position to the orb's own circle edge), so
+         everything below is placed relative to it and the leftover window
+         area is just transparent slack off to the right. Anything measured
+         from the far edges instead lands wherever the floor happens to put
+         them — the mic button, bottom-right-aligned inside a client area
+         four times wider than asked for, sat ~95px right and ~13px below the
+         end of its own tether line, which is the whole bug this comment
+         replaces two wrong explanations of. -->
+    <Grid x:Name="Root"
+          Width="26" Height="26"
+          HorizontalAlignment="Left" VerticalAlignment="Top">
         <!-- EndPoint touches the button's actual circle, not its 24x24
              bounding box: that box spans (2,2)-(26,26) (bottom-right-aligned
-             in this 26x26 window), so its centre is (14,14) with a 12px
+             in Root's 26x26 — not the window's own size, see above, which is
+             exactly the distinction this got wrong), so its centre is
+             (14,14) with a 12px
              radius, and the circle's true edge toward the line sits inset
              from the box corner at roughly 14 - 12*cos(45°) ≈ 5.7 — the same
              inscribed-circle gap corrected for on the orb end of this line
@@ -61,8 +72,14 @@
               VerticalAlignment="Bottom"
               Cursor="Hand">
             <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+            <!-- 11, not 13. The glyph is a diagonal shape, so its corner-to-corner
+                 extent is what has to fit, not its nominal size: at 13 the mic's
+                 head sat on the ring's inner edge with the handle reaching the
+                 opposite one, which read as an icon slightly too big for the
+                 button it's in. 11 leaves visible clearance on both ends while
+                 still filling the circle. -->
             <TextBlock Text="&#127908;"
-                       FontSize="13"
+                       FontSize="11"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Center"
                        IsHitTestVisible="False"/>

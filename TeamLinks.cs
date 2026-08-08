@@ -259,10 +259,16 @@ namespace ClaudeBuddy
                 Show();
             }
 
-            // The orb window is 56x56 DIPs regardless of how big the orb inside
-            // it is drawn, so its centre is the same for a member and a lead.
-            // Asked of the window rather than derived from Position, so it is
-            // right on both platforms' coordinate systems.
+            // An orb sits at DIP (28,28) in its own window regardless of how
+            // big the orb inside is drawn, so this point is the same for a
+            // member and a lead. Asked of the window rather than derived from
+            // Position, so it is right on both platforms' coordinate systems.
+            //
+            // (28,28) is the centre of OrbWindow's Root, which is pinned to
+            // 56x56 and anchored top-left precisely so this stays true where
+            // the OS won't let the window itself be 56x56 — see the comment on
+            // Root in OrbWindow.axaml. Arrows were landing off-centre on
+            // Windows for exactly that reason before it was pinned.
             private static Point Centre(OrbWindow orb)
             {
                 var centre = orb.PointToScreen(new Point(28, 28));
