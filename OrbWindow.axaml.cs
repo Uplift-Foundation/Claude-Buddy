@@ -515,8 +515,6 @@ namespace ClaudeBuddy
         // mic-permission prompt — for someone who hasn't opted in.
         private void EnsureFlyoutShown()
         {
-            if (!ClaudeBuddySettings.VoiceInputEnabled) return;
-
             if (_flyout is null)
             {
                 _flyout = new OrbFlyout();
@@ -524,6 +522,10 @@ namespace ClaudeBuddy
                 {
                     if (_recording) StopRecording();
                     else StartRecording();
+                };
+                _flyout.ArrangeClicked += () =>
+                {
+                    SessionManager.Instance?.ArrangeOrbsInPattern();
                 };
 
                 // The other half of the hover bridge described on
@@ -535,28 +537,23 @@ namespace ClaudeBuddy
                 _flyout.PointerExited += (_, _) => ScheduleFlyoutHide();
             }
 
-            // PointToScreen, not raw arithmetic on Position: Position is
-            // physical screen pixels, but MicFlyoutOffset is a DIP
-            // measurement — the two only line up at 100% display scaling.
-            // TeamLinks hits this exact trap for the same reason (see its
-            // own comment on measuring scale via PointToScreen) — a mic
-            // that looked right on a Mac and landed nowhere near the orb on
-            // a scaled Windows display is what not doing this looks like.
-            var target = this.PointToScreen(new Point(MicFlyoutOffset, MicFlyoutOffset));
+            _flyout.SetMicVisible(ClaudeBuddySettings.VoiceInputEnabled);
+            _flyout.SetArranged(SessionManager.Instance?.IsArranged ?? false);
 
-            // Starts concentric with the orb, so the mic reads as emerging from
-            // underneath it and sliding out. Position — this window's top-left —
-            // was the original start point, and it puts the mic's centre at the
-            // orb window's DIP (14,14) instead: up and to the left of the orb's
-            // own centre at (28,28), so the first visible frames appeared off
-            // the orb's top-left corner rather than from behind the orb.
-            //
-            // Offsetting by the flyout's own mic centre is the whole trick: the
-            // animation moves that window's *corner*, so aligning anything
-            // inside it with a point on this one means subtracting where it sits
-            // within its window. The same correction is why `target` aims at the
-            // orb's circle edge rather than the mic's resting centre.
-            const double startDip = OrbCentre - OrbFlyout.MicCentreOffset;
+            // PointToScreen, not raw arithmetic on Position: Position is
+            // physical screen pixels, but FlyoutOffset is a DIP measurement —
+            // the two only line up at 100% display scaling. TeamLinks hits
+            // this exact trap for the same reason (see its own comment on
+            // measuring scale via PointToScreen).
+            var target = this.PointToScreen(new Point(FlyoutOffset, FlyoutOffset));
+
+            // Starts concentric with the orb, so the first button reads as
+            // emerging from underneath it and sliding out. Offsetting by the
+            // flyout's own button centre aligns the button with the orb's
+            // centre during the first frames of the animation — without this,
+            // the flyout's corner (not its button) would line up, and the
+            // first visible frames would appear off the orb's top-left.
+            const double startDip = OrbCentre - OrbFlyout.ButtonCentreOffset;
             var from = this.PointToScreen(new Point(startDip, startDip));
 
             _flyout.ShowNear(from: from, to: target, owner: this);
@@ -571,24 +568,26 @@ namespace ClaudeBuddy
         // its square bounding box: the orb is a 36px circle centred in Root's
         // 56x56 box, so along the down-right diagonal its true edge sits
         // inset from that box's corner (46,46) at roughly
-        // 28 + 18*cos(45°) ≈ 41, not 46 itself. Anchoring at the box corner
-        // — the first version of this — left a few pixels of dead space the
-        // line had to visibly cross before actually touching the orb.
+        // 28 + 18*cos(45°) ≈ 41, not 46 itself.
         //
         // Root's box, not the window's: the two are the same on macOS but not
         // on Windows, where the OS floors the window wider than it asks for
         // and Root is pinned and top-left-anchored inside it to keep this
-        // number meaning what it says. See the comment on Root in
-        // OrbWindow.axaml — an orb centred in that inflated window instead is
-        // what put the mic ~60px right of where this offset aims it.
+        // number meaning what it says.
         //
-        // In DIPs, not physical pixels — see the PointToScreen comment above
-        // for why that distinction is load-bearing here. (Team-member orbs
-        // are drawn smaller — see MemberScale — so their true edge sits a
-        // little further inside this same point; not accounted for here,
-        // since the difference is a couple of pixels and not worth a
-        // per-orb-scale offset for a decorative line.)
-        private const int MicFlyoutOffset = 41;
+        // In DIPs, not physical pixels — see the PointToScreen comment in
+        // EnsureFlyoutShown for why that distinction is load-bearing here.
+        private const int FlyoutOffset = 41;
+
+        // Called by SessionManager when the arrangement state changes, so
+        // every orb's flyout (if it exists) reflects whether clicking the
+        // arrange button would arrange or restore.
+        public void SetFlyoutArranged(bool arranged) => _flyout?.SetArranged(arranged);
+
+        // Hides the flyout unconditionally — used by SessionManager before
+        // starting an arrangement animation, since a flyout anchored to a
+        // moving orb would look broken.
+        public void HideFlyout() => HideFlyoutNow();
 
         // Immediate, not scheduled — dragging moves the orb every pointer
         // move, and a flyout animating toward a stale position underneath a

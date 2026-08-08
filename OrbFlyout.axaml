@@ -12,72 +12,69 @@
         ShowActivated="False"
         WindowStartupLocation="Manual">
 
-    <!-- One action today (voice dictation); a home for more later, stacked
-         further from the orb as they're added — which is the reason this is
-         its own window positioned next to the orb rather than a control
-         drawn inside OrbWindow's own 56x56 bounds. That size is load-bearing
-         elsewhere (drag hit-testing, SessionManager's stacking/reflow,
-         TeamLinks' arrow anchor all assume it), so a second action would
-         have had nowhere to go without pulling this out.
+    <!-- Two actions today; a home for more later, stacked further from the
+         orb as they're added — which is the reason this is its own window
+         positioned next to the orb rather than a control drawn inside
+         OrbWindow's own 56x56 bounds. That size is load-bearing elsewhere
+         (drag hit-testing, SessionManager's stacking/reflow, TeamLinks'
+         arrow anchor all assume it), so there was nowhere else to go.
 
-         A tether line to the orb, and the button itself smaller than the
-         orb (24px here vs. the orb's own 36px) — both make this read as
-         "belongs to that orb" rather than as an unrelated floating button
-         nearby, the way the connecting arrows already do for team members
-         in TeamLinks. Simpler than TeamLinks' own arrows on purpose: this
-         window's position is always the same fixed offset from its orb (see
-         OrbWindow.MicFlyoutOffset), never two independently-dragged points,
-         so the line's start and end are constants rather than geometry
-         recomputed from wherever two orbs currently happen to be.
+         Both buttons are smaller than the orb (24px vs. 36px) and connected
+         by a tether line, so they read as "belongs to that orb" rather than
+         as unrelated floating things nearby. The first button (arrange) is
+         always visible; the second (mic) appears only when voice input is
+         enabled and sits further from the orb along the same diagonal —
+         Margin-based positioning within Root, not alignment, so each
+         button's location is explicit and independent of Root's current
+         size.
 
-         Root is pinned to 26x26 and anchored top-left because this window
-         does not get to be 26x26 on Windows: the OS floors a top-level
+         Root is pinned and anchored top-left because this window does not
+         get to be its requested size on Windows: the OS floors a top-level
          window at SM_CXMINTRACK/SM_CYMINTRACK (136x39 on a stock Windows 11
-         desktop), which arrives here as a 120x39 client area. Measured on a
-         real machine, and not negotiable — Width/Height, MinWidth/MaxWidth,
-         and a direct SetWindowPos from outside the process all leave it at
-         the floor. macOS honours the 26x26, which is why every symptom of
-         this was Windows-only.
-
-         Anchoring at the top-left is what makes that harmless: the corner is
-         the one point of this window whose screen location the app actually
-         controls (OrbWindow sets Position to the orb's own circle edge), so
-         everything below is placed relative to it and the leftover window
-         area is just transparent slack off to the right. Anything measured
-         from the far edges instead lands wherever the floor happens to put
-         them — the mic button, bottom-right-aligned inside a client area
-         four times wider than asked for, sat ~95px right and ~13px below the
-         end of its own tether line, which is the whole bug this comment
-         replaces two wrong explanations of. -->
+         desktop). Anchoring at the top-left is what makes that harmless:
+         the corner is the one point of this window whose screen location the
+         app actually controls, so everything below is placed relative to it
+         and the leftover window area is just transparent slack off to the
+         right. Root's Width/Height are adjusted dynamically by
+         SetMicVisible() — 26x26 when only the arrange button shows, 52x52
+         when both buttons are visible — so the hit-test and hover areas
+         match what's actually drawn. -->
     <Grid x:Name="Root"
           Width="26" Height="26"
           HorizontalAlignment="Left" VerticalAlignment="Top">
-        <!-- EndPoint touches the button's actual circle, not its 24x24
-             bounding box: that box spans (2,2)-(26,26) (bottom-right-aligned
-             in Root's 26x26 — not the window's own size, see above, which is
-             exactly the distinction this got wrong), so its centre is
-             (14,14) with a 12px
-             radius, and the circle's true edge toward the line sits inset
-             from the box corner at roughly 14 - 12*cos(45°) ≈ 5.7 — the same
-             inscribed-circle gap corrected for on the orb end of this line
-             (see MicFlyoutOffset in OrbWindow), just showing up at the other
-             end instead. -->
+        <!-- EndPoint touches the arrange button's actual circle edge, not
+             its 24x24 bounding box: that box spans (2,2)-(26,26), centre at
+             (14,14) with a 12px radius, and the circle's edge toward (0,0)
+             sits at roughly 14 - 12*cos(45°) ≈ 5.7. Same inscribed-circle
+             gap corrected for on the orb end of this line (see FlyoutOffset
+             in OrbWindow). -->
         <Line StartPoint="0,0" EndPoint="5.7,5.7"
               Stroke="#80FFFFFF" StrokeThickness="1.5"
               IsHitTestVisible="False"/>
 
+        <Grid x:Name="ArrangeButton"
+              Width="24" Height="24"
+              HorizontalAlignment="Left"
+              VerticalAlignment="Top"
+              Margin="2,2,0,0"
+              Cursor="Hand">
+            <Ellipse x:Name="ArrangeFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+            <TextBlock x:Name="ArrangeGlyph"
+                       Text="&#10024;"
+                       FontSize="12"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Grid>
+
         <Grid x:Name="MicButton"
               Width="24" Height="24"
-              HorizontalAlignment="Right"
-              VerticalAlignment="Bottom"
+              HorizontalAlignment="Left"
+              VerticalAlignment="Top"
+              Margin="28,28,0,0"
+              IsVisible="False"
               Cursor="Hand">
             <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
-            <!-- 11, not 13. The glyph is a diagonal shape, so its corner-to-corner
-                 extent is what has to fit, not its nominal size: at 13 the mic's
-                 head sat on the ring's inner edge with the handle reaching the
-                 opposite one, which read as an icon slightly too big for the
-                 button it's in. 11 leaves visible clearance on both ends while
-                 still filling the circle. -->
             <TextBlock Text="&#127908;"
                        FontSize="11"
                        HorizontalAlignment="Center"

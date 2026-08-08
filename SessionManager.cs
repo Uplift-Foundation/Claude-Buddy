@@ -796,5 +796,191 @@ namespace ClaudeBuddy
                 ResetSessionToIdle(sessionId);
             }
         }
+
+        // --- orb arrangement patterns ----------------------------------------
+        // Clicking the arrange button on any orb's flyout gathers every
+        // visible orb into a heart shape, centred on the primary screen.
+        // Clicking again restores them — a toggle, not a one-way trip.
+
+        private readonly Dictionary<string, (PixelPoint Position, bool Pinned)> _preArrangeState = new();
+        private bool _isArranged;
+
+        public bool IsArranged => _isArranged;
+
+        private DispatcherTimer? _arrangeAnimTimer;
+        private Dictionary<string, (PixelPoint From, PixelPoint To)>? _arrangeAnimTargets;
+        private long _arrangeAnimStart;
+        private Action? _arrangeAnimComplete;
+        private const int ArrangeAnimMs = 600;
+
+        public void ArrangeOrbsInPattern()
+        {
+            if (_arrangeAnimTargets is not null) return;
+
+            if (_isArranged)
+            {
+                RestoreFromPattern();
+                return;
+            }
+
+            var orbs = DisplayOrder()
+                .Where(id => _windows.ContainsKey(id) && _windows[id].IsVisible)
+                .Select(id => _windows[id])
+                .ToList();
+
+            if (orbs.Count < 1) return;
+
+            foreach (var w in _windows.Values)
+                w.HideFlyout();
+
+            _preArrangeState.Clear();
+            foreach (var orb in orbs)
+                _preArrangeState[orb.SessionId] = (orb.Position, orb.IsPinned);
+
+            var targets = HeartPositions(orbs);
+
+            _arrangeAnimTargets = new();
+            for (int i = 0; i < orbs.Count; i++)
+                _arrangeAnimTargets[orbs[i].SessionId] = (orbs[i].Position, targets[i]);
+
+            _isArranged = true;
+            AnimateArrangement(() =>
+            {
+                foreach (var (id, (_, to)) in _arrangeAnimTargets ?? new())
+                {
+                    if (_windows.TryGetValue(id, out var window))
+                        window.PinAt(to);
+                }
+            });
+
+            foreach (var w in _windows.Values)
+                w.SetFlyoutArranged(true);
+        }
+
+        private void RestoreFromPattern()
+        {
+            if (_arrangeAnimTargets is not null) return;
+
+            foreach (var w in _windows.Values)
+                w.HideFlyout();
+
+            var targets = new Dictionary<string, (PixelPoint From, PixelPoint To)>();
+            foreach (var (id, (origPos, _)) in _preArrangeState)
+            {
+                if (!_windows.TryGetValue(id, out var window)) continue;
+                targets[id] = (window.Position, origPos);
+            }
+
+            _arrangeAnimTargets = targets;
+            _isArranged = false;
+
+            AnimateArrangement(() =>
+            {
+                foreach (var (id, (origPos, wasPinned)) in _preArrangeState)
+                {
+                    if (!_windows.TryGetValue(id, out var window)) continue;
+                    if (wasPinned)
+                        window.PinAt(origPos);
+                    else
+                        window.Unpin();
+                }
+                _preArrangeState.Clear();
+                ReflowPositions();
+            });
+
+            foreach (var w in _windows.Values)
+                w.SetFlyoutArranged(false);
+        }
+
+        private void AnimateArrangement(Action? onComplete = null)
+        {
+            _arrangeAnimComplete = onComplete;
+            _arrangeAnimStart = Environment.TickCount64;
+
+            if (_arrangeAnimTimer is null)
+            {
+                _arrangeAnimTimer = new DispatcherTimer
+                {
+                    Interval = TimeSpan.FromMilliseconds(1000.0 / 60)
+                };
+                _arrangeAnimTimer.Tick += OnArrangeAnimTick;
+            }
+            _arrangeAnimTimer.Start();
+        }
+
+        private void OnArrangeAnimTick(object? sender, EventArgs e)
+        {
+            if (_arrangeAnimTargets is null)
+            {
+                _arrangeAnimTimer?.Stop();
+                return;
+            }
+
+            var elapsed = Environment.TickCount64 - _arrangeAnimStart;
+            var t = Math.Min(1.0, elapsed / (double)ArrangeAnimMs);
+            var eased = 1 - Math.Pow(1 - t, 3);
+
+            foreach (var (id, (from, to)) in _arrangeAnimTargets)
+            {
+                if (!_windows.TryGetValue(id, out var window)) continue;
+                window.Position = new PixelPoint(
+                    (int)Math.Round(from.X + (to.X - from.X) * eased),
+                    (int)Math.Round(from.Y + (to.Y - from.Y) * eased));
+            }
+            TeamLinks.Refresh();
+
+            if (t < 1.0) return;
+
+            _arrangeAnimTimer!.Stop();
+            var complete = _arrangeAnimComplete;
+            _arrangeAnimComplete = null;
+            var targets = _arrangeAnimTargets;
+            _arrangeAnimTargets = null;
+            complete?.Invoke();
+        }
+
+        // Heart parametric curve: x = 16sin³t, y = 13cos(t) - 5cos(2t)
+        // - 2cos(3t) - cos(4t). The y is negated so screen-y (down-positive)
+        // renders the heart right-way-up. Scaled and centred on the primary
+        // screen's working area, with orb size accounted for so nothing
+        // clips at the edges. A single orb just gets centred on screen.
+        private static List<PixelPoint> HeartPositions(List<OrbWindow> orbs)
+        {
+            int n = orbs.Count;
+            var screen = orbs[0].Screens.Primary ?? orbs[0].Screens.All.FirstOrDefault();
+            if (screen is null)
+                return orbs.Select(o => o.Position).ToList();
+
+            var work = screen.WorkingArea;
+            int orbSize = (int)(56 * screen.Scaling);
+
+            double cx = work.X + work.Width / 2.0 - orbSize / 2.0;
+            double cy = work.Y + work.Height / 2.0 - orbSize / 2.0;
+
+            if (n == 1)
+                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
+
+            var pts = new (double X, double Y)[n];
+            for (int i = 0; i < n; i++)
+            {
+                double t = 2 * Math.PI * i / n;
+                double sinT = Math.Sin(t);
+                pts[i] = (
+                    16 * sinT * sinT * sinT,
+                    -(13 * Math.Cos(t) - 5 * Math.Cos(2 * t)
+                      - 2 * Math.Cos(3 * t) - Math.Cos(4 * t))
+                );
+            }
+
+            double heartW = 32, heartH = 30;
+            double availW = work.Width - 2.0 * orbSize;
+            double availH = work.Height - 2.0 * orbSize;
+            double s = Math.Min(availW / heartW, availH / heartH) * 0.5;
+
+            return pts.Select(p => new PixelPoint(
+                (int)Math.Round(cx + p.X * s),
+                (int)Math.Round(cy + p.Y * s)
+            )).ToList();
+        }
     }
 }

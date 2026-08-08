@@ -1,13 +1,14 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Media;
 using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
     // The small always-on-top window that appears just below-and-right of an
-    // orb on hover. Only the voice-dictation mic lives in it today, but it's
-    // built to gain siblings under it (see the XAML comment on Root) rather
-    // than to hold exactly one button forever.
+    // orb on hover. Two buttons today: an arrange button (always visible)
+    // and a mic button (only when voice input is enabled), stacked along
+    // the same diagonal away from the orb.
     //
     // Owned one-per-orb by OrbWindow, created lazily on first hover rather
     // than in every orb's constructor, so an orb nobody ever hovers never
@@ -26,20 +27,29 @@ namespace ClaudeBuddy
         private PixelPoint _flyTo;
         private long _flyStartedAt;
 
-        // Where the mic button's centre sits inside this window, in DIPs: the
-        // 24x24 button is bottom-right-aligned in Root's 26x26, so it spans
-        // (2,2)-(26,26) and its centre is (14,14). Exposed because OrbWindow
-        // needs it to line the fly-out animation's *start* up with the orb —
-        // this window's own geometry, so it's stated here rather than guessed
-        // at from the other side. See the XAML for why Root's size is what
-        // this is measured against and not the window's.
-        public const double MicCentreOffset = 14;
+        // Where the first button's centre sits inside this window, in DIPs.
+        // The arrange button is at Margin="2,2,0,0" in Root, so it spans
+        // (2,2)-(26,26) and its centre is (14,14). OrbWindow uses this to
+        // line the fly-out animation's start up with the orb — this window's
+        // own geometry, stated here rather than guessed at from the other
+        // side.
+        public const double ButtonCentreOffset = 14;
+
+        private static readonly IBrush ArrangeNormalFill = new SolidColorBrush(Color.Parse("#E0202024"));
+        private static readonly IBrush ArrangeActiveFill = new SolidColorBrush(Color.Parse("#E0B8860B"));
 
         public event Action? MicClicked;
+        public event Action? ArrangeClicked;
 
         public OrbFlyout()
         {
             InitializeComponent();
+
+            ArrangeButton.PointerPressed += (_, e) =>
+            {
+                e.Handled = true;
+                ArrangeClicked?.Invoke();
+            };
 
             MicButton.PointerPressed += (_, e) =>
             {
@@ -58,6 +68,23 @@ namespace ClaudeBuddy
                 // no matter which window asks first.
                 this.AcceptFirstClick();
             };
+        }
+
+        public void SetMicVisible(bool visible)
+        {
+            MicButton.IsVisible = visible;
+            var size = visible ? 52 : 26;
+            Root.Width = size;
+            Root.Height = size;
+            Width = size;
+            Height = size;
+        }
+
+        // Dark goldenrod fill when orbs are arranged (indicating "click to
+        // return"), the usual dark fill otherwise.
+        public void SetArranged(bool arranged)
+        {
+            ArrangeFill.Fill = arranged ? ArrangeActiveFill : ArrangeNormalFill;
         }
 
         // True while the pointer is anywhere over this window — OrbWindow
