@@ -5,10 +5,11 @@ using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
-    // The small always-on-top window that appears just below-and-right of an
-    // orb on hover. Two buttons today: an arrange button (always visible)
-    // and a mic button (only when voice input is enabled), stacked along
-    // the same diagonal away from the orb.
+    // The small always-on-top window that appears below an orb on hover,
+    // with its buttons arranged in a semicircular arc. The arrange button
+    // (always visible) and mic button (voice-input-gated) sit at the
+    // 7-o'clock and 5-o'clock positions respectively — symmetric below
+    // the orb, looking like a radial menu.
     //
     // Owned one-per-orb by OrbWindow, created lazily on first hover rather
     // than in every orb's constructor, so an orb nobody ever hovers never
@@ -26,14 +27,6 @@ namespace ClaudeBuddy
         private PixelPoint _flyFrom;
         private PixelPoint _flyTo;
         private long _flyStartedAt;
-
-        // Where the first button's centre sits inside this window, in DIPs.
-        // The arrange button is at Margin="2,2,0,0" in Root, so it spans
-        // (2,2)-(26,26) and its centre is (14,14). OrbWindow uses this to
-        // line the fly-out animation's start up with the orb — this window's
-        // own geometry, stated here rather than guessed at from the other
-        // side.
-        public const double ButtonCentreOffset = 14;
 
         private static readonly IBrush ArrangeNormalFill = new SolidColorBrush(Color.Parse("#E0202024"));
         private static readonly IBrush ArrangeActiveFill = new SolidColorBrush(Color.Parse("#E0B8860B"));
@@ -70,14 +63,27 @@ namespace ClaudeBuddy
             };
         }
 
+        // Two-button layout: 60x28, both buttons at symmetric positions.
+        // One-button layout: 24x24, just the arrange button filling Root.
         public void SetMicVisible(bool visible)
         {
             MicButton.IsVisible = visible;
-            var size = visible ? 52 : 26;
-            Root.Width = size;
-            Root.Height = size;
-            Width = size;
-            Height = size;
+            if (visible)
+            {
+                Root.Width = 60;
+                Root.Height = 28;
+                Width = 60;
+                Height = 28;
+                ArrangeButton.Margin = new Thickness(1, 2, 0, 0);
+            }
+            else
+            {
+                Root.Width = 24;
+                Root.Height = 24;
+                Width = 24;
+                Height = 24;
+                ArrangeButton.Margin = new Thickness(0);
+            }
         }
 
         // Dark goldenrod fill when orbs are arranged (indicating "click to
@@ -93,26 +99,19 @@ namespace ClaudeBuddy
         // itself) never triggers a hide meant for "the pointer left both".
         public bool IsPointerOverFlyout => Root.IsPointerOver;
 
-        // Animates from the orb's own position to its resting spot near it —
-        // the "flies out" motion the feature is named for — rather than
-        // just appearing there. Both points are physical screen pixels,
-        // already computed by the caller (OrbWindow.EnsureFlyoutShown) via
-        // PointToScreen — this window has no reason to know the orb's own
-        // geometry, just where it's coming from and going to.
-        // `owner` is only used for z-order: the fly-out is meant to look like it
-        // comes out from under the orb, so this window spends the animation
-        // behind it and returns to the front on arrival. It must not stay
-        // behind — see PlaceInFront for the clicks that costs.
+        // Animates from the orb's centre to the resting spot below it —
+        // slides straight down so both buttons appear to emerge from behind
+        // the orb. Both points are physical screen pixels, already computed
+        // by the caller (OrbWindow.EnsureFlyoutShown) via PointToScreen.
+        // `owner` is only used for z-order: the flyout starts behind the
+        // orb during animation and moves in front on arrival.
         public void ShowNear(PixelPoint from, PixelPoint to, Window owner)
         {
             if (IsVisible)
             {
                 // Already up (recording kept it visible through a hover
                 // that came back) — just track, no need to replay the
-                // fly-out motion for a window that never left. Deliberately
-                // no z-order change either: it is already in front, and
-                // dropping it behind the orb here is what would leave a
-                // window nothing ever raises again.
+                // fly-out motion for a window that never left.
                 Position = to;
                 return;
             }
@@ -166,10 +165,8 @@ namespace ClaudeBuddy
                 Position = _flyTo;
                 Opacity = 1;
 
-                // Arrived: back in front, so the mic is fully clickable where it
-                // has come to rest rather than only where it clears the orb's
-                // window. Done here rather than by the caller because this is
-                // the only place that knows the motion is over.
+                // Arrived: back in front, so buttons are fully clickable
+                // rather than only where they clear the orb's window.
                 this.PlaceInFront();
             };
             _flyTimer.Start();

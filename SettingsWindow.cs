@@ -237,11 +237,8 @@ namespace ClaudeBuddy
                     + "first two letters of it when there's only one word — instead of just "
                     + "the one letter every orb shows today."))));
 
-            // Its own group rather than three more rows in Orbs: that card already
-            // has two rows and one of them carries a paragraph of help, so five
-            // would read as a list rather than a group — and System Settings
-            // groups by what a setting is *about*. The labels are the same three
-            // words the tray menu already uses for these states.
+            root.Children.Add(Group("Auto-organize", Card(AutoOrganizeRows())));
+
             root.Children.Add(Group("Orb colours", Card(
                 ColorRow("Idle", "idle"),
                 ColorRow("Working", "generating"),
@@ -290,6 +287,75 @@ namespace ClaudeBuddy
         }
 
         // --- Voice input ---
+        // --- Auto-organize ---
+
+        private static readonly (string Label, string Value)[] ShapeChoices =
+        {
+            ("Heart", "heart"),
+            ("Circle", "circle"),
+            ("Diamond", "diamond"),
+            ("Star", "star"),
+            ("Grid", "grid")
+        };
+
+        private Control ShapePicker()
+        {
+            var current = ClaudeBuddySettings.ArrangeShape;
+            var choices = ShapeChoices.ToList();
+
+            if (choices.All(c => c.Value != current))
+                choices.Add((current, current));
+
+            var combo = new ComboBox
+            {
+                ItemsSource = choices.Select(c => c.Label).ToList(),
+                SelectedIndex = choices.FindIndex(c => c.Value == current),
+                MinWidth = 132
+            };
+            combo.SelectionChanged += (_, _) =>
+            {
+                var index = combo.SelectedIndex;
+                if (index < 0) return;
+
+                ClaudeBuddySettings.ArrangeShape = choices[index].Value;
+                SessionManager.Instance?.ReapplyArrangement();
+            };
+            return combo;
+        }
+
+        private Control[] AutoOrganizeRows()
+        {
+            return new Control[]
+            {
+                Row("Shape", ShapePicker(),
+                    "The pattern orbs arrange into when you click the sparkle button on any orb's flyout."),
+                Row("Spacing", SpacingSlider(),
+                    "How far apart the orbs sit inside the shape. Drag to see them move in real time.")
+            };
+        }
+
+        private Control SpacingSlider()
+        {
+            var slider = new Slider
+            {
+                Minimum = 0.3,
+                Maximum = 2.0,
+                Value = ClaudeBuddySettings.ArrangeSpacing,
+                MinWidth = 160,
+                SmallChange = 0.05,
+                LargeChange = 0.1,
+                TickFrequency = 0.05,
+                IsSnapToTickEnabled = true
+            };
+            slider.PropertyChanged += (_, e) =>
+            {
+                if (e.Property != Slider.ValueProperty) return;
+                ClaudeBuddySettings.ArrangeSpacing = slider.Value;
+                SessionManager.Instance?.ReapplyArrangement();
+            };
+            return slider;
+        }
+
         // Off by default (see ClaudeBuddySettings.VoiceInputEnabled) —
         // turning it on is what triggers the one-time Whisper model download,
         // never the first mic click on an orb, so the multi-hundred-MB

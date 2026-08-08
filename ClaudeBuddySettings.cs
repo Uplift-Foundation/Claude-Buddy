@@ -83,6 +83,9 @@ namespace ClaudeBuddy
         public const int DefaultOrbLifetimeMinutes = 5;
         public const int OrbLifetimeForever = 0;
 
+        public const string DefaultArrangeShape = "heart";
+        public const double DefaultArrangeSpacing = 0.85;
+
         private sealed class Model
         {
             public bool ShowOrbs { get; set; } = true;
@@ -126,6 +129,10 @@ namespace ClaudeBuddy
             // means in practice: a repair/reinstall re-reads whatever's saved
             // here rather than needing its own separate wizard UI for it.
             public List<string> ClaudeCodeProfileDirs { get; init; } = new();
+
+            // Auto-organize: which shape and how much space between orbs.
+            public string ArrangeShape { get; set; } = DefaultArrangeShape;
+            public double ArrangeSpacing { get; set; } = DefaultArrangeSpacing;
         }
 
         // ---- app-wide -------------------------------------------------------
@@ -181,6 +188,20 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.TwoLetterGlyphs; }
             set { Load(); lock (Gate) _model.TwoLetterGlyphs = value; Save(); }
+        }
+
+        // ---- auto-organize ----------------------------------------------------
+
+        public static string ArrangeShape
+        {
+            get { Load(); lock (Gate) return _model.ArrangeShape; }
+            set { Load(); lock (Gate) _model.ArrangeShape = value; Save(); }
+        }
+
+        public static double ArrangeSpacing
+        {
+            get { Load(); lock (Gate) return _model.ArrangeSpacing; }
+            set { Load(); lock (Gate) _model.ArrangeSpacing = value; Save(); }
         }
 
         // ---- orb state colours ----------------------------------------------
@@ -337,7 +358,9 @@ namespace ClaudeBuddy
                         OrbLifetimeMinutes =
                             root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes,
                         VoiceInputEnabled = root["voiceInputEnabled"]?.GetValue<bool>() ?? false,
-                        TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false
+                        TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
+                        ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
+                        ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing
                     };
 
                     if (root["orbColors"] is JsonObject orbColors)
@@ -464,6 +487,8 @@ namespace ClaudeBuddy
                         ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
                         ["voiceInputEnabled"] = _model.VoiceInputEnabled,
                         ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
+                        ["arrangeShape"] = _model.ArrangeShape,
+                        ["arrangeSpacing"] = _model.ArrangeSpacing,
                         // Grouped rather than three top-level keys: it reads as
                         // one setting in the file the way it reads as one card in
                         // the window. A null entry — which is what a colour left

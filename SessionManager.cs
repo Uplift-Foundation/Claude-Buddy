@@ -823,25 +823,25 @@ namespace ClaudeBuddy
                 return;
             }
 
-            var orbs = DisplayOrder()
+            var allOrbs = DisplayOrder()
                 .Where(id => _windows.ContainsKey(id) && _windows[id].IsVisible)
                 .Select(id => _windows[id])
                 .ToList();
 
-            if (orbs.Count < 1) return;
+            if (allOrbs.Count < 1) return;
 
             foreach (var w in _windows.Values)
                 w.HideFlyout();
 
             _preArrangeState.Clear();
-            foreach (var orb in orbs)
+            foreach (var orb in allOrbs)
                 _preArrangeState[orb.SessionId] = (orb.Position, orb.IsPinned);
 
-            var targets = HeartPositions(orbs);
+            var positioned = ComputeClusteredPositions(allOrbs);
 
             _arrangeAnimTargets = new();
-            for (int i = 0; i < orbs.Count; i++)
-                _arrangeAnimTargets[orbs[i].SessionId] = (orbs[i].Position, targets[i]);
+            foreach (var (orb, target) in positioned)
+                _arrangeAnimTargets[orb.SessionId] = (orb.Position, target);
 
             _isArranged = true;
             AnimateArrangement(() =>
@@ -855,6 +855,72 @@ namespace ClaudeBuddy
 
             foreach (var w in _windows.Values)
                 w.SetFlyoutArranged(true);
+        }
+
+        // Leads and solo orbs define the shape; members radiate outward
+        // from their lead, away from the shape's centre — so the pattern
+        // reads cleanly and the small member orbs fan out like spokes.
+        private List<(OrbWindow Orb, PixelPoint Target)> ComputeClusteredPositions(List<OrbWindow> allOrbs)
+        {
+            var teams = new Dictionary<string, List<OrbWindow>>(StringComparer.Ordinal);
+            var anchors = new List<OrbWindow>();
+
+            foreach (var orb in allOrbs)
+            {
+                var lead = _statuses.TryGetValue(orb.SessionId, out var s) ? s.Lead : "";
+                if (!string.IsNullOrEmpty(lead) && lead != orb.SessionId
+                    && allOrbs.Any(o => o.SessionId == lead))
+                {
+                    if (!teams.TryGetValue(lead, out var members))
+                        teams[lead] = members = new List<OrbWindow>();
+                    members.Add(orb);
+                }
+                else
+                {
+                    anchors.Add(orb);
+                }
+            }
+
+            var shapeTargets = ShapePositions(anchors);
+            var result = new List<(OrbWindow, PixelPoint)>();
+
+            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(allOrbs);
+
+            for (int i = 0; i < anchors.Count; i++)
+            {
+                var anchor = anchors[i];
+                var pos = shapeTargets[i];
+                result.Add((anchor, pos));
+
+                if (!teams.TryGetValue(anchor.SessionId, out var members)) continue;
+
+                // Direction from shape centre outward through this lead
+                double dx = pos.X - cx;
+                double dy = pos.Y - cy;
+                double dist = Math.Sqrt(dx * dx + dy * dy);
+                if (dist < 1) { dx = 0; dy = -1; dist = 1; }
+                double nx = dx / dist;
+                double ny = dy / dist;
+
+                double memberRadius = orbSize * 1.2;
+                double fanSpread = Math.PI / 3;
+
+                for (int m = 0; m < members.Count; m++)
+                {
+                    double baseAngle = Math.Atan2(ny, nx);
+                    double offset = members.Count == 1
+                        ? 0
+                        : fanSpread * (m - (members.Count - 1) / 2.0) / Math.Max(members.Count - 1, 1);
+                    double angle = baseAngle + offset;
+
+                    var memberPos = new PixelPoint(
+                        (int)Math.Round(pos.X + memberRadius * Math.Cos(angle)),
+                        (int)Math.Round(pos.Y + memberRadius * Math.Sin(angle)));
+                    result.Add((members[m], memberPos));
+                }
+            }
+
+            return result;
         }
 
         private void RestoreFromPattern()
@@ -939,23 +1005,79 @@ namespace ClaudeBuddy
             complete?.Invoke();
         }
 
-        // Heart parametric curve: x = 16sin³t, y = 13cos(t) - 5cos(2t)
-        // - 2cos(3t) - cos(4t). The y is negated so screen-y (down-positive)
-        // renders the heart right-way-up. Scaled and centred on the primary
-        // screen's working area, with orb size accounted for so nothing
-        // clips at the edges. A single orb just gets centred on screen.
+        public List<OrbWindow> ArrangedSiblings(string excludeSessionId)
+        {
+            if (!_isArranged) return new();
+
+            return _preArrangeState.Keys
+                .Where(id => id != excludeSessionId
+                          && _windows.ContainsKey(id)
+                          && _windows[id].IsVisible)
+                .Select(id => _windows[id])
+                .ToList();
+        }
+
+        // Called from the settings slider so the user sees orbs reposition
+        // in real time while dragging. Only acts when orbs are already arranged;
+        // if they're not, the new spacing is just saved for next time.
+        public void ReapplyArrangement()
+        {
+            if (!_isArranged) return;
+            if (_arrangeAnimTargets is not null) return;
+
+            var allOrbs = DisplayOrder()
+                .Where(id => _windows.ContainsKey(id) && _windows[id].IsVisible)
+                .Select(id => _windows[id])
+                .ToList();
+
+            if (allOrbs.Count < 1) return;
+
+            var positioned = ComputeClusteredPositions(allOrbs);
+            foreach (var (orb, target) in positioned)
+                orb.Position = target;
+
+            TeamLinks.Refresh();
+        }
+
+        // ---- shape generators ---------------------------------------------------
+
+        private static List<PixelPoint> ShapePositions(List<OrbWindow> orbs)
+        {
+            var shape = ClaudeBuddySettings.ArrangeShape;
+            return shape switch
+            {
+                "circle"  => CirclePositions(orbs),
+                "diamond" => DiamondPositions(orbs),
+                "star"    => StarPositions(orbs),
+                "grid"    => GridPositions(orbs),
+                _         => HeartPositions(orbs),
+            };
+        }
+
+        private static (PixelRect Work, double Scale, int OrbSize, int Margin, double Cx, double Cy) ShapeAnchor(List<OrbWindow> orbs)
+        {
+            var screen = orbs[0].Screens.Primary ?? orbs[0].Screens.All.FirstOrDefault();
+            var work = screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080);
+            double scale = screen?.Scaling ?? 1.0;
+            int orbSize = (int)(56 * scale);
+            int margin = (int)(24 * scale);
+
+            double cx = work.Right - margin - orbSize * 1.5;
+            double cy = work.Y + margin + orbSize * 2.5;
+
+            return (work, scale, orbSize, margin, cx, cy);
+        }
+
+        private static double SpacingScale(int orbSize)
+        {
+            return orbSize * ClaudeBuddySettings.ArrangeSpacing / 16.0;
+        }
+
+        // Heart: x = 16sin³t, y = 13cos(t) - 5cos(2t) - 2cos(3t) - cos(4t)
         private static List<PixelPoint> HeartPositions(List<OrbWindow> orbs)
         {
             int n = orbs.Count;
-            var screen = orbs[0].Screens.Primary ?? orbs[0].Screens.All.FirstOrDefault();
-            if (screen is null)
-                return orbs.Select(o => o.Position).ToList();
-
-            var work = screen.WorkingArea;
-            int orbSize = (int)(56 * screen.Scaling);
-
-            double cx = work.X + work.Width / 2.0 - orbSize / 2.0;
-            double cy = work.Y + work.Height / 2.0 - orbSize / 2.0;
+            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
 
             if (n == 1)
                 return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
@@ -972,15 +1094,120 @@ namespace ClaudeBuddy
                 );
             }
 
-            double heartW = 32, heartH = 30;
-            double availW = work.Width - 2.0 * orbSize;
-            double availH = work.Height - 2.0 * orbSize;
-            double s = Math.Min(availW / heartW, availH / heartH) * 0.5;
+            double s = SpacingScale(orbSize);
 
             return pts.Select(p => new PixelPoint(
                 (int)Math.Round(cx + p.X * s),
                 (int)Math.Round(cy + p.Y * s)
             )).ToList();
+        }
+
+        private static List<PixelPoint> CirclePositions(List<OrbWindow> orbs)
+        {
+            int n = orbs.Count;
+            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
+
+            if (n == 1)
+                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
+
+            double radius = SpacingScale(orbSize) * 10;
+
+            return Enumerable.Range(0, n).Select(i =>
+            {
+                double t = 2 * Math.PI * i / n - Math.PI / 2;
+                return new PixelPoint(
+                    (int)Math.Round(cx + radius * Math.Cos(t)),
+                    (int)Math.Round(cy + radius * Math.Sin(t)));
+            }).ToList();
+        }
+
+        private static List<PixelPoint> DiamondPositions(List<OrbWindow> orbs)
+        {
+            int n = orbs.Count;
+            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
+
+            if (n == 1)
+                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
+
+            double s = SpacingScale(orbSize) * 10;
+            var pts = new List<PixelPoint>();
+            for (int i = 0; i < n; i++)
+            {
+                double t = 2 * Math.PI * i / n - Math.PI / 2;
+                double cos = Math.Cos(t), sin = Math.Sin(t);
+                double r = s / Math.Max(Math.Abs(cos) + Math.Abs(sin), 0.01);
+                pts.Add(new PixelPoint(
+                    (int)Math.Round(cx + r * cos),
+                    (int)Math.Round(cy + r * sin)));
+            }
+            return pts;
+        }
+
+        // Five-pointed star: 10 vertices (5 outer tips, 5 inner valleys)
+        // with N orbs distributed evenly along the perimeter, interpolating
+        // between vertices so any count traces the star shape.
+        private static List<PixelPoint> StarPositions(List<OrbWindow> orbs)
+        {
+            int n = orbs.Count;
+            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
+
+            if (n == 1)
+                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
+
+            double outer = SpacingScale(orbSize) * 12;
+            double inner = outer * 0.4;
+            const int verts = 10;
+
+            var starX = new double[verts];
+            var starY = new double[verts];
+            for (int v = 0; v < verts; v++)
+            {
+                double angle = 2 * Math.PI * v / verts - Math.PI / 2;
+                double r = (v % 2 == 0) ? outer : inner;
+                starX[v] = r * Math.Cos(angle);
+                starY[v] = r * Math.Sin(angle);
+            }
+
+            return Enumerable.Range(0, n).Select(i =>
+            {
+                double pos = (double)i * verts / n;
+                int idx = (int)pos;
+                double frac = pos - idx;
+                int a = idx % verts;
+                int b = (idx + 1) % verts;
+
+                double x = starX[a] * (1 - frac) + starX[b] * frac;
+                double y = starY[a] * (1 - frac) + starY[b] * frac;
+
+                return new PixelPoint(
+                    (int)Math.Round(cx + x),
+                    (int)Math.Round(cy + y));
+            }).ToList();
+        }
+
+        private static List<PixelPoint> GridPositions(List<OrbWindow> orbs)
+        {
+            int n = orbs.Count;
+            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
+
+            if (n == 1)
+                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
+
+            int cols = (int)Math.Ceiling(Math.Sqrt(n));
+            int rows = (int)Math.Ceiling((double)n / cols);
+            double gap = orbSize * (0.5 + ClaudeBuddySettings.ArrangeSpacing);
+
+            double startX = cx - (cols - 1) * gap / 2;
+            double startY = cy - (rows - 1) * gap / 2;
+
+            return Enumerable.Range(0, n).Select(i =>
+            {
+                int col = i % cols;
+                int row = i / cols;
+                return new PixelPoint(
+                    (int)Math.Round(startX + col * gap),
+                    (int)Math.Round(startY + row * gap));
+            }).ToList();
         }
     }
 }

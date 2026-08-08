@@ -1,7 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="ClaudeBuddy.OrbFlyout"
-        Width="26" Height="26"
+        Width="60" Height="28"
         SizeToContent="Manual"
         SystemDecorations="None"
         TransparencyLevelHint="Transparent"
@@ -12,66 +12,51 @@
         ShowActivated="False"
         WindowStartupLocation="Manual">
 
-    <!-- Two actions today; a home for more later, stacked further from the
-         orb as they're added — which is the reason this is its own window
-         positioned next to the orb rather than a control drawn inside
-         OrbWindow's own 56x56 bounds. That size is load-bearing elsewhere
-         (drag hit-testing, SessionManager's stacking/reflow, TeamLinks'
-         arrow anchor all assume it), so there was nowhere else to go.
+    <!-- Flyout actions arranged in a semicircular arc below the orb.
+         The arrange button (always visible) sits at the 7-o'clock
+         position and the mic button (only when voice input is enabled)
+         sits at 5 o'clock — symmetric below the orb, so the pair reads
+         as a radial menu belonging to it. The emerge-from-behind
+         animation reinforces the relationship without needing a tether
+         line: the flyout starts centred on the orb and slides straight
+         down, so both buttons appear to grow out from behind the orb.
 
-         Both buttons are smaller than the orb (24px vs. 36px) and connected
-         by a tether line, so they read as "belongs to that orb" rather than
-         as unrelated floating things nearby. The first button (arrange) is
-         always visible; the second (mic) appears only when voice input is
-         enabled and sits further from the orb along the same diagonal —
-         Margin-based positioning within Root, not alignment, so each
-         button's location is explicit and independent of Root's current
-         size.
-
-         Root is pinned and anchored top-left because this window does not
-         get to be its requested size on Windows: the OS floors a top-level
-         window at SM_CXMINTRACK/SM_CYMINTRACK (136x39 on a stock Windows 11
-         desktop). Anchoring at the top-left is what makes that harmless:
-         the corner is the one point of this window whose screen location the
-         app actually controls, so everything below is placed relative to it
-         and the leftover window area is just transparent slack off to the
-         right. Root's Width/Height are adjusted dynamically by
-         SetMicVisible() — 26x26 when only the arrange button shows, 52x52
-         when both buttons are visible — so the hit-test and hover areas
-         match what's actually drawn. -->
+         Root is pinned and anchored top-left like OrbWindow's own Root:
+         on Windows, the OS floors a top-level window at
+         SM_CXMINTRACK/SM_CYMINTRACK (136x39 on stock Windows 11),
+         so the leftover area is just transparent slack off to the right.
+         Width/Height are adjusted dynamically by SetMicVisible — 60x28
+         when both buttons are visible, 24x24 for the arrange button
+         alone — so the hover hit area matches what's drawn. -->
     <Grid x:Name="Root"
-          Width="26" Height="26"
+          Width="60" Height="28"
           HorizontalAlignment="Left" VerticalAlignment="Top">
-        <!-- EndPoint touches the arrange button's actual circle edge, not
-             its 24x24 bounding box: that box spans (2,2)-(26,26), centre at
-             (14,14) with a 12px radius, and the circle's edge toward (0,0)
-             sits at roughly 14 - 12*cos(45°) ≈ 5.7. Same inscribed-circle
-             gap corrected for on the orb end of this line (see FlyoutOffset
-             in OrbWindow). -->
-        <Line StartPoint="0,0" EndPoint="5.7,5.7"
-              Stroke="#80FFFFFF" StrokeThickness="1.5"
-              IsHitTestVisible="False"/>
 
+        <!-- At the 7-o'clock position within the arc: left of centre,
+             so when both are visible the pair is symmetric around the
+             orb's vertical axis. When the mic is hidden, SetMicVisible
+             zeroes this margin and shrinks Root to 24x24. -->
         <Grid x:Name="ArrangeButton"
               Width="24" Height="24"
               HorizontalAlignment="Left"
               VerticalAlignment="Top"
-              Margin="2,2,0,0"
+              Margin="1,2,0,0"
               Cursor="Hand">
             <Ellipse x:Name="ArrangeFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
-            <TextBlock x:Name="ArrangeGlyph"
-                       Text="&#10024;"
+            <TextBlock Text="&#10024;"
                        FontSize="12"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Center"
                        IsHitTestVisible="False"/>
         </Grid>
 
+        <!-- At the 5-o'clock position: right of centre, mirroring the
+             arrange button across the orb's vertical axis. -->
         <Grid x:Name="MicButton"
               Width="24" Height="24"
               HorizontalAlignment="Left"
               VerticalAlignment="Top"
-              Margin="28,28,0,0"
+              Margin="35,2,0,0"
               IsVisible="False"
               Cursor="Hand">
             <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>

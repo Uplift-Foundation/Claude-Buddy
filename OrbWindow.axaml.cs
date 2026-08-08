@@ -502,11 +502,11 @@ namespace ClaudeBuddy
         }
 
         // --- Voice dictation mic ---
-        // Hover fades in a small flyout window below-and-right of the orb
-        // (see OrbFlyout — its own window, not a control drawn inside this
-        // one, so it has room to grow into more than the mic); clicking the
-        // mic records, transcribes locally, and types the result into this
-        // session's terminal — never pressing Enter. See VoiceRecorder,
+        // Hover shows a small flyout window below the orb with action
+        // buttons in a semicircular arc (see OrbFlyout — its own window,
+        // not a control drawn inside this one's 56x56 bounds). The mic
+        // button records, transcribes locally via Whisper, and types the
+        // result into this session's terminal. See VoiceRecorder,
         // SpeechTranscriber and TerminalFocuser.SendText.
 
         // Created on first hover, not in the constructor — see the field's
@@ -537,26 +537,39 @@ namespace ClaudeBuddy
                 _flyout.PointerExited += (_, _) => ScheduleFlyoutHide();
             }
 
-            _flyout.SetMicVisible(ClaudeBuddySettings.VoiceInputEnabled);
+            bool micOn = ClaudeBuddySettings.VoiceInputEnabled;
+            _flyout.SetMicVisible(micOn);
             _flyout.SetArranged(SessionManager.Instance?.IsArranged ?? false);
 
-            // PointToScreen, not raw arithmetic on Position: Position is
-            // physical screen pixels, but FlyoutOffset is a DIP measurement —
-            // the two only line up at 100% display scaling. TeamLinks hits
-            // this exact trap for the same reason (see its own comment on
-            // measuring scale via PointToScreen).
-            var target = this.PointToScreen(new Point(FlyoutOffset, FlyoutOffset));
+            // The flyout sits centred below the orb. Its resting position
+            // and the animation's start point both depend on the current
+            // layout size (60x28 with mic, 24x24 without), since the start
+            // aligns the flyout's centre with the orb's centre and the end
+            // puts it just below the orb's circle edge.
+            //
+            // PointToScreen, not raw arithmetic: Position is physical screen
+            // pixels, these are DIP measurements, and the two only line up
+            // at 100% display scaling.
+            Point target, from;
+            if (micOn)
+            {
+                // Two-button layout (60x28): buttons at 7-o'clock and
+                // 5-o'clock. Flyout centre is (30, 14).
+                target = new Point(OrbCentre - 30, FlyoutRestY);
+                from = new Point(OrbCentre - 30, OrbCentre - 14);
+            }
+            else
+            {
+                // Single-button layout (24x24): centred below the orb.
+                // Flyout centre is (12, 12).
+                target = new Point(OrbCentre - 12, FlyoutRestY);
+                from = new Point(OrbCentre - 12, OrbCentre - 12);
+            }
 
-            // Starts concentric with the orb, so the first button reads as
-            // emerging from underneath it and sliding out. Offsetting by the
-            // flyout's own button centre aligns the button with the orb's
-            // centre during the first frames of the animation — without this,
-            // the flyout's corner (not its button) would line up, and the
-            // first visible frames would appear off the orb's top-left.
-            const double startDip = OrbCentre - OrbFlyout.ButtonCentreOffset;
-            var from = this.PointToScreen(new Point(startDip, startDip));
-
-            _flyout.ShowNear(from: from, to: target, owner: this);
+            _flyout.ShowNear(
+                from: this.PointToScreen(from),
+                to: this.PointToScreen(target),
+                owner: this);
         }
 
         // Centre of the orb in its own window's DIPs — half of Root's pinned
@@ -564,20 +577,10 @@ namespace ClaudeBuddy
         // around this same point, never moved off it.
         private const double OrbCentre = 28;
 
-        // Below and to the right, touching the orb's own circle rather than
-        // its square bounding box: the orb is a 36px circle centred in Root's
-        // 56x56 box, so along the down-right diagonal its true edge sits
-        // inset from that box's corner (46,46) at roughly
-        // 28 + 18*cos(45°) ≈ 41, not 46 itself.
-        //
-        // Root's box, not the window's: the two are the same on macOS but not
-        // on Windows, where the OS floors the window wider than it asks for
-        // and Root is pinned and top-left-anchored inside it to keep this
-        // number meaning what it says.
-        //
-        // In DIPs, not physical pixels — see the PointToScreen comment in
-        // EnsureFlyoutShown for why that distinction is load-bearing here.
-        private const int FlyoutOffset = 41;
+        // The flyout's top edge rests just below the orb's circle edge with
+        // a 2px gap: the circle's radius is 18, so its bottom sits at
+        // 28 + 18 = 46 in Root DIP space, and 46 + 2 = 48.
+        private const double FlyoutRestY = 48;
 
         // Called by SessionManager when the arrangement state changes, so
         // every orb's flyout (if it exists) reflects whether clicking the
@@ -785,6 +788,19 @@ namespace ClaudeBuddy
                                        ?? Enumerable.Empty<OrbWindow>())
                 {
                     _followers.Add((member, member.Position));
+                }
+
+                // When arranged, the whole cluster moves as one — every
+                // orb in the pattern that isn't already a team follower
+                // tags along so the shape stays intact.
+                if (SessionManager.Instance?.IsArranged == true)
+                {
+                    var existing = new HashSet<string>(_followers.Select(f => f.Orb.SessionId));
+                    foreach (var sibling in SessionManager.Instance.ArrangedSiblings(SessionId))
+                    {
+                        if (!existing.Contains(sibling.SessionId))
+                            _followers.Add((sibling, sibling.Position));
+                    }
                 }
 
                 e.Pointer.Capture(this);
