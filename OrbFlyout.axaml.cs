@@ -30,9 +30,12 @@ namespace ClaudeBuddy
 
         private static readonly IBrush ArrangeNormalFill = new SolidColorBrush(Color.Parse("#E0202024"));
         private static readonly IBrush ArrangeActiveFill = new SolidColorBrush(Color.Parse("#E0B8860B"));
+        private static readonly IBrush SpeakNormalFill = new SolidColorBrush(Color.Parse("#E0202024"));
+        private static readonly IBrush SpeakActiveFill = new SolidColorBrush(Color.Parse("#E04A90D9"));
 
         public event Action? MicClicked;
         public event Action? ArrangeClicked;
+        public event Action? SpeakClicked;
 
         public OrbFlyout()
         {
@@ -42,6 +45,12 @@ namespace ClaudeBuddy
             {
                 e.Handled = true;
                 ArrangeClicked?.Invoke();
+            };
+
+            SpeakButton.PointerPressed += (_, e) =>
+            {
+                e.Handled = true;
+                SpeakClicked?.Invoke();
             };
 
             MicButton.PointerPressed += (_, e) =>
@@ -63,26 +72,29 @@ namespace ClaudeBuddy
             };
         }
 
-        // Two-button layout: 60x28, both buttons at symmetric positions.
-        // One-button layout: 24x24, just the arrange button filling Root.
+        // Three-button layout: 94x28 — arrange, speak, mic.
+        // Two-button layout: 60x28 — arrange, speak (mic hidden).
         public void SetMicVisible(bool visible)
         {
             MicButton.IsVisible = visible;
             if (visible)
+            {
+                Root.Width = 94;
+                Root.Height = 28;
+                Width = 94;
+                Height = 28;
+                ArrangeButton.Margin = new Thickness(1, 2, 0, 0);
+                SpeakButton.Margin = new Thickness(35, 2, 0, 0);
+                MicButton.Margin = new Thickness(69, 2, 0, 0);
+            }
+            else
             {
                 Root.Width = 60;
                 Root.Height = 28;
                 Width = 60;
                 Height = 28;
                 ArrangeButton.Margin = new Thickness(1, 2, 0, 0);
-            }
-            else
-            {
-                Root.Width = 24;
-                Root.Height = 24;
-                Width = 24;
-                Height = 24;
-                ArrangeButton.Margin = new Thickness(0);
+                SpeakButton.Margin = new Thickness(35, 2, 0, 0);
             }
         }
 
@@ -91,6 +103,14 @@ namespace ClaudeBuddy
         public void SetArranged(bool arranged)
         {
             ArrangeFill.Fill = arranged ? ArrangeActiveFill : ArrangeNormalFill;
+        }
+
+        // Blue fill and a stop-square glyph while speech is playing;
+        // normal fill and speaker glyph otherwise.
+        public void SetSpeaking(bool speaking)
+        {
+            SpeakFill.Fill = speaking ? SpeakActiveFill : SpeakNormalFill;
+            SpeakGlyph.Text = speaking ? "⏹" : "🔈";
         }
 
         // True while the pointer is anywhere over this window — OrbWindow

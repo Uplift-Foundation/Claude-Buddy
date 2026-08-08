@@ -150,6 +150,9 @@ namespace ClaudeBuddy
             // not leave a capture thread or a native mic handle running.
             Closed += (_, _) => CancelRecording();
 
+            // Don't leave the platform TTS speaking for a session that's gone.
+            Closed += (_, _) => TextToSpeech.Cancel();
+
             // The flyout is a second, independent top-level window — it
             // outlives this one unless told otherwise. Stopping the hide
             // timer first, not just closing the flyout, matters because a
@@ -527,6 +530,7 @@ namespace ClaudeBuddy
                 {
                     SessionManager.Instance?.ArrangeOrbsInPattern();
                 };
+                _flyout.SpeakClicked += OnSpeakClicked;
 
                 // The other half of the hover bridge described on
                 // _hideFlyoutTimer: entering the flyout must cancel a hide
@@ -541,9 +545,11 @@ namespace ClaudeBuddy
             _flyout.SetMicVisible(micOn);
             _flyout.SetArranged(SessionManager.Instance?.IsArranged ?? false);
 
+            _flyout.SetSpeaking(TextToSpeech.IsSpeaking);
+
             // The flyout sits centred below the orb. Its resting position
             // and the animation's start point both depend on the current
-            // layout size (60x28 with mic, 24x24 without), since the start
+            // layout size (94x28 with mic, 60x28 without), since the start
             // aligns the flyout's centre with the orb's centre and the end
             // puts it just below the orb's circle edge.
             //
@@ -553,17 +559,17 @@ namespace ClaudeBuddy
             Point target, from;
             if (micOn)
             {
-                // Two-button layout (60x28): buttons at 7-o'clock and
-                // 5-o'clock. Flyout centre is (30, 14).
-                target = new Point(OrbCentre - 30, FlyoutRestY);
-                from = new Point(OrbCentre - 30, OrbCentre - 14);
+                // Three-button layout (94x28): arrange, speak, mic.
+                // Flyout centre is (47, 14).
+                target = new Point(OrbCentre - 47, FlyoutRestY);
+                from = new Point(OrbCentre - 47, OrbCentre - 14);
             }
             else
             {
-                // Single-button layout (24x24): centred below the orb.
-                // Flyout centre is (12, 12).
-                target = new Point(OrbCentre - 12, FlyoutRestY);
-                from = new Point(OrbCentre - 12, OrbCentre - 12);
+                // Two-button layout (60x28): arrange, speak.
+                // Flyout centre is (30, 14).
+                target = new Point(OrbCentre - 30, FlyoutRestY);
+                from = new Point(OrbCentre - 30, OrbCentre - 14);
             }
 
             _flyout.ShowNear(
@@ -738,6 +744,25 @@ namespace ClaudeBuddy
             try { _recorder.Stop(); } catch { }
             _recorder.Dispose();
             _recorder = null;
+        }
+
+        // --- Speak latest turn --------------------------------------------------
+
+        private void OnSpeakClicked()
+        {
+            if (TextToSpeech.IsSpeaking)
+            {
+                TextToSpeech.Cancel();
+                _flyout?.SetSpeaking(false);
+                return;
+            }
+
+            var path = _lastStatus?.TranscriptPath;
+            var text = TranscriptReader.LatestAssistantText(path ?? "");
+            if (text is null) return;
+
+            TextToSpeech.Speak(text);
+            _flyout?.SetSpeaking(true);
         }
 
         // --- Click, dragging & context menu ---
