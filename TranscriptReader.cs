@@ -23,7 +23,7 @@ namespace ClaudeBuddy
                 for (int i = lines.Length - 1; i >= 0; i--)
                 {
                     var line = lines[i];
-                    if (!line.StartsWith("{\"type\":\"assistant\""))
+                    if (!line.Contains("\"type\":\"assistant\""))
                         continue;
 
                     var text = ExtractText(line);
@@ -68,18 +68,20 @@ namespace ClaudeBuddy
             }
         }
 
-        // Transcript assistant records look like:
-        //   {"type":"assistant","message":{"role":"assistant","content":[
-        //     {"type":"text","text":"The answer is..."},
-        //     {"type":"tool_use",...}
-        //   ],...}}
-        // We extract and concatenate the text blocks.
+        // Transcript assistant records have a top-level "type":"assistant"
+        // (not necessarily the first key) and a "message" object whose
+        // "content" array holds text and tool_use blocks. We extract and
+        // concatenate the text blocks.
         private static string? ExtractText(string jsonLine)
         {
             try
             {
                 using var doc = JsonDocument.Parse(jsonLine);
                 var root = doc.RootElement;
+
+                if (!root.TryGetProperty("type", out var typeProp)
+                    || typeProp.GetString() != "assistant")
+                    return null;
 
                 if (!root.TryGetProperty("message", out var message))
                     return null;

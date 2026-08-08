@@ -1,7 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Runtime.InteropServices;
-using System.Threading;
 
 namespace ClaudeBuddy
 {
@@ -11,8 +12,13 @@ namespace ClaudeBuddy
     // naturally between speak and stop.
     public static class TextToSpeech
     {
+        public static readonly string DefaultVoice =
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "Samantha" : "David";
+
         private static Process? _speaking;
         private static readonly object Gate = new();
+
+        private static List<string>? _cachedVoices;
 
         public static bool IsSpeaking
         {
@@ -38,11 +44,62 @@ namespace ClaudeBuddy
             }
         }
 
-        public static void Speak(string text)
+        public static List<string> AvailableVoices()
+        {
+            if (_cachedVoices is not null) return _cachedVoices;
+
+            var voices = new List<string>();
+            try
+            {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                {
+                    var proc = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "/usr/bin/say",
+                        ArgumentList = { "-v", "?" },
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        CreateNoWindow = true
+                    });
+                    if (proc is null) return voices;
+
+                    var output = proc.StandardOutput.ReadToEnd();
+                    proc.WaitForExit(5000);
+
+                    foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        // Lines: "Samantha            en_US    # Hello!..."
+                        // Only include English voices.
+                        var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                        if (parts.Length < 2) continue;
+
+                        var locale = parts.Length > 1 ? parts[^2] : "";
+                        if (!locale.StartsWith("en_")) continue;
+
+                        // Voice name is everything before the locale — names
+                        // like "Flo (English (US))" have spaces and parens.
+                        var localeStart = line.IndexOf(locale, StringComparison.Ordinal);
+                        if (localeStart < 1) continue;
+                        var name = line[..localeStart].TrimEnd();
+
+                        voices.Add(name);
+                    }
+                }
+            }
+            catch { }
+
+            if (voices.Count == 0) voices.Add(DefaultVoice);
+            _cachedVoices = voices;
+            return voices;
+        }
+
+        public static void Speak(string text, string? voice = null)
         {
             Cancel();
 
             if (string.IsNullOrWhiteSpace(text)) return;
+
+            voice ??= DefaultVoice;
 
             Process proc;
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
@@ -52,7 +109,7 @@ namespace ClaudeBuddy
                     StartInfo = new ProcessStartInfo
                     {
                         FileName = "/usr/bin/say",
-                        ArgumentList = { text },
+                        ArgumentList = { "-v", voice, text },
                         UseShellExecute = false,
                         CreateNoWindow = true,
                         RedirectStandardOutput = true,
@@ -63,9 +120,8 @@ namespace ClaudeBuddy
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                // PowerShell one-liner using .NET's built-in SpeechSynthesizer;
-                // avoids a NuGet dependency for a feature every Windows box has.
                 var escaped = text.Replace("'", "''");
+                var voiceEscaped = voice.Replace("'", "''");
                 proc = new Process
                 {
                     StartInfo = new ProcessStartInfo
@@ -75,7 +131,9 @@ namespace ClaudeBuddy
                         {
                             "-NoProfile", "-Command",
                             $"Add-Type -AssemblyName System.Speech; " +
-                            $"(New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{escaped}')"
+                            $"$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; " +
+                            $"$s.SelectVoice('{voiceEscaped}'); " +
+                            $"$s.Speak('{escaped}')"
                         },
                         UseShellExecute = false,
                         CreateNoWindow = true,
