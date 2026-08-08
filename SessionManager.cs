@@ -432,7 +432,8 @@ namespace ClaudeBuddy
                     && string.IsNullOrEmpty(status.TermProgram)
                     && string.IsNullOrEmpty(status.TmuxPane)
                     && status.TermPid == 0
-                    && !leadsWithLiveAgents.Contains(sessionId))
+                    && !leadsWithLiveAgents.Contains(sessionId)
+                    && status.SessionPid > 0)
                 {
                     continue;
                 }
