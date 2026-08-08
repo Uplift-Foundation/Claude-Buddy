@@ -13,7 +13,7 @@ namespace ClaudeBuddy
     public static class TextToSpeech
     {
         public static readonly string DefaultVoice =
-            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "Samantha" : "David";
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "Susan (Enhanced)" : "David";
 
         private static Process? _speaking;
         private static readonly object Gate = new();
@@ -89,6 +89,17 @@ namespace ClaudeBuddy
             catch { }
 
             if (voices.Count == 0) voices.Add(DefaultVoice);
+
+            // Premium and Enhanced voices first — they're what people want.
+            int Tier(string n) =>
+                n.Contains("(Premium)") ? 0 :
+                n.Contains("(Enhanced)") ? 1 : 2;
+            voices.Sort((a, b) =>
+            {
+                var cmp = Tier(a).CompareTo(Tier(b));
+                return cmp != 0 ? cmp : string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+            });
+
             _cachedVoices = voices;
             return voices;
         }
