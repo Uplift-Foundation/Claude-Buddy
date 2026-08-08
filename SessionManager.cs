@@ -386,7 +386,7 @@ namespace ClaudeBuddy
                 // behind. This applies to `waiting` as well, which the timer
                 // below deliberately never touches; an unanswered prompt whose
                 // session was killed used to sit on screen indefinitely.
-                if (!ProcessLiveness.IsRunning(status.SessionPid))
+                if (status.SessionPid > 0 && !ProcessLiveness.IsRunning(status.SessionPid))
                 {
                     continue;   // removed in the pass below
                 }
