@@ -760,7 +760,6 @@ namespace ClaudeBuddy
             var path = _lastStatus?.TranscriptPath;
             var text = TranscriptReader.LatestAssistantText(path, SessionId);
             if (text is null) return;
-
             TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
             _flyout?.SetSpeaking(true);
         }
