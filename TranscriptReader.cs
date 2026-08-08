@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 
 namespace ClaudeBuddy
@@ -12,8 +14,11 @@ namespace ClaudeBuddy
         private const int TailBytes = 262144;
         private const int MaxSpokenChars = 1500;
 
-        public static string? LatestAssistantText(string transcriptPath)
+        public static string? LatestAssistantText(string? transcriptPath, string? sessionId = null)
         {
+            if (string.IsNullOrEmpty(transcriptPath) && !string.IsNullOrEmpty(sessionId))
+                transcriptPath = FindTranscript(sessionId);
+
             if (string.IsNullOrEmpty(transcriptPath) || !File.Exists(transcriptPath))
                 return null;
 
@@ -35,6 +40,35 @@ namespace ClaudeBuddy
             }
             catch
             {
+            }
+
+            return null;
+        }
+
+        // When the hook hasn't written transcript_path yet (old status
+        // file), find <session-id>.jsonl under the known Claude Code
+        // config directories.
+        private static string? FindTranscript(string sessionId)
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var dirs = new List<string> { Path.Combine(home, ".claude") };
+
+            foreach (var extra in ClaudeBuddySettings.ClaudeCodeProfileDirs)
+                dirs.Add(Path.Combine(home, extra));
+
+            var filename = sessionId + ".jsonl";
+            foreach (var configDir in dirs)
+            {
+                var projects = Path.Combine(configDir, "projects");
+                if (!Directory.Exists(projects)) continue;
+
+                try
+                {
+                    var match = Directory.EnumerateFiles(projects, filename, SearchOption.AllDirectories)
+                        .FirstOrDefault();
+                    if (match is not null) return match;
+                }
+                catch { }
             }
 
             return null;
