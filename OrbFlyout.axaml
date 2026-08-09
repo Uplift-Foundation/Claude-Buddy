@@ -1,7 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="ClaudeBuddy.OrbFlyout"
-        Width="60" Height="28"
+        Width="70" Height="32"
         SizeToContent="Manual"
         SystemDecorations="None"
         TransparencyLevelHint="Transparent"
@@ -13,31 +13,25 @@
         WindowStartupLocation="Manual">
 
     <!-- Flyout actions arranged in a semicircular arc below the orb.
-         The arrange button (always visible) sits at the 7-o'clock
-         position, the speak button (always visible) sits at 6 o'clock,
-         and the mic button (only when voice input is enabled) sits at
-         5 o'clock — symmetric below the orb, so the group reads as a
-         radial menu belonging to it. The emerge-from-behind animation
-         reinforces the relationship without needing a tether line: the
-         flyout starts centred on the orb and slides straight down, so
-         the buttons appear to grow out from behind the orb.
+         Button positions are computed trigonometrically by LayoutArc()
+         so the curve adapts to the number of visible buttons: arrange
+         and settings on the left of the arc, then speak, with mic at
+         its right end when voice input is on.
 
-         Root is pinned and anchored top-left like OrbWindow's own Root:
-         on Windows, the OS floors a top-level window at
-         SM_CXMINTRACK/SM_CYMINTRACK (136x39 on stock Windows 11),
-         so the leftover area is just transparent slack off to the right.
-         Width/Height are adjusted dynamically by SetMicVisible — 94x28
-         with all three buttons, 60x28 without the mic. -->
-    <Grid x:Name="Root"
-          Width="60" Height="28"
-          HorizontalAlignment="Left" VerticalAlignment="Top">
+         Root is a Canvas for absolute positioning. The transparent
+         background keeps the whole bounding box hit-testable, which the
+         hover bridge between the orb and flyout relies on. Width and
+         Height are adjusted dynamically by LayoutArc(). On Windows the
+         OS floors a top-level window at SM_CXMINTRACK/SM_CYMINTRACK, so
+         the leftover area is transparent slack to the right — same
+         reason OrbWindow anchors its own Root top-left. -->
+    <Canvas x:Name="Root"
+            Width="70" Height="32"
+            Background="Transparent"
+            HorizontalAlignment="Left" VerticalAlignment="Top">
 
-        <!-- At the 7-o'clock position: leftmost in the arc. -->
         <Grid x:Name="ArrangeButton"
               Width="24" Height="24"
-              HorizontalAlignment="Left"
-              VerticalAlignment="Top"
-              Margin="1,2,0,0"
               Cursor="Hand">
             <Ellipse x:Name="ArrangeFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
             <TextBlock Text="&#10024;"
@@ -47,13 +41,23 @@
                        IsHitTestVisible="False"/>
         </Grid>
 
-        <!-- At the 6-o'clock position: centre of the arc, always visible.
-             Speaks the latest assistant turn aloud via platform TTS. -->
+        <Grid x:Name="SettingsButton"
+              Width="24" Height="24"
+              Cursor="Hand">
+            <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+            <TextBlock Text="&#9881;"
+                       FontSize="12"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Grid>
+
+        <!-- Speaks the latest assistant turn aloud via platform TTS.
+             Its fill and glyph are named because SetSpeaking swaps both
+             while speech is playing — the button doubles as the stop
+             control, so it has to be able to say which it currently is. -->
         <Grid x:Name="SpeakButton"
               Width="24" Height="24"
-              HorizontalAlignment="Left"
-              VerticalAlignment="Top"
-              Margin="35,2,0,0"
               Cursor="Hand">
             <Ellipse x:Name="SpeakFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
             <TextBlock x:Name="SpeakGlyph"
@@ -64,13 +68,8 @@
                        IsHitTestVisible="False"/>
         </Grid>
 
-        <!-- At the 5-o'clock position: rightmost, only when voice input
-             is enabled. -->
         <Grid x:Name="MicButton"
               Width="24" Height="24"
-              HorizontalAlignment="Left"
-              VerticalAlignment="Top"
-              Margin="69,2,0,0"
               IsVisible="False"
               Cursor="Hand">
             <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
@@ -80,5 +79,5 @@
                        VerticalAlignment="Center"
                        IsHitTestVisible="False"/>
         </Grid>
-    </Grid>
+    </Canvas>
 </Window>

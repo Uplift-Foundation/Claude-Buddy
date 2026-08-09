@@ -25,7 +25,14 @@ namespace ClaudeBuddy
         // server, so there is no window anywhere showing it, and a click on its
         // orb otherwise did nothing at all. The session running the team is the
         // honest answer — it's where that agent's work is being driven from.
-        public static void Focus(SessionStatus? status, SessionStatus? teamLead = null)
+        // sessionId is the orb's own id, which SessionStatus doesn't carry —
+        // it's the status file's name, not a field inside it. Needed for the
+        // background case at the end, where the only way to reach a session is
+        // to name it.
+        public static void Focus(
+            SessionStatus? status,
+            SessionStatus? teamLead = null,
+            string? sessionId = null)
         {
             if (status is null) return;
 
@@ -36,7 +43,32 @@ namespace ClaudeBuddy
             Task.Run(() =>
             {
                 if (FocusCore(status)) return;
-                if (teamLead is not null) FocusCore(teamLead);
+                if (teamLead is not null && FocusCore(teamLead)) return;
+
+                // Nothing on screen shows this session. For a background one
+                // that is the normal case rather than a failure — it runs under
+                // a daemon with no terminal of its own — so open one on it
+                // rather than leave the click doing nothing. Gated on having no
+                // pid so a real session whose terminal merely couldn't be
+                // resolved gets a diagnosis rather than a surprise window.
+                if (status.SessionPid <= 0 && !string.IsNullOrEmpty(sessionId))
+                {
+                    var pane = AgentTeamViewer.AttachSession(sessionId, status.Cwd);
+
+                    // It went into tmux, so finish the job the ordinary way:
+                    // FocusCore already knows how to select a pane, find the
+                    // client showing it and bring that client's window
+                    // forward. Only the pane is new — everything after it is
+                    // the path every other tmux session takes.
+                    if (!string.IsNullOrEmpty(pane))
+                    {
+                        FocusCore(new SessionStatus
+                        {
+                            TmuxPane = pane,
+                            Cwd = status.Cwd
+                        });
+                    }
+                }
             });
         }
 
