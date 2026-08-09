@@ -142,10 +142,15 @@ namespace ClaudeBuddy
         // <executable file>` is understood by every terminal this file's
         // neighbours already name, so one path covers all of them instead of
         // one per app.
-        public static bool AttachSession(string sessionId, string cwd)
+        // Returns the tmux pane the session was attached into, when it went
+        // into tmux at all — the caller focuses it through the same path it
+        // uses for any other pane, rather than this file growing its own copy
+        // of client resolution and window raising. Null means it either went
+        // into a terminal window of its own or didn't happen.
+        public static string? AttachSession(string sessionId, string cwd)
         {
-            if (!OperatingSystem.IsMacOS()) return false;
-            if (string.IsNullOrEmpty(sessionId)) return false;
+            if (!OperatingSystem.IsMacOS()) return null;
+            if (string.IsNullOrEmpty(sessionId)) return null;
 
             // A terminal may already be attached to this session and still not
             // be adoptable: Locate needs a tty to hand back, and a window
@@ -160,7 +165,17 @@ namespace ClaudeBuddy
             if (AttachedAlready(JobIdOf(sessionId)))
             {
                 ActivateApp(remembered ?? TerminalApp());
-                return true;
+                return null;
+            }
+
+            // Into tmux when there's a tmux to go into. Opening a bare terminal
+            // window for someone who lives in tmux puts the session somewhere
+            // their usual navigation can't reach it — the window is *outside*
+            // the thing they use to move between windows, which is worse than
+            // an extra pane inside it.
+            if (PlaceInTmux(JobIdOf(sessionId), cwd) is { Length: > 0 } pane)
+            {
+                return pane;
             }
 
             try
@@ -226,14 +241,80 @@ namespace ClaudeBuddy
                 // otherwise keep saying "nothing here" for its full window,
                 // leaving the next click to open a second one.
                 Forget(cwd);
-                return true;
+                return null;
             }
             catch
             {
                 // Same contract as everything else on this path: failing to
                 // open a window is a click that did nothing, never a crash.
-                return false;
+                return null;
             }
+        }
+
+        // Runs the attach in a new window of whichever tmux session already has
+        // a client, and hands back its pane. Nothing is selected or raised here
+        // — returning the pane lets the caller reuse the focus path every other
+        // pane goes through, which already knows how to find the client, pick
+        // the window and bring its app forward.
+        private static string? PlaceInTmux(string jobId, string cwd)
+        {
+            var tmux = ResolveTmux();
+            if (tmux is null) return null;
+
+            // A server with no client attached is a detached session: making a
+            // window in it would put the attach somewhere with no screen, which
+            // is the same nowhere the orb already pointed at.
+            if (!TryRun(tmux, out var clients, "list-clients", "-F", "#{client_session}"))
+            {
+                return null;
+            }
+
+            var session = clients
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.Trim())
+                .FirstOrDefault(line => line.Length > 0);
+
+            if (session is null) return null;
+
+            // Through a login shell for the same PATH reason as everywhere else
+            // here: tmux runs a command with `sh -c`, and the server's own
+            // environment is whatever it was started with, which needn't
+            // include wherever `claude` lives.
+            var shell = Environment.GetEnvironmentVariable("SHELL");
+            if (string.IsNullOrEmpty(shell)) shell = "/bin/zsh";
+
+            var command = shell + " -lc 'claude attach " + jobId.Replace("'", "'\\''") + "'";
+
+            // "<session>:" with the colon, not the bare name. Bare, tmux reads
+            // the target as a *window* and refuses with "index N in use" the
+            // moment that index is taken; the trailing colon names the session
+            // and lets it pick the next free index.
+            if (!TryRun(tmux, out var pane,
+                    "new-window", "-t", session + ":", "-c", cwd,
+                    "-P", "-F", "#{pane_id}", command))
+            {
+                return null;
+            }
+
+            var id = pane.Trim();
+            return id.StartsWith('%') ? id : null;
+        }
+
+        // Where tmux actually is. The app can't count on PATH — launched from
+        // Finder it gets the bare system one — and unlike a session's status
+        // file there's no recorded location to start from here, so this is the
+        // same candidate list TerminalFocuser falls back to.
+        private static string? ResolveTmux()
+        {
+            string[] candidates =
+            {
+                "/opt/homebrew/bin/tmux",
+                "/usr/local/bin/tmux",
+                "/usr/bin/tmux",
+                "/opt/local/bin/tmux"
+            };
+
+            return candidates.FirstOrDefault(File.Exists);
         }
 
         // Whichever terminal is already running, so the viewer opens where the
