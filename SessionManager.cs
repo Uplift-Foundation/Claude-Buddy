@@ -446,6 +446,23 @@ namespace ClaudeBuddy
                     continue;
                 }
 
+                // A background job the daemon considers finished. Its status
+                // file still says "idle" — the hook has no idea the work is
+                // over — so this is the only place the difference shows up,
+                // and without it the orb outlives the session it stands for.
+                // Worse than merely stale: the session has no terminal and
+                // `claude attach` on a finished job exits at once, so the orb
+                // is a click that flashes a window and closes it.
+                //
+                // Only asked of pid-less sessions, which is the only kind this
+                // can be true of, so an ordinary session never pays for the
+                // lookup. See BackgroundJobs for why an unknown answer keeps
+                // the orb rather than hiding it.
+                if (status.SessionPid <= 0 && BackgroundJobs.IsFinished(sessionId))
+                {
+                    continue;
+                }
+
                 seen.Add(sessionId);
 
                 // Whether this session is an agent-team member, and whose. Read

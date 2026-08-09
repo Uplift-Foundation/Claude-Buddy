@@ -53,7 +53,21 @@ namespace ClaudeBuddy
                 // resolved gets a diagnosis rather than a surprise window.
                 if (status.SessionPid <= 0 && !string.IsNullOrEmpty(sessionId))
                 {
-                    AgentTeamViewer.AttachSession(sessionId, status.Cwd);
+                    var pane = AgentTeamViewer.AttachSession(sessionId, status.Cwd);
+
+                    // It went into tmux, so finish the job the ordinary way:
+                    // FocusCore already knows how to select a pane, find the
+                    // client showing it and bring that client's window
+                    // forward. Only the pane is new — everything after it is
+                    // the path every other tmux session takes.
+                    if (!string.IsNullOrEmpty(pane))
+                    {
+                        FocusCore(new SessionStatus
+                        {
+                            TmuxPane = pane,
+                            Cwd = status.Cwd
+                        });
+                    }
                 }
             });
         }
