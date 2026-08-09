@@ -117,13 +117,14 @@ try {
 } catch {}
 
 $status = @{
-    state        = $State
-    cwd          = $cwd
-    title        = $title
-    color        = $color
-    term_program = $termProgram
-    term_pid     = $termPid
-    session_pid  = $sessionPid
+    state           = $State
+    cwd             = $cwd
+    title           = $title
+    color           = $color
+    term_program    = $termProgram
+    term_pid        = $termPid
+    session_pid     = $sessionPid
+    transcript_path = $transcript
 } | ConvertTo-Json -Compress
 
 # Not Set-Content: on Windows PowerShell 5.1 it writes the ANSI codepage and

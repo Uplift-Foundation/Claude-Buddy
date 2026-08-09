@@ -15,7 +15,8 @@
     <!-- Flyout actions arranged in a semicircular arc below the orb.
          Button positions are computed trigonometrically by LayoutArc()
          so the curve adapts to the number of visible buttons: arrange
-         at 7 o'clock, settings at 6, mic at 5.
+         and settings on the left of the arc, then speak, with mic at
+         its right end when voice input is on.
 
          Root is a Canvas for absolute positioning. The transparent
          background keeps the whole bounding box hit-testable, which the
@@ -46,6 +47,22 @@
             <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
             <TextBlock Text="&#9881;"
                        FontSize="12"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Grid>
+
+        <!-- Speaks the latest assistant turn aloud via platform TTS.
+             Its fill and glyph are named because SetSpeaking swaps both
+             while speech is playing — the button doubles as the stop
+             control, so it has to be able to say which it currently is. -->
+        <Grid x:Name="SpeakButton"
+              Width="24" Height="24"
+              Cursor="Hand">
+            <Ellipse x:Name="SpeakFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+            <TextBlock x:Name="SpeakGlyph"
+                       Text="&#128264;"
+                       FontSize="11"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Center"
                        IsHitTestVisible="False"/>

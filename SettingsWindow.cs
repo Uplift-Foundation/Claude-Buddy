@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Avalonia;
@@ -253,7 +254,7 @@ namespace ClaudeBuddy
                 Row("Tint the active window",
                     Switch(ClaudeDesktopOverlay.Enabled, ClaudeDesktopOverlay.SetEnabled)))));
 
-            root.Children.Add(Group("Voice input", Card(VoiceInputRows())));
+            root.Children.Add(Group("Voice", Card(VoiceRows())));
 
             root.Children.Add(Group("Profiles", ProfilesCard()));
 
@@ -366,10 +367,15 @@ namespace ClaudeBuddy
         // is shown at all rather than a stale one.
         private string? _voiceModelStatus;
 
-        private Control[] VoiceInputRows()
+        private Control[] VoiceRows()
         {
             var rows = new List<Control>
             {
+                Row("Speak voice", SpeakVoicePicker(),
+                    "Which voice the speaker button on the orb flyout uses to read the "
+                    + "latest assistant turn aloud. Premium and Enhanced voices sound "
+                    + "the most natural."),
+                DownloadVoicesRow(),
                 Row("Enable voice input (experimental)",
                     Switch(ClaudeBuddySettings.VoiceInputEnabled, OnVoiceInputToggled),
                     "Hover an orb and click the mic that appears to dictate a prompt. Speech is "
@@ -390,6 +396,59 @@ namespace ClaudeBuddy
             }
 
             return rows.ToArray();
+        }
+
+        private Control SpeakVoicePicker()
+        {
+            var voices = TextToSpeech.AvailableVoices();
+            var current = ClaudeBuddySettings.SpeakVoice;
+
+            if (voices.All(v => !v.Equals(current, StringComparison.OrdinalIgnoreCase)))
+                voices = new List<string>(voices) { current };
+
+            var combo = new ComboBox
+            {
+                ItemsSource = voices,
+                SelectedIndex = voices.FindIndex(v => v.Equals(current, StringComparison.OrdinalIgnoreCase)),
+                MinWidth = 180
+            };
+            combo.SelectionChanged += (_, _) =>
+            {
+                var index = combo.SelectedIndex;
+                if (index < 0) return;
+                ClaudeBuddySettings.SpeakVoice = voices[index];
+            };
+            return combo;
+        }
+
+        private Control DownloadVoicesRow()
+        {
+            var link = new TextBlock
+            {
+                Text = "Download more voices…",
+                FontSize = 12,
+                Foreground = new SolidColorBrush(Color.Parse("#4A90D9")),
+                Cursor = new Cursor(StandardCursorType.Hand),
+                Margin = new Thickness(14, 2, 14, 8)
+            };
+            link.PointerPressed += (_, e) =>
+            {
+                e.Handled = true;
+                if (OperatingSystem.IsMacOS())
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "open",
+                        ArgumentList = { "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent" },
+                        UseShellExecute = false
+                    })?.Dispose();
+                }
+            };
+            link.PointerEntered += (_, _) =>
+                link.TextDecorations = TextDecorations.Underline;
+            link.PointerExited += (_, _) =>
+                link.TextDecorations = null;
+            return link;
         }
 
         private void OnVoiceInputToggled(bool enabled)

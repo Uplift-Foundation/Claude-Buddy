@@ -150,6 +150,10 @@ namespace ClaudeBuddy
             // not leave a capture thread or a native mic handle running.
             Closed += (_, _) => CancelRecording();
 
+            // Same reason for the other half of the voice feature: speech
+            // outlives the window that started it unless it's cancelled.
+            Closed += (_, _) => TextToSpeech.Cancel();
+
             // The flyout is a second, independent top-level window — it
             // outlives this one unless told otherwise. Stopping the hide
             // timer first, not just closing the flyout, matters because a
@@ -531,6 +535,7 @@ namespace ClaudeBuddy
                 {
                     SettingsWindow.Toggle();
                 };
+                _flyout.SpeakClicked += OnSpeakClicked;
 
                 // The other half of the hover bridge described on
                 // _hideFlyoutTimer: entering the flyout must cancel a hide
@@ -544,6 +549,11 @@ namespace ClaudeBuddy
             bool micOn = ClaudeBuddySettings.VoiceInputEnabled;
             _flyout.SetMicVisible(micOn);
             _flyout.SetArranged(SessionManager.Instance?.IsArranged ?? false);
+
+            // Speech is global rather than per-orb, so a flyout opening
+            // while something is already being read has to show the stop
+            // glyph rather than offer to start a second one.
+            _flyout.SetSpeaking(TextToSpeech.IsSpeaking);
 
             // The arc's virtual centre (ArcOrigin) aligns with the orb's
             // centre so the semicircle sits concentric with the orb. The
@@ -570,6 +580,50 @@ namespace ClaudeBuddy
         // 56x56. Unchanged by MemberScale: a team member is drawn smaller
         // around this same point, never moved off it.
         private const double OrbCentre = 28;
+
+        // --- Speak latest turn --------------------------------------------------
+
+        private void OnSpeakClicked()
+        {
+            if (TextToSpeech.IsSpeaking)
+            {
+                TextToSpeech.Cancel();
+                _flyout?.SetSpeaking(false);
+                return;
+            }
+
+            var text = FindSpeakableText();
+            if (text is null) return;
+
+            TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+            _flyout?.SetSpeaking(true);
+        }
+
+        // This session's own transcript first, then a search by directory.
+        //
+        // The fallback is for a session that dispatches work rather than
+        // doing it: a controller has no transcript of its own, but the
+        // background jobs it launched write theirs into project dirs named
+        // for the same cwd, and the most recent of those is what "read the
+        // last turn" means when you click its orb.
+        private string? FindSpeakableText()
+        {
+            var path = _lastStatus?.TranscriptPath;
+            var text = TranscriptReader.LatestAssistantText(path, SessionId);
+            if (text is not null) return text;
+
+            var cwd = _lastStatus?.Cwd;
+            if (string.IsNullOrEmpty(cwd)) return null;
+
+            var fallback = TranscriptReader.LatestTranscriptForCwd(cwd);
+            if (fallback is not null)
+            {
+                text = TranscriptReader.LatestAssistantText(fallback);
+                if (text is not null) return text;
+            }
+
+            return null;
+        }
 
         // Called by SessionManager when the arrangement state changes, so
         // every orb's flyout (if it exists) reflects whether clicking the

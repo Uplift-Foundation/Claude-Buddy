@@ -25,9 +25,13 @@ namespace ClaudeBuddy
         private static readonly IBrush ArrangeNormalFill = new SolidColorBrush(Color.Parse("#E0202024"));
         private static readonly IBrush ArrangeActiveFill = new SolidColorBrush(Color.Parse("#E0B8860B"));
 
+        private static readonly IBrush SpeakNormalFill = new SolidColorBrush(Color.Parse("#E0202024"));
+        private static readonly IBrush SpeakActiveFill = new SolidColorBrush(Color.Parse("#E04A90D9"));
+
         public event Action? MicClicked;
         public event Action? ArrangeClicked;
         public event Action? SettingsClicked;
+        public event Action? SpeakClicked;
 
         // Where the orb's centre maps to in this window's DIP space.
         // Computed by LayoutArc, read by OrbWindow.EnsureFlyoutShown to
@@ -50,6 +54,12 @@ namespace ClaudeBuddy
             {
                 e.Handled = true;
                 SettingsClicked?.Invoke();
+            };
+
+            SpeakButton.PointerPressed += (_, e) =>
+            {
+                e.Handled = true;
+                SpeakClicked?.Invoke();
             };
 
             MicButton.PointerPressed += (_, e) =>
@@ -82,15 +92,20 @@ namespace ClaudeBuddy
             double[] angles;
             Grid[] buttons;
 
+            // Kept symmetric about 90° (straight down) so the arc stays
+            // centred under the orb whichever set is showing, and spread
+            // wider as buttons are added rather than packed tighter —
+            // ArcRadius is fixed, so the spacing between neighbours is
+            // what has to give.
             if (MicButton.IsVisible)
             {
-                angles = new[] { 125.0, 90.0, 55.0 };
-                buttons = new[] { ArrangeButton, SettingsButton, MicButton };
+                angles = new[] { 135.0, 105.0, 75.0, 45.0 };
+                buttons = new[] { ArrangeButton, SettingsButton, SpeakButton, MicButton };
             }
             else
             {
-                angles = new[] { 115.0, 65.0 };
-                buttons = new[] { ArrangeButton, SettingsButton };
+                angles = new[] { 125.0, 90.0, 55.0 };
+                buttons = new[] { ArrangeButton, SettingsButton, SpeakButton };
             }
 
             var cx = new double[angles.Length];
@@ -133,6 +148,15 @@ namespace ClaudeBuddy
         public void SetArranged(bool arranged)
         {
             ArrangeFill.Fill = arranged ? ArrangeActiveFill : ArrangeNormalFill;
+        }
+
+        // Blue fill and a stop-square glyph while speech is playing;
+        // normal fill and speaker glyph otherwise. The button is its own
+        // stop control, so it has to look like whichever it currently is.
+        public void SetSpeaking(bool speaking)
+        {
+            SpeakFill.Fill = speaking ? SpeakActiveFill : SpeakNormalFill;
+            SpeakGlyph.Text = speaking ? "⏹" : "\U0001F508";
         }
 
         public bool IsPointerOverFlyout => Root.IsPointerOver;
