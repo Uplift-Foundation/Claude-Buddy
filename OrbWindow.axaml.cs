@@ -871,7 +871,8 @@ namespace ClaudeBuddy
                 // TerminalFocuser.Focus.
                 TerminalFocuser.Focus(
                     _lastStatus,
-                    SessionManager.Instance?.StatusFor(_lastStatus?.Lead));
+                    SessionManager.Instance?.StatusFor(_lastStatus?.Lead),
+                    SessionId);
             }
 
             _followers.Clear();
