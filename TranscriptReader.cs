@@ -45,6 +45,66 @@ namespace ClaudeBuddy
             return null;
         }
 
+        // Find the most recently written transcript in any project
+        // directory whose path encodes the given CWD.  Used when a
+        // controller session has no transcript of its own — its
+        // background jobs live in sibling project dirs with the same
+        // CWD prefix.
+        public static string? LatestTranscriptForCwd(string cwd)
+        {
+            if (string.IsNullOrEmpty(cwd)) return null;
+
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var dirs = new List<string> { Path.Combine(home, ".claude") };
+            foreach (var extra in ClaudeBuddySettings.ClaudeCodeProfileDirs)
+                dirs.Add(Path.Combine(home, extra));
+
+            // Claude Code encodes /Users/foo/Source/Bar as
+            // -Users-foo-Source-Bar inside the projects directory.
+            var encoded = cwd.Replace(Path.DirectorySeparatorChar, '-');
+            if (encoded.Length > 0 && encoded[0] != '-')
+                encoded = "-" + encoded;
+
+            string? best = null;
+            DateTime bestTime = DateTime.MinValue;
+
+            foreach (var configDir in dirs)
+            {
+                var projects = Path.Combine(configDir, "projects");
+                if (!Directory.Exists(projects)) continue;
+
+                try
+                {
+                    foreach (var dir in Directory.EnumerateDirectories(projects))
+                    {
+                        var dirName = Path.GetFileName(dir);
+                        if (!dirName.StartsWith(encoded, StringComparison.Ordinal))
+                            continue;
+                        // Must be exact match or a sub-path separator
+                        if (dirName.Length > encoded.Length && dirName[encoded.Length] != '-')
+                            continue;
+
+                        foreach (var file in Directory.EnumerateFiles(dir, "*.jsonl"))
+                        {
+                            try
+                            {
+                                var mod = File.GetLastWriteTimeUtc(file);
+                                if (mod > bestTime)
+                                {
+                                    bestTime = mod;
+                                    best = file;
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            return best;
+        }
+
         // When the hook hasn't written transcript_path yet (old status
         // file), find <session-id>.jsonl under the known Claude Code
         // config directories.
