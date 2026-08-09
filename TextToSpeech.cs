@@ -20,6 +20,8 @@ namespace ClaudeBuddy
 
         private static List<string>? _cachedVoices;
 
+        public static void ClearVoiceCache() => _cachedVoices = null;
+
         public static bool IsSpeaking
         {
             get
@@ -68,19 +70,22 @@ namespace ClaudeBuddy
 
                     foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
                     {
-                        // Lines: "Samantha            en_US    # Hello!..."
-                        // Only include English voices.
-                        var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                        // Lines: "Ava (Premium)       en_US    # Hello! My name is Ava."
+                        // Strip the sample text after '#' first, then the
+                        // locale is the last whitespace-delimited token in
+                        // what remains.
+                        var hashIdx = line.IndexOf('#');
+                        var meta = hashIdx >= 0 ? line[..hashIdx] : line;
+
+                        var parts = meta.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                         if (parts.Length < 2) continue;
 
-                        var locale = parts.Length > 1 ? parts[^2] : "";
+                        var locale = parts[^1];
                         if (!locale.StartsWith("en_")) continue;
 
-                        // Voice name is everything before the locale — names
-                        // like "Flo (English (US))" have spaces and parens.
-                        var localeStart = line.IndexOf(locale, StringComparison.Ordinal);
+                        var localeStart = meta.LastIndexOf(locale, StringComparison.Ordinal);
                         if (localeStart < 1) continue;
-                        var name = line[..localeStart].TrimEnd();
+                        var name = meta[..localeStart].TrimEnd();
 
                         voices.Add(name);
                     }

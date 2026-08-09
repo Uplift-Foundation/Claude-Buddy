@@ -436,12 +436,18 @@ namespace ClaudeBuddy
                 e.Handled = true;
                 if (OperatingSystem.IsMacOS())
                 {
-                    Process.Start(new ProcessStartInfo
+                    try
                     {
-                        FileName = "open",
-                        ArgumentList = { "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent" },
-                        UseShellExecute = false
-                    })?.Dispose();
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = "open",
+                            ArgumentList = { "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent" },
+                            UseShellExecute = false
+                        })?.Dispose();
+                    }
+                    catch { }
+
+                    TextToSpeech.ClearVoiceCache();
                 }
             };
             link.PointerEntered += (_, _) =>
