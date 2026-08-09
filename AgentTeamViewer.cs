@@ -162,6 +162,21 @@ namespace ClaudeBuddy
             string? remembered;
             lock (Gate) remembered = Launched.GetValueOrDefault(JobIdOf(sessionId));
 
+            // Already attached inside tmux. Hand the pane back so the caller
+            // selects it, rather than only bringing the app forward: the two
+            // look the same when you happen to be looking at that window
+            // already, and nothing like each other when you aren't. This is
+            // why a second click appeared to do nothing — the window existed
+            // and was reachable by hand, but the click stopped short of
+            // switching to it.
+            if (ExistingAttachPane(JobIdOf(sessionId)) is { Length: > 0 } existing)
+            {
+                return existing;
+            }
+
+            // Attached, but in a terminal window of its own rather than a pane.
+            // There's nothing to select in that case, so raising its app is the
+            // whole of what can be done.
             if (AttachedAlready(JobIdOf(sessionId)))
             {
                 ActivateApp(remembered ?? TerminalApp());
@@ -352,6 +367,45 @@ namespace ClaudeBuddy
         {
             var dash = sessionId.IndexOf('-');
             return dash > 0 ? sessionId[..dash] : sessionId;
+        }
+
+        // The tmux pane already running `claude attach <id>`, if there is one.
+        //
+        // Found through each pane's own process rather than anything this app
+        // remembered, so it still works after a restart, and finds a pane the
+        // user opened by hand just as well as one opened from an orb.
+        private static string? ExistingAttachPane(string jobId)
+        {
+            var tmux = ResolveTmux();
+            if (tmux is null) return null;
+
+            if (!TryRun(tmux, out var panes, "list-panes", "-a", "-F", "#{pane_id} #{pane_pid}"))
+            {
+                return null;
+            }
+
+            foreach (var line in panes.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 2) continue;
+                if (!int.TryParse(parts[1], out var pid)) continue;
+
+                if (!TryRun("/bin/ps", out var args, "-p", pid.ToString(), "-o", "args=")) continue;
+
+                var words = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (words.Length < 3) continue;
+                if (Path.GetFileName(words[0]) is not ("claude" or "claude.exe")) continue;
+                if (words[1] != "attach") continue;
+
+                var id = words[2];
+                if (jobId.StartsWith(id, StringComparison.Ordinal)
+                    || id.StartsWith(jobId, StringComparison.Ordinal))
+                {
+                    return parts[0];
+                }
+            }
+
+            return null;
         }
 
         // Whether some terminal is already sitting on `claude attach <id>`.
