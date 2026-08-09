@@ -37,6 +37,12 @@ namespace ClaudeBuddy
         private static readonly Dictionary<string, (Viewer? Found, long Stamp)> Cache =
             new(StringComparer.Ordinal);
 
+        // Which terminal app a viewer for a directory was opened into, so a
+        // later click can bring that app forward instead of opening a second
+        // window onto the same team.
+        private static readonly Dictionary<string, string> Launched =
+            new(StringComparer.Ordinal);
+
         private readonly record struct Viewer(string Socket, string Pane, string Tty);
 
         // Fills in a status that names no terminal, from the viewer for its
@@ -111,6 +117,208 @@ namespace ClaudeBuddy
             }
 
             return null;
+        }
+
+        // Opens the one session an orb stands for, in a terminal.
+        //
+        // TryAdopt can only adopt a window that already exists, which leaves
+        // the case this whole file is about only half answered: a background
+        // session has no window *anywhere*, so its orb stays inert no matter
+        // how good the lookup is.
+        //
+        // `claude attach <id>` is the answer Claude Code already provides, and
+        // it is the reason this doesn't open the `claude agents` list instead.
+        // The list was tried first and is the wrong destination twice over: it
+        // lands on a roster rather than the session you clicked, and filtering
+        // it with --cwd — which reads like "this session's directory" — means
+        // "started *under* this path", so for an agent dispatched into a
+        // worktree it matches nothing and the view opens on its empty state,
+        // which is a new-task prompt. `attach` names the session directly, and
+        // its own help is explicit that the session keeps running whether you
+        // stay attached or drop out, so a click can never disturb the work.
+        //
+        // Driven through a script file rather than AppleScript's `do script`
+        // because that verb is Terminal.app's own vocabulary; `open -a <app>
+        // <executable file>` is understood by every terminal this file's
+        // neighbours already name, so one path covers all of them instead of
+        // one per app.
+        public static bool AttachSession(string sessionId, string cwd)
+        {
+            if (!OperatingSystem.IsMacOS()) return false;
+            if (string.IsNullOrEmpty(sessionId)) return false;
+
+            // A terminal may already be attached to this session and still not
+            // be adoptable: Locate needs a tty to hand back, and a window
+            // opened by `open` has none, so it declines one that is plainly
+            // there. Left at that, every click would open another terminal on
+            // a session that already has one. Existence is the right question
+            // here, not addressability — so ask it directly, and settle for
+            // bringing its app forward rather than attaching twice.
+            string? remembered;
+            lock (Gate) remembered = Launched.GetValueOrDefault(JobIdOf(sessionId));
+
+            if (AttachedAlready(JobIdOf(sessionId)))
+            {
+                ActivateApp(remembered ?? TerminalApp());
+                return true;
+            }
+
+            try
+            {
+                System.IO.Directory.CreateDirectory(ClaudeBuddySettings.Directory);
+                var script = Path.Combine(ClaudeBuddySettings.Directory, "open-agents-view.sh");
+
+                // Single-quoted, with any embedded quote closed and reopened
+                // the shell way, so a directory with a space or an apostrophe
+                // still arrives as one word.
+                var quoted = "'" + cwd.Replace("'", "'\\''") + "'";
+
+                // A login shell, not the bare `sh` that `open` would give us:
+                // launched from Finder this app has only the stock system PATH,
+                // and `claude` lives in ~/.local/bin. Asking the user's own
+                // shell to resolve it is the same answer ResolveTmuxBinary
+                // reaches for tmux, without hard-coding a second install list.
+                var shell = Environment.GetEnvironmentVariable("SHELL");
+                if (string.IsNullOrEmpty(shell)) shell = "/bin/zsh";
+
+                // The directory travels in the environment rather than inline
+                // in the -lc string. Written inline it would have to be quoted
+                // inside a string that is itself single-quoted, and shell
+                // single quotes don't nest — the two runs would flatten into
+                // one unquoted word, which happens to work until the first
+                // path with a space in it and then silently cd's somewhere
+                // else. A variable reference needs no quoting of its own.
+                // attach wants the *job* id, which is the first segment of the
+                // session uuid and not the uuid itself — `claude logs` with a
+                // full id answers "No job matching", with the short one it
+                // prints the session's output. `claude agents --json` shows
+                // both side by side ("id": "162e0b4b", "sessionId":
+                // "162e0b4b-3c45-..."), which is where the relationship is
+                // confirmed rather than assumed.
+                var jobId = JobIdOf(sessionId);
+                var quotedId = "'" + jobId.Replace("'", "'\\''") + "'";
+
+                // The cd matters even though attach names the session outright:
+                // Ctrl+Z drops you back to a shell in this window, and the
+                // useful place to land is the directory whose orb you clicked.
+                File.WriteAllText(script,
+                    "#!/bin/sh\n"
+                    + "CLAUDE_BUDDY_AGENT_DIR=" + quoted + "\n"
+                    + "CLAUDE_BUDDY_SESSION=" + quotedId + "\n"
+                    + "export CLAUDE_BUDDY_AGENT_DIR CLAUDE_BUDDY_SESSION\n"
+                    + "exec " + shell + " -lc "
+                    + "'cd \"$CLAUDE_BUDDY_AGENT_DIR\" "
+                    + "&& exec claude attach \"$CLAUDE_BUDDY_SESSION\"'\n");
+
+                File.SetUnixFileMode(script,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+                var app = TerminalApp();
+                lock (Gate) Launched[jobId] = app;
+
+                var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
+                psi.ArgumentList.Add("-a");
+                psi.ArgumentList.Add(app);
+                psi.ArgumentList.Add(script);
+                Process.Start(psi);
+
+                // The window takes a moment to appear and the cache would
+                // otherwise keep saying "nothing here" for its full window,
+                // leaving the next click to open a second one.
+                Forget(cwd);
+                return true;
+            }
+            catch
+            {
+                // Same contract as everything else on this path: failing to
+                // open a window is a click that did nothing, never a crash.
+                return false;
+            }
+        }
+
+        // Whichever terminal is already running, so the viewer opens where the
+        // user's other terminals are rather than waking a second app. Ordered
+        // by specificity: Terminal.app is last because it's the fallback that
+        // always exists, not a preference.
+        private static string TerminalApp()
+        {
+            string[] candidates =
+            {
+                "/Applications/iTerm.app",
+                "/Applications/Ghostty.app",
+                "/Applications/WezTerm.app"
+            };
+
+            if (TryRun("/bin/ps", out var listing, "-eo", "args="))
+            {
+                foreach (var candidate in candidates)
+                {
+                    if (listing.Contains(candidate, StringComparison.Ordinal)
+                        && System.IO.Directory.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+            }
+
+            return "/System/Applications/Utilities/Terminal.app";
+        }
+
+        // The short form `claude attach` and `claude logs` expect. Split rather
+        // than a fixed eight characters so an id that isn't a uuid degrades to
+        // itself instead of being sliced into nonsense.
+        private static string JobIdOf(string sessionId)
+        {
+            var dash = sessionId.IndexOf('-');
+            return dash > 0 ? sessionId[..dash] : sessionId;
+        }
+
+        // Whether some terminal is already sitting on `claude attach <id>`.
+        // Matched the same way ViewerPids matches the agent view, and for the
+        // same reason: the executable path is version-stamped and moves, the
+        // arguments don't. The id is compared by prefix because attach accepts
+        // the short form and echoes it back that way, so a window opened by
+        // hand with `claude attach bd7919f8` must still count as this session's.
+        private static bool AttachedAlready(string sessionId)
+        {
+            if (!TryRun("/bin/ps", out var listing, "-eo", "args=")) return false;
+
+            foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var words = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (words.Length < 3) continue;
+                if (Path.GetFileName(words[0]) is not ("claude" or "claude.exe")) continue;
+                if (words[1] != "attach") continue;
+
+                var id = words[2];
+                if (sessionId.StartsWith(id, StringComparison.Ordinal)
+                    || id.StartsWith(sessionId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static void Forget(string cwd)
+        {
+            lock (Gate) Cache.Remove(cwd.TrimEnd('/'));
+        }
+
+        // `open -a` on a running app just brings it forward — the same trick
+        // TerminalFocuser.ActivateApp uses, kept here rather than shared
+        // because that one is private to a class this file must not depend on.
+        private static void ActivateApp(string appBundlePath)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
+                psi.ArgumentList.Add("-a");
+                psi.ArgumentList.Add(appBundlePath);
+                Process.Start(psi);
+            }
+            catch { }
         }
 
         // Processes running `claude agents`. Matched on the argument rather
