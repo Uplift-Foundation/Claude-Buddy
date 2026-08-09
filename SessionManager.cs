@@ -700,6 +700,12 @@ namespace ClaudeBuddy
         {
             if (_order.Count == 0 || !OrbsVisible) return;
 
+            if (_isArranged)
+            {
+                AbsorbIntoArrangement();
+                return;
+            }
+
             var first = _windows[_order[0]];
             var screen = first.Screens.Primary ?? first.Screens.All.FirstOrDefault();
             if (screen is null) return;
@@ -727,6 +733,44 @@ namespace ClaudeBuddy
             }
 
             // Every arrow's geometry just moved.
+            TeamLinks.Refresh();
+        }
+
+        // A new orb appeared or an old one vanished while the shape is
+        // active. Fold the newcomer in and redraw rather than dumping it
+        // into the vertical stack where it would sit outside the pattern.
+        private void AbsorbIntoArrangement()
+        {
+            if (_arrangeAnimTargets is not null) return;
+
+            // Orbs gone since the pattern was drawn — drop their saved state.
+            foreach (var id in _preArrangeState.Keys
+                         .Where(id => !_windows.ContainsKey(id)).ToList())
+            {
+                _preArrangeState.Remove(id);
+            }
+
+            // Orbs that arrived after the pattern was drawn — record where
+            // they would have stacked so Restore can put them back there.
+            foreach (var id in _windows.Keys)
+            {
+                if (_preArrangeState.ContainsKey(id)) continue;
+                var w = _windows[id];
+                _preArrangeState[id] = (w.Position, w.IsPinned);
+                w.SetFlyoutArranged(true);
+            }
+
+            var allOrbs = DisplayOrder()
+                .Where(id => _windows.ContainsKey(id) && _windows[id].IsVisible)
+                .Select(id => _windows[id])
+                .ToList();
+
+            if (allOrbs.Count < 1) return;
+
+            var positioned = ComputeClusteredPositions(allOrbs);
+            foreach (var (orb, target) in positioned)
+                orb.PinAt(target);
+
             TeamLinks.Refresh();
         }
 
