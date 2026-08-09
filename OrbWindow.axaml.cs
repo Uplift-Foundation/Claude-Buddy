@@ -757,11 +757,38 @@ namespace ClaudeBuddy
                 return;
             }
 
-            var path = _lastStatus?.TranscriptPath;
-            var text = TranscriptReader.LatestAssistantText(path, SessionId);
+            var text = FindSpeakableText();
             if (text is null) return;
+
             TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
             _flyout?.SetSpeaking(true);
+        }
+
+        // Try this session's own transcript first. If it has none (e.g. a
+        // controller session that dispatches to background jobs), find
+        // the most recently written transcript in project dirs matching
+        // this session's CWD.
+        private string? FindSpeakableText()
+        {
+            var path = _lastStatus?.TranscriptPath;
+            var text = TranscriptReader.LatestAssistantText(path, SessionId);
+            if (text is not null) return text;
+
+            // Controller/dispatcher sessions have no transcript. Search
+            // for the most recently written transcript in project dirs
+            // that match this session's CWD — background jobs launched
+            // from this session live in those dirs.
+            var cwd = _lastStatus?.Cwd;
+            if (string.IsNullOrEmpty(cwd)) return null;
+
+            var fallback = TranscriptReader.LatestTranscriptForCwd(cwd);
+            if (fallback is not null)
+            {
+                text = TranscriptReader.LatestAssistantText(fallback);
+                if (text is not null) return text;
+            }
+
+            return null;
         }
 
         // --- Click, dragging & context menu ---
