@@ -28,21 +28,34 @@ namespace ClaudeBuddy
         private static Dictionary<string, string>? _states;
         private static long _stamp;
 
-        // True only when the job is known and known to be finished. Unknown
-        // stays false on purpose: this decides whether to *hide* an orb, and
-        // every uncertainty — the CLI missing, a parse failure, a session the
-        // listing doesn't mention — should leave the orb where it is rather
-        // than make it vanish for a reason the user can't see.
-        public static bool IsFinished(string sessionId)
+        // Whether this session is a background job that is still going.
+        //
+        // Asked of sessions that record no pid, which is a wider group than it
+        // sounds: a background agent has none, but neither does a subagent, and
+        // neither does a session whose status file outlived it. Only the first
+        // is something to show an orb for, and the difference isn't on disk —
+        // every one of them writes the same "idle" — so the daemon's own list
+        // is the only place to settle it.
+        //
+        // Absent from a listing that was read successfully means not a job at
+        // all: a subagent, or a session that ended. "done" means it was one and
+        // has finished. Neither has anything left to show, and an orb for
+        // either is a click that can only fail.
+        //
+        // A listing that couldn't be read answers true, not false. This decides
+        // whether to *hide* an orb, and no orb should vanish because the CLI
+        // was briefly unavailable — the failure the user can't see is the one
+        // worth being careful about.
+        public static bool IsLiveJob(string sessionId)
         {
-            if (string.IsNullOrEmpty(sessionId)) return false;
+            if (string.IsNullOrEmpty(sessionId)) return true;
 
             var states = States();
-            if (states is null) return false;
+            if (states is null) return true;
 
-            var jobId = JobIdOf(sessionId);
-            return states.TryGetValue(jobId, out var state)
-                && string.Equals(state, "done", StringComparison.OrdinalIgnoreCase);
+            if (!states.TryGetValue(JobIdOf(sessionId), out var state)) return false;
+
+            return !string.Equals(state, "done", StringComparison.OrdinalIgnoreCase);
         }
 
         private static Dictionary<string, string>? States()

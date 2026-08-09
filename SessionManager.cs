@@ -446,19 +446,23 @@ namespace ClaudeBuddy
                     continue;
                 }
 
-                // A background job the daemon considers finished. Its status
-                // file still says "idle" — the hook has no idea the work is
-                // over — so this is the only place the difference shows up,
-                // and without it the orb outlives the session it stands for.
-                // Worse than merely stale: the session has no terminal and
-                // `claude attach` on a finished job exits at once, so the orb
-                // is a click that flashes a window and closes it.
+                // A session recording no pid is only worth an orb if it's a
+                // background job that is still running.
                 //
-                // Only asked of pid-less sessions, which is the only kind this
-                // can be true of, so an ordinary session never pays for the
-                // lookup. See BackgroundJobs for why an unknown answer keeps
-                // the orb rather than hiding it.
-                if (status.SessionPid <= 0 && BackgroundJobs.IsFinished(sessionId))
+                // "No pid" is a wider net than it first appears. A background
+                // agent has none — which is what the exemption above is for —
+                // but neither does a subagent, and neither does a status file
+                // whose session ended without clearing it. All three write the
+                // same "idle" state, so on disk they're identical; only the
+                // daemon knows which is which. Taking pid-less to mean
+                // "background agent" put a permanent orb on screen for every
+                // subagent anyone spawned, and with the lifetime set to forever
+                // they only accumulated.
+                //
+                // Asked of nothing else, so an ordinary session never pays for
+                // the lookup, and a listing that can't be read keeps every orb
+                // — see BackgroundJobs.
+                if (status.SessionPid <= 0 && !BackgroundJobs.IsLiveJob(sessionId))
                 {
                     continue;
                 }
