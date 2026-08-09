@@ -5,23 +5,17 @@ using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
-    // The small always-on-top window that appears below an orb on hover,
-    // with its buttons arranged in a semicircular arc. The arrange button
-    // (always visible) and mic button (voice-input-gated) sit at the
-    // 7-o'clock and 5-o'clock positions respectively — symmetric below
-    // the orb, looking like a radial menu.
-    //
-    // Owned one-per-orb by OrbWindow, created lazily on first hover rather
-    // than in every orb's constructor, so an orb nobody ever hovers never
-    // pays for a second window.
     public partial class OrbFlyout : Window
     {
-        // One-shot, not the shared low-fps ticker OrbWindow's pulse uses —
-        // that exists to keep *continuous* animation cheap across many
-        // simultaneously-pulsing orbs, which doesn't apply to a ~160ms
-        // one-off that only runs while a hover is actively landing.
         private const int FlyMs = 160;
         private static readonly TimeSpan FlyTick = TimeSpan.FromMilliseconds(1000.0 / 60);
+
+        // Distance from the orb's centre to each button's centre, in
+        // DIPs. Large enough that the side buttons clear the orb's
+        // circle with a small gap, without spreading the arc so far
+        // the buttons feel detached from the orb they belong to.
+        private const double ArcRadius = 40;
+        private const double ButtonHalf = 12;
 
         private DispatcherTimer? _flyTimer;
         private PixelPoint _flyFrom;
@@ -35,9 +29,16 @@ namespace ClaudeBuddy
         public event Action? ArrangeClicked;
         public event Action? SettingsClicked;
 
+        // Where the orb's centre maps to in this window's DIP space.
+        // Computed by LayoutArc, read by OrbWindow.EnsureFlyoutShown to
+        // position the window so the arc sits concentric with the orb.
+        public double ArcOriginX { get; private set; }
+        public double ArcOriginY { get; private set; }
+
         public OrbFlyout()
         {
             InitializeComponent();
+            LayoutArc();
 
             ArrangeButton.PointerPressed += (_, e) =>
             {
@@ -60,63 +61,86 @@ namespace ClaudeBuddy
             Opened += (_, _) =>
             {
                 this.ShowOnAllSpaces();
-
-                // Same fix OrbWindow needs, for the same reason (a
-                // background app's first click on an inactive window is
-                // otherwise eaten by macOS) — harmless to call again here,
-                // since MacOSWindowExtensions installs it once, class-wide,
-                // no matter which window asks first.
                 this.AcceptFirstClick();
             };
         }
 
-        // Three-button layout (with mic): 94x28.
-        // Two-button layout (without mic): 60x28.
         public void SetMicVisible(bool visible)
         {
             MicButton.IsVisible = visible;
-            if (visible)
+            LayoutArc();
+        }
+
+        // Computes button positions along a semicircular arc and sizes
+        // the Canvas to the tight bounding box around all buttons.
+        // Angles are in degrees, measured from the positive X axis with
+        // Y pointing down (screen coordinates): 90° is straight down
+        // (6 o'clock), <90° swings right (toward 5), >90° swings left
+        // (toward 7).
+        private void LayoutArc()
+        {
+            double[] angles;
+            Grid[] buttons;
+
+            if (MicButton.IsVisible)
             {
-                Root.Width = 94;
-                Root.Height = 28;
-                Width = 94;
-                Height = 28;
+                angles = new[] { 125.0, 90.0, 55.0 };
+                buttons = new[] { ArrangeButton, SettingsButton, MicButton };
             }
             else
             {
-                Root.Width = 60;
-                Root.Height = 28;
-                Width = 60;
-                Height = 28;
+                angles = new[] { 115.0, 65.0 };
+                buttons = new[] { ArrangeButton, SettingsButton };
             }
+
+            var cx = new double[angles.Length];
+            var cy = new double[angles.Length];
+            for (int i = 0; i < angles.Length; i++)
+            {
+                var rad = angles[i] * Math.PI / 180.0;
+                cx[i] = ArcRadius * Math.Cos(rad);
+                cy[i] = ArcRadius * Math.Sin(rad);
+            }
+
+            double left = double.MaxValue, top = double.MaxValue;
+            double right = double.MinValue, bottom = double.MinValue;
+            for (int i = 0; i < angles.Length; i++)
+            {
+                left = Math.Min(left, cx[i] - ButtonHalf);
+                right = Math.Max(right, cx[i] + ButtonHalf);
+                top = Math.Min(top, cy[i] - ButtonHalf);
+                bottom = Math.Max(bottom, cy[i] + ButtonHalf);
+            }
+
+            var w = Math.Ceiling(right - left);
+            var h = Math.Ceiling(bottom - top);
+
+            Root.Width = w;
+            Root.Height = h;
+            Width = w;
+            Height = h;
+
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                Canvas.SetLeft(buttons[i], cx[i] - ButtonHalf - left);
+                Canvas.SetTop(buttons[i], cy[i] - ButtonHalf - top);
+            }
+
+            ArcOriginX = -left;
+            ArcOriginY = -top;
         }
 
-        // Dark goldenrod fill when orbs are arranged (indicating "click to
-        // return"), the usual dark fill otherwise.
         public void SetArranged(bool arranged)
         {
             ArrangeFill.Fill = arranged ? ArrangeActiveFill : ArrangeNormalFill;
         }
 
-        // True while the pointer is anywhere over this window — OrbWindow
-        // checks this before deciding whether to actually hide, so moving
-        // between the orb and this flyout (or just sitting on the flyout
-        // itself) never triggers a hide meant for "the pointer left both".
         public bool IsPointerOverFlyout => Root.IsPointerOver;
 
-        // Animates from the orb's centre to the resting spot below it —
-        // slides straight down so both buttons appear to emerge from behind
-        // the orb. Both points are physical screen pixels, already computed
-        // by the caller (OrbWindow.EnsureFlyoutShown) via PointToScreen.
-        // `owner` is only used for z-order: the flyout starts behind the
-        // orb during animation and moves in front on arrival.
         public void ShowNear(PixelPoint from, PixelPoint to, Window owner)
         {
             if (IsVisible)
             {
-                // Already up (recording kept it visible through a hover
-                // that came back) — just track, no need to replay the
-                // fly-out motion for a window that never left.
                 Position = to;
                 return;
             }
@@ -124,18 +148,10 @@ namespace ClaudeBuddy
             Position = from;
             Opacity = 0;
             Show();
-
-            // After Show(), which is both what gives this window a handle to
-            // order and what put it in front of the orb to begin with.
             this.PlaceJustBehind(owner);
-
             AnimateTo(from, to);
         }
 
-        // `new`, not an override — WindowBase.Hide() isn't virtual — but
-        // every caller reaches this one anyway: OrbWindow only ever holds a
-        // reference typed as OrbFlyout, never as the base Window, so the
-        // compile-time type is what picks the overload here.
         public new void Hide()
         {
             _flyTimer?.Stop();
@@ -154,9 +170,6 @@ namespace ClaudeBuddy
             {
                 var elapsed = Environment.TickCount64 - _flyStartedAt;
                 var t = Math.Min(1.0, elapsed / (double)FlyMs);
-
-                // Ease-out cubic: quick off the mark, settling gently into
-                // place rather than arriving with a jolt.
                 var eased = 1 - Math.Pow(1 - t, 3);
 
                 Position = new PixelPoint(
@@ -169,9 +182,6 @@ namespace ClaudeBuddy
                 _flyTimer!.Stop();
                 Position = _flyTo;
                 Opacity = 1;
-
-                // Arrived: back in front, so buttons are fully clickable
-                // rather than only where they clear the orb's window.
                 this.PlaceInFront();
             };
             _flyTimer.Start();
