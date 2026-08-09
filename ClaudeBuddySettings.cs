@@ -368,6 +368,7 @@ namespace ClaudeBuddy
                         OrbLifetimeMinutes =
                             root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes,
                         VoiceInputEnabled = root["voiceInputEnabled"]?.GetValue<bool>() ?? false,
+                        SpeakVoice = root["speakVoice"]?.GetValue<string>(),
                         TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
                         ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
                         ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing
@@ -496,6 +497,7 @@ namespace ClaudeBuddy
                         ["tintActiveWindow"] = _model.TintActiveWindow,
                         ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
                         ["voiceInputEnabled"] = _model.VoiceInputEnabled,
+                        ["speakVoice"] = _model.SpeakVoice,
                         ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
                         ["arrangeShape"] = _model.ArrangeShape,
                         ["arrangeSpacing"] = _model.ArrangeSpacing,
