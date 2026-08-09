@@ -1,0 +1,84 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ClaudeBuddy.OrbFlyout"
+        Width="60" Height="28"
+        SizeToContent="Manual"
+        SystemDecorations="None"
+        TransparencyLevelHint="Transparent"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        CanResize="False"
+        ShowActivated="False"
+        WindowStartupLocation="Manual">
+
+    <!-- Flyout actions arranged in a semicircular arc below the orb.
+         The arrange button (always visible) sits at the 7-o'clock
+         position, the settings button (always visible) at 6-o'clock,
+         and the mic button (only when voice input is enabled) at
+         5 o'clock. The emerge-from-behind animation reinforces the
+         relationship without needing a tether line: the flyout starts
+         centred on the orb and slides straight down, so all buttons
+         appear to grow out from behind the orb.
+
+         Root is pinned and anchored top-left like OrbWindow's own Root:
+         on Windows, the OS floors a top-level window at
+         SM_CXMINTRACK/SM_CYMINTRACK (136x39 on stock Windows 11),
+         so the leftover area is just transparent slack off to the right.
+         Width/Height are adjusted dynamically by SetMicVisible — 94x28
+         when all three buttons are visible, 60x28 when the mic is
+         hidden — so the hover hit area matches what's drawn. -->
+    <Grid x:Name="Root"
+          Width="60" Height="28"
+          HorizontalAlignment="Left" VerticalAlignment="Top">
+
+        <!-- At the 7-o'clock position within the arc: left of centre,
+             always visible. -->
+        <Grid x:Name="ArrangeButton"
+              Width="24" Height="24"
+              HorizontalAlignment="Left"
+              VerticalAlignment="Top"
+              Margin="1,2,0,0"
+              Cursor="Hand">
+            <Ellipse x:Name="ArrangeFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+            <TextBlock Text="&#10024;"
+                       FontSize="12"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Grid>
+
+        <!-- At the 6-o'clock position: centre of the arc, always
+             visible. Opens the settings window. -->
+        <Grid x:Name="SettingsButton"
+              Width="24" Height="24"
+              HorizontalAlignment="Left"
+              VerticalAlignment="Top"
+              Margin="35,2,0,0"
+              Cursor="Hand">
+            <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+            <TextBlock Text="&#9881;"
+                       FontSize="12"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Grid>
+
+        <!-- At the 5-o'clock position: right of centre, only visible
+             when voice input is enabled. -->
+        <Grid x:Name="MicButton"
+              Width="24" Height="24"
+              HorizontalAlignment="Left"
+              VerticalAlignment="Top"
+              Margin="69,2,0,0"
+              IsVisible="False"
+              Cursor="Hand">
+            <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+            <TextBlock Text="&#127908;"
+                       FontSize="11"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Grid>
+    </Grid>
+</Window>

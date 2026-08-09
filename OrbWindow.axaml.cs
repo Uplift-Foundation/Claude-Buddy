@@ -61,6 +61,7 @@ namespace ClaudeBuddy
 
         private string _lastState = "";
         private string _lastColor = "";
+        private string _lastGlyphName = "";
 
         // Colour for the team arrow leaving this orb, when it has one. Follows
         // /color so several members pointing at one lead stay apart; sessions
@@ -81,6 +82,29 @@ namespace ClaudeBuddy
         private readonly ColorTransition _colorTransition;
         private readonly ScaleTransform _orbScale = new();
 
+        // Flat red rather than a fourth entry in OrbColors: this isn't a
+        // session state Claude Code reports, it's purely local UI feedback
+        // for "the mic is listening", so it has no reason to be user
+        // configurable the way idle/generating/waiting are.
+        private static readonly Color RecordingColor = Color.Parse("#D93B3B");
+
+        private bool _recording;
+        private VoiceRecorder? _recorder;
+        private DispatcherTimer? _recordingCap;
+
+        // Created lazily on first hover (see EnsureFlyoutShown), not here —
+        // most orbs are never hovered in a given run, and none of them should
+        // pay for a second window until one actually is.
+        private OrbFlyout? _flyout;
+
+        // Bridges hover between two separate OS windows (the orb and its
+        // flyout): a bare PointerExited on either one would hide the flyout
+        // the instant the cursor crosses from one window into the other,
+        // before it ever reaches the second window. Scheduling the hide and
+        // cancelling it if either window reports the pointer back within the
+        // grace period turns that into a single smooth handoff instead.
+        private DispatcherTimer? _hideFlyoutTimer;
+
         public OrbWindow(string sessionId)
         {
             SessionId = sessionId;
@@ -99,6 +123,13 @@ namespace ClaudeBuddy
             Glow.Fill = _glowBrush;
             Orb.RenderTransform = _orbScale;
 
+            Root.PointerEntered += (_, _) =>
+            {
+                CancelFlyoutHide();
+                EnsureFlyoutShown();
+            };
+            Root.PointerExited += (_, _) => ScheduleFlyoutHide();
+
             // Unlike WPF, Loaded fires *after* the first UpdateFrom here, so
             // honor any state that already arrived instead of stomping it.
             Loaded += (_, _) => ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
@@ -114,6 +145,21 @@ namespace ClaudeBuddy
 
             // A closed orb must leave the shared ticker or it keeps being ticked.
             Closed += (_, _) => Pulsing.Remove(this);
+
+            // A session going away mid-dictation (the window closing) must
+            // not leave a capture thread or a native mic handle running.
+            Closed += (_, _) => CancelRecording();
+
+            // The flyout is a second, independent top-level window — it
+            // outlives this one unless told otherwise. Stopping the hide
+            // timer first, not just closing the flyout, matters because a
+            // tick already queued on the dispatcher would otherwise run
+            // after this and touch a window that no longer exists.
+            Closed += (_, _) =>
+            {
+                _hideFlyoutTimer?.Stop();
+                _flyout?.Close();
+            };
         }
 
         public void UpdateFrom(SessionStatus status)
@@ -145,6 +191,20 @@ namespace ClaudeBuddy
                 ? (string.IsNullOrEmpty(described) ? SessionId : described)
                 : $"{described}\n{status.Cwd}");
 
+            // Above the orb, not at the pointer (Avalonia's default for a
+            // tooltip). The mic flyout sits below and to the right, which is
+            // exactly where a pointer-placed tooltip lands, and a tooltip is its
+            // own always-on-top window — so it covered the mic and swallowed the
+            // clicks meant for it. Caught with WindowFromPoint over the mic's
+            // circle: a 160x46 tooltip window owned most of it.
+            //
+            // Placement rather than suppressing the tooltip while the flyout is
+            // up: the name and path are worth having on hover whether or not
+            // you're reaching for the mic, and moving it costs nothing, while
+            // hiding it would trade one annoyance for another.
+            ToolTip.SetPlacement(Root, PlacementMode.Top);
+
+            _lastGlyphName = name;
             Glyph.Text = GlyphFor(name);
             ApplyAccent(status.Color);
             SetTeamRole(!string.IsNullOrEmpty(status.Lead));
@@ -157,11 +217,15 @@ namespace ClaudeBuddy
             if (status.State != _lastState)
             {
                 _lastState = status.State;
-                if (IsLoaded)
+                if (IsLoaded && !_recording)
                 {
                     ApplyState(status.State);
                 }
-                // else: Loaded handler applies _lastState once the window is up.
+                // else if !IsLoaded: Loaded handler applies _lastState once the
+                // window is up. Else (_recording): the mic's red pulse owns
+                // the orb's colour/motion right now — StopRecording restores
+                // whatever _lastState ends up being once dictation finishes,
+                // so a state change mid-recording isn't lost, just deferred.
             }
         }
 
@@ -209,8 +273,24 @@ namespace ClaudeBuddy
 
             Orb.Width = Orb.Height = 36 * scale;
             Glow.Width = Glow.Height = 56 * scale;
-            Glyph.FontSize = 16 * scale;
+            Glyph.FontSize = BaseGlyphFontSize * scale;
             OrbRadius = 18 * scale;
+        }
+
+        // Smaller with two letters than with one, so the wider glyph still
+        // fits inside the same 36px circle rather than crowding its edge.
+        private static double BaseGlyphFontSize => ClaudeBuddySettings.TwoLetterGlyphs ? 12.0 : 16.0;
+
+        // Settings' "Two-letter initials" toggle changes how every already-
+        // open orb's glyph reads without waiting for that session's next
+        // hook update — see SessionManager.ReapplyGlyphs, which calls this
+        // on each one. Re-derives from _lastGlyphName rather than the full
+        // SessionStatus: nothing else about the orb needs to change, just
+        // the text and the font size sitting under it.
+        public void ReapplyGlyph()
+        {
+            Glyph.Text = GlyphFor(_lastGlyphName);
+            Glyph.FontSize = BaseGlyphFontSize * (_isTeamMember ? MemberScale : 1.0);
         }
 
         private static string GlyphFor(string label)
@@ -218,11 +298,39 @@ namespace ClaudeBuddy
             label = label.TrimStart();
             if (label.Length == 0) return "•";
 
-            // Never cut a surrogate pair in half — a title starting with an
-            // emoji would render as a broken box.
-            var first = char.IsHighSurrogate(label[0]) && label.Length > 1 ? label[..2] : label[..1];
-            return first.ToUpperInvariant();
+            if (!ClaudeBuddySettings.TwoLetterGlyphs)
+            {
+                return FirstGrapheme(label).ToUpperInvariant();
+            }
+
+            // Two words get one letter each — the initials a person would
+            // write by hand ("Menu UX" -> "Mu") — rather than two letters
+            // from the first word alone, which reads as a typo of it
+            // ("Menu UX" -> "Me"). A single word falls back to its own
+            // first two letters, since there's nothing else to draw from.
+            //
+            // Upper then lower, not both upper: two capitals side by side
+            // reads as an acronym ("MU"), where the point here is a little
+            // word-shaped mark ("Mu") — same reason a monogram is "Mu", not
+            // "MU". Only the letter case changes; which letters are picked
+            // is exactly the same either way.
+            var words = label.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length >= 2)
+            {
+                return FirstGrapheme(words[0]).ToUpperInvariant() + FirstGrapheme(words[1]).ToLowerInvariant();
+            }
+
+            var first = FirstGrapheme(label);
+            var rest = label[first.Length..];
+            var second = rest.Length > 0 ? FirstGrapheme(rest) : "";
+            return first.ToUpperInvariant() + second.ToLowerInvariant();
         }
+
+        // One printable character, or a full surrogate pair if the string
+        // starts with one (e.g. an emoji) — never split in half, which is
+        // what renders as a broken box instead of the emoji.
+        private static string FirstGrapheme(string s) =>
+            s.Length > 1 && char.IsHighSurrogate(s[0]) ? s[..2] : s[..1];
 
         // The colour comes from OrbColors so this switch is about *motion* only —
         // one state-to-colour mapping in the app, not two that can drift apart.
@@ -393,6 +501,249 @@ namespace ClaudeBuddy
             _orbScale.ScaleX = _orbScale.ScaleY = 1.0;
         }
 
+        // --- Voice dictation mic ---
+        // Hover shows a small flyout window below the orb with action
+        // buttons in a semicircular arc (see OrbFlyout — its own window,
+        // not a control drawn inside this one's 56x56 bounds). The mic
+        // button records, transcribes locally via Whisper, and types the
+        // result into this session's terminal. See VoiceRecorder,
+        // SpeechTranscriber and TerminalFocuser.SendText.
+
+        // Created on first hover, not in the constructor — see the field's
+        // own comment for why. A no-op when the feature is off, so nothing
+        // here ever constructs a VoiceRecorder — and triggers macOS's
+        // mic-permission prompt — for someone who hasn't opted in.
+        private void EnsureFlyoutShown()
+        {
+            if (_flyout is null)
+            {
+                _flyout = new OrbFlyout();
+                _flyout.MicClicked += () =>
+                {
+                    if (_recording) StopRecording();
+                    else StartRecording();
+                };
+                _flyout.ArrangeClicked += () =>
+                {
+                    SessionManager.Instance?.ArrangeOrbsInPattern();
+                };
+                _flyout.SettingsClicked += () =>
+                {
+                    SettingsWindow.Toggle();
+                };
+
+                // The other half of the hover bridge described on
+                // _hideFlyoutTimer: entering the flyout must cancel a hide
+                // that Root.PointerExited already scheduled, and leaving it
+                // must schedule one of its own in case the pointer doesn't
+                // land back on the orb either.
+                _flyout.PointerEntered += (_, _) => CancelFlyoutHide();
+                _flyout.PointerExited += (_, _) => ScheduleFlyoutHide();
+            }
+
+            bool micOn = ClaudeBuddySettings.VoiceInputEnabled;
+            _flyout.SetMicVisible(micOn);
+            _flyout.SetArranged(SessionManager.Instance?.IsArranged ?? false);
+
+            // The flyout sits centred below the orb. Its resting position
+            // and the animation's start point both depend on the current
+            // layout size (94x28 with mic, 60x28 without), since the start
+            // aligns the flyout's centre with the orb's centre and the end
+            // puts it just below the orb's circle edge.
+            //
+            // PointToScreen, not raw arithmetic: Position is physical screen
+            // pixels, these are DIP measurements, and the two only line up
+            // at 100% display scaling.
+            Point target, from;
+            if (micOn)
+            {
+                // Three-button layout (94x28): arrange, settings, mic.
+                // Flyout centre is (47, 14).
+                target = new Point(OrbCentre - 47, FlyoutRestY);
+                from = new Point(OrbCentre - 47, OrbCentre - 14);
+            }
+            else
+            {
+                // Two-button layout (60x28): arrange and settings.
+                // Flyout centre is (30, 14).
+                target = new Point(OrbCentre - 30, FlyoutRestY);
+                from = new Point(OrbCentre - 30, OrbCentre - 14);
+            }
+
+            _flyout.ShowNear(
+                from: this.PointToScreen(from),
+                to: this.PointToScreen(target),
+                owner: this);
+        }
+
+        // Centre of the orb in its own window's DIPs — half of Root's pinned
+        // 56x56. Unchanged by MemberScale: a team member is drawn smaller
+        // around this same point, never moved off it.
+        private const double OrbCentre = 28;
+
+        // The flyout's top edge rests just below the orb's circle edge with
+        // a 2px gap: the circle's radius is 18, so its bottom sits at
+        // 28 + 18 = 46 in Root DIP space, and 46 + 2 = 48.
+        private const double FlyoutRestY = 48;
+
+        // Called by SessionManager when the arrangement state changes, so
+        // every orb's flyout (if it exists) reflects whether clicking the
+        // arrange button would arrange or restore.
+        public void SetFlyoutArranged(bool arranged) => _flyout?.SetArranged(arranged);
+
+        // Hides the flyout unconditionally — used by SessionManager before
+        // starting an arrangement animation, since a flyout anchored to a
+        // moving orb would look broken.
+        public void HideFlyout() => HideFlyoutNow();
+
+        // Immediate, not scheduled — dragging moves the orb every pointer
+        // move, and a flyout animating toward a stale position underneath a
+        // moving orb would read as broken rather than as a hover effect.
+        private void HideFlyoutNow()
+        {
+            _hideFlyoutTimer?.Stop();
+            _flyout?.Hide();
+        }
+
+        private void CancelFlyoutHide() => _hideFlyoutTimer?.Stop();
+
+        // A no-op while recording: the flyout is the only way to stop, so it
+        // must stay up regardless of where the pointer wanders.
+        private void ScheduleFlyoutHide()
+        {
+            if (_recording) return;
+
+            _hideFlyoutTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+            _hideFlyoutTimer.Stop();
+
+            // Re-subscribing on every schedule would stack a duplicate Tick
+            // handler per hover; there both is and only ever needs to be one.
+            _hideFlyoutTimer.Tick -= OnFlyoutHideTick;
+            _hideFlyoutTimer.Tick += OnFlyoutHideTick;
+            _hideFlyoutTimer.Start();
+        }
+
+        private void OnFlyoutHideTick(object? sender, EventArgs e)
+        {
+            _hideFlyoutTimer!.Stop();
+
+            // The grace period ends with the pointer having genuinely landed
+            // on one of the two windows after all (a slow, deliberate move
+            // across the gap) — nothing to hide in that case.
+            if (Root.IsPointerOver || (_flyout?.IsPointerOverFlyout ?? false)) return;
+
+            _flyout?.Hide();
+        }
+
+        private void StartRecording()
+        {
+            if (_recording) return;
+
+            try
+            {
+                _recorder = new VoiceRecorder();
+
+                // Fired from VoiceRecorder's own capture thread, so this has
+                // to hop back to the UI thread before touching anything here
+                // — StopRecording ends up updating Avalonia controls and
+                // awaiting the transcription pipeline, none of which is safe
+                // to do from off the dispatcher.
+                _recorder.SilenceDetected += () => Dispatcher.UIThread.Post(StopRecording);
+
+                _recorder.Start();
+            }
+            catch (Exception ex)
+            {
+                // No input device, permission denied, device busy — a
+                // convenience feature failing to start is not worth a crash.
+                _recorder = null;
+                Console.Error.WriteLine($"Claude Buddy: couldn't start recording: {ex.Message}");
+                return;
+            }
+
+            _recording = true;
+
+            // Flat red, fast — visibly distinct from the waiting/generating
+            // pulses, so "listening" reads as its own thing rather than as
+            // the session itself having changed state.
+            AnimateColor(RecordingColor, TimeSpan.FromMilliseconds(150), _lastState);
+            StartPulse(1.18, TimeSpan.FromMilliseconds(350), new SineEaseInOut());
+
+            // A hard cap, not just a courtesy: this runs whether or not the
+            // user remembers to click again, so a missed second click can't
+            // leave the mic — and VoiceRecorder's own capture thread — running
+            // indefinitely.
+            _recordingCap = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+            _recordingCap.Tick += (_, _) => StopRecording();
+            _recordingCap.Start();
+        }
+
+        private async void StopRecording()
+        {
+            if (!_recording || _recorder is null) return;
+
+            _recording = false;
+            _recordingCap?.Stop();
+            _recordingCap = null;
+
+            // Back to whatever the session's own state actually is —
+            // StartRecording never changed _lastState, only the pulse and
+            // colour drawn over it.
+            ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
+
+            // The pointer is very likely still over the mic right after a
+            // click, but the recording that was forcing the flyout to stay
+            // up just ended — re-derive from where the pointer actually is
+            // now rather than assuming either way.
+            if (Root.IsPointerOver || (_flyout?.IsPointerOverFlyout ?? false))
+            {
+                CancelFlyoutHide();
+            }
+            else
+            {
+                HideFlyoutNow();
+            }
+
+            var recorder = _recorder;
+            _recorder = null;
+
+            float[] pcm;
+            try
+            {
+                pcm = recorder.Stop();
+            }
+            finally
+            {
+                recorder.Dispose();
+            }
+
+            if (pcm.Length == 0) return;
+
+            var text = await SpeechTranscriber.TranscribeAsync(pcm);
+            if (string.IsNullOrWhiteSpace(text)) return;
+
+            var status = _lastStatus;
+            if (status is null) return;
+
+            await TerminalFocuser.SendText(status, text);
+        }
+
+        // Ends an in-progress recording without transcribing or sending
+        // anything — only reachable from Closed, where the orb (and the
+        // session it belongs to) is going away regardless.
+        private void CancelRecording()
+        {
+            _recordingCap?.Stop();
+            _recordingCap = null;
+
+            if (!_recording || _recorder is null) return;
+
+            _recording = false;
+            try { _recorder.Stop(); } catch { }
+            _recorder.Dispose();
+            _recorder = null;
+        }
+
         // --- Click, dragging & context menu ---
         // Left-press starts as a potential click; it becomes a drag once the
         // pointer moves past a small threshold. A clean click jumps to the
@@ -443,6 +794,19 @@ namespace ClaudeBuddy
                     _followers.Add((member, member.Position));
                 }
 
+                // When arranged, the whole cluster moves as one — every
+                // orb in the pattern that isn't already a team follower
+                // tags along so the shape stays intact.
+                if (SessionManager.Instance?.IsArranged == true)
+                {
+                    var existing = new HashSet<string>(_followers.Select(f => f.Orb.SessionId));
+                    foreach (var sibling in SessionManager.Instance.ArrangedSiblings(SessionId))
+                    {
+                        if (!existing.Contains(sibling.SessionId))
+                            _followers.Add((sibling, sibling.Position));
+                    }
+                }
+
                 e.Pointer.Capture(this);
             }
         }
@@ -457,6 +821,12 @@ namespace ClaudeBuddy
             var dy = current.Y - _pointerStart.Y;
 
             if (!_dragging && Math.Abs(dx) < 6 && Math.Abs(dy) < 6) return;
+
+            // Only on the transition into dragging, not every move after —
+            // a flyout animating toward a stale position underneath a moving
+            // orb would read as broken, so it's simplest to just take it off
+            // screen the instant a drag actually starts.
+            if (!_dragging) HideFlyoutNow();
 
             _dragging = true;
             Position = new PixelPoint(_windowStart.X + dx, _windowStart.Y + dy);
@@ -516,7 +886,8 @@ namespace ClaudeBuddy
                 // TerminalFocuser.Focus.
                 TerminalFocuser.Focus(
                     _lastStatus,
-                    SessionManager.Instance?.StatusFor(_lastStatus?.Lead));
+                    SessionManager.Instance?.StatusFor(_lastStatus?.Lead),
+                    SessionId);
             }
 
             _followers.Clear();
