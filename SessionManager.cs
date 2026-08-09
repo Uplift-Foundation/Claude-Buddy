@@ -412,7 +412,15 @@ namespace ClaudeBuddy
                 // process in a real window that nothing in the lead's own
                 // process tree points at, so the hook could never have recorded
                 // it. See AgentTeamViewer, which finds it by directory.
-                if (leadsWithLiveAgents.Contains(sessionId) && !KnowsATerminal(status))
+                // A session with no pid of its own is in the same bind and
+                // for the same reason: nothing in a process tree points at
+                // the window you actually watch it in, so the directory is
+                // the only link back to its `claude agents` viewer. Widened
+                // to cover it because the machinery is identical — TryAdopt
+                // no-ops off macOS, without a cwd, and when no viewer for
+                // that directory is running.
+                if (!KnowsATerminal(status)
+                    && (leadsWithLiveAgents.Contains(sessionId) || status.SessionPid <= 0))
                 {
                     AgentTeamViewer.TryAdopt(status);
                 }
@@ -1045,7 +1053,7 @@ namespace ClaudeBuddy
         private static List<PixelPoint> ShapePositions(List<OrbWindow> orbs)
         {
             var shape = ClaudeBuddySettings.ArrangeShape;
-            return shape switch
+            var pts = shape switch
             {
                 "circle"  => CirclePositions(orbs),
                 "diamond" => DiamondPositions(orbs),
@@ -1053,6 +1061,43 @@ namespace ClaudeBuddy
                 "grid"    => GridPositions(orbs),
                 _         => HeartPositions(orbs),
             };
+            return EnsureMinSpacing(pts, orbs);
+        }
+
+        // After a shape generator runs, check whether any two orbs ended
+        // up too close and uniformly scale the whole pattern outward from
+        // its centre until every pair clears the minimum gap.
+        private static List<PixelPoint> EnsureMinSpacing(List<PixelPoint> pts, List<OrbWindow> orbs)
+        {
+            if (pts.Count < 2) return pts;
+
+            var screen = orbs[0].Screens.Primary ?? orbs[0].Screens.All.FirstOrDefault();
+            double scale = screen?.Scaling ?? 1.0;
+            int orbSize = (int)(56 * scale);
+            double minGap = orbSize * (0.3 + ClaudeBuddySettings.ArrangeSpacing);
+
+            double minDist = double.MaxValue;
+            for (int i = 0; i < pts.Count; i++)
+            {
+                for (int j = i + 1; j < pts.Count; j++)
+                {
+                    double dx = pts[i].X - pts[j].X;
+                    double dy = pts[i].Y - pts[j].Y;
+                    double dist = Math.Sqrt(dx * dx + dy * dy);
+                    if (dist < minDist) minDist = dist;
+                }
+            }
+
+            if (minDist >= minGap || minDist < 1) return pts;
+
+            double cx = pts.Average(p => (double)p.X);
+            double cy = pts.Average(p => (double)p.Y);
+            double factor = minGap / minDist;
+
+            return pts.Select(p => new PixelPoint(
+                (int)Math.Round(cx + (p.X - cx) * factor),
+                (int)Math.Round(cy + (p.Y - cy) * factor)
+            )).ToList();
         }
 
         private static (PixelRect Work, double Scale, int OrbSize, int Margin, double Cx, double Cy) ShapeAnchor(List<OrbWindow> orbs)
