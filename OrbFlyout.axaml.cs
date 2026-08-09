@@ -14,7 +14,7 @@ namespace ClaudeBuddy
         // DIPs. Large enough that the side buttons clear the orb's
         // circle with a small gap, without spreading the arc so far
         // the buttons feel detached from the orb they belong to.
-        private const double ArcRadius = 40;
+        private const double ArcRadius = 56;
         private const double ButtonHalf = 12;
 
         private DispatcherTimer? _flyTimer;
@@ -99,12 +99,12 @@ namespace ClaudeBuddy
             // what has to give.
             if (MicButton.IsVisible)
             {
-                angles = new[] { 135.0, 105.0, 75.0, 45.0 };
+                angles = new[] { 140.0, 106.7, 73.3, 40.0 };
                 buttons = new[] { ArrangeButton, SettingsButton, SpeakButton, MicButton };
             }
             else
             {
-                angles = new[] { 125.0, 90.0, 55.0 };
+                angles = new[] { 140.0, 90.0, 40.0 };
                 buttons = new[] { ArrangeButton, SettingsButton, SpeakButton };
             }
 
