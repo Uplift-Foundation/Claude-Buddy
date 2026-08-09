@@ -547,7 +547,7 @@ namespace ClaudeBuddy
 
             // The flyout sits centred below the orb. Its resting position
             // and the animation's start point both depend on the current
-            // layout size (60x28 with mic, 24x24 without), since the start
+            // layout size (94x28 with mic, 60x28 without), since the start
             // aligns the flyout's centre with the orb's centre and the end
             // puts it just below the orb's circle edge.
             //
