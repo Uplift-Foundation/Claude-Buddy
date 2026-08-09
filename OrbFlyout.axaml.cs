@@ -33,6 +33,7 @@ namespace ClaudeBuddy
 
         public event Action? MicClicked;
         public event Action? ArrangeClicked;
+        public event Action? SettingsClicked;
 
         public OrbFlyout()
         {
@@ -42,6 +43,12 @@ namespace ClaudeBuddy
             {
                 e.Handled = true;
                 ArrangeClicked?.Invoke();
+            };
+
+            SettingsButton.PointerPressed += (_, e) =>
+            {
+                e.Handled = true;
+                SettingsClicked?.Invoke();
             };
 
             MicButton.PointerPressed += (_, e) =>
@@ -63,26 +70,24 @@ namespace ClaudeBuddy
             };
         }
 
-        // Two-button layout: 60x28, both buttons at symmetric positions.
-        // One-button layout: 24x24, just the arrange button filling Root.
+        // Three-button layout (with mic): 94x28.
+        // Two-button layout (without mic): 60x28.
         public void SetMicVisible(bool visible)
         {
             MicButton.IsVisible = visible;
             if (visible)
             {
+                Root.Width = 94;
+                Root.Height = 28;
+                Width = 94;
+                Height = 28;
+            }
+            else
+            {
                 Root.Width = 60;
                 Root.Height = 28;
                 Width = 60;
                 Height = 28;
-                ArrangeButton.Margin = new Thickness(1, 2, 0, 0);
-            }
-            else
-            {
-                Root.Width = 24;
-                Root.Height = 24;
-                Width = 24;
-                Height = 24;
-                ArrangeButton.Margin = new Thickness(0);
             }
         }
 

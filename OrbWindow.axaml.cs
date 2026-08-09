@@ -527,6 +527,10 @@ namespace ClaudeBuddy
                 {
                     SessionManager.Instance?.ArrangeOrbsInPattern();
                 };
+                _flyout.SettingsClicked += () =>
+                {
+                    SettingsWindow.Toggle();
+                };
 
                 // The other half of the hover bridge described on
                 // _hideFlyoutTimer: entering the flyout must cancel a hide
@@ -553,17 +557,17 @@ namespace ClaudeBuddy
             Point target, from;
             if (micOn)
             {
-                // Two-button layout (60x28): buttons at 7-o'clock and
-                // 5-o'clock. Flyout centre is (30, 14).
-                target = new Point(OrbCentre - 30, FlyoutRestY);
-                from = new Point(OrbCentre - 30, OrbCentre - 14);
+                // Three-button layout (94x28): arrange, settings, mic.
+                // Flyout centre is (47, 14).
+                target = new Point(OrbCentre - 47, FlyoutRestY);
+                from = new Point(OrbCentre - 47, OrbCentre - 14);
             }
             else
             {
-                // Single-button layout (24x24): centred below the orb.
-                // Flyout centre is (12, 12).
-                target = new Point(OrbCentre - 12, FlyoutRestY);
-                from = new Point(OrbCentre - 12, OrbCentre - 12);
+                // Two-button layout (60x28): arrange and settings.
+                // Flyout centre is (30, 14).
+                target = new Point(OrbCentre - 30, FlyoutRestY);
+                from = new Point(OrbCentre - 30, OrbCentre - 14);
             }
 
             _flyout.ShowNear(
