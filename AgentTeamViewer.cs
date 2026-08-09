@@ -203,21 +203,17 @@ namespace ClaudeBuddy
                 // still arrives as one word.
                 var quoted = "'" + cwd.Replace("'", "'\\''") + "'";
 
-                // A login shell, not the bare `sh` that `open` would give us:
-                // launched from Finder this app has only the stock system PATH,
-                // and `claude` lives in ~/.local/bin. Asking the user's own
-                // shell to resolve it is the same answer ResolveTmuxBinary
-                // reaches for tmux, without hard-coding a second install list.
-                var shell = Environment.GetEnvironmentVariable("SHELL");
-                if (string.IsNullOrEmpty(shell)) shell = "/bin/zsh";
+                // An absolute path, not a bare name resolved by a login shell.
+                // That was the original approach and it silently didn't work:
+                // `zsh -lc` skips .zshrc (non-interactive), which is where a
+                // PATH addition for ~/.local/bin normally lives, so the script
+                // died with "command not found" whenever the app was launched
+                // from Finder rather than a terminal. See ClaudeBinary.
+                var claude = ClaudeBinary.Path;
+                if (claude is null) return null;
 
-                // The directory travels in the environment rather than inline
-                // in the -lc string. Written inline it would have to be quoted
-                // inside a string that is itself single-quoted, and shell
-                // single quotes don't nest — the two runs would flatten into
-                // one unquoted word, which happens to work until the first
-                // path with a space in it and then silently cd's somewhere
-                // else. A variable reference needs no quoting of its own.
+                var quotedClaude = "'" + claude.Replace("'", "'\\''") + "'";
+
                 // attach wants the *job* id, which is the first segment of the
                 // session uuid and not the uuid itself — `claude logs` with a
                 // full id answers "No job matching", with the short one it
@@ -233,12 +229,8 @@ namespace ClaudeBuddy
                 // useful place to land is the directory whose orb you clicked.
                 File.WriteAllText(script,
                     "#!/bin/sh\n"
-                    + "CLAUDE_BUDDY_AGENT_DIR=" + quoted + "\n"
-                    + "CLAUDE_BUDDY_SESSION=" + quotedId + "\n"
-                    + "export CLAUDE_BUDDY_AGENT_DIR CLAUDE_BUDDY_SESSION\n"
-                    + "exec " + shell + " -lc "
-                    + "'cd \"$CLAUDE_BUDDY_AGENT_DIR\" "
-                    + "&& exec claude attach \"$CLAUDE_BUDDY_SESSION\"'\n");
+                    + "cd " + quoted + " || exit 1\n"
+                    + "exec " + quotedClaude + " attach " + quotedId + "\n");
 
                 File.SetUnixFileMode(script,
                     UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -291,14 +283,16 @@ namespace ClaudeBuddy
 
             if (session is null) return null;
 
-            // Through a login shell for the same PATH reason as everywhere else
-            // here: tmux runs a command with `sh -c`, and the server's own
-            // environment is whatever it was started with, which needn't
-            // include wherever `claude` lives.
-            var shell = Environment.GetEnvironmentVariable("SHELL");
-            if (string.IsNullOrEmpty(shell)) shell = "/bin/zsh";
+            // An absolute path here too. tmux runs the command with `sh -c`,
+            // and the server's environment is whatever it happened to be
+            // started with — which needn't include wherever `claude` lives, and
+            // can't be assumed to match this app's. See ClaudeBinary for why
+            // asking a login shell to resolve it isn't the fix it looks like.
+            var claude = ClaudeBinary.Path;
+            if (claude is null) return null;
 
-            var command = shell + " -lc 'claude attach " + jobId.Replace("'", "'\\''") + "'";
+            var command = "'" + claude.Replace("'", "'\\''") + "'"
+                          + " attach '" + jobId.Replace("'", "'\\''") + "'";
 
             // "<session>:" with the colon, not the bare name. Bare, tmux reads
             // the target as a *window* and refuses with "index N in use" the
