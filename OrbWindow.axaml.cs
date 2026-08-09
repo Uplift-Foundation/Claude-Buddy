@@ -545,30 +545,20 @@ namespace ClaudeBuddy
             _flyout.SetMicVisible(micOn);
             _flyout.SetArranged(SessionManager.Instance?.IsArranged ?? false);
 
-            // The flyout sits centred below the orb. Its resting position
-            // and the animation's start point both depend on the current
-            // layout size (94x28 with mic, 60x28 without), since the start
-            // aligns the flyout's centre with the orb's centre and the end
-            // puts it just below the orb's circle edge.
+            // The arc's virtual centre (ArcOrigin) aligns with the orb's
+            // centre so the semicircle sits concentric with the orb. The
+            // animation starts with the flyout centred on the orb so the
+            // buttons are hidden behind it and emerge downward.
             //
             // PointToScreen, not raw arithmetic: Position is physical screen
             // pixels, these are DIP measurements, and the two only line up
             // at 100% display scaling.
-            Point target, from;
-            if (micOn)
-            {
-                // Three-button layout (94x28): arrange, settings, mic.
-                // Flyout centre is (47, 14).
-                target = new Point(OrbCentre - 47, FlyoutRestY);
-                from = new Point(OrbCentre - 47, OrbCentre - 14);
-            }
-            else
-            {
-                // Two-button layout (60x28): arrange and settings.
-                // Flyout centre is (30, 14).
-                target = new Point(OrbCentre - 30, FlyoutRestY);
-                from = new Point(OrbCentre - 30, OrbCentre - 14);
-            }
+            var target = new Point(
+                OrbCentre - _flyout.ArcOriginX,
+                OrbCentre - _flyout.ArcOriginY);
+            var from = new Point(
+                OrbCentre - _flyout.Width / 2,
+                OrbCentre - _flyout.Height / 2);
 
             _flyout.ShowNear(
                 from: this.PointToScreen(from),
@@ -580,11 +570,6 @@ namespace ClaudeBuddy
         // 56x56. Unchanged by MemberScale: a team member is drawn smaller
         // around this same point, never moved off it.
         private const double OrbCentre = 28;
-
-        // The flyout's top edge rests just below the orb's circle edge with
-        // a 2px gap: the circle's radius is 18, so its bottom sits at
-        // 28 + 18 = 46 in Root DIP space, and 46 + 2 = 48.
-        private const double FlyoutRestY = 48;
 
         // Called by SessionManager when the arrangement state changes, so
         // every orb's flyout (if it exists) reflects whether clicking the
