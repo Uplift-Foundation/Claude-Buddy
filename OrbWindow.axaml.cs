@@ -150,7 +150,8 @@ namespace ClaudeBuddy
             // not leave a capture thread or a native mic handle running.
             Closed += (_, _) => CancelRecording();
 
-            // Don't leave the platform TTS speaking for a session that's gone.
+            // Same reason for the other half of the voice feature: speech
+            // outlives the window that started it unless it's cancelled.
             Closed += (_, _) => TextToSpeech.Cancel();
 
             // The flyout is a second, independent top-level window — it
@@ -530,6 +531,10 @@ namespace ClaudeBuddy
                 {
                     SessionManager.Instance?.ArrangeOrbsInPattern();
                 };
+                _flyout.SettingsClicked += () =>
+                {
+                    SettingsWindow.Toggle();
+                };
                 _flyout.SpeakClicked += OnSpeakClicked;
 
                 // The other half of the hover bridge described on
@@ -545,32 +550,25 @@ namespace ClaudeBuddy
             _flyout.SetMicVisible(micOn);
             _flyout.SetArranged(SessionManager.Instance?.IsArranged ?? false);
 
+            // Speech is global rather than per-orb, so a flyout opening
+            // while something is already being read has to show the stop
+            // glyph rather than offer to start a second one.
             _flyout.SetSpeaking(TextToSpeech.IsSpeaking);
 
-            // The flyout sits centred below the orb. Its resting position
-            // and the animation's start point both depend on the current
-            // layout size (94x28 with mic, 60x28 without), since the start
-            // aligns the flyout's centre with the orb's centre and the end
-            // puts it just below the orb's circle edge.
+            // The arc's virtual centre (ArcOrigin) aligns with the orb's
+            // centre so the semicircle sits concentric with the orb. The
+            // animation starts with the flyout centred on the orb so the
+            // buttons are hidden behind it and emerge downward.
             //
             // PointToScreen, not raw arithmetic: Position is physical screen
             // pixels, these are DIP measurements, and the two only line up
             // at 100% display scaling.
-            Point target, from;
-            if (micOn)
-            {
-                // Three-button layout (94x28): arrange, speak, mic.
-                // Flyout centre is (47, 14).
-                target = new Point(OrbCentre - 47, FlyoutRestY);
-                from = new Point(OrbCentre - 47, OrbCentre - 14);
-            }
-            else
-            {
-                // Two-button layout (60x28): arrange, speak.
-                // Flyout centre is (30, 14).
-                target = new Point(OrbCentre - 30, FlyoutRestY);
-                from = new Point(OrbCentre - 30, OrbCentre - 14);
-            }
+            var target = new Point(
+                OrbCentre - _flyout.ArcOriginX,
+                OrbCentre - _flyout.ArcOriginY);
+            var from = new Point(
+                OrbCentre - _flyout.Width / 2,
+                OrbCentre - _flyout.Height / 2);
 
             _flyout.ShowNear(
                 from: this.PointToScreen(from),
@@ -583,10 +581,49 @@ namespace ClaudeBuddy
         // around this same point, never moved off it.
         private const double OrbCentre = 28;
 
-        // The flyout's top edge rests just below the orb's circle edge with
-        // a 2px gap: the circle's radius is 18, so its bottom sits at
-        // 28 + 18 = 46 in Root DIP space, and 46 + 2 = 48.
-        private const double FlyoutRestY = 48;
+        // --- Speak latest turn --------------------------------------------------
+
+        private void OnSpeakClicked()
+        {
+            if (TextToSpeech.IsSpeaking)
+            {
+                TextToSpeech.Cancel();
+                _flyout?.SetSpeaking(false);
+                return;
+            }
+
+            var text = FindSpeakableText();
+            if (text is null) return;
+
+            TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+            _flyout?.SetSpeaking(true);
+        }
+
+        // This session's own transcript first, then a search by directory.
+        //
+        // The fallback is for a session that dispatches work rather than
+        // doing it: a controller has no transcript of its own, but the
+        // background jobs it launched write theirs into project dirs named
+        // for the same cwd, and the most recent of those is what "read the
+        // last turn" means when you click its orb.
+        private string? FindSpeakableText()
+        {
+            var path = _lastStatus?.TranscriptPath;
+            var text = TranscriptReader.LatestAssistantText(path, SessionId);
+            if (text is not null) return text;
+
+            var cwd = _lastStatus?.Cwd;
+            if (string.IsNullOrEmpty(cwd)) return null;
+
+            var fallback = TranscriptReader.LatestTranscriptForCwd(cwd);
+            if (fallback is not null)
+            {
+                text = TranscriptReader.LatestAssistantText(fallback);
+                if (text is not null) return text;
+            }
+
+            return null;
+        }
 
         // Called by SessionManager when the arrangement state changes, so
         // every orb's flyout (if it exists) reflects whether clicking the
@@ -746,51 +783,6 @@ namespace ClaudeBuddy
             _recorder = null;
         }
 
-        // --- Speak latest turn --------------------------------------------------
-
-        private void OnSpeakClicked()
-        {
-            if (TextToSpeech.IsSpeaking)
-            {
-                TextToSpeech.Cancel();
-                _flyout?.SetSpeaking(false);
-                return;
-            }
-
-            var text = FindSpeakableText();
-            if (text is null) return;
-
-            TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
-            _flyout?.SetSpeaking(true);
-        }
-
-        // Try this session's own transcript first. If it has none (e.g. a
-        // controller session that dispatches to background jobs), find
-        // the most recently written transcript in project dirs matching
-        // this session's CWD.
-        private string? FindSpeakableText()
-        {
-            var path = _lastStatus?.TranscriptPath;
-            var text = TranscriptReader.LatestAssistantText(path, SessionId);
-            if (text is not null) return text;
-
-            // Controller/dispatcher sessions have no transcript. Search
-            // for the most recently written transcript in project dirs
-            // that match this session's CWD — background jobs launched
-            // from this session live in those dirs.
-            var cwd = _lastStatus?.Cwd;
-            if (string.IsNullOrEmpty(cwd)) return null;
-
-            var fallback = TranscriptReader.LatestTranscriptForCwd(cwd);
-            if (fallback is not null)
-            {
-                text = TranscriptReader.LatestAssistantText(fallback);
-                if (text is not null) return text;
-            }
-
-            return null;
-        }
-
         // --- Click, dragging & context menu ---
         // Left-press starts as a potential click; it becomes a drag once the
         // pointer moves past a small threshold. A clean click jumps to the
@@ -933,7 +925,8 @@ namespace ClaudeBuddy
                 // TerminalFocuser.Focus.
                 TerminalFocuser.Focus(
                     _lastStatus,
-                    SessionManager.Instance?.StatusFor(_lastStatus?.Lead));
+                    SessionManager.Instance?.StatusFor(_lastStatus?.Lead),
+                    SessionId);
             }
 
             _followers.Clear();

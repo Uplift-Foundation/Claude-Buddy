@@ -198,7 +198,8 @@ namespace ClaudeBuddy
                 {
                     var item = new NativeMenuItem(SessionLabel(session, ambiguous.Contains(DisplayName(session))));
                     var status = session.Status;
-                    item.Click += (_, _) => TerminalFocuser.Focus(status);
+                    var id = session.SessionId;
+                    item.Click += (_, _) => TerminalFocuser.Focus(status, null, id);
                     menu.Add(item);
                 }
             }
