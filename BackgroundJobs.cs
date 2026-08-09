@@ -87,23 +87,30 @@ namespace ClaudeBuddy
         {
             try
             {
+                // Invoked directly, not through a shell. The obvious way to
+                // reach a binary that isn't on this app's PATH is to ask the
+                // user's shell to find it, and that quietly doesn't work:
+                // `zsh -lc` reads .zshenv, .zprofile and .zlogin, but *not*
+                // .zshrc, which is only for interactive shells — and .zshrc is
+                // where a PATH addition for ~/.local/bin normally lives. So the
+                // lookup failed with "command not found" for exactly the launch
+                // this was written to survive, and because a failed read is
+                // treated as "don't hide anything", every finished session and
+                // every subagent got an orb again.
+                var claude = ClaudeBinary.Path;
+                if (claude is null) return null;
+
                 // --json is documented as not needing a tty, which is what
                 // makes it usable from a GUI app at all.
-                var psi = new ProcessStartInfo("/bin/sh")
+                var psi = new ProcessStartInfo(claude)
                 {
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 };
 
-                // Through a login shell for the same reason AgentTeamViewer
-                // needs one: launched from Finder this app has only the stock
-                // system PATH, and `claude` isn't on it.
-                var shell = Environment.GetEnvironmentVariable("SHELL");
-                if (string.IsNullOrEmpty(shell)) shell = "/bin/zsh";
-
-                psi.ArgumentList.Add("-c");
-                psi.ArgumentList.Add($"exec {shell} -lc 'claude agents --json'");
+                psi.ArgumentList.Add("agents");
+                psi.ArgumentList.Add("--json");
 
                 using var process = Process.Start(psi);
                 if (process is null) return null;
