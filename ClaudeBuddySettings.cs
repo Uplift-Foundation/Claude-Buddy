@@ -83,11 +83,24 @@ namespace ClaudeBuddy
         public const int DefaultOrbLifetimeMinutes = 5;
         public const int OrbLifetimeForever = 0;
 
+        public const string DefaultArrangeShape = "heart";
+        public const double DefaultArrangeSpacing = 0.85;
+
         private sealed class Model
         {
             public bool ShowOrbs { get; set; } = true;
             public bool TintActiveWindow { get; set; } = true;
             public int OrbLifetimeMinutes { get; set; } = DefaultOrbLifetimeMinutes;
+
+            // Off by default: one letter is what every existing orb already
+            // looks like, and changing that for everyone on upgrade would be
+            // a cosmetic surprise nobody asked for.
+            public bool TwoLetterGlyphs { get; set; }
+
+            // Off by default: turning this on is what triggers the one-time
+            // Whisper model download (a few hundred MB), so it must be an
+            // explicit opt-in rather than something a fresh install just has.
+            public bool VoiceInputEnabled { get; set; }
 
             // "#RRGGBB", or null for "use the built-in colour". Null rather than
             // a copy of the default so that retuning a shipped colour later still
@@ -116,6 +129,10 @@ namespace ClaudeBuddy
             // means in practice: a repair/reinstall re-reads whatever's saved
             // here rather than needing its own separate wizard UI for it.
             public List<string> ClaudeCodeProfileDirs { get; init; } = new();
+
+            // Auto-organize: which shape and how much space between orbs.
+            public string ArrangeShape { get; set; } = DefaultArrangeShape;
+            public double ArrangeSpacing { get; set; } = DefaultArrangeSpacing;
         }
 
         // ---- app-wide -------------------------------------------------------
@@ -151,6 +168,40 @@ namespace ClaudeBuddy
                 lock (Gate) _model.OrbLifetimeMinutes = value < 0 ? OrbLifetimeForever : value;
                 Save();
             }
+        }
+
+        // Gates both the mic flyout on the orb and the one-time Whisper model
+        // download — see VoiceRecorder/SpeechTranscriber. Nothing about speech
+        // capture or transcription runs while this is false.
+        public static bool VoiceInputEnabled
+        {
+            get { Load(); lock (Gate) return _model.VoiceInputEnabled; }
+            set { Load(); lock (Gate) _model.VoiceInputEnabled = value; Save(); }
+        }
+
+        // One letter (the default) or two initials on every orb's glyph —
+        // see OrbWindow.GlyphFor. Purely cosmetic, so there's no lifecycle
+        // to guard the way VoiceInputEnabled has; SessionManager.ReapplyGlyphs
+        // is what makes an already-open orb notice a flip without waiting
+        // for its next hook update.
+        public static bool TwoLetterGlyphs
+        {
+            get { Load(); lock (Gate) return _model.TwoLetterGlyphs; }
+            set { Load(); lock (Gate) _model.TwoLetterGlyphs = value; Save(); }
+        }
+
+        // ---- auto-organize ----------------------------------------------------
+
+        public static string ArrangeShape
+        {
+            get { Load(); lock (Gate) return _model.ArrangeShape; }
+            set { Load(); lock (Gate) _model.ArrangeShape = value; Save(); }
+        }
+
+        public static double ArrangeSpacing
+        {
+            get { Load(); lock (Gate) return _model.ArrangeSpacing; }
+            set { Load(); lock (Gate) _model.ArrangeSpacing = value; Save(); }
         }
 
         // ---- orb state colours ----------------------------------------------
@@ -305,7 +356,11 @@ namespace ClaudeBuddy
                         ShowOrbs = root["showOrbs"]?.GetValue<bool>() ?? true,
                         TintActiveWindow = root["tintActiveWindow"]?.GetValue<bool>() ?? true,
                         OrbLifetimeMinutes =
-                            root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes
+                            root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes,
+                        VoiceInputEnabled = root["voiceInputEnabled"]?.GetValue<bool>() ?? false,
+                        TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
+                        ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
+                        ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing
                     };
 
                     if (root["orbColors"] is JsonObject orbColors)
@@ -430,6 +485,10 @@ namespace ClaudeBuddy
                         ["showOrbs"] = _model.ShowOrbs,
                         ["tintActiveWindow"] = _model.TintActiveWindow,
                         ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
+                        ["voiceInputEnabled"] = _model.VoiceInputEnabled,
+                        ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
+                        ["arrangeShape"] = _model.ArrangeShape,
+                        ["arrangeSpacing"] = _model.ArrangeSpacing,
                         // Grouped rather than three top-level keys: it reads as
                         // one setting in the file the way it reads as one card in
                         // the window. A null entry — which is what a colour left

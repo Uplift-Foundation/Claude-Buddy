@@ -3,6 +3,7 @@
         x:Class="ClaudeBuddy.OrbWindow"
         Title="Claude Buddy"
         Width="56" Height="56"
+        SizeToContent="Manual"
         SystemDecorations="None"
         TransparencyLevelHint="Transparent"
         Background="Transparent"
@@ -12,10 +13,33 @@
         ShowActivated="False"
         WindowStartupLocation="Manual">
 
-    <!-- Transparent (not null) background so the whole 56x56 area is
+    <!-- Root is pinned to 56x56 and anchored top-left rather than left to
+         fill the window, because on Windows this window is *not* 56x56 no
+         matter what it asks for. Windows enforces a minimum size on a
+         top-level window (SM_CXMINTRACK/SM_CYMINTRACK, 136x39 on a stock
+         Windows 11 desktop), which lands here as a 120x56 client area —
+         measured on a real machine, and confirmed unbeatable: Width/Height,
+         MinWidth/MaxWidth, and even an outside SetWindowPos asking for 26x26
+         all leave it at the floor. (Min/Max used to be set here for exactly
+         that purpose; they did nothing and are gone.)
+
+         So the window's own size can't be a layout input. Its *position*
+         still can — that Avalonia sets exactly — which is why anchoring the
+         real 56x56 box to the top-left corner is what restores the geometry
+         every other part of the app already assumes: a 36px circle centred
+         at DIP (28,28). Centred in the inflated client area instead, the orb
+         was drawn 32px right of that point, which is what put the mic flyout
+         (OrbWindow.MicFlyoutOffset) and the team arrows (TeamLinks, which
+         anchors at PointToScreen(28,28)) nowhere near the orb they belong
+         to, and stretched the hover/drag square below to 120px wide.
+
+         Transparent (not null) background so the whole 56x56 area is
          hit-testable: hover tooltip, drag, and right-click work anywhere
-         on the orb's square, not just the ellipse pixels. -->
-    <Grid x:Name="Root" Background="Transparent">
+         on the orb's square, not just the ellipse pixels. Now genuinely that
+         square, rather than the window's full width. -->
+    <Grid x:Name="Root" Background="Transparent"
+          Width="56" Height="56"
+          HorizontalAlignment="Left" VerticalAlignment="Top">
         <Grid.ContextMenu>
             <ContextMenu>
                 <!-- Chat name, then its directory. The path row hides itself

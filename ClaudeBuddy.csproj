@@ -53,6 +53,7 @@
          theme bump that dropped it would otherwise break the build for a reason
          with nothing to do with theming. -->
     <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.3.7" />
+    <PackageReference Include="PvRecorder" Version="1.2.13" />
     <PackageReference Include="System.Management" Version="8.0.0" />
     <!-- AppKit-shaped control styles (MIT, Devolutions). Loaded only on macOS —
          see App.Initialize — with Fluent kept for Windows. Hand-rolling this was
@@ -60,6 +61,8 @@
          not published anywhere, and a drawn imitation maintained here drifts
          every time Apple moves. Requires Avalonia >= 11.3.7. -->
     <PackageReference Include="Devolutions.AvaloniaTheme.MacOS" Version="2026.6.16.1" />
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
   </ItemGroup>
 
 </Project>

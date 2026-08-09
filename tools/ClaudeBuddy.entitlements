@@ -39,5 +39,17 @@
          permanently with no way for the user to grant permission. -->
     <key>com.apple.security.automation.apple-events</key>
     <true/>
+
+    <!-- The voice-dictation mic (VoiceRecorder, via PvRecorder) opens the
+         audio input device. Following the same pattern as the Automation key
+         above — this app isn't sandboxed, but the hardened runtime still
+         gates several TCC-protected resources by their own entitlement, and
+         Apple Events already needed one here despite no sandbox — so this is
+         believed to be required for the same reason, though it hasn't been
+         separately confirmed on a signed build the way the Automation
+         permission failure mode was (see the README's Automation note). If
+         the mic silently fails to prompt on a real signed build, start here. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
 </dict>
 </plist>

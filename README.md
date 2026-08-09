@@ -28,6 +28,11 @@ sessions in one repo stop looking identical. Hover for the name and the full
 path; the right-click menu leads with both (plus reset that session to idle /
 exit Claude Buddy entirely).
 
+Turn on **Two-letter initials** in Settings for a wider glyph: one letter
+from each of the first two words of that same name (`Menu UX` → `Mu`), or
+the first two letters of it when there's only one word. Off by default, so
+existing installs keep looking exactly as they always have.
+
 **Left-click-drag an orb to put it wherever you want**, and it stays there:
 it holds that spot as other sessions come and go (the rest of the stack
 closes up behind it), and it's remembered across restarts of Claude Buddy —
@@ -317,6 +322,60 @@ Claude Buddy there — drag it onto the taskbar once to pin it (that's what
 sets `IsPromoted` in `HKCU\Control Panel\NotifyIconSettings`, which Windows
 then remembers). Nothing to configure in the app; it's how Windows 11 treats
 every new icon.
+
+### Voice dictation (optional, off by default)
+
+Turn on **Enable voice input** in the settings window and hovering an orb
+fades in a small mic badge over its corner. Click it, speak, click again (or
+wait 30 seconds) to stop. What you said is transcribed **entirely on this
+machine** — no cloud speech-to-text service, no Anthropic API call, nothing
+sent anywhere — and typed into that session's terminal for you to read over.
+**Enter is never pressed for you**; a misheard word is easy to fix or discard
+before it becomes a prompt.
+
+That "entirely on this machine" part is the point, not an afterthought: this
+has to work on a plain Claude subscription rather than API billing, so the
+whole pipeline avoids anything that would need its own separate account or
+per-minute charge. Transcription is [Whisper.net](https://github.com/sandrohanea/whisper.net)
+against a small English-only model (`ggml-base.en`, downloaded once — about
+150MB — the first time you turn the setting on, cached beside `settings.json`
+so it isn't fetched again). Typing the result in reuses the exact terminal/
+tmux-pane identification click-to-focus already does (see above and
+`TerminalFocuser.cs`); dictation just adds a second step after focusing —
+typing the words in — rather than a new way of finding the pane.
+
+**None of this has been hand-verified on a real machine yet** — it's new, and
+this repository is deliberately careful about that distinction elsewhere (see
+`docs/*-findings.md`). What's true by construction versus what still needs a
+real run-through:
+
+- **tmux (macOS)**: reuses the pane resolution described above, then runs
+  `tmux send-keys -t <pane> -l "<text>"` — literal mode, so tmux won't try to
+  interpret the words as key names. Should work wherever click-to-focus
+  already does; not yet confirmed against a live session.
+- **Non-tmux macOS** (iTerm2, Terminal.app, or just whichever terminal is
+  frontmost): after focusing, runs `tell application "System Events" to
+  keystroke "<text>"`. This needs **Accessibility** permission — a *different*
+  grant from the Automation permission click-to-focus uses, under System
+  Settings → Privacy & Security → **Accessibility**. Not yet confirmed whether
+  macOS prompts for it automatically the first time or whether it has to be
+  added by hand; if dictated text silently doesn't appear, check there first.
+  Like the Automation grant, expect it to be tied to the app's code identity —
+  a rebuild may invalidate it the same way (`tccutil reset Accessibility
+  io.github.wtvamp.claudebuddy` to force a fresh prompt).
+- **Windows**: focuses the terminal the same way a click does, then types the
+  words via `SendInput` (Unicode key events, not `SendKeys` — dictated text
+  isn't written in `SendKeys`'s escaping language). Not yet run against a real
+  Windows Terminal session.
+- **Microphone capture**: [PvRecorder](https://github.com/Picovoice/pvrecorder)
+  opens the input device directly; on macOS this needs the
+  `NSMicrophoneUsageDescription` Info.plist key (present in
+  `tools/build-macos-app.sh`) and, on a hardened-runtime signed build, the
+  `com.apple.security.device.audio-input` entitlement — believed necessary by
+  the same reasoning as the Automation entitlement, not separately confirmed.
+
+If you turn this on and something above doesn't work as described, that's the
+gap this section is flagging — not a contradiction of it.
 
 ### Claude Desktop profiles (macOS)
 

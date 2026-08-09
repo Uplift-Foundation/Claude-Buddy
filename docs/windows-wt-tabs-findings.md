@@ -202,3 +202,74 @@ Cleanup: all throwaway WT windows/tabs, the console test harness, the
 interactive `claude` sessions started for testing, and their processes were
 removed; final UIA enumeration matched the original two-window baseline
 exactly before stopping.
+
+## Item 4: corrections from real use
+
+Everything above was tested by *focusing* a terminal. Voice dictation later
+started typing into one, which exercises the same code with a much stricter
+success condition — the keystrokes have to arrive in the shell, not merely in
+the right window — and three conclusions above turned out to be narrower than
+they read. All four items here were measured on a real machine, the same way
+the originals were; what changed is the scope of the test, not the method.
+
+**`.Select()` raises the window only when the selection actually changes.**
+Item 1's cross-window result is real and reproduces. What it does not cover is
+selecting the tab that is *already* selected: that changes no selection, so it
+is a no-op and raises nothing. Item 2 read the finding as "a confirmed select
+means the window is up" and returned early on that basis, which is correct for
+every case item 3 exercised (all of them targeted a background tab, a
+background window, or both) and wrong for the one nobody thought to try —
+clicking the orb of the session you are already looking at. Clicking an orb or
+its mic makes Claude Buddy the foreground app first, so nothing brought the
+terminal back. `FocusWindows` now raises the tab's window explicitly after a
+successful select.
+
+**Raise the tab's own window, not `MainWindowHandle`.** Fallout from the
+same change. One process owning several WT windows is the premise this whole
+document starts from, and `Process.MainWindowHandle` picks an arbitrary one of
+them — fine as a last-resort fallback, not as the thing you raise when you
+have just identified an exact tab. The select script now reports its window's
+`NativeWindowHandle` (`SELECTED:<hwnd>`) and the caller raises that.
+
+**`.Select()` moves keyboard focus to the tab header.** Measured with
+`AutomationElement.FocusedElement` immediately either side of the call:
+`TermControl` (class name, the terminal pane) before, `TabItem` /
+`ListViewItem` after. This is invisible when the selection changes, because
+switching tabs then moves focus into the newly shown pane — which is why item
+3 never saw it, and why focus never came up in this document at all. When the
+tab is already current there is no such follow-up, so focus is left sitting on
+the tab header, and typing into a focused WT tab header starts an inline
+rename: the tab title highlights and nothing reaches the shell. Fixed by not
+selecting an already-selected tab, then calling `SetFocus()` on the on-screen
+`TermControl` regardless. The `SetFocus()` is deliberate belt-and-braces —
+without it, a window already left focused on its header by an earlier run has
+nothing to move focus back, and confirmed recovering from exactly that state.
+There is only ever one on-screen `TermControl` (WT exposes just the active
+tab's), so "the one that isn't offscreen" is unambiguous.
+
+**`"✳ " + status.Title` is the wrong thing to match.** Item 1 established the
+prefix correctly for the sessions it looked at — all idle. Claude Code
+replaces that glyph with an animated braille spinner (`⠂`, `⠐`, …) while a
+session is actually working, so a generating session's tab reads
+`"⠐ Check Claude Code status"` and the exact match never fires. Observed live
+with two sessions in one window: the idle one's orb worked, the generating
+one's did not, which presents as intermittency rather than as a rule. Note
+this failure was *not* harmless in the way item 2's "never worse than today"
+rule intended — falling through to window activation raises the window with
+whatever other tab was in front, so the orb appeared to work while showing the
+wrong session. Matching is now on the tab name's ending, so any status glyph
+passes; adding spinner frames to a list of accepted prefixes was rejected as
+tracking someone else's animation detail.
+
+**Item 2's `-NonInteractive: this must never pop a console of its own` was
+wrong.** `-NonInteractive` has nothing to do with it. This app is a `WinExe`,
+so a console child gets a console allocated and shown unless
+`CREATE_NO_WINDOW` says otherwise, and redirecting stdout/stderr does not
+suppress it. Measured from a `WinExe` parent with the same
+`ProcessStartInfo`: without `CreateNoWindow` the child owns a visible
+`PseudoConsoleWindow`, with it none, and stdout and exit code are identical.
+It flashed on screen for the ~400ms of every orb click, and — the part that
+mattered — held the foreground while it lived, so the terminal this code
+exists to raise lost the race. `TryRun` sets `CreateNoWindow = true` now;
+this is the one change here that touches the shared helper item 3 was careful
+about, and it is inert on macOS, where the flag is ignored.

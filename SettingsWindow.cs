@@ -226,13 +226,19 @@ namespace ClaudeBuddy
                 Row("Keep orbs for", LifetimePicker(),
                     "How long an orb stays after its session goes quiet. A session that's "
                     + "waiting on you is never removed, however long this is — those only go "
-                    + "away when you answer it or reset it from the orb's menu."))));
+                    + "away when you answer it or reset it from the orb's menu."),
+                Row("Two-letter initials",
+                    Switch(ClaudeBuddySettings.TwoLetterGlyphs, value =>
+                    {
+                        ClaudeBuddySettings.TwoLetterGlyphs = value;
+                        SessionManager.Instance?.ReapplyGlyphs();
+                    }),
+                    "One letter from each of the first two words of a chat's name, or the "
+                    + "first two letters of it when there's only one word — instead of just "
+                    + "the one letter every orb shows today."))));
 
-            // Its own group rather than three more rows in Orbs: that card already
-            // has two rows and one of them carries a paragraph of help, so five
-            // would read as a list rather than a group — and System Settings
-            // groups by what a setting is *about*. The labels are the same three
-            // words the tray menu already uses for these states.
+            root.Children.Add(Group("Auto-organize", Card(AutoOrganizeRows())));
+
             root.Children.Add(Group("Orb colours", Card(
                 ColorRow("Idle", "idle"),
                 ColorRow("Working", "generating"),
@@ -246,6 +252,8 @@ namespace ClaudeBuddy
             root.Children.Add(Group("Claude Desktop", Card(
                 Row("Tint the active window",
                     Switch(ClaudeDesktopOverlay.Enabled, ClaudeDesktopOverlay.SetEnabled)))));
+
+            root.Children.Add(Group("Voice input", Card(VoiceInputRows())));
 
             root.Children.Add(Group("Profiles", ProfilesCard()));
 
@@ -276,6 +284,152 @@ namespace ClaudeBuddy
             }
 
             return root;
+        }
+
+        // --- Voice input ---
+        // --- Auto-organize ---
+
+        private static readonly (string Label, string Value)[] ShapeChoices =
+        {
+            ("Heart", "heart"),
+            ("Circle", "circle"),
+            ("Diamond", "diamond"),
+            ("Star", "star"),
+            ("Grid", "grid")
+        };
+
+        private Control ShapePicker()
+        {
+            var current = ClaudeBuddySettings.ArrangeShape;
+            var choices = ShapeChoices.ToList();
+
+            if (choices.All(c => c.Value != current))
+                choices.Add((current, current));
+
+            var combo = new ComboBox
+            {
+                ItemsSource = choices.Select(c => c.Label).ToList(),
+                SelectedIndex = choices.FindIndex(c => c.Value == current),
+                MinWidth = 132
+            };
+            combo.SelectionChanged += (_, _) =>
+            {
+                var index = combo.SelectedIndex;
+                if (index < 0) return;
+
+                ClaudeBuddySettings.ArrangeShape = choices[index].Value;
+                SessionManager.Instance?.ReapplyArrangement();
+            };
+            return combo;
+        }
+
+        private Control[] AutoOrganizeRows()
+        {
+            return new Control[]
+            {
+                Row("Shape", ShapePicker(),
+                    "The pattern orbs arrange into when you click the sparkle button on any orb's flyout."),
+                Row("Spacing", SpacingSlider(),
+                    "How far apart the orbs sit inside the shape. Drag to see them move in real time.")
+            };
+        }
+
+        private Control SpacingSlider()
+        {
+            var slider = new Slider
+            {
+                Minimum = 0.3,
+                Maximum = 2.0,
+                Value = ClaudeBuddySettings.ArrangeSpacing,
+                MinWidth = 160,
+                SmallChange = 0.05,
+                LargeChange = 0.1,
+                TickFrequency = 0.05,
+                IsSnapToTickEnabled = true
+            };
+            slider.PropertyChanged += (_, e) =>
+            {
+                if (e.Property != Slider.ValueProperty) return;
+                ClaudeBuddySettings.ArrangeSpacing = slider.Value;
+                SessionManager.Instance?.ReapplyArrangement();
+            };
+            return slider;
+        }
+
+        // Off by default (see ClaudeBuddySettings.VoiceInputEnabled) —
+        // turning it on is what triggers the one-time Whisper model download,
+        // never the first mic click on an orb, so the multi-hundred-MB
+        // fetch is always something the user just asked for here.
+
+        // Only meaningful while a download this window kicked off is still
+        // running; null the rest of the time, in which case no status row
+        // is shown at all rather than a stale one.
+        private string? _voiceModelStatus;
+
+        private Control[] VoiceInputRows()
+        {
+            var rows = new List<Control>
+            {
+                Row("Enable voice input (experimental)",
+                    Switch(ClaudeBuddySettings.VoiceInputEnabled, OnVoiceInputToggled),
+                    "Hover an orb and click the mic that appears to dictate a prompt. Speech is "
+                    + "transcribed entirely on this machine (Whisper, no cloud service) and typed "
+                    + "into that session's terminal for review — nothing is sent anywhere, and "
+                    + "Enter is never pressed for you.")
+            };
+
+            if (ClaudeBuddySettings.VoiceInputEnabled && _voiceModelStatus is not null)
+            {
+                rows.Add(Row("Voice model", new TextBlock
+                {
+                    Text = _voiceModelStatus,
+                    FontSize = 12,
+                    Opacity = 0.7,
+                    TextWrapping = TextWrapping.Wrap
+                }));
+            }
+
+            return rows.ToArray();
+        }
+
+        private void OnVoiceInputToggled(bool enabled)
+        {
+            ClaudeBuddySettings.VoiceInputEnabled = enabled;
+
+            if (!enabled || SpeechTranscriber.ModelDownloaded)
+            {
+                Rebuild();
+                return;
+            }
+
+            _voiceModelStatus = "Downloading voice model (about 150 MB)…";
+            Rebuild();
+
+            var progress = new Progress<string>(message => Dispatcher.UIThread.Post(() =>
+            {
+                // The window this download was kicked off from may already be
+                // closed (or replaced by a fresh Toggle()) by the time a
+                // progress callback lands — updating a closed window's fields
+                // and rebuilding its (torn-down) content would be pointless
+                // at best.
+                if (_open != this) return;
+
+                _voiceModelStatus = message;
+                Rebuild();
+            }));
+
+            _ = SpeechTranscriber.DownloadModelAsync(progress).ContinueWith(t =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (_open != this) return;
+
+                    _voiceModelStatus = t.IsFaulted
+                        ? "Couldn't download the voice model — check your connection and try again."
+                        : null;
+                    Rebuild();
+                });
+            });
         }
 
         // --- Mac-ish chrome ---------------------------------------------------
