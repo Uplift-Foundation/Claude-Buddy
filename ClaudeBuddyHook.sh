@@ -116,9 +116,9 @@ if [ "$STATE" = "ended" ]; then
     rm -f "$FILE"
 else
     mkdir -p "$DIR"
-    printf '{"state":"%s","cwd":"%s","title":"%s","color":"%s","term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s","tmux_pane":"%s","tmux_bin":"%s","session_pid":%s}' \
+    printf '{"state":"%s","cwd":"%s","title":"%s","color":"%s","term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s","tmux_pane":"%s","tmux_bin":"%s","session_pid":%s,"transcript_path":"%s"}' \
         "$STATE" "$CWD" "$TITLE" "$COLOR" "$TERM_PROGRAM" "$TERM_ID" "$TTY" \
-        "$TMUX_SOCKET" "$TMUX_PANE_ID" "$TMUX_BIN" "${SESSION_PID:-0}" > "$FILE"
+        "$TMUX_SOCKET" "$TMUX_PANE_ID" "$TMUX_BIN" "${SESSION_PID:-0}" "$TRANSCRIPT" > "$FILE"
 fi
 
 exit 0

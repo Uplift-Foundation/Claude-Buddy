@@ -86,6 +86,13 @@ namespace ClaudeBuddy
         // checked and only the lifetime timer applies. See SessionGone.
         [JsonPropertyName("session_pid")]
         public int SessionPid { get; set; }
+
+        // Absolute path to the session's JSONL transcript file. The hooks
+        // receive it from Claude Code's hook payload and pass it through so
+        // the app can read conversation content (e.g. to speak the latest
+        // turn aloud). Empty from hooks older than this field.
+        [JsonPropertyName("transcript_path")]
+        public string TranscriptPath { get; set; } = "";
     }
 
     // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude

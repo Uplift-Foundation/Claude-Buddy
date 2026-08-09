@@ -102,6 +102,10 @@ namespace ClaudeBuddy
             // explicit opt-in rather than something a fresh install just has.
             public bool VoiceInputEnabled { get; set; }
 
+            // Which macOS `say` / Windows SAPI voice to use for speaking the
+            // latest turn. Null means the default ("Samantha" on macOS).
+            public string? SpeakVoice { get; set; }
+
             // "#RRGGBB", or null for "use the built-in colour". Null rather than
             // a copy of the default so that retuning a shipped colour later still
             // reaches everyone who never touched it — see the properties below.
@@ -177,6 +181,12 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.VoiceInputEnabled; }
             set { Load(); lock (Gate) _model.VoiceInputEnabled = value; Save(); }
+        }
+
+        public static string SpeakVoice
+        {
+            get { Load(); lock (Gate) return _model.SpeakVoice ?? TextToSpeech.DefaultVoice; }
+            set { Load(); lock (Gate) _model.SpeakVoice = value; Save(); }
         }
 
         // One letter (the default) or two initials on every orb's glyph —
