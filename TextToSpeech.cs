@@ -12,8 +12,23 @@ namespace ClaudeBuddy
     // naturally between speak and stop.
     public static class TextToSpeech
     {
+        // On Windows this is a last resort, not a real default: SAPI voice names
+        // are fully qualified ("Microsoft David Desktop"), and the bare "David"
+        // this used to be is not a name SelectVoice accepts. Measured in the
+        // host Speak actually uses — Windows PowerShell 5.1 — SelectVoice('David')
+        // and even SelectVoice('Microsoft David') both threw "No matching voice
+        // is installed or the voice was disabled", so speaking failed outright on
+        // Windows for every session that never picked a voice by hand.
+        //
+        // "Microsoft David Desktop" is the voice that ships with Windows itself,
+        // so it is the safest literal to fall back to; anything actually
+        // installed is preferred over it — see ResolveDefaultVoice.
+        private const string WindowsFallbackVoice = "Microsoft David Desktop";
+
         public static readonly string DefaultVoice =
-            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "Susan (Enhanced)" : "David";
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                ? "Susan (Enhanced)"
+                : WindowsFallbackVoice;
 
         private static Process? _speaking;
         private static readonly object Gate = new();
@@ -85,6 +100,10 @@ namespace ClaudeBuddy
                         voices.Add(name);
                     }
                 }
+                else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    voices.AddRange(WindowsVoices());
+                }
             }
             catch { }
 
@@ -102,6 +121,54 @@ namespace ClaudeBuddy
 
             _cachedVoices = voices;
             return voices;
+        }
+
+        // Asked of the same host that does the speaking — `powershell`, i.e.
+        // Windows PowerShell 5.1 — and that detail is the whole point rather
+        // than an implementation convenience. Enumerated from PowerShell 7 this
+        // machine reported five voices including "Microsoft David"; from 5.1 it
+        // reported two, "Microsoft David Desktop" and "Microsoft Zira Desktop".
+        // 5.1's System.Speech sees only the SAPI5 registry hive, while 7's sees
+        // the Speech_OneCore hive too, so a list gathered from the wrong host
+        // offers voices that SelectVoice then refuses. Both names 5.1 reported
+        // were confirmed to select successfully.
+        //
+        // A consequence worth knowing, and the reason the settings link says
+        // what it says: voices added through Windows' own Speech settings land
+        // in Speech_OneCore, so they will not appear here until this speaks
+        // through something that reads that hive.
+        private static List<string> WindowsVoices()
+        {
+            var found = new List<string>();
+
+            var proc = Process.Start(new ProcessStartInfo
+            {
+                FileName = "powershell",
+                ArgumentList =
+                {
+                    "-NoProfile", "-NonInteractive", "-Command",
+                    "Add-Type -AssemblyName System.Speech; " +
+                    "(New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | " +
+                    "Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.TwoLetterISOLanguageName -eq 'en' } | " +
+                    "ForEach-Object { $_.VoiceInfo.Name }"
+                },
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true   // a WinExe parent shows a console without this
+            });
+            if (proc is null) return found;
+
+            var output = proc.StandardOutput.ReadToEnd();
+            proc.WaitForExit(5000);
+
+            foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var name = line.Trim();
+                if (name.Length > 0) found.Add(name);
+            }
+
+            return found;
         }
 
         public static void Speak(string text, string? voice = null)
@@ -141,9 +208,18 @@ namespace ClaudeBuddy
                         ArgumentList =
                         {
                             "-NoProfile", "-Command",
+                            // SelectVoice is guarded so an unusable voice name
+                            // costs the *choice* of voice, not the speech.
+                            // It throws rather than returning false when a name
+                            // doesn't match, and with stderr discarded the only
+                            // symptom was silence — which is how a bad default
+                            // ("David", never a real SAPI name) read as "the
+                            // speak button does nothing". A voice saved before
+                            // this fix, or one that has since been uninstalled,
+                            // lands in the same place and now still speaks.
                             $"Add-Type -AssemblyName System.Speech; " +
                             $"$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; " +
-                            $"$s.SelectVoice('{voiceEscaped}'); " +
+                            $"try {{ $s.SelectVoice('{voiceEscaped}') }} catch {{ }}; " +
                             $"$s.Speak('{escaped}')"
                         },
                         UseShellExecute = false,

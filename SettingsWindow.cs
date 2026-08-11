@@ -443,6 +443,22 @@ namespace ClaudeBuddy
                         UseShellExecute = false
                     })?.Dispose();
                 }
+                else if (OperatingSystem.IsWindows())
+                {
+                    // Windows' own Speech page, which is where "Manage voices"
+                    // and "Add voices" live. There was no Windows branch here at
+                    // all, so the link hovered, underlined and did nothing —
+                    // the whole of the reported bug.
+                    //
+                    // UseShellExecute must be true, unlike the macOS call above:
+                    // ms-settings: is a URI for the shell to resolve, not an
+                    // executable to launch, and CreateProcess cannot start it.
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "ms-settings:speech",
+                        UseShellExecute = true
+                    })?.Dispose();
+                }
             };
             link.PointerEntered += (_, _) =>
                 link.TextDecorations = TextDecorations.Underline;
