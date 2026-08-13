@@ -45,6 +45,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- tools/ is scripts, plus the side-car speech engine's own project (see
+         tools/ClaudeBuddySpeech). The SDK's default glob is **/*.cs rooted at
+         this file, so without this the side-car's source would be compiled into
+         the app — dragging in the very 82MB of dependencies that keeping it a
+         separate downloadable process exists to avoid. Harmless until tools/
+         gained its first .cs file, which is exactly why it is easy to miss. -->
+    <Compile Remove="tools\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.7" />
     <PackageReference Include="Avalonia.Desktop" Version="11.3.7" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.7" />
