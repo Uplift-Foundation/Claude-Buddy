@@ -28,6 +28,12 @@ namespace ClaudeBuddy
         private static readonly IBrush SpeakNormalFill = new SolidColorBrush(Color.Parse("#E0202024"));
         private static readonly IBrush SpeakActiveFill = new SolidColorBrush(Color.Parse("#E04A90D9"));
 
+        // Amber rather than the speaking blue, so "working on it" and "playing"
+        // are told apart at a glance and not only by the glyph. The neural engine
+        // takes a few seconds to reach its first sound (see NeuralSpeech), and a
+        // stop button sitting over silence reads as a hang.
+        private static readonly IBrush SpeakPreparingFill = new SolidColorBrush(Color.Parse("#E0B8860B"));
+
         public event Action? MicClicked;
         public event Action? ArrangeClicked;
         public event Action? SettingsClicked;
@@ -150,13 +156,26 @@ namespace ClaudeBuddy
             ArrangeFill.Fill = arranged ? ArrangeActiveFill : ArrangeNormalFill;
         }
 
-        // Blue fill and a stop-square glyph while speech is playing;
-        // normal fill and speaker glyph otherwise. The button is its own
-        // stop control, so it has to look like whichever it currently is.
-        public void SetSpeaking(bool speaking)
+        // Three looks, because there are three things the button can mean. Blue
+        // with a stop square while audio plays, amber with an hourglass while the
+        // engine is still working towards its first sound, and the plain speaker
+        // otherwise. Pressing it cancels in either of the first two states, so
+        // both have to read as "press again to stop".
+        public void SetSpeakState(TextToSpeech.SpeakState state)
         {
-            SpeakFill.Fill = speaking ? SpeakActiveFill : SpeakNormalFill;
-            SpeakGlyph.Text = speaking ? "⏹" : "\U0001F508";
+            SpeakFill.Fill = state switch
+            {
+                TextToSpeech.SpeakState.Speaking => SpeakActiveFill,
+                TextToSpeech.SpeakState.Preparing => SpeakPreparingFill,
+                _ => SpeakNormalFill
+            };
+
+            SpeakGlyph.Text = state switch
+            {
+                TextToSpeech.SpeakState.Speaking => "⏹",
+                TextToSpeech.SpeakState.Preparing => "⏳",
+                _ => "\U0001F508"
+            };
         }
 
         public bool IsPointerOverFlyout => Root.IsPointerOver;

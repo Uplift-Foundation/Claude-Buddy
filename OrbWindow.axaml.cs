@@ -620,8 +620,9 @@ namespace ClaudeBuddy
 
             // Speech is global rather than per-orb, so a flyout opening
             // while something is already being read has to show the stop
-            // glyph rather than offer to start a second one.
-            _flyout.SetSpeaking(TextToSpeech.IsSpeaking);
+            // glyph rather than offer to start a second one. Reads the real
+            // state now rather than a flag some click left behind.
+            _flyout.SetSpeakState(TextToSpeech.State);
 
             // The arc's virtual centre (ArcOrigin) aligns with the orb's
             // centre so the semicircle sits concentric with the orb. The
@@ -651,12 +652,19 @@ namespace ClaudeBuddy
 
         // --- Speak latest turn --------------------------------------------------
 
+        // Deliberately tells the flyout nothing. It used to push the glyph itself
+        // either side of the call, which was a guess that happened to be right on
+        // the way in and always wrong on the way out — speech that ended by itself
+        // left the stop glyph up until the flyout was reopened, and the neural
+        // engine's several seconds of preparation looked identical to playing.
+        // TextToSpeech.StateChanged is the single source now; see SessionManager,
+        // which broadcasts it to every orb because speech is global rather than
+        // per-orb.
         private void OnSpeakClicked()
         {
             if (TextToSpeech.IsSpeaking)
             {
                 TextToSpeech.Cancel();
-                _flyout?.SetSpeaking(false);
                 return;
             }
 
@@ -664,8 +672,11 @@ namespace ClaudeBuddy
             if (text is null) return;
 
             TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
-            _flyout?.SetSpeaking(true);
         }
+
+        // Called by SessionManager when speech starts, changes phase or stops.
+        public void SetFlyoutSpeakState(TextToSpeech.SpeakState state) =>
+            _flyout?.SetSpeakState(state);
 
         // This session's own transcript first, then a search by directory.
         //

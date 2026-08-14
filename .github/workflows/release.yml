@@ -170,10 +170,28 @@ jobs:
         run: .\tools\build-windows-installer.ps1
         shell: pwsh
 
+      # The optional high-quality speech engine (see NeuralSpeech and
+      # docs/windows-neural-voice-findings.md). Never inside the installer: its
+      # dependencies weigh ~82MB, most of it phoneme lexicons for languages it
+      # doesn't use, and putting them in the app would have taken the installer
+      # from 35MB to ~110MB for every user whether they enable it or not. So it
+      # ships as its own asset in this same release and the app downloads it on
+      # demand — which is also why it must be built here rather than by hand: the
+      # toggle in Settings fetches this exact URL, so a release without this asset
+      # gives everyone who turns it on a 404.
+      #
+      # Windows-only, and only in this job, because macOS reaches Apple's Enhanced
+      # and Premium voices through `say` already and needs none of it.
+      - name: Build speech engine
+        run: .\tools\build-speech-engine.ps1
+        shell: pwsh
+
       - uses: actions/upload-artifact@v7
         with:
           name: windows-setup
-          path: dist/*.exe
+          path: |
+            dist/*.exe
+            dist/ClaudeBuddySpeech-*.zip
           if-no-files-found: error
 
   publish:
@@ -197,7 +215,11 @@ jobs:
           ls -la
           # Named extensions rather than `*`, so the output file can never end up
           # listed inside itself depending on glob-vs-redirection ordering.
-          sha256sum *.dmg *.exe > SHA256SUMS.txt
+          # The .zip is the optional speech engine, which the app downloads at
+          # runtime — publishing its checksum matters more than the installers',
+          # since that one arrives over the wire onto a machine rather than being
+          # something a person chose to click.
+          sha256sum *.dmg *.exe *.zip > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create release
