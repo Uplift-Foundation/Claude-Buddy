@@ -61,6 +61,7 @@ namespace ClaudeBuddy
 
         private string _lastState = "";
         private string _lastColor = "";
+        private Color? _accentColor;
         private string _lastGlyphName = "";
 
         // Colour for the team arrow leaving this orb, when it has one. Follows
@@ -191,21 +192,10 @@ namespace ClaudeBuddy
                 ? name
                 : $"{status.Agent} · {label}";
 
-            ToolTip.SetTip(Root, string.IsNullOrEmpty(status.Cwd)
-                ? (string.IsNullOrEmpty(described) ? SessionId : described)
-                : $"{described}\n{status.Cwd}");
+            var tipTitle = string.IsNullOrEmpty(described) ? SessionId : described;
+            var tipPath = string.IsNullOrEmpty(status.Cwd) ? null : status.Cwd;
+            ToolTip.SetTip(Root, ThoughtBubble(tipTitle, tipPath));
 
-            // Above the orb, not at the pointer (Avalonia's default for a
-            // tooltip). The mic flyout sits below and to the right, which is
-            // exactly where a pointer-placed tooltip lands, and a tooltip is its
-            // own always-on-top window — so it covered the mic and swallowed the
-            // clicks meant for it. Caught with WindowFromPoint over the mic's
-            // circle: a 160x46 tooltip window owned most of it.
-            //
-            // Placement rather than suppressing the tooltip while the flyout is
-            // up: the name and path are worth having on hover whether or not
-            // you're reaching for the mic, and moving it costs nothing, while
-            // hiding it would trade one annoyance for another.
             ToolTip.SetPlacement(Root, PlacementMode.Top);
 
             _lastGlyphName = name;
@@ -246,10 +236,15 @@ namespace ClaudeBuddy
             var known = !string.IsNullOrEmpty(colorName)
                         && AgentColors.TryGetValue(colorName, out accent);
 
+            _accentColor = known ? accent : null;
+
             Orb.Stroke = new SolidColorBrush(known ? accent : PlainStroke);
             Orb.StrokeThickness = known ? 2 : 1;
             Glyph.Foreground = new SolidColorBrush(known ? accent : PlainGlyph);
             LinkColor = known ? accent : PlainLink;
+
+            if (Glow.IsVisible)
+                _glowBrush.GradientStops = GlowStops(_accentColor ?? _orbBrush.Color);
         }
 
         // --- agent teams ------------------------------------------------------
@@ -412,7 +407,7 @@ namespace ClaudeBuddy
             // rendered at all, and there's no point rebuilding four gradient
             // stops for something nobody can see.
             Glow.IsVisible = GlowsFor(state);
-            if (Glow.IsVisible) _glowBrush.GradientStops = GlowStops(to);
+            if (Glow.IsVisible) _glowBrush.GradientStops = GlowStops(_accentColor ?? to);
         }
 
         // Opaque at the centre, gone by the edge — the same falloff a blur gave,
@@ -429,6 +424,79 @@ namespace ClaudeBuddy
             new GradientStop(Color.FromArgb(95, color.R, color.G, color.B), 0.82),
             new GradientStop(Color.FromArgb(0, color.R, color.G, color.B), 1.0)
         };
+
+        private static Control ThoughtBubble(string title, string? path)
+        {
+            var bg = Color.Parse("#E6EAECF0");
+            var fg = Color.Parse("#FF2A2A35");
+            var font = new FontFamily(
+                "SF Pro Rounded, .AppleSystemUIFontRounded, Segoe UI, sans-serif");
+
+            var content = new StackPanel { Spacing = 2 };
+            content.Children.Add(new TextBlock
+            {
+                Text = title,
+                FontSize = 12.5,
+                FontFamily = font,
+                FontWeight = FontWeight.SemiBold,
+                Foreground = new SolidColorBrush(fg),
+                TextWrapping = TextWrapping.NoWrap,
+                LineHeight = 17
+            });
+
+            if (path is not null)
+            {
+                content.Children.Add(new TextBlock
+                {
+                    Text = path,
+                    FontSize = 11.5,
+                    FontFamily = font,
+                    Foreground = new SolidColorBrush(Color.FromArgb(180, fg.R, fg.G, fg.B)),
+                    TextWrapping = TextWrapping.NoWrap,
+                    LineHeight = 15
+                });
+            }
+
+            var bubble = new Border
+            {
+                Background = new SolidColorBrush(bg),
+                CornerRadius = new CornerRadius(14),
+                Padding = new Thickness(14, 9),
+                BoxShadow = BoxShadows.Parse("0 2 8 0 #30000000"),
+                Child = content
+            };
+
+            var canvas = new Canvas
+            {
+                Width = 16, Height = 16,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                Margin = new Thickness(0, -2, 0, 0)
+            };
+
+            var dot1 = new Ellipse
+            {
+                Width = 8, Height = 8,
+                Fill = new SolidColorBrush(Color.FromArgb(180, bg.R, bg.G, bg.B))
+            };
+            Canvas.SetLeft(dot1, 4);
+            Canvas.SetTop(dot1, 0);
+
+            var dot2 = new Ellipse
+            {
+                Width = 5, Height = 5,
+                Fill = new SolidColorBrush(Color.FromArgb(120, bg.R, bg.G, bg.B))
+            };
+            Canvas.SetLeft(dot2, 6);
+            Canvas.SetTop(dot2, 10);
+
+            canvas.Children.Add(dot1);
+            canvas.Children.Add(dot2);
+
+            var stack = new StackPanel();
+            stack.Children.Add(bubble);
+            stack.Children.Add(canvas);
+            return stack;
+        }
 
         // One shared ticker drives every orb's pulse instead of an Avalonia
         // Animation per window. Avalonia animations run at the display's frame
