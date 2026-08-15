@@ -25,6 +25,41 @@ namespace ClaudeBuddy
         private static Model _model = new();
         private static bool _loaded;
 
+        // Keys found in settings.json that this build knows nothing about, kept
+        // verbatim so Save can put them back.
+        //
+        // Save rebuilds the whole document from the model rather than editing the
+        // file in place, which means any key it doesn't write is deleted. That is
+        // fine while there is only ever one version of the app — and quietly
+        // destructive the moment there isn't. Observed exactly that way: an
+        // installed build three commits behind was launched for a couple of
+        // minutes, saved once for an unrelated reason, and silently erased
+        // speakCommand, neuralVoiceEnabled and neuralVoice from a file it had no
+        // idea contained them. The visible symptom was speech coming out in the
+        // default system voice with no explanation.
+        //
+        // It costs a user nothing to be wrong about this and quite a lot to
+        // discover it: downgrading, running an old copy once, or testing a build
+        // from bin/ beside an installed one all do it. Round-tripping the unknown
+        // keys makes an older version leave newer settings alone instead.
+        private static readonly Dictionary<string, JsonNode?> _unknownKeys =
+            new(StringComparer.Ordinal);
+
+        // Every key Save writes. Kept next to _unknownKeys rather than derived
+        // from the JsonObject Save builds, because it has to be consulted during
+        // Load, before that object exists. Adding a setting means adding it here
+        // too — miss it and the key round-trips through _unknownKeys as well as
+        // being written properly, which JsonObject rejects as a duplicate.
+        private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
+        {
+            "version", "showOrbs", "tintActiveWindow", "orbLifetimeMinutes",
+            "voiceInputEnabled", "twoLetterGlyphs", "arrangeShape", "arrangeSpacing",
+            "speakVoice", "neuralVoiceEnabled", "neuralVoice",
+            "speakCommand", "speakCommandArgs",
+            "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
+            "orbColors", "claudeCodeProfileDirs", "profiles", "orbPositions"
+        };
+
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
         // options it's given — it doesn't fall back to
         // JsonSerializerOptions.Default's own resolver just because that one
@@ -83,11 +118,111 @@ namespace ClaudeBuddy
         public const int DefaultOrbLifetimeMinutes = 5;
         public const int OrbLifetimeForever = 0;
 
+        public const string DefaultArrangeShape = "heart";
+        public const double DefaultArrangeSpacing = 0.85;
+
         private sealed class Model
         {
             public bool ShowOrbs { get; set; } = true;
             public bool TintActiveWindow { get; set; } = true;
             public int OrbLifetimeMinutes { get; set; } = DefaultOrbLifetimeMinutes;
+
+            // Off by default: one letter is what every existing orb already
+            // looks like, and changing that for everyone on upgrade would be
+            // a cosmetic surprise nobody asked for.
+            public bool TwoLetterGlyphs { get; set; }
+
+            // Off by default: turning this on is what triggers the one-time
+            // Whisper model download (a few hundred MB), so it must be an
+            // explicit opt-in rather than something a fresh install just has.
+            public bool VoiceInputEnabled { get; set; }
+
+            // Which macOS `say` / Windows SAPI voice to use for speaking the
+            // latest turn. Null means the default ("Samantha" on macOS).
+            public string? SpeakVoice { get; set; }
+
+            // Off by default, same reasoning as VoiceInputEnabled: turning it on
+            // is what fetches the neural speech engine and its model (~300MB
+            // together), so it has to be something the user just asked for.
+            // Windows-only in practice — see NeuralSpeech, and note that macOS's
+            // own Enhanced and Premium voices are already better than this.
+            public bool NeuralVoiceEnabled { get; set; }
+
+            // A command of the user's own to speak with, replacing every built-in
+            // engine. Null means "use the built-in ones".
+            //
+            // This is the extension point for any voice or engine this app will
+            // never ship: the contract is deliberately the same one TextToSpeech
+            // already lives by, because speaking here has always been "a child
+            // process is running" and stopping it "kill that process". So the
+            // whole interface is: text arrives on stdin as UTF-8, the process
+            // exits when it has finished speaking, and being killed means stop.
+            // Nothing to implement beyond reading stdin.
+            //
+            // Whatever is on the other end is the user's business — a Piper
+            // wrapper, a voice-conversion chain, a Python script, a cloud API, a
+            // batch file. The app makes no assumption about it and reports its
+            // failures rather than hiding them. Same posture the project already
+            // takes with ClaudeBuddyHook.ps1, which is a user-editable script in
+            // %APPDATA% wired into Claude Code by hand.
+            public string? SpeakCommand { get; set; }
+
+            // Arguments for it, kept as a list rather than one string so nobody
+            // has to guess this app's quoting rules for a path with spaces —
+            // they are passed through ArgumentList, which quotes each one
+            // correctly by construction.
+            public List<string> SpeakCommandArgs { get; init; } = new();
+
+            // Optional companion to SpeakCommand: a command that prints the voice
+            // names it can speak with, one per line, so they can be offered in the
+            // settings window like any other voice.
+            //
+            // Needed because the app cannot know what an arbitrary program
+            // supports — SpeakCommand is opaque by design. Without this the only
+            // honest thing the picker can say is "the command decides", and the
+            // chosen voice has to be configured inside the command instead.
+            //
+            // The selected name reaches SpeakCommand through the CLAUDEBUDDY_VOICE
+            // environment variable rather than an appended argument: SpeakCommandArgs
+            // belongs to the user, and injecting a positional argument would break
+            // any wrapper that takes fixed ones. A command that ignores the variable
+            // is unaffected.
+            public string? SpeakVoicesCommand { get; set; }
+
+            // Its own arguments, not shared with SpeakCommandArgs. One script
+            // usually serves both roles by branching on an argument — ours takes
+            // "--list-voices" — and sharing one list would mean handing that same
+            // flag to the speaking invocation, which would then list voices
+            // instead of talking. Two lists is the difference between "one script,
+            // two modes" working and quietly doing the wrong thing.
+            public List<string> SpeakVoicesCommandArgs { get; init; } = new();
+
+            // Which of the three engines the selected voice belongs to: "system",
+            // "neural" or "custom". The voice itself lives in that engine's own key
+            // below, so switching engines and back remembers what was chosen in
+            // each.
+            //
+            // Exists because the engine used to be decided by precedence —
+            // configuring a command silently took the neural and system voices out
+            // of play, and the settings picker could only ever show one engine's
+            // worth of what the machine could do. Making the choice explicit is what
+            // lets all three sit in one list.
+            public string? SpeakEngine { get; set; }
+
+            // Which of those names is selected. A fourth voice key rather than
+            // reusing SpeakVoice or NeuralVoice for the same reason those two are
+            // separate: the name spaces have nothing in common, and a value left
+            // behind in another engine's key is a name that engine rejects.
+            public string? SpeakCommandVoice { get; set; }
+
+            // Which neural voice ("af_heart"). Kept separate from SpeakVoice
+            // rather than sharing one key, because the two name spaces have
+            // nothing in common: leaving "af_heart" behind in the field SAPI
+            // reads would hand SelectVoice a name it throws on, which is exactly
+            // the failure the comment at the top of TextToSpeech describes
+            // shipping once already. Two keys means either engine's choice
+            // survives a round trip through the other.
+            public string? NeuralVoice { get; set; }
 
             // "#RRGGBB", or null for "use the built-in colour". Null rather than
             // a copy of the default so that retuning a shipped colour later still
@@ -116,6 +251,10 @@ namespace ClaudeBuddy
             // means in practice: a repair/reinstall re-reads whatever's saved
             // here rather than needing its own separate wizard UI for it.
             public List<string> ClaudeCodeProfileDirs { get; init; } = new();
+
+            // Auto-organize: which shape and how much space between orbs.
+            public string ArrangeShape { get; set; } = DefaultArrangeShape;
+            public double ArrangeSpacing { get; set; } = DefaultArrangeSpacing;
         }
 
         // ---- app-wide -------------------------------------------------------
@@ -151,6 +290,105 @@ namespace ClaudeBuddy
                 lock (Gate) _model.OrbLifetimeMinutes = value < 0 ? OrbLifetimeForever : value;
                 Save();
             }
+        }
+
+        // Gates both the mic flyout on the orb and the one-time Whisper model
+        // download — see VoiceRecorder/SpeechTranscriber. Nothing about speech
+        // capture or transcription runs while this is false.
+        public static bool VoiceInputEnabled
+        {
+            get { Load(); lock (Gate) return _model.VoiceInputEnabled; }
+            set { Load(); lock (Gate) _model.VoiceInputEnabled = value; Save(); }
+        }
+
+        public static string SpeakVoice
+        {
+            get { Load(); lock (Gate) return _model.SpeakVoice ?? TextToSpeech.DefaultVoice; }
+            set { Load(); lock (Gate) _model.SpeakVoice = value; Save(); }
+        }
+
+        // Settings-file only, with no row in the settings window on purpose: a
+        // free-text command box invites pasting something and hoping, and this
+        // belongs next to the hook JSON in the README where the rest of the
+        // power-user surface is documented. Easy to surface later if it earns it.
+        public static string? SpeakCommand
+        {
+            get { Load(); lock (Gate) return _model.SpeakCommand; }
+            set { Load(); lock (Gate) _model.SpeakCommand = value; Save(); }
+        }
+
+        public static List<string> SpeakCommandArgs
+        {
+            // A copy, not the list itself: callers build a ProcessStartInfo from
+            // this off the UI thread while Settings could be writing it.
+            get { Load(); lock (Gate) return new List<string>(_model.SpeakCommandArgs); }
+        }
+
+        public static string? SpeakVoicesCommand
+        {
+            get { Load(); lock (Gate) return _model.SpeakVoicesCommand; }
+            set { Load(); lock (Gate) _model.SpeakVoicesCommand = value; Save(); }
+        }
+
+        public static List<string> SpeakVoicesCommandArgs
+        {
+            get { Load(); lock (Gate) return new List<string>(_model.SpeakVoicesCommandArgs); }
+        }
+
+        // Null when nothing has been chosen, unlike SpeakVoice and NeuralVoice
+        // which fall back to a default: there is no sensible default name for a
+        // command whose voices this app has never seen, and passing a guess would
+        // be worse than passing nothing.
+        public static string? SpeakCommandVoice
+        {
+            get { Load(); lock (Gate) return _model.SpeakCommandVoice; }
+            set { Load(); lock (Gate) _model.SpeakCommandVoice = value; Save(); }
+        }
+
+        // "system" when unset, because the platform voices are the only ones that
+        // always exist — a fresh install has no neural engine downloaded and no
+        // command configured.
+        public static string SpeakEngine
+        {
+            get { Load(); lock (Gate) return _model.SpeakEngine ?? "system"; }
+            set { Load(); lock (Gate) _model.SpeakEngine = value; Save(); }
+        }
+
+        public static bool NeuralVoiceEnabled
+        {
+            get { Load(); lock (Gate) return _model.NeuralVoiceEnabled; }
+            set { Load(); lock (Gate) _model.NeuralVoiceEnabled = value; Save(); }
+        }
+
+        public static string NeuralVoice
+        {
+            get { Load(); lock (Gate) return _model.NeuralVoice ?? NeuralSpeech.DefaultVoiceName; }
+            set { Load(); lock (Gate) _model.NeuralVoice = value; Save(); }
+        }
+
+        // One letter (the default) or two initials on every orb's glyph —
+        // see OrbWindow.GlyphFor. Purely cosmetic, so there's no lifecycle
+        // to guard the way VoiceInputEnabled has; SessionManager.ReapplyGlyphs
+        // is what makes an already-open orb notice a flip without waiting
+        // for its next hook update.
+        public static bool TwoLetterGlyphs
+        {
+            get { Load(); lock (Gate) return _model.TwoLetterGlyphs; }
+            set { Load(); lock (Gate) _model.TwoLetterGlyphs = value; Save(); }
+        }
+
+        // ---- auto-organize ----------------------------------------------------
+
+        public static string ArrangeShape
+        {
+            get { Load(); lock (Gate) return _model.ArrangeShape; }
+            set { Load(); lock (Gate) _model.ArrangeShape = value; Save(); }
+        }
+
+        public static double ArrangeSpacing
+        {
+            get { Load(); lock (Gate) return _model.ArrangeSpacing; }
+            set { Load(); lock (Gate) _model.ArrangeSpacing = value; Save(); }
         }
 
         // ---- orb state colours ----------------------------------------------
@@ -305,8 +543,49 @@ namespace ClaudeBuddy
                         ShowOrbs = root["showOrbs"]?.GetValue<bool>() ?? true,
                         TintActiveWindow = root["tintActiveWindow"]?.GetValue<bool>() ?? true,
                         OrbLifetimeMinutes =
-                            root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes
+                            root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes,
+                        VoiceInputEnabled = root["voiceInputEnabled"]?.GetValue<bool>() ?? false,
+                        TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
+                        ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
+                        ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing,
+
+                        // speakVoice was declared on the model and written by its
+                        // property from the start, but never read here and never
+                        // written by Save — so every voice anyone picked was
+                        // discarded at exit and silently replaced by the default.
+                        // Text(), not GetValue<string>(), for the reason Text's
+                        // own comment gives: a type mismatch in one hand-edited
+                        // key would otherwise throw and reset every setting in
+                        // this file, profiles and orb positions included.
+                        SpeakVoice = Text(root["speakVoice"]),
+                        NeuralVoiceEnabled = root["neuralVoiceEnabled"]?.GetValue<bool>() ?? false,
+                        NeuralVoice = Text(root["neuralVoice"]),
+                        SpeakCommand = Text(root["speakCommand"]),
+                        SpeakVoicesCommand = Text(root["speakVoicesCommand"]),
+                        SpeakCommandVoice = Text(root["speakCommandVoice"]),
+                        SpeakEngine = Text(root["speakEngine"])
                     };
+
+                    // Same shape as claudeCodeProfileDirs below: read as an array
+                    // and skipped entirely when absent, so an older settings file
+                    // simply has no arguments rather than failing to load.
+                    if (root["speakCommandArgs"] is JsonArray speakArgs)
+                    {
+                        foreach (var argument in speakArgs)
+                        {
+                            var value = Text(argument);
+                            if (!string.IsNullOrEmpty(value)) model.SpeakCommandArgs.Add(value);
+                        }
+                    }
+
+                    if (root["speakVoicesCommandArgs"] is JsonArray voicesArgs)
+                    {
+                        foreach (var argument in voicesArgs)
+                        {
+                            var value = Text(argument);
+                            if (!string.IsNullOrEmpty(value)) model.SpeakVoicesCommandArgs.Add(value);
+                        }
+                    }
 
                     if (root["orbColors"] is JsonObject orbColors)
                     {
@@ -355,6 +634,22 @@ namespace ClaudeBuddy
 
                             model.OrbPositions[key] = new OrbPlacement(x.Value, y.Value);
                         }
+                    }
+
+                    // Anything above this line is a key this build understands.
+                    // Whatever is left belongs to a different version and is kept
+                    // aside for Save to write back untouched — see _unknownKeys
+                    // for why, and note that "version" is deliberately treated as
+                    // known so it is not carried around twice.
+                    _unknownKeys.Clear();
+                    foreach (var (key, node) in root)
+                    {
+                        if (KnownKeys.Contains(key)) continue;
+
+                        // Detached from the document, because the JsonObject this
+                        // came from is about to go out of scope and a JsonNode
+                        // cannot belong to two parents.
+                        _unknownKeys[key] = node?.DeepClone();
                     }
 
                     _model = model;
@@ -424,12 +719,35 @@ namespace ClaudeBuddy
                     var profileDirs = new JsonArray();
                     foreach (var dirName in _model.ClaudeCodeProfileDirs) profileDirs.Add(dirName);
 
+                    var speakArgs = new JsonArray();
+                    foreach (var argument in _model.SpeakCommandArgs) speakArgs.Add(argument);
+
+                    var voicesArgs = new JsonArray();
+                    foreach (var argument in _model.SpeakVoicesCommandArgs) voicesArgs.Add(argument);
+
                     root = new JsonObject
                     {
                         ["version"] = CurrentVersion,
                         ["showOrbs"] = _model.ShowOrbs,
                         ["tintActiveWindow"] = _model.TintActiveWindow,
                         ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
+                        ["voiceInputEnabled"] = _model.VoiceInputEnabled,
+                        ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
+                        ["arrangeShape"] = _model.ArrangeShape,
+                        ["arrangeSpacing"] = _model.ArrangeSpacing,
+                        // Null when never chosen, like the colours below rather
+                        // than a copy of the current default — so changing which
+                        // voice ships as the default still reaches everyone who
+                        // never picked one.
+                        ["speakVoice"] = _model.SpeakVoice,
+                        ["neuralVoiceEnabled"] = _model.NeuralVoiceEnabled,
+                        ["neuralVoice"] = _model.NeuralVoice,
+                        ["speakCommand"] = _model.SpeakCommand,
+                        ["speakCommandArgs"] = speakArgs,
+                        ["speakVoicesCommand"] = _model.SpeakVoicesCommand,
+                        ["speakVoicesCommandArgs"] = voicesArgs,
+                        ["speakCommandVoice"] = _model.SpeakCommandVoice,
+                        ["speakEngine"] = _model.SpeakEngine,
                         // Grouped rather than three top-level keys: it reads as
                         // one setting in the file the way it reads as one card in
                         // the window. A null entry — which is what a colour left
@@ -445,6 +763,18 @@ namespace ClaudeBuddy
                         ["profiles"] = profiles,
                         ["orbPositions"] = positions
                     };
+
+                    // Keys this build doesn't understand, put back exactly as they
+                    // were found. Without this, saving here *deletes* every
+                    // setting a newer version added — see _unknownKeys. Added last
+                    // so a key that becomes known later can never be written
+                    // twice: the guard below keeps the two sources from colliding
+                    // if KnownKeys and this object ever drift apart.
+                    foreach (var (key, node) in _unknownKeys)
+                    {
+                        if (root.ContainsKey(key)) continue;
+                        root[key] = node?.DeepClone();
+                    }
                 }
 
                 // Write beside the target and rename over it, so a crash midway

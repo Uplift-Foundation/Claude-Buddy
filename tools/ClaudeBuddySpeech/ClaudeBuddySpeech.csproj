@@ -1,0 +1,69 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The side-car speech engine: a separate process the app downloads on demand
+       and shells out to, never something shipped inside ClaudeBuddy.exe.
+
+       It lives in its own project because of what it drags in. KokoroSharp's
+       dependency graph weighs ~82MB on disk, 66MB of which is MisakiSharp.dll —
+       embedded grapheme-to-phoneme lexicons for English, Japanese, Chinese and
+       Hindi, of which this uses only English. Referenced from the app that would
+       have taken the Windows installer from 35MB to ~110MB for every user
+       whether or not they ever turned the feature on, and put the same weight
+       into the macOS .app where it can never be used at all (Apple's Enhanced
+       and Premium voices are already available to any app through `say`).
+
+       Being a separate *process* rather than a side-loaded assembly is also what
+       keeps the app's speech contract intact. TextToSpeech already models
+       speaking as "a child process is alive" and cancelling as killing it; a
+       side-car fits that exactly, where loading this in-process would have meant
+       an AssemblyLoadContext, a native-library resolver inside a single-file
+       exe, reflection over every call, and a new state machine to handle
+       cancellation that is no longer instantaneous.
+
+       Deliberately not in claudeBuddy.sln: it is not part of the app's build,
+       and adding it there would make `dotnet build` at the repo root restore
+       82MB of packages nobody asked for. Build it with
+       tools/build-speech-engine.ps1. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ClaudeBuddySpeech</AssemblyName>
+    <RootNamespace>ClaudeBuddySpeech</RootNamespace>
+
+    <!-- Cosmetic: what the file properties of ClaudeBuddySpeech.exe report.
+         Nothing depends on it. The version that matters — the one in the bundle's
+         filename, in the release URL and in the %APPDATA% path — comes from
+         ClaudeBuddy.csproj's <Version>, which the README calls the single source
+         of truth; build-speech-engine.ps1 reads it from there and NeuralSpeech
+         derives the same value from the app assembly, so the two cannot drift. -->
+    <Version>0.3.0-beta</Version>
+
+    <!-- Self-contained: the app itself is self-contained precisely so users need
+         no .NET runtime installed, and a framework-dependent side-car would
+         quietly reintroduce that requirement for anyone who enables this.
+
+         NOT single-file, unlike the app. The engine needs its voices/ directory
+         beside the executable anyway (KokoroVoiceManager.LoadVoicesFromPath), so
+         a folder is the honest shape — and it avoids re-extracting ~150MB of
+         natives to a temp directory on every single utterance, which is what
+         single-file self-extraction would do to a short-lived process. -->
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
+
+    <!-- No trimming. NumSharp and ONNX Runtime are reflection-heavy, and this
+         project's whole job is to work; the download is already large enough
+         that shaving the runtime is not worth a silent trimming failure at
+         synthesis time. Revisit only with measurements. -->
+    <PublishTrimmed>false</PublishTrimmed>
+
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="KokoroSharp.CPU" Version="0.8.4" />
+  </ItemGroup>
+
+</Project>

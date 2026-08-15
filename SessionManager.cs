@@ -86,6 +86,13 @@ namespace ClaudeBuddy
         // checked and only the lifetime timer applies. See SessionGone.
         [JsonPropertyName("session_pid")]
         public int SessionPid { get; set; }
+
+        // Absolute path to the session's JSONL transcript file. The hooks
+        // receive it from Claude Code's hook payload and pass it through so
+        // the app can read conversation content (e.g. to speak the latest
+        // turn aloud). Empty from hooks older than this field.
+        [JsonPropertyName("transcript_path")]
+        public string TranscriptPath { get; set; } = "";
     }
 
     // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude
@@ -134,6 +141,11 @@ namespace ClaudeBuddy
         {
             Instance = this;
             Directory.CreateDirectory(_statusDir);
+
+            // Subscribed once for the app's lifetime, so no unsubscribe: this
+            // object outlives every orb, which is the point — an orb closing must
+            // not stop the other flyouts hearing about speech.
+            TextToSpeech.StateChanged += OnSpeakStateChanged;
 
             _tray = new TrayController();
 
@@ -386,7 +398,7 @@ namespace ClaudeBuddy
                 // behind. This applies to `waiting` as well, which the timer
                 // below deliberately never touches; an unanswered prompt whose
                 // session was killed used to sit on screen indefinitely.
-                if (!ProcessLiveness.IsRunning(status.SessionPid))
+                if (status.SessionPid > 0 && !ProcessLiveness.IsRunning(status.SessionPid))
                 {
                     continue;   // removed in the pass below
                 }
@@ -412,7 +424,15 @@ namespace ClaudeBuddy
                 // process in a real window that nothing in the lead's own
                 // process tree points at, so the hook could never have recorded
                 // it. See AgentTeamViewer, which finds it by directory.
-                if (leadsWithLiveAgents.Contains(sessionId) && !KnowsATerminal(status))
+                // A session with no pid of its own is in the same bind and
+                // for the same reason: nothing in a process tree points at
+                // the window you actually watch it in, so the directory is
+                // the only link back to its `claude agents` viewer. Widened
+                // to cover it because the machinery is identical — TryAdopt
+                // no-ops off macOS, without a cwd, and when no viewer for
+                // that directory is running.
+                if (!KnowsATerminal(status)
+                    && (leadsWithLiveAgents.Contains(sessionId) || status.SessionPid <= 0))
                 {
                     AgentTeamViewer.TryAdopt(status);
                 }
@@ -432,7 +452,29 @@ namespace ClaudeBuddy
                     && string.IsNullOrEmpty(status.TermProgram)
                     && string.IsNullOrEmpty(status.TmuxPane)
                     && status.TermPid == 0
-                    && !leadsWithLiveAgents.Contains(sessionId))
+                    && !leadsWithLiveAgents.Contains(sessionId)
+                    && status.SessionPid > 0)
+                {
+                    continue;
+                }
+
+                // A session recording no pid is only worth an orb if it's a
+                // background job that is still running.
+                //
+                // "No pid" is a wider net than it first appears. A background
+                // agent has none — which is what the exemption above is for —
+                // but neither does a subagent, and neither does a status file
+                // whose session ended without clearing it. All three write the
+                // same "idle" state, so on disk they're identical; only the
+                // daemon knows which is which. Taking pid-less to mean
+                // "background agent" put a permanent orb on screen for every
+                // subagent anyone spawned, and with the lifetime set to forever
+                // they only accumulated.
+                //
+                // Asked of nothing else, so an ordinary session never pays for
+                // the lookup, and a listing that can't be read keeps every orb
+                // — see BackgroundJobs.
+                if (status.SessionPid <= 0 && !BackgroundJobs.IsLiveJob(sessionId))
                 {
                     continue;
                 }
@@ -647,9 +689,46 @@ namespace ClaudeBuddy
             _tray?.ReapplyStateColors();
         }
 
+        // Same shape as ReapplyStateColors, for the "Two-letter initials"
+        // toggle: a cosmetic setting change isn't a session change, so
+        // nothing on the scan path would otherwise notice it until whatever
+        // orb's session next fires a hook.
+        public void ReapplyGlyphs()
+        {
+            foreach (var window in _windows.Values)
+            {
+                window.ReapplyGlyph();
+            }
+        }
+
+        // Speech is one global thing, not one per orb: whichever orb started it,
+        // every open flyout's speak button has to agree about whether something
+        // is being read. Broadcasting from here rather than from the orb that
+        // clicked, for the same reason ReapplyGlyphs lives here — this class is
+        // already what owns "one change, every orb".
+        //
+        // Posted to the UI thread because the state changes on whatever thread
+        // the speech engine's process exited on.
+        private void OnSpeakStateChanged(TextToSpeech.SpeakState state)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                foreach (var window in _windows.Values)
+                {
+                    window.SetFlyoutSpeakState(state);
+                }
+            });
+        }
+
         private void ReflowPositions()
         {
             if (_order.Count == 0 || !OrbsVisible) return;
+
+            if (_isArranged)
+            {
+                AbsorbIntoArrangement();
+                return;
+            }
 
             var first = _windows[_order[0]];
             var screen = first.Screens.Primary ?? first.Screens.All.FirstOrDefault();
@@ -678,6 +757,44 @@ namespace ClaudeBuddy
             }
 
             // Every arrow's geometry just moved.
+            TeamLinks.Refresh();
+        }
+
+        // A new orb appeared or an old one vanished while the shape is
+        // active. Fold the newcomer in and redraw rather than dumping it
+        // into the vertical stack where it would sit outside the pattern.
+        private void AbsorbIntoArrangement()
+        {
+            if (_arrangeAnimTargets is not null) return;
+
+            // Orbs gone since the pattern was drawn — drop their saved state.
+            foreach (var id in _preArrangeState.Keys
+                         .Where(id => !_windows.ContainsKey(id)).ToList())
+            {
+                _preArrangeState.Remove(id);
+            }
+
+            // Orbs that arrived after the pattern was drawn — record where
+            // they would have stacked so Restore can put them back there.
+            foreach (var id in _windows.Keys)
+            {
+                if (_preArrangeState.ContainsKey(id)) continue;
+                var w = _windows[id];
+                _preArrangeState[id] = (w.Position, w.IsPinned);
+                w.SetFlyoutArranged(true);
+            }
+
+            var allOrbs = DisplayOrder()
+                .Where(id => _windows.ContainsKey(id) && _windows[id].IsVisible)
+                .Select(id => _windows[id])
+                .ToList();
+
+            if (allOrbs.Count < 1) return;
+
+            var positioned = ComputeClusteredPositions(allOrbs);
+            foreach (var (orb, target) in positioned)
+                orb.PinAt(target);
+
             TeamLinks.Refresh();
         }
 
@@ -783,6 +900,456 @@ namespace ClaudeBuddy
             {
                 ResetSessionToIdle(sessionId);
             }
+        }
+
+        // --- orb arrangement patterns ----------------------------------------
+        // Clicking the arrange button on any orb's flyout gathers every
+        // visible orb into a heart shape, centred on the primary screen.
+        // Clicking again restores them — a toggle, not a one-way trip.
+
+        private readonly Dictionary<string, (PixelPoint Position, bool Pinned)> _preArrangeState = new();
+        private bool _isArranged;
+
+        public bool IsArranged => _isArranged;
+
+        private DispatcherTimer? _arrangeAnimTimer;
+        private Dictionary<string, (PixelPoint From, PixelPoint To)>? _arrangeAnimTargets;
+        private long _arrangeAnimStart;
+        private Action? _arrangeAnimComplete;
+        private const int ArrangeAnimMs = 600;
+
+        public void ArrangeOrbsInPattern()
+        {
+            if (_arrangeAnimTargets is not null) return;
+
+            if (_isArranged)
+            {
+                RestoreFromPattern();
+                return;
+            }
+
+            var allOrbs = DisplayOrder()
+                .Where(id => _windows.ContainsKey(id) && _windows[id].IsVisible)
+                .Select(id => _windows[id])
+                .ToList();
+
+            if (allOrbs.Count < 1) return;
+
+            foreach (var w in _windows.Values)
+                w.HideFlyout();
+
+            _preArrangeState.Clear();
+            foreach (var orb in allOrbs)
+                _preArrangeState[orb.SessionId] = (orb.Position, orb.IsPinned);
+
+            var positioned = ComputeClusteredPositions(allOrbs);
+
+            _arrangeAnimTargets = new();
+            foreach (var (orb, target) in positioned)
+                _arrangeAnimTargets[orb.SessionId] = (orb.Position, target);
+
+            _isArranged = true;
+            AnimateArrangement(() =>
+            {
+                foreach (var (id, (_, to)) in _arrangeAnimTargets ?? new())
+                {
+                    if (_windows.TryGetValue(id, out var window))
+                        window.PinAt(to);
+                }
+            });
+
+            foreach (var w in _windows.Values)
+                w.SetFlyoutArranged(true);
+        }
+
+        // Leads and solo orbs define the shape; members radiate outward
+        // from their lead, away from the shape's centre — so the pattern
+        // reads cleanly and the small member orbs fan out like spokes.
+        private List<(OrbWindow Orb, PixelPoint Target)> ComputeClusteredPositions(List<OrbWindow> allOrbs)
+        {
+            var teams = new Dictionary<string, List<OrbWindow>>(StringComparer.Ordinal);
+            var anchors = new List<OrbWindow>();
+
+            foreach (var orb in allOrbs)
+            {
+                var lead = _statuses.TryGetValue(orb.SessionId, out var s) ? s.Lead : "";
+                if (!string.IsNullOrEmpty(lead) && lead != orb.SessionId
+                    && allOrbs.Any(o => o.SessionId == lead))
+                {
+                    if (!teams.TryGetValue(lead, out var members))
+                        teams[lead] = members = new List<OrbWindow>();
+                    members.Add(orb);
+                }
+                else
+                {
+                    anchors.Add(orb);
+                }
+            }
+
+            var shapeTargets = ShapePositions(anchors);
+            var result = new List<(OrbWindow, PixelPoint)>();
+
+            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(allOrbs);
+
+            for (int i = 0; i < anchors.Count; i++)
+            {
+                var anchor = anchors[i];
+                var pos = shapeTargets[i];
+                result.Add((anchor, pos));
+
+                if (!teams.TryGetValue(anchor.SessionId, out var members)) continue;
+
+                // Direction from shape centre outward through this lead
+                double dx = pos.X - cx;
+                double dy = pos.Y - cy;
+                double dist = Math.Sqrt(dx * dx + dy * dy);
+                if (dist < 1) { dx = 0; dy = -1; dist = 1; }
+                double nx = dx / dist;
+                double ny = dy / dist;
+
+                double memberRadius = orbSize * 1.2;
+                double fanSpread = Math.PI / 3;
+
+                for (int m = 0; m < members.Count; m++)
+                {
+                    double baseAngle = Math.Atan2(ny, nx);
+                    double offset = members.Count == 1
+                        ? 0
+                        : fanSpread * (m - (members.Count - 1) / 2.0) / Math.Max(members.Count - 1, 1);
+                    double angle = baseAngle + offset;
+
+                    var memberPos = new PixelPoint(
+                        (int)Math.Round(pos.X + memberRadius * Math.Cos(angle)),
+                        (int)Math.Round(pos.Y + memberRadius * Math.Sin(angle)));
+                    result.Add((members[m], memberPos));
+                }
+            }
+
+            return result;
+        }
+
+        private void RestoreFromPattern()
+        {
+            if (_arrangeAnimTargets is not null) return;
+
+            foreach (var w in _windows.Values)
+                w.HideFlyout();
+
+            var targets = new Dictionary<string, (PixelPoint From, PixelPoint To)>();
+            foreach (var (id, (origPos, _)) in _preArrangeState)
+            {
+                if (!_windows.TryGetValue(id, out var window)) continue;
+                targets[id] = (window.Position, origPos);
+            }
+
+            _arrangeAnimTargets = targets;
+            _isArranged = false;
+
+            AnimateArrangement(() =>
+            {
+                foreach (var (id, (origPos, wasPinned)) in _preArrangeState)
+                {
+                    if (!_windows.TryGetValue(id, out var window)) continue;
+                    if (wasPinned)
+                        window.PinAt(origPos);
+                    else
+                        window.Unpin();
+                }
+                _preArrangeState.Clear();
+                ReflowPositions();
+            });
+
+            foreach (var w in _windows.Values)
+                w.SetFlyoutArranged(false);
+        }
+
+        private void AnimateArrangement(Action? onComplete = null)
+        {
+            _arrangeAnimComplete = onComplete;
+            _arrangeAnimStart = Environment.TickCount64;
+
+            if (_arrangeAnimTimer is null)
+            {
+                _arrangeAnimTimer = new DispatcherTimer
+                {
+                    Interval = TimeSpan.FromMilliseconds(1000.0 / 60)
+                };
+                _arrangeAnimTimer.Tick += OnArrangeAnimTick;
+            }
+            _arrangeAnimTimer.Start();
+        }
+
+        private void OnArrangeAnimTick(object? sender, EventArgs e)
+        {
+            if (_arrangeAnimTargets is null)
+            {
+                _arrangeAnimTimer?.Stop();
+                return;
+            }
+
+            var elapsed = Environment.TickCount64 - _arrangeAnimStart;
+            var t = Math.Min(1.0, elapsed / (double)ArrangeAnimMs);
+            var eased = 1 - Math.Pow(1 - t, 3);
+
+            foreach (var (id, (from, to)) in _arrangeAnimTargets)
+            {
+                if (!_windows.TryGetValue(id, out var window)) continue;
+                window.Position = new PixelPoint(
+                    (int)Math.Round(from.X + (to.X - from.X) * eased),
+                    (int)Math.Round(from.Y + (to.Y - from.Y) * eased));
+            }
+            TeamLinks.Refresh();
+
+            if (t < 1.0) return;
+
+            _arrangeAnimTimer!.Stop();
+            var complete = _arrangeAnimComplete;
+            _arrangeAnimComplete = null;
+            var targets = _arrangeAnimTargets;
+            _arrangeAnimTargets = null;
+            complete?.Invoke();
+        }
+
+        public List<OrbWindow> ArrangedSiblings(string excludeSessionId)
+        {
+            if (!_isArranged) return new();
+
+            return _preArrangeState.Keys
+                .Where(id => id != excludeSessionId
+                          && _windows.ContainsKey(id)
+                          && _windows[id].IsVisible)
+                .Select(id => _windows[id])
+                .ToList();
+        }
+
+        // Called from the settings slider so the user sees orbs reposition
+        // in real time while dragging. Only acts when orbs are already arranged;
+        // if they're not, the new spacing is just saved for next time.
+        public void ReapplyArrangement()
+        {
+            if (!_isArranged) return;
+            if (_arrangeAnimTargets is not null) return;
+
+            var allOrbs = DisplayOrder()
+                .Where(id => _windows.ContainsKey(id) && _windows[id].IsVisible)
+                .Select(id => _windows[id])
+                .ToList();
+
+            if (allOrbs.Count < 1) return;
+
+            var positioned = ComputeClusteredPositions(allOrbs);
+            foreach (var (orb, target) in positioned)
+                orb.Position = target;
+
+            TeamLinks.Refresh();
+        }
+
+        // ---- shape generators ---------------------------------------------------
+
+        private static List<PixelPoint> ShapePositions(List<OrbWindow> orbs)
+        {
+            var shape = ClaudeBuddySettings.ArrangeShape;
+            var pts = shape switch
+            {
+                "circle"  => CirclePositions(orbs),
+                "diamond" => DiamondPositions(orbs),
+                "star"    => StarPositions(orbs),
+                "grid"    => GridPositions(orbs),
+                _         => HeartPositions(orbs),
+            };
+            return EnsureMinSpacing(pts, orbs);
+        }
+
+        // After a shape generator runs, check whether any two orbs ended
+        // up too close and uniformly scale the whole pattern outward from
+        // its centre until every pair clears the minimum gap.
+        private static List<PixelPoint> EnsureMinSpacing(List<PixelPoint> pts, List<OrbWindow> orbs)
+        {
+            if (pts.Count < 2) return pts;
+
+            var screen = orbs[0].Screens.Primary ?? orbs[0].Screens.All.FirstOrDefault();
+            double scale = screen?.Scaling ?? 1.0;
+            int orbSize = (int)(56 * scale);
+            double minGap = orbSize * (0.3 + ClaudeBuddySettings.ArrangeSpacing);
+
+            double minDist = double.MaxValue;
+            for (int i = 0; i < pts.Count; i++)
+            {
+                for (int j = i + 1; j < pts.Count; j++)
+                {
+                    double dx = pts[i].X - pts[j].X;
+                    double dy = pts[i].Y - pts[j].Y;
+                    double dist = Math.Sqrt(dx * dx + dy * dy);
+                    if (dist < minDist) minDist = dist;
+                }
+            }
+
+            if (minDist >= minGap || minDist < 1) return pts;
+
+            double cx = pts.Average(p => (double)p.X);
+            double cy = pts.Average(p => (double)p.Y);
+            double factor = minGap / minDist;
+
+            return pts.Select(p => new PixelPoint(
+                (int)Math.Round(cx + (p.X - cx) * factor),
+                (int)Math.Round(cy + (p.Y - cy) * factor)
+            )).ToList();
+        }
+
+        private static (PixelRect Work, double Scale, int OrbSize, int Margin, double Cx, double Cy) ShapeAnchor(List<OrbWindow> orbs)
+        {
+            var screen = orbs[0].Screens.Primary ?? orbs[0].Screens.All.FirstOrDefault();
+            var work = screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080);
+            double scale = screen?.Scaling ?? 1.0;
+            int orbSize = (int)(56 * scale);
+            int margin = (int)(24 * scale);
+
+            double cx = work.Right - margin - orbSize * 1.5;
+            double cy = work.Y + margin + orbSize * 2.5;
+
+            return (work, scale, orbSize, margin, cx, cy);
+        }
+
+        private static double SpacingScale(int orbSize)
+        {
+            return orbSize * ClaudeBuddySettings.ArrangeSpacing / 16.0;
+        }
+
+        // Heart: x = 16sin³t, y = 13cos(t) - 5cos(2t) - 2cos(3t) - cos(4t)
+        private static List<PixelPoint> HeartPositions(List<OrbWindow> orbs)
+        {
+            int n = orbs.Count;
+            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
+
+            if (n == 1)
+                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
+
+            var pts = new (double X, double Y)[n];
+            for (int i = 0; i < n; i++)
+            {
+                double t = 2 * Math.PI * i / n;
+                double sinT = Math.Sin(t);
+                pts[i] = (
+                    16 * sinT * sinT * sinT,
+                    -(13 * Math.Cos(t) - 5 * Math.Cos(2 * t)
+                      - 2 * Math.Cos(3 * t) - Math.Cos(4 * t))
+                );
+            }
+
+            double s = SpacingScale(orbSize);
+
+            return pts.Select(p => new PixelPoint(
+                (int)Math.Round(cx + p.X * s),
+                (int)Math.Round(cy + p.Y * s)
+            )).ToList();
+        }
+
+        private static List<PixelPoint> CirclePositions(List<OrbWindow> orbs)
+        {
+            int n = orbs.Count;
+            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
+
+            if (n == 1)
+                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
+
+            double radius = SpacingScale(orbSize) * 10;
+
+            return Enumerable.Range(0, n).Select(i =>
+            {
+                double t = 2 * Math.PI * i / n - Math.PI / 2;
+                return new PixelPoint(
+                    (int)Math.Round(cx + radius * Math.Cos(t)),
+                    (int)Math.Round(cy + radius * Math.Sin(t)));
+            }).ToList();
+        }
+
+        private static List<PixelPoint> DiamondPositions(List<OrbWindow> orbs)
+        {
+            int n = orbs.Count;
+            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
+
+            if (n == 1)
+                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
+
+            double s = SpacingScale(orbSize) * 10;
+            var pts = new List<PixelPoint>();
+            for (int i = 0; i < n; i++)
+            {
+                double t = 2 * Math.PI * i / n - Math.PI / 2;
+                double cos = Math.Cos(t), sin = Math.Sin(t);
+                double r = s / Math.Max(Math.Abs(cos) + Math.Abs(sin), 0.01);
+                pts.Add(new PixelPoint(
+                    (int)Math.Round(cx + r * cos),
+                    (int)Math.Round(cy + r * sin)));
+            }
+            return pts;
+        }
+
+        // Five-pointed star: 10 vertices (5 outer tips, 5 inner valleys)
+        // with N orbs distributed evenly along the perimeter, interpolating
+        // between vertices so any count traces the star shape.
+        private static List<PixelPoint> StarPositions(List<OrbWindow> orbs)
+        {
+            int n = orbs.Count;
+            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
+
+            if (n == 1)
+                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
+
+            double outer = SpacingScale(orbSize) * 12;
+            double inner = outer * 0.4;
+            const int verts = 10;
+
+            var starX = new double[verts];
+            var starY = new double[verts];
+            for (int v = 0; v < verts; v++)
+            {
+                double angle = 2 * Math.PI * v / verts - Math.PI / 2;
+                double r = (v % 2 == 0) ? outer : inner;
+                starX[v] = r * Math.Cos(angle);
+                starY[v] = r * Math.Sin(angle);
+            }
+
+            return Enumerable.Range(0, n).Select(i =>
+            {
+                double pos = (double)i * verts / n;
+                int idx = (int)pos;
+                double frac = pos - idx;
+                int a = idx % verts;
+                int b = (idx + 1) % verts;
+
+                double x = starX[a] * (1 - frac) + starX[b] * frac;
+                double y = starY[a] * (1 - frac) + starY[b] * frac;
+
+                return new PixelPoint(
+                    (int)Math.Round(cx + x),
+                    (int)Math.Round(cy + y));
+            }).ToList();
+        }
+
+        private static List<PixelPoint> GridPositions(List<OrbWindow> orbs)
+        {
+            int n = orbs.Count;
+            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
+
+            if (n == 1)
+                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
+
+            int cols = (int)Math.Ceiling(Math.Sqrt(n));
+            int rows = (int)Math.Ceiling((double)n / cols);
+            double gap = orbSize * (0.5 + ClaudeBuddySettings.ArrangeSpacing);
+
+            double startX = cx - (cols - 1) * gap / 2;
+            double startY = cy - (rows - 1) * gap / 2;
+
+            return Enumerable.Range(0, n).Select(i =>
+            {
+                int col = i % cols;
+                int row = i / cols;
+                return new PixelPoint(
+                    (int)Math.Round(startX + col * gap),
+                    (int)Math.Round(startY + row * gap));
+            }).ToList();
         }
     }
 }

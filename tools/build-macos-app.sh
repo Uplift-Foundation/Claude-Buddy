@@ -131,6 +131,21 @@ cat > "$CONTENTS/Info.plist" <<PLIST
          menu (quitting sends a quit Apple Event, which is TCC-gated). -->
     <key>NSAppleEventsUsageDescription</key>
     <string>Claude Buddy uses automation to bring the terminal window of a Claude Code session to the front when you click its orb, and to quit a Claude Desktop profile when you choose Quit from its menu.</string>
+    <!-- Shown the moment PvRecorder opens the input device, which only
+         happens if the user has turned on voice input in Settings and then
+         clicks the mic that appears on hover — see VoiceRecorder. Without
+         this key macOS kills the process instead of prompting, so it has to
+         be here before that feature can work at all, the same way the
+         Automation key above has to exist before click-to-focus can prompt.
+         Typing the transcribed text into the terminal is a second, separate
+         permission (Accessibility, for the "System Events keystroke"
+         AppleScript in TerminalFocuser.SendText) — TCC prompts for that one
+         itself the first time it's needed, with no Info.plist key of its
+         own, but it's tied to this bundle's code identity exactly like the
+         Automation grant is, so the same "a rebuild can invalidate it"
+         caveat above applies to it too. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Claude Buddy uses the microphone to transcribe what you say, entirely on this machine, when you click the mic that appears on hovering an orb — only after you turn voice input on in Settings.</string>
 </dict>
 </plist>
 PLIST

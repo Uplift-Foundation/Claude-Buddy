@@ -17,7 +17,7 @@
          explicitly from the numeric part. Version flows into
          AssemblyInformationalVersion, which is what actually shows the
          prerelease label. -->
-    <Version>0.2.0-beta</Version>
+    <Version>0.3.0-beta</Version>
     <AssemblyVersion>0.2.0.0</AssemblyVersion>
     <FileVersion>0.2.0.0</FileVersion>
     <Product>Claude Buddy</Product>
@@ -45,6 +45,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- tools/ is scripts, plus the side-car speech engine's own project (see
+         tools/ClaudeBuddySpeech). The SDK's default glob is **/*.cs rooted at
+         this file, so without this the side-car's source would be compiled into
+         the app — dragging in the very 82MB of dependencies that keeping it a
+         separate downloadable process exists to avoid. Harmless until tools/
+         gained its first .cs file, which is exactly why it is easy to miss. -->
+    <Compile Remove="tools\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.7" />
     <PackageReference Include="Avalonia.Desktop" Version="11.3.7" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.7" />
@@ -53,6 +63,7 @@
          theme bump that dropped it would otherwise break the build for a reason
          with nothing to do with theming. -->
     <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.3.7" />
+    <PackageReference Include="PvRecorder" Version="1.2.13" />
     <PackageReference Include="System.Management" Version="8.0.0" />
     <!-- AppKit-shaped control styles (MIT, Devolutions). Loaded only on macOS —
          see App.Initialize — with Fluent kept for Windows. Hand-rolling this was
@@ -60,6 +71,8 @@
          not published anywhere, and a drawn imitation maintained here drifts
          every time Apple moves. Requires Avalonia >= 11.3.7. -->
     <PackageReference Include="Devolutions.AvaloniaTheme.MacOS" Version="2026.6.16.1" />
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
   </ItemGroup>
 
 </Project>
