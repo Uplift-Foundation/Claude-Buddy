@@ -18,7 +18,7 @@ attempt:
 | checked | result |
 | --- | --- |
 | `libonnxruntime.dylib` for arm64 | present, and signed by its package |
-| `--list-voices` | 20 American English voices, the same list Windows reports |
+| `--list-voices` | the same English voice list Windows reports |
 | Synthesis | works; ~half real time, matching the Windows measurement |
 | Apphost signature | ad-hoc, applied by the SDK at publish time |
 | Publish size / zip | 209 MB on disk, 129 MB zipped |
@@ -177,7 +177,7 @@ shorter than the app's list, which also needs Apple Events and the microphone;
 the engine sends no events and opens no input device.
 
 Verified on the real artifact: a signed engine extracted from the zip keeps
-`flags=0x10000(runtime)` and all three entitlements, lists 20 voices, speaks, and
+`flags=0x10000(runtime)` and all three entitlements, lists its voices, speaks, and
 exits 0.
 
 One trap in writing that file: `codesign` parses entitlements through
@@ -189,7 +189,7 @@ The archive was verified through the app's own extraction path — .NET's
 `ZipFile.ExtractToDirectory`, not `unzip` — and comes out with
 `ClaudeBuddySpeech` and `voices/` at the top level, no `__MACOSX` entries, and
 the executable bit already set at 755 before `SetUnixFileMode` is applied. The
-extracted artifact was then run: 20 voices listed, spoke, exit 0.
+extracted artifact was then run: voices listed, spoke, exit 0.
 
 `zip` rather than `ditto` on purpose: `ditto` adds `__MACOSX` resource-fork
 entries that `ZipFile.ExtractToDirectory` materialises as junk beside the binary.
@@ -198,22 +198,95 @@ ditto's handling of them.
 
 One trap that cost a confusing half hour: `cp -R voices publish/voices` nests as
 `publish/voices/voices` when the target already exists, and the engine then loads
-every voice twice — visible only as `--list-voices` quietly reporting 44 English
-voices instead of 20. The script removes the target first and copies the `.npy`
+every voice twice — visible only as `--list-voices` quietly reporting double
+the voices it should. The script removes the target first and copies the `.npy`
 files by name.
+
+## Gatekeeper does not block the downloaded engine
+
+The engine is signed with a Developer ID but is **not notarized** — it is not a
+bundle and is not submitted with the DMGs — so `spctl` assesses it as rejected:
+
+```
+$ spctl -a -vv -t exec .../ClaudeBuddySpeech
+rejected
+source=Unnotarized Developer ID
+```
+
+That assessment does not stop it running, because Gatekeeper enforces on files
+carrying `com.apple.quarantine`, and nothing in this path sets one. Quarantine is
+applied by download*ers* that participate in it — browsers, and anything using
+LaunchServices — not by an arbitrary `HttpClient`, and `ZipFile.ExtractToDirectory`
+does not propagate an attribute that was never there.
+
+Verified rather than reasoned about: the zip was served over HTTP, fetched with
+the same `HttpClient` calls `DownloadCoreAsync` makes, extracted with the same
+`ZipFile` call, and then checked and run.
+
+| checked | result |
+| --- | --- |
+| `com.apple.quarantine` on the executable | absent |
+| Quarantined files anywhere in the extracted tree | 0 |
+| `codesign --verify --strict` after the roundtrip | valid, satisfies its Designated Requirement |
+| Running it | listed voices, spoke, exit 0 |
+
+**Assumed, not verified:** that a real GitHub HTTPS release URL behaves the same
+as the localhost HTTP one. The same API does the fetching either way, and
+quarantine is a property of the downloader rather than the origin, which is the
+reason for believing it.
+
+## Custom voices
+
+Tested, because the whole feature exists for them.
+
+| file dropped in the user voices directory | listed? | spoke? |
+| --- | --- | --- |
+| `af_warrentest.npy` | yes | yes, exit 0 |
+| `nopfx_custom.npy` (no recognised prefix) | yes | yes, exit 0 |
+| `bf_british.npy` | yes | yes, exit 0 |
+| `zf_chinese.npy` | no — filed under Mandarin | n/a |
+
+Two things this contradicted, both of which had been written down as fact:
+
+- **A prefix-less name is not invisible.** It falls through to the American
+  English list and behaves like any other voice. What hides a voice is a prefix
+  claiming a *different* language.
+- **British voices were being filtered out entirely.** `EnglishVoices()` asked
+  for `AmericanEnglish` only, so `bf_alice`, `bf_emma`, `bf_isabella`, `bf_lily`,
+  `bm_daniel`, `bm_fable`, `bm_george` and `bm_lewis` shipped inside every 130 MB
+  bundle and appeared in no picker — while the README told users `bf_`/`bm_` were
+  prefixes that would work. It now asks for both English variants: 28 bundled
+  voices instead of 20, and a custom British voice shows up.
+
+That bug was **pre-existing and not macOS-specific** — Windows filtered the same
+eight voices out of its own picker.
+
+The eight were listened to before being let into the picker, rather than assumed
+to be fine because they shipped: they are the same quality as the American set
+and belong there. That was a product call as much as a bug fix, since restoring
+them changes what every user sees on both platforms.
 
 ## Open / unverified
 
-- The `osx-x64` engine has **never been built or run**. Only `osx-arm64` was
-  exercised here. The script takes `--rid osx-x64` and the workflow builds it,
-  but no Intel Mac was available to confirm it runs.
-- Not tested against a released asset end to end — the download URL cannot be
-  exercised until a tag publishes one. Everything up to and including extraction
-  was tested with a local zip.
-- Playback quality on a long turn (near the 1500-character limit, many segments)
-  was not measured. Each segment is a separate `afplay`, so there is a process
-  start between them; on sentence boundaries it should read as a natural pause,
-  but nobody has listened to a full-length turn.
+- **`osx-x64` has never run on a real Intel Mac.** It builds, signs and packs
+  (135.9 MB), and it was run under **Rosetta** on Apple Silicon — 22 voices
+  listed, spoke, exit 0, noticeably slower as translation implies. That exercises
+  the x86_64 binary and the x64 ONNX library, but it is not the same as native
+  Intel hardware.
+- **Nothing has been driven through the app's own UI.** Every test here invoked
+  the engine binary directly. The settings toggle, the voice picker and the orb's
+  speak button have not been exercised against this engine.
+- Not tested against a real published asset — the release URL cannot be exercised
+  until a tag carries one.
+- Only macOS 27.0 was tested. The app's `LSMinimumSystemVersion` is 11.0, and
+  nothing older was tried; `afplay` and the OpenAL-free path are not expected to
+  be version-sensitive, but that is an expectation, not a measurement.
+- A full-length turn plays through — 770 characters, 54 s, many segments, exit 0.
+  Each segment is a separate `afplay`, so there is a process start between them,
+  and the concern was that this would read as a stutter rather than a pause.
+  **Listened to and judged fine**, which is the only test that settles it. Worth
+  re-checking if the segmentation config ever changes, since the gap scales with
+  how often a new `afplay` starts rather than with anything measured here.
 - Bluetooth and external audio devices were not tested; `afplay` follows the
   system default output, so device switching mid-utterance is unexplored.
 - A cancelled utterance leaves its temp WAV behind in `$TMPDIR`, because the tree

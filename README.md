@@ -436,9 +436,12 @@ put beside the bundled voices would be deleted by the next release.
 
 The filename matters more than you'd expect: Kokoro reads the language and
 gender from its prefix, so `af_` (American female), `am_` (American male),
-`bf_`/`bm_` (British) are what make a voice show up in an English list. A file
-named `mycustom.npy` loads and is then invisible. Copy the naming of the bundled
-ones and it'll be there.
+`bf_`/`bm_` (British) are what make a voice show up in the picker. A prefix
+claiming another language is what hides one — `zf_mine.npy` is filed under
+Mandarin and filtered out of an English list. A name with no recognisable prefix
+at all is *not* dropped; it falls through to the American English list and
+appears like any other voice. Copying the naming of the bundled ones is still
+the safe move, since it's the prefix that decides how the voice is treated.
 
 Worth knowing what a Kokoro "voice" is before hunting for more: it's a 510 KB
 array of style vectors for that one model, not an engine and not a recording. So

@@ -148,8 +148,15 @@ namespace ClaudeBuddySpeech
         // A Kokoro voice is a 510KB numpy array of style vectors for this one
         // model — not an engine, not an audio file — so this is genuinely just
         // reading a file. Language and gender come from the name prefix (af_ for
-        // American female, am_ American male, bf_/bm_ British), which is why a
-        // file named without one loads but never shows up in an English list.
+        // American female, am_ American male, bf_/bm_ British), all of which
+        // EnglishVoices lists.
+        //
+        // A name with no *recognised* prefix is not dropped, which is worth
+        // knowing because the opposite was written here for a while: it falls
+        // through to the American English list and shows up like any other
+        // voice. Tested — `nopfx_custom.npy` both listed and spoke. What does
+        // disappear is a name claiming another language, so `zf_` lands in
+        // Mandarin and is filtered out of an English picker.
         private static void LoadUserVoices(string? path)
         {
             if (string.IsNullOrEmpty(path) || !Directory.Exists(path)) return;
@@ -170,15 +177,26 @@ namespace ClaudeBuddySpeech
             }
         }
 
-        // 20 American English voices, which is two fewer than KokoroSharp reports
-        // when it loads voices its own way. The missing pair, af_maple and af_sol,
-        // simply have no .npy file in the package's voices directory — checked —
-        // so a folder-based load like this one cannot see them wherever they do
-        // come from. Recorded because "20 or 22?" otherwise looks like a filtering
-        // bug in here, and it isn't one; a user who wants either can drop the file
+        // Both English variants, which is 28 voices: 20 American and 8 British.
+        //
+        // British was missing until it was noticed that bf_alice, bf_emma,
+        // bf_isabella, bf_lily, bm_daniel, bm_fable, bm_george and bm_lewis ship
+        // inside every engine bundle and appeared in no picker on either
+        // platform — asking for AmericanEnglish alone filtered out eight voices
+        // the user had already downloaded. The README told them the opposite,
+        // naming bf_/bm_ as prefixes that make a *custom* voice show up, so
+        // anyone adding a British one hit a silent failure too.
+        //
+        // The 20 American ones are two fewer than KokoroSharp reports when it
+        // loads voices its own way. The missing pair, af_maple and af_sol, simply
+        // have no .npy file in the package's voices directory — checked — so a
+        // folder-based load like this one cannot see them wherever they do come
+        // from. Recorded because "20 or 22?" otherwise looks like a filtering bug
+        // in here, and it isn't one; a user who wants either can drop the file
         // into the user voices directory (see LoadUserVoices).
         private static List<KokoroVoice> EnglishVoices() =>
-            KokoroVoiceManager.GetVoices(KokoroLanguage.AmericanEnglish);
+            KokoroVoiceManager.GetVoices(
+                [KokoroLanguage.AmericanEnglish, KokoroLanguage.BritishEnglish]);
 
         // Falls back to any English voice rather than failing, so a name that has
         // been renamed upstream, or a settings file edited by hand, still speaks.
