@@ -39,7 +39,7 @@
          ClaudeBuddy.csproj's <Version>, which the README calls the single source
          of truth; build-speech-engine.ps1 reads it from there and NeuralSpeech
          derives the same value from the app assembly, so the two cannot drift. -->
-    <Version>0.2.0-beta</Version>
+    <Version>0.3.0-beta</Version>
 
     <!-- Self-contained: the app itself is self-contained precisely so users need
          no .NET runtime installed, and a framework-dependent side-car would
