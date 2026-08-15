@@ -93,8 +93,11 @@ namespace ClaudeBuddy
         // A Kokoro voice is a 510KB numpy array of style vectors for the one
         // model, so "adding a voice" really is just putting a file here. The name
         // matters: language and gender come from its prefix (af_ American female,
-        // am_ American male, bf_/bm_ British), and a file named without one loads
-        // but never appears in the English list.
+        // am_ American male, bf_/bm_ British), all of which the engine lists. A
+        // prefix naming some other language is what hides a voice — zf_ is filed
+        // under Mandarin and filtered out — while a name with no recognisable
+        // prefix falls through to the American English list and shows up
+        // normally.
         public static string UserVoicesDirectory =>
             Path.Combine(ClaudeBuddySettings.Directory, "voices");
         private static string ModelPath => Path.Combine(Root, "kokoro-fp16.onnx");
