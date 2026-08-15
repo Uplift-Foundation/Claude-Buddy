@@ -378,30 +378,21 @@ namespace ClaudeBuddy
         {
             var rows = new List<Control>();
 
-            // Windows only, because the engine only exists there — macOS reaches
-            // Apple's Enhanced and Premium voices through `say` already, which is
-            // better than this and needs no download. Hidden rather than disabled:
-            // a switch that can never be moved is worse than no switch.
-            if (OperatingSystem.IsWindows())
-            {
-                rows.Add(Row("High-quality voice (experimental)",
-                    Switch(ClaudeBuddySettings.NeuralVoiceEnabled, OnNeuralVoiceToggled),
-                    "Speaks with a neural voice that runs on this machine instead of the "
-                    + "built-in Windows voices, which sound noticeably more robotic. "
-                    + "Downloads about 300 MB the first time and takes a few seconds "
-                    + "before it starts talking. Windows' own natural voices can't be "
-                    + "used by other apps, which is why this brings its own."));
+            rows.Add(Row("High-quality voice (experimental)",
+                Switch(ClaudeBuddySettings.NeuralVoiceEnabled, OnNeuralVoiceToggled),
+                "Speaks with a neural voice (Kokoro) that runs entirely on this machine. "
+                + "Downloads about 300 MB the first time and takes a few seconds "
+                + "before it starts talking."));
 
-                if (ClaudeBuddySettings.NeuralVoiceEnabled && _neuralModelStatus is not null)
+            if (ClaudeBuddySettings.NeuralVoiceEnabled && _neuralModelStatus is not null)
+            {
+                rows.Add(Row("Speech engine", new TextBlock
                 {
-                    rows.Add(Row("Speech engine", new TextBlock
-                    {
-                        Text = _neuralModelStatus,
-                        FontSize = 12,
-                        Opacity = 0.7,
-                        TextWrapping = TextWrapping.Wrap
-                    }));
-                }
+                    Text = _neuralModelStatus,
+                    FontSize = 12,
+                    Opacity = 0.7,
+                    TextWrapping = TextWrapping.Wrap
+                }));
             }
 
             // One list, every engine, each entry saying where it comes from — so

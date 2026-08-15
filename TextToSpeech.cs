@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
+
 
 namespace ClaudeBuddy
 {
@@ -199,7 +199,7 @@ namespace ClaudeBuddy
                 options.Add(new VoiceOption(SpeakEngine.System, name, $"{name} (system)"));
             }
 
-            if (OperatingSystem.IsWindows() && NeuralSpeech.Available)
+            if (NeuralSpeech.Available)
             {
                 foreach (var name in NeuralSpeech.Voices())
                 {
@@ -481,7 +481,6 @@ namespace ClaudeBuddy
             // is the shape of bug the comment at the top of this file exists
             // because of.
             if (selected?.Engine == SpeakEngine.Neural
-                && OperatingSystem.IsWindows()
                 && NeuralSpeech.Available
                 && StartNeural(text))
             {
@@ -673,7 +672,6 @@ namespace ClaudeBuddy
             }
         }
 
-        [SupportedOSPlatform("windows")]
         private static bool StartNeural(string text)
         {
             // Announced before the process exists, because starting it is itself

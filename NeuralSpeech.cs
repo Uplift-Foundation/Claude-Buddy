@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Reflection;
-using System.Runtime.Versioning;
+
 
 namespace ClaudeBuddy
 {
@@ -9,20 +9,11 @@ namespace ClaudeBuddy
     // a separate downloaded process. See TextToSpeech, which routes to it when the
     // user has opted in, and tools/ClaudeBuddySpeech for the engine itself.
     //
-    // Windows-only, and downloaded rather than shipped, for one reason each:
-    //
-    // Windows-only because macOS does not need it. Apple's Enhanced and Premium
-    // voices are available to any app through `say`, which is what TextToSpeech
-    // already uses there. Windows ships comparable voices and reserves them for
-    // Narrator — its natural/HD voices register no token in either the SAPI5 or
-    // Speech_OneCore hive and are invisible to System.Speech and to WinRT alike
-    // (measured), so the only way to sound better on Windows is to bring a model.
-    //
-    // Downloaded because the engine's dependencies weigh ~82MB on disk, 66MB of
-    // it phoneme lexicons for languages this never uses. Referenced from the app
-    // that would have taken the installer from 35MB to ~110MB for everyone,
-    // enabled or not. As a separate process it costs non-users nothing at all,
-    // and it keeps the app's dependency graph and the macOS bundle untouched.
+    // Downloaded rather than shipped because the engine's dependencies weigh
+    // ~82MB on disk, 66MB of it phoneme lexicons for languages this never uses.
+    // Referenced from the app that would have taken the installer from 35MB to
+    // ~110MB for everyone, enabled or not. As a separate process it costs
+    // non-users nothing at all.
     //
     // It also keeps cancellation honest: speaking is a child process, stopping is
     // killing it, which is exactly the contract TextToSpeech has always had for
@@ -72,9 +63,12 @@ namespace ClaudeBuddy
         // alongside it, with no second tag to remember and no window where an app
         // is published against an engine that isn't. It costs re-uploading ~130MB
         // per release, which is cheap next to getting that wrong.
+        private static string EngineRid =>
+            OperatingSystem.IsMacOS() ? "osx-arm64" : "win-x64";
+
         private static string EngineUrl =>
             "https://github.com/Uplift-Foundation/Claude-Buddy/releases/download/"
-            + $"v{EngineVersion}/ClaudeBuddySpeech-{EngineVersion}-win-x64.zip";
+            + $"v{EngineVersion}/ClaudeBuddySpeech-{EngineVersion}-{EngineRid}.zip";
 
         private static string Root => Path.Combine(ClaudeBuddySettings.Directory, "speech-engine");
 
@@ -92,13 +86,16 @@ namespace ClaudeBuddy
         public static string UserVoicesDirectory =>
             Path.Combine(ClaudeBuddySettings.Directory, "voices");
         private static string ModelPath => Path.Combine(Root, "kokoro-fp16.onnx");
-        private static string EnginePath => Path.Combine(Root, EngineVersion, "ClaudeBuddySpeech.exe");
+        private static string EngineExeName =>
+            OperatingSystem.IsWindows() ? "ClaudeBuddySpeech.exe" : "ClaudeBuddySpeech";
+
+        private static string EnginePath => Path.Combine(Root, EngineVersion, EngineExeName);
 
         // Both halves have to be present, and they arrive separately — the engine
         // is ~150MB of executable and the model another 156MB, so a download
         // interrupted between them must not read as ready.
         public static bool Installed =>
-            OperatingSystem.IsWindows() && File.Exists(EnginePath) && File.Exists(ModelPath);
+            File.Exists(EnginePath) && File.Exists(ModelPath);
 
         // What TextToSpeech asks before routing anything here.
         public static bool Available => Installed && ClaudeBuddySettings.NeuralVoiceEnabled;
@@ -165,13 +162,21 @@ namespace ClaudeBuddy
                     // build-speech-engine.ps1 copies them by hand. If that ever
                     // regresses, the download should fail loudly here rather than
                     // install an engine that refuses to speak.
-                    var stagedExe = Path.Combine(staging, "ClaudeBuddySpeech.exe");
+                    var stagedExe = Path.Combine(staging, EngineExeName);
                     var stagedVoices = Path.Combine(staging, "voices");
 
                     if (!File.Exists(stagedExe))
                     {
                         throw new InvalidDataException(
-                            "the downloaded speech engine has no ClaudeBuddySpeech.exe");
+                            $"the downloaded speech engine has no {EngineExeName}");
+                    }
+
+                    if (!OperatingSystem.IsWindows())
+                    {
+                        File.SetUnixFileMode(stagedExe,
+                            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                            UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                            UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
                     }
 
                     if (!Directory.Exists(stagedVoices) ||
@@ -215,7 +220,6 @@ namespace ClaudeBuddy
         // The engine's own list, asked of the engine rather than hardcoded here,
         // so the two can't drift. Empty when it isn't installed, which is what
         // makes the settings picker fall back to the system voices.
-        [SupportedOSPlatform("windows")]
         public static List<string> Voices()
         {
             var voices = new List<string>();
@@ -265,7 +269,6 @@ namespace ClaudeBuddy
         // model load, then the first segment's synthesis, measured at ~3.3s — so
         // the caller needs to distinguish "preparing" from "speaking" rather than
         // showing a stop button over silence.
-        [SupportedOSPlatform("windows")]
         public static Process? Start(string text, string? voice, Action? onSpeaking)
         {
             if (!Installed) return null;
