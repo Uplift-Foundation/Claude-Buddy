@@ -1099,16 +1099,41 @@ namespace ClaudeBuddy
         // needed two clicks — the first activating, the second selecting with
         // the app already active. Both observations come from the same rule.
         //
-        // So: activate, give the activation time to land, then select. The
-        // delay is what the earlier attempt was missing; a fifth of a second is
-        // unnoticeable against a click that has already spent longer querying
-        // tmux, and it is the same gap a double click was inserting by hand.
-        // `delay` sits outside the tell block on purpose: inside one it is
-        // dispatched to the application, which doesn't understand it, and the
-        // whole script fails with "Can't continue delay".
+        // So: activate, wait for the activation to actually land, then select.
+        //
+        // Waited for rather than guessed at. This used to be `delay 0.2`, on the
+        // reasoning that a fifth of a second is unnoticeable and is the gap a
+        // double click was inserting by hand — both true, and it still lost the
+        // race often enough to be reported as "clicking an orb doesn't switch
+        // desktops any more". Measured on an idle machine, `activate` took 145ms,
+        // 167ms and 531ms on three consecutive runs of the same script: the
+        // spread is the problem, not the average. Every run slower than the delay
+        // selects the window while the activation is still in flight, and then
+        // the activation lands and raises the local window instead — the exact
+        // failure described above, except intermittent, which is why it reads as
+        // "sometimes it works".
+        //
+        // Polling `frontmost` costs nothing when activation is quick — measured
+        // at 141ms end to end, faster than the fixed delay it replaces, because
+        // it stops as soon as the app is really there — and keeps waiting when it
+        // isn't. The cap is a backstop, not a timeout anyone should reach: if the
+        // app never comes forward, selecting a window is going to fail anyway,
+        // and hanging the click is worse than trying and missing.
+        //
+        // `frontmost of application "X"` is answered by the app itself, so this
+        // needs no permission beyond the Automation grant the activate already
+        // required. Both `delay` and the repeat sit outside the tell block on
+        // purpose: inside one they are dispatched to the application, which
+        // doesn't understand them, and the whole script fails with "Can't
+        // continue delay".
+        private const int ActivationPollTicks = 40;      // x 50ms = 2s ceiling
+
         private static string ActivateThenSettle(string app) => $$"""
             tell application "{{app}}" to activate
-            delay 0.2
+            repeat {{ActivationPollTicks}} times
+                if frontmost of application "{{app}}" then exit repeat
+                delay 0.05
+            end repeat
             """;
 
         private static string ITermSelectScript(string property, string value) => $$"""
