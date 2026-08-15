@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using KokoroSharp;
 using KokoroSharp.Core;
@@ -123,7 +125,11 @@ namespace ClaudeBuddySpeech
                 return ExitNoModel;
             }
 
-            return Speak(modelPath, chosen, text);
+            // macOS deliberately does not go through KokoroSharp's own playback.
+            // SpeakThroughAfplay carries the whole story of why.
+            return OperatingSystem.IsMacOS()
+                ? SpeakThroughAfplay(modelPath, chosen, text)
+                : Speak(modelPath, chosen, text);
         }
 
         // Voices the user dropped in themselves, from a directory outside the
@@ -190,6 +196,239 @@ namespace ClaudeBuddySpeech
             }
 
             return voices.Count > 0 ? voices[0] : null;
+        }
+
+        // The same streaming synthesis as Speak, with macOS playing the samples
+        // instead of KokoroSharp.
+        //
+        // KokoroSharp plays through NAudio on Windows and falls back to OpenTK's
+        // OpenAL binding everywhere else. That fallback is where macOS dies:
+        // alcOpenDevice segfaults inside Apple's OpenAL framework
+        // (OALDeviceMap::Add, KERN_INVALID_ADDRESS at 0x8) on a .NET worker
+        // thread, deterministically, before one sample is played — and because
+        // the crash is in *opening the device*, the "speaking" marker went out
+        // over silence and every utterance cost ~12s of synthesis to say
+        // nothing.
+        //
+        // Not Apple's framework being broken, which was the obvious suspicion
+        // and is wrong: a C harness opens the device happily with NULL, by name,
+        // from a pthread, and as the first call in the process; OpenTK opens it
+        // from .NET on the main thread, on a thread-pool thread and on a
+        // dedicated thread, on both 4.9.4 and the 5.0.0-pre.13 that KokoroSharp
+        // actually resolves. Only KokoroSharp's own playback path reproduces it.
+        // Chasing a prerelease binding through a framework Apple deprecated in
+        // 10.15 buys nothing here — macOS has afplay, and "speaking is a child
+        // process" is the shape this engine already has everywhere else.
+        //
+        // Cancelling still works because TextToSpeech kills the whole tree
+        // rather than this process alone. KillTree's comment explains why it was
+        // written that way, having already been bitten by a .cmd wrapper whose
+        // grandchild kept talking after the tracked child died; an afplay
+        // started here is exactly that grandchild, and dies with us.
+        private static int SpeakThroughAfplay(string modelPath, KokoroVoice voice, string text)
+        {
+            using var synth = KokoroWavSynthesizer.LoadModel(modelPath, SessionOptionsForBackgroundUse());
+
+            // Same reasoning as Speak: a whole turn is up to ~100 seconds of
+            // audio synthesised at roughly half real time, so waiting for all of
+            // it would mean the better part of a minute of silence after the
+            // click. Measured on this path: the first segment arrives at 989ms
+            // carrying 2.02s of audio, which is comfortably ahead of playback.
+            var config = new KokoroTTSPipelineConfig(new DefaultSegmentationConfig
+            {
+                MaxFirstSegmentLength = 60
+            });
+
+            // Synthesis hands segments over as they finish; one consumer plays
+            // them in order. A queue rather than playing from the callback
+            // because afplay is synchronous — playing inline would block the
+            // synthesiser between segments and give away the head start that
+            // streaming just bought.
+            var segments = new BlockingCollection<float[]>(new ConcurrentQueue<float[]>());
+            var announced = 0;
+            var failed = false;
+
+            var player = Task.Run(() =>
+            {
+                var index = 0;
+
+                foreach (var samples in segments.GetConsumingEnumerable())
+                {
+                    // Written to a file rather than piped to afplay's stdin: it
+                    // reads a *file*, and a WAV header has to state its data
+                    // length up front, which a stream being synthesised does not
+                    // know yet.
+                    var path = Path.Combine(
+                        Path.GetTempPath(),
+                        $"claudebuddy-speech-{Environment.ProcessId}-{index++}.wav");
+
+                    try
+                    {
+                        File.WriteAllBytes(path, WavBytes(samples));
+
+                        using var afplay = Process.Start(new ProcessStartInfo("/usr/bin/afplay")
+                        {
+                            ArgumentList = { path },
+                            UseShellExecute = false,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true
+                        });
+
+                        if (afplay is null)
+                        {
+                            Console.Error.WriteLine("ClaudeBuddySpeech: could not start afplay");
+                            failed = true;
+                            return;
+                        }
+
+                        // Announced here, not when synthesis starts: this is the
+                        // first moment sound is actually being made, and the
+                        // marker existing at all is so the orb can tell
+                        // "preparing" from "speaking". Printing it any earlier is
+                        // what made the OpenAL crash look like a silent success.
+                        if (Interlocked.Exchange(ref announced, 1) == 0)
+                        {
+                            Console.Out.WriteLine("speaking");
+                            Console.Out.Flush();
+                        }
+
+                        afplay.WaitForExit();
+
+                        if (afplay.ExitCode != 0)
+                        {
+                            Console.Error.WriteLine(
+                                $"ClaudeBuddySpeech: afplay exited {afplay.ExitCode}");
+                            failed = true;
+                            return;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"ClaudeBuddySpeech: playback failed: {ex.Message}");
+                        failed = true;
+                        return;
+                    }
+                    finally
+                    {
+                        // A kill from the parent takes the whole tree and skips
+                        // this, so the temp directory can collect one file per
+                        // interrupted segment. They are named per pid and reaped
+                        // by macOS; leaking a few WAVs is better than holding the
+                        // audio in memory to avoid them.
+                        try { File.Delete(path); } catch { /* untidy, not broken */ }
+                    }
+                }
+            });
+
+            // This overload returns as soon as the job is queued — the segments
+            // arrive later on KokoroSharp's own engine thread — so the wait has
+            // to be on the completion callback. Closing the queue on the way out
+            // of the call instead marks it complete before the first segment is
+            // ever produced, and the synthesiser then throws into a thread
+            // nobody is catching on. Same blocking shape as Speak: the process
+            // exists to say one thing and die, and a kill from the parent is
+            // what interrupts it.
+            using var finished = new ManualResetEventSlim(false);
+
+            synth.Synthesize(text, voice, AcceptSegment, () => finished.Set(), config);
+            finished.Wait();
+
+            // Guarded rather than handing `segments.Add` over directly. Closing
+            // the queue below assumes no segment arrives after OnComplete, which
+            // is what was observed — but this callback runs on KokoroSharp's own
+            // thread, where an exception is nobody's to catch and would take the
+            // process down mid-sentence. If that assumption is ever wrong, losing
+            // a trailing segment is the better way to be wrong.
+            void AcceptSegment(float[] samples)
+            {
+                try { segments.Add(samples); }
+                catch (InvalidOperationException) { /* queue already closed */ }
+            }
+
+            // Only now: OnComplete fires after the last segment has been handed
+            // over, so this cannot cut one off.
+            segments.CompleteAdding();
+            player.Wait();
+
+            Console.Out.Flush();
+            Console.Error.Flush();
+
+            // Left through _exit rather than by returning, because shutting this
+            // process down cleanly is what kills it. Once every sample has been
+            // played, tearing the synthesiser and its ONNX session down throws
+            // out of native code — libc++abi reports "mutex lock failed: Invalid
+            // argument" — and the runtime turns that into exit 134. The caller
+            // reads any non-zero exit as "the engine failed" and speaks the whole
+            // turn again in the system voice, so a crash on the way out is heard
+            // by the user as the paragraph twice.
+            //
+            // Environment.Exit is not enough: it still runs managed shutdown,
+            // which is where the abort happens. Traced to be sure of the
+            // ordering rather than assumed — OnComplete, then every afplay
+            // exiting 0, then the player thread joining, and only then the
+            // abort. So the work is genuinely finished and the only thing left
+            // is to stop existing.
+            //
+            // _exit(2) is the syscall that does exactly that: no atexit
+            // handlers, no finalizers, no native destructors. Safe precisely
+            // because this process is a short-lived side-car — both streams are
+            // flushed above, the temp WAVs are deleted, afplay has exited, and
+            // the model is memory the kernel is about to reclaim wholesale.
+            // Fixing the disposal itself belongs upstream in KokoroSharp.
+            SysExit(failed ? ExitFailed : ExitSpoke);
+            return failed ? ExitFailed : ExitSpoke;   // unreachable; keeps the compiler happy
+        }
+
+        // Terminates immediately, skipping every exit handler and destructor the
+        // runtime would otherwise run. See the call site for why that is the
+        // right way out of a finished utterance on macOS.
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "_exit")]
+        private static extern void SysExit(int status);
+
+        // Kokoro emits 24kHz mono float samples; afplay wants a container. The
+        // header is 44 bytes of well-specified WAV and writing it by hand is
+        // smaller than taking a dependency to do it — KokoroWavSynthesizer's own
+        // SaveAudioToFile is no use here because the streaming callback hands
+        // over float[] rather than the byte[] that method expects. (Its
+        // *blocking* overload returns headerless PCM despite the name, which is
+        // worth knowing before trusting it: measured, the bytes begin with
+        // samples, not "RIFF".)
+        private static byte[] WavBytes(float[] samples)
+        {
+            const int SampleRate = 24000;
+            const int Channels = 1;
+            const int BitsPerSample = 16;
+
+            var dataBytes = samples.Length * sizeof(short);
+
+            using var buffer = new MemoryStream(44 + dataBytes);
+            using var writer = new BinaryWriter(buffer);
+
+            writer.Write("RIFF"u8);
+            writer.Write(36 + dataBytes);
+            writer.Write("WAVE"u8);
+            writer.Write("fmt "u8);
+            writer.Write(16);                                             // PCM chunk size
+            writer.Write((short)1);                                       // PCM, uncompressed
+            writer.Write((short)Channels);
+            writer.Write(SampleRate);
+            writer.Write(SampleRate * Channels * BitsPerSample / 8);      // byte rate
+            writer.Write((short)(Channels * BitsPerSample / 8));          // block align
+            writer.Write((short)BitsPerSample);
+            writer.Write("data"u8);
+            writer.Write(dataBytes);
+
+            // Clamped before scaling. Kokoro occasionally returns samples a
+            // shade outside [-1, 1], and letting those wrap round the short
+            // boundary turns a loud syllable into a burst of noise.
+            foreach (var sample in samples)
+            {
+                var clamped = Math.Clamp(sample, -1f, 1f);
+                writer.Write((short)(clamped * short.MaxValue));
+            }
+
+            writer.Flush();
+            return buffer.ToArray();
         }
 
         private static int Speak(string modelPath, KokoroVoice voice, string text)

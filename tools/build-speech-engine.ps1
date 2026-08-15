@@ -9,9 +9,11 @@
 # tools/ClaudeBuddySpeech/ClaudeBuddySpeech.csproj for why it is a separate
 # downloaded process rather than a dependency.
 #
-# Windows-only by design. The engine exists because Windows keeps its good voices
-# inside Narrator; macOS has Apple's Enhanced and Premium voices available to any
-# app through `say` and needs none of this.
+# Windows-only, with tools/build-speech-engine.sh as its macOS twin. That split
+# is not just convention: an osx-* engine has to be published on a Mac, because
+# the SDK ad-hoc signs the apphost with `codesign` and Apple Silicon will not
+# exec an unsigned arm64 binary, so -Rid osx-arm64 from here would produce a
+# bundle that installs and then dies on launch.
 
 [CmdletBinding()]
 param(

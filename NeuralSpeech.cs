@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Reflection;
+using System.Runtime.InteropServices;
 
 
 namespace ClaudeBuddy
@@ -63,8 +64,19 @@ namespace ClaudeBuddy
         // alongside it, with no second tag to remember and no window where an app
         // is published against an engine that isn't. It costs re-uploading ~130MB
         // per release, which is cheap next to getting that wrong.
+
+        // Asked of the running process rather than assumed, because this repo
+        // ships an osx-x64 DMG as well as an osx-arm64 one: an Intel Mac told to
+        // fetch the arm64 engine downloads 130MB and is then killed on exec, and
+        // an arm64 Mac running the x64 app under Rosetta needs the x64 engine to
+        // match the process it is started from. ProcessArchitecture answers both
+        // — it reports what this build actually is, not what the hardware could
+        // run — and the release workflow builds the engine in the same
+        // rid matrix as the DMGs so both exist for every tag.
         private static string EngineRid =>
-            OperatingSystem.IsMacOS() ? "osx-arm64" : "win-x64";
+            OperatingSystem.IsMacOS()
+                ? (RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "osx-arm64" : "osx-x64")
+                : "win-x64";
 
         private static string EngineUrl =>
             "https://github.com/Uplift-Foundation/Claude-Buddy/releases/download/"
