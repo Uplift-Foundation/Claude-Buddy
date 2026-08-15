@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the side-car speech engine, when it is signed with a real
+  Developer ID.
+
+  Deliberately a shorter list than tools/ClaudeBuddy.entitlements. The engine is
+  a headless process that loads a model, synthesises audio and hands the samples
+  to afplay; it sends no Apple Events and opens no input device, so the two
+  TCC-gated keys the app needs would be privileges granted for nothing.
+
+  What it does share is the reason the app needs entitlements at all: this is a
+  self-contained .NET program, and signing it with the hardened runtime turns
+  off things CoreCLR depends on. These are load-bearing — sign the engine with
+  the hardened runtime and none of these, and the result installs correctly and
+  then dies the moment the app tries to speak.
+
+  (No double hyphens anywhere in these comments: codesign parses this through
+  AMFIUnserializeXML, which rejects the XML that a "hyphen hyphen options"
+  spelling of a codesign flag would produce, with only a line number to go on.)
+-->
+<plist version="1.0">
+<dict>
+    <!-- CoreCLR JITs managed code at runtime. Without this the process dies at
+         startup with a Mach exception, exactly as the app does. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- The JIT writes to memory pages it then executes; allow-jit alone covers
+         MAP_JIT, and CoreCLR maps executable memory beyond that. -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- ONNX Runtime's libonnxruntime.dylib arrives signed by its own publisher,
+         not by this team. Library validation demands every loaded library match
+         the main executable's Team ID, so it has to be off or the engine cannot
+         load the very thing it exists to run. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

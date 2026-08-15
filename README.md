@@ -377,6 +377,151 @@ real run-through:
 If you turn this on and something above doesn't work as described, that's the
 gap this section is flagging — not a contradiction of it.
 
+### High-quality voice (optional, off by default)
+
+The speaker button on an orb's flyout reads the latest assistant turn aloud. On
+macOS that uses `say` with Apple's Enhanced and Premium voices and sounds good.
+On Windows the best voice any third-party app can reach is `Microsoft Zira
+Desktop`, which is over a decade old and sounds it.
+
+Windows *does* ship better voices, and they are deliberately out of reach.
+Narrator's natural/HD voices — the ones you add under Settings → Accessibility →
+Narrator → Add natural voices — install as model data that registers no voice
+token in either the SAPI5 or `Speech_OneCore` registry hive. They are invisible
+to `System.Speech` and to WinRT's `SpeechSynthesizer.AllVoices` alike, and the
+only bridge that exists works by extracting encryption keys out of system files.
+Microsoft's own on-device neural TTS (Azure Embedded Speech) is available by
+application only, to customers with a direct Microsoft account team. So the only
+way for this app to sound better on Windows is to bring its own model.
+
+**High-quality voice (experimental)** in the settings window does that. It
+downloads a neural speech engine and its model — about 300 MB in total, once —
+into `%APPDATA%\ClaudeBuddy\speech-engine` (`~/Library/Application
+Support/ClaudeBuddy/speech-engine` on macOS), and speaks entirely on this
+machine. No cloud service, no API key, nothing leaves the computer, same as
+dictation.
+
+It is offered on macOS too, even though Apple's voices are already decent: some
+people prefer Kokoro's, and the engine turned out to be genuinely portable. The
+one thing that isn't shared is playback — macOS synthesises to audio and plays it
+with `afplay` rather than through KokoroSharp's own OpenAL path, which crashes
+before making a sound. `docs/macos-neural-voice-findings.md` has the evidence.
+
+Worth knowing before you turn it on:
+
+- **It takes a few seconds to start talking** — roughly three, against about half
+  a second for the built-in voices. Most of that is loading the model and its
+  phoneme lexicon. The speaker button turns amber with an hourglass while it
+  works and blue with a stop square once audio is playing, so the wait is
+  visible rather than mysterious.
+- **It costs real CPU**: about one core-second per second of speech, against a
+  fifteenth of that for the built-in voices, deliberately capped at two threads
+  so a background utility can't commandeer the machine. Nothing is used while
+  it's silent.
+- **Nothing ships in the installer.** The engine is a separate downloaded
+  process, so the app stays the same size and anyone who doesn't enable this pays
+  nothing for it — on either platform.
+
+Built on [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) via
+[KokoroSharp](https://github.com/Lyrcaxis/KokoroSharp); the voices are
+Apache-2.0 and their licence travels inside the downloaded bundle.
+
+#### Adding voices
+
+Drop `.npy` Kokoro voice files into `%APPDATA%\ClaudeBuddy\voices`
+(`~/Library/Application Support/ClaudeBuddy/voices` on macOS) and they
+appear in the picker alongside the bundled ones. That directory is deliberately
+outside the engine's own folder, which an upgrade replaces wholesale — anything
+put beside the bundled voices would be deleted by the next release.
+
+The filename matters more than you'd expect: Kokoro reads the language and
+gender from its prefix, so `af_` (American female), `am_` (American male),
+`bf_`/`bm_` (British) are what make a voice show up in the picker. A prefix
+claiming another language is what hides one — `zf_mine.npy` is filed under
+Mandarin and filtered out of an English list. A name with no recognisable prefix
+at all is *not* dropped; it falls through to the American English list and
+appears like any other voice. Copying the naming of the bundled ones is still
+the safe move, since it's the prefix that decides how the voice is treated.
+
+Worth knowing what a Kokoro "voice" is before hunting for more: it's a 510 KB
+array of style vectors for that one model, not an engine and not a recording. So
+files from other systems — Piper's `.onnx` voices, SAPI voice packs, RVC `.pth`
+models — are not interchangeable with it, and the 54 that ship are essentially
+the whole published set.
+
+### Speaking with something else entirely
+
+If you want a different engine, a different voice, or a chain of both, point the
+app at your own command and it will use that instead of anything built in:
+
+```jsonc
+// %APPDATA%\ClaudeBuddy\settings.json  (~/Library/Application Support/… on macOS)
+"speakCommand": "C:\\tools\\my-voice.cmd",
+"speakCommandArgs": ["--voice", "whatever"]
+```
+
+Its voices then appear in the **Speak voice** picker alongside the built-in ones,
+marked `(custom)` — the system voices are marked `(system)` and the neural ones
+`(Kokoro)`. Picking a voice is what selects the engine, so all three are
+available at once rather than one hiding the others.
+
+The whole contract:
+
+- The text arrives on **stdin as UTF-8**. Not as an argument — an assistant turn
+  runs to 1500 characters of quotes, apostrophes, newlines and code punctuation,
+  and a pipe has no escaping rules to get wrong.
+- **Exit when you've finished speaking.** The app treats your process being alive
+  as "speaking", which is what makes the flyout's speaker button show a stop
+  square.
+- **Being killed means stop.** Pressing the button again kills your process; you
+  don't need to handle anything.
+- Optionally, print `speaking` on stdout the moment audio actually starts, and
+  the button will show an hourglass until then instead. Skip it and the button
+  simply shows stop for the whole run.
+
+That's it — no plugin API, no manifest, nothing to compile against. A batch file
+that pipes stdin into some other tool is a complete implementation. Arguments go
+through `ArgumentList`, so paths with spaces need no quoting of your own.
+
+#### Letting it offer more than one voice
+
+If your command can speak in several voices, tell the app how to list them and
+they each get their own entry in the picker:
+
+```jsonc
+"speakVoicesCommand": "C:\\tools\\my-voice.cmd",
+"speakVoicesCommandArgs": ["--list-voices"]
+```
+
+- It should print **one voice name per line** on stdout and exit. Nothing else is
+  parsed.
+- The chosen name reaches `speakCommand` in the **`CLAUDEBUDDY_VOICE`**
+  environment variable. Not as an argument: `speakCommandArgs` is yours, and
+  appending a positional argument would break a wrapper that takes fixed ones. A
+  command that ignores the variable keeps working.
+- `speakVoicesCommandArgs` is deliberately separate from `speakCommandArgs`. One
+  script usually serves both roles by branching on a flag, and sharing one list
+  would hand `--list-voices` to the speaking call too — which would then list
+  voices instead of talking.
+- Leave `speakVoicesCommand` unset and the picker shows a single **Custom
+  command** entry, meaning "this command picks its own voice".
+
+The listing command is run while the settings window is being built, and is given
+ten seconds before it's killed — a wrapper that hangs shouldn't hang the UI with
+it. The result is cached until the window is reopened.
+
+Two deliberate consequences. Your command takes precedence over both built-in
+engines, and if it fails to start the app **does not** quietly fall back to a
+system voice — it reports the failure on stderr and stays silent, because a
+silent substitution looks like your engine working badly rather than not running
+at all. And whatever is on the other end is yours to choose and yours to license;
+the app makes no assumptions about it, exactly as it makes none about the hook
+script it asks you to wire into Claude Code.
+
+Settings-file only, with no row in the settings window: a free-text command box
+invites pasting something and hoping, and this belongs next to the hook JSON with
+the rest of the power-user surface.
+
 ### Claude Desktop profiles (macOS)
 
 Unrelated to session monitoring, and sharing nothing with it but the menu:
@@ -929,6 +1074,20 @@ git tag v0.2.0-beta && git push origin v0.2.0-beta
 CI then builds both DMGs and the Windows setup, signs and notarizes the macOS
 ones, generates `SHA256SUMS.txt`, and publishes a release using those notes.
 A tag containing a hyphen is marked as a prerelease automatically.
+
+The release also carries `ClaudeBuddySpeech-<version>-<rid>.zip` for each of
+`win-x64`, `osx-arm64` and `osx-x64` — the optional high-quality speech engine.
+Those assets are not decoration: the toggle in the settings window downloads the
+one matching its own version *and architecture* from this exact release, so a
+release published without them hands a 404 to everyone who turns the feature on.
+
+The Windows one is built by `tools/build-speech-engine.ps1` in the Windows job;
+the macOS ones by `tools/build-speech-engine.sh` in the macOS job's rid matrix.
+They are split that way because an osx-* engine cannot be cross-built — the SDK
+ad-hoc signs the apphost with `codesign`, and Apple Silicon will not exec an
+arm64 binary that carries no signature at all. Nothing about any of this needs
+doing by hand, but a change to either script is a change to the release, which
+`workflow_dispatch` is the way to test.
 
 `workflow_dispatch` runs the same build without publishing, which is the way to
 test packaging changes. Every push and PR also builds and packages via

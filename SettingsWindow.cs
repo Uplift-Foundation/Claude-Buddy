@@ -367,22 +367,57 @@ namespace ClaudeBuddy
         // is shown at all rather than a stale one.
         private string? _voiceModelStatus;
 
+        // Only meaningful while a neural-engine download this window kicked off is
+        // still running; null otherwise, so no stale row is left behind. Separate
+        // from _voiceModelStatus rather than shared: enabling dictation and
+        // enabling the neural voice each fetch a few hundred MB, and two
+        // downloads reporting into one field would overwrite each other's text.
+        private string? _neuralModelStatus;
+
         private Control[] VoiceRows()
         {
-            var rows = new List<Control>
+            var rows = new List<Control>();
+
+            rows.Add(Row("High-quality voice (experimental)",
+                Switch(ClaudeBuddySettings.NeuralVoiceEnabled, OnNeuralVoiceToggled),
+                "Speaks with a neural voice (Kokoro) that runs entirely on this machine. "
+                + "Downloads about 300 MB the first time and takes a few seconds "
+                + "before it starts talking."));
+
+            if (ClaudeBuddySettings.NeuralVoiceEnabled && _neuralModelStatus is not null)
             {
-                Row("Speak voice", SpeakVoicePicker(),
-                    "Which voice the speaker button on the orb flyout uses to read the "
-                    + "latest assistant turn aloud. Premium and Enhanced voices sound "
-                    + "the most natural."),
-                DownloadVoicesRow(),
+                rows.Add(Row("Speech engine", new TextBlock
+                {
+                    Text = _neuralModelStatus,
+                    FontSize = 12,
+                    Opacity = 0.7,
+                    TextWrapping = TextWrapping.Wrap
+                }));
+            }
+
+            // One list, every engine, each entry saying where it comes from — so
+            // choosing a voice is also choosing the engine, and nothing is hidden
+            // by a precedence the user can't see.
+            rows.Add(Row("Speak voice", SpeakVoicePicker(),
+                "Which voice the speaker button on the orb flyout uses to read the latest "
+                + "assistant turn aloud. Marked (system) for the ones Windows or macOS "
+                + "provides, (Kokoro) for the high-quality engine above, and (custom) for "
+                + "anything your own speakCommand lists."));
+
+            // Still shown, because the system voices are always among the choices
+            // now rather than being shadowed by whatever else is installed — so a
+            // voice added through Windows' own settings is genuinely usable.
+            rows.Add(DownloadVoicesRow());
+
+            rows.AddRange(new Control[]
+            {
                 Row("Enable voice input (experimental)",
                     Switch(ClaudeBuddySettings.VoiceInputEnabled, OnVoiceInputToggled),
                     "Hover an orb and click the mic that appears to dictate a prompt. Speech is "
                     + "transcribed entirely on this machine (Whisper, no cloud service) and typed "
                     + "into that session's terminal for review — nothing is sent anywhere, and "
                     + "Enter is never pressed for you.")
-            };
+            });
 
             if (ClaudeBuddySettings.VoiceInputEnabled && _voiceModelStatus is not null)
             {
@@ -400,25 +435,99 @@ namespace ClaudeBuddy
 
         private Control SpeakVoicePicker()
         {
-            var voices = TextToSpeech.AvailableVoices();
-            var current = ClaudeBuddySettings.SpeakVoice;
+            // Every voice from every available engine in one list — system, Kokoro
+            // and a user command together — with the engine shown against each
+            // name. Previously this showed one engine's worth at a time, decided by
+            // a precedence the user could not see, so downloading the neural engine
+            // silently hid the system voices and configuring a command hid both.
+            //
+            // Selecting an entry records both the voice and which engine speaks it
+            // (TextToSpeech.SelectVoice), so the choice is explicit rather than
+            // inferred, and each engine's own key remembers what was picked there.
+            var options = TextToSpeech.AllVoiceOptions();
+            if (options.Count == 0)
+            {
+                return new ComboBox
+                {
+                    ItemsSource = new[] { "No voices found" },
+                    SelectedIndex = 0,
+                    IsEnabled = false,
+                    MinWidth = 220
+                };
+            }
 
-            if (voices.All(v => !v.Equals(current, StringComparison.OrdinalIgnoreCase)))
-                voices = new List<string>(voices) { current };
+            var selected = TextToSpeech.SelectedVoice();
+            var labels = options.Select(o => o.Label).ToList();
 
             var combo = new ComboBox
             {
-                ItemsSource = voices,
-                SelectedIndex = voices.FindIndex(v => v.Equals(current, StringComparison.OrdinalIgnoreCase)),
-                MinWidth = 180
+                ItemsSource = labels,
+                SelectedIndex = selected is null ? 0 : Math.Max(0, options.IndexOf(selected)),
+
+                // Wider than the other pickers: these labels carry the engine as
+                // well as the name, and "Microsoft David Desktop (system)" is
+                // simply a long string.
+                MinWidth = 220
             };
+
             combo.SelectionChanged += (_, _) =>
             {
                 var index = combo.SelectedIndex;
-                if (index < 0) return;
-                ClaudeBuddySettings.SpeakVoice = voices[index];
+                if (index < 0 || index >= options.Count) return;
+
+                TextToSpeech.SelectVoice(options[index]);
             };
+
             return combo;
+        }
+
+        // A near-copy of OnVoiceInputToggled below, and deliberately so: the
+        // download-progress dance (write the setting first, seed the status row,
+        // Rebuild, marshal progress onto the UI thread, guard against this window
+        // having been closed) is already established there and is worth matching
+        // line for line rather than reinventing.
+        //
+        // The one addition is InvalidateVoiceCache: the voice list is cached for the
+        // process lifetime, and this toggle changes what belongs in it — turning the
+        // neural engine on adds its voices, turning it off takes them away — so
+        // without it the picker would keep showing the previous answer.
+        private void OnNeuralVoiceToggled(bool enabled)
+        {
+            ClaudeBuddySettings.NeuralVoiceEnabled = enabled;
+            TextToSpeech.InvalidateVoiceCache();
+
+            if (!enabled || NeuralSpeech.Installed)
+            {
+                Rebuild();
+                return;
+            }
+
+            _neuralModelStatus = "Downloading the speech engine and its voice model (about 300 MB)…";
+            Rebuild();
+
+            var progress = new Progress<string>(message => Dispatcher.UIThread.Post(() =>
+            {
+                if (_open != this) return;
+                _neuralModelStatus = message;
+                Rebuild();
+            }));
+
+            _ = NeuralSpeech.DownloadAsync(progress).ContinueWith(t =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (_open != this) return;
+
+                    // The voice list only becomes answerable once the engine is on
+                    // disk, since it is the engine that enumerates it.
+                    TextToSpeech.InvalidateVoiceCache();
+
+                    _neuralModelStatus = t.IsFaulted
+                        ? "Couldn't download the speech engine — check your connection and try again."
+                        : null;
+                    Rebuild();
+                });
+            });
         }
 
         private Control DownloadVoicesRow()
@@ -436,11 +545,33 @@ namespace ClaudeBuddy
                 e.Handled = true;
                 if (OperatingSystem.IsMacOS())
                 {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = "open",
+                            ArgumentList = { "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent" },
+                            UseShellExecute = false
+                        })?.Dispose();
+                    }
+                    catch { }
+
+                    TextToSpeech.InvalidateVoiceCache();
+                }
+                else if (OperatingSystem.IsWindows())
+                {
+                    // Windows' own Speech page, which is where "Manage voices"
+                    // and "Add voices" live. There was no Windows branch here at
+                    // all, so the link hovered, underlined and did nothing —
+                    // the whole of the reported bug.
+                    //
+                    // UseShellExecute must be true, unlike the macOS call above:
+                    // ms-settings: is a URI for the shell to resolve, not an
+                    // executable to launch, and CreateProcess cannot start it.
                     Process.Start(new ProcessStartInfo
                     {
-                        FileName = "open",
-                        ArgumentList = { "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent" },
-                        UseShellExecute = false
+                        FileName = "ms-settings:speech",
+                        UseShellExecute = true
                     })?.Dispose();
                 }
             };

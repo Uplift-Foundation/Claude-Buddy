@@ -142,6 +142,11 @@ namespace ClaudeBuddy
             Instance = this;
             Directory.CreateDirectory(_statusDir);
 
+            // Subscribed once for the app's lifetime, so no unsubscribe: this
+            // object outlives every orb, which is the point — an orb closing must
+            // not stop the other flyouts hearing about speech.
+            TextToSpeech.StateChanged += OnSpeakStateChanged;
+
             _tray = new TrayController();
 
             StartWatching();
@@ -694,6 +699,25 @@ namespace ClaudeBuddy
             {
                 window.ReapplyGlyph();
             }
+        }
+
+        // Speech is one global thing, not one per orb: whichever orb started it,
+        // every open flyout's speak button has to agree about whether something
+        // is being read. Broadcasting from here rather than from the orb that
+        // clicked, for the same reason ReapplyGlyphs lives here — this class is
+        // already what owns "one change, every orb".
+        //
+        // Posted to the UI thread because the state changes on whatever thread
+        // the speech engine's process exited on.
+        private void OnSpeakStateChanged(TextToSpeech.SpeakState state)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                foreach (var window in _windows.Values)
+                {
+                    window.SetFlyoutSpeakState(state);
+                }
+            });
         }
 
         private void ReflowPositions()
