@@ -377,7 +377,7 @@ real run-through:
 If you turn this on and something above doesn't work as described, that's the
 gap this section is flagging — not a contradiction of it.
 
-### High-quality voice (Windows, optional, off by default)
+### High-quality voice (optional, off by default)
 
 The speaker button on an orb's flyout reads the latest assistant turn aloud. On
 macOS that uses `say` with Apple's Enhanced and Premium voices and sounds good.
@@ -396,8 +396,16 @@ way for this app to sound better on Windows is to bring its own model.
 
 **High-quality voice (experimental)** in the settings window does that. It
 downloads a neural speech engine and its model — about 300 MB in total, once —
-into `%APPDATA%\ClaudeBuddy\speech-engine`, and speaks entirely on this machine.
-No cloud service, no API key, nothing leaves the computer, same as dictation.
+into `%APPDATA%\ClaudeBuddy\speech-engine` (`~/Library/Application
+Support/ClaudeBuddy/speech-engine` on macOS), and speaks entirely on this
+machine. No cloud service, no API key, nothing leaves the computer, same as
+dictation.
+
+It is offered on macOS too, even though Apple's voices are already decent: some
+people prefer Kokoro's, and the engine turned out to be genuinely portable. The
+one thing that isn't shared is playback — macOS synthesises to audio and plays it
+with `afplay` rather than through KokoroSharp's own OpenAL path, which crashes
+before making a sound. `docs/macos-neural-voice-findings.md` has the evidence.
 
 Worth knowing before you turn it on:
 
@@ -412,8 +420,7 @@ Worth knowing before you turn it on:
   it's silent.
 - **Nothing ships in the installer.** The engine is a separate downloaded
   process, so the app stays the same size and anyone who doesn't enable this pays
-  nothing for it. That is also why it doesn't exist on macOS, which has better
-  voices available for free.
+  nothing for it — on either platform.
 
 Built on [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) via
 [KokoroSharp](https://github.com/Lyrcaxis/KokoroSharp); the voices are
@@ -421,7 +428,8 @@ Apache-2.0 and their licence travels inside the downloaded bundle.
 
 #### Adding voices
 
-Drop `.npy` Kokoro voice files into `%APPDATA%\ClaudeBuddy\voices` and they
+Drop `.npy` Kokoro voice files into `%APPDATA%\ClaudeBuddy\voices`
+(`~/Library/Application Support/ClaudeBuddy/voices` on macOS) and they
 appear in the picker alongside the bundled ones. That directory is deliberately
 outside the engine's own folder, which an upgrade replaces wholesale — anything
 put beside the bundled voices would be deleted by the next release.
@@ -1064,13 +1072,19 @@ CI then builds both DMGs and the Windows setup, signs and notarizes the macOS
 ones, generates `SHA256SUMS.txt`, and publishes a release using those notes.
 A tag containing a hyphen is marked as a prerelease automatically.
 
-The release also carries `ClaudeBuddySpeech-<version>-win-x64.zip`, the optional
-high-quality speech engine. That asset is not decoration: the toggle in the
-settings window downloads it from this exact release, deriving the URL from the
-app's own version, so a release published without it hands a 404 to everyone who
-turns the feature on. It is built by `tools/build-speech-engine.ps1` inside the
-Windows job — nothing about it needs doing by hand, but a change to that script
-is a change to the release, which `workflow_dispatch` is the way to test.
+The release also carries `ClaudeBuddySpeech-<version>-<rid>.zip` for each of
+`win-x64`, `osx-arm64` and `osx-x64` — the optional high-quality speech engine.
+Those assets are not decoration: the toggle in the settings window downloads the
+one matching its own version *and architecture* from this exact release, so a
+release published without them hands a 404 to everyone who turns the feature on.
+
+The Windows one is built by `tools/build-speech-engine.ps1` in the Windows job;
+the macOS ones by `tools/build-speech-engine.sh` in the macOS job's rid matrix.
+They are split that way because an osx-* engine cannot be cross-built — the SDK
+ad-hoc signs the apphost with `codesign`, and Apple Silicon will not exec an
+arm64 binary that carries no signature at all. Nothing about any of this needs
+doing by hand, but a change to either script is a change to the release, which
+`workflow_dispatch` is the way to test.
 
 `workflow_dispatch` runs the same build without publishing, which is the way to
 test packaging changes. Every push and PR also builds and packages via

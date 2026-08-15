@@ -146,10 +146,26 @@ jobs:
           fi
           ./tools/build-macos-dmg.sh --rid "${{ matrix.rid }}"
 
+      # The same optional speech engine the Windows job builds, for this RID.
+      # Built here rather than alongside the Windows one because it cannot be
+      # cross-published: the .NET SDK ad-hoc signs the apphost with `codesign`,
+      # which only exists on macOS, and Apple Silicon refuses to exec an arm64
+      # binary carrying no signature at all. An engine built in the Windows job
+      # would download and extract correctly and then be killed on launch.
+      #
+      # In the rid matrix so osx-arm64 and osx-x64 both get one — NeuralSpeech
+      # picks its URL from the running process's architecture, so an Intel Mac
+      # asks for the x64 asset and a release with only the arm64 one gives it a
+      # 404 on the toggle.
+      - name: Build speech engine (${{ matrix.rid }})
+        run: ./tools/build-speech-engine.sh --rid "${{ matrix.rid }}"
+
       - uses: actions/upload-artifact@v7
         with:
           name: dmg-${{ matrix.rid }}
-          path: dist/*.dmg
+          path: |
+            dist/*.dmg
+            dist/ClaudeBuddySpeech-*.zip
           if-no-files-found: error
 
   windows:
@@ -180,8 +196,9 @@ jobs:
       # toggle in Settings fetches this exact URL, so a release without this asset
       # gives everyone who turns it on a 404.
       #
-      # Windows-only, and only in this job, because macOS reaches Apple's Enhanced
-      # and Premium voices through `say` already and needs none of it.
+      # The macOS job builds the same thing for its own RIDs with the shell twin
+      # of this script; see the comment there for why it cannot be cross-built
+      # from here.
       - name: Build speech engine
         run: .\tools\build-speech-engine.ps1
         shell: pwsh
