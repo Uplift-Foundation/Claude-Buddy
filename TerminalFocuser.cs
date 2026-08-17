@@ -36,6 +36,13 @@ namespace ClaudeBuddy
         {
             if (status is null) return;
 
+            // A gateway session has no terminal anywhere and no local process,
+            // so there is nothing to focus. Returning here also keeps it out of
+            // the background-session branch below, which reads pid <= 0 as "a
+            // local `claude daemon` session" and would open a tmux window trying
+            // to attach a session id that exists only on another machine.
+            if (status.Source != SessionSource.ClaudeCode) return;
+
             // Resolving a target runs several short-lived processes (tmux
             // queries, ps walks, osascript) and waits on their output; doing
             // that on the UI thread would stall every orb's animation for the
@@ -93,6 +100,14 @@ namespace ClaudeBuddy
         public static Task SendText(SessionStatus? status, string text)
         {
             if (status is null || string.IsNullOrEmpty(text)) return Task.CompletedTask;
+
+            // Nowhere safe to type. Without this the macOS path falls through to
+            // SendTextMacKeystroke, which is an unconditional System Events
+            // keystroke into whatever happens to be frontmost — so a dictated
+            // sentence lands in an editor, a browser, or another session. That
+            // is a latent hazard for any pane-less session; a gateway session
+            // would make it the normal case.
+            if (status.Source != SessionSource.ClaudeCode) return Task.CompletedTask;
 
             return Task.Run(async () =>
             {

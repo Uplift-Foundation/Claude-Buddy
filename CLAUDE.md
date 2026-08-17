@@ -95,7 +95,20 @@ there.
 
 ## Testing UI behavior
 
-There is no test suite; changes to orb behavior are verified by running the app.
+Orb *geometry* has a test suite — `dotnet run --project tests/ArrangementTests`.
+It walks every shape at every end of the spacing slider across a range of orb
+counts and team shapes (nested teams, everything in one team, lead cycles, a
+lead that points at nothing) on three screen sizes, and asserts that nothing
+leaves the work area, nothing is drawn on top of anything else, and no team
+member ends up too far from its lead to be read as one. Run it after any change
+to `OrbArrangement`; it exits non-zero and prints the exact case that failed.
+
+That exists because the arrangement was fixed by eye half a dozen times and each
+fix broke a case the previous one had fixed. Keep the geometry in
+`OrbArrangement` — pure, no windows, no settings — so it stays testable, with
+`SessionManager` only mapping orbs onto its inputs and its answers back.
+
+Everything else about orb behavior is still verified by running the app.
 Two things make that survivable:
 
 - The status directory comes from the temp path, so `TMPDIR=<dir>` plus

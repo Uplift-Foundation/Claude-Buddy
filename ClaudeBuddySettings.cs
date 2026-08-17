@@ -21,6 +21,16 @@ namespace ClaudeBuddy
     {
         private const int CurrentVersion = 1;
 
+        // OpenClaw's own default. Only worth changing for a gateway that was
+        // moved off it.
+        public const int DefaultOpenClawPort = 18789;
+
+        // An hour of history by default. Long enough to cover the conversation
+        // you were just having, short enough that a gateway holding a year of
+        // Discord channels doesn't fill the screen.
+        public const int DefaultOpenClawActiveWithin = 60;
+        public const int OpenClawActiveWithinAll = 0;
+
         private static readonly object Gate = new();
         private static Model _model = new();
         private static bool _loaded;
@@ -57,7 +67,9 @@ namespace ClaudeBuddy
             "speakVoice", "neuralVoiceEnabled", "neuralVoice",
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
-            "orbColors", "claudeCodeProfileDirs", "profiles", "orbPositions"
+            "orbColors", "claudeCodeProfileDirs", "profiles", "orbPositions",
+            "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
+            "openclawReplyEnabled", "openclawActiveWithinMinutes"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -147,6 +159,42 @@ namespace ClaudeBuddy
             // Windows-only in practice — see NeuralSpeech, and note that macOS's
             // own Enhanced and Premium voices are already better than this.
             public bool NeuralVoiceEnabled { get; set; }
+
+            // Off by default, and for a stronger reason than the voice features
+            // above: an app that reaches out to a machine on the network is not
+            // something a Claude Code tool should start doing because it was
+            // upgraded. Most installs will never point at an OpenClaw gateway,
+            // and while this is off nothing here is constructed, no socket is
+            // opened, and no key is generated — the only trace of the feature is
+            // the settings row that turns it on. Same discipline as
+            // VoiceInputEnabled and the mic permission prompt.
+            public bool OpenClawEnabled { get; set; }
+
+            // Where the gateway lives. An address rather than a name on purpose:
+            // the certificate it serves is self-signed with no subjectAltName,
+            // so a hostname buys nothing and pinning does the identity work.
+            public string? OpenClawHost { get; set; }
+
+            public int OpenClawPort { get; set; } = DefaultOpenClawPort;
+
+            // The certificate fingerprint this install has agreed to trust,
+            // recorded the first time it connects. Empty means "trust whatever
+            // is presented next and remember it"; once set, a different
+            // certificate is refused rather than silently accepted.
+            public string? OpenClawFingerprint { get; set; }
+
+            // Off by default, and separately from OpenClawEnabled on purpose:
+            // showing what your agents are doing and being able to make them do
+            // things are different powers, and the second one should be asked
+            // for. Turning it on widens the scopes this device requests, which
+            // the gateway treats as a new pairing to approve.
+            public bool OpenClawReplyEnabled { get; set; }
+
+            // How far back a gateway session counts as current. Separate from
+            // OrbLifetimeMinutes, which decides how long a session lingers after
+            // it goes quiet — this decides which of a gateway's many
+            // conversations are candidates at all. Zero means all of them.
+            public int OpenClawActiveWithinMinutes { get; set; } = DefaultOpenClawActiveWithin;
 
             // A command of the user's own to speak with, replacing every built-in
             // engine. Null means "use the built-in ones".
@@ -354,6 +402,48 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.SpeakEngine = value; Save(); }
         }
 
+        // Turning this on or off takes effect immediately rather than at the
+        // next launch: SessionManager asks OpenClawSessions for a snapshot every
+        // scan, and that returns nothing at all while this is false.
+        public static bool OpenClawEnabled
+        {
+            get { Load(); lock (Gate) return _model.OpenClawEnabled; }
+            set { Load(); lock (Gate) _model.OpenClawEnabled = value; Save(); }
+        }
+
+        public static string OpenClawHost
+        {
+            get { Load(); lock (Gate) return _model.OpenClawHost ?? ""; }
+            set { Load(); lock (Gate) _model.OpenClawHost = value; Save(); }
+        }
+
+        public static int OpenClawPort
+        {
+            get { Load(); lock (Gate) return _model.OpenClawPort; }
+            set { Load(); lock (Gate) _model.OpenClawPort = value; Save(); }
+        }
+
+        // Empty until the first successful connection, which records what it
+        // was shown. See OpenClawSocket for why a fingerprint rather than the
+        // system trust store.
+        public static string OpenClawFingerprint
+        {
+            get { Load(); lock (Gate) return _model.OpenClawFingerprint ?? ""; }
+            set { Load(); lock (Gate) _model.OpenClawFingerprint = value; Save(); }
+        }
+
+        public static int OpenClawActiveWithinMinutes
+        {
+            get { Load(); lock (Gate) return _model.OpenClawActiveWithinMinutes; }
+            set { Load(); lock (Gate) _model.OpenClawActiveWithinMinutes = value; Save(); }
+        }
+
+        public static bool OpenClawReplyEnabled
+        {
+            get { Load(); lock (Gate) return _model.OpenClawReplyEnabled; }
+            set { Load(); lock (Gate) _model.OpenClawReplyEnabled = value; Save(); }
+        }
+
         public static bool NeuralVoiceEnabled
         {
             get { Load(); lock (Gate) return _model.NeuralVoiceEnabled; }
@@ -545,6 +635,13 @@ namespace ClaudeBuddy
                         OrbLifetimeMinutes =
                             root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes,
                         VoiceInputEnabled = root["voiceInputEnabled"]?.GetValue<bool>() ?? false,
+                        OpenClawEnabled = root["openclawEnabled"]?.GetValue<bool>() ?? false,
+                        OpenClawHost = Text(root["openclawHost"]),
+                        OpenClawPort = root["openclawPort"]?.GetValue<int>() ?? DefaultOpenClawPort,
+                        OpenClawFingerprint = Text(root["openclawFingerprint"]),
+                        OpenClawReplyEnabled = root["openclawReplyEnabled"]?.GetValue<bool>() ?? false,
+                        OpenClawActiveWithinMinutes =
+                            root["openclawActiveWithinMinutes"]?.GetValue<int>() ?? DefaultOpenClawActiveWithin,
                         TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
                         ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
                         ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing,
@@ -732,6 +829,12 @@ namespace ClaudeBuddy
                         ["tintActiveWindow"] = _model.TintActiveWindow,
                         ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
                         ["voiceInputEnabled"] = _model.VoiceInputEnabled,
+                        ["openclawEnabled"] = _model.OpenClawEnabled,
+                        ["openclawHost"] = _model.OpenClawHost,
+                        ["openclawPort"] = _model.OpenClawPort,
+                        ["openclawFingerprint"] = _model.OpenClawFingerprint,
+                        ["openclawReplyEnabled"] = _model.OpenClawReplyEnabled,
+                        ["openclawActiveWithinMinutes"] = _model.OpenClawActiveWithinMinutes,
                         ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
                         ["arrangeShape"] = _model.ArrangeShape,
                         ["arrangeSpacing"] = _model.ArrangeSpacing,
