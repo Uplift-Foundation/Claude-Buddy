@@ -182,7 +182,12 @@ namespace ClaudeBuddy
 
             if (sessions.Count == 0)
             {
-                menu.Add(new NativeMenuItem("No Claude Code sessions") { IsEnabled = false });
+                // Not "No Claude Code sessions" any more: with the OpenClaw
+                // feature on, an empty menu can mean no sessions of either kind,
+                // and naming only one of them reads as a bug in the other.
+                menu.Add(new NativeMenuItem(
+                    ClaudeBuddySettings.OpenClawEnabled ? "No sessions" : "No Claude Code sessions")
+                { IsEnabled = false });
             }
             else
             {

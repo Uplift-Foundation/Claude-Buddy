@@ -1,0 +1,31 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ClaudeBuddy.AvatarPopup"
+        Width="292" Height="292"
+        SizeToContent="Manual"
+        SystemDecorations="None"
+        TransparencyLevelHint="Transparent"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        CanResize="False"
+        ShowActivated="True"
+        RequestedThemeVariant="Dark"
+        WindowStartupLocation="Manual">
+
+    <!-- The portrait on its own, four times the size it is in the chat panel's
+         header. Deliberately nothing else: no title, no chrome, no buttons —
+         it exists for one purpose and dismisses on the next click anywhere,
+         so anything else in here would only be in the way.
+
+         ShowActivated so Deactivated fires the moment you click elsewhere,
+         which is what closes it. -->
+    <Border x:Name="Root" Width="292" Height="292"
+            HorizontalAlignment="Left" VerticalAlignment="Top"
+            CornerRadius="146"
+            Background="#E0202024"
+            BorderBrush="#66FFFFFF" BorderThickness="2">
+        <Ellipse x:Name="Portrait" Width="272" Height="272"
+                 HorizontalAlignment="Center" VerticalAlignment="Center"/>
+    </Border>
+</Window>

@@ -716,6 +716,71 @@ automatically. A second Linux user account inside the same distro is the one
 combination left unwired, since that needs hooks added inside *their* account
 specifically — the "By hand" section further down still covers that case.
 
+## OpenClaw agents (experimental, off by default)
+
+Claude Buddy can also show an orb for each recently active session on an
+[OpenClaw](https://docs.openclaw.ai) gateway — the agents you talk to through
+Discord or its TUI — beside your Claude Code ones. They breathe when idle and
+pulse violet while an agent is working, the same as any other orb.
+
+It is **off until you turn it on**, and while it is off the app opens no socket,
+starts no background task and generates no key. Turn it on in **Settings →
+OpenClaw agents**, then give it:
+
+- **Gateway address** — the machine running the gateway. An IP address rather
+  than a hostname, because the certificate it serves carries no hostname to
+  validate against.
+- **Gateway token** — the `gateway.auth.token` from the gateway's own
+  `openclaw.json`. It is kept out of `settings.json`, in a file only your user
+  can read, beside the device key.
+
+The first connection asks the gateway to pair this machine, and then waits: on
+the gateway, run `openclaw devices approve --latest` and check it names
+`gateway-client` before approving. Claude Buddy asks for **`operator.read` and
+nothing else**, so it can see what your agents are doing and cannot ask them to
+do anything.
+
+Orbs are named for the agent, not its id: OpenClaw keeps a name per agent, so
+an orb reads **Lilibeth — #general** rather than `main`, and its letter is L
+rather than a fourth M. The second half says which conversation it is, because
+one agent commonly has a DM with you, a DM with someone else and two channels
+going at once.
+
+**Only recently active sessions get orbs.** A gateway remembers every
+conversation it has ever had — 59 of them on the machine this was developed
+against — so an orb per session would bury the screen. **Show sessions active
+within** controls how far back to look; anything currently working shows
+regardless. That is deliberately separate from **Keep orbs for**, which is about
+how long a session lingers *after* it goes quiet.
+
+Be aware that the gateway's own idea of "recent" is unreliable — it reported
+nearly two hours since last activity for a Discord chat that was happening at
+that moment — so Claude Buddy also counts anything it has watched happen since
+it started. Conversations from before it connected are the ones that depend on
+the setting.
+
+**Click one of these orbs and a small chat panel opens under it** — the last
+turns, what the agent is thinking, the tools it reaches for, and a line to type
+in. Escape, Cmd-W, the close button or clicking away all dismiss it, and your
+half-typed draft survives being dismissed. Enter sends, Shift+Enter starts a new
+line, and with voice input on the mic drops what you said into the box rather
+than sending it, exactly as dictation into a terminal already does.
+
+Replying is a **second switch**, off by default: **Allow replying to agents**.
+Turning it on asks the gateway for write permission as well as read, which it
+treats as a new pairing — so approve the device again there
+(`openclaw devices approve --latest`) and the status row will tell you it is
+waiting until you do. Seeing what your agents are doing and being able to make
+them do things are different powers, which is why the second one is asked for
+separately rather than coming along with the first.
+
+Two things worth knowing if you are wiring this up yourself: the connection uses
+its own TLS stack (BouncyCastle) because the gateway requires TLS 1.3 and .NET
+on macOS cannot speak it, and the certificate is trusted by fingerprint on first
+connection rather than through the system trust store. `docs/openclaw-findings.md`
+records what was measured against a real gateway, including several places where
+the published protocol documentation disagrees with the running software.
+
 ## 1. Install it
 
 Either download an installer or build from source — both are fully supported,
