@@ -252,6 +252,12 @@ namespace ClaudeBuddy
         // doing. An unknown or missing color name leaves the orb looking the
         // way it always has, so a future addition to Claude Code's palette
         // degrades quietly instead of throwing.
+        //
+        // A "#RRGGBB" is accepted as well as a name, which is how a gateway
+        // agent gets an accent: it has no /color to give, so one is derived
+        // from its id (see AgentPalette). Taking it through the same field
+        // rather than adding a second one means the ring, the glyph and the
+        // team arrow all pick it up with no further wiring.
         private void ApplyAccent(string colorName)
         {
             if (colorName == _lastColor) return;
@@ -259,7 +265,8 @@ namespace ClaudeBuddy
 
             Color accent = default;
             var known = !string.IsNullOrEmpty(colorName)
-                        && AgentColors.TryGetValue(colorName, out accent);
+                        && (AgentColors.TryGetValue(colorName, out accent)
+                            || (colorName[0] == '#' && Color.TryParse(colorName, out accent)));
 
             _accentColor = known ? accent : null;
 

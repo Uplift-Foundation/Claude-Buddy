@@ -117,11 +117,14 @@
                                     Background="{Binding Bubble}"
                                     HorizontalAlignment="{Binding Side}">
                                 <StackPanel>
-                                    <TextBlock Text="{Binding Text}" TextWrapping="Wrap"
-                                               IsVisible="{Binding HasText}"
-                                               FontSize="{Binding Size}"
-                                               FontStyle="{Binding Style}"
-                                               Foreground="{Binding Ink}"/>
+                                    <!-- Built in code rather than bound to a
+                                         string, because a reply is Markdown and
+                                         drawing it as one TextBlock showed the
+                                         asterisks and backticks. TurnView.Body
+                                         is a small stack of paragraphs, lists
+                                         and code blocks — see BuildBody. -->
+                                    <ContentControl Content="{Binding Body}"
+                                                    IsVisible="{Binding HasText}"/>
                                     <!-- A picture sent in the conversation.
                                          Width-constrained and free in height so
                                          a tall render keeps its proportions;
