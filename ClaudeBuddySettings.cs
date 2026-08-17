@@ -190,6 +190,20 @@ namespace ClaudeBuddy
             // the gateway treats as a new pairing to approve.
             public bool OpenClawReplyEnabled { get; set; }
 
+            // The chat panel on a local Claude Code orb. On by default, unlike
+            // everything else here that is off: it opens no socket, starts no
+            // engine and asks for no permission — it reads a file the hook
+            // already tells us about, and only while a panel is up.
+            public bool ClaudeCodeChatEnabled { get; set; } = true;
+
+            // Typing into that session from the panel. Off by default, and the
+            // same split as OpenClawReplyEnabled for the same reason: watching a
+            // session work and being able to drive it are different powers. The
+            // second one also covers answering permission prompts and
+            // interrupting a run, which are the two places a wrong click costs
+            // most.
+            public bool ClaudeCodeReplyEnabled { get; set; }
+
             // How far back a gateway session counts as current. Separate from
             // OrbLifetimeMinutes, which decides how long a session lingers after
             // it goes quiet — this decides which of a gateway's many
@@ -444,6 +458,18 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.OpenClawReplyEnabled = value; Save(); }
         }
 
+        public static bool ClaudeCodeChatEnabled
+        {
+            get { Load(); lock (Gate) return _model.ClaudeCodeChatEnabled; }
+            set { Load(); lock (Gate) _model.ClaudeCodeChatEnabled = value; Save(); }
+        }
+
+        public static bool ClaudeCodeReplyEnabled
+        {
+            get { Load(); lock (Gate) return _model.ClaudeCodeReplyEnabled; }
+            set { Load(); lock (Gate) _model.ClaudeCodeReplyEnabled = value; Save(); }
+        }
+
         public static bool NeuralVoiceEnabled
         {
             get { Load(); lock (Gate) return _model.NeuralVoiceEnabled; }
@@ -642,6 +668,8 @@ namespace ClaudeBuddy
                         OpenClawReplyEnabled = root["openclawReplyEnabled"]?.GetValue<bool>() ?? false,
                         OpenClawActiveWithinMinutes =
                             root["openclawActiveWithinMinutes"]?.GetValue<int>() ?? DefaultOpenClawActiveWithin,
+                        ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
+                        ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
                         ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
                         ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing,
@@ -835,6 +863,8 @@ namespace ClaudeBuddy
                         ["openclawFingerprint"] = _model.OpenClawFingerprint,
                         ["openclawReplyEnabled"] = _model.OpenClawReplyEnabled,
                         ["openclawActiveWithinMinutes"] = _model.OpenClawActiveWithinMinutes,
+                        ["claudeCodeChatEnabled"] = _model.ClaudeCodeChatEnabled,
+                        ["claudeCodeReplyEnabled"] = _model.ClaudeCodeReplyEnabled,
                         ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
                         ["arrangeShape"] = _model.ArrangeShape,
                         ["arrangeSpacing"] = _model.ArrangeSpacing,

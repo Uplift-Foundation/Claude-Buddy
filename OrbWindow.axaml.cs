@@ -73,6 +73,13 @@ namespace ClaudeBuddy
         // SessionManager seeds OrbsVisible from ClaudeBuddySettings.ShowOrbs.
         private readonly SolidColorBrush _orbBrush = new(OrbColors.Idle);
 
+        // The two halves of this orb's identity, for the chat panel's header.
+        // A local session has no portrait and no emoji to draw there, and these
+        // are what it has instead — read from the orb rather than re-derived, so
+        // the header cannot disagree with the thing that was clicked.
+        public string GlyphText => Glyph.Text ?? "";
+        public Color OrbColor => _orbBrush.Color;
+
         private readonly RadialGradientBrush _glowBrush = new()
         {
             GradientOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),
@@ -800,6 +807,7 @@ namespace ClaudeBuddy
                     SettingsWindow.Toggle();
                 };
                 _flyout.SpeakClicked += OnSpeakClicked;
+                _flyout.ChatClicked += OpenChat;
 
                 // The other half of the hover bridge described on
                 // _hideFlyoutTimer: entering the flyout must cancel a hide
@@ -816,6 +824,14 @@ namespace ClaudeBuddy
             // input box rather than sending them.
             bool micOn = ClaudeBuddySettings.VoiceInputEnabled;
             _flyout.SetMicVisible(micOn);
+
+            // Only on local sessions. A gateway orb opens its panel when you
+            // click it, so a button that did the same thing one ring further out
+            // would be a second way to do the thing the orb already does.
+            _flyout.SetChatVisible(
+                _lastStatus?.Source == SessionSource.ClaudeCode
+                && ClaudeBuddySettings.ClaudeCodeChatEnabled);
+
             _flyout.SetArranged(SessionManager.Instance?.IsArranged ?? false);
 
             // Speech is global rather than per-orb, so a flyout opening
@@ -940,6 +956,19 @@ namespace ClaudeBuddy
         // Called by ChatPanel when it closes itself, so the arc becomes
         // available again without the orb having to watch the window.
         public void SetChatOpen(bool open) => _chatOpen = open;
+
+        // The flyout's keyboard button. Same destination a gateway orb's click
+        // reaches, arrived at differently because for a local session the click
+        // is already spoken for.
+        private void OpenChat()
+        {
+            var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
+            if (chat is null) return;
+
+            _chatOpen = true;
+            HideFlyoutNow();
+            ChatPanel.OpenFor(this, chat);
+        }
 
         // Whether a dictation capture is in progress. The panel mirrors it on
         // its own mic button and refuses to be dismissed while it is true.
@@ -1285,13 +1314,22 @@ namespace ClaudeBuddy
                 // session there is no terminal anywhere, and the honest answer
                 // is a place to read and reply — so the panel *is* the
                 // destination rather than an extra affordance.
-                var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
-                if (chat is not null)
+                //
+                // Guarded on the source rather than on RemoteChatFor answering,
+                // which it now does for local sessions as well: that is what the
+                // flyout's keyboard button opens, and it must not quietly become
+                // what a click does instead. Going to the terminal is the oldest
+                // behaviour this app has and people reach for it without looking.
+                if (_lastStatus?.Source != SessionSource.ClaudeCode)
                 {
-                    _chatOpen = true;
-                    HideFlyoutNow();
-                    ChatPanel.OpenFor(this, chat);
-                    return;
+                    var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
+                    if (chat is not null)
+                    {
+                        _chatOpen = true;
+                        HideFlyoutNow();
+                        ChatPanel.OpenFor(this, chat);
+                        return;
+                    }
                 }
 
                 TerminalFocuser.Focus(

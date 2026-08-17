@@ -191,11 +191,13 @@ namespace ClaudeBuddy
             _session.TurnUpdated -= OnTurnUpdated;
             _session.StateChanged -= OnStateChanged;
 
-            if (_session is OpenClawChatSession previous)
+            if (_session is IRemoteChatBacklog previous)
             {
                 previous.HistoryReplaced -= OnHistoryReplaced;
                 previous.HistoryPrepended -= OnHistoryPrepended;
             }
+
+            if (_session is IRemoteChatPrompts prompts) prompts.PromptChanged -= OnPromptChanged;
         }
 
         private void Bind(OrbWindow orb, IRemoteChatSession session)
@@ -219,11 +221,13 @@ namespace ClaudeBuddy
             // transcript has to be able to be replaced under it rather than only
             // appended to. Optional on purpose — a session that only ever
             // appends never raises it.
-            if (session is OpenClawChatSession loader)
+            if (session is IRemoteChatBacklog loader)
             {
                 loader.HistoryReplaced += OnHistoryReplaced;
                 loader.HistoryPrepended += OnHistoryPrepended;
             }
+
+            if (session is IRemoteChatPrompts prompts) prompts.PromptChanged += OnPromptChanged;
 
             // "Zara — wtvamp" is built as name plus place, so it splits back
             // into the two lines the header now has. A name with no place (an
@@ -242,6 +246,12 @@ namespace ClaudeBuddy
             Input.Text = Drafts.GetValueOrDefault(session.SessionId, "");
             MicButton.IsVisible = ClaudeBuddySettings.VoiceInputEnabled;
             ApplySpeakState(TextToSpeech.State);
+
+            // The box stays enabled even when sending won't work, and says why
+            // on itself instead. A disabled box can't be pasted into or drafted
+            // in, and SendAsync explains itself in the transcript anyway.
+            Input.Watermark = (session as IRemoteChatComposer)?.ComposerHint ?? "Message…";
+            ApplyPrompt();
 
             Reposition();
 
@@ -270,16 +280,48 @@ namespace ClaudeBuddy
 
         private void ApplyAvatar(string sessionId)
         {
-            var avatar = OpenClawSessions.AvatarForSession(sessionId);
-
             StopAvatarAnimation();
+
+            var avatar = OpenClawSessions.AvatarForSession(sessionId);
+            var identity = OpenClawSessions.IdentityForSession(sessionId);
+
+            // Neither a portrait nor an emoji, which is every local session and
+            // a gateway one whose agent list hasn't landed yet. Its orb already
+            // carries both halves of an identity — a letter and a colour, the
+            // ones just clicked — so the header borrows them. Better than an
+            // empty circle, and better than a second scheme invented for this
+            // window: the panel ends up looking like the orb it came out of.
+            //
+            // Keyed on there being no OpenClaw identity rather than on the
+            // session's type, because the panel deliberately doesn't know what
+            // kinds of session exist.
+            if (avatar is null && identity is null && _owner is not null)
+            {
+                _avatar = null;
+                _avatarFrame = 0;
+
+                Avatar.Fill = new SolidColorBrush(_owner.OrbColor);
+                Avatar.IsVisible = true;
+
+                // An initial wants less room than an emoji does.
+                AvatarEmoji.Text = _owner.GlyphText;
+                AvatarEmoji.FontSize = 26;
+                AvatarEmoji.IsVisible = !string.IsNullOrEmpty(AvatarEmoji.Text);
+
+                StateDot.HorizontalAlignment = HorizontalAlignment.Right;
+                StateDot.VerticalAlignment = VerticalAlignment.Bottom;
+                return;
+            }
+
             _avatar = avatar;
             _avatarFrame = 0;
 
-            var identity = OpenClawSessions.IdentityForSession(sessionId);
+            // Reset from whatever the branch above may have left behind.
+            AvatarEmoji.FontSize = 38;
 
             if (avatar is null)
             {
+                Avatar.Fill = null;
                 Avatar.IsVisible = false;
 
                 // Emoji if there is one, and the state dot moves back to the
@@ -479,7 +521,7 @@ namespace ClaudeBuddy
         private async Task LoadOlderAsync()
         {
             if (_loadingOlder) return;
-            if (_session is not OpenClawChatSession chat || !chat.HasMore) return;
+            if (_session is not IRemoteChatBacklog chat || !chat.HasMore) return;
 
             _loadingOlder = true;
 
@@ -487,7 +529,7 @@ namespace ClaudeBuddy
             {
                 var before = Scroll.Extent.Height;
 
-                if (!await OpenClawSessions.LoadOlderAsync(chat, CancellationToken.None)) return;
+                if (!await chat.LoadOlderAsync(CancellationToken.None)) return;
 
                 // The prepend itself happens on the event below; this only has
                 // to restore the position once layout has caught up with it.
@@ -570,6 +612,62 @@ namespace ClaudeBuddy
             };
         }
 
+        private void OnPromptChanged() => ApplyPrompt();
+
+        // A dialog the session has stopped on, or nothing.
+        //
+        // The options are shown whether or not replying is switched on, and
+        // clicking one while it is off produces the same explanation in the
+        // transcript that sending a message would. Same reasoning as the
+        // composer: the panel doesn't hide what is happening because you can't
+        // act on it yet, and the session — which owns the rule — is the thing
+        // that states it.
+        private void ApplyPrompt()
+        {
+            var prompt = (_session as IRemoteChatPrompts)?.Prompt;
+
+            if (prompt is null)
+            {
+                PromptBox.IsVisible = false;
+                PromptOptions.ItemsSource = null;
+                return;
+            }
+
+            PromptTitle.Text = prompt.Title;
+
+            // No options means the screen couldn't be read. The box still
+            // appears — something is waiting and the transcript won't say so —
+            // but the only thing offered is the terminal.
+            PromptOptions.ItemsSource = prompt.Options.Count > 0 ? prompt.Options : null;
+            PromptOptions.IsVisible = prompt.Options.Count > 0;
+
+            PromptBox.IsVisible = true;
+        }
+
+        private void PromptOption_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            e.Handled = true;
+
+            if ((sender as Control)?.DataContext is not ChatPromptOption option) return;
+            if (_session is not IRemoteChatPrompts prompts) return;
+
+            _ = prompts.AnswerAsync(option);
+        }
+
+        private void PromptElsewhere_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            e.Handled = true;
+
+            if (_session is not IRemoteChatPrompts prompts) return;
+
+            prompts.AnswerElsewhere();
+
+            // Dismissed, because this asked to be somewhere else. Leaving the
+            // panel up over the terminal it just brought forward would be
+            // covering the dialog it sent you to answer.
+            HideNow();
+        }
+
         // Only when already at the bottom, so reading back through a long reply
         // isn't yanked forward as it grows. DispatcherPriority.Loaded because
         // the extent isn't updated until the text has re-measured.
@@ -585,6 +683,12 @@ namespace ClaudeBuddy
 
             StopAvatarAnimation();
             AvatarPopup.Close();
+
+            // Cleared with the panel, not left standing: the next session bound
+            // here is very unlikely to be waiting on the same dialog, and a
+            // stale one would offer buttons that answer nothing.
+            PromptBox.IsVisible = false;
+            PromptOptions.ItemsSource = null;
 
             // Detached while hidden. The panel is a singleton that stays alive
             // between openings, and a hidden panel left subscribed goes on

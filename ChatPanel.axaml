@@ -30,7 +30,7 @@
             HorizontalAlignment="Left" VerticalAlignment="Top"
             CornerRadius="12" Padding="10"
             Background="#E0202024" BorderBrush="#80FFFFFF" BorderThickness="1.5">
-        <Grid RowDefinitions="Auto,*,Auto" RowSpacing="6">
+        <Grid RowDefinitions="Auto,*,Auto,Auto" RowSpacing="6">
 
             <!-- A contact card: portrait, then who and where stacked beside
                  it, then the actions. The name and the place used to be one
@@ -152,7 +152,61 @@
                 </ItemsControl>
             </ScrollViewer>
 
-            <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="5">
+            <!-- A dialog the session has stopped on, almost always a permission
+                 prompt. It sits between the transcript and the input because
+                 that is what it is: the thing standing between what has been
+                 said and saying anything else.
+
+                 Amber, matching "preparing" on the speak button and the arrange
+                 button's active state, so the app keeps one vocabulary for
+                 "waiting on something" rather than acquiring a second.
+
+                 The options are not ours. Their labels are read off the pane by
+                 ClaudeCodeChatSession.ParsePrompt, because the dialog is drawn
+                 by the TUI and never reaches the transcript — and a button that
+                 said "Approve" while sending a digit that meant something else
+                 is the one failure this feature must not have. When the screen
+                 can't be parsed there are no options and only the terminal
+                 button, which is the honest answer at that point. -->
+            <Border x:Name="PromptBox" Grid.Row="2" IsVisible="False"
+                    CornerRadius="8" Padding="8,6"
+                    Background="#26B8860B" BorderBrush="#80B8860B" BorderThickness="1">
+                <StackPanel Spacing="6">
+                    <TextBlock x:Name="PromptTitle" TextWrapping="Wrap"
+                               FontSize="11" FontWeight="SemiBold"
+                               Foreground="#F2FFFFFF"/>
+                    <ItemsControl x:Name="PromptOptions">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Spacing="4"/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#33FFFFFF"
+                                        BorderBrush="#40FFFFFF" BorderThickness="1"
+                                        CornerRadius="6" Padding="7,4" Cursor="Hand"
+                                        PointerPressed="PromptOption_PointerPressed">
+                                    <TextBlock Text="{Binding Label}" TextWrapping="Wrap"
+                                               FontSize="11" Foreground="#EEFFFFFF"/>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <!-- Always offered, not only as a fall back: the dialog's
+                         last option is usually "no, and tell Claude what to do
+                         differently", which needs a sentence typed rather than
+                         a button pressed. -->
+                    <TextBlock x:Name="PromptElsewhere"
+                               Text="Answer in the terminal"
+                               FontSize="10.5" Cursor="Hand"
+                               TextDecorations="Underline"
+                               Foreground="#B3FFFFFF"
+                               PointerPressed="PromptElsewhere_PointerPressed"/>
+                </StackPanel>
+            </Border>
+
+            <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="5">
                 <!-- AcceptsReturn so the TextBox owns newline insertion, caret
                      placement and undo; Enter-to-send is intercepted on the
                      tunnel route instead. Grows to about three lines, then

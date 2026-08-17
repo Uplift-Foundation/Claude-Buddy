@@ -95,4 +95,84 @@ namespace ClaudeBuddy
         void Cancel();
     }
 
+    // Everything below is optional. The panel tests for each one and does
+    // without when it isn't there, which is what keeps the in-memory fake — and
+    // any future third transport — to the nine members above.
+    //
+    // They are separate interfaces rather than more members on
+    // IRemoteChatSession because they are separate powers: a transport can page
+    // backwards without being able to answer a dialog, and both were true of
+    // exactly one implementation each when they were written.
+
+    // Scrolling back past what the panel was given.
+    //
+    // This started life as four members on OpenClawChatSession that the panel
+    // reached for by type test. Lifting it happened when the second transport
+    // turned out to want the same thing for the same reason — a transcript is
+    // thousands of rows and the panel is given forty.
+    public interface IRemoteChatBacklog
+    {
+        // False once there is nothing older left to fetch. The panel asks before
+        // every fetch, so an implementation that can't page says false forever.
+        bool HasMore { get; }
+
+        // True when this call actually prepended something. False is not a
+        // failure — it is "that was the end" — and the panel uses it to avoid
+        // measuring a scroll correction that isn't coming.
+        Task<bool> LoadOlderAsync(CancellationToken ct);
+
+        // The whole transcript changed underneath the panel, which TurnAdded
+        // can't express. Raised when a backlog lands a moment after the panel
+        // opened and replaces the little it had.
+        event Action? HistoryReplaced;
+
+        // Older turns went on the front. Carries how many, because the panel has
+        // to put the scroll position back afterwards — content appearing above
+        // where you are reading would otherwise throw you down the page.
+        event Action<int>? HistoryPrepended;
+    }
+
+    // What the empty input box should say.
+    //
+    // Both transports can be in a state where typing is pointless — replying
+    // switched off, or a session with no pane to type into — and both would
+    // rather say so on the box than let you write a paragraph first. The box
+    // stays enabled either way: SendAsync still explains itself in the
+    // transcript, and a disabled box you can't paste a draft into is a worse
+    // answer than one that tells you what will happen.
+    public interface IRemoteChatComposer
+    {
+        string ComposerHint { get; }
+    }
+
+    // One option in a dialog the session is blocked on. Key is what gets sent —
+    // a digit, for the numbered lists Claude Code puts up — and Label is the
+    // dialog's own wording, read off the screen rather than guessed at.
+    public sealed record ChatPromptOption(string Key, string Label);
+
+    public sealed record ChatPrompt(string Title, IReadOnlyList<ChatPromptOption> Options);
+
+    // A session that has stopped and is waiting to be answered.
+    //
+    // The case this exists for is a permission prompt: the session is doing
+    // nothing, the transcript says nothing about why, and the panel would
+    // otherwise show a conversation that had simply gone quiet. Answering is a
+    // real power and is gated like sending is.
+    public interface IRemoteChatPrompts
+    {
+        // Null when nothing is waiting. Non-null means the panel should show the
+        // options instead of pretending the silence is normal.
+        ChatPrompt? Prompt { get; }
+
+        event Action? PromptChanged;
+
+        // Take this option. Only ever called with an option out of Prompt, so an
+        // implementation never has to invent a key it didn't publish.
+        Task AnswerAsync(ChatPromptOption option);
+
+        // "I'll deal with it myself" — go to wherever the dialog actually is.
+        // The fall back for when the dialog could not be read, which is the only
+        // honest answer at that point.
+        void AnswerElsewhere();
+    }
 }
