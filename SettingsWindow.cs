@@ -502,6 +502,48 @@ namespace ClaudeBuddy
             reconnect.Click += (_, _) => { OpenClawSessions.Restart(); Rebuild(); };
             rows.Add(Row("", reconnect));
 
+            // Only when the pin is the thing standing in the way, because this
+            // is the one control here that gives something up.
+            //
+            // It has to exist. A gateway that regenerates its certificate —
+            // reinstalled, upgraded, switched to mkcert — is refused for ever
+            // after with a message the user can do nothing about: Reconnect
+            // fails the same way every time, and the only way through was to
+            // edit settings.json by hand. That is not a security property, it is
+            // a dead end that teaches people to distrust the message.
+            //
+            // Deliberately not automatic, and deliberately not a general "always
+            // trust" switch. Accepting a new certificate is exactly what an
+            // interception needs you to do, so it stays a separate, explicit act
+            // taken while looking at a line that says what changed.
+            if (OpenClawSessions.CertificateRejected)
+            {
+                var trust = new Button
+                {
+                    Content = "Trust the new certificate",
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left
+                };
+
+                // The pin is cleared rather than set to what was observed: the
+                // next successful connection records it anyway (trust on first
+                // use), and writing a fingerprint the app has been *refusing* is
+                // a longer way round to the same place with more to get wrong.
+                //
+                // TrustNewCertificate rather than doing it here, so the button
+                // is gone by the time Rebuild runs — see its own comment.
+                trust.Click += (_, _) =>
+                {
+                    OpenClawSessions.TrustNewCertificate();
+                    Rebuild();
+                };
+
+                rows.Add(Row("", trust,
+                    "The gateway's certificate has changed since this install first "
+                    + "connected. That is normal after the gateway is reinstalled or "
+                    + "upgraded — and is also what someone impersonating it would look "
+                    + "like. Only do this if you know why it changed."));
+            }
+
             return rows.ToArray();
         }
 
