@@ -173,6 +173,17 @@ namespace ClaudeBuddy
             get { lock (Gate) return _state; }
         }
 
+        // True when the last attempt failed *only* because the certificate no
+        // longer matches the pinned one. The settings window offers to accept
+        // the new one when this is set, and offers nothing of the sort
+        // otherwise — see the button's own comment for why it is not automatic.
+        public static bool CertificateRejected
+        {
+            get { lock (Gate) return _certificateRejected; }
+        }
+
+        private static bool _certificateRejected;
+
         // The panel's view of one session. sessionId is the app's namespaced
         // id; the gateway knows it without the prefix.
         public static IRemoteChatSession? ChatFor(string sessionId, string displayName)
@@ -220,6 +231,32 @@ namespace ClaudeBuddy
 
         public static IReadOnlyList<Session> Snapshot() =>
             ClaudeBuddySettings.OpenClawEnabled ? _snapshot : Array.Empty<Session>();
+
+        // Accept whatever certificate the gateway is now serving.
+        //
+        // Clearing the pin *and* the rejection together, rather than letting the
+        // next successful connection clear the flag, because the flag means "the
+        // pin is refusing this gateway" and after this call there is no pin to
+        // refuse with. Waiting for the connection left the settings window still
+        // offering to trust a certificate that had already been trusted — the
+        // reconnect is asynchronous and the window redraws long before it
+        // finishes, so the button sat there until something else redrew it.
+        //
+        // The status line moves too, for the same reason: leaving the old
+        // sentence up under a button that has just gone would read as the click
+        // having done nothing.
+        public static void TrustNewCertificate()
+        {
+            ClaudeBuddySettings.OpenClawFingerprint = "";
+
+            lock (Gate)
+            {
+                _certificateRejected = false;
+                _state = "connecting…";
+            }
+
+            Restart();
+        }
 
         // Called on launch and whenever the settings change. Idempotent: a
         // second call while running is a restart, which is what changing the
@@ -283,6 +320,17 @@ namespace ClaudeBuddy
                     {
                         Report(Describe(result));
 
+                        // Recorded as a flag as well as a sentence, because the
+                        // settings window has to *offer something* for this one
+                        // rather than only describe it — a changed certificate
+                        // is otherwise a permanent dead end with no way through
+                        // but editing settings.json.
+                        lock (Gate)
+                        {
+                            _certificateRejected =
+                                result.Outcome == OpenClawGateway.Outcome.CertificateMismatch;
+                        }
+
                         // Terminal states get no retry. A gateway that refuses
                         // our credentials will refuse them again in two seconds,
                         // and again after that — the only thing a retry loop
@@ -323,7 +371,15 @@ namespace ClaudeBuddy
 
                     backoff = TimeSpan.FromSeconds(2);   // reset on a real connect, never before
 
-                    lock (Gate) _gateway = gateway;
+                    // Whatever the certificate was, it is agreed now — so the
+                    // offer to accept a new one goes away with the problem
+                    // rather than lingering as a button that would clear a pin
+                    // nothing is complaining about.
+                    lock (Gate)
+                    {
+                        _gateway = gateway;
+                        _certificateRejected = false;
+                    }
 
                     // A panel opened while disconnected has an empty transcript
                     // and no way to know it should try again, so reconnecting
