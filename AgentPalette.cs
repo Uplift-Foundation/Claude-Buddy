@@ -33,14 +33,16 @@ namespace ClaudeBuddy
         private const double Saturation = 0.558;
         private const double Value = 0.843;
 
-        // How far apart two agents' hues have to be to be told apart at the size
-        // an orb's ring is drawn. Below roughly this, two rings read as "the
-        // same colour, maybe" — which is worse than no colour, because it
-        // invites a distinction that isn't there.
-        private const int MinGap = 24;
+        // The widest separation worth insisting on. Beyond about this, two hues
+        // are already unmistakable and holding out for more only moves agents
+        // further from the colour their own id asked for.
+        private const int IdealGap = 55;
 
-        // The colour an agent would like, before anyone else is considered.
+        // The colour an agent would like, before anyone else is considered. Any
+        // hue at all — the whole wheel is in play, not a fixed set of names.
         public static string HexFor(string key) => Hex(PreferredHue(key), Saturation, Value);
+
+        private static uint PreferredHue(string key) => Hash(key ?? "") % 360u;
 
         // Colours for a whole set of agents at once.
         //
@@ -68,27 +70,60 @@ namespace ClaudeBuddy
                               .OrderBy(id => id, StringComparer.Ordinal)
                               .ToList();
 
-            // With enough agents the gap has to give, or there is no assignment
-            // at all. Shrinking it keeps every agent a distinct colour when they
-            // can no longer all be an obviously distinct one.
+            // How far apart is *enough* depends on how many are competing, which
+            // is the thing a fixed number can't express.
             //
-            // Divided by count + 1 rather than count, because exactly
-            // count × gap degrees leaves no slack anywhere on the circle and the
-            // last agent has nowhere legal to go — which showed up as a
-            // duplicate colour at forty agents rather than as a failure.
-            var gap = ids.Count > 0 ? Math.Min(MinGap, Math.Max(1, 360 / (ids.Count + 1))) : MinGap;
+            // A first attempt insisted on 24° between any two agents and still
+            // produced two rings that were called the same colour — 24° in the
+            // blues is barely a step. The instinct was then to quantise the
+            // wheel to a dozen hand-picked hues, which fixed that and gave up
+            // the spectrum to do it.
+            //
+            // Neither is necessary. With six agents there is room for 51°
+            // between neighbours, which is unmistakable; with twenty there is
+            // room for 17°, and cramped-but-distinct is the honest best on offer
+            // at that point. Scaling to the count gives the widest separation
+            // the wheel can actually deliver, at any number of agents, while
+            // every hue stays available.
+            //
+            // The largest gap that actually works for *this* set, found by
+            // trying and backing off rather than by arithmetic.
+            //
+            // Arithmetic gets it wrong, and did: 360 / (count + 1) looks like
+            // the right ceiling — eight agents, 40° each — but a placed hue
+            // blocks the gap on *both* sides, and placements start from wherever
+            // each id hashes to rather than from an even grid. So the circle
+            // fills up long before count × gap reaches 360, the last few agents
+            // fail their gap, fall back, and land 13° from a neighbour. Which is
+            // exactly the "these two are the same colour" this was fixing.
+            //
+            // Walking down from the ideal costs at most fifty cheap attempts and
+            // gives the widest separation greedy placement can genuinely deliver
+            // for this particular set of ids.
+            for (var gap = IdealGap; gap > 1; gap--)
+            {
+                if (TryAssign(ids, gap) is { } spread) return spread;
+            }
 
+            // One degree apart is the floor: distinct values, no promises about
+            // telling them apart. Only reachable with hundreds of agents.
+            return TryAssign(ids, 1) ?? ids.ToDictionary(id => id, id => HexFor(id), StringComparer.Ordinal);
+        }
+
+        // Places every id at or after its own preferred hue, keeping `gap`
+        // between all of them. Null the moment one cannot be placed — a partial
+        // assignment is no use, and the caller is about to try a smaller gap.
+        private static Dictionary<string, string>? TryAssign(List<string> ids, int gap)
+        {
             var taken = new List<int>();
             var colours = new Dictionary<string, string>(StringComparer.Ordinal);
 
             foreach (var id in ids)
             {
-                var preferred = (int)PreferredHue(id);
-
-                // Walk forward to the first hue far enough from every hue already
-                // placed. Forward rather than to the nearest free slot, so the
-                // result reads the same however the list is traversed.
-                var hue = Find(preferred, taken, gap) ?? Find(preferred, taken, 1) ?? preferred;
+                // Forward from the agent's own hue rather than to the nearest
+                // free slot, so the result reads the same however the list is
+                // traversed.
+                if (Find((int)PreferredHue(id), taken, gap) is not { } hue) return null;
 
                 taken.Add(hue);
                 colours[id] = Hex(hue, Saturation, Value);
@@ -100,10 +135,8 @@ namespace ClaudeBuddy
         // The first hue at or after `preferred` that clears `gap` from every hue
         // already placed, or null if the circle is too crowded for that.
         //
-        // Called twice: once at the real gap, and once at 1° if that failed, so
-        // that beyond the point where every agent can look obviously different
-        // they at least still look different. Only past ~360 agents does the
-        // second attempt fail too, and then a repeat is the honest outcome.
+        // Null is not a failure here — it is the signal that this gap is too
+        // ambitious for this set, which is how Assign finds the one that isn't.
         private static int? Find(int preferred, List<int> taken, int gap)
         {
             for (var step = 0; step < 360; step++)
@@ -121,8 +154,6 @@ namespace ClaudeBuddy
             var d = Math.Abs(a - b) % 360;
             return Math.Min(d, 360 - d);
         }
-
-        private static uint PreferredHue(string key) => Hash(key ?? "") % 360u;
 
         // FNV-1a. Chosen for being stable rather than for being good: this value
         // decides what colour an agent is, so it has to survive a .NET upgrade.
