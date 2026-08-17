@@ -270,21 +270,43 @@ namespace ClaudeBuddy
 
             _accentColor = known ? accent : null;
 
-            // The ring belongs to the state when a picture has taken the fill —
-            // it is the only solid colour left on the orb, and an accent
-            // painted over it would leave nothing saying what the session is
-            // doing. Everything else here still applies.
-            if (!_hasAvatar)
-            {
-                Orb.Stroke = new SolidColorBrush(known ? accent : PlainStroke);
-                Orb.StrokeThickness = known ? 2 : 1;
-            }
+            // The ring says *who*, including over a picture.
+            //
+            // It used to carry the state there instead, on the reasoning that a
+            // picture takes the fill and leaves the ring as the only solid
+            // colour. That was wrong in practice for a reason the reasoning
+            // couldn't see: the idle colour is a user setting, and set near
+            // black — which most installs are, since idle is meant to be quiet —
+            // the "state ring" is a **black band** around the picture for the
+            // 95% of the time an agent is idle. It reads as a rendering fault,
+            // not as a status.
+            //
+            // Nothing is lost by giving it up. State on these orbs is carried by
+            // the glow, which appears only for the states worth noticing
+            // (GlowsFor) and pulses while they last — so "working" still
+            // announces itself, and "idle" correctly says nothing at all.
+            Orb.Stroke = new SolidColorBrush(known ? accent : _hasAvatar ? _orbBrush.Color : PlainStroke);
+
+            // Thicker over a picture: it is a ring around a photograph rather
+            // than an outline on a flat circle, and at 2px it reads as an edge.
+            Orb.StrokeThickness = _hasAvatar ? 3 : known ? 2 : 1;
 
             Glyph.Foreground = new SolidColorBrush(known ? accent : PlainGlyph);
             LinkColor = known ? accent : PlainLink;
 
             if (Glow.IsVisible)
                 _glowBrush.GradientStops = GlowStops(_accentColor ?? _orbBrush.Color);
+        }
+
+        // Re-runs ApplyAccent when something other than the colour has changed —
+        // a picture arriving or going, which changes how thick the ring is and
+        // what it falls back to. ApplyAccent returns early when the colour is
+        // the same, and here it is: where it is *drawn* is what moved.
+        private void RefreshAccent()
+        {
+            var colour = _lastColor;
+            _lastColor = " ";
+            ApplyAccent(colour);
         }
 
         // --- agent teams ------------------------------------------------------
@@ -385,10 +407,6 @@ namespace ClaudeBuddy
             _avatarBrush.Source = avatar.Frames[0];
             Orb.Fill = _avatarBrush;
 
-            // Thick enough to read as the state at a glance now that it is the
-            // only solid colour left on the orb.
-            Orb.StrokeThickness = 3;
-
             _ringBrush ??= new SolidColorBrush(_orbBrush.Color)
             {
                 Transitions = new Transitions
@@ -403,7 +421,14 @@ namespace ClaudeBuddy
             };
 
             _ringBrush.Color = _orbBrush.Color;
+
+            // The picture lands long after the accent did, and it is what
+            // decides how the ring is drawn — so the accent is applied again
+            // rather than assumed to have got there first. An agent with no
+            // colour at all falls back to the state ring inside ApplyAccent,
+            // which is what _ringBrush is still here for.
             Orb.Stroke = _ringBrush;
+            RefreshAccent();
 
             StartAvatarAnimation();
         }
@@ -435,6 +460,9 @@ namespace ClaudeBuddy
             Orb.Stroke = new SolidColorBrush(Color.Parse("#22FFFFFF"));
             Orb.StrokeThickness = 1;
             Glyph.IsVisible = true;
+
+            // Thinner ring, and the accent back on a flat circle.
+            RefreshAccent();
         }
 
         // Its own timer rather than the shared pulse ticker: frame delays are

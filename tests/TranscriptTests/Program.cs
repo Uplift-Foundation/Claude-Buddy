@@ -476,13 +476,11 @@ Check("the hash is pinned to known values",
     $"main={AgentPalette.HexFor("main")} lilibeth={AgentPalette.HexFor("lilibeth")} "
     + $"zara={AgentPalette.HexFor("zara")}");
 
-// The reason Assign exists. These two hash to the same hue, and shipping them
-// as identical orbs would defeat the whole feature.
-Check("colliding agents are separated",
-    AgentPalette.HexFor("warden") == AgentPalette.HexFor("main-3")
-    && AgentPalette.Assign(new[] { "warden", "main-3" })["warden"]
-       != AgentPalette.Assign(new[] { "warden", "main-3" })["main-3"],
-    "warden and main-3 both hash to hue 60");
+// The reason Assign exists: agents whose hashes land on the same anchor must
+// not ship as identical orbs.
+var pair = AgentPalette.Assign(new[] { "warden", "main-3" });
+Check("colliding agents are separated", pair["warden"] != pair["main-3"],
+    $"warden={pair["warden"]} main-3={pair["main-3"]}");
 
 var assigned = AgentPalette.Assign(agents);
 Check("every agent in a set gets a colour", assigned.Count == agents.Length);
@@ -517,14 +515,40 @@ for (var a = 0; a < hues.Count; a++)
         closest = Math.Min(closest, Math.Min(d, 360 - d));
     }
 
-Check("no two agents are within 24° of each other", closest >= 24,
+// Thirty degrees, not the 45 that dividing the circle by eight suggests:
+// placement starts from wherever each id hashes to rather than from an even
+// grid, so the achievable separation is well below the theoretical one. What
+// matters is that it is a real step — this is the assertion that would have
+// caught the 13° pair a person called "the same colour".
+Check("eight agents are at least 30° apart", closest >= 30,
     $"closest pair is {closest}° apart in {string.Join(",", hues.OrderBy(h => h))}");
 
-// More agents than the gap allows must still terminate, and still be distinct.
-var crowd = Enumerable.Range(0, 40).Select(n => "agent-" + n).ToArray();
-var crowded = AgentPalette.Assign(crowd);
-Check("a crowd still gets distinct colours",
-    crowded.Count == 40 && crowded.Values.Distinct().Count() == 40);
+// Separation scales with the count rather than being a fixed number: fewer
+// agents must be spread *further*, not the same distance with gaps left over.
+var three = AgentPalette.Assign(new[] { "one", "two", "three" }).Values.Select(HueOf).ToList();
+var threeClosest = 360;
+for (var a = 0; a < three.Count; a++)
+    for (var b = a + 1; b < three.Count; b++)
+    {
+        var d = Math.Abs(three[a] - three[b]) % 360;
+        threeClosest = Math.Min(threeClosest, Math.Min(d, 360 - d));
+    }
+
+Check("three agents are spread further than eight", threeClosest >= 55,
+    $"closest of three is {threeClosest}°");
+
+// Crowded, but every one still distinct and nobody dropped.
+var crowd = AgentPalette.Assign(Enumerable.Range(0, 40).Select(n => "agent-" + n));
+Check("forty agents are all handled", crowd.Count == 40);
+Check("forty agents are all distinct", crowd.Values.Distinct().Count() == 40,
+    crowd.Values.Distinct().Count().ToString());
+
+// The whole wheel is in use — not a fixed set of named colours.
+var manyHues = crowd.Values.Select(HueOf).ToList();
+Check("colours are spread across the spectrum",
+    manyHues.Any(h => h < 60) && manyHues.Any(h => h is >= 60 and < 180)
+    && manyHues.Any(h => h is >= 180 and < 300) && manyHues.Any(h => h >= 300),
+    string.Join(",", manyHues.OrderBy(h => h)));
 
 Check("every colour is a valid #RRGGBB",
     agents.All(a =>
