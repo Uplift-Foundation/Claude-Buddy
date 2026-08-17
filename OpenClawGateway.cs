@@ -29,6 +29,40 @@ namespace ClaudeBuddy
         private const string ClientMode = "ui";
         private const string Role = "operator";
 
+        // Which OS is asking. This was hardcoded "macos" and worked, because the
+        // gateway recomputes the signature from the fields it was sent — so a
+        // wrong value that is wrong consistently still verifies. It is reported
+        // anyway, against the paired device record, and the one moment anybody
+        // reads it is the approval prompt: deciding whether to trust a machine
+        // while being told the wrong operating system is worse than being told
+        // nothing. Confirmed accepted rather than assumed — "windows" passes the
+        // gateway's schema validation, which happens before authentication, so a
+        // rejected value would surface as a schema error and does not.
+        //
+        // Used by both the wire `client` block and the signed v3 payload, which
+        // must agree to the character, hence one property rather than two
+        // literals.
+        //
+        // Changing this value on an already-paired device is expensive, and
+        // worse than a re-approval. Measured: the connect is refused with
+        // "device identity changed and must be re-approved", and the gateway's
+        // own CLI then reports the device as *already paired* and offers nothing
+        // to approve — `devices approve --latest` cannot clear it. Reverting the
+        // value doesn't clear it either. The way out is to remove the device on
+        // the gateway and pair again from scratch.
+        //
+        // macOS is unaffected: it sends the same string it always sent. Nobody
+        // has a Windows or Linux pairing yet, which is the only reason this
+        // correction is cheap to make now.
+        //
+        // Keep the value coarse for the same reason. A version number in here
+        // would strand every paired device on every OS update, and the remedy
+        // would be a manual removal on the gateway each time.
+        private static string Platform =>
+            OperatingSystem.IsWindows() ? "windows" :
+            OperatingSystem.IsMacOS() ? "macos" :
+            OperatingSystem.IsLinux() ? "linux" : "unknown";
+
         // What we ask to be granted at pairing time. Read-only unless the user
         // has asked to be able to reply — an orb display that cannot make a
         // remote agent do anything is worth being true rather than merely
@@ -169,7 +203,7 @@ namespace ClaudeBuddy
 
             var payload = OpenClawIdentity.AuthPayload(
                 identity.DeviceId, ClientId, ClientMode, Role, Scopes,
-                signedAt, signatureToken, nonce, "macos", "");
+                signedAt, signatureToken, nonce, Platform, "");
 
             var auth = new Dictionary<string, object>();
             if (!string.IsNullOrEmpty(_gatewayToken)) auth["token"] = _gatewayToken;
@@ -185,7 +219,7 @@ namespace ClaudeBuddy
                 {
                     ["id"] = ClientId,
                     ["version"] = "0.3.0",
-                    ["platform"] = "macos",
+                    ["platform"] = Platform,
                     ["mode"] = ClientMode
                 },
                 ["auth"] = auth,
