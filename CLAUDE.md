@@ -17,26 +17,38 @@ Everything else is short-lived and **named for what it is**:
 
 | Prefix | For | Branches from | Merges to |
 | --- | --- | --- | --- |
-| `feature/` | anything new or changed | `develop` | `develop` |
+| `feature/` | new or changed behaviour | `develop` | `develop` |
+| `bugfix/` | fixing something that is wrong but not yet released | `develop` | `develop` |
 | `release/` | preparing a version (bump, notes, packaging fixes) | `develop` | `main` **and** `develop` |
-| `hotfix/` | a fix that can't wait for the next release | `main` | `main` **and** `develop` |
+| `hotfix/` | a fix for released code that can't wait | `main` | `main` **and** `develop` |
 
-Use `feature/` for fixes and docs too — the prefix says where the work goes,
-not how important it is. Name the rest of the branch after the change, not the
-issue number: `feature/persist-orb-positions`, not `feature/pr-12`.
+**`bugfix/` and `hotfix/` are not a severity judgement — they say where the fix
+starts.** A bug that only exists on `develop`, or one that is shipped but can
+wait for the next release, is a `bugfix/` off `develop`: it rides the normal
+train and there is nothing to fix on `main`. A `hotfix/` branches off `main`
+because it has to reach released users without waiting for whatever else is
+sitting on `develop`, and it merges to both so the fix isn't lost at the next
+release. If you're unsure which, ask what a user on the latest release
+experiences today: if the answer is "nothing wrong yet", it's a `bugfix/`.
+
+Docs and chores go on `feature/` unless they're correcting something wrong, in
+which case `bugfix/` says more.
+
+Name the rest of the branch after the change, not the issue number:
+`feature/persist-orb-positions`, not `feature/pr-12`.
 
 Releases before 0.1.2 used flat names (`release-0.1.1-beta`) and features went
 straight to `main`; that's history, not a pattern to copy.
 
 ## Pull requests
 
-Open every PR **against `develop`** unless it's a `release/` or `hotfix/`
-branch, which target `main`. The repository's default branch is still `main`, so
-GitHub will offer the wrong base — pass it explicitly:
+Open every PR **against `develop`** — `feature/` and `bugfix/` both — unless it's
+a `release/` or `hotfix/` branch, which target `main`. The repository's default
+branch is still `main`, so GitHub will offer the wrong base — pass it explicitly:
 
 ```bash
 gh pr create --repo Uplift-Foundation/Claude-Buddy --base develop \
-  --head feature/<name> --title "..." --body "..."
+  --head <branch> --title "..." --body "..."
 ```
 
 Say in the PR body what was actually verified and what wasn't. This project
@@ -50,10 +62,15 @@ gone; you have to open a fresh PR. Get the prefix right before the first push.
 
 ## Remotes
 
-- **`upstream`** → `Uplift-Foundation/Claude-Buddy`, the canonical repository.
-  Branches and PRs go here.
-- **`origin`** → `wtvamp/Claude-Buddy`, a personal fork. Older branches still
-  track it; don't add to them.
+`Uplift-Foundation/Claude-Buddy` is the canonical repository; branches and PRs go
+there. **Which remote name points at it varies by clone** — run `git remote -v`
+rather than assuming:
+
+- Clones made from the canonical repo call it **`origin`** and have no
+  `upstream`, so `git fetch upstream` fails outright.
+- Clones made from the **`wtvamp/Claude-Buddy`** fork call the fork `origin` and
+  the canonical repo `upstream`. Older branches still track the fork; don't add
+  to them.
 
 ## Commits
 
