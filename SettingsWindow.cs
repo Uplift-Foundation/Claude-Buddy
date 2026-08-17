@@ -270,6 +270,8 @@ namespace ClaudeBuddy
 
             root.Children.Add(Group("Voice", Card(VoiceRows())));
 
+            root.Children.Add(Group("Claude Code sessions", Card(ClaudeCodeChatRows())));
+
             root.Children.Add(Group("OpenClaw agents", Card(OpenClawRows())));
 
             root.Children.Add(Group("Profiles", ProfilesCard()));
@@ -394,6 +396,51 @@ namespace ClaudeBuddy
         // reason that isn't about taste: while this switch is off the app opens
         // no socket, starts no background task and generates no key. Turning it
         // on is the whole of the consent to talk to a machine on the network.
+        // The chat panel on a local orb, and whether it can type back.
+        //
+        // Unlike every other feature switch in this window the first one is
+        // *on* by default, and the difference is real rather than an
+        // inconsistency: it opens no socket, starts no engine and asks macOS for
+        // no permission. It reads a file the hook already points at, only while
+        // a panel is actually up. There is nothing to consent to.
+        //
+        // The second one is the OpenClaw split, for the OpenClaw reason.
+        private Control[] ClaudeCodeChatRows()
+        {
+            var rows = new List<Control>
+            {
+                Row("Chat panel on the orb",
+                    Switch(ClaudeBuddySettings.ClaudeCodeChatEnabled, OnClaudeCodeChatToggled),
+                    "Adds a keyboard button to the orb's hover menu that opens the session's "
+                    + "conversation — the same panel OpenClaw agents use. It is the same "
+                    + "conversation as the terminal's, not a copy: it reads the transcript "
+                    + "Claude Code already writes. Clicking the orb still goes to the terminal.")
+            };
+
+            if (!ClaudeBuddySettings.ClaudeCodeChatEnabled) return rows.ToArray();
+
+            rows.Add(Row("Allow replying to sessions",
+                Switch(ClaudeBuddySettings.ClaudeCodeReplyEnabled, OnClaudeCodeReplyToggled),
+                "Off, the panel shows what a session is doing. On, you can type into it, "
+                + "answer its permission prompts and interrupt it — by typing into its tmux "
+                + "pane, exactly as if you had typed there yourself, so the terminal shows it "
+                + "too. Sessions not running under tmux stay read-only either way, because "
+                + "the only way to type into those is to bring their window to the front."));
+
+            return rows.ToArray();
+        }
+
+        private void OnClaudeCodeChatToggled(bool enabled)
+        {
+            ClaudeBuddySettings.ClaudeCodeChatEnabled = enabled;
+            Rebuild();
+        }
+
+        private void OnClaudeCodeReplyToggled(bool enabled)
+        {
+            ClaudeBuddySettings.ClaudeCodeReplyEnabled = enabled;
+        }
+
         private Control[] OpenClawRows()
         {
             var rows = new List<Control>

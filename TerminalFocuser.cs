@@ -152,6 +152,109 @@ namespace ClaudeBuddy
             return TryRun(tmux, out _, TmuxArgs(status, "send-keys", "-t", status.TmuxPane, "-l", text));
         }
 
+        // --- the chat panel's half ---
+        //
+        // Everything below is tmux-only and deliberately so. The keystroke and
+        // SendInput fallbacks above type into whatever is *frontmost*, which
+        // means focusing the terminal first; that is a fine trade for dictation,
+        // which you started by reaching for the orb anyway, and the wrong one
+        // for a chat panel whose entire point is not making you leave what you
+        // are doing. A session with no pane gets a read-only panel instead —
+        // see ClaudeCodeChatSession.CanType.
+
+        // Whether this session can be typed into without anything coming to the
+        // front. The one question the panel asks before enabling its composer.
+        public static bool CanSendQuietly(SessionStatus? status) =>
+            status is { Source: SessionSource.ClaudeCode }
+            && !string.IsNullOrEmpty(status.TmuxPane)
+            && ResolveTmuxBinary(status.TmuxBin) is not null;
+
+        // Types the text and presses Enter. The Enter is the whole difference
+        // from SendText above, and it is why this is reached only from a Send
+        // button behind a setting that is off by default: dictation is a typing
+        // aid and doesn't get to decide you meant it, but a person clicking Send
+        // has said exactly that.
+        //
+        // No FocusCore. Nothing comes forward, which is the feature.
+        public static Task<bool> SendTextAndSubmit(SessionStatus? status, string text)
+        {
+            if (status is null || string.IsNullOrEmpty(text)) return Task.FromResult(false);
+            if (!CanSendQuietly(status)) return Task.FromResult(false);
+
+            return Task.Run(() =>
+            {
+                var tmux = ResolveTmuxBinary(status.TmuxBin);
+                if (tmux is null) return false;
+
+                // Through the paste buffer rather than send-keys -l, for
+                // multi-line messages: a literal newline sent as a keystroke is
+                // indistinguishable from pressing Return, so Shift+Enter in the
+                // panel would submit half a sentence and leave the rest to
+                // arrive as a second message. paste-buffer -p wraps it in
+                // bracketed-paste markers, which the TUI reads as one paste.
+                //
+                // -p is safe when the pane's application never asked for
+                // bracketed paste: tmux then sends the text unwrapped, which for
+                // a single line is what send-keys -l would have done anyway.
+                //
+                // -- so a message starting with a dash isn't read as a flag.
+                if (!TryRun(tmux, out _, TmuxArgs(status, "set-buffer", "-b", PasteBuffer, "--", text)))
+                    return false;
+
+                // -d deletes the buffer after pasting, so a half-typed message
+                // isn't left sitting in tmux's paste stack for the next
+                // middle-click anywhere else on the machine to find.
+                if (!TryRun(tmux, out _, TmuxArgs(status,
+                        "paste-buffer", "-b", PasteBuffer, "-t", status.TmuxPane, "-p", "-d")))
+                    return false;
+
+                return TryRun(tmux, out _, TmuxArgs(status, "send-keys", "-t", status.TmuxPane, "Enter"));
+            });
+        }
+
+        private const string PasteBuffer = "claude-buddy";
+
+        // A named key — "Enter", "Escape", or a bare digit for a numbered
+        // dialog. Not -l: these are key names, which is the one case where
+        // letting tmux interpret the argument is the point rather than the
+        // hazard. Only ever called with a constant or with a digit this app
+        // read off the pane itself, never with anything a person typed.
+        public static Task<bool> SendPaneKey(SessionStatus? status, string key)
+        {
+            if (status is null || string.IsNullOrEmpty(key)) return Task.FromResult(false);
+            if (!CanSendQuietly(status)) return Task.FromResult(false);
+
+            return Task.Run(() =>
+            {
+                var tmux = ResolveTmuxBinary(status.TmuxBin);
+                if (tmux is null) return false;
+
+                return TryRun(tmux, out _, TmuxArgs(status, "send-keys", "-t", status.TmuxPane, key));
+            });
+        }
+
+        // What the pane is showing right now, as text.
+        //
+        // This is how a permission prompt gets answered from the panel without
+        // guessing. The dialog is drawn by the TUI and never reaches the
+        // transcript, so the only place its wording exists is the screen —
+        // capture-pane is reading the screen, which is exactly as much as is
+        // needed and no more. Without -e, so no escape sequences come back.
+        public static Task<string?> CapturePane(SessionStatus? status)
+        {
+            if (status is null || !CanSendQuietly(status)) return Task.FromResult<string?>(null);
+
+            return Task.Run<string?>(() =>
+            {
+                var tmux = ResolveTmuxBinary(status.TmuxBin);
+                if (tmux is null) return null;
+
+                return TryRun(tmux, out var screen, TmuxArgs(status, "capture-pane", "-p", "-t", status.TmuxPane))
+                    ? screen
+                    : null;
+            });
+        }
+
         // Whether anything was actually brought forward. False means the click
         // had no effect at all, which is what the team-lead fallback above is
         // for — and what made two orbs on screen feel broken before it existed.

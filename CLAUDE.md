@@ -108,6 +108,23 @@ fix broke a case the previous one had fixed. Keep the geometry in
 `OrbArrangement` — pure, no windows, no settings — so it stays testable, with
 `SessionManager` only mapping orbs onto its inputs and its answers back.
 
+Transcript and dialog parsing has one too — `dotnet run --project
+tests/TranscriptTests`. It covers `ChatTranscript`: turning Claude Code's JSONL
+into chat turns, and reading a permission dialog off a captured tmux pane. Same
+rule as the geometry — `ChatTranscript` is pure, and `ClaudeCodeChatSession`
+only decides which bytes to hand it.
+
+Both parsers read formats nobody here controls, and both fail *quietly*: a
+mis-mapped transcript silently drops a message, and a mis-read dialog puts a
+button on screen that presses something other than what it says. Write fixtures
+from real output, not from memory — the dialog parser was first written against
+an invented fixture and failed on every real dialog. To capture one:
+
+```bash
+tmux capture-pane -p -t %<pane> > /tmp/pane.txt
+dotnet run --project tests/TranscriptTests -- /tmp/pane.txt   # or a .jsonl
+```
+
 Everything else about orb behavior is still verified by running the app.
 Two things make that survivable:
 

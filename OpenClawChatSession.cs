@@ -12,7 +12,7 @@ namespace ClaudeBuddy
     // which a person has to approve on the gateway — and it is not something
     // opening a window should do on their behalf. Until then this is a reader
     // with an input box that explains itself.
-    internal sealed class OpenClawChatSession : IRemoteChatSession
+    internal sealed class OpenClawChatSession : IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer
     {
         private readonly List<ChatTurn> _history = new();
 
@@ -216,6 +216,16 @@ namespace ClaudeBuddy
 
         // False once the gateway answers a page with nothing left to give.
         public bool HasMore { get; set; } = true;
+
+        // The fetch itself lives on OpenClawSessions, which owns the connection;
+        // this is only the seam the panel reaches it through, so the panel does
+        // not have to know that a page comes from a gateway rather than a file.
+        public Task<bool> LoadOlderAsync(CancellationToken ct) =>
+            OpenClawSessions.LoadOlderAsync(this, ct);
+
+        public string ComposerHint => ClaudeBuddySettings.OpenClawReplyEnabled
+            ? "Message…"
+            : "Replying is off";
 
         // Older turns, from scrolling back. Prepended rather than replacing, and
         // raising its own event, because the panel has to put the scroll

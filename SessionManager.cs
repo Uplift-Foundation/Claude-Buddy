@@ -604,6 +604,12 @@ namespace ClaudeBuddy
 
                 window!.UpdateFrom(status);
 
+                // The chat panel's view of "waiting for a permission prompt"
+                // comes from here rather than from the transcript, because the
+                // dialog never reaches the transcript. This is the only place
+                // that state arrives.
+                if (_chats.TryGetValue(sessionId, out var chat)) chat.UpdateStatus(status);
+
                 // After UpdateFrom, so the window is already showing something
                 // if the position turns out to be unusable. Before the reflow
                 // below, which steps over whatever this pins.
@@ -618,6 +624,11 @@ namespace ClaudeBuddy
                 _statuses.Remove(id);
                 _order.Remove(id);
                 setChanged = true;
+
+                // The watcher goes with the orb. A session that has ended has a
+                // transcript that will never grow again, and a FileSystemWatcher
+                // per dead session is a handle leak measured in days.
+                if (_chats.Remove(id, out var chat)) chat.Dispose();
             }
 
             if (setChanged)
@@ -703,10 +714,32 @@ namespace ClaudeBuddy
         public IRemoteChatSession? RemoteChatFor(string sessionId)
         {
             if (!_statuses.TryGetValue(sessionId, out var status)) return null;
-            if (status.Source != SessionSource.OpenClaw) return null;
 
-            return OpenClawSessions.ChatFor(sessionId, status.Title);
+            if (status.Source == SessionSource.OpenClaw)
+                return OpenClawSessions.ChatFor(sessionId, status.Title);
+
+            if (!ClaudeBuddySettings.ClaudeCodeChatEnabled) return null;
+
+            // Cached rather than made per click: the session owns a file watcher
+            // and a byte offset into a transcript, and rebuilding it every time
+            // the panel opened would re-read the tail and lose the scrollback
+            // someone had already paged in.
+            if (_chats.TryGetValue(sessionId, out var existing))
+            {
+                existing.UpdateStatus(status);
+                return existing;
+            }
+
+            var chat = new ClaudeCodeChatSession(sessionId, status);
+            _chats[sessionId] = chat;
+            chat.Start();
+            return chat;
         }
+
+        // Local chat sessions, by session id. Only ever populated by a click —
+        // there is no reason to watch a transcript nobody is reading — and
+        // emptied with the orb.
+        private readonly Dictionary<string, ClaudeCodeChatSession> _chats = new(StringComparer.Ordinal);
 
         public SessionStatus? StatusFor(string? sessionId) =>
             string.IsNullOrEmpty(sessionId) ? null : _statuses.GetValueOrDefault(sessionId);

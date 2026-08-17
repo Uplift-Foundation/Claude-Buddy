@@ -716,6 +716,53 @@ automatically. A second Linux user account inside the same distro is the one
 combination left unwired, since that needs hooks added inside *their* account
 specifically — the "By hand" section further down still covers that case.
 
+## Chatting with a session from its orb
+
+Hover an orb and the flyout has a keyboard button (⌨). It opens a small panel
+under the orb with that session's conversation in it — what it said, what it is
+thinking, the tools it reached for — and a line to type in.
+
+**It is the same conversation as the terminal's, not a copy.** Claude Code
+writes every session's transcript to a file, the hook already tells Claude Buddy
+where, and the panel reads it. So anything you type in the terminal shows up in
+the panel. And sending from the panel types into the session's tmux pane, so
+anything you send from the orb shows up in the terminal too, exactly as if you
+had typed it there. There is no second conversation to get out of step.
+
+Two honest limits. The panel updates a **block at a time** rather than a word at
+a time — each thinking pass, each tool call and each paragraph appears as it
+finishes, a few seconds behind the terminal's own streaming. And a half-typed
+draft is not shared: the panel keeps its own, and so does the terminal.
+
+Clicking the orb still goes to the terminal. That is what a click has always
+meant here and the panel is a second destination, not a replacement — which is
+why it's a separate button rather than a change to the click. (Gateway orbs have
+no terminal to go to, so for those the click opens the panel directly.)
+
+**Typing back is a second switch, off by default:** Settings → Claude Code
+sessions → **Allow replying to sessions**. With it off the panel is a live view
+of what your sessions are doing. With it on you can also type into them, answer
+their permission prompts, and interrupt a run. Seeing what a session is doing
+and being able to drive it are different powers, so the second one is asked for
+separately — the same split the OpenClaw section below makes, for the same
+reason.
+
+**Sessions not running under tmux stay read-only.** The only way to type into
+those is to bring their terminal to the front first, which defeats the point of
+chatting from an orb; dictation already does that and is welcome to, but a chat
+panel that raised a window on every message would not be one. The input box says
+so rather than being greyed out.
+
+When a session stops for a **permission prompt**, the panel says so and offers
+the dialog's own options as buttons. It reads them off the pane with
+`tmux capture-pane` rather than assuming what "1" means — the dialog is drawn by
+the terminal UI and never reaches the transcript, so the screen is the only
+place its wording exists. If it can't read the dialog it says only "answer in
+the terminal", because a button labelled "Approve" that sent something else
+would be worse than no button. That parsing has a test suite of its own
+(`dotnet run --project tests/TranscriptTests`) whose fixtures are transcribed
+from real captures.
+
 ## OpenClaw agents (experimental, off by default)
 
 Claude Buddy can also show an orb for each recently active session on an

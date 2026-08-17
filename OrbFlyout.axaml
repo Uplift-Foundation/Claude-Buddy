@@ -79,5 +79,25 @@
                        VerticalAlignment="Center"
                        IsHitTestVisible="False"/>
         </Grid>
+
+        <!-- Opens the chat panel on this session.
+             A separate button rather than a change to what clicking the orb
+             does: for a Claude Code session the click already means "take me to
+             that terminal", which is the oldest thing this app does and still
+             the right default. This adds a second destination instead of
+             replacing the first. Gateway orbs have no terminal to go to, so for
+             those the click still opens the panel directly and this never
+             appears. -->
+        <Grid x:Name="ChatButton"
+              Width="24" Height="24"
+              IsVisible="False"
+              Cursor="Hand">
+            <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+            <TextBlock Text="&#9000;"
+                       FontSize="11"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Grid>
     </Canvas>
 </Window>

@@ -38,6 +38,7 @@ namespace ClaudeBuddy
         public event Action? ArrangeClicked;
         public event Action? SettingsClicked;
         public event Action? SpeakClicked;
+        public event Action? ChatClicked;
 
         // Where the orb's centre maps to in this window's DIP space.
         // Computed by LayoutArc, read by OrbWindow.EnsureFlyoutShown to
@@ -74,6 +75,12 @@ namespace ClaudeBuddy
                 MicClicked?.Invoke();
             };
 
+            ChatButton.PointerPressed += (_, e) =>
+            {
+                e.Handled = true;
+                ChatClicked?.Invoke();
+            };
+
             Opened += (_, _) =>
             {
                 this.ShowOnAllSpaces();
@@ -87,31 +94,56 @@ namespace ClaudeBuddy
             LayoutArc();
         }
 
+        public void SetChatVisible(bool visible)
+        {
+            ChatButton.IsVisible = visible;
+            LayoutArc();
+        }
+
         // Computes button positions along a semicircular arc and sizes
         // the Canvas to the tight bounding box around all buttons.
         // Angles are in degrees, measured from the positive X axis with
         // Y pointing down (screen coordinates): 90° is straight down
         // (6 o'clock), <90° swings right (toward 5), >90° swings left
         // (toward 7).
+        // The order buttons appear along the arc, left end to right end. Which
+        // of them are actually on the arc is each one's IsVisible; the angles
+        // are derived from how many that turns out to be.
+        private Grid[] ArcButtons => new[]
+        {
+            ArrangeButton, SettingsButton, SpeakButton, MicButton, ChatButton
+        };
+
         private void LayoutArc()
         {
-            double[] angles;
-            Grid[] buttons;
+            // Spread evenly between the two ends, which keeps the arc symmetric
+            // about 90° (straight down) whichever set is showing and spreads it
+            // wider as buttons are added rather than packing them tighter —
+            // ArcRadius is fixed, so the spacing between neighbours is what has
+            // to give.
+            //
+            // This used to be two hardcoded angle arrays chosen by a single
+            // `if (MicButton.IsVisible)`. The values below reproduce those
+            // exactly — three buttons still land on 140/90/40 and four on
+            // 140/106.7/73.3/40 — but a second independently-hidden button made
+            // the old shape unrepresentable rather than merely inconvenient:
+            // it needed one branch per combination, and got them wrong in the
+            // combinations nobody had on screen while writing it.
+            const double FromAngle = 140.0;
+            const double ToAngle = 40.0;
 
-            // Kept symmetric about 90° (straight down) so the arc stays
-            // centred under the orb whichever set is showing, and spread
-            // wider as buttons are added rather than packed tighter —
-            // ArcRadius is fixed, so the spacing between neighbours is
-            // what has to give.
-            if (MicButton.IsVisible)
+            var buttons = ArcButtons.Where(b => b.IsVisible).ToArray();
+            if (buttons.Length == 0) return;
+
+            var angles = new double[buttons.Length];
+            for (int i = 0; i < buttons.Length; i++)
             {
-                angles = new[] { 140.0, 106.7, 73.3, 40.0 };
-                buttons = new[] { ArrangeButton, SettingsButton, SpeakButton, MicButton };
-            }
-            else
-            {
-                angles = new[] { 140.0, 90.0, 40.0 };
-                buttons = new[] { ArrangeButton, SettingsButton, SpeakButton };
+                // A lone button goes straight down rather than to the left end,
+                // which is what the midpoint gives and what the division by
+                // zero below would not.
+                angles[i] = buttons.Length == 1
+                    ? (FromAngle + ToAngle) / 2
+                    : FromAngle + (ToAngle - FromAngle) * i / (buttons.Length - 1);
             }
 
             var cx = new double[angles.Length];
