@@ -339,6 +339,231 @@ var noQuestion = ChatTranscript.ParseDialog("""
 Check("a frame edge doesn't become the title", noQuestion?.Title == "Waiting for input",
     noQuestion?.Title ?? "null");
 
+// --- markdown ---
+
+// The failure mode here is visible rather than silent — you see the asterisks —
+// but the mis-fires are not: a rule that eats `snake_case`, or an unclosed
+// delimiter in a half-streamed reply swallowing the rest of the paragraph.
+
+static ChatMarkdown.MdBlock[] Blocks(string s) => ChatMarkdown.Parse(s).ToArray();
+static ChatMarkdown.MdSpan[] Spans(string s) => ChatMarkdown.Inline(s).ToArray();
+
+var spans = Spans("Fixed **the clamp** in `OrbArrangement.cs` — see *why* below.");
+Check("bold is found", spans.Any(s => s.Style == ChatMarkdown.MdStyle.Bold && s.Text == "the clamp"));
+Check("inline code is found",
+    spans.Any(s => s.Style == ChatMarkdown.MdStyle.Code && s.Text == "OrbArrangement.cs"));
+Check("italic is found", spans.Any(s => s.Style == ChatMarkdown.MdStyle.Italic && s.Text == "why"));
+Check("delimiters are not in the output", spans.All(s => !s.Text.Contains('*') && !s.Text.Contains('`')));
+Check("nothing is lost", string.Concat(spans.Select(s => s.Text))
+    == "Fixed the clamp in OrbArrangement.cs — see why below.");
+
+// The reason underscores are not emphasis. This is the single most common
+// string in this app's own conversations.
+var snake = Spans("the file_path and session_pid fields");
+Check("underscores are left alone", snake.Length == 1 && snake[0].Style == ChatMarkdown.MdStyle.Normal,
+    string.Join(" | ", snake.Select(s => s.Style + ":" + s.Text)));
+
+// A reply being streamed is half-written by definition.
+var unclosed = Spans("this is **not finished");
+Check("an unclosed delimiter stays literal",
+    unclosed.Length == 1 && unclosed[0].Text == "this is **not finished",
+    string.Join(" | ", unclosed.Select(s => s.Style + ":" + s.Text)));
+
+Check("an unclosed backtick stays literal",
+    Spans("run `dotnet buil").Single().Text == "run `dotnet buil");
+
+// Markup inside a code span is text, which is why code is matched first.
+var literal = Spans("write `**bold**` like that");
+Check("markup inside code is literal",
+    literal.Any(s => s.Style == ChatMarkdown.MdStyle.Code && s.Text == "**bold**"),
+    string.Join(" | ", literal.Select(s => s.Style + ":" + s.Text)));
+
+Check("bold-italic is three stars",
+    Spans("***very***").Single().Style == ChatMarkdown.MdStyle.BoldItalic);
+
+var link = Spans("see [the findings](docs/openclaw-findings.md) for more");
+Check("a link keeps its label and drops its url",
+    link.Any(s => s.Style == ChatMarkdown.MdStyle.Link && s.Text == "the findings")
+    && link.All(s => !s.Text.Contains(".md")),
+    string.Join(" | ", link.Select(s => s.Style + ":" + s.Text)));
+
+// Blocks.
+var fenced = Blocks("""
+    Here is the fix:
+
+    ```csharp
+    var x = 1;
+    if (x > 0) return;
+    ```
+
+    That's it.
+    """);
+
+Check("a fence becomes one code block", fenced.Count(b => b.Kind == ChatMarkdown.MdKind.Code) == 1);
+Check("the code keeps its line breaks",
+    fenced.Single(b => b.Kind == ChatMarkdown.MdKind.Code).Text == "var x = 1;\nif (x > 0) return;",
+    fenced.Single(b => b.Kind == ChatMarkdown.MdKind.Code).Text.Replace("\n", "\\n"));
+Check("the language is kept",
+    fenced.Single(b => b.Kind == ChatMarkdown.MdKind.Code).Marker == "csharp");
+Check("prose around the fence survives",
+    fenced.Count(b => b.Kind == ChatMarkdown.MdKind.Paragraph) == 2);
+
+// Indented code inside an already-indented bubble reads as doubly indented.
+Check("a code block is dedented",
+    Blocks("```\n    one\n      two\n```").Single().Text == "one\n  two");
+
+// A fence that hasn't closed yet is the normal case mid-reply.
+Check("an unclosed fence is still a code block",
+    Blocks("```\nvar x = 1;").Single().Kind == ChatMarkdown.MdKind.Code);
+
+var list = Blocks("""
+    Three things:
+
+    - extract the geometry
+    - add the test
+    - delete the old path
+    """);
+Check("bullets become bullet blocks", list.Count(b => b.Kind == ChatMarkdown.MdKind.Bullet) == 3);
+Check("the bullet glyph is not the source dash",
+    list.First(b => b.Kind == ChatMarkdown.MdKind.Bullet).Marker == "•");
+Check("bullet text loses its marker",
+    list.First(b => b.Kind == ChatMarkdown.MdKind.Bullet).Text == "extract the geometry");
+
+var ordered = Blocks("4. fourth\n5. fifth");
+Check("an ordered list keeps its own numbering",
+    ordered.Length == 2 && ordered[0].Marker == "4." && ordered[1].Marker == "5.",
+    string.Join(" | ", ordered.Select(b => b.Marker)));
+
+Check("a heading is a heading",
+    Blocks("## Findings").Single() is { Kind: ChatMarkdown.MdKind.Heading, Text: "Findings", Depth: 2 });
+
+Check("a hash with no space is not a heading",
+    Blocks("#hashtag not a heading").Single().Kind == ChatMarkdown.MdKind.Paragraph);
+
+// Reflowing a table destroys it; monospace at least keeps the columns.
+var table = Blocks("| a | b |\n| - | - |\n| 1 | 2 |");
+Check("a table is kept verbatim as code",
+    table.Single().Kind == ChatMarkdown.MdKind.Code && table.Single().Text.Split('\n').Length == 3);
+
+Check("a rule draws nothing", Blocks("one\n\n---\n\ntwo").All(b => b.Text != "---"));
+
+Check("wrapped prose joins into one paragraph",
+    Blocks("a line\nand its continuation").Single().Text == "a line and its continuation");
+
+Check("a blank line separates paragraphs", Blocks("first\n\nsecond").Length == 2);
+
+Check("empty text is no blocks", Blocks("").Length == 0 && Blocks("   \n  ").Length == 0);
+
+// --- agent colours ---
+
+// The property that matters is stability: an agent that changed colour between
+// launches would be worse than every agent sharing one, because the ring would
+// be actively misleading rather than merely uninformative. That rules out
+// string.GetHashCode(), which is randomised per process — a test can't catch
+// that within one process, so the hash is hand-written and pinned below.
+var agents = new[] { "main", "lilibeth", "zara", "asher", "main-2", "ops", "scribe", "warden" };
+
+Check("a colour is stable within a run",
+    agents.All(a => AgentPalette.HexFor(a) == AgentPalette.HexFor(a)));
+
+// Pinned. If these change, every agent silently changes colour on upgrade —
+// which is the thing the whole derived-not-stored design exists to prevent. A
+// deliberate change to the palette means updating these on purpose.
+Check("the hash is pinned to known values",
+    AgentPalette.HexFor("main") == "#5FBFD7"
+    && AgentPalette.HexFor("lilibeth") == "#5FD7A7"
+    && AgentPalette.HexFor("zara") == "#5F9DD7",
+    $"main={AgentPalette.HexFor("main")} lilibeth={AgentPalette.HexFor("lilibeth")} "
+    + $"zara={AgentPalette.HexFor("zara")}");
+
+// The reason Assign exists. These two hash to the same hue, and shipping them
+// as identical orbs would defeat the whole feature.
+Check("colliding agents are separated",
+    AgentPalette.HexFor("warden") == AgentPalette.HexFor("main-3")
+    && AgentPalette.Assign(new[] { "warden", "main-3" })["warden"]
+       != AgentPalette.Assign(new[] { "warden", "main-3" })["main-3"],
+    "warden and main-3 both hash to hue 60");
+
+var assigned = AgentPalette.Assign(agents);
+Check("every agent in a set gets a colour", assigned.Count == agents.Length);
+Check("a set's colours are all distinct", assigned.Values.Distinct().Count() == agents.Length,
+    string.Join(" ", assigned.Select(kv => kv.Key + "=" + kv.Value)));
+
+Check("assignment doesn't depend on listing order",
+    AgentPalette.Assign(agents.Reverse()).OrderBy(kv => kv.Key).SequenceEqual(
+        assigned.OrderBy(kv => kv.Key)));
+
+Check("duplicates in the input are harmless",
+    AgentPalette.Assign(new[] { "main", "main", "zara" }).Count == 2);
+
+// Separation has to hold across the wrap: hue 350 and hue 10 are 20 apart.
+static int HueOf(string hex)
+{
+    int r = Convert.ToInt32(hex[1..3], 16), g = Convert.ToInt32(hex[3..5], 16), b = Convert.ToInt32(hex[5..7], 16);
+    int max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b));
+    if (max == min) return 0;
+    double h = max == r ? (g - b) / (double)(max - min)
+        : max == g ? 2 + (b - r) / (double)(max - min)
+        : 4 + (r - g) / (double)(max - min);
+    return ((int)Math.Round(h * 60) + 360) % 360;
+}
+
+var hues = assigned.Values.Select(HueOf).ToList();
+var closest = 360;
+for (var a = 0; a < hues.Count; a++)
+    for (var b = a + 1; b < hues.Count; b++)
+    {
+        var d = Math.Abs(hues[a] - hues[b]) % 360;
+        closest = Math.Min(closest, Math.Min(d, 360 - d));
+    }
+
+Check("no two agents are within 24° of each other", closest >= 24,
+    $"closest pair is {closest}° apart in {string.Join(",", hues.OrderBy(h => h))}");
+
+// More agents than the gap allows must still terminate, and still be distinct.
+var crowd = Enumerable.Range(0, 40).Select(n => "agent-" + n).ToArray();
+var crowded = AgentPalette.Assign(crowd);
+Check("a crowd still gets distinct colours",
+    crowded.Count == 40 && crowded.Values.Distinct().Count() == 40);
+
+Check("every colour is a valid #RRGGBB",
+    agents.All(a =>
+    {
+        var hex = AgentPalette.HexFor(a);
+        return hex.Length == 7 && hex[0] == '#'
+            && hex[1..].All(Uri.IsHexDigit) && hex[1..] == hex[1..].ToUpperInvariant();
+    }));
+
+Check("different agents get different colours",
+    agents.Select(AgentPalette.HexFor).Distinct().Count() == agents.Length,
+    string.Join(" ", agents.Select(a => a + "=" + AgentPalette.HexFor(a))));
+
+// Ids that differ only in their last character are the realistic collision:
+// "main", "main-1", "main-2" is exactly the case that made four orbs read "M".
+Check("near-identical ids are well separated",
+    new[] { "main", "main-1", "main-2", "main-3" }.Select(AgentPalette.HexFor).Distinct().Count() == 4);
+
+// Every generated colour sits on Claude Code's own saturation/value surface, so
+// it reads as the same kind of colour as a /color one — see AgentPalette.
+foreach (var agent in agents)
+{
+    var hex = AgentPalette.HexFor(agent);
+    var r = Convert.ToInt32(hex[1..3], 16);
+    var g = Convert.ToInt32(hex[3..5], 16);
+    var b = Convert.ToInt32(hex[5..7], 16);
+
+    var max = Math.Max(r, Math.Max(g, b));
+    var min = Math.Min(r, Math.Min(g, b));
+
+    // #D75F5F, #5F87D7 and the rest of Claude's palette are all max 215,
+    // min 95 — the same numbers these must land on, within rounding.
+    Check($"{agent} sits on Claude's palette surface",
+        Math.Abs(max - 215) <= 1 && Math.Abs(min - 95) <= 1,
+        $"{hex} -> max {max}, min {min}");
+}
+
+Check("an empty id doesn't throw", AgentPalette.HexFor("").StartsWith('#'));
+
 // --- report ---
 
 if (failures.Count == 0)

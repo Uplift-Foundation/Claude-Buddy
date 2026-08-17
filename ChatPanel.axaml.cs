@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.Controls.Documents;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
@@ -711,7 +712,20 @@ namespace ClaudeBuddy
             public TurnView(ChatTurn turn)
             {
                 _turn = turn;
-                turn.PropertyChanged += (_, e) => PropertyChanged?.Invoke(this, e);
+
+                turn.PropertyChanged += (_, e) =>
+                {
+                    // A streaming turn replaces its whole text, so the rendered
+                    // Markdown has to be thrown away with it. Without this the
+                    // first snapshot of a reply is the only one ever drawn.
+                    if (e.PropertyName == nameof(ChatTurn.Text))
+                    {
+                        _body = null;
+                        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Body)));
+                    }
+
+                    PropertyChanged?.Invoke(this, e);
+                };
 
                 if (!string.IsNullOrEmpty(turn.ImageUrl)) LoadImage();
             }
@@ -720,6 +734,175 @@ namespace ClaudeBuddy
             public string Text => _turn.Text;
 
             public bool HasText => !string.IsNullOrWhiteSpace(_turn.Text);
+
+            // The rendered Markdown, rebuilt when the text changes.
+            //
+            // A control rather than a bound string because a reply has
+            // structure — code blocks want a monospace box, list items want a
+            // bullet and a hanging indent, and neither is expressible as one
+            // TextBlock. Cached because OpenClaw streams: a snapshot arrives per
+            // delta, and reparsing on read would reparse per layout pass too.
+            private Control? _body;
+
+            public Control Body => _body ??= BuildBody();
+
+            private Control BuildBody()
+            {
+                var stack = new StackPanel { Spacing = 4 };
+
+                foreach (var block in ChatMarkdown.Parse(_turn.Text))
+                    stack.Children.Add(BuildBlock(block));
+
+                // A turn whose text is only whitespace still needs something to
+                // hand back; HasText hides it either way.
+                if (stack.Children.Count == 0)
+                    stack.Children.Add(Line(_turn.Text));
+
+                return stack;
+            }
+
+            private Control BuildBlock(ChatMarkdown.MdBlock block)
+            {
+                switch (block.Kind)
+                {
+                    case ChatMarkdown.MdKind.Code:
+                        // Wrapped rather than scrolled: the bubble is 244pt and
+                        // a horizontal scrollbar per code block in a column of
+                        // them is worse than a wrapped line.
+                        return new Border
+                        {
+                            Background = CodeBackground,
+                            CornerRadius = new CornerRadius(4),
+                            Padding = new Thickness(6, 4),
+                            Margin = new Thickness(0, 1),
+                            Child = new TextBlock
+                            {
+                                Text = block.Text,
+                                TextWrapping = TextWrapping.Wrap,
+                                FontFamily = Mono,
+                                FontSize = Size - 1,
+                                Foreground = CodeInk
+                            }
+                        };
+
+                    case ChatMarkdown.MdKind.Heading:
+                    {
+                        var heading = Line(block.Text);
+                        heading.FontWeight = FontWeight.SemiBold;
+
+                        // Only two sizes. Six levels of heading inside a bubble
+                        // this size would be a distinction nobody could see.
+                        heading.FontSize = block.Depth <= 2 ? Size + 1 : Size;
+                        heading.Margin = new Thickness(0, 2, 0, 0);
+                        return heading;
+                    }
+
+                    case ChatMarkdown.MdKind.Quote:
+                    {
+                        var quote = Line(block.Text);
+                        quote.Opacity = 0.75;
+                        return new Border
+                        {
+                            BorderBrush = QuoteEdge,
+                            BorderThickness = new Thickness(2, 0, 0, 0),
+                            Padding = new Thickness(6, 0, 0, 0),
+                            Child = quote
+                        };
+                    }
+
+                    case ChatMarkdown.MdKind.Bullet:
+                    case ChatMarkdown.MdKind.Ordered:
+                    {
+                        // Two columns so the text hangs under itself rather than
+                        // wrapping back beneath the bullet.
+                        var row = new Grid
+                        {
+                            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+                            Margin = new Thickness(block.Depth * 10, 0, 0, 0)
+                        };
+
+                        var marker = Line(block.Marker);
+                        marker.Margin = new Thickness(0, 0, 5, 0);
+                        marker.Opacity = 0.7;
+
+                        var text = Line(block.Text);
+                        Grid.SetColumn(text, 1);
+
+                        row.Children.Add(marker);
+                        row.Children.Add(text);
+                        return row;
+                    }
+
+                    default:
+                        return Line(block.Text);
+                }
+            }
+
+            // One line of inline Markdown as a TextBlock of styled runs.
+            private TextBlock Line(string text)
+            {
+                var block = new TextBlock
+                {
+                    TextWrapping = TextWrapping.Wrap,
+                    FontSize = Size,
+                    FontStyle = Style,
+                    Foreground = Ink
+                };
+
+                var spans = ChatMarkdown.Inline(text);
+
+                // No markup at all is the common case, and setting Text avoids
+                // building an Inlines collection for every plain line.
+                if (spans.Count == 1 && spans[0].Style == ChatMarkdown.MdStyle.Normal)
+                {
+                    block.Text = spans[0].Text;
+                    return block;
+                }
+
+                foreach (var span in spans)
+                {
+                    var run = new Run(span.Text);
+
+                    switch (span.Style)
+                    {
+                        case ChatMarkdown.MdStyle.Bold:
+                            run.FontWeight = FontWeight.SemiBold;
+                            break;
+
+                        case ChatMarkdown.MdStyle.Italic:
+                            run.FontStyle = FontStyle.Italic;
+                            break;
+
+                        case ChatMarkdown.MdStyle.BoldItalic:
+                            run.FontWeight = FontWeight.SemiBold;
+                            run.FontStyle = FontStyle.Italic;
+                            break;
+
+                        // Avalonia's Run has no background, so inline code is
+                        // told apart by face and colour rather than by a chip.
+                        case ChatMarkdown.MdStyle.Code:
+                            run.FontFamily = Mono;
+                            run.FontSize = Size - 0.5;
+                            run.Foreground = CodeInk;
+                            break;
+
+                        case ChatMarkdown.MdStyle.Link:
+                            run.Foreground = LinkInk;
+                            run.TextDecorations = TextDecorations.Underline;
+                            break;
+                    }
+
+                    block.Inlines?.Add(run);
+                }
+
+                return block;
+            }
+
+            private static readonly FontFamily Mono = new("Menlo,SF Mono,Consolas,monospace");
+            private static readonly IBrush CodeBackground = new SolidColorBrush(Color.Parse("#33000000"));
+            private static readonly IBrush CodeInk = new SolidColorBrush(Color.Parse("#FFD9A0"));
+            private static readonly IBrush LinkInk = new SolidColorBrush(Color.Parse("#9FD0FF"));
+            private static readonly IBrush QuoteEdge = new SolidColorBrush(Color.Parse("#4DFFFFFF"));
             public bool HasImage => _image is not null;
 
             private Bitmap? _image;

@@ -387,14 +387,33 @@ namespace ClaudeBuddy
             // put an orb on screen for all of them forever. Using real activity
             // lets the user's own "Keep orbs for" setting do the filtering, with
             // no new concept and no second timeout to reason about.
-            foreach (var session in OpenClawSessions.Snapshot())
+            var gatewaySessions = OpenClawSessions.Snapshot();
+
+            // Assigned across the whole set rather than per session, because
+            // keeping two agents apart is a fact about the pair — see
+            // AgentPalette.Assign.
+            var agentColours = AgentPalette.Assign(
+                gatewaySessions.Select(s => OpenClawSessions.AgentIdOf(s.Key) ?? s.Key));
+
+            foreach (var session in gatewaySessions)
             {
                 var status = new SessionStatus
                 {
                     Source = SessionSource.OpenClaw,
                     State = session.State,
                     Title = session.Title,
-                    Color = session.Channel,
+
+                    // Per *agent*, not per session, so an agent's DM and its two
+                    // channels read as one thing in three places rather than as
+                    // three unrelated orbs. Derived from the id, so it is the
+                    // same colour next launch without anything being stored.
+                    //
+                    // This field used to be handed session.Channel, which is a
+                    // channel name and matches no colour Claude Code knows — so
+                    // every gateway orb fell through to the plain ring, and six
+                    // of them were indistinguishable.
+                    Color = agentColours.GetValueOrDefault(
+                        OpenClawSessions.AgentIdOf(session.Key) ?? session.Key, ""),
                 };
 
                 // Namespaced because these ids share a dictionary with Claude

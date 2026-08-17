@@ -20,6 +20,8 @@
          knows what a window is, which is the property that makes them testable
          at all. -->
     <Compile Include="../../ChatTranscript.cs" />
+    <Compile Include="../../ChatMarkdown.cs" />
+    <Compile Include="../../AgentPalette.cs" />
     <Compile Include="../../RemoteChat.cs" />
   </ItemGroup>
 
