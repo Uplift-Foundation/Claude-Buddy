@@ -100,9 +100,32 @@ sha256   34da256e1eaedac88e0e01b251d57c56a7a5ae85221a3affa7da0b752b56a617
 ```
 
 So **pin the fingerprint and skip name validation entirely** — with no SAN there
-is no hostname to validate against, for any host or IP. Pin `34da256e…`, not the
-mkcert one. Why the configured cert isn't being served is unexplained and worth
-a look if TLS is ever reconfigured.
+is no hostname to validate against, for any host or IP. Why the configured cert
+isn't being served is unexplained and worth a look if TLS is ever reconfigured.
+
+**Overtaken by a later measurement — do not pin `34da256e…`.** Probed again from
+Windows on 2026-08-17, the same listener serves the **mkcert leaf after all**:
+
+```
+subject  O=mkcert development certificate, OU=warrenthompson@Warrens-Mini…
+issuer   O=mkcert development CA, CN=mkcert warrenthompson@Warrens-Mac-mini…
+sha256   48911757b22504ef68e43e681302541b653228ea441e2470205b783ff56b8cff
+```
+
+That is the fingerprint of the *configured* cert, so whatever was overriding it
+in the paragraph above has stopped — a restart or a TLS reconfiguration in
+between is the likely cause, and neither was observed happening.
+
+The conclusion that survives is the one that matters: **no fingerprint belongs in
+the source.** Which certificate this gateway serves has now changed once during
+development, so a literal in the code would have shipped broken. The client
+trusts what it sees on the first connection and stores it in
+`openclawFingerprint`, which is why this change cost nothing to absorb. Skipping
+name validation also still stands, and for a second reason now — the mkcert leaf
+does carry a SAN, but it names `192.168.0.127`, so validation would break the
+moment the gateway moved to another address.
+
+Both fingerprints are kept above because the *variability* is the finding.
 
 **Method note:** an earlier round of these probes used `timeout 10 openssl …`.
 macOS has no `timeout`, so those commands never ran and their empty output read
@@ -200,6 +223,63 @@ block → receive a device token → store it → sign with it thereafter.
 
 **Not yet verified end-to-end**, because redeeming the bootstrap token writes a
 new paired device to the gateway. That is the one remaining gap.
+
+### `client.platform` is part of the device identity
+
+Measured on Windows, 2026-08-17, and it is the sort of thing that only shows up
+on a second platform. The client sent a hardcoded `"macos"` from every machine,
+which *authenticated fine* — the gateway recomputes the signature from the fields
+it was given, so a value that is wrong consistently still verifies. Correcting it
+to `"windows"` was refused:
+
+```
+PAIRING_REQUIRED: pairing required: device identity changed and must be re-approved
+```
+
+So `platform` is folded into the paired device identity, alongside role and
+scopes, rather than merely logged next to it.
+
+**And the resulting state cannot be cleared by approving.** Measured in this
+order, which is the useful part:
+
+| step | result |
+| --- | --- |
+| paired and connected sending `"macos"` | `Connected`, `operator.read` granted |
+| changed to `"windows"`, reconnect | `PAIRING_REQUIRED: device identity changed and must be re-approved` |
+| `openclaw devices approve --latest` on the gateway | reports the device **already paired**; nothing offered to approve |
+| reconnect again | same refusal |
+| reverted to `"macos"`, reconnect | **same refusal** |
+
+So the gateway holds two views at once: its device list says paired, and its
+connect path says the identity changed. The pending identity-change is not
+visible to `approve --latest`, and reverting the field does not put things back —
+the first refused attempt is enough to leave the record unsatisfiable by either
+value. The way out is to **remove the device on the gateway and pair from
+scratch**.
+
+Two consequences for this code:
+
+- Correcting `platform` is only cheap because **no Windows or Linux device has
+  ever been paired** — the value is unshipped. macOS keeps sending the string it
+  always sent and notices nothing.
+- **Nothing version-specific belongs in that field, and neither does anything
+  else that might later be "improved".** `"windows"` is stable; `"windows 11
+  26200"` would strand every paired device on every OS update, with a manual
+  removal on the gateway as the only remedy. The same caution applies to
+  `client.id`, `client.mode`, `role` and the scope set.
+
+**Method note, because it weakens the cleanest version of the claim:** the revert
+test was contaminated — by the time it ran, the first refused attempt had already
+put the record into the state above, so "`macos` is refused too" does not
+distinguish *platform is identity-bearing* from *any pending identity-change
+blocks every connect*. Both are consistent with everything observed, and the
+remedy is the same either way. What is certain: the refusal began exactly when
+the field changed, and the gateway names device identity as the reason.
+
+Also still hardcoded next to it: `client.version` is the literal `"0.3.0"`, which
+will disagree with `<Version>` in the csproj the moment that moves. Left alone
+because changing it is a re-approval by the paragraph above, so it wants doing
+once, deliberately, with a value derived from the assembly.
 
 ### Enums, measured not guessed
 
