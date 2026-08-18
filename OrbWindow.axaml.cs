@@ -239,15 +239,21 @@ namespace ClaudeBuddy
             ApplyAvatar(status);
             if (!_hasAvatar) Glyph.Text = _agentEmoji ?? GlyphFor(name);
             ApplyAccent(status.Color);
-            ApplyKind(status.IsRoom ? SessionKind.Unknown : status.Kind);
+            // Rooms wear the badge too, now that their glyph is the channel's
+            // initials rather than a hash. It was suppressed when the two would
+            // have said the same thing; with the glyph saying *which* channel,
+            // the badge saying *that* it is one is the other half rather than a
+            // repeat — and without it a room orb is indistinguishable from an
+            // ordinary one.
+            ApplyKind(status.Kind);
 
-            // A room is a place, not somebody. "#" says that at a glance, and it
-            // replaces the badge rather than joining it — a room orb wearing a
-            // channel badge is the same fact drawn twice, once as the thing
-            // itself and once as a note about it.
+            // A room orb is named for its channel, like every other orb is named
+            // for its session: "#arch" draws "Ar". The hash it used to draw
+            // instead said only "this is a channel", which is true of the badge
+            // on every member orb too and so distinguished one room from
+            // another not at all.
             if (status.IsRoom)
             {
-                Glyph.Text = "#";
                 Glyph.IsVisible = true;
             }
             SetTeamRole(!string.IsNullOrEmpty(status.Lead));
@@ -612,8 +618,16 @@ namespace ClaudeBuddy
 
             // One word, or none worth reading: take two letters from the label
             // itself, which is the old behaviour and still right for "Menu".
-            var first = FirstGrapheme(label);
-            var rest = label[first.Length..];
+            //
+            // From where it starts *reading*, though. The two-word branch above
+            // skips leading punctuation per word, and this one did not — so
+            // "#kubernetes" gave "Ku" only because it is two words after the
+            // channel name is prefixed, while a single-word "#arch" gave "#a".
+            // A room orb is named for its channel, so that is the common case
+            // rather than an oddity.
+            var readable = ReadableStart(label);
+            var first = FirstGrapheme(readable);
+            var rest = readable[first.Length..];
             var second = rest.Length > 0 ? FirstGrapheme(rest) : "";
             return first.ToUpperInvariant() + second.ToLowerInvariant();
         }
@@ -624,6 +638,21 @@ namespace ClaudeBuddy
         // The first character of a word that a person would say out loud —
         // skipping any leading punctuation, so "#general" gives "g" and a lone
         // "—" gives nothing at all.
+        // The label from its first character worth reading, so "#arch" starts at
+        // "a". Only ASCII punctuation is skipped: an emoji is a perfectly good
+        // mark for an orb and is a symbol by every other measure, so skipping
+        // symbols generally would throw away the best glyph a label has.
+        private static string ReadableStart(string label)
+        {
+            for (var i = 0; i < label.Length; i++)
+            {
+                var c = label[i];
+                if (c > 127 || char.IsLetterOrDigit(c)) return label[i..];
+            }
+
+            return label;
+        }
+
         private static string Initial(string word)
         {
             for (var i = 0; i < word.Length; i++)
