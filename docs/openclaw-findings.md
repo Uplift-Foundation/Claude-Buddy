@@ -490,6 +490,23 @@ distinguishing part is `origin.label`, which is written for a log —
 cleans up to `#general` and `wtvamp` by cutting at `" id:"` and dropping the
 noun before it.
 
+## Replying to a cron session works
+
+A scheduled job looked like the one session kind with nobody on the other end,
+and therefore the one where a typed reply might go nowhere — the panel nearly
+shipped with cron sessions read-only for that reason.
+
+Measured instead of assumed: **a cron session accepts a message and responds to
+it.** `chat.send` against an `agent:<name>:cron:<uuid>` key behaves as it does
+anywhere else. The job's schedule is what starts a run; it is not a restriction
+on the conversation, and the session is an ordinary agent conversation that
+happens to have been started by a timer rather than by a person.
+
+So the panel treats cron like any other session, gated only by the same
+"Allow replying to agents" switch. The badge still says it is a cron job,
+because knowing a run was scheduled rather than asked for is worth seeing — but
+that is information, not a wall.
+
 ## Still unknown
 
 - **The amber "needs you" state.** No `session.approval` fired in six minutes of
@@ -497,8 +514,9 @@ noun before it.
   exists in the protocol and requires `includeApprovals: true` on
   `sessions.messages.subscribe`, which in turn needs `operator.approvals` —
   a scope this device did not request. Unverified end to end.
-- Whether a Discord-originated turn behaves identically to a cron one. Only cron
-  activity occurred while watching.
+- Whether a Discord-originated turn *streams* identically to a cron one. Only
+  cron activity occurred while watching. Sending into either is now known to
+  work (above); what is untested is whether the event sequence differs.
 - What a terminal `chat` state looks like (only `state: "delta"` was seen).
 
 ## Incidental
