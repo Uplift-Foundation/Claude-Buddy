@@ -108,6 +108,13 @@ namespace ClaudeBuddy
         // When the hook hasn't written transcript_path yet (old status
         // file), find <session-id>.jsonl under the known Claude Code
         // config directories.
+        //
+        // Public as well as used internally: the chat panel needs the same
+        // answer for the same reason, and a session whose status file predates
+        // transcript_path is exactly the one whose orb you'd click wondering
+        // what it had been doing.
+        public static string? FindTranscriptFor(string sessionId) => FindTranscript(sessionId);
+
         private static string? FindTranscript(string sessionId)
         {
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);

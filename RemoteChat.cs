@@ -1,0 +1,178 @@
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+
+namespace ClaudeBuddy
+{
+    // What the chat panel needs from a session it can talk to, and nothing more.
+    //
+    // An interface here rather than the panel reaching into OpenClawSessions
+    // directly, for one practical reason: it lets the whole panel — layout,
+    // keyboard, streaming, autoscroll, the mic — be built and watched against an
+    // in-memory fake before the gateway can send a word. The transport is then
+    // swapping one implementation for another rather than the moment everything
+    // is first tried at once.
+    //
+    // Four requirements on any implementation, each of which the panel relies on
+    // and none of which it can check:
+    //
+    //  1. Every event is raised on the UI thread. The implementation does its
+    //     own Dispatcher.Post. The alternative is every consumer hopping threads
+    //     by hand and a comment on each explaining why.
+    //  2. TurnUpdated carries the whole turn, already mutated — not a delta. A
+    //     dropped or coalesced event then costs nothing, because the panel
+    //     re-reads Text. Deltas make the view desyncable with no way to notice.
+    //     (The gateway obliges: its `agent` events carry data.text as a full
+    //     snapshot alongside data.delta.)
+    //  3. SendAsync raises TurnAdded for the user's own turn. The panel never
+    //     inserts optimistically, so exactly one thing owns the transcript and a
+    //     failed send leaves no ghost behind.
+    //  4. History is already bounded and ordered oldest to newest. The panel
+    //     shows what it is given and never trims or pages.
+    public enum ChatRole { User, Assistant, System }
+
+    public enum RemoteChatState { Disconnected, Connecting, Connected, Error }
+
+    // Mutable on purpose: a streaming reply updates Text in place and raises
+    // TurnUpdated, so the list never recreates the item. Recreating it would
+    // re-template the row, which is the one thing that could steal focus from
+    // the input mid-sentence.
+    public sealed class ChatTurn : INotifyPropertyChanged
+    {
+        private string _text = "";
+
+        public ChatRole Role { get; init; }
+
+        public string Text
+        {
+            get => _text;
+            set
+            {
+                if (_text == value) return;
+                _text = value;
+                Raise();
+            }
+        }
+
+        public bool IsComplete { get; set; }
+
+        // When this turn happened, in local time. The gateway records a
+        // timestamp per message and the panel shows it, so a conversation that
+        // has been going on across Discord and a terminal all day reads as
+        // something with a shape rather than a flat wall.
+        //
+        // Defaulted to now, which is right for a turn created live and is
+        // overwritten from the backlog for one that wasn't.
+        public DateTimeOffset At { get; init; } = DateTimeOffset.Now;
+
+        // A picture sent in the conversation, as a path on the gateway rather
+        // than bytes: a transcript can hold a dozen of them and only the ones
+        // actually scrolled to are worth a megabyte each. The panel resolves it.
+        public string? ImageUrl { get; init; }
+
+        public string ImageAlt { get; init; } = "";
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        private void Raise([CallerMemberName] string? name = null) =>
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
+
+    public interface IRemoteChatSession
+    {
+        string SessionId { get; }
+        string DisplayName { get; }
+        RemoteChatState State { get; }
+        IReadOnlyList<ChatTurn> History { get; }
+
+        event Action<ChatTurn>? TurnAdded;
+        event Action<ChatTurn>? TurnUpdated;
+        event Action<RemoteChatState>? StateChanged;
+
+        Task SendAsync(string text);
+
+        // Stops the reply in flight. Separate from dismissing the panel: closing
+        // a window should never cancel work someone asked for.
+        void Cancel();
+    }
+
+    // Everything below is optional. The panel tests for each one and does
+    // without when it isn't there, which is what keeps the in-memory fake — and
+    // any future third transport — to the nine members above.
+    //
+    // They are separate interfaces rather than more members on
+    // IRemoteChatSession because they are separate powers: a transport can page
+    // backwards without being able to answer a dialog, and both were true of
+    // exactly one implementation each when they were written.
+
+    // Scrolling back past what the panel was given.
+    //
+    // This started life as four members on OpenClawChatSession that the panel
+    // reached for by type test. Lifting it happened when the second transport
+    // turned out to want the same thing for the same reason — a transcript is
+    // thousands of rows and the panel is given forty.
+    public interface IRemoteChatBacklog
+    {
+        // False once there is nothing older left to fetch. The panel asks before
+        // every fetch, so an implementation that can't page says false forever.
+        bool HasMore { get; }
+
+        // True when this call actually prepended something. False is not a
+        // failure — it is "that was the end" — and the panel uses it to avoid
+        // measuring a scroll correction that isn't coming.
+        Task<bool> LoadOlderAsync(CancellationToken ct);
+
+        // The whole transcript changed underneath the panel, which TurnAdded
+        // can't express. Raised when a backlog lands a moment after the panel
+        // opened and replaces the little it had.
+        event Action? HistoryReplaced;
+
+        // Older turns went on the front. Carries how many, because the panel has
+        // to put the scroll position back afterwards — content appearing above
+        // where you are reading would otherwise throw you down the page.
+        event Action<int>? HistoryPrepended;
+    }
+
+    // What the empty input box should say.
+    //
+    // Both transports can be in a state where typing is pointless — replying
+    // switched off, or a session with no pane to type into — and both would
+    // rather say so on the box than let you write a paragraph first. The box
+    // stays enabled either way: SendAsync still explains itself in the
+    // transcript, and a disabled box you can't paste a draft into is a worse
+    // answer than one that tells you what will happen.
+    public interface IRemoteChatComposer
+    {
+        string ComposerHint { get; }
+    }
+
+    // One option in a dialog the session is blocked on. Key is what gets sent —
+    // a digit, for the numbered lists Claude Code puts up — and Label is the
+    // dialog's own wording, read off the screen rather than guessed at.
+    public sealed record ChatPromptOption(string Key, string Label);
+
+    public sealed record ChatPrompt(string Title, IReadOnlyList<ChatPromptOption> Options);
+
+    // A session that has stopped and is waiting to be answered.
+    //
+    // The case this exists for is a permission prompt: the session is doing
+    // nothing, the transcript says nothing about why, and the panel would
+    // otherwise show a conversation that had simply gone quiet. Answering is a
+    // real power and is gated like sending is.
+    public interface IRemoteChatPrompts
+    {
+        // Null when nothing is waiting. Non-null means the panel should show the
+        // options instead of pretending the silence is normal.
+        ChatPrompt? Prompt { get; }
+
+        event Action? PromptChanged;
+
+        // Take this option. Only ever called with an option out of Prompt, so an
+        // implementation never has to invent a key it didn't publish.
+        Task AnswerAsync(ChatPromptOption option);
+
+        // "I'll deal with it myself" — go to wherever the dialog actually is.
+        // The fall back for when the dialog could not be read, which is the only
+        // honest answer at that point.
+        void AnswerElsewhere();
+    }
+}

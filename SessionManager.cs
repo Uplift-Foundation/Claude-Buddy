@@ -52,6 +52,19 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public string Agent { get; set; } = "";
 
+        // Which kind of thing this session is. App-filled during the scan and
+        // never serialized, for the same reason Lead and Agent aren't: the
+        // hooks know nothing about it and write no such field. Serializing it
+        // would also be actively harmful — ResetSessionToIdle writes this whole
+        // object back over a hook-owned file, so the key would appear in that
+        // file and then vanish again on the hook's next write.
+        //
+        // An enum rather than a string because it is entirely internal: a typo
+        // should not compile. Defaulting to ClaudeCode means every existing
+        // path keeps its behaviour without being touched.
+        [JsonIgnore]
+        public SessionSource Source { get; set; } = SessionSource.ClaudeCode;
+
         // Where the session's terminal lives (macOS hook only; empty on
         // Windows or with an older hook script). See TerminalFocuser.
         [JsonPropertyName("term_program")]
@@ -93,6 +106,17 @@ namespace ClaudeBuddy
         // turn aloud). Empty from hooks older than this field.
         [JsonPropertyName("transcript_path")]
         public string TranscriptPath { get; set; } = "";
+    }
+
+    // What produced a session. ClaudeCode is a local process that fires the
+    // hook; OpenClaw is a conversation on a remote gateway with no process, no
+    // terminal and no transcript file here. Almost every rule in this file was
+    // written for the first and is wrong for the second, which is why this
+    // exists rather than being inferred from which fields happen to be empty.
+    public enum SessionSource
+    {
+        ClaudeCode,
+        OpenClaw
     }
 
     // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude
@@ -153,6 +177,10 @@ namespace ClaudeBuddy
 
             _pollTimer.Tick += (_, _) => ScanAndUpdate();
             _pollTimer.Start();
+
+            // Connects only if the user has turned it on and given it an
+            // address; otherwise this returns having done nothing at all.
+            OpenClawSessions.Restart();
 
             _debounce.Tick += (_, _) =>
             {
@@ -347,6 +375,54 @@ namespace ClaudeBuddy
                 found.Add(new ScanEntry(Path.GetFileNameWithoutExtension(file), status, written));
             }
 
+            // The gateway's sessions join the same list the status files
+            // produced, so everything downstream — ordering, stacking, pinning,
+            // the tray, the removal pass — stays a single code path. Empty and
+            // free when the feature is off.
+            //
+            // Written is the session's own last activity, deliberately, not the
+            // time of this scan. A gateway lists every conversation it has ever
+            // had (59 on the machine this was built against, of which two had
+            // been touched in the last five minutes), so stamping "now" would
+            // put an orb on screen for all of them forever. Using real activity
+            // lets the user's own "Keep orbs for" setting do the filtering, with
+            // no new concept and no second timeout to reason about.
+            var gatewaySessions = OpenClawSessions.Snapshot();
+
+            // Assigned across the whole set rather than per session, because
+            // keeping two agents apart is a fact about the pair — see
+            // AgentPalette.Assign.
+            var agentColours = AgentPalette.Assign(
+                gatewaySessions.Select(s => OpenClawSessions.AgentIdOf(s.Key) ?? s.Key));
+
+            foreach (var session in gatewaySessions)
+            {
+                var status = new SessionStatus
+                {
+                    Source = SessionSource.OpenClaw,
+                    State = session.State,
+                    Title = session.Title,
+
+                    // Per *agent*, not per session, so an agent's DM and its two
+                    // channels read as one thing in three places rather than as
+                    // three unrelated orbs. Derived from the id, so it is the
+                    // same colour next launch without anything being stored.
+                    //
+                    // This field used to be handed session.Channel, which is a
+                    // channel name and matches no colour Claude Code knows — so
+                    // every gateway orb fell through to the plain ring, and six
+                    // of them were indistinguishable.
+                    Color = agentColours.GetValueOrDefault(
+                        OpenClawSessions.AgentIdOf(session.Key) ?? session.Key, ""),
+                };
+
+                // Namespaced because these ids share a dictionary with Claude
+                // Code's UUIDs, and because a gateway key contains colons and
+                // slashes that ResetSessionToIdle would otherwise splice into a
+                // file path.
+                found.Add(new ScanEntry("openclaw:" + session.Key, status, session.LastActivity));
+            }
+
             InheritTerminalInfo(found);
 
             var superseded = Superseded(found);
@@ -409,9 +485,15 @@ namespace ClaudeBuddy
                 // away. Pruning it would hide the orb exactly when it matters
                 // most. Use "Reset this session to idle" to clear a genuinely
                 // abandoned one manually.
+                // "generating" is exempt for gateway sessions for the same
+                // reason "waiting" is exempt for local ones: it is the state
+                // where hiding the orb is worst. A local session can't be caught
+                // by this because its file is being rewritten as it works, which
+                // a gateway session has no equivalent of.
                 var staleAfter = StaleAfter;
                 if (staleAfter is not null
                     && status.State != "waiting"
+                    && !(status.Source == SessionSource.OpenClaw && status.State == "generating")
                     && now - written > staleAfter)
                 {
                     continue; // treat as gone; cleaned up in the removal pass below
@@ -431,7 +513,14 @@ namespace ClaudeBuddy
                 // to cover it because the machinery is identical — TryAdopt
                 // no-ops off macOS, without a cwd, and when no viewer for
                 // that directory is running.
-                if (!KnowsATerminal(status)
+                // Not for a gateway session: TryAdopt matches on cwd string
+                // equality alone, and the machine running the gateway usually
+                // has the same repositories checked out at the same paths. It
+                // would hand a remote session the tmux pane of unrelated local
+                // work, and clicking that orb would jump to it — worse than a
+                // dead click, because it looks like it worked.
+                if (status.Source == SessionSource.ClaudeCode
+                    && !KnowsATerminal(status)
                     && (leadsWithLiveAgents.Contains(sessionId) || status.SessionPid <= 0))
                 {
                     AgentTeamViewer.TryAdopt(status);
@@ -448,7 +537,11 @@ namespace ClaudeBuddy
                 // nothing is a worse lie than an orb you might not be able to
                 // click. It's also a session you can see is running, which is
                 // what an orb is for.
-                if (string.IsNullOrEmpty(status.Tty)
+                // A gateway session has none of these and never will — it has
+                // no terminal anywhere, which is the point of it. Left ungated
+                // this rule alone drops every OpenClaw orb, every scan.
+                if (status.Source == SessionSource.ClaudeCode
+                    && string.IsNullOrEmpty(status.Tty)
                     && string.IsNullOrEmpty(status.TermProgram)
                     && string.IsNullOrEmpty(status.TmuxPane)
                     && status.TermPid == 0
@@ -474,7 +567,13 @@ namespace ClaudeBuddy
                 // Asked of nothing else, so an ordinary session never pays for
                 // the lookup, and a listing that can't be read keeps every orb
                 // — see BackgroundJobs.
-                if (status.SessionPid <= 0 && !BackgroundJobs.IsLiveJob(sessionId))
+                // Likewise: a gateway session records no pid, so this would ask
+                // the local daemon about a session it has never heard of — once
+                // per scan, per session — and drop the orb when the answer came
+                // back "not a job", which it always would.
+                if (status.Source == SessionSource.ClaudeCode
+                    && status.SessionPid <= 0
+                    && !BackgroundJobs.IsLiveJob(sessionId))
                 {
                     continue;
                 }
@@ -485,7 +584,9 @@ namespace ClaudeBuddy
                 // from its process rather than its status file — see AgentTeam.
                 // Asked after the liveness rules above so a dead session never
                 // costs a lookup.
-                var membership = AgentTeam.Of(status.SessionPid);
+                var membership = status.Source == SessionSource.ClaudeCode
+                    ? AgentTeam.Of(status.SessionPid)
+                    : default;
                 status.Lead = membership.Lead == sessionId ? "" : membership.Lead;
                 status.Agent = string.IsNullOrEmpty(status.Lead) ? "" : membership.Name;
 
@@ -522,6 +623,12 @@ namespace ClaudeBuddy
 
                 window!.UpdateFrom(status);
 
+                // The chat panel's view of "waiting for a permission prompt"
+                // comes from here rather than from the transcript, because the
+                // dialog never reaches the transcript. This is the only place
+                // that state arrives.
+                if (_chats.TryGetValue(sessionId, out var chat)) chat.UpdateStatus(status);
+
                 // After UpdateFrom, so the window is already showing something
                 // if the position turns out to be unusable. Before the reflow
                 // below, which steps over whatever this pins.
@@ -536,6 +643,11 @@ namespace ClaudeBuddy
                 _statuses.Remove(id);
                 _order.Remove(id);
                 setChanged = true;
+
+                // The watcher goes with the orb. A session that has ended has a
+                // transcript that will never grow again, and a FileSystemWatcher
+                // per dead session is a handle leak measured in days.
+                if (_chats.Remove(id, out var chat)) chat.Dispose();
             }
 
             if (setChanged)
@@ -614,6 +726,40 @@ namespace ClaudeBuddy
         // The last known state of another session — what an orb needs to hand
         // its team lead to TerminalFocuser. Null for a session that isn't
         // tracked, including the empty id a non-member passes in.
+        // A session this orb can hold a conversation with, or null when its
+        // click means something else. Null is the whole of the "not one of
+        // those" signal the orb understands — it deliberately knows nothing
+        // about which source a session came from, or whether the feature is on.
+        public IRemoteChatSession? RemoteChatFor(string sessionId)
+        {
+            if (!_statuses.TryGetValue(sessionId, out var status)) return null;
+
+            if (status.Source == SessionSource.OpenClaw)
+                return OpenClawSessions.ChatFor(sessionId, status.Title);
+
+            if (!ClaudeBuddySettings.ClaudeCodeChatEnabled) return null;
+
+            // Cached rather than made per click: the session owns a file watcher
+            // and a byte offset into a transcript, and rebuilding it every time
+            // the panel opened would re-read the tail and lose the scrollback
+            // someone had already paged in.
+            if (_chats.TryGetValue(sessionId, out var existing))
+            {
+                existing.UpdateStatus(status);
+                return existing;
+            }
+
+            var chat = new ClaudeCodeChatSession(sessionId, status);
+            _chats[sessionId] = chat;
+            chat.Start();
+            return chat;
+        }
+
+        // Local chat sessions, by session id. Only ever populated by a click —
+        // there is no reason to watch a transcript nobody is reading — and
+        // emptied with the orb.
+        private readonly Dictionary<string, ClaudeCodeChatSession> _chats = new(StringComparer.Ordinal);
+
         public SessionStatus? StatusFor(string? sessionId) =>
             string.IsNullOrEmpty(sessionId) ? null : _statuses.GetValueOrDefault(sessionId);
 
@@ -711,8 +857,15 @@ namespace ClaudeBuddy
         // the speech engine's process exited on.
         private void OnSpeakStateChanged(TextToSpeech.SpeakState state)
         {
+            // Inside the Post, not before it. TextToSpeech raises this from
+            // whichever thread noticed the speech engine change state — the
+            // reason the orb updates below were already marshalled — and the
+            // panel's own glyph is an Avalonia control like any other, so
+            // touching it from there took the app down mid-sentence.
             Dispatcher.UIThread.Post(() =>
             {
+                ChatPanel.SetSpeakState(state);
+
                 foreach (var window in _windows.Values)
                 {
                     window.SetFlyoutSpeakState(state);
@@ -867,6 +1020,16 @@ namespace ClaudeBuddy
 
         public void ResetSessionToIdle(string sessionId)
         {
+            // There is no status file to rewrite for a gateway session, and the
+            // path this would build from its key ("openclaw:agent:main:…")
+            // is not one this app should be writing at all. The gateway owns
+            // that session's state; we only display it.
+            if (_statuses.TryGetValue(sessionId, out var known)
+                && known.Source != SessionSource.ClaudeCode)
+            {
+                return;
+            }
+
             var file = Path.Combine(_statusDir, sessionId + ".txt");
             SessionStatus? existing = null;
             try
@@ -936,7 +1099,10 @@ namespace ClaudeBuddy
             if (allOrbs.Count < 1) return;
 
             foreach (var w in _windows.Values)
+            {
                 w.HideFlyout();
+                ChatPanel.HideFor(w.SessionId);
+            }
 
             _preArrangeState.Clear();
             foreach (var orb in allOrbs)
@@ -965,67 +1131,39 @@ namespace ClaudeBuddy
         // Leads and solo orbs define the shape; members radiate outward
         // from their lead, away from the shape's centre — so the pattern
         // reads cleanly and the small member orbs fan out like spokes.
+        // Maps the orbs on screen onto OrbArrangement's inputs and its answer
+        // back onto them. All the geometry lives there, where it can be tested —
+        // see tests/ArrangementTests, which walks every shape at every spacing
+        // across the team shapes that occur and checks that nothing leaves the
+        // screen or lands on top of anything else.
         private List<(OrbWindow Orb, PixelPoint Target)> ComputeClusteredPositions(List<OrbWindow> allOrbs)
         {
-            var teams = new Dictionary<string, List<OrbWindow>>(StringComparer.Ordinal);
-            var anchors = new List<OrbWindow>();
+            if (allOrbs.Count == 0) return new List<(OrbWindow, PixelPoint)>();
 
-            foreach (var orb in allOrbs)
+            var index = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (var i = 0; i < allOrbs.Count; i++) index[allOrbs[i].SessionId] = i;
+
+            var leadOf = new int[allOrbs.Count];
+            for (var i = 0; i < allOrbs.Count; i++)
             {
-                var lead = _statuses.TryGetValue(orb.SessionId, out var s) ? s.Lead : "";
-                if (!string.IsNullOrEmpty(lead) && lead != orb.SessionId
-                    && allOrbs.Any(o => o.SessionId == lead))
-                {
-                    if (!teams.TryGetValue(lead, out var members))
-                        teams[lead] = members = new List<OrbWindow>();
-                    members.Add(orb);
-                }
-                else
-                {
-                    anchors.Add(orb);
-                }
+                var lead = _statuses.TryGetValue(allOrbs[i].SessionId, out var status) ? status.Lead : "";
+
+                leadOf[i] = !string.IsNullOrEmpty(lead) && index.TryGetValue(lead, out var at) && at != i
+                    ? at
+                    : -1;
             }
 
-            var shapeTargets = ShapePositions(anchors);
-            var result = new List<(OrbWindow, PixelPoint)>();
+            var screen = allOrbs[0].Screens.Primary ?? allOrbs[0].Screens.All.FirstOrDefault();
 
-            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(allOrbs);
+            var layout = new OrbArrangement.Layout(
+                screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080),
+                screen?.Scaling ?? 1.0,
+                ClaudeBuddySettings.ArrangeShape,
+                ClaudeBuddySettings.ArrangeSpacing);
 
-            for (int i = 0; i < anchors.Count; i++)
-            {
-                var anchor = anchors[i];
-                var pos = shapeTargets[i];
-                result.Add((anchor, pos));
+            var placed = OrbArrangement.Compute(allOrbs.Count, leadOf, layout);
 
-                if (!teams.TryGetValue(anchor.SessionId, out var members)) continue;
-
-                // Direction from shape centre outward through this lead
-                double dx = pos.X - cx;
-                double dy = pos.Y - cy;
-                double dist = Math.Sqrt(dx * dx + dy * dy);
-                if (dist < 1) { dx = 0; dy = -1; dist = 1; }
-                double nx = dx / dist;
-                double ny = dy / dist;
-
-                double memberRadius = orbSize * 1.2;
-                double fanSpread = Math.PI / 3;
-
-                for (int m = 0; m < members.Count; m++)
-                {
-                    double baseAngle = Math.Atan2(ny, nx);
-                    double offset = members.Count == 1
-                        ? 0
-                        : fanSpread * (m - (members.Count - 1) / 2.0) / Math.Max(members.Count - 1, 1);
-                    double angle = baseAngle + offset;
-
-                    var memberPos = new PixelPoint(
-                        (int)Math.Round(pos.X + memberRadius * Math.Cos(angle)),
-                        (int)Math.Round(pos.Y + memberRadius * Math.Sin(angle)));
-                    result.Add((members[m], memberPos));
-                }
-            }
-
-            return result;
+            return allOrbs.Select((orb, i) => (orb, placed[i])).ToList();
         }
 
         private void RestoreFromPattern()
@@ -1033,7 +1171,10 @@ namespace ClaudeBuddy
             if (_arrangeAnimTargets is not null) return;
 
             foreach (var w in _windows.Values)
+            {
                 w.HideFlyout();
+                ChatPanel.HideFor(w.SessionId);
+            }
 
             var targets = new Dictionary<string, (PixelPoint From, PixelPoint To)>();
             foreach (var (id, (origPos, _)) in _preArrangeState)
@@ -1160,40 +1301,127 @@ namespace ClaudeBuddy
             return EnsureMinSpacing(pts, orbs);
         }
 
-        // After a shape generator runs, check whether any two orbs ended
-        // up too close and uniformly scale the whole pattern outward from
-        // its centre until every pair clears the minimum gap.
+        // After a shape generator runs, scale the whole pattern so its orbs
+        // clear each other — and no further than the screen can hold.
+        //
+        // This used to scale by minGap/minDist with nothing bounding it. That is
+        // fine for five orbs on a circle and disastrous for twenty on a heart:
+        // a parametric curve bunches points near its cusps, so the closest pair
+        // is almost touching, the factor needed to separate *them* is enormous,
+        // and applying it to the whole pattern threw the outer orbs off the
+        // screen. Observed exactly that way — a heart that went from a huddle to
+        // scattered past the edges with nothing in between.
+        //
+        // So the same factor is computed and then capped by what fits, and the
+        // result is moved back inside the working area. An arrangement that
+        // still overlaps a little is a worse drawing; one that is off screen is
+        // a lost orb.
         private static List<PixelPoint> EnsureMinSpacing(List<PixelPoint> pts, List<OrbWindow> orbs)
         {
             if (pts.Count < 2) return pts;
 
             var screen = orbs[0].Screens.Primary ?? orbs[0].Screens.All.FirstOrDefault();
+            var work = screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080);
             double scale = screen?.Scaling ?? 1.0;
             int orbSize = (int)(56 * scale);
-            double minGap = orbSize * (0.3 + ClaudeBuddySettings.ArrangeSpacing);
+            // Measured against the circle that is drawn, not the window it is
+            // drawn in. An orb's window is 56pt but its ellipse is 36 — using
+            // the window meant every gap was set more than half an orb wider
+            // than it needed to be, and since the gap is what ends up sizing the
+            // whole pattern, that inflated everything.
+            double drawn = orbSize * 36.0 / 56.0;
 
-            double minDist = double.MaxValue;
-            for (int i = 0; i < pts.Count; i++)
-            {
-                for (int j = i + 1; j < pts.Count; j++)
-                {
-                    double dx = pts[i].X - pts[j].X;
-                    double dy = pts[i].Y - pts[j].Y;
-                    double dist = Math.Sqrt(dx * dx + dy * dy);
-                    if (dist < minDist) minDist = dist;
-                }
-            }
+            // 0.35 rather than 1.0, so the bottom of the slider is a genuinely
+            // tight cluster — about half the pattern it used to make — instead
+            // of a large shape with a smaller one beside it. The circles start
+            // to overlap slightly down there, which is what "smallest" ought to
+            // buy; the middle of the slider still clears them comfortably.
+            double minGap = drawn * (0.35 + ClaudeBuddySettings.ArrangeSpacing);
 
-            if (minDist >= minGap || minDist < 1) return pts;
+            // Two neighbouring leads can each fan a team into the space between
+            // them, so the room reserved is for both.
+            return FitPattern(pts, work, orbSize, minGap);
+        }
+
+        // Pure, so it can be reasoned about and tested without a screen.
+        internal static List<PixelPoint> FitPattern(
+            List<PixelPoint> pts, PixelRect work, int orbSize, double minGap)
+        {
+            if (pts.Count < 2) return pts;
 
             double cx = pts.Average(p => (double)p.X);
             double cy = pts.Average(p => (double)p.Y);
-            double factor = minGap / minDist;
 
-            return pts.Select(p => new PixelPoint(
+            // Neighbours along the outline, not every pair.
+            //
+            // A heart's two lobes nearly touch at the notch, so somewhere in any
+            // dense arrangement there is a pair that is far apart *along* the
+            // shape and close *in space*. Separating that pair means inflating
+            // the entire pattern, which is how the smallest spacing setting
+            // still filled the screen. Neighbours are what a person reads as
+            // spacing; the notch is allowed to be tight, because that is what a
+            // heart looks like.
+            double minDist = double.MaxValue;
+            for (int i = 0; i < pts.Count; i++)
+            {
+                var next = pts[(i + 1) % pts.Count];
+                double dx = pts[i].X - next.X;
+                double dy = pts[i].Y - next.Y;
+                double dist = Math.Sqrt(dx * dx + dy * dy);
+                if (dist < minDist) minDist = dist;
+            }
+
+            double wanted = minDist > 0.5 && minDist < minGap ? minGap / minDist : 1.0;
+
+            // What the screen can take. The orb is drawn centred on its point,
+            // so half of one has to fit past the pattern's edge on each side.
+            double halfW = pts.Max(p => Math.Abs(p.X - cx));
+            double halfH = pts.Max(p => Math.Abs(p.Y - cy));
+
+            double roomW = Math.Max(1, (work.Width - orbSize * 1.6) / 2.0);
+            double roomH = Math.Max(1, (work.Height - orbSize * 1.6) / 2.0);
+
+            double fits = Math.Min(
+                halfW > 1 ? roomW / halfW : double.MaxValue,
+                halfH > 1 ? roomH / halfH : double.MaxValue);
+
+            // Shrinks as well as grows: a pattern that already overflowed the
+            // screen before any spacing was applied gets pulled in too.
+            double factor = Math.Min(wanted, fits);
+
+            var scaled = pts.Select(p => new PixelPoint(
                 (int)Math.Round(cx + (p.X - cx) * factor),
-                (int)Math.Round(cy + (p.Y - cy) * factor)
-            )).ToList();
+                (int)Math.Round(cy + (p.Y - cy) * factor))).ToList();
+
+            return Nudge(scaled, work, orbSize);
+        }
+
+        // Slides the whole pattern back inside the working area. The shapes are
+        // anchored near the top right, where they were free to grow off two
+        // edges; scaling now happens first and this puts the result somewhere it
+        // can be seen.
+        private static List<PixelPoint> Nudge(List<PixelPoint> pts, PixelRect work, int orbSize)
+        {
+            // A point is a window's top-left corner, not its centre — that is
+            // what PinAt and Position take. Bounding them as centres pushed the
+            // right and bottom edges half an orb off the screen while inserting
+            // the same half at the left and top.
+            int left = pts.Min(p => p.X);
+            int right = pts.Max(p => p.X) + orbSize;
+            int top = pts.Min(p => p.Y);
+            int bottom = pts.Max(p => p.Y) + orbSize;
+
+            int dx = 0, dy = 0;
+
+            if (left < work.X) dx = work.X - left;
+            else if (right > work.Right) dx = work.Right - right;
+
+            if (top < work.Y) dy = work.Y - top;
+            else if (bottom > work.Bottom) dy = work.Bottom - bottom;
+
+            if (dx == 0 && dy == 0) return pts;
+
+            return pts.Select(p => new PixelPoint(p.X + dx, p.Y + dy)).ToList();
         }
 
         private static (PixelRect Work, double Scale, int OrbSize, int Margin, double Cx, double Cy) ShapeAnchor(List<OrbWindow> orbs)
@@ -1215,6 +1443,56 @@ namespace ClaudeBuddy
             return orbSize * ClaudeBuddySettings.ArrangeSpacing / 16.0;
         }
 
+        // The heart curve, sampled at even *distance* rather than even t.
+        //
+        // Stepping t uniformly is the obvious thing and looks fine for five
+        // orbs. The curve does not move at a constant rate though — it crawls
+        // around the two lobes and races through the point at the bottom — so by
+        // twenty orbs they arrive in visible clumps with gaps between them. That
+        // also made the closest pair absurdly close, which is what the old
+        // spacing pass then tried to fix by inflating the entire pattern.
+        //
+        // So the curve is walked finely, its length accumulated, and the orbs
+        // placed at equal fractions of that length.
+        internal static (double X, double Y)[] HeartUnit(int n)
+        {
+            const int Samples = 2000;
+
+            var curve = new (double X, double Y)[Samples + 1];
+            for (int i = 0; i <= Samples; i++)
+            {
+                double t = 2 * Math.PI * i / Samples;
+                double sinT = Math.Sin(t);
+                curve[i] = (
+                    16 * sinT * sinT * sinT,
+                    -(13 * Math.Cos(t) - 5 * Math.Cos(2 * t)
+                      - 2 * Math.Cos(3 * t) - Math.Cos(4 * t))
+                );
+            }
+
+            var along = new double[Samples + 1];
+            for (int i = 1; i <= Samples; i++)
+            {
+                double dx = curve[i].X - curve[i - 1].X;
+                double dy = curve[i].Y - curve[i - 1].Y;
+                along[i] = along[i - 1] + Math.Sqrt(dx * dx + dy * dy);
+            }
+
+            double total = along[Samples];
+            var pts = new (double X, double Y)[n];
+
+            int cursor = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double want = total * i / n;
+                while (cursor < Samples && along[cursor + 1] < want) cursor++;
+
+                pts[i] = curve[cursor];
+            }
+
+            return pts;
+        }
+
         // Heart: x = 16sin³t, y = 13cos(t) - 5cos(2t) - 2cos(3t) - cos(4t)
         private static List<PixelPoint> HeartPositions(List<OrbWindow> orbs)
         {
@@ -1224,17 +1502,7 @@ namespace ClaudeBuddy
             if (n == 1)
                 return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
 
-            var pts = new (double X, double Y)[n];
-            for (int i = 0; i < n; i++)
-            {
-                double t = 2 * Math.PI * i / n;
-                double sinT = Math.Sin(t);
-                pts[i] = (
-                    16 * sinT * sinT * sinT,
-                    -(13 * Math.Cos(t) - 5 * Math.Cos(2 * t)
-                      - 2 * Math.Cos(3 * t) - Math.Cos(4 * t))
-                );
-            }
+            var pts = HeartUnit(n);
 
             double s = SpacingScale(orbSize);
 

@@ -1,0 +1,377 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace ClaudeBuddy
+{
+    // Turning what Claude Code writes down into what the chat panel shows.
+    //
+    // Pure on purpose, and kept out of ClaudeCodeChatSession for the same reason
+    // the geometry is kept out of SessionManager: no files, no windows, no
+    // settings, no dispatcher — just text in and turns out, so it can be tested
+    // by `dotnet run --project tests/TranscriptTests` rather than by opening a
+    // panel and reading it.
+    //
+    // Two jobs, and they are less similar than they look:
+    //
+    //  * Map() reads the transcript, which is a documented-by-example append-only
+    //    JSONL file. Unfamiliar rows are skipped, so a Claude Code upgrade that
+    //    adds a row type degrades rather than breaks.
+    //
+    //  * ParseDialog() reads the *screen*, because a permission prompt is drawn
+    //    by the TUI and never written to the transcript. That one is strict to
+    //    the point of rudeness — anything unexpected returns null — because its
+    //    output becomes buttons that send keystrokes, and a button whose label
+    //    disagrees with what it sends is the one failure this must not have.
+    public static class ChatTranscript
+    {
+        public readonly record struct Row(string? Uuid, ChatTurn Turn);
+
+        // --- the transcript ---
+
+        public static List<Row> Map(IEnumerable<string> lines)
+        {
+            var mapped = new List<Row>();
+
+            foreach (var line in lines)
+            {
+                if (line.Length == 0 || line[0] != '{') continue;
+
+                // Parsing every row would mean parsing the ones that carry the
+                // bytes: a file-history snapshot or an attachment is routinely
+                // larger than the whole conversation around it, and none of the
+                // types skipped here can produce a turn. A substring test rather
+                // than a parse for the same reason TranscriptReader uses one —
+                // the point is to not build a JsonDocument for a megabyte that
+                // is about to be discarded.
+                if (!IsInteresting(line)) continue;
+
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    MapRow(doc.RootElement, mapped);
+                }
+                catch
+                {
+                    // A row we can't parse is a row we don't show.
+                }
+            }
+
+            return mapped;
+        }
+
+        // A false positive costs nothing: a tool result whose text happens to
+        // contain one of these parses to no turns anyway, because it has no text
+        // blocks of its own. A false negative would silently drop a message, so
+        // the test that matters is that these three strings are exactly the row
+        // types MapRow handles.
+        public static bool IsInteresting(string line) =>
+            line.Contains("\"type\":\"assistant\"", StringComparison.Ordinal)
+            || line.Contains("\"type\":\"user\"", StringComparison.Ordinal)
+            || line.Contains("\"type\":\"queue-operation\"", StringComparison.Ordinal);
+
+        private static void MapRow(JsonElement root, List<Row> into)
+        {
+            var type = Str(root, "type");
+            if (type is null) return;
+
+            // Subagent chatter. One team run produces thousands of these and
+            // they would bury the conversation the panel was opened to read.
+            if (Bool(root, "isSidechain")) return;
+
+            var uuid = Str(root, "uuid");
+            var at = Time(root);
+
+            switch (type)
+            {
+                case "user":
+                    MapUser(root, uuid, at, into);
+                    return;
+
+                case "assistant":
+                    MapAssistant(root, uuid, at, into);
+                    return;
+
+                // Sent while the session was busy. Claude Code holds it and
+                // picks it up at the end of the turn, and showing that is the
+                // difference between "did that send?" and knowing it did.
+                case "queue-operation" when Str(root, "operation") == "enqueue":
+                {
+                    var queued = Str(root, "content");
+                    if (string.IsNullOrWhiteSpace(queued) || IsNoise(queued)) return;
+
+                    into.Add(new Row(uuid, new ChatTurn
+                    {
+                        Role = ChatRole.User,
+                        Text = queued.Trim(),
+                        IsComplete = true,
+                        At = at
+                    }));
+                    return;
+                }
+            }
+        }
+
+        private static void MapUser(JsonElement root, string? uuid, DateTimeOffset at, List<Row> into)
+        {
+            // Rows Claude Code writes to itself — hook output, command
+            // scaffolding, the transcript's own bookkeeping.
+            if (Bool(root, "isMeta")) return;
+            if (!root.TryGetProperty("message", out var message)) return;
+            if (!message.TryGetProperty("content", out var content)) return;
+
+            if (content.ValueKind == JsonValueKind.String)
+            {
+                AddText(content.GetString(), ChatRole.User, uuid, at, into);
+                return;
+            }
+
+            if (content.ValueKind != JsonValueKind.Array) return;
+
+            foreach (var block in content.EnumerateArray())
+            {
+                // tool_result blocks are the other half of a tool_use that is
+                // already one line in the panel. Rendering them would put the
+                // contents of every file read into the conversation.
+                if (Str(block, "type") != "text") continue;
+
+                AddText(Str(block, "text"), ChatRole.User, uuid, at, into);
+            }
+        }
+
+        private static void MapAssistant(JsonElement root, string? uuid, DateTimeOffset at, List<Row> into)
+        {
+            if (!root.TryGetProperty("message", out var message)) return;
+            if (!message.TryGetProperty("content", out var content)) return;
+            if (content.ValueKind != JsonValueKind.Array) return;
+
+            foreach (var block in content.EnumerateArray())
+            {
+                switch (Str(block, "type"))
+                {
+                    case "text":
+                        AddText(Str(block, "text"), ChatRole.Assistant, uuid, at, into);
+                        break;
+
+                    // Shown, and as its own turn rather than folded into the
+                    // reply — the same call OpenClawChatSession makes, for the
+                    // same reason: watching a session think is most of the value
+                    // of an orb that pulses.
+                    case "thinking":
+                        AddText(Str(block, "thinking"), ChatRole.System, uuid, at, into);
+                        break;
+
+                    case "tool_use":
+                        into.Add(new Row(uuid, new ChatTurn
+                        {
+                            Role = ChatRole.System,
+                            Text = ToolSummary(block),
+                            IsComplete = true,
+                            At = at
+                        }));
+                        break;
+                }
+            }
+        }
+
+        private static void AddText(string? text, ChatRole role, string? uuid, DateTimeOffset at, List<Row> into)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return;
+            if (role == ChatRole.User && IsNoise(text)) return;
+
+            into.Add(new Row(uuid, new ChatTurn
+            {
+                Role = role,
+                Text = text.Trim(),
+                IsComplete = true,
+                At = at
+            }));
+        }
+
+        // Things that arrive as user turns but were never said by the user:
+        // injected context, slash-command scaffolding, notifications from
+        // background work. All of it is addressed to the model, none of it to a
+        // person reading the conversation back.
+        private static readonly string[] NoisePrefixes =
+        {
+            "<system-reminder>",
+            "<command-name>",
+            "<command-message>",
+            "<command-args>",
+            "<local-command-stdout>",
+            "<local-command-caveat>",
+            "<task-notification>",
+            "<user-prompt-submit-hook>",
+            "[Request interrupted",
+            "Caveat: The messages below"
+        };
+
+        public static bool IsNoise(string text)
+        {
+            var t = text.TrimStart();
+            foreach (var prefix in NoisePrefixes)
+                if (t.StartsWith(prefix, StringComparison.Ordinal)) return true;
+
+            return false;
+        }
+
+        // "· Read OrbArrangement.cs" — the tool, and the one argument saying
+        // which thing it touched. A bare tool name is nearly useless in a column
+        // of nine of them, and the whole input is a paragraph.
+        private static readonly string[] ArgKeys =
+        {
+            "file_path", "notebook_path", "path", "command", "pattern", "url", "query", "description", "prompt"
+        };
+
+        private static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
+
+        public static string ToolSummary(JsonElement block)
+        {
+            var name = Str(block, "name") ?? "tool";
+
+            if (!block.TryGetProperty("input", out var input) || input.ValueKind != JsonValueKind.Object)
+                return "· " + name;
+
+            foreach (var key in ArgKeys)
+            {
+                if (!input.TryGetProperty(key, out var value)) continue;
+                if (value.ValueKind != JsonValueKind.String) continue;
+
+                var arg = value.GetString();
+                if (string.IsNullOrWhiteSpace(arg)) continue;
+
+                if (key is "file_path" or "notebook_path" or "path") arg = Path.GetFileName(arg);
+
+                arg = Whitespace.Replace(arg.Trim(), " ");
+                if (arg.Length > 48) arg = arg[..48] + "…";
+
+                return "· " + name + "  " + arg;
+            }
+
+            return "· " + name;
+        }
+
+        // --- the screen ---
+
+        private static readonly Regex OptionLine =
+            new(@"^(?:[❯>›»→]\s*)?(\d{1,2})[.)]\s+(\S.*)$", RegexOptions.Compiled);
+
+        // How far up the pane to look. The dialog is always at the bottom; this
+        // is only enough room for the longest option list plus its trailer.
+        private const int DialogWindow = 30;
+
+        // The numbered dialog at the bottom of the pane, or null.
+        //
+        // Every rule below was written against a real capture rather than
+        // guessed, and the guesses were wrong in three ways worth recording,
+        // because the shape is nothing like what the documentation of a "dialog"
+        // suggests:
+        //
+        //  1. **There is no box.** A Bash approval is a horizontal rule, a
+        //     heading, the command, the question, then the options — no frame at
+        //     all. An earlier version stripped box-drawing edges and stopped
+        //     dead on the "╰────╯" it expected to find.
+        //  2. **Things come after the options.** A footer ("Esc to cancel · Tab
+        //     to amend · ctrl+e to explain"), and in a plan prompt an indented
+        //     continuation under the last option. So the options cannot be found
+        //     by reading up from the last non-blank line; they have to be
+        //     searched for.
+        //  3. **The dialog replaces the input box.** That is the one reliable
+        //     difference between a real dialog and a numbered list the assistant
+        //     happened to write in prose — the prose has the input box and its
+        //     two horizontal rules below it, and the dialog has nothing below it
+        //     but a hint. That is what the rule check at the end is for, and it
+        //     is the whole defence against pressing a key to answer a question
+        //     nobody asked.
+        //
+        // Null on anything unexpected, and every caller treats null as "send the
+        // person to the terminal".
+        public static ChatPrompt? ParseDialog(string screen)
+        {
+            var lines = screen.Replace("\r", "").Split('\n');
+
+            // Box drawing is stripped anyway: it costs nothing, and an
+            // elicitation dialog may still be framed even though a permission
+            // prompt isn't.
+            var cleaned = lines.Select(l => l.Trim().Trim('│', '┃', '|', '║').Trim()).ToArray();
+
+            var from = Math.Max(0, cleaned.Length - DialogWindow);
+
+            // The *last* contiguous run of numbered lines in the window. Last,
+            // because anything the assistant wrote earlier in the conversation
+            // is above whatever it is now blocked on.
+            var runEnd = -1;
+            var runStart = -1;
+
+            for (var i = cleaned.Length - 1; i >= from; i--)
+            {
+                if (!OptionLine.IsMatch(cleaned[i])) continue;
+
+                runEnd = i;
+                runStart = i;
+                while (runStart - 1 >= from && OptionLine.IsMatch(cleaned[runStart - 1])) runStart--;
+                break;
+            }
+
+            if (runStart < 0) return null;
+
+            var options = new List<ChatPromptOption>();
+            for (var i = runStart; i <= runEnd; i++)
+            {
+                var match = OptionLine.Match(cleaned[i]);
+                options.Add(new ChatPromptOption(match.Groups[1].Value, match.Groups[2].Value.Trim()));
+            }
+
+            if (options.Count < 2) return null;
+
+            // Numbered 1..n in order, or this is not the list we think it is.
+            // A list that reads 1, 2, 4 is one this did not understand, and
+            // pressing "3" on it would answer something nobody asked.
+            for (var n = 0; n < options.Count; n++)
+                if (options[n].Key != (n + 1).ToString()) return null;
+
+            // The input box, still drawn below — so the session is not blocked
+            // on this and these numbers are prose. See (3) above.
+            for (var i = runEnd + 1; i < cleaned.Length; i++)
+                if (IsHorizontalRule(cleaned[i])) return null;
+
+            var t = runStart - 1;
+            while (t >= 0 && IsBlankOrFrame(cleaned[t])) t--;
+
+            // Usually "Do you want to proceed?". A rule or a frame edge is not a
+            // question, so those fall through to the generic title.
+            var title = t >= 0 ? cleaned[t] : "";
+            if (title.Length == 0 || !title.Any(char.IsLetterOrDigit)) title = "Waiting for input";
+
+            return new ChatPrompt(title, options);
+        }
+
+        private const string BoxDrawing = "─━═│┃║╭╮╰╯┌┐└┘├┤┬┴┼╔╗╚╝▐▌╌╍┄┅";
+
+        private static bool IsBlankOrFrame(string line) =>
+            line.Length == 0 || line.All(c => char.IsWhiteSpace(c) || BoxDrawing.Contains(c));
+
+        // The full-width line the TUI draws above and below its input box.
+        // Length matters: a short run of dashes is punctuation in a sentence.
+        private static bool IsHorizontalRule(string line) =>
+            line.Length >= 10 && line.All(c => c is '─' or '━' or '═' || char.IsWhiteSpace(c));
+
+        // --- json helpers ---
+
+        private static string? Str(JsonElement e, string name) =>
+            e.ValueKind == JsonValueKind.Object
+            && e.TryGetProperty(name, out var v)
+            && v.ValueKind == JsonValueKind.String
+                ? v.GetString()
+                : null;
+
+        private static bool Bool(JsonElement e, string name) =>
+            e.ValueKind == JsonValueKind.Object
+            && e.TryGetProperty(name, out var v)
+            && v.ValueKind == JsonValueKind.True;
+
+        private static DateTimeOffset Time(JsonElement e) =>
+            Str(e, "timestamp") is { } s && DateTimeOffset.TryParse(s, out var at)
+                ? at.ToLocalTime()
+                : DateTimeOffset.Now;
+    }
+}
