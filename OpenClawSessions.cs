@@ -218,6 +218,18 @@ namespace ClaudeBuddy
         private static readonly Dictionary<string, OpenClawRoomChatSession> Rooms =
             new(StringComparer.Ordinal);
 
+        // Everyone in a channel, whether or not their orb is on screen. Keyed
+        // by OpenClawSessionKind.RoomOf.
+        private static Dictionary<string, List<string>> _roomMembers = new(StringComparer.Ordinal);
+
+        public static IReadOnlyList<string> MembersOfRoom(string roomKey)
+        {
+            lock (Gate)
+                return _roomMembers.TryGetValue(roomKey, out var members)
+                    ? members.ToList()
+                    : Array.Empty<string>();
+        }
+
         public static IRemoteChatSession? RoomChatFor(
             string sessionId, string displayName, IReadOnlyList<string> memberKeys)
         {
@@ -659,6 +671,14 @@ namespace ClaudeBuddy
             var now = DateTime.UtcNow;
             var result = new List<Session>();
 
+            var roomMembers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+            // Every agent the gateway knows of, filtered or not, so that a
+            // colour is reserved for one whose orb isn't drawn — their messages
+            // still appear in a room, and an uncoloured bubble in a coloured
+            // conversation reads as a failure rather than as an absence.
+            var everyAgent = new List<string>();
+
             foreach (var s in list.EnumerateArray())
             {
                 var key = Str(s, "key") ?? Str(s, "sessionKey");
@@ -675,6 +695,28 @@ namespace ClaudeBuddy
                 var state = StateFor(key);
                 var activity = Activity(s, key);
 
+                // Room membership is recorded *before* the recency filter, and
+                // deliberately ignores it.
+                //
+                // Those are two different questions. "Which orbs are worth
+                // showing" is about what you are working with now; "who is in
+                // this channel" is about the conversation, and an agent that
+                // spoke an hour ago is still one of the people in the room. With
+                // this after the filter, Amber's session was dropped, her
+                // transcript never loaded, and the "Nodes loaded" she posted
+                // survived only as input to the others — anonymous, unmatchable,
+                // and drawn as though you had said it.
+                var roomKey = OpenClawSessionKind.RoomOf(key);
+                if (roomKey is not null)
+                {
+                    if (!roomMembers.TryGetValue(roomKey, out var members))
+                        roomMembers[roomKey] = members = new List<string>();
+
+                    members.Add(key);
+                }
+
+                everyAgent.Add(AgentIdOf(key) ?? key);
+
                 // A session mid-run is current whatever its timestamps say —
                 // it is the one thing an orb is most worth showing.
                 var within = ActiveWithin;
@@ -690,7 +732,9 @@ namespace ClaudeBuddy
                     KindFor(s, origin, key)));
             }
 
-            AssignColours(result.Select(r => AgentIdOf(r.Key) ?? r.Key));
+            AssignColours(everyAgent);
+
+            lock (Gate) _roomMembers = roomMembers;
 
             return (result, list.GetArrayLength());
         }
