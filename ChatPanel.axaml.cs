@@ -32,6 +32,14 @@ namespace ClaudeBuddy
         private IRemoteChatSession? _session;
         private OrbWindow? _owner;
 
+        // The colour a reply is drawn in when the turn itself doesn't name one.
+        //
+        // A room's turns carry their own, because several agents are talking. In
+        // every other panel exactly one agent is, and repeating its name on
+        // every bubble would be noise — but its colour is not, so it comes from
+        // the orb rather than from each message.
+        private Color? _defaultBubble;
+
         private readonly ObservableCollection<TurnView> _turns = new();
 
         // Distance from the orb's centre to the panel's near edge. Clears the
@@ -245,11 +253,13 @@ namespace ClaudeBuddy
             KindChip.IsVisible = kind is not null;
             KindChipText.Text = kind is null ? "" : $"{orb.KindGlyphText}  {kind}";
 
+            _defaultBubble = orb.AccentColor;
+
             ApplyAvatar(session.SessionId);
             OnStateChanged(session.State);
 
             _turns.Clear();
-            foreach (var turn in session.History) _turns.Add(new TurnView(turn));
+            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble));
 
             Input.Text = Drafts.GetValueOrDefault(session.SessionId, "");
             MicButton.IsVisible = ClaudeBuddySettings.VoiceInputEnabled;
@@ -568,7 +578,7 @@ namespace ClaudeBuddy
             // start them downloading again.
             for (var i = 0; i < count && i < _session.History.Count; i++)
             {
-                _turns.Insert(i, new TurnView(_session.History[i]));
+                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble));
             }
         }
 
@@ -577,7 +587,7 @@ namespace ClaudeBuddy
             if (_session is null) return;
 
             _turns.Clear();
-            foreach (var turn in _session.History) _turns.Add(new TurnView(turn));
+            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble));
 
             // Straight to the bottom rather than the pinned-only rule: a
             // transcript that has just been replaced wholesale has no scroll
@@ -588,7 +598,7 @@ namespace ClaudeBuddy
 
         private void OnTurnAdded(ChatTurn turn)
         {
-            _turns.Add(new TurnView(turn));
+            _turns.Add(new TurnView(turn, _defaultBubble));
 
             // Your own turn always brings the view with it; everything else
             // respects where you were reading.
@@ -715,10 +725,12 @@ namespace ClaudeBuddy
         private sealed class TurnView : System.ComponentModel.INotifyPropertyChanged
         {
             private readonly ChatTurn _turn;
+            private readonly Color? _defaultBubble;
 
-            public TurnView(ChatTurn turn)
+            public TurnView(ChatTurn turn, Color? defaultBubble)
             {
                 _turn = turn;
+                _defaultBubble = defaultBubble;
 
                 turn.PropertyChanged += (_, e) =>
                 {
@@ -991,11 +1003,22 @@ namespace ClaudeBuddy
             public string SpeakerName => _turn.Speaker ?? "";
 
             // The agent's own colour, the one their orb's ring is drawn in.
-            private Color? SpeakerColor =>
-                !string.IsNullOrEmpty(_turn.SpeakerColor)
-                && Color.TryParse(_turn.SpeakerColor, out var c)
-                    ? c
-                    : null;
+            private Color? SpeakerColor
+            {
+                get
+                {
+                    if (!string.IsNullOrEmpty(_turn.SpeakerColor)
+                        && Color.TryParse(_turn.SpeakerColor, out var named))
+                    {
+                        return named;
+                    }
+
+                    // Only what the session said. Your own bubbles keep their
+                    // blue, and a system note keeps none — the fallback is the
+                    // agent's colour, and neither of those is the agent.
+                    return IsSystem || IsUser ? null : _defaultBubble;
+                }
+            }
 
             public IBrush SpeakerInk =>
                 SpeakerColor is { } c ? new SolidColorBrush(c) : SystemInk;
