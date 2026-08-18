@@ -71,6 +71,22 @@ namespace ClaudeBuddy
 
         public string ImageAlt { get; init; } = "";
 
+        // Who said this, when that is someone other than the two ends of the
+        // conversation. In a channel an agent's transcript carries messages from
+        // the other agents in the room, and "Zara" and "Lilibeth" arriving in
+        // identical bubbles is a transcript you have to read twice to follow.
+        //
+        // Null for an ordinary two-party conversation, where the side of the
+        // bubble already says who is talking and a name on every row would be
+        // noise.
+        public string? Speaker { get; init; }
+
+        // That speaker's colour, as "#RRGGBB" — the same one their orb's ring
+        // is drawn in, so the two are recognisably the same agent. Carried
+        // rather than looked up because the panel deliberately knows nothing
+        // about agents or gateways.
+        public string? SpeakerColor { get; init; }
+
         public event PropertyChangedEventHandler? PropertyChanged;
 
         private void Raise([CallerMemberName] string? name = null) =>

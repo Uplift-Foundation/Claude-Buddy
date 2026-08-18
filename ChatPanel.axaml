@@ -134,6 +134,17 @@
                                     Background="{Binding Bubble}"
                                     HorizontalAlignment="{Binding Side}">
                                 <StackPanel>
+                                    <!-- Who said it, when that isn't one of the
+                                         two ends of the conversation. In a
+                                         channel the transcript carries the other
+                                         agents in the room, and without this
+                                         they arrive as anonymous grey bubbles
+                                         that have to be worked out from context. -->
+                                    <TextBlock Text="{Binding SpeakerName}"
+                                               IsVisible="{Binding HasSpeaker}"
+                                               FontSize="9.5" FontWeight="SemiBold"
+                                               Margin="0,0,0,2"
+                                               Foreground="{Binding SpeakerInk}"/>
                                     <!-- Built in code rather than bound to a
                                          string, because a reply is Markdown and
                                          drawing it as one TextBlock showed the

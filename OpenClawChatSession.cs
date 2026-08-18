@@ -232,7 +232,7 @@ namespace ClaudeBuddy
         // position back afterwards — content appearing above where you are
         // reading would otherwise throw you down the page.
         public void PrependHistory(
-            IReadOnlyList<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At)> turns)
+            IReadOnlyList<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> turns)
         {
             if (turns.Count == 0) return;
 
@@ -243,6 +243,8 @@ namespace ClaudeBuddy
                 ImageUrl = t.ImageUrl,
                 ImageAlt = t.ImageAlt,
                 At = t.At,
+                Speaker = t.Speaker,
+                SpeakerColor = t.SpeakerColor,
                 IsComplete = true
             }).ToList();
 
@@ -253,7 +255,7 @@ namespace ClaudeBuddy
         public event Action<int>? HistoryPrepended;
 
         public void SetHistory(
-            IReadOnlyList<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At)> turns)
+            IReadOnlyList<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> turns)
         {
             if (turns.Count == 0) return;
 
@@ -262,7 +264,7 @@ namespace ClaudeBuddy
             _streamingKind = null;
             HasMore = true;
 
-            foreach (var (role, text, imageUrl, imageAlt, at) in turns)
+            foreach (var (role, text, imageUrl, imageAlt, at, speaker, speakerColor) in turns)
             {
                 _history.Add(new ChatTurn
                 {
@@ -271,6 +273,8 @@ namespace ClaudeBuddy
                     ImageUrl = imageUrl,
                     ImageAlt = imageAlt,
                     At = at,
+                    Speaker = speaker,
+                    SpeakerColor = speakerColor,
                     IsComplete = true
                 });
             }
