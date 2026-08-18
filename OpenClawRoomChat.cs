@@ -109,6 +109,7 @@ namespace ClaudeBuddy
             chat.TurnAdded += OnMemberChanged;
             chat.TurnUpdated += OnMemberChanged;
             chat.HistoryReplaced += Rebuild;
+            chat.HistoryPrepended += OnMemberPrepended;
         }
 
         private void Unsubscribe(OpenClawChatSession chat)
@@ -116,9 +117,15 @@ namespace ClaudeBuddy
             chat.TurnAdded -= OnMemberChanged;
             chat.TurnUpdated -= OnMemberChanged;
             chat.HistoryReplaced -= Rebuild;
+            chat.HistoryPrepended -= OnMemberPrepended;
         }
 
         private void OnMemberChanged(ChatTurn _) => Rebuild();
+
+        // Paging a member back is the one thing that widens the window this can
+        // be trusted over, so it has to redraw — and it was missing, which meant
+        // Deepen's work would not have shown until something else happened.
+        private void OnMemberPrepended(int _) => Rebuild();
 
         // The whole view is rebuilt, rather than the one turn that changed being
         // inserted in the right place.
@@ -204,12 +211,106 @@ namespace ClaudeBuddy
             }
 
             merged.Sort((a, b) => a.At.CompareTo(b.At));
+
+            // Cut back to where every member's transcript actually reaches.
+            //
+            // Each member loads a page at a time, and they do not cover the same
+            // stretch of time — one agent's page can reach back an hour further
+            // than another's. In the part only some of them cover, the missing
+            // members' messages exist solely as echoes in the others, with no
+            // assistant turn to attribute them against, so they came out as blue
+            // bubbles from you. Historical messages were wrong far more often
+            // than recent ones for exactly this reason.
+            //
+            // Showing less is the honest answer: before this point the room does
+            // not know who was talking, and saying so by omission beats saying
+            // it was you. Deepen widens it.
+            var from = TrustworthyFrom();
+            if (from is { } start) merged.RemoveAll(t => t.At < start);
+
             if (merged.Count > Keep) merged.RemoveRange(0, merged.Count - Keep);
 
             _history.Clear();
             _history.AddRange(merged);
 
             Dispatcher.UIThread.Post(() => HistoryReplaced?.Invoke());
+        }
+
+        // The earliest moment every member's loaded history covers, or null if
+        // no member is holding anything back.
+        //
+        // A member that has reached the beginning of its transcript constrains
+        // nothing — it has everything there is, and its silence before some
+        // point is real rather than unloaded. Only a member with more to fetch
+        // draws the line, at the oldest message it has so far.
+        private DateTimeOffset? TrustworthyFrom()
+        {
+            DateTimeOffset? start = null;
+
+            foreach (var member in _members)
+            {
+                if (!member.Chat.HasMore) continue;
+
+                var earliest = Earliest(member.Chat);
+                if (earliest is null) continue;
+
+                if (start is null || earliest > start) start = earliest;
+            }
+
+            return start;
+        }
+
+        private static DateTimeOffset? Earliest(OpenClawChatSession chat)
+        {
+            DateTimeOffset? earliest = null;
+
+            foreach (var turn in chat.History)
+                if (earliest is null || turn.At < earliest) earliest = turn.At;
+
+            return earliest;
+        }
+
+        private bool _deepening;
+
+        // Pages members back until they cover a common stretch of time.
+        //
+        // Without it the window is set by whichever member happens to have the
+        // shallowest page, which in a busy room can be a few minutes — correct,
+        // but not much of a conversation. Each round pushes back the member that
+        // is currently the binding constraint, so the requests go where they buy
+        // the most rather than being spread evenly.
+        //
+        // Bounded, because a room with a member that has thousands of messages
+        // behind it would otherwise page the whole way there on open.
+        public async Task DeepenAsync()
+        {
+            if (_deepening) return;
+            _deepening = true;
+
+            try
+            {
+                for (var round = 0; round < 8; round++)
+                {
+                    var binding = _members
+                        .Where(m => m.Chat.HasMore && Earliest(m.Chat) is not null)
+                        .OrderByDescending(m => Earliest(m.Chat))
+                        .FirstOrDefault();
+
+                    if (binding is null) return;
+
+                    if (!await OpenClawSessions.LoadOlderAsync(binding.Chat, CancellationToken.None))
+                        return;
+                }
+            }
+            catch
+            {
+                // A gateway that stops answering is not worth failing an open
+                // conversation over; the window simply stays where it is.
+            }
+            finally
+            {
+                _deepening = false;
+            }
         }
 
         // Compared on the words alone. A relayed copy can differ in surrounding
