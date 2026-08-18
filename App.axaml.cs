@@ -43,6 +43,21 @@ namespace ClaudeBuddy
 
                 new SessionManager().Start();
 
+                // An upgrade leaves the previous release's speech engine on disk
+                // and this build looking for its own. Speaking still works from
+                // the old one, so nothing here is urgent — but the matching
+                // engine has to be fetched by *something*, or the app runs a
+                // steadily older engine until the user happens to toggle the
+                // setting. This is that something, and it is a no-op unless the
+                // feature is already enabled and already installed.
+                //
+                // The voice list is cached for the process lifetime and is built
+                // by asking the engine, so it has to be dropped once a different
+                // engine is in place — otherwise the picker keeps showing the old
+                // engine's answer until restart.
+                _ = NeuralSpeech.EnsureCurrentAsync()
+                    .ContinueWith(_ => TextToSpeech.InvalidateVoiceCache(), TaskScheduler.Default);
+
                 // Development entry point: `ClaudeBuddy --settings` opens the
                 // settings window at launch. It is otherwise only reachable by
                 // clicking the status-bar menu, which is awkward when the thing
