@@ -258,9 +258,12 @@ namespace ClaudeBuddy
         // from its id (see AgentPalette). Taking it through the same field
         // rather than adding a second one means the ring, the glyph and the
         // team arrow all pick it up with no further wiring.
-        private void ApplyAccent(string colorName)
+        private void ApplyAccent(string colorName, bool force = false)
         {
-            if (colorName == _lastColor) return;
+            // force is for a redraw the colour itself did not ask for — a
+            // picture arriving or going changes how the ring is drawn while
+            // leaving the colour alone, and the early return would swallow it.
+            if (!force && colorName == _lastColor) return;
             _lastColor = colorName;
 
             Color accent = default;
@@ -302,12 +305,7 @@ namespace ClaudeBuddy
         // a picture arriving or going, which changes how thick the ring is and
         // what it falls back to. ApplyAccent returns early when the colour is
         // the same, and here it is: where it is *drawn* is what moved.
-        private void RefreshAccent()
-        {
-            var colour = _lastColor;
-            _lastColor = " ";
-            ApplyAccent(colour);
-        }
+        private void RefreshAccent() => ApplyAccent(_lastColor, force: true);
 
         // --- agent teams ------------------------------------------------------
         // A team member is drawn smaller than the session that leads it, so a
