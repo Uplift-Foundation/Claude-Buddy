@@ -108,7 +108,7 @@ namespace ClaudeBuddy
         {
             chat.TurnAdded += OnMemberChanged;
             chat.TurnUpdated += OnMemberChanged;
-            chat.HistoryReplaced += Rebuild;
+            chat.HistoryReplaced += ScheduleRebuild;
             chat.HistoryPrepended += OnMemberPrepended;
         }
 
@@ -116,16 +116,36 @@ namespace ClaudeBuddy
         {
             chat.TurnAdded -= OnMemberChanged;
             chat.TurnUpdated -= OnMemberChanged;
-            chat.HistoryReplaced -= Rebuild;
+            chat.HistoryReplaced -= ScheduleRebuild;
             chat.HistoryPrepended -= OnMemberPrepended;
         }
 
-        private void OnMemberChanged(ChatTurn _) => Rebuild();
+        private void OnMemberChanged(ChatTurn _) => ScheduleRebuild();
+
+        private bool _rebuildQueued;
+
+        // Coalesced to one rebuild per pass of the dispatcher.
+        //
+        // A streaming reply raises TurnUpdated per snapshot, several times a
+        // second, and each one would otherwise re-merge and re-sort every
+        // transcript in the room — for a single row whose text changed. The
+        // panel cannot draw faster than this anyway.
+        private void ScheduleRebuild()
+        {
+            if (_rebuildQueued) return;
+            _rebuildQueued = true;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                _rebuildQueued = false;
+                Rebuild();
+            }, DispatcherPriority.Background);
+        }
 
         // Paging a member back is the one thing that widens the window this can
         // be trusted over, so it has to redraw — and it was missing, which meant
         // Deepen's work would not have shown until something else happened.
-        private void OnMemberPrepended(int _) => Rebuild();
+        private void OnMemberPrepended(int _) => ScheduleRebuild();
 
         // The whole view is rebuilt, rather than the one turn that changed being
         // inserted in the right place.
@@ -230,11 +250,47 @@ namespace ClaudeBuddy
 
             if (merged.Count > Keep) merged.RemoveRange(0, merged.Count - Keep);
 
+            // Whether this is the same conversation with older messages on the
+            // front, or a different one.
+            //
+            // It matters because the panel treats them differently: a replaced
+            // transcript scrolls to the bottom, which is right when a room first
+            // opens and exactly wrong when you have just scrolled to the top and
+            // asked for more. Prepending keeps you where you were reading.
+            var prepended = PrependedCount(merged);
+
             _history.Clear();
             _history.AddRange(merged);
 
-            Dispatcher.UIThread.Post(() => HistoryReplaced?.Invoke());
+            if (prepended > 0) HistoryPrepended?.Invoke(prepended);
+            else HistoryReplaced?.Invoke();
         }
+
+        // How many turns were added to the front, if that is all that happened.
+        // Zero when anything else changed, which the caller reads as "replaced".
+        //
+        // Compared by value rather than by reference: an assistant turn is
+        // copied on every merge to carry its speaker, so the objects differ even
+        // when the conversation has not.
+        private int PrependedCount(List<ChatTurn> merged)
+        {
+            if (_history.Count == 0 || merged.Count <= _history.Count) return 0;
+
+            var offset = merged.Count - _history.Count;
+
+            for (var i = 0; i < _history.Count; i++)
+            {
+                if (!Same(_history[i], merged[i + offset])) return 0;
+            }
+
+            return offset;
+        }
+
+        private static bool Same(ChatTurn a, ChatTurn b) =>
+            a.Role == b.Role
+            && a.At == b.At
+            && a.Speaker == b.Speaker
+            && a.Text == b.Text;
 
         // The earliest moment every member's loaded history covers, or null if
         // no member is holding anything back.
@@ -291,15 +347,7 @@ namespace ClaudeBuddy
             {
                 for (var round = 0; round < 8; round++)
                 {
-                    var binding = _members
-                        .Where(m => m.Chat.HasMore && Earliest(m.Chat) is not null)
-                        .OrderByDescending(m => Earliest(m.Chat))
-                        .FirstOrDefault();
-
-                    if (binding is null) return;
-
-                    if (!await OpenClawSessions.LoadOlderAsync(binding.Chat, CancellationToken.None))
-                        return;
+                    if (!await PageBindingMemberAsync(CancellationToken.None)) return;
                 }
             }
             catch
@@ -311,6 +359,23 @@ namespace ClaudeBuddy
             {
                 _deepening = false;
             }
+        }
+
+        // Fetches one page for whichever member is currently stopping the
+        // window opening further — the one whose oldest loaded message is the
+        // most recent. Sending every request to where it buys the most beats
+        // spreading them evenly over members that are already deeper than the
+        // view can show.
+        private async Task<bool> PageBindingMemberAsync(CancellationToken ct)
+        {
+            var binding = _members
+                .Where(m => m.Chat.HasMore && Earliest(m.Chat) is not null)
+                .OrderByDescending(m => Earliest(m.Chat))
+                .FirstOrDefault();
+
+            if (binding is null) return false;
+
+            return await OpenClawSessions.LoadOlderAsync(binding.Chat, ct);
         }
 
         // Compared on the words alone. A relayed copy can differ in surrounding
