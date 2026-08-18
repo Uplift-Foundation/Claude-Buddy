@@ -22,11 +22,6 @@ namespace ClaudeBuddy
     // its view when any of them changes.
     internal sealed class OpenClawRoomChatSession : IRemoteChatSession, IRemoteChatComposer, IRemoteChatBacklog
     {
-        // Bounded like a member transcript, and for the same reason — except
-        // this is several of them interleaved, so the same number of turns
-        // covers proportionally less time.
-        private const int Keep = 400;
-
         private readonly List<ChatTurn> _history = new();
         private readonly List<Member> _members = new();
 
@@ -55,14 +50,35 @@ namespace ClaudeBuddy
         // subscribes to HistoryReplaced through this interface and nowhere else,
         // so without it a merged transcript is assembled and never drawn.
         //
-        // Paging back is genuinely not offered. Each member pages independently,
-        // and pulling one page from six transcripts would interleave six
-        // unrelated stretches of time into the middle of what you were reading.
-        // Saying "no more" is the honest answer until that is worth doing
-        // properly.
-        public bool HasMore => false;
+        // There is more as long as any member is still holding some back — that
+        // member is what stops the window opening further, so it is exactly what
+        // reaching the top should fetch.
+        //
+        // This was declined at first, on the grounds that pulling a page from
+        // six transcripts would interleave six unrelated stretches of time into
+        // the middle of what you were reading. That was true while the room
+        // showed everything it had, and stopped being true once the view is cut
+        // to where every member reaches: paging then has one meaning, which is
+        // to move that line back, and the interleaving happens above where you
+        // are reading rather than through it.
+        public bool HasMore => _members.Any(m => m.Chat.HasMore);
 
-        public Task<bool> LoadOlderAsync(CancellationToken ct) => Task.FromResult(false);
+        public async Task<bool> LoadOlderAsync(CancellationToken ct)
+        {
+            var before = TrustworthyFrom();
+
+            // A few rounds per scroll, not one. Paging the constraining member
+            // once often just makes a different member the constraint, and a
+            // scroll that fetched a page and moved the window by nothing would
+            // read as the top of the conversation.
+            for (var round = 0; round < 3; round++)
+            {
+                if (!await PageBindingMemberAsync(ct)) break;
+                if (TrustworthyFrom() != before) break;
+            }
+
+            return TrustworthyFrom() != before;
+        }
 
         public event Action<int>? HistoryPrepended;
 
@@ -226,7 +242,29 @@ namespace ClaudeBuddy
                     // two agents can record it either side of a minute boundary.
                     if (!seen.Add(text)) continue;
 
-                    merged.Add(turn);
+                    // Whether this is yours is genuinely not known, and drawing
+                    // it in your own blue was the app asserting that it is.
+                    //
+                    // Three things arrive here and look identical: something you
+                    // said, something another person in the channel said, and
+                    // something an agent said whose own transcript is not
+                    // available to match against — an agent whose session the
+                    // gateway no longer lists, which is most likely for exactly
+                    // the old messages where this was going wrong. Only the
+                    // first belongs in your blue, and nothing distinguishes it.
+                    //
+                    // So it is drawn as the room's own voice: left, neutral, no
+                    // name. "Somebody said this" is true of all three, where
+                    // "you said this" is true of one.
+                    merged.Add(new ChatTurn
+                    {
+                        Role = ChatRole.Assistant,
+                        Text = turn.Text,
+                        ImageUrl = turn.ImageUrl,
+                        ImageAlt = turn.ImageAlt,
+                        At = turn.At,
+                        IsComplete = true
+                    });
                 }
             }
 
@@ -248,7 +286,11 @@ namespace ClaudeBuddy
             var from = TrustworthyFrom();
             if (from is { } start) merged.RemoveAll(t => t.At < start);
 
-            if (merged.Count > Keep) merged.RemoveRange(0, merged.Count - Keep);
+            // Deliberately uncapped. A cap here trimmed the *front*, which is
+            // the end paging adds to — so scrolling up fetched older messages
+            // and then dropped them again, and the window could never open past
+            // the cap however far you scrolled. What bounds this is how far the
+            // members have been paged back, which is the reader's own doing.
 
             // Whether this is the same conversation with older messages on the
             // front, or a different one.
