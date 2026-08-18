@@ -65,6 +65,12 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public SessionSource Source { get; set; } = SessionSource.ClaudeCode;
 
+        // What kind of gateway conversation this is. [JsonIgnore] for the same
+        // reason Source is: it is derived from the gateway's answer during the
+        // scan, and ResetSessionToIdle rewrites a status file from this object.
+        [JsonIgnore]
+        public SessionKind Kind { get; set; } = SessionKind.Unknown;
+
         // Where the session's terminal lives (macOS hook only; empty on
         // Windows or with an older hook script). See TerminalFocuser.
         [JsonPropertyName("term_program")]
@@ -414,6 +420,7 @@ namespace ClaudeBuddy
                     // of them were indistinguishable.
                     Color = agentColours.GetValueOrDefault(
                         OpenClawSessions.AgentIdOf(session.Key) ?? session.Key, ""),
+                    Kind = session.Kind,
                 };
 
                 // Namespaced because these ids share a dictionary with Claude

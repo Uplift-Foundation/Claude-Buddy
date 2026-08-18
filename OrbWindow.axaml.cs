@@ -234,6 +234,7 @@ namespace ClaudeBuddy
             ApplyAvatar(status);
             if (!_hasAvatar) Glyph.Text = _agentEmoji ?? GlyphFor(name);
             ApplyAccent(status.Color);
+            ApplyKind(status.Kind);
             SetTeamRole(!string.IsNullOrEmpty(status.Lead));
 
             SessionInfoItem.Header = string.IsNullOrEmpty(described) ? SessionId : described;
@@ -315,6 +316,45 @@ namespace ClaudeBuddy
         // the same, and here it is: where it is *drawn* is what moved.
         private void RefreshAccent() => ApplyAccent(_lastColor, force: true);
 
+        private const double BadgeSize = 16;
+
+        // A scheduled job, a private message, or a room with other people in
+        // it. Nothing at all for a local session or for an agent's own main
+        // session: every agent has a main, so badging it would put a mark on
+        // almost every orb and distinguish nothing.
+        //
+        // @ and # are the symbols the surfaces themselves use for these two
+        // things, so they need no learning. The clock is the odd one out and
+        // has to be: a cron session is the one kind with nobody on the other
+        // end, which is the distinction most worth seeing from across a screen.
+        private static (string Glyph, string Label)? BadgeFor(SessionKind kind) => kind switch
+        {
+            SessionKind.Cron => ("\u23F1", "cron"),
+            SessionKind.Direct => ("@", "direct message"),
+            SessionKind.Channel => ("#", "channel"),
+            _ => null
+        };
+
+        // What the chat panel puts in its header. Null where there is no badge,
+        // so the panel shows nothing rather than the word "unknown".
+        public string? KindLabel => BadgeFor(_lastStatus?.Kind ?? SessionKind.Unknown)?.Label;
+
+        public string? KindGlyphText => BadgeFor(_lastStatus?.Kind ?? SessionKind.Unknown)?.Glyph;
+
+        private void ApplyKind(SessionKind kind)
+        {
+            var badge = BadgeFor(kind);
+
+            if (badge is null)
+            {
+                KindBadge.IsVisible = false;
+                return;
+            }
+
+            KindGlyph.Text = badge.Value.Glyph;
+            KindBadge.IsVisible = true;
+        }
+
         // --- agent teams ------------------------------------------------------
         // A team member is drawn smaller than the session that leads it, so a
         // team reads as one lead with its agents rather than as several equal
@@ -340,6 +380,19 @@ namespace ClaudeBuddy
 
             Orb.Width = Orb.Height = 36 * scale;
             Glow.Width = Glow.Height = 56 * scale;
+
+            // Kept on the orb's edge rather than in the window's corner. The
+            // orb is a circle of radius 18*scale centred at (28,28), so its
+            // lower-right edge is at 28 + 18*scale*sin45. Solving for the
+            // margin that puts the badge's centre there is what keeps it
+            // touching the rim at both sizes instead of drifting off a team
+            // member's smaller circle.
+            KindBadge.Width = KindBadge.Height = BadgeSize * scale;
+            KindBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
+            KindGlyph.FontSize = 9 * scale;
+
+            var inset = 28 - (18 * scale * 0.7071) - (BadgeSize * scale / 2);
+            KindBadge.Margin = new Thickness(0, 0, Math.Max(0, inset), Math.Max(0, inset));
             Glyph.FontSize = BaseGlyphFontSize * scale;
             OrbRadius = 18 * scale;
         }

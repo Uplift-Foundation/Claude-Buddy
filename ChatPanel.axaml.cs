@@ -238,6 +238,13 @@ namespace ClaudeBuddy
             SubtitleText.Text = parts.Length > 1 ? parts[1] : "";
             SubtitleText.IsVisible = parts.Length > 1;
 
+            // Read off the orb rather than from the session, so the panel and
+            // the badge on the thing that was clicked cannot disagree — the
+            // same reason the header takes its colour and letter from there.
+            var kind = orb.KindLabel;
+            KindChip.IsVisible = kind is not null;
+            KindChipText.Text = kind is null ? "" : $"{orb.KindGlyphText}  {kind}";
+
             ApplyAvatar(session.SessionId);
             OnStateChanged(session.State);
 
