@@ -760,8 +760,12 @@ namespace ClaudeBuddy
         // channel. Where the key is uninformative (`agent:main:discord:…`),
         // chatType decides; where chatType is missing, the key's fourth segment
         // carries the same word.
+        // chatType is on the session itself as well as inside origin, and the
+        // top-level one is preferred: origin describes where a conversation came
+        // from and is absent on 12 of the 70 sessions this was measured against,
+        // while chatType is the gateway's own answer to the question being asked.
         private static SessionKind KindFor(JsonElement session, JsonElement origin, string key) =>
-            OpenClawSessionKind.From(key, Str(origin, "chatType"));
+            OpenClawSessionKind.From(key, Str(session, "chatType") ?? Str(origin, "chatType"));
 
         // What to call a session. Two halves: who is talking, and where.
         //
@@ -795,7 +799,7 @@ namespace ClaudeBuddy
                     ? label!.StartsWith("Cron: ", StringComparison.OrdinalIgnoreCase)
                         ? label![6..]
                         : label!
-                    : Where(origin) ?? surface;
+                    : Group(session) ?? Where(origin) ?? surface;
 
                 return string.Equals(name, detail, StringComparison.OrdinalIgnoreCase)
                     ? name
@@ -811,6 +815,19 @@ namespace ClaudeBuddy
             }
 
             return key;
+        }
+
+        // The channel's name, as the gateway already writes it: "#general".
+        //
+        // Where() below reconstructs the same thing out of origin.label by
+        // cutting at " id:" and stripping the noun that introduces it, which was
+        // necessary before anyone looked at what else sessions.list carries.
+        // This field needs none of that and cannot be thrown off by a label
+        // whose shape changes, so it is asked first and Where is the fallback.
+        private static string? Group(JsonElement session)
+        {
+            var group = Str(session, "groupChannel");
+            return string.IsNullOrWhiteSpace(group) ? null : group!.Trim();
         }
 
         // origin.label is written for a log, not for a person: "#general channel
