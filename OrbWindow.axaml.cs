@@ -80,6 +80,11 @@ namespace ClaudeBuddy
         public string GlyphText => Glyph.Text ?? "";
         public Color OrbColor => _orbBrush.Color;
 
+        // This session's own colour — /color for a Claude Code session, the
+        // derived one for a gateway agent — or null where it has none. Distinct
+        // from OrbColor, which is the *state* and changes as the session works.
+        public Color? AccentColor => _accentColor;
+
         private readonly RadialGradientBrush _glowBrush = new()
         {
             GradientOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),
