@@ -144,7 +144,10 @@ namespace ClaudeBuddy
             // the assistant turns are collected first and everything matching
             // one of them is dropped on the second pass.
             var merged = new List<ChatTurn>();
-            var saidByAnAgent = new HashSet<string>(StringComparer.Ordinal);
+
+            // A list rather than a set, because matching is no longer equality:
+            // a relayed copy can be cut short. See SaidByAnAgent.
+            var agentTexts = new List<string>();
 
             foreach (var member in _members)
             {
@@ -152,7 +155,7 @@ namespace ClaudeBuddy
                 {
                     if (turn.Role != ChatRole.Assistant) continue;
 
-                    saidByAnAgent.Add(Normalise(turn.Text));
+                    agentTexts.Add(Normalise(turn.Text));
 
                     merged.Add(new ChatTurn
                     {
@@ -188,7 +191,7 @@ namespace ClaudeBuddy
                     // Said by an agent, and already in the list attributed to
                     // whichever one. This is the same message, seen from the
                     // other side.
-                    if (saidByAnAgent.Contains(text)) continue;
+                    if (SaidByAnAgent(agentTexts, text)) continue;
 
                     // The same message reaches every agent in the room, so it is
                     // taken once. Keyed on the text alone rather than on the
@@ -214,6 +217,37 @@ namespace ClaudeBuddy
         // that or the duplicate comes back.
         private static string Normalise(string text) =>
             string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+        // Shortest run of characters that is allowed to identify an echo on its
+        // own. Below this a match means very little — "yes" is the opening of
+        // plenty of sentences — and dropping a person's short reply because an
+        // agent happened to start a paragraph the same way is a worse failure
+        // than showing one duplicate.
+        private const int EchoPrefix = 16;
+
+        // Whether this is an agent's message arriving from the other side.
+        //
+        // Not equality, which is what the first attempt used and what left the
+        // duplicates in place: the copy that reaches the other agents is
+        // sometimes **cut short**, so Lilibeth's full sentence appeared once
+        // attributed and once as a blue bubble ending at its first colon. So a
+        // long enough prefix counts, in either direction — the relay truncates,
+        // and nothing says the stored original is the longer of the two.
+        private static bool SaidByAnAgent(List<string> agentTexts, string text)
+        {
+            foreach (var said in agentTexts)
+            {
+                if (said == text) return true;
+
+                if (text.Length >= EchoPrefix && said.StartsWith(text, StringComparison.Ordinal))
+                    return true;
+
+                if (said.Length >= EchoPrefix && text.StartsWith(said, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
+        }
 
         // Sent through one member, because the gateway has no room to send to —
         // but with delivery on, which posts it to the channel itself, so every
