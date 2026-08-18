@@ -588,6 +588,61 @@ foreach (var agent in agents)
 
 Check("an empty id doesn't throw", AgentPalette.HexFor("").StartsWith('#'));
 
+// --- session kinds ---
+
+// The mistake this can make is silent and directional: a channel shown as a
+// direct message says a room other people can read is private, and nothing on
+// screen contradicts it. So the unrecognised cases assert Unknown rather than a
+// guess at the commoner of the two.
+
+static SessionKind Kind(string key, string? chatType = null) =>
+    OpenClawSessionKind.From(key, chatType);
+
+// Real keys, from docs/openclaw-findings.md.
+Check("a cron job is a cron job",
+    Kind("agent:main:cron:2f54203e-1c2f-4a1e-9c0e-2b1d8e5a7c31") == SessionKind.Cron);
+
+Check("cron wins over anything attached to it",
+    Kind("agent:main:cron:2f54203e", "direct") == SessionKind.Cron,
+    "the key is structural; chatType must not override it");
+
+Check("an agent's own session is Main",
+    Kind("agent:alexis:main") == SessionKind.Main);
+
+Check("a DM is Direct",
+    Kind("agent:main:discord:direct:246722755112861696") == SessionKind.Direct);
+
+Check("a channel is a Channel",
+    Kind("agent:main:discord:channel:1474991965354463274") == SessionKind.Channel);
+
+// origin.chatType is what separates these two when the key says only the
+// surface, which is the usual case.
+Check("chatType decides when the key only names a surface",
+    Kind("agent:main:discord", "channel") == SessionKind.Channel
+    && Kind("agent:main:discord", "direct") == SessionKind.Direct);
+
+Check("chatType is preferred over the key's fourth segment",
+    Kind("agent:main:discord:direct:2467", "channel") == SessionKind.Channel,
+    "origin is the gateway's own word for the conversation");
+
+Check("the surfaces' other words for a group are all Channel",
+    new[] { "channel", "group", "guild" }.All(t => Kind("agent:m:slack", t) == SessionKind.Channel));
+
+Check("the surfaces' other words for a DM are all Direct",
+    new[] { "direct", "dm", "im" }.All(t => Kind("agent:m:slack", t) == SessionKind.Direct));
+
+Check("case doesn't matter", Kind("agent:m:CRON:x") == SessionKind.Cron
+    && Kind("agent:m:slack", "Direct") == SessionKind.Direct);
+
+// Everything below must decline to guess.
+Check("an unrecognised chatType is Unknown",
+    Kind("agent:main:discord", "thread") == SessionKind.Unknown);
+Check("a surface with no chatType is Unknown",
+    Kind("agent:main:discord") == SessionKind.Unknown);
+Check("an empty key is Unknown", Kind("") == SessionKind.Unknown);
+Check("a non-agent key is Unknown", Kind("something:else:entirely") == SessionKind.Unknown);
+Check("a null key is Unknown", OpenClawSessionKind.From(null, null) == SessionKind.Unknown);
+
 // --- report ---
 
 if (failures.Count == 0)

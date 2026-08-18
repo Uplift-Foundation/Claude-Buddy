@@ -159,7 +159,8 @@ namespace ClaudeBuddy
             string Channel,
             string State,
             DateTime LastActivity,
-            Delivery? Delivery);
+            Delivery? Delivery,
+            SessionKind Kind);
 
         // Where a reply in this session is supposed to end up. The gateway
         // resolves this itself when asked to deliver an agent's answer, but a
@@ -620,11 +621,30 @@ namespace ClaudeBuddy
                     channel,
                     state,
                     activity,
-                    DeliveryFor(s)));
+                    DeliveryFor(s),
+                    KindFor(s, origin, key)));
             }
 
             return (result, list.GetArrayLength());
         }
+
+        // What kind of thing this session is: a scheduled job, a private
+        // conversation, or one in a room with other people in it.
+        //
+        // Worth telling apart because they are not the same kind of object at
+        // all — "Zara — general" and "Zara — wtvamp" read identically today,
+        // and one of them is a channel anyone can see while the other is a DM.
+        // A cron session is further still: nobody is on the other end of it.
+        //
+        // Two sources, deliberately in this order. The key is structural and
+        // always present — `agent:<name>:cron:<uuid>` cannot be anything but a
+        // cron job — while origin.chatType is the gateway's own word for a
+        // conversation and is the only thing that separates a DM from a
+        // channel. Where the key is uninformative (`agent:main:discord:…`),
+        // chatType decides; where chatType is missing, the key's fourth segment
+        // carries the same word.
+        private static SessionKind KindFor(JsonElement session, JsonElement origin, string key) =>
+            OpenClawSessionKind.From(key, Str(origin, "chatType"));
 
         // What to call a session. Two halves: who is talking, and where.
         //

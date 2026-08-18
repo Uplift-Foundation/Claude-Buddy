@@ -66,10 +66,27 @@
                                FontSize="14" FontWeight="SemiBold"
                                Foreground="#F2FFFFFF"
                                TextTrimming="CharacterEllipsis"/>
-                    <TextBlock x:Name="SubtitleText"
-                               FontSize="11"
-                               Foreground="#99FFFFFF"
-                               TextTrimming="CharacterEllipsis"/>
+                    <!-- Where this conversation is, and what kind of thing it
+                         is. The second half is a chip rather than more words in
+                         the same line because "general" and "wtvamp" are the
+                         same shape as each other, and one of them is a room
+                         other people can read. -->
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <Border x:Name="KindChip"
+                                IsVisible="False"
+                                CornerRadius="4" Padding="4,1"
+                                VerticalAlignment="Center"
+                                Background="#26FFFFFF">
+                            <TextBlock x:Name="KindChipText"
+                                       FontSize="9.5"
+                                       Foreground="#CCFFFFFF"/>
+                        </Border>
+                        <TextBlock x:Name="SubtitleText"
+                                   FontSize="11"
+                                   VerticalAlignment="Center"
+                                   Foreground="#99FFFFFF"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
                 </StackPanel>
 
                 <Grid x:Name="SpeakButton" Grid.Column="2" Width="24" Height="24"
