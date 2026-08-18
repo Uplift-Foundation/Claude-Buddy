@@ -1056,18 +1056,33 @@ namespace ClaudeBuddy
 
         // --- dragged orb positions -------------------------------------------
         // A dragged orb stays where it was put. Within a run that's the pinned
-        // flag above; across runs it's settings.json, keyed by the session's
-        // directory — session ids are new every time, so they'd remember
-        // nothing. Two live sessions in one directory therefore share a key:
+        // flag above; across runs it's settings.json, keyed by whichever part of
+        // a session survives a restart. For Claude Code that is its directory,
+        // because its session id is new every run and would remember nothing;
+        // for a gateway session it is the id itself, which is not.
+        // Two live local sessions in one directory therefore share a key:
         // the first orb to appear claims the saved spot, the others stack
         // normally, and whichever one you drag last is what gets remembered.
 
-        private static string PositionKeyFor(SessionStatus status) =>
-            string.IsNullOrEmpty(status.Cwd) ? "" : status.Cwd.TrimEnd('\\', '/');
+        // A gateway session has no directory to be keyed by — the findings doc
+        // notes the absence of `cwd` as a *simplification*, since there is no
+        // local checkout for a key to collide with. What it missed is that the
+        // key was doing a second job: an empty one is never saved and never
+        // restored, so every agent orb went back to the stack on every launch
+        // while local ones stayed put.
+        //
+        // Its session id is the stable thing instead. Unlike a Claude Code
+        // session id, which is new every run, a gateway key is derived from the
+        // agent and the channel and is the same string next week — which is what
+        // made it a good room key and makes it a good position key.
+        private static string PositionKeyFor(SessionStatus status, string sessionId) =>
+            status.Source == SessionSource.ClaudeCode
+                ? string.IsNullOrEmpty(status.Cwd) ? "" : status.Cwd.TrimEnd('\\', '/')
+                : sessionId;
 
         private void RestoreOrbPosition(OrbWindow window, SessionStatus status)
         {
-            var key = PositionKeyFor(status);
+            var key = PositionKeyFor(status, window.SessionId);
             window.PositionKey = key;
             if (string.IsNullOrEmpty(key)) return;
 
