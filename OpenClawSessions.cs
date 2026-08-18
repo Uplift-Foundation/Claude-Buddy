@@ -168,6 +168,28 @@ namespace ClaudeBuddy
         // the client needs to know the address too.
         internal sealed record Delivery(string Channel, string To, string? AccountId);
 
+        // An agent's colour, assigned across the whole set so no two are
+        // confusable (see AgentPalette.Assign).
+        //
+        // Kept here rather than recomputed by each caller because the orb's ring
+        // and a chat bubble from the same agent have to be the same colour or
+        // the attribution means nothing — and Assign's answer depends on which
+        // other agents exist, so two callers computing it from different sets
+        // would quietly disagree.
+        private static Dictionary<string, string> _agentColours = new(StringComparer.Ordinal);
+
+        public static string ColourForAgent(string? agentId)
+        {
+            if (string.IsNullOrEmpty(agentId)) return "";
+            lock (Gate) return _agentColours.GetValueOrDefault(agentId, "");
+        }
+
+        private static void AssignColours(IEnumerable<string> agentIds)
+        {
+            var colours = AgentPalette.Assign(agentIds);
+            lock (Gate) _agentColours = colours;
+        }
+
         // What the settings window shows on its status row.
         public static string StatusText
         {
@@ -625,6 +647,8 @@ namespace ClaudeBuddy
                     KindFor(s, origin, key)));
             }
 
+            AssignColours(result.Select(r => AgentIdOf(r.Key) ?? r.Key));
+
             return (result, list.GetArrayLength());
         }
 
@@ -917,8 +941,12 @@ namespace ClaudeBuddy
         // metadata. It isn't noise to be dropped though — it is one of your
         // agents talking — so the header is replaced by the thing it was
         // actually saying, attributed to whoever said it.
-        private static string Readable(string text)
+        private static string Readable(string text) => Readable(text, out _);
+
+        private static string Readable(string text, out string? speakerId)
         {
+            speakerId = null;
+
             // Not something a person said: OpenClaw writes this into the user
             // role when it restarts a CLI session under the covers. Dropped
             // rather than shortened, because there is nothing in it for the
@@ -961,12 +989,18 @@ namespace ClaudeBuddy
 
             if (from is null) return rest;
 
-            // The agent's name if we have it. The key carries the id, and the
-            // id is what its owner's config calls it rather than what they do.
-            string speaker;
-            lock (Gate) speaker = AgentNames.GetValueOrDefault(from, from);
+            // Reported rather than glued to the front of the text. A name in the
+            // string is a name the panel can only draw as part of the sentence;
+            // as a field it can be a label above the bubble and can colour it.
+            speakerId = from;
+            return rest;
+        }
 
-            return $"{speaker}: {rest}";
+        // The agent's name if we have it. The key carries the id, and the id is
+        // what its owner's config calls it rather than what they do.
+        public static string AgentNameOf(string agentId)
+        {
+            lock (Gate) return AgentNames.GetValueOrDefault(agentId, agentId);
         }
 
         // The last thing the agent said, for the speak button on the orb's own
@@ -1181,7 +1215,7 @@ namespace ClaudeBuddy
             Dispatcher.UIThread.Post(() => chat.SetHistory(initial));
         }
 
-        private static async Task<(List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At)> Turns, int Messages)?>
+        private static async Task<(List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> Turns, int Messages)?>
             FetchPageAsync(OpenClawChatSession chat, int offset, CancellationToken ct)
         {
             OpenClawGateway? gateway;
@@ -1204,7 +1238,7 @@ namespace ClaudeBuddy
                     return null;
                 }
 
-                var turns = new List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At)>();
+                var turns = new List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)>();
 
                 foreach (var message in messages.EnumerateArray())
                 {
@@ -1236,7 +1270,8 @@ namespace ClaudeBuddy
                             var ms2 = Num(message, "timestamp");
                             turns.Add((role, "", url!, Str(block, "alt") ?? "", ms2 <= 0
                                 ? DateTimeOffset.Now
-                                : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime()));
+                                : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
+                                null, null));
                         }
                     }
 
@@ -1256,7 +1291,7 @@ namespace ClaudeBuddy
 
                     if (string.IsNullOrWhiteSpace(text)) continue;
 
-                    text = Readable(text);
+                    text = Readable(text, out var speakerId);
                     if (string.IsNullOrWhiteSpace(text)) continue;
 
                     var ms = Num(message, "timestamp");
@@ -1264,7 +1299,9 @@ namespace ClaudeBuddy
                         ? DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime()
                         : DateTimeOffset.Now;
 
-                    turns.Add((role, text.Trim(), null, "", at));
+                    turns.Add((role, text.Trim(), null, "", at,
+                        speakerId is null ? null : AgentNameOf(speakerId),
+                        speakerId is null ? null : ColourForAgent(speakerId)));
                 }
 
                 // The message count, not the turn count: it is what the next

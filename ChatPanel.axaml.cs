@@ -978,7 +978,27 @@ namespace ClaudeBuddy
             }
 
             private bool IsSystem => _turn.Role == ChatRole.System;
-            private bool IsUser => _turn.Role == ChatRole.User;
+
+            // A named speaker is never *you*, whatever role the transport gave
+            // it. Another agent's message in a channel arrives with role "user"
+            // — it is user-role input as far as this agent is concerned — and
+            // taking that at face value drew it right-aligned in your own blue,
+            // so a room full of agents looked like you talking to yourself.
+            private bool IsUser => _turn.Role == ChatRole.User && !HasSpeaker;
+
+            public bool HasSpeaker => !string.IsNullOrEmpty(_turn.Speaker);
+
+            public string SpeakerName => _turn.Speaker ?? "";
+
+            // The agent's own colour, the one their orb's ring is drawn in.
+            private Color? SpeakerColor =>
+                !string.IsNullOrEmpty(_turn.SpeakerColor)
+                && Color.TryParse(_turn.SpeakerColor, out var c)
+                    ? c
+                    : null;
+
+            public IBrush SpeakerInk =>
+                SpeakerColor is { } c ? new SolidColorBrush(c) : SystemInk;
 
             public HorizontalAlignment Side => IsSystem
                 ? HorizontalAlignment.Center
@@ -988,7 +1008,15 @@ namespace ClaudeBuddy
             // app has trained everyone to read without being told. The blue is
             // the same #4A90D9 the speak button already uses for "live", so the
             // app keeps one accent rather than acquiring a second.
-            public IBrush Bubble => IsSystem ? Transparent : IsUser ? UserBubble : AgentBubble;
+            // A speaker's own colour, at low alpha. Full strength would be a
+            // wall of saturated colour in a busy room — the name above it is
+            // drawn in the same hue at full strength, which is enough to tie the
+            // two together and to the orb.
+            public IBrush Bubble => IsSystem
+                ? Transparent
+                : SpeakerColor is { } c
+                    ? new SolidColorBrush(Color.FromArgb(0x3D, c.R, c.G, c.B))
+                    : IsUser ? UserBubble : AgentBubble;
 
             public IBrush Ink => IsSystem ? SystemInk : BubbleInk;
 

@@ -395,12 +395,6 @@ namespace ClaudeBuddy
             // no new concept and no second timeout to reason about.
             var gatewaySessions = OpenClawSessions.Snapshot();
 
-            // Assigned across the whole set rather than per session, because
-            // keeping two agents apart is a fact about the pair — see
-            // AgentPalette.Assign.
-            var agentColours = AgentPalette.Assign(
-                gatewaySessions.Select(s => OpenClawSessions.AgentIdOf(s.Key) ?? s.Key));
-
             foreach (var session in gatewaySessions)
             {
                 var status = new SessionStatus
@@ -418,8 +412,11 @@ namespace ClaudeBuddy
                     // channel name and matches no colour Claude Code knows — so
                     // every gateway orb fell through to the plain ring, and six
                     // of them were indistinguishable.
-                    Color = agentColours.GetValueOrDefault(
-                        OpenClawSessions.AgentIdOf(session.Key) ?? session.Key, ""),
+                    // Asked for rather than computed here: an agent's ring and
+                    // a chat bubble from that agent have to agree, so exactly
+                    // one place decides. See OpenClawSessions.ColourForAgent.
+                    Color = OpenClawSessions.ColourForAgent(
+                        OpenClawSessions.AgentIdOf(session.Key) ?? session.Key),
                     Kind = session.Kind,
                 };
 
