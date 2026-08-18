@@ -643,6 +643,36 @@ Check("an empty key is Unknown", Kind("") == SessionKind.Unknown);
 Check("a non-agent key is Unknown", Kind("something:else:entirely") == SessionKind.Unknown);
 Check("a null key is Unknown", OpenClawSessionKind.From(null, null) == SessionKind.Unknown);
 
+// --- rooms ---
+
+// Every agent in a channel has to agree on the room key, or a room fragments
+// into one orb per agent and the grouping is worse than none.
+static string? Room(string key) => OpenClawSessionKind.RoomOf(key);
+
+Check("agents in one channel agree on the room",
+    Room("agent:lilibeth:discord:channel:1474991965354463274")
+    == Room("agent:zara:discord:channel:1474991965354463274")
+    && Room("agent:zara:discord:channel:1474991965354463274") == "discord:1474991965354463274");
+
+Check("different channels are different rooms",
+    Room("agent:zara:discord:channel:111") != Room("agent:zara:discord:channel:222"));
+
+// The same channel id on two surfaces is not the same room.
+Check("the surface is part of the room",
+    Room("agent:z:discord:channel:111") != Room("agent:z:slack:channel:111"));
+
+// A DM is not a room: two people talking privately is not somewhere others
+// can be standing.
+Check("a direct message is not a room", Room("agent:main:discord:direct:2467") is null);
+Check("a cron job is not a room", Room("agent:main:cron:2f54203e") is null);
+Check("an agent's own session is not a room", Room("agent:alexis:main") is null);
+Check("a malformed key is not a room",
+    Room("") is null && Room("agent:z:discord") is null && Room("nonsense") is null);
+
+// A channel id containing a colon must not be truncated into a different room.
+Check("a colon in the channel id survives",
+    Room("agent:z:matrix:channel:!abc:server.org") == "matrix:!abc:server.org");
+
 // --- report ---
 
 if (failures.Count == 0)

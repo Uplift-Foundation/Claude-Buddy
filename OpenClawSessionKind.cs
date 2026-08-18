@@ -72,6 +72,30 @@ namespace ClaudeBuddy
             return SessionKind.Unknown;
         }
 
+        // Which room a channel session is in, as a key stable across restarts
+        // and shared by every agent in it: "<surface>:<channel id>".
+        //
+        // Taken from the session key rather than from origin.label, which is
+        // written for a log and varies — the id at the end of
+        // "agent:main:discord:channel:1474991965354463274" is the room, and the
+        // agent in front of it is who is standing in it.
+        //
+        // Null for anything that is not a channel, including a DM: two people
+        // messaging privately is not a room other agents can join.
+        public static string? RoomOf(string? key)
+        {
+            var parts = (key ?? "").Split(':');
+
+            // agent : <name> : <surface> : <type> : <id>
+            if (parts.Length < 5 || parts[0] != "agent") return null;
+            if (From(key, null) != SessionKind.Channel) return null;
+
+            var surface = parts[2];
+            var id = string.Join(":", parts.Skip(4));
+
+            return string.IsNullOrWhiteSpace(id) ? null : $"{surface}:{id}";
+        }
+
         private static bool Is(string a, string b) =>
             string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
     }

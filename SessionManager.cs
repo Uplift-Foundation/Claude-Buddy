@@ -71,6 +71,13 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public SessionKind Kind { get; set; } = SessionKind.Unknown;
 
+        // A stand-in orb for a channel, invented by this app rather than
+        // reported by anything. It has no conversation of its own — it is the
+        // thing the agents in that channel point at, so a room reads as one
+        // place instead of as eight unrelated orbs that happen to share a badge.
+        [JsonIgnore]
+        public bool IsRoom { get; set; }
+
         // Where the session's terminal lives (macOS hook only; empty on
         // Windows or with an older hook script). See TerminalFocuser.
         [JsonPropertyName("term_program")]
@@ -395,6 +402,11 @@ namespace ClaudeBuddy
             // no new concept and no second timeout to reason about.
             var gatewaySessions = OpenClawSessions.Snapshot();
 
+            // Channel -> the room orb to stand for it. Keyed by
+            // OpenClawSessionKind.RoomOf, so every agent in a channel agrees.
+            var rooms = new Dictionary<string, (string Title, DateTime Activity, bool Working)>(
+                StringComparer.Ordinal);
+
             foreach (var session in gatewaySessions)
             {
                 var status = new SessionStatus
@@ -424,7 +436,49 @@ namespace ClaudeBuddy
                 // Code's UUIDs, and because a gateway key contains colons and
                 // slashes that ResetSessionToIdle would otherwise splice into a
                 // file path.
+                // Which room this is standing in, if any. The room orb itself is
+                // added below, once, however many agents point at it.
+                var room = OpenClawSessionKind.RoomOf(session.Key);
+                if (room is not null)
+                {
+                    status.Lead = RoomId(room);
+
+                    if (!rooms.TryGetValue(room, out var seenRoom)
+                        || session.LastActivity > seenRoom.Activity)
+                    {
+                        rooms[room] = (RoomTitle(session.Title), session.LastActivity,
+                            (seenRoom.Working || session.State == "generating"));
+                    }
+                    else if (session.State == "generating")
+                    {
+                        rooms[room] = (seenRoom.Title, seenRoom.Activity, true);
+                    }
+                }
+
                 found.Add(new ScanEntry("openclaw:" + session.Key, status, session.LastActivity));
+            }
+
+            // One orb per channel, for the agents in it to point at. Invented
+            // here rather than reported by the gateway, which has no notion of a
+            // room as a thing — it has a session per agent per channel, and
+            // eight of those on screen is eight orbs with nothing saying they
+            // are the same conversation.
+            foreach (var (key, room) in rooms)
+            {
+                found.Add(new ScanEntry(
+                    RoomId(key),
+                    new SessionStatus
+                    {
+                        Source = SessionSource.OpenClaw,
+                        IsRoom = true,
+                        Title = room.Title,
+
+                        // Busy while anyone in it is, which is what a room being
+                        // "active" means. Its own colour stays empty: the ring
+                        // is how an *agent* is identified, and a room is not one.
+                        State = room.Working ? "generating" : "idle",
+                    },
+                    room.Activity));
             }
 
             InheritTerminalInfo(found);
@@ -591,8 +645,18 @@ namespace ClaudeBuddy
                 var membership = status.Source == SessionSource.ClaudeCode
                     ? AgentTeam.Of(status.SessionPid)
                     : default;
-                status.Lead = membership.Lead == sessionId ? "" : membership.Lead;
-                status.Agent = string.IsNullOrEmpty(status.Lead) ? "" : membership.Name;
+
+                // Guarded, where it used to run for everything. A gateway
+                // session has no process to ask, so `default` came back and this
+                // assigned Lead = "" — which silently erased the room a channel
+                // session had already been put in, a few lines earlier and in
+                // another file. Teams and rooms are different things that happen
+                // to use the same field.
+                if (status.Source == SessionSource.ClaudeCode)
+                {
+                    status.Lead = membership.Lead == sessionId ? "" : membership.Lead;
+                    status.Agent = string.IsNullOrEmpty(status.Lead) ? "" : membership.Name;
+                }
 
                 // The colour Claude Code gave this agent when the team was
                 // built. Only used when the session hasn't set one itself: a
@@ -738,6 +802,10 @@ namespace ClaudeBuddy
         {
             if (!_statuses.TryGetValue(sessionId, out var status)) return null;
 
+            // A room is this app's own invention and the gateway has never heard
+            // of it, so asking for its conversation would invent one too.
+            if (status.IsRoom) return null;
+
             if (status.Source == SessionSource.OpenClaw)
                 return OpenClawSessions.ChatFor(sessionId, status.Title);
 
@@ -763,6 +831,17 @@ namespace ClaudeBuddy
         // there is no reason to watch a transcript nobody is reading — and
         // emptied with the orb.
         private readonly Dictionary<string, ClaudeCodeChatSession> _chats = new(StringComparer.Ordinal);
+
+        // Namespaced away from both Claude Code's UUIDs and the gateway's own
+        // keys, because it is neither: nothing on the gateway answers to it.
+        private static string RoomId(string roomKey) => "openclaw:room:" + roomKey;
+
+        // A member's title is "Lilibeth — general"; the room is just "general".
+        private static string RoomTitle(string sessionTitle)
+        {
+            var dash = sessionTitle.IndexOf(" — ", StringComparison.Ordinal);
+            return dash > 0 ? sessionTitle[(dash + 3)..].Trim() : sessionTitle;
+        }
 
         public SessionStatus? StatusFor(string? sessionId) =>
             string.IsNullOrEmpty(sessionId) ? null : _statuses.GetValueOrDefault(sessionId);

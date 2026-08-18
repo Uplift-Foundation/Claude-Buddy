@@ -234,7 +234,17 @@ namespace ClaudeBuddy
             ApplyAvatar(status);
             if (!_hasAvatar) Glyph.Text = _agentEmoji ?? GlyphFor(name);
             ApplyAccent(status.Color);
-            ApplyKind(status.Kind);
+            ApplyKind(status.IsRoom ? SessionKind.Unknown : status.Kind);
+
+            // A room is a place, not somebody. "#" says that at a glance, and it
+            // replaces the badge rather than joining it — a room orb wearing a
+            // channel badge is the same fact drawn twice, once as the thing
+            // itself and once as a note about it.
+            if (status.IsRoom)
+            {
+                Glyph.Text = "#";
+                Glyph.IsVisible = true;
+            }
             SetTeamRole(!string.IsNullOrEmpty(status.Lead));
 
             SessionInfoItem.Header = string.IsNullOrEmpty(described) ? SessionId : described;
