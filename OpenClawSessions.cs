@@ -259,6 +259,12 @@ namespace ClaudeBuddy
             }
 
             room.SetMembers(members);
+
+            // Widening the window the merge can be trusted over, in the
+            // background: the members' first pages rarely cover the same
+            // stretch, and the room can only show where they overlap.
+            _ = room.DeepenAsync();
+
             return room;
         }
 
