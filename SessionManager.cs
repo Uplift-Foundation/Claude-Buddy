@@ -1060,9 +1060,13 @@ namespace ClaudeBuddy
         // a session survives a restart. For Claude Code that is its directory,
         // because its session id is new every run and would remember nothing;
         // for a gateway session it is the id itself, which is not.
-        // Two live local sessions in one directory therefore share a key:
-        // the first orb to appear claims the saved spot, the others stack
-        // normally, and whichever one you drag last is what gets remembered.
+        //
+        // A local key is the directory *and* the session's name, because two
+        // sessions in one directory are common and sharing a slot meant neither
+        // stayed put. The name can change under you — Claude Code writes an
+        // automatic title that follows the conversation — so a lookup falls back
+        // to the directory alone, which also covers positions saved before names
+        // were part of this.
 
         // A gateway session has no directory to be keyed by — the findings doc
         // notes the absence of `cwd` as a *simplification*, since there is no
@@ -1075,10 +1079,30 @@ namespace ClaudeBuddy
         // session id, which is new every run, a gateway key is derived from the
         // agent and the channel and is the same string next week — which is what
         // made it a good room key and makes it a good position key.
-        private static string PositionKeyFor(SessionStatus status, string sessionId) =>
-            status.Source == SessionSource.ClaudeCode
-                ? string.IsNullOrEmpty(status.Cwd) ? "" : status.Cwd.TrimEnd('\\', '/')
-                : sessionId;
+        private static string PositionKeyFor(SessionStatus status, string sessionId)
+        {
+            if (status.Source != SessionSource.ClaudeCode) return sessionId;
+
+            var cwd = DirectoryKeyFor(status);
+            if (cwd.Length == 0) return "";
+
+            // The directory alone is not enough when two sessions are open in
+            // one: "makayla-lawyer" and "job-lawyer" both live in Evidence, so
+            // they shared a slot — first orb to appear claimed it, the other
+            // stacked, and whichever was dragged last overwrote the one entry.
+            // Two orbs that would not stay where they were put, while every
+            // other orb did.
+            //
+            // The session's name is what separates them, and it is the right
+            // thing rather than a convenient one: it is what *you* called that
+            // session, so an orb follows the name you gave it rather than the
+            // folder it happens to share.
+            var title = (status.Title ?? "").Trim();
+            return title.Length == 0 ? cwd : cwd + "\n" + title;
+        }
+
+        private static string DirectoryKeyFor(SessionStatus status) =>
+            string.IsNullOrEmpty(status.Cwd) ? "" : status.Cwd.TrimEnd('\\', '/');
 
         private void RestoreOrbPosition(OrbWindow window, SessionStatus status)
         {
@@ -1096,6 +1120,22 @@ namespace ClaudeBuddy
             }
 
             var saved = ClaudeBuddySettings.OrbPositionFor(key);
+
+            // Nothing under the name, so try the directory on its own. That
+            // covers a position saved before names were part of the key, and a
+            // session whose title has changed since — Claude Code writes an
+            // automatic one that moves as a conversation does, and losing your
+            // placement to a retitle would be a worse bug than the one this
+            // fixes.
+            if (saved is null && status.Source == SessionSource.ClaudeCode)
+            {
+                var directory = DirectoryKeyFor(status);
+                if (directory.Length > 0 && directory != key)
+                {
+                    saved = ClaudeBuddySettings.OrbPositionFor(directory);
+                }
+            }
+
             if (saved is null) return;
 
             var point = new PixelPoint(saved.X, saved.Y);
