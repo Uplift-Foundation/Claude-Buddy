@@ -207,6 +207,49 @@ namespace ClaudeBuddy
 
         private static bool _certificateRejected;
 
+        // The conversation in a channel, as one thing. memberKeys are the
+        // gateway keys of the sessions standing in it — see
+        // OpenClawSessionKind.RoomOf for what decides that.
+        //
+        // The member chats are created here as a side effect, which is what
+        // starts their backlogs loading. That is the same thing opening any one
+        // of their orbs would do, so a room costs the same requests as reading
+        // it agent by agent, made at once instead of one at a time.
+        private static readonly Dictionary<string, OpenClawRoomChatSession> Rooms =
+            new(StringComparer.Ordinal);
+
+        public static IRemoteChatSession? RoomChatFor(
+            string sessionId, string displayName, IReadOnlyList<string> memberKeys)
+        {
+            if (!ClaudeBuddySettings.OpenClawEnabled) return null;
+            if (memberKeys.Count == 0) return null;
+
+            OpenClawRoomChatSession room;
+            lock (Gate)
+            {
+                if (!Rooms.TryGetValue(sessionId, out var existing))
+                {
+                    existing = new OpenClawRoomChatSession(sessionId, displayName);
+                    Rooms[sessionId] = existing;
+                }
+
+                existing.DisplayName = displayName;
+                room = existing;
+            }
+
+            var members = new List<(OpenClawChatSession Chat, string Agent, string Colour)>();
+            foreach (var key in memberKeys)
+            {
+                if (ChatFor("openclaw:" + key, displayName) is not OpenClawChatSession chat) continue;
+
+                var agentId = AgentIdOf(key) ?? key;
+                members.Add((chat, AgentNameOf(agentId), ColourForAgent(agentId)));
+            }
+
+            room.SetMembers(members);
+            return room;
+        }
+
         // The panel's view of one session. sessionId is the app's namespaced
         // id; the gateway knows it without the prefix.
         public static IRemoteChatSession? ChatFor(string sessionId, string displayName)

@@ -473,6 +473,12 @@ namespace ClaudeBuddy
                         IsRoom = true,
                         Title = room.Title,
 
+                        // For the panel's header chip. The orb itself skips the
+                        // badge — it *is* the channel — but the panel is a
+                        // window onto a conversation and saying which kind is
+                        // the same help it is anywhere else.
+                        Kind = SessionKind.Channel,
+
                         // Busy while anyone in it is, which is what a room being
                         // "active" means. Its own colour stays empty: the ring
                         // is how an *agent* is identified, and a room is not one.
@@ -802,9 +808,21 @@ namespace ClaudeBuddy
         {
             if (!_statuses.TryGetValue(sessionId, out var status)) return null;
 
-            // A room is this app's own invention and the gateway has never heard
-            // of it, so asking for its conversation would invent one too.
-            if (status.IsRoom) return null;
+            // A room's conversation is its members' transcripts merged, since
+            // the gateway has no room to ask about. Assembled from the same
+            // Lead field the arrows are drawn from, so what opens is exactly
+            // what the orb is pointing at.
+            if (status.IsRoom)
+            {
+                var members = _order
+                    .Where(id => _statuses.TryGetValue(id, out var m)
+                                 && m.Lead == sessionId
+                                 && m.Source == SessionSource.OpenClaw)
+                    .Select(id => id["openclaw:".Length..])
+                    .ToList();
+
+                return OpenClawSessions.RoomChatFor(sessionId, status.Title, members);
+            }
 
             if (status.Source == SessionSource.OpenClaw)
                 return OpenClawSessions.ChatFor(sessionId, status.Title);
