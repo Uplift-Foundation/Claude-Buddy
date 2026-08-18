@@ -814,12 +814,14 @@ namespace ClaudeBuddy
             // what the orb is pointing at.
             if (status.IsRoom)
             {
-                var members = _order
-                    .Where(id => _statuses.TryGetValue(id, out var m)
-                                 && m.Lead == sessionId
-                                 && m.Source == SessionSource.OpenClaw)
-                    .Select(id => id["openclaw:".Length..])
-                    .ToList();
+                // Asked of the gateway's own list rather than assembled from
+                // the orbs on screen. The orbs are filtered by "show sessions
+                // active within", which is a question about what is worth
+                // drawing — and an agent that spoke an hour ago is still in the
+                // room. Built from the orbs, its half of the conversation went
+                // missing and its messages showed up as yours.
+                const string RoomPrefix = "openclaw:room:";
+                var members = OpenClawSessions.MembersOfRoom(sessionId[RoomPrefix.Length..]);
 
                 return OpenClawSessions.RoomChatFor(sessionId, status.Title, members);
             }
