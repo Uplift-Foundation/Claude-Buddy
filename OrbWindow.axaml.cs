@@ -117,11 +117,17 @@ namespace ClaudeBuddy
         // the same piece of screen — ArcRadius is 56, directly below the orb —
         // and the arc's mic and speak duplicate what the panel already offers,
         // so one hides for the other rather than both being there.
-        //
-        // Note for whoever merges the flyout hover-delay branch: that one adds
-        // ScheduleFlyoutShow, and this guard belongs at the top of it, in the
-        // same shape as its _recording guard, rather than here.
         private bool _chatOpen;
+
+        // The flyout used to open the instant the pointer touched an orb,
+        // which made orbs hostile to each other: the arc one orb throws out
+        // covers its neighbours, so a cursor travelling toward a second orb
+        // summoned a menu that then sat in the way of the click it was on its
+        // way to make. Requiring the pointer to *rest* on the orb separates
+        // "I want this orb's menu" from "I am passing over this orb", and
+        // costs a deliberate hover nothing it would notice.
+        private DispatcherTimer? _showFlyoutTimer;
+        private static readonly TimeSpan FlyoutHoverDelay = TimeSpan.FromMilliseconds(450);
 
         public OrbWindow(string sessionId)
         {
@@ -143,12 +149,14 @@ namespace ClaudeBuddy
 
             Root.PointerEntered += (_, _) =>
             {
-                if (_chatOpen) return;
-
                 CancelFlyoutHide();
-                EnsureFlyoutShown();
+                ScheduleFlyoutShow();
             };
-            Root.PointerExited += (_, _) => ScheduleFlyoutHide();
+            Root.PointerExited += (_, _) =>
+            {
+                CancelFlyoutShow();
+                ScheduleFlyoutHide();
+            };
 
             // Unlike WPF, Loaded fires *after* the first UpdateFrom here, so
             // honor any state that already arrived instead of stomping it.
@@ -1026,11 +1034,55 @@ namespace ClaudeBuddy
         // moving orb would read as broken rather than as a hover effect.
         private void HideFlyoutNow()
         {
+            CancelFlyoutShow();
             _hideFlyoutTimer?.Stop();
             _flyout?.Hide();
         }
 
         private void CancelFlyoutHide() => _hideFlyoutTimer?.Stop();
+
+        private void CancelFlyoutShow() => _showFlyoutTimer?.Stop();
+
+        // The delay is only for *opening* the flyout from nothing. Coming back
+        // onto the orb from its own open flyout is the other half of the hover
+        // bridge, not a new request, and pausing there would be a stutter in
+        // the middle of an interaction the user is already having.
+        private void ScheduleFlyoutShow()
+        {
+            // On the method rather than on PointerEntered, the same way
+            // ScheduleFlyoutHide carries its own _recording guard: the rule is
+            // "the arc does not open while the chat panel has that space", and a
+            // rule about the arc belongs where the arc is scheduled. Left on the
+            // handler it is one caller's business, and the next caller has to
+            // remember it.
+            if (_chatOpen) return;
+
+            if (_flyout?.IsVisible == true)
+            {
+                EnsureFlyoutShown();
+                return;
+            }
+
+            _showFlyoutTimer ??= new DispatcherTimer { Interval = FlyoutHoverDelay };
+            _showFlyoutTimer.Stop();
+
+            // One handler, however many hovers — same reason as the hide timer.
+            _showFlyoutTimer.Tick -= OnFlyoutShowTick;
+            _showFlyoutTimer.Tick += OnFlyoutShowTick;
+            _showFlyoutTimer.Start();
+        }
+
+        private void OnFlyoutShowTick(object? sender, EventArgs e)
+        {
+            _showFlyoutTimer!.Stop();
+
+            // PointerExited cancels this timer, but a drag that carries the orb
+            // out from under a stationary cursor, or an orb closing mid-wait,
+            // doesn't necessarily raise one — so confirm rather than assume.
+            if (!Root.IsPointerOver) return;
+
+            EnsureFlyoutShown();
+        }
 
         // A no-op while recording: the flyout is the only way to stop, so it
         // must stay up regardless of where the pointer wanders.
