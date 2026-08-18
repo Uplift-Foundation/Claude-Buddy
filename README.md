@@ -716,6 +716,118 @@ automatically. A second Linux user account inside the same distro is the one
 combination left unwired, since that needs hooks added inside *their* account
 specifically — the "By hand" section further down still covers that case.
 
+## Chatting with a session from its orb
+
+Hover an orb and the flyout has a keyboard button (⌨). It opens a small panel
+under the orb with that session's conversation in it — what it said, what it is
+thinking, the tools it reached for — and a line to type in.
+
+**It is the same conversation as the terminal's, not a copy.** Claude Code
+writes every session's transcript to a file, the hook already tells Claude Buddy
+where, and the panel reads it. So anything you type in the terminal shows up in
+the panel. And sending from the panel types into the session's tmux pane, so
+anything you send from the orb shows up in the terminal too, exactly as if you
+had typed it there. There is no second conversation to get out of step.
+
+Two honest limits. The panel updates a **block at a time** rather than a word at
+a time — each thinking pass, each tool call and each paragraph appears as it
+finishes, a few seconds behind the terminal's own streaming. And a half-typed
+draft is not shared: the panel keeps its own, and so does the terminal.
+
+Clicking the orb still goes to the terminal. That is what a click has always
+meant here and the panel is a second destination, not a replacement — which is
+why it's a separate button rather than a change to the click. (Gateway orbs have
+no terminal to go to, so for those the click opens the panel directly.)
+
+**Typing back is a second switch, off by default:** Settings → Claude Code
+sessions → **Allow replying to sessions**. With it off the panel is a live view
+of what your sessions are doing. With it on you can also type into them, answer
+their permission prompts, and interrupt a run. Seeing what a session is doing
+and being able to drive it are different powers, so the second one is asked for
+separately — the same split the OpenClaw section below makes, for the same
+reason.
+
+**Sessions not running under tmux stay read-only.** The only way to type into
+those is to bring their terminal to the front first, which defeats the point of
+chatting from an orb; dictation already does that and is welcome to, but a chat
+panel that raised a window on every message would not be one. The input box says
+so rather than being greyed out.
+
+When a session stops for a **permission prompt**, the panel says so and offers
+the dialog's own options as buttons. It reads them off the pane with
+`tmux capture-pane` rather than assuming what "1" means — the dialog is drawn by
+the terminal UI and never reaches the transcript, so the screen is the only
+place its wording exists. If it can't read the dialog it says only "answer in
+the terminal", because a button labelled "Approve" that sent something else
+would be worse than no button. That parsing has a test suite of its own
+(`dotnet run --project tests/TranscriptTests`) whose fixtures are transcribed
+from real captures.
+
+## OpenClaw agents (experimental, off by default)
+
+Claude Buddy can also show an orb for each recently active session on an
+[OpenClaw](https://docs.openclaw.ai) gateway — the agents you talk to through
+Discord or its TUI — beside your Claude Code ones. They breathe when idle and
+pulse violet while an agent is working, the same as any other orb.
+
+It is **off until you turn it on**, and while it is off the app opens no socket,
+starts no background task and generates no key. Turn it on in **Settings →
+OpenClaw agents**, then give it:
+
+- **Gateway address** — the machine running the gateway. An IP address rather
+  than a hostname, because the certificate it serves carries no hostname to
+  validate against.
+- **Gateway token** — the `gateway.auth.token` from the gateway's own
+  `openclaw.json`. It is kept out of `settings.json`, in a file only your user
+  can read, beside the device key.
+
+The first connection asks the gateway to pair this machine, and then waits: on
+the gateway, run `openclaw devices approve --latest` and check it names
+`gateway-client` before approving. Claude Buddy asks for **`operator.read` and
+nothing else**, so it can see what your agents are doing and cannot ask them to
+do anything.
+
+Orbs are named for the agent, not its id: OpenClaw keeps a name per agent, so
+an orb reads **Lilibeth — #general** rather than `main`, and its letter is L
+rather than a fourth M. The second half says which conversation it is, because
+one agent commonly has a DM with you, a DM with someone else and two channels
+going at once.
+
+**Only recently active sessions get orbs.** A gateway remembers every
+conversation it has ever had — 59 of them on the machine this was developed
+against — so an orb per session would bury the screen. **Show sessions active
+within** controls how far back to look; anything currently working shows
+regardless. That is deliberately separate from **Keep orbs for**, which is about
+how long a session lingers *after* it goes quiet.
+
+Be aware that the gateway's own idea of "recent" is unreliable — it reported
+nearly two hours since last activity for a Discord chat that was happening at
+that moment — so Claude Buddy also counts anything it has watched happen since
+it started. Conversations from before it connected are the ones that depend on
+the setting.
+
+**Click one of these orbs and a small chat panel opens under it** — the last
+turns, what the agent is thinking, the tools it reaches for, and a line to type
+in. Escape, Cmd-W, the close button or clicking away all dismiss it, and your
+half-typed draft survives being dismissed. Enter sends, Shift+Enter starts a new
+line, and with voice input on the mic drops what you said into the box rather
+than sending it, exactly as dictation into a terminal already does.
+
+Replying is a **second switch**, off by default: **Allow replying to agents**.
+Turning it on asks the gateway for write permission as well as read, which it
+treats as a new pairing — so approve the device again there
+(`openclaw devices approve --latest`) and the status row will tell you it is
+waiting until you do. Seeing what your agents are doing and being able to make
+them do things are different powers, which is why the second one is asked for
+separately rather than coming along with the first.
+
+Two things worth knowing if you are wiring this up yourself: the connection uses
+its own TLS stack (BouncyCastle) because the gateway requires TLS 1.3 and .NET
+on macOS cannot speak it, and the certificate is trusted by fingerprint on first
+connection rather than through the system trust store. `docs/openclaw-findings.md`
+records what was measured against a real gateway, including several places where
+the published protocol documentation disagrees with the running software.
+
 ## 1. Install it
 
 Either download an installer or build from source — both are fully supported,

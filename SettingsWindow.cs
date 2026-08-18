@@ -40,6 +40,9 @@ namespace ClaudeBuddy
             _open = new SettingsWindow();
             _open.Closed += (_, _) =>
             {
+                // A timer on a closed window would keep the window alive and go
+                // on ticking for nothing.
+                _open?._openClawStatusTimer?.Stop();
                 _open = null;
 
                 // The colour pickers defer their write; closing the window is the
@@ -50,13 +53,24 @@ namespace ClaudeBuddy
                 MacOSActivation.SetAccessory();
             };
 
-            // An accessory app's window can't take keyboard focus, so a name
-            // field would silently swallow every keystroke. Becoming a regular
-            // app for as long as the window is open is the supported fix, and it
-            // is why this is a Toggle rather than a plain Show.
+            // Becoming a regular app for as long as this window is open, so it
+            // comes to the front and gets a Dock icon and a Cmd-Tab entry while
+            // it is up.
+            //
+            // The reason recorded here used to be "an accessory app's window
+            // can't take keyboard focus". That is not true, and the chat panel
+            // demonstrates it: it is a borderless window on the same accessory
+            // app, it takes typed input, and it does no policy switching at all.
+            // What is different is how each one is opened — this window comes
+            // from a status-item click, which does not activate the app, and the
+            // panel comes from a click on one of the app's own windows, which
+            // does. So the Activate() below is the part that matters here, and
+            // SetRegular is what makes it stick for a window with no orb behind
+            // it to have been clicked.
             MacOSActivation.SetRegular();
             _open.Show();
             _open.Activate();
+            _open.StartStatusTicker();
         }
 
         private SettingsWindow()
@@ -256,6 +270,10 @@ namespace ClaudeBuddy
 
             root.Children.Add(Group("Voice", Card(VoiceRows())));
 
+            root.Children.Add(Group("Claude Code sessions", Card(ClaudeCodeChatRows())));
+
+            root.Children.Add(Group("OpenClaw agents", Card(OpenClawRows())));
+
             root.Children.Add(Group("Profiles", ProfilesCard()));
 
             // Native wiring for extra Claude Code (CLI) accounts, and WSL's own
@@ -373,6 +391,304 @@ namespace ClaudeBuddy
         // enabling the neural voice each fetch a few hundred MB, and two
         // downloads reporting into one field would overwrite each other's text.
         private string? _neuralModelStatus;
+
+        // Off by default and, unlike everything else in this window, off for a
+        // reason that isn't about taste: while this switch is off the app opens
+        // no socket, starts no background task and generates no key. Turning it
+        // on is the whole of the consent to talk to a machine on the network.
+        // The chat panel on a local orb, and whether it can type back.
+        //
+        // Unlike every other feature switch in this window the first one is
+        // *on* by default, and the difference is real rather than an
+        // inconsistency: it opens no socket, starts no engine and asks macOS for
+        // no permission. It reads a file the hook already points at, only while
+        // a panel is actually up. There is nothing to consent to.
+        //
+        // The second one is the OpenClaw split, for the OpenClaw reason.
+        private Control[] ClaudeCodeChatRows()
+        {
+            var rows = new List<Control>
+            {
+                Row("Chat panel on the orb",
+                    Switch(ClaudeBuddySettings.ClaudeCodeChatEnabled, OnClaudeCodeChatToggled),
+                    "Adds a keyboard button to the orb's hover menu that opens the session's "
+                    + "conversation — the same panel OpenClaw agents use. It is the same "
+                    + "conversation as the terminal's, not a copy: it reads the transcript "
+                    + "Claude Code already writes. Clicking the orb still goes to the terminal.")
+            };
+
+            if (!ClaudeBuddySettings.ClaudeCodeChatEnabled) return rows.ToArray();
+
+            rows.Add(Row("Allow replying to sessions",
+                Switch(ClaudeBuddySettings.ClaudeCodeReplyEnabled, OnClaudeCodeReplyToggled),
+                "Off, the panel shows what a session is doing. On, you can type into it, "
+                + "answer its permission prompts and interrupt it — by typing into its tmux "
+                + "pane, exactly as if you had typed there yourself, so the terminal shows it "
+                + "too. Sessions not running under tmux stay read-only either way, because "
+                + "the only way to type into those is to bring their window to the front."));
+
+            return rows.ToArray();
+        }
+
+        private void OnClaudeCodeChatToggled(bool enabled)
+        {
+            ClaudeBuddySettings.ClaudeCodeChatEnabled = enabled;
+            Rebuild();
+        }
+
+        private void OnClaudeCodeReplyToggled(bool enabled)
+        {
+            ClaudeBuddySettings.ClaudeCodeReplyEnabled = enabled;
+        }
+
+        private Control[] OpenClawRows()
+        {
+            var rows = new List<Control>
+            {
+                Row("Show OpenClaw agents (experimental)",
+                    Switch(ClaudeBuddySettings.OpenClawEnabled, OnOpenClawToggled),
+                    "Shows an orb for each recently active session on an OpenClaw gateway, "
+                    + "alongside your Claude Code ones. Read-only: Claude Buddy can see what "
+                    + "your agents are doing, and cannot ask them to do anything.")
+            };
+
+            if (!ClaudeBuddySettings.OpenClawEnabled) return rows.ToArray();
+
+            rows.Add(Row("Gateway address", GatewayHostBox(),
+                "The address of the machine running the gateway — an IP, because the "
+                + "certificate it serves carries no hostname. Port "
+                + ClaudeBuddySettings.DefaultOpenClawPort + " unless you changed it."));
+
+            rows.Add(Row("Gateway token", GatewayTokenBox(),
+                "From `gateway.auth.token` in the gateway's own openclaw.json. Stored "
+                + "outside settings.json, in a file only you can read."));
+
+            rows.Add(Row("Show sessions active within", ActiveWithinPicker(),
+                "A gateway remembers every conversation it has ever had, so only recent "
+                + "ones get orbs. Anything currently working shows regardless. Note that "
+                + "the gateway's own idea of \"recent\" lags badly for Discord chats, so "
+                + "Claude Buddy also counts anything it has watched happen since it started."));
+
+            rows.Add(Row("Allow replying to agents",
+                Switch(ClaudeBuddySettings.OpenClawReplyEnabled, OnOpenClawReplyToggled),
+                "Off, this shows what your agents are doing. On, you can also reply to "
+                + "them from an orb — which asks the gateway for write permission, so you "
+                + "have to approve this device again there (`openclaw devices approve --latest`)."));
+
+            // Kept as a field and ticked, rather than rebuilt: the connection
+            // changes state while you are looking at it — pairing gets approved,
+            // a machine wakes up — and a status line that only tells the truth
+            // at the moment the window was built is worse than none. Rebuilding
+            // the window instead would be simpler and would also take the focus
+            // out of whichever box was being typed into.
+            _openClawStatus = new TextBlock
+            {
+                Text = OpenClawSessions.StatusText,
+                FontSize = 12,
+                Opacity = 0.75,
+                TextWrapping = TextWrapping.Wrap
+            };
+
+            rows.Add(NoteRow(_openClawStatus));
+
+            // The first connection from a new install lands in the gateway's
+            // pending list and stays there until a human approves it, so the
+            // status line above will say so rather than looking broken.
+            var reconnect = new Button
+            {
+                Content = "Reconnect",
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left
+            };
+            reconnect.Click += (_, _) => { OpenClawSessions.Restart(); Rebuild(); };
+            rows.Add(Row("", reconnect));
+
+            // Only when the pin is the thing standing in the way, because this
+            // is the one control here that gives something up.
+            //
+            // It has to exist. A gateway that regenerates its certificate —
+            // reinstalled, upgraded, switched to mkcert — is refused for ever
+            // after with a message the user can do nothing about: Reconnect
+            // fails the same way every time, and the only way through was to
+            // edit settings.json by hand. That is not a security property, it is
+            // a dead end that teaches people to distrust the message.
+            //
+            // Deliberately not automatic, and deliberately not a general "always
+            // trust" switch. Accepting a new certificate is exactly what an
+            // interception needs you to do, so it stays a separate, explicit act
+            // taken while looking at a line that says what changed.
+            if (OpenClawSessions.CertificateRejected)
+            {
+                var trust = new Button
+                {
+                    Content = "Trust the new certificate",
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left
+                };
+
+                // The pin is cleared rather than set to what was observed: the
+                // next successful connection records it anyway (trust on first
+                // use), and writing a fingerprint the app has been *refusing* is
+                // a longer way round to the same place with more to get wrong.
+                //
+                // TrustNewCertificate rather than doing it here, so the button
+                // is gone by the time Rebuild runs — see its own comment.
+                trust.Click += (_, _) =>
+                {
+                    OpenClawSessions.TrustNewCertificate();
+                    Rebuild();
+                };
+
+                rows.Add(Row("", trust,
+                    "The gateway's certificate has changed since this install first "
+                    + "connected. That is normal after the gateway is reinstalled or "
+                    + "upgraded — and is also what someone impersonating it would look "
+                    + "like. Only do this if you know why it changed."));
+            }
+
+            return rows.ToArray();
+        }
+
+        private static readonly (string Label, int Minutes)[] ActiveWithinChoices =
+        {
+            ("15 minutes", 15),
+            ("1 hour", 60),
+            ("4 hours", 240),
+            ("12 hours", 720),
+            ("Everything", ClaudeBuddySettings.OpenClawActiveWithinAll)
+        };
+
+        private Control ActiveWithinPicker()
+        {
+            var current = ClaudeBuddySettings.OpenClawActiveWithinMinutes;
+            var choices = ActiveWithinChoices.ToList();
+
+            // Same courtesy LifetimePicker extends: a value typed into
+            // settings.json by hand shows as itself rather than being silently
+            // rounded to the nearest one on the list.
+            if (choices.All(choice => choice.Minutes != current))
+            {
+                choices.Insert(choices.Count - 1, ($"{current} minutes", current));
+            }
+
+            var combo = new ComboBox
+            {
+                ItemsSource = choices.Select(choice => choice.Label).ToList(),
+                SelectedIndex = choices.FindIndex(choice => choice.Minutes == current),
+                MinWidth = 132
+            };
+
+            combo.SelectionChanged += (_, _) =>
+            {
+                var index = combo.SelectedIndex;
+                if (index < 0 || index >= choices.Count) return;
+
+                var minutes = choices[index].Minutes;
+                if (minutes == ClaudeBuddySettings.OpenClawActiveWithinMinutes) return;
+
+                // No reconnect: this only changes which of the sessions we
+                // already have gets an orb, and the next poll is a few seconds
+                // away.
+                ClaudeBuddySettings.OpenClawActiveWithinMinutes = minutes;
+            };
+
+            return combo;
+        }
+
+        private TextBlock? _openClawStatus;
+        private DispatcherTimer? _openClawStatusTimer;
+
+        private void StartStatusTicker()
+        {
+            _openClawStatusTimer ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _openClawStatusTimer.Tick -= OnStatusTick;
+            _openClawStatusTimer.Tick += OnStatusTick;
+            _openClawStatusTimer.Start();
+        }
+
+        private void OnStatusTick(object? sender, EventArgs e)
+        {
+            if (_openClawStatus is null) return;
+
+            var text = OpenClawSessions.StatusText;
+            if (_openClawStatus.Text != text) _openClawStatus.Text = text;
+        }
+
+        private Control GatewayHostBox()
+        {
+            var box = new TextBox
+            {
+                Text = ClaudeBuddySettings.OpenClawHost,
+                Watermark = "192.168.0.10",
+                Width = 220
+            };
+
+            // On losing focus rather than per keystroke: every edit restarts the
+            // connection, and restarting once per character typed would hammer
+            // the gateway with half-written addresses.
+            box.LostFocus += (_, _) =>
+            {
+                var value = (box.Text ?? "").Trim();
+                if (value == ClaudeBuddySettings.OpenClawHost) return;
+
+                ClaudeBuddySettings.OpenClawHost = value;
+
+                // A different gateway is a different certificate; keeping the
+                // old pin would refuse the new one for reasons the user could
+                // not possibly guess.
+                ClaudeBuddySettings.OpenClawFingerprint = "";
+                OpenClawSessions.Restart();
+                Rebuild();
+            };
+
+            return box;
+        }
+
+        private Control GatewayTokenBox()
+        {
+            var host = ClaudeBuddySettings.OpenClawHost;
+            var existing = string.IsNullOrEmpty(host) ? null : OpenClawIdentity.GatewayTokenFor(host);
+
+            var box = new TextBox
+            {
+                PasswordChar = '•',
+                Text = existing ?? "",
+                Watermark = "paste the gateway token",
+                Width = 220
+            };
+
+            box.LostFocus += (_, _) =>
+            {
+                var value = (box.Text ?? "").Trim();
+                if (string.IsNullOrEmpty(host) || value == (existing ?? "")) return;
+
+                OpenClawIdentity.SetGatewayTokenFor(host, value);
+                OpenClawSessions.Restart();
+                Rebuild();
+            };
+
+            return box;
+        }
+
+        private void OnOpenClawReplyToggled(bool enabled)
+        {
+            ClaudeBuddySettings.OpenClawReplyEnabled = enabled;
+
+            // Reconnects, because the scopes are part of the handshake and the
+            // gateway treats a changed scope set as a device to approve afresh.
+            // The status row then says it is waiting for that approval.
+            OpenClawSessions.Restart();
+            Rebuild();
+        }
+
+        private void OnOpenClawToggled(bool enabled)
+        {
+            ClaudeBuddySettings.OpenClawEnabled = enabled;
+
+            // Immediately, not at the next launch: turning it off should take
+            // the orbs off the screen and the socket off the network while the
+            // user is still looking at the switch.
+            OpenClawSessions.Restart();
+            Rebuild();
+        }
 
         private Control[] VoiceRows()
         {
@@ -692,6 +1008,21 @@ namespace ClaudeBuddy
                 ClipToBounds = true,
                 Child = stack
             };
+        }
+
+        // A line of text on its own, full width.
+        //
+        // Not Row(): that puts its control in an Auto-width column so it can sit
+        // right-aligned beside a label, and a TextBlock in an Auto column is
+        // never given a width to wrap inside — it just runs off the edge of the
+        // window, which is what the connection status did. The help text under a
+        // row wraps because it spans both columns instead, and this is that,
+        // without a setting above it.
+        private static Control NoteRow(Control content)
+        {
+            var grid = new Grid { Margin = new Thickness(14, 10) };
+            grid.Children.Add(content);
+            return grid;
         }
 
         private static Control Row(string label, Control control, string? help = null)
