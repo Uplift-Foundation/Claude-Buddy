@@ -39,8 +39,22 @@ if (args.Length > 0)
         var text = new StreamReader(fs).ReadToEnd();
         if (from > 0 && text.IndexOf('\n') >= 0) text = text[(text.IndexOf('\n') + 1)..];
 
-        var turns = ChatTranscript.Map(text.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList());
-        Console.WriteLine($"{turns.Count} turns from the last {(fs.Length - from) / 1024}KB\n");
+        // Which CLI wrote it. Both write .jsonl, so the extension decides
+        // nothing — and handing a Codex rollout to ChatTranscript prints "0
+        // turns", which reads as a parser bug rather than as the wrong parser.
+        //
+        // The first row of a rollout is Codex's own session header, which is
+        // unambiguous; the filename is the fallback for a copy that has been
+        // trimmed of it.
+        fs.Seek(0, SeekOrigin.Begin);
+        var header = new StreamReader(fs, leaveOpen: true).ReadLine() ?? "";
+        var codex = header.Contains("\"type\":\"session_meta\"", StringComparison.Ordinal)
+                    || Path.GetFileName(path).StartsWith("rollout-", StringComparison.OrdinalIgnoreCase);
+
+        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
+        var turns = codex ? CodexTranscript.Map(lines) : ChatTranscript.Map(lines);
+        Console.WriteLine(
+            $"{turns.Count} turns from the last {(fs.Length - from) / 1024}KB, read as {(codex ? "codex" : "claude code")}\n");
 
         foreach (var t in turns)
         {
@@ -681,6 +695,231 @@ Check("the real session for that channel still is a room",
 // A channel id containing a colon must not be truncated into a different room.
 Check("a colon in the channel id survives",
     Room("agent:z:matrix:channel:!abc:server.org") == "matrix:!abc:server.org");
+
+// --- the codex transcript ---
+
+// Real rows from ~/.codex/sessions/2026/08/19/rollout-*.jsonl, trimmed of the
+// fields none of this reads. Ordinals and timestamps are the originals: the
+// ordinal is what the reader dedupes on, so a fixture that invented one would
+// be testing the wrong thing.
+//
+// Codex writes the same conversation twice — see CodexTranscript's header —
+// so the response_item row below is here to be ignored, and it is the largest
+// single reason this parser exists as its own file rather than a mode of
+// ChatTranscript.
+const string CxUser =
+    """{"timestamp":"2026-08-19T16:57:08.663Z","ordinal":9,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"01a01af4-8937","content":[{"type":"text","text":"convert this from a claude project to codex","text_elements":[]}]}}}""";
+
+const string CxAgent =
+    """{"timestamp":"2026-08-19T16:57:11.063Z","ordinal":12,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"msg_000c72","content":[{"type":"Text","text":"I'll inventory the repository's Claude-specific files."}],"phase":"commentary"}}}""";
+
+const string CxAgentFinal =
+    """{"timestamp":"2026-08-19T17:03:05.443Z","ordinal":310,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"msg_000c73","content":[{"type":"Text","text":"Converted the workspace from Claude to Codex."}],"phase":"final_answer"}}}""";
+
+const string CxReasoning =
+    """{"timestamp":"2026-08-19T16:57:10.334Z","ordinal":10,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"Reasoning","id":"rs_000c72","summary_text":[],"raw_content":[]}}}""";
+
+const string CxExec =
+    """{"timestamp":"2026-08-19T16:57:14.073Z","ordinal":15,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"exec-a5a4bb49","process_id":"65218","command":["/bin/zsh","-lc","sed -n '1,240p' SKILL.md"],"cwd":"file:///Users/w/Source/AIEA","parsed_cmd":[{"type":"read","cmd":"sed -n '1,240p' SKILL.md","name":"SKILL.md"}],"aggregated_output":"...240 lines..."}}}""";
+
+const string CxEdit =
+    """{"timestamp":"2026-08-19T16:58:45.136Z","ordinal":113,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","id":"exec-4c46b3cb","changes":{"/Users/w/Source/AIEA/backend/utils/config.py":{"type":"update","unified_diff":"@@ -1,3 +1,3 @@\n-import anthropic\n+from openai import OpenAI\n"}}}}}""";
+
+const string CxSearch =
+    """{"timestamp":"2026-08-19T16:57:28.434Z","ordinal":37,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"Extension","kind":"web.search","id":"exec-9b827849","query":"site:developers.openai.com/codex AGENTS.md","action":{"type":"search"},"results":[{"type":"text_result","snippet":"lots of bytes"}]}}}""";
+
+// The wire log. Same content, and on a real rollout it is half the rows and
+// nearly all the bytes.
+const string CxResponseItem =
+    """{"timestamp":"2026-08-19T16:57:11.064Z","ordinal":13,"type":"response_item","payload":{"type":"message","id":"msg_000c72","role":"assistant","content":[{"type":"output_text","text":"I'll inventory the repository's Claude-specific files."}]}}""";
+
+// Not a conversation: the session header, which carries the whole system
+// prompt and is the first row of every rollout.
+const string CxSessionMeta =
+    """{"timestamp":"2026-08-19T16:57:08.290Z","ordinal":0,"type":"session_meta","payload":{"session_id":"01a01af4","cwd":"/Users/w/Source/AIEA","originator":"codex-tui","cli_version":"0.148.0"}}""";
+
+var cx = CodexTranscript.Map(new[]
+{
+    CxSessionMeta, CxUser, CxReasoning, CxAgent, CxExec, CxSearch, CxEdit,
+    CxResponseItem, CxAgentFinal
+});
+
+// Six of the nine rows are things a person said or watched happen. The empty
+// Reasoning, the response_item duplicate and the session header are not.
+Check("codex maps exactly the six displayable rows", cx.Count == 6,
+    "got " + cx.Count + ": " + string.Join(" | ", cx.Select(r => r.Turn.Role + ":" + Head(r.Turn.Text))));
+
+Check("codex keeps file order",
+    cx.Count == 6 && cx[0].Turn.Role == ChatRole.User && cx[5].Turn.Role == ChatRole.Assistant,
+    string.Join(" | ", cx.Select(r => r.Turn.Role.ToString())));
+
+// The one that would cost every reply. UserMessage content blocks are typed
+// "text" and AgentMessage content blocks are typed "Text", which is not a
+// transcription slip in the fixtures above — it is what Codex writes. A parser
+// that assumes either casing applies to both drops half the conversation and
+// says nothing about it.
+Check("a user message uses lowercase \"text\"",
+    cx.Any(r => r.Turn.Role == ChatRole.User && r.Turn.Text.StartsWith("convert this")));
+
+Check("an agent message uses capital \"Text\"",
+    cx.Any(r => r.Turn.Role == ChatRole.Assistant && r.Turn.Text.StartsWith("I'll inventory")));
+
+Check("the casing is not accepted the other way round",
+    CodexTranscript.Map(new[]
+    {
+        """{"ordinal":1,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"Text","text":"wrong case"}]}}}""",
+        """{"ordinal":2,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":[{"type":"text","text":"wrong case"}]}}}"""
+    }).Count == 0);
+
+Check("both agent phases are shown",
+    cx.Count(r => r.Turn.Role == ChatRole.Assistant) == 2,
+    "commentary and final_answer are both things the TUI drew");
+
+// --- what a tool call reads as ---
+
+Check("a command reads as its parsed form",
+    cx.Any(r => r.Turn.Text == "· exec  sed -n '1,240p' SKILL.md"),
+    string.Join(" | ", cx.Select(r => r.Turn.Text)));
+
+Check("a command with no parsed form loses the shell wrapper",
+    CodexTranscript.Map(new[]
+    {
+        """{"ordinal":1,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","command":["/bin/zsh","-lc","git status --short"]}}}"""
+    })[0].Turn.Text == "· exec  git status --short");
+
+Check("an edit names the file, not its path",
+    cx.Any(r => r.Turn.Text == "· edit  config.py"),
+    string.Join(" | ", cx.Select(r => r.Turn.Text)));
+
+Check("an edit touching several files says how many",
+    CodexTranscript.Map(new[]
+    {
+        """{"ordinal":1,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","changes":{"/a/one.cs":{"type":"update"},"/b/two.cs":{"type":"add"},"/c/three.cs":{"type":"delete"}}}}}"""
+    })[0].Turn.Text == "· edit  one.cs +2");
+
+// Not every web action has an argument: `action.type` "other" comes with an
+// empty query, and three of the fifteen Extension items on a real rollout were
+// that. A bare "· web.search" is the honest reading — the session did reach for
+// the web — and dropping the row would lose that it happened at all.
+Check("a web action with no query is still a row",
+    CodexTranscript.Map(new[]
+    {
+        """{"ordinal":1,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"Extension","kind":"web.search","query":"","action":{"type":"other"}}}}"""
+    }) is { Count: 1 } bare && bare[0].Turn.Text == "· web.search");
+
+Check("a web search reads as its kind and query",
+    cx.Any(r => r.Turn.Text == "· web.search  site:developers.openai.com/codex AGENTS.md"),
+    string.Join(" | ", cx.Select(r => r.Turn.Text)));
+
+Check("a long command is truncated and its whitespace collapsed",
+    CodexTranscript.Map(new[]
+    {
+        """{"ordinal":1,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","parsed_cmd":[{"cmd":"rg    --files   --hidden --glob '!**/node_modules/**' --glob '!**/target/**' ."}]}}}"""
+    })[0].Turn.Text is { Length: < 70 } trimmed
+    && trimmed.EndsWith('…')
+    && !trimmed.Contains("  --files"));
+
+// --- reasoning ---
+
+Check("an empty reasoning summary adds nothing",
+    !cx.Any(r => r.Turn.Role == ChatRole.System && r.Turn.Text.Length == 0));
+
+// Never observed populated on a real rollout — 109 reasoning items, all empty
+// — so this pins the behaviour for when it starts happening rather than
+// describing something seen.
+Check("a populated reasoning summary is a system turn",
+    CodexTranscript.Map(new[]
+    {
+        """{"ordinal":1,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"Reasoning","summary_text":["Checking the clamp order."]}}}"""
+    }) is { Count: 1 } reasoned
+    && reasoned[0].Turn.Role == ChatRole.System
+    && reasoned[0].Turn.Text == "Checking the clamp order.");
+
+// --- what identifies a row ---
+
+// The ordinal, not the item id. Ids are absent on some items and shared
+// between a call and its output on others; the ordinal is dense and unique.
+Check("a row is keyed by its ordinal",
+    cx.Any(r => r.Uuid == "9") && cx.Any(r => r.Uuid == "15"),
+    string.Join(",", cx.Select(r => r.Uuid ?? "null")));
+
+// --- the pre-filter has to agree with the mapper ---
+
+// Same invariant the Claude suite pins, and for the same reason: if
+// IsInteresting says no to something MapRow would have mapped, that message is
+// dropped and nothing anywhere reports it.
+foreach (var row in new[]
+         {
+             CxSessionMeta, CxUser, CxReasoning, CxAgent, CxExec, CxSearch,
+             CxEdit, CxResponseItem, CxAgentFinal
+         })
+{
+    if (CodexTranscript.IsInteresting(row)) continue;
+
+    Check("the codex pre-filter drops a row the mapper would have shown",
+        CodexTranscript.Map(new[] { row }).Count == 0, Head(row));
+}
+
+Check("the wire log is filtered out before it is parsed",
+    !CodexTranscript.IsInteresting(CxResponseItem));
+
+// --- rows too large to parse ---
+
+// A CommandExecution that ran something noisy. The largest measured on a real
+// rollout was 1,046,104 bytes, with the output starting at offset 503,008 and
+// the command itself at 311 — so the head is read and the rest is never
+// touched. Above two megabytes the parse is skipped entirely; this row is
+// deliberately over that line.
+var huge =
+    """{"timestamp":"2026-08-19T16:57:14.073Z","ordinal":15,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"exec-1","command":["/bin/zsh","-lc","cat big.log"],"parsed_cmd":[{"type":"unknown","cmd":"cat big.log"}],"aggregated_output":"""
+    + "\"" + new string('x', 3 * 1024 * 1024) + "\"}}}";
+
+var oversized = CodexTranscript.Map(new[] { huge });
+
+Check("a row too large to parse still names its command",
+    oversized.Count == 1 && oversized[0].Turn.Text == "· exec  cat big.log",
+    oversized.Count == 0 ? "dropped" : oversized[0].Turn.Text);
+
+Check("a row too large to parse keeps its ordinal",
+    oversized.Count == 1 && oversized[0].Uuid == "15",
+    oversized.Count == 0 ? "dropped" : oversized[0].Uuid ?? "null");
+
+Check("a row too large to parse keeps its timestamp",
+    oversized.Count == 1 && oversized[0].Turn.At.Year == 2026 && oversized[0].Turn.At.Month == 8);
+
+// --- nothing here may throw ---
+
+Check("an unknown item type is skipped",
+    CodexTranscript.Map(new[]
+    {
+        """{"ordinal":1,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"SomethingNewInCodex","content":[{"type":"Text","text":"x"}]}}}"""
+    }).Count == 0);
+
+Check("injected context arriving as a user message is dropped",
+    CodexTranscript.Map(new[]
+    {
+        """{"ordinal":1,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"text","text":"<environment_context>\n  <cwd>/Users/w</cwd>\n</environment_context>"}]}}}"""
+    }).Count == 0);
+
+Check("a truncated row is skipped rather than thrown on",
+    CodexTranscript.Map(new[] { """{"ordinal":1,"type":"event_msg","payload":{"type":"item_comple""" }).Count == 0);
+
+Check("a row that isn't json is skipped",
+    CodexTranscript.Map(new[] { "item_completed but not json at all" }).Count == 0);
+
+Check("an item with no content is skipped",
+    CodexTranscript.Map(new[]
+    {
+        """{"ordinal":1,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage"}}}"""
+    }).Count == 0);
+
+Check("whitespace-only text is not a turn",
+    CodexTranscript.Map(new[]
+    {
+        """{"ordinal":1,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":[{"type":"Text","text":"   "}]}}}"""
+    }).Count == 0);
+
+Check("an empty list maps to nothing", CodexTranscript.Map(Array.Empty<string>()).Count == 0);
 
 // --- report ---
 
