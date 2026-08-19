@@ -126,51 +126,79 @@ if [ "$AGENT" = "claude" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
     COLOR=$(cb_value "$(cb_pick agent-color)" agentColor | tr -cd 'a-zA-Z')
 fi
 
-# Codex names nothing. It has a /rename, but the name it sets is not written to
-# the rollout — it lives in a sqlite database this has no business reading —
-# and there is no auto-title and no /color at all. So the orb would fall back
-# to the directory name, which is right for one session in a folder and useless
-# for three.
+# What Codex calls this chat. It has both halves of what Claude Code has, in
+# its own state database rather than in the transcript:
 #
-# The first thing you asked for is the closest thing to a name the file
-# actually contains, and it has the property that matters most here: it never
-# changes, so the orb's saved position doesn't move when the conversation does.
-# It is a title this app invented rather than one Codex reported, which is why
-# it is written down in AGENTS.md and the README rather than left to be
-# discovered.
+#   name   <- /rename, the name you chose
+#   title  <- Codex's own, taken from the first thing you asked
 #
-# Computed once. Every later write re-reads the title out of the status file,
-# so the grep below happens on a session's first hook and never again — which
-# matters because this one runs on every tool call.
+# Same precedence as the Claude Code branch above, and for the same reason: a
+# name you set by hand outranks a generated one however recently the generated
+# one was written. There is still no /color equivalent, so COLOR stays empty and
+# a Codex orb keeps the plain ring.
+#
+# Read from the database on every hook rather than cached in the status file,
+# which is what the first version of this did. Caching was there to avoid
+# grepping a multi-megabyte rollout, and a primary-key lookup costs nothing —
+# measured at 7ms against the live file. It also means /rename shows up on the
+# orb at the next hook instead of never, which is a limitation Claude Code
+# sessions still have.
+#
+# Read-only, via a file: URI, so a hook can never take a write lock on a
+# database Codex is using. Anything that goes wrong here — no sqlite3, a
+# database mid-write, a schema this doesn't recognise — falls through to the
+# rollout, which is the same answer by a slower route.
 if [ "$AGENT" = "codex" ]; then
-    if [ -f "$FILE" ]; then
-        TITLE=$(sed -n 's/.*"title"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$FILE")
+    # The filename carries a schema version (state_5.sqlite today) and will be
+    # bumped by some future Codex. Take the highest rather than naming one, so
+    # an upgrade degrades to the fallback below only if the *schema* changes,
+    # not merely because the number did.
+    CODEX_DB=$(ls -1 "${CODEX_HOME:-$HOME/.codex}"/state_*.sqlite 2>/dev/null | sort -V | tail -1)
+
+    # The session id goes into a SQL string, and it arrives from a hook payload
+    # this script does not control. Everything but hex and dashes is stripped —
+    # a real thread id is a UUID, so nothing legitimate is lost, and there is
+    # no quoting to get right.
+    SAFE_ID=$(printf '%s' "$SESSION_ID" | tr -cd '0-9a-fA-F-')
+
+    if [ -n "$CODEX_DB" ] && [ -n "$SAFE_ID" ] && command -v sqlite3 >/dev/null 2>&1; then
+        TITLE=$(sqlite3 -readonly "file:$CODEX_DB?mode=ro" \
+            "select coalesce(nullif(name,''), nullif(title,'')) from threads where id='$SAFE_ID';" \
+            2>/dev/null | head -1)
     fi
 
+    # No database, or nothing in it about this session yet — a thread is written
+    # there a moment after it starts, so the very first hook of a session can
+    # legitimately find nothing. The rollout has the same first message that
+    # Codex's own title is built from, so this agrees with the database rather
+    # than competing with it.
     if [ -z "$TITLE" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
         # -m1 stops at the first match, and a UserMessage is within the first
         # handful of rows, so this reads the head of the file rather than the
         # file. The row is one line of compact JSON; the prompt is the first
         # "text" value inside the first UserMessage item.
-        #
-        # The two sed passes before the trim are not tidying. A prompt is
-        # several lines as often as not, and its newlines arrive as the two
-        # characters \ and n — so stripping backslashes first would weld the
-        # lines together with an "n" in the seam ("first linensecond line").
-        # Escaped quotes are stripped after that, for the reason the Claude
-        # branch above gives: this script hand-rolls its JSON and a stray
-        # backslash would break the app's parse and drop the orb.
         TITLE=$(grep -m1 '"type":"UserMessage"' "$TRANSCRIPT" 2>/dev/null \
-            | sed -n 's/.*"type":"UserMessage".*"text":"\([^"]*\)".*/\1/p' \
+            | sed -n 's/.*"type":"UserMessage".*"text":"\([^"]*\)".*/\1/p')
+    fi
+
+    # Whichever it came from, it has to survive being spliced into the JSON this
+    # script hand-rolls, and it has to fit on an orb's tooltip.
+    #
+    # The two sed passes before the trim are not tidying. A first message is
+    # several lines as often as not, and its newlines arrive as the two
+    # characters \ and n — so stripping backslashes first would weld the lines
+    # together with an "n" in the seam ("first linensecond line").
+    if [ -n "$TITLE" ]; then
+        TITLE=$(printf '%s' "$TITLE" \
             | sed 's/\\[nrt]/ /g' \
             | tr -d '\\' \
             | tr -s '[:space:]' ' ' \
             | cut -c1-60 \
-            | sed 's/[[:space:]]*$//')
+            | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
 
-        # Cut at 60 characters lands mid-word about as often as not, and this
-        # is a name rather than a summary — "remove all usa" reads as a bug in
-        # the app. Back off to the last space, but only when that still leaves
+        # Cut at 60 characters lands mid-word about as often as not, and this is
+        # a name rather than a summary — "remove all usa" reads as a bug in the
+        # app. Back off to the last space, but only when that still leaves
         # something worth reading; a first word longer than 30 characters is a
         # path or a URL, and half of one is better than none of it.
         SHORTER="${TITLE% *}"

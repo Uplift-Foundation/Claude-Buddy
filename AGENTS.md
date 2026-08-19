@@ -138,14 +138,16 @@ and add to it rather than to a commit message when you measure something new.
 Two things about Codex support are worth knowing before you are surprised by
 them:
 
-- **A Codex orb's name is invented by this app.** Codex writes no title into its
-  rollout — it has a `/rename`, but the name lives in a sqlite database, and
-  there is no auto-title and no `/color` at all. So the hook takes the first
-  sixty-odd characters of the session's **first prompt**, trimmed at a word
-  boundary, and uses that. It is stable for the life of the session, which is
-  what a saved orb position needs. Two sessions started with the same prompt in
-  different directories get the same name, which is why the working directory is
-  part of the position key and not just the title.
+- **A Codex orb's name comes from Codex, not from the rollout.** Its transcript
+  carries no title record, but `$CODEX_HOME/state_<n>.sqlite` has a `threads`
+  table holding both `name` (what `/rename` set) and `title` (Codex's own, from
+  your first message). The hook prefers the first, exactly as the Claude Code
+  path prefers `/rename` over an auto-title, and falls back to reading the first
+  message out of the rollout for the brief window before a thread is written to
+  the database. There is no `/color` equivalent, so a Codex orb keeps the plain
+  ring. Two sessions started with the same first message in different
+  directories get the same title, which is why the working directory is part of
+  the position key and not just the title.
 - **Codex will not run a hook it has not been told to trust.** A `hooks.json`
   written by anything other than Codex itself starts out untrusted, and editing
   one later changes its hash and asks again. Until it is trusted no hook fires,

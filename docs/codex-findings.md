@@ -103,19 +103,55 @@ all, which is the case that makes this a rule rather than an optimisation.
   is the empty string, so a bare `· web.search` is the honest reading rather
   than a parse failure.
 
-### There is no title and no colour in the rollout
+### Names: not in the rollout, but Codex has them
 
-Nothing corresponding to Claude Code's `custom-title`, `ai-title` or
-`agent-color` rows. Codex *does* have a `/rename` slash command, but the name it
-sets is not written to the rollout — the thread metadata lives in
-`~/.codex/thread_history_1.sqlite`.
+An earlier version of this document said Codex names nothing. That was wrong,
+and it was wrong in the way worth guarding against — true of the file being
+read, and false about the product.
 
-So the hook derives a name from the session's first prompt. Two of the three
-rollouts on this machine began with the *same* prompt, in different directories
-— the same instruction run against two repositories, which is a normal way to
-work and not a coincidence worth designing around. A derived title is therefore
-not unique on its own, and the working directory has to stay part of anything
-that identifies a session, the saved orb position included.
+The rollout carries nothing corresponding to Claude Code's `custom-title`,
+`ai-title` or `agent-color` rows. But `$CODEX_HOME/state_<n>.sqlite` has a
+`threads` table, and it holds both halves of what Claude Code keeps in its
+transcript:
+
+| column | is |
+| --- | --- |
+| `name` | what `/rename` set. Null until someone renames the thread. |
+| `title` | Codex's own, taken from the first thing you asked. Always set. |
+| `preview` | the same first message, truncated. |
+| `first_user_message` | likewise. |
+| `agent_nickname` | null on every thread seen so far. |
+
+So the precedence is exactly Claude Code's — a name set by hand outranks a
+generated one — and the query is:
+
+```sql
+select coalesce(nullif(name,''), nullif(title,'')) from threads where id = ?
+```
+
+Measured against the live database while Codex was running: **7 ms**, read-only
+through a `file:…?mode=ro` URI so a hook can never take a write lock on a
+database Codex is using. A full Codex hook invocation including this costs
+about 98 ms.
+
+Two things to know before relying on it:
+
+- **The filename carries a schema version** — `state_5.sqlite` today. Take the
+  highest-numbered match rather than naming one, so a bump alone doesn't break
+  the lookup.
+- **A thread appears in the table a moment after it starts**, so the very first
+  hook of a session can legitimately find nothing. The fallback reads the first
+  `UserMessage` out of the rollout, which is the same message Codex builds its
+  own `title` from — so the two agree rather than compete.
+
+There is still **no `/color` equivalent**, so a Codex orb keeps the plain ring
+and the badge carries its identity.
+
+Note that a derived title is not unique. Two of the rollouts on this machine
+began with the *same* first message in different directories — the same
+instruction run against two repositories, which is a normal way to work. The
+working directory therefore has to stay part of anything identifying a session,
+the saved orb position included.
 
 ## The hooks
 
@@ -211,4 +247,3 @@ Not measured. Do not write these down as facts until they are.
 - Whether a side conversation shares a pid or a session id with its parent.
 - Whether compaction rewrites a rollout in place — a reader that treats a
   shrinking file as "start over" depends on the answer.
-- Whether `/rename` puts a name anywhere the app can read.
