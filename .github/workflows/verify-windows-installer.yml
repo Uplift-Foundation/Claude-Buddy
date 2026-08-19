@@ -26,6 +26,8 @@ on:
       - 'tools/ClaudeBuddy.iss'
       - 'tools/build-windows-installer.ps1'
       - 'tools/install-windows-hooks.ps1'
+      - 'tools/install-codex-hooks.ps1'
+      - 'tools/install-hooks.ps1'
       - 'ClaudeBuddyHook.ps1'
       - '.github/workflows/verify-windows-installer.yml'
 
@@ -111,7 +113,9 @@ jobs:
           $expected = @(
             (Join-Path $app 'ClaudeBuddy.exe'),
             (Join-Path $app 'ClaudeBuddyHook.ps1'),
+            (Join-Path $app 'tools\install-hooks.ps1'),
             (Join-Path $app 'tools\install-windows-hooks.ps1'),
+            (Join-Path $app 'tools\install-codex-hooks.ps1'),
             (Join-Path $app 'LICENSE.txt'),
             (Join-Path $app 'README.md'),
             (Join-Path $app 'unins000.exe'),
@@ -192,6 +196,17 @@ jobs:
           $backup = "$settingsPath.claudebuddy-backup"
           if (Test-Path $backup) { Write-Host "  ok      backup written: $backup" }
           else { $failures += 'no settings.json backup was written' }
+
+          # The runner has no Codex, so this run exercises the skip path in
+          # install-hooks.ps1 — which has to be a clean no-op, not a half-done
+          # setup. A hooks.json here would mean the installer creates config for
+          # a CLI the user does not have, and the first thing Codex would do on
+          # a later install is ask them to trust hooks they never asked for.
+          $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+          if (Test-Path (Join-Path $codexHome 'hooks.json')) {
+            $failures += 'wired Codex hooks on a machine with no Codex installed'
+          }
+          else { Write-Host '  ok      Codex absent, and nothing was written for it' }
 
           if ($failures.Count) { $failures | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
           Write-Host 'Hooks wired correctly and existing settings preserved.'

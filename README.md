@@ -846,7 +846,7 @@ is needed; the .NET runtime is bundled.
 | Windows 10/11, 64-bit | `ClaudeBuddy-<version>-win-x64-setup.exe` |
 
 **macOS**: open the DMG, drag Claude Buddy to Applications, then double-click
-**Install Claude Code Hooks.command** — that runs step 2 below for you. The
+**Install Hooks.command** — that runs step 2 below for you. The
 builds are signed and notarized, so they open without a Gatekeeper override.
 
 **Windows**: run the setup. It installs per-user under
@@ -936,33 +936,65 @@ The Windows one needs [Inno Setup 6](https://jrsoftware.org/isdl.php)
 (`winget install -e --id JRSoftware.InnoSetup`). Both work unsigned for local
 testing — see [Releasing](#releasing) for what CI adds on top.
 
-## 2. Wire up Claude Code
+## 2. Wire up your agent CLIs
 
-Each Claude Code install you want tracked (WSL, native Windows, macOS, ...)
-needs its own copy of these hooks added to *its own* `settings.json` —
-installs don't share config. Repeat this section once per install.
+Claude Buddy tracks **Claude Code** and **OpenAI's Codex CLI**. Each install you
+want tracked (WSL, native Windows, macOS, ...) needs its own copy of the hooks
+added to *its own* config — installs don't share config.
 
 ### The scripted way
 
-There's a script per platform, and it's the recommended route: it backs up
-`settings.json` first, preserves everything already in it (including other
-tools' hooks), and converges rather than duplicating, so re-running it repairs
-a broken setup. Pass `--uninstall` / `-Uninstall` to remove just our entries.
+One script wires whatever it finds. It's the recommended route: it backs up
+each config first, preserves everything already in it (including other tools'
+hooks), and converges rather than duplicating, so re-running it repairs a broken
+setup — or picks up the second CLI after you install it. Pass `--uninstall` /
+`-Uninstall` to remove just our entries, from everything.
 
 ```bash
-./tools/install-macos-hooks.sh
-# installed from a DMG instead of a clone? the script ships inside the app:
-"/Applications/Claude Buddy.app/Contents/Resources/install-macos-hooks.sh"
+./tools/install-hooks.sh
+# installed from a DMG instead of a clone? it ships inside the app:
+"/Applications/Claude Buddy.app/Contents/Resources/install-hooks.sh"
 ```
 
 ```powershell
-.\tools\install-windows-hooks.ps1
+.\tools\install-hooks.ps1
 # or, installed from the setup:
-& "$env:LOCALAPPDATA\Programs\ClaudeBuddy\tools\install-windows-hooks.ps1"
+& "$env:LOCALAPPDATA\Programs\ClaudeBuddy\tools\install-hooks.ps1"
 ```
 
+A CLI you don't have is skipped and said so, not treated as an error. Underneath
+it are one installer per CLI — `install-macos-hooks.sh` /
+`install-windows-hooks.ps1` for Claude Code, `install-codex-hooks.sh` /
+`install-codex-hooks.ps1` for Codex — and those still take the per-CLI options
+described below. You only need them if you want one of those options; the
+wrapper is what an install runs.
+
+### Codex
+
+**Codex will not run a hook it has not been told to trust.** A `hooks.json`
+written by anything other than Codex starts out untrusted, so after wiring, the
+first time you start Codex, accept the hook review it shows you — or run
+`/hooks` inside it and trust the Claude Buddy entries. Until you do, no hook
+fires, no Codex orb appears, and **nothing anywhere tells you why**. Editing
+`hooks.json` later, including re-running the installer, changes its hash and
+asks you again.
+
+The hooks go in `$CODEX_HOME/hooks.json` (`~/.codex/hooks.json` by default),
+which Codex discovers on its own — nothing needs adding to `config.toml`.
+
+Two differences from a Claude Code orb, both because Codex works differently
+rather than because the support is unfinished:
+
+- **No `/color`.** Codex has no equivalent, so a Codex orb keeps the plain ring
+  and carries a badge instead. Its *name* does come from Codex — `/rename` if
+  you've set one, otherwise Codex's own title, taken from your first message.
+- **No chat panel yet.** Clicking a Codex orb goes to its terminal, and the
+  flyout's chat button stays hidden. Reading and replying to a Codex session
+  from the panel is a follow-up; see `docs/codex-findings.md` for what has been
+  measured and what hasn't.
+
 The Windows installer runs this for you if you leave the checkbox ticked, and
-the macOS DMG's **Install Claude Code Hooks.command** is a wrapper around it.
+the macOS DMG's **Install Hooks.command** is a wrapper around it.
 
 **WSL** is covered by the same script, opt-in via a couple of extra flags —
 native Windows wiring is unaffected either way:
@@ -1121,6 +1153,19 @@ do). The BOM matters too: `System.Text.Json` treats a leading BOM as an
 invalid start of value, so a BOM would make the app skip the file and drop
 that orb entirely. PowerShell 7 defaults are already correct; being explicit
 is right on both.
+
+**Codex on Windows** carries one gap worth knowing about: a Codex orb there is
+named after your first message, not after `/rename`. Codex keeps both names in a
+SQLite database, and macOS can read it because the system ships a `sqlite3`
+binary — Windows ships `winsqlite3.dll` but no command-line client, and
+PowerShell has no built-in provider, so the hook falls back to the first message
+out of the rollout. That is the same message Codex builds its own title from, so
+the name is true, just not the one you chose. It matches what a Claude Code
+session under WSL already does for the same category of reason.
+
+Windows Codex support has **not been run on a real machine** — the hook script,
+the installer and the setup wiring are written and reviewed but unverified. See
+`docs/codex-findings.md`.
 
 **WSL** (hooks execute via a Linux shell that then calls out to Windows):
 `claude-hooks-snippet-wsl.json` uses `powershell.exe`'s full path
