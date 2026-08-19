@@ -67,7 +67,7 @@ namespace ClaudeBuddy
             "speakVoice", "neuralVoiceEnabled", "neuralVoice",
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
-            "orbColors", "claudeCodeProfileDirs", "profiles", "orbPositions",
+            "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes"
         };
@@ -313,6 +313,12 @@ namespace ClaudeBuddy
             // means in practice: a repair/reinstall re-reads whatever's saved
             // here rather than needing its own separate wizard UI for it.
             public List<string> ClaudeCodeProfileDirs { get; init; } = new();
+
+            // The Codex analogue: directory names under $HOME that a second
+            // account is run out of via CODEX_HOME. Separate from the list
+            // above because they are separate products with separate configs,
+            // and someone can easily have extras of one and not the other.
+            public List<string> CodexHomes { get; init; } = new();
 
             // Auto-organize: which shape and how much space between orbs.
             public string ArrangeShape { get; set; } = DefaultArrangeShape;
@@ -599,6 +605,31 @@ namespace ClaudeBuddy
             Save();
         }
 
+        public static IReadOnlyList<string> CodexHomes
+        {
+            get { Load(); lock (Gate) return _model.CodexHomes.ToList(); }
+        }
+
+        public static void AddCodexHome(string dirName)
+        {
+            Load();
+            lock (Gate)
+            {
+                if (!_model.CodexHomes.Contains(dirName, StringComparer.Ordinal))
+                {
+                    _model.CodexHomes.Add(dirName);
+                }
+            }
+            Save();
+        }
+
+        public static void RemoveCodexHome(string dirName)
+        {
+            Load();
+            lock (Gate) { _model.CodexHomes.Remove(dirName); }
+            Save();
+        }
+
         // ---- per profile ----------------------------------------------------
 
         // A copy, so callers can't mutate the store without going through Update.
@@ -730,6 +761,17 @@ namespace ClaudeBuddy
                         }
                     }
 
+                    if (root["codexHomes"] is JsonArray codexHomes)
+                    {
+                        foreach (var node in codexHomes)
+                        {
+                            if (node?.GetValue<string>() is { Length: > 0 } dirName)
+                            {
+                                model.CodexHomes.Add(dirName);
+                            }
+                        }
+                    }
+
                     if (root["profiles"] is JsonObject profiles)
                     {
                         foreach (var (folder, node) in profiles)
@@ -844,6 +886,9 @@ namespace ClaudeBuddy
                     var profileDirs = new JsonArray();
                     foreach (var dirName in _model.ClaudeCodeProfileDirs) profileDirs.Add(dirName);
 
+                    var codexHomeDirs = new JsonArray();
+                    foreach (var dirName in _model.CodexHomes) codexHomeDirs.Add(dirName);
+
                     var speakArgs = new JsonArray();
                     foreach (var argument in _model.SpeakCommandArgs) speakArgs.Add(argument);
 
@@ -893,6 +938,7 @@ namespace ClaudeBuddy
                             ["waiting"] = _model.WaitingColor
                         },
                         ["claudeCodeProfileDirs"] = profileDirs,
+                        ["codexHomes"] = codexHomeDirs,
                         ["profiles"] = profiles,
                         ["orbPositions"] = positions
                     };

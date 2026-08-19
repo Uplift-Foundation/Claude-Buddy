@@ -276,13 +276,38 @@ namespace ClaudeBuddy
 
             root.Children.Add(Group("Profiles", ProfilesCard()));
 
-            // Native wiring for extra Claude Code (CLI) accounts, and WSL's own
-            // per-distro toggles — neither concept exists on macOS, where the
-            // hook installer only ever touches ~/.claude.
+            // Extra accounts, for both CLIs, on both platforms.
+            //
+            // These were Windows-only, on the stated reasoning that the concept
+            // did not exist on macOS. That was true of WSL and wrong about
+            // profiles: CLAUDE_CONFIG_DIR and CODEX_HOME are features of the
+            // CLIs, not of Windows, and install-macos-hooks.sh has always taken
+            // a --settings path. So macOS had the mechanism, consumed the
+            // setting in TranscriptReader, and offered no way to fill it in —
+            // which left a second account wired once by hand, if at all, and
+            // never maintained by a repair or an uninstall.
+            root.Children.Add(Group("Claude Code profiles", Card(ProfileDirsCard(
+                blurb: "Wire Claude Buddy hooks into additional Claude Code accounts managed via "
+                       + "CLAUDE_CONFIG_DIR, alongside the default ~/.claude.",
+                watermark: ".claude-work",
+                current: () => ClaudeBuddySettings.ClaudeCodeProfileDirs,
+                add: ClaudeBuddySettings.AddClaudeCodeProfileDir,
+                remove: ClaudeBuddySettings.RemoveClaudeCodeProfileDir,
+                reapply: HookInstaller.ReapplyClaudeCode))));
+
+            root.Children.Add(Group("Codex profiles", Card(ProfileDirsCard(
+                blurb: "Wire Claude Buddy hooks into additional Codex accounts managed via "
+                       + "CODEX_HOME, alongside the default ~/.codex. Codex asks you to trust "
+                       + "hooks the first time it sees them, once per account.",
+                watermark: ".codex-work",
+                current: () => ClaudeBuddySettings.CodexHomes,
+                add: ClaudeBuddySettings.AddCodexHome,
+                remove: ClaudeBuddySettings.RemoveCodexHome,
+                reapply: HookInstaller.ReapplyCodex))));
+
+            // WSL genuinely is Windows-only, unlike the two above.
             if (OperatingSystem.IsWindows())
             {
-                root.Children.Add(Group("Claude Code profiles", Card(ClaudeCodeProfilesCard())));
-
                 var wslCard = WslCard();
                 if (wslCard is not null) root.Children.Add(Group("WSL integration", Card(wslCard)));
             }
@@ -1413,49 +1438,56 @@ namespace ClaudeBuddy
             return box;
         }
 
-        // ---- Windows-only: extra Claude Code (CLI) profile directories ------
+        // ---- extra CLI account directories ----------------------------------
 
         // Distinct from "Profiles" above (Claude Desktop, the Electron app) —
-        // these are Claude Code *CLI* config directory names, for a second
-        // (or third...) account managed via CLAUDE_CONFIG_DIR, e.g. an alias
-        // like `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"`. Each
-        // one is wired in *addition* to the default ~/.claude, on native
-        // Windows and every WSL distro below — never a replacement for it,
-        // and never auto-discovered: only names added here (or passed
-        // explicitly to install-windows-hooks.ps1's -ProfileDir/
-        // -WslProfileDir) are ever touched. Always shown, unlike the WSL card:
-        // native wiring applies regardless of whether WSL is even installed.
-        [SupportedOSPlatform("windows")]
-        private static Control ClaudeCodeProfilesCard()
+        // these are *CLI* config directory names, for a second (or third...)
+        // account: CLAUDE_CONFIG_DIR for Claude Code, CODEX_HOME for Codex,
+        // e.g. an alias like `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"`.
+        // Each one is wired in *addition* to the default, never as a
+        // replacement, and never auto-discovered: only names added here (or
+        // passed explicitly to an installer's --profile-dir) are ever touched.
+        //
+        // One card, used twice. The two lists are separate settings because
+        // they are separate products and someone can easily have extras of one
+        // and not the other, but nothing about the *UI* differs between them,
+        // and two near-identical copies would have drifted the way the
+        // platforms did.
+        private static Control ProfileDirsCard(
+            string blurb,
+            string watermark,
+            Func<IReadOnlyList<string>> current,
+            Action<string> add,
+            Action<string> remove,
+            Action reapply)
         {
             var content = new StackPanel { Spacing = 8, Margin = new Thickness(14, 10) };
 
             content.Children.Add(new TextBlock
             {
-                Text = "Wire Claude Buddy hooks into additional Claude Code accounts managed via "
-                       + "CLAUDE_CONFIG_DIR, alongside the default ~/.claude.",
+                Text = blurb,
                 TextWrapping = TextWrapping.Wrap,
                 Opacity = 0.55,
                 FontSize = 11
             });
 
             var itemsPanel = new StackPanel { Spacing = 4 };
-            foreach (var dirName in ClaudeBuddySettings.ClaudeCodeProfileDirs)
+            foreach (var dirName in current())
             {
-                itemsPanel.Children.Add(ProfileDirRow(dirName, itemsPanel));
+                itemsPanel.Children.Add(ProfileDirRow(dirName, itemsPanel, remove));
             }
             content.Children.Add(itemsPanel);
 
-            var input = new TextBox { Watermark = ".claude-work", Width = 220 };
+            var input = new TextBox { Watermark = watermark, Width = 220 };
             var browseButton = new Button { Content = "Browse…" };
             var addButton = new Button { Content = "Add" };
             var status = new TextBlock { FontSize = 11, Opacity = 0.7 };
 
             // A folder picker is the more discoverable way to do this, but
-            // typing stays available too: CLAUDE_CONFIG_DIR can point at a
-            // directory that doesn't exist yet (Claude Code creates it on
-            // first use with that alias), which a picker — browsing existing
-            // folders only — can't select.
+            // typing stays available too: these variables can point at a
+            // directory that doesn't exist yet (the CLI creates it on first use
+            // with that alias), which a picker — browsing existing folders only
+            // — can't select.
             browseButton.Click += async (_, _) =>
             {
                 var picked = await BrowseForProfileDir(browseButton, status);
@@ -1468,18 +1500,18 @@ namespace ClaudeBuddy
                 if (string.IsNullOrEmpty(name)) return;
 
                 status.Text = "";
-                ClaudeBuddySettings.AddClaudeCodeProfileDir(name);
-                itemsPanel.Children.Add(ProfileDirRow(name, itemsPanel));
+                add(name);
+                itemsPanel.Children.Add(ProfileDirRow(name, itemsPanel, remove));
                 input.Text = "";
 
-                // Off the UI thread: this shells out (native wiring, plus a
-                // re-run for every already-wired WSL distro), and the window
-                // must stay responsive the whole time — ReapplyProfiles'
-                // own internal timeouts guarantee it eventually returns
+                // Off the UI thread: this shells out to an installer, and on
+                // Windows that means a re-run for every already-wired WSL
+                // distro. The window must stay responsive the whole time; the
+                // installers' own timeouts guarantee it eventually returns
                 // either way.
                 addButton.IsEnabled = false;
                 input.IsEnabled = false;
-                Task.Run(WslIntegration.ReapplyProfiles).ContinueWith(_ =>
+                Task.Run(reapply).ContinueWith(_ =>
                 {
                     Dispatcher.UIThread.Post(() =>
                     {
@@ -1500,7 +1532,7 @@ namespace ClaudeBuddy
             content.Children.Add(new TextBlock
             {
                 Text = "Removing a profile stops it from being wired on future changes; it doesn't "
-                       + "remove hooks already written to that profile's own settings.json.",
+                       + "remove hooks already written to that profile's own config.",
                 TextWrapping = TextWrapping.Wrap,
                 Opacity = 0.5,
                 FontSize = 11
@@ -1512,9 +1544,13 @@ namespace ClaudeBuddy
         // Returns the picked folder's bare name (e.g. ".claude-work"), or
         // null if the user cancelled or picked something invalid — in which
         // case `status` is set to say why, since a folder outside the home
-        // directory would resolve to the wrong place on both native Windows
-        // and WSL (see ClaudeCodeProfilesCard's own doc comment).
-        [SupportedOSPlatform("windows")]
+        // directory would resolve to the wrong place everywhere: native
+        // Windows, WSL, and macOS alike (see ProfileDirsCard's doc comment).
+        //
+        // No longer Windows-only. GetWslHomeUncPaths already returns an empty
+        // list off Windows, so the validation below reduces to "a direct child
+        // of $HOME", which is exactly the rule the macOS installers enforce
+        // when they refuse a profile name containing a slash.
         private static async Task<string?> BrowseForProfileDir(Control owner, TextBlock status)
         {
             var storageProvider = TopLevel.GetTopLevel(owner)?.StorageProvider;
@@ -1525,7 +1561,7 @@ namespace ClaudeBuddy
 
             var result = await storageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
             {
-                Title = "Select a Claude Code config directory",
+                Title = "Select a config directory",
                 SuggestedStartLocation = startLocation,
                 AllowMultiple = false
             });
@@ -1569,7 +1605,8 @@ namespace ClaudeBuddy
         }
 
         [SupportedOSPlatform("windows")]
-        private static Control ProfileDirRow(string dirName, StackPanel itemsPanel)
+        private static Control ProfileDirRow(
+            string dirName, StackPanel itemsPanel, Action<string> remove)
         {
             var label = new TextBlock
             {
@@ -1577,18 +1614,18 @@ namespace ClaudeBuddy
                 VerticalAlignment = VerticalAlignment.Center,
                 Width = 220
             };
-            var remove = new Button { Content = "Remove" };
+            var removeButton = new Button { Content = "Remove" };
 
             var row = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 Spacing = 8,
-                Children = { label, remove }
+                Children = { label, removeButton }
             };
 
-            remove.Click += (_, _) =>
+            removeButton.Click += (_, _) =>
             {
-                ClaudeBuddySettings.RemoveClaudeCodeProfileDir(dirName);
+                remove(dirName);
                 itemsPanel.Children.Remove(row);
             };
 

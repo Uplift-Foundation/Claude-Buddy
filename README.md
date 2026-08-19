@@ -1016,10 +1016,23 @@ every WSL distro with a checkbox per distro to wire or unwire it on the spot —
 no script or installer re-run needed for that. Both routes only reach each
 distro's *default* Linux user (see the Scope note above).
 
-**Multiple Claude Code accounts** managed via `CLAUDE_CONFIG_DIR` — e.g. an
-alias like `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"` for a
-second account — are a separate `settings.json` each, invisible to the
-default `~/.claude` wiring above. Note that `claude`'s own PATH detection
+**Multiple accounts** — `CLAUDE_CONFIG_DIR` for Claude Code, `CODEX_HOME` for
+Codex, e.g. an alias like `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"`
+— are a separate config file each, invisible to the default wiring above. The
+**Settings window** has a "Claude Code profiles" and a "Codex profiles" section
+on **both platforms**: add a directory name once and it's wired immediately and
+re-applied on every future install, repair and uninstall. The installers read
+the same list, so a fresh install picks up whatever is saved there.
+
+macOS can also pass them explicitly:
+
+```bash
+./tools/install-macos-hooks.sh --profile-dir .claude-work
+./tools/install-codex-hooks.sh --profile-dir .codex-work
+```
+
+The Windows-specific parts of this — WSL distros, and the extra flags below —
+stay Windows-only, because WSL does. Note that `claude`'s own PATH detection
 (the `-Wsl` skip/`-Force` logic just above) tries several shells before
 giving up specifically because of this: nvm/pyenv/rustup-style installs put
 their PATH line in `~/.bashrc` or `~/.zshrc` depending on which shell you
