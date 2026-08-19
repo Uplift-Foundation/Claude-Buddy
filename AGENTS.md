@@ -127,6 +127,21 @@ Both CLIs write `.jsonl`, so the harness picks its parser from the file's first
 row rather than its extension and says which one it used. If that line names the
 wrong CLI, nothing below it means anything.
 
+## Extra accounts
+
+Both CLIs support a second account through an environment variable —
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME` — and each is a separate config file that
+the default wiring does not touch. The app keeps a list per CLI
+(`claudeCodeProfileDirs`, `codexHomes`), the Settings window edits them on both
+platforms, and the installers read them so a repair or uninstall covers every
+account rather than just the default one.
+
+This was Windows-only until it wasn't, on the reasoning that "neither concept
+exists on macOS". Only the WSL half of that was ever true, and the gap was
+invisible: macOS already *consumed* the list in `TranscriptReader` and offered
+no way to fill it in, so a second account got wired once by hand if at all and
+was never maintained afterwards.
+
 ## Codex specifically
 
 `docs/codex-findings.md` is the reference for everything measured about the

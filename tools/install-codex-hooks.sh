@@ -9,6 +9,12 @@
 #   install-codex-hooks.sh              # install / repair
 #   install-codex-hooks.sh --uninstall  # remove just our entries
 #
+# A second Codex account run as `CODEX_HOME=~/.codex-work codex` is a separate
+# hooks.json and invisible to the default wiring, exactly as an extra
+# CLAUDE_CONFIG_DIR account is for Claude Code. Every directory name saved in
+# the app's own settings ("Codex profiles" in the Settings window) is wired too,
+# in addition to the default and never instead of it.
+#
 # Safe to re-run: it strips any existing Claude Buddy entries before adding
 # fresh ones, so it converges rather than accumulating duplicates. That matters
 # more here than it does for Claude Code, because Codex's own `/import` copies
@@ -39,6 +45,8 @@
 set -euo pipefail
 
 UNINSTALL=0
+NO_PROFILES=0
+EXTRA_PROFILES=()
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 HOOK_DIR=""
 HOOKS_JSON=""
@@ -47,6 +55,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --uninstall) UNINSTALL=1; shift ;;
     --codex-home) CODEX_DIR="$2"; shift 2 ;;
+    # One extra Codex home, by name under $HOME. The saved list is used when
+    # this is absent.
+    --profile-dir) EXTRA_PROFILES+=("$2"); shift 2 ;;
+    # Don't recurse into the saved profiles; set when this script re-invokes
+    # itself for one of them.
+    --no-profiles) NO_PROFILES=1; shift ;;
     --hooks-json) HOOKS_JSON="$2"; shift 2 ;;
     --hook-dir) HOOK_DIR="$2"; shift 2 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
@@ -231,3 +245,60 @@ echo "  its hash and asks you again."
 echo
 echo "Then restart any running Codex sessions: hooks are read at session start,"
 echo "so existing sessions will not produce orbs until they are restarted."
+
+# --- extra Codex accounts -----------------------------------------------------
+
+# The directory names saved in the app's own settings, one per line. JXA for the
+# reason the merge above uses it, and a missing file is not an error.
+#
+# This path does *not* follow HOME — SpecialFolder.ApplicationData resolves
+# through the OS, so the app reads this exact file whatever HOME says.
+saved_profiles() {
+  local settings="$HOME/Library/Application Support/ClaudeBuddy/settings.json"
+  [[ -f "$settings" ]] || return 0
+
+  osascript -l JavaScript -e '
+    ObjC.import("Foundation");
+    function run(a) {
+      const s = $.NSString.stringWithContentsOfFileEncodingError(a[0], $.NSUTF8StringEncoding, null);
+      if (s.isNil()) return "";
+      let parsed;
+      try { parsed = JSON.parse(ObjC.unwrap(s)); } catch (e) { return ""; }
+      const dirs = parsed.codexHomes;
+      if (!Array.isArray(dirs)) return "";
+      return dirs.filter(function (d) { return typeof d === "string" && d.length > 0; }).join("\n");
+    }' "$settings" 2>/dev/null
+}
+
+if [[ $NO_PROFILES -eq 0 ]]; then
+  profiles=()
+  if [[ ${#EXTRA_PROFILES[@]} -gt 0 ]]; then
+    profiles=("${EXTRA_PROFILES[@]}")
+  else
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && profiles+=("$line")
+    done < <(saved_profiles)
+  fi
+
+  for profile in "${profiles[@]+"${profiles[@]}"}"; do
+    # A bare name under $HOME, the shape the Settings window stores. A path is
+    # refused rather than resolved: CODEX_HOME can point anywhere, and guessing
+    # would write hooks somewhere nobody asked for.
+    if [[ "$profile" == */* ]]; then
+      echo "Skipping profile '$profile': expected a directory name under \$HOME, not a path." >&2
+      continue
+    fi
+
+    echo
+    echo "--- codex profile: $profile"
+
+    # An array, not ${UNINSTALL:+--uninstall}: UNINSTALL is 0 or 1 and "0" is a
+    # non-empty string, so :+ would expand every time and an install would
+    # quietly unwire each extra profile. That exact mistake was made and caught
+    # in the Claude Code installer next door.
+    mode=()
+    [[ $UNINSTALL -eq 1 ]] && mode=(--uninstall)
+
+    "$0" "${mode[@]+"${mode[@]}"}" --no-profiles --codex-home "$HOME/$profile"
+  done
+fi
