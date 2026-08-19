@@ -65,6 +65,19 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public SessionSource Source { get; set; } = SessionSource.ClaudeCode;
 
+        // What kind of gateway conversation this is. [JsonIgnore] for the same
+        // reason Source is: it is derived from the gateway's answer during the
+        // scan, and ResetSessionToIdle rewrites a status file from this object.
+        [JsonIgnore]
+        public SessionKind Kind { get; set; } = SessionKind.Unknown;
+
+        // A stand-in orb for a channel, invented by this app rather than
+        // reported by anything. It has no conversation of its own — it is the
+        // thing the agents in that channel point at, so a room reads as one
+        // place instead of as eight unrelated orbs that happen to share a badge.
+        [JsonIgnore]
+        public bool IsRoom { get; set; }
+
         // Where the session's terminal lives (macOS hook only; empty on
         // Windows or with an older hook script). See TerminalFocuser.
         [JsonPropertyName("term_program")]
@@ -389,11 +402,10 @@ namespace ClaudeBuddy
             // no new concept and no second timeout to reason about.
             var gatewaySessions = OpenClawSessions.Snapshot();
 
-            // Assigned across the whole set rather than per session, because
-            // keeping two agents apart is a fact about the pair — see
-            // AgentPalette.Assign.
-            var agentColours = AgentPalette.Assign(
-                gatewaySessions.Select(s => OpenClawSessions.AgentIdOf(s.Key) ?? s.Key));
+            // Channel -> the room orb to stand for it. Keyed by
+            // OpenClawSessionKind.RoomOf, so every agent in a channel agrees.
+            var rooms = new Dictionary<string, (string Title, DateTime Activity, bool Working)>(
+                StringComparer.Ordinal);
 
             foreach (var session in gatewaySessions)
             {
@@ -412,15 +424,67 @@ namespace ClaudeBuddy
                     // channel name and matches no colour Claude Code knows — so
                     // every gateway orb fell through to the plain ring, and six
                     // of them were indistinguishable.
-                    Color = agentColours.GetValueOrDefault(
-                        OpenClawSessions.AgentIdOf(session.Key) ?? session.Key, ""),
+                    // Asked for rather than computed here: an agent's ring and
+                    // a chat bubble from that agent have to agree, so exactly
+                    // one place decides. See OpenClawSessions.ColourForAgent.
+                    Color = OpenClawSessions.ColourForAgent(
+                        OpenClawSessions.AgentIdOf(session.Key) ?? session.Key),
+                    Kind = session.Kind,
                 };
 
                 // Namespaced because these ids share a dictionary with Claude
                 // Code's UUIDs, and because a gateway key contains colons and
                 // slashes that ResetSessionToIdle would otherwise splice into a
                 // file path.
+                // Which room this is standing in, if any. The room orb itself is
+                // added below, once, however many agents point at it.
+                var room = OpenClawSessionKind.RoomOf(session.Key);
+                if (room is not null)
+                {
+                    status.Lead = RoomId(room);
+
+                    if (!rooms.TryGetValue(room, out var seenRoom)
+                        || session.LastActivity > seenRoom.Activity)
+                    {
+                        rooms[room] = (RoomTitle(session.Title), session.LastActivity,
+                            (seenRoom.Working || session.State == "generating"));
+                    }
+                    else if (session.State == "generating")
+                    {
+                        rooms[room] = (seenRoom.Title, seenRoom.Activity, true);
+                    }
+                }
+
                 found.Add(new ScanEntry("openclaw:" + session.Key, status, session.LastActivity));
+            }
+
+            // One orb per channel, for the agents in it to point at. Invented
+            // here rather than reported by the gateway, which has no notion of a
+            // room as a thing — it has a session per agent per channel, and
+            // eight of those on screen is eight orbs with nothing saying they
+            // are the same conversation.
+            foreach (var (key, room) in rooms)
+            {
+                found.Add(new ScanEntry(
+                    RoomId(key),
+                    new SessionStatus
+                    {
+                        Source = SessionSource.OpenClaw,
+                        IsRoom = true,
+                        Title = room.Title,
+
+                        // For the panel's header chip. The orb itself skips the
+                        // badge — it *is* the channel — but the panel is a
+                        // window onto a conversation and saying which kind is
+                        // the same help it is anywhere else.
+                        Kind = SessionKind.Channel,
+
+                        // Busy while anyone in it is, which is what a room being
+                        // "active" means. Its own colour stays empty: the ring
+                        // is how an *agent* is identified, and a room is not one.
+                        State = room.Working ? "generating" : "idle",
+                    },
+                    room.Activity));
             }
 
             InheritTerminalInfo(found);
@@ -587,8 +651,18 @@ namespace ClaudeBuddy
                 var membership = status.Source == SessionSource.ClaudeCode
                     ? AgentTeam.Of(status.SessionPid)
                     : default;
-                status.Lead = membership.Lead == sessionId ? "" : membership.Lead;
-                status.Agent = string.IsNullOrEmpty(status.Lead) ? "" : membership.Name;
+
+                // Guarded, where it used to run for everything. A gateway
+                // session has no process to ask, so `default` came back and this
+                // assigned Lead = "" — which silently erased the room a channel
+                // session had already been put in, a few lines earlier and in
+                // another file. Teams and rooms are different things that happen
+                // to use the same field.
+                if (status.Source == SessionSource.ClaudeCode)
+                {
+                    status.Lead = membership.Lead == sessionId ? "" : membership.Lead;
+                    status.Agent = string.IsNullOrEmpty(status.Lead) ? "" : membership.Name;
+                }
 
                 // The colour Claude Code gave this agent when the team was
                 // built. Only used when the session hasn't set one itself: a
@@ -734,6 +808,24 @@ namespace ClaudeBuddy
         {
             if (!_statuses.TryGetValue(sessionId, out var status)) return null;
 
+            // A room's conversation is its members' transcripts merged, since
+            // the gateway has no room to ask about. Assembled from the same
+            // Lead field the arrows are drawn from, so what opens is exactly
+            // what the orb is pointing at.
+            if (status.IsRoom)
+            {
+                // Asked of the gateway's own list rather than assembled from
+                // the orbs on screen. The orbs are filtered by "show sessions
+                // active within", which is a question about what is worth
+                // drawing — and an agent that spoke an hour ago is still in the
+                // room. Built from the orbs, its half of the conversation went
+                // missing and its messages showed up as yours.
+                const string RoomPrefix = "openclaw:room:";
+                var members = OpenClawSessions.MembersOfRoom(sessionId[RoomPrefix.Length..]);
+
+                return OpenClawSessions.RoomChatFor(sessionId, status.Title, members);
+            }
+
             if (status.Source == SessionSource.OpenClaw)
                 return OpenClawSessions.ChatFor(sessionId, status.Title);
 
@@ -759,6 +851,17 @@ namespace ClaudeBuddy
         // there is no reason to watch a transcript nobody is reading — and
         // emptied with the orb.
         private readonly Dictionary<string, ClaudeCodeChatSession> _chats = new(StringComparer.Ordinal);
+
+        // Namespaced away from both Claude Code's UUIDs and the gateway's own
+        // keys, because it is neither: nothing on the gateway answers to it.
+        private static string RoomId(string roomKey) => "openclaw:room:" + roomKey;
+
+        // A member's title is "Lilibeth — general"; the room is just "general".
+        private static string RoomTitle(string sessionTitle)
+        {
+            var dash = sessionTitle.IndexOf(" — ", StringComparison.Ordinal);
+            return dash > 0 ? sessionTitle[(dash + 3)..].Trim() : sessionTitle;
+        }
 
         public SessionStatus? StatusFor(string? sessionId) =>
             string.IsNullOrEmpty(sessionId) ? null : _statuses.GetValueOrDefault(sessionId);
@@ -953,18 +1056,57 @@ namespace ClaudeBuddy
 
         // --- dragged orb positions -------------------------------------------
         // A dragged orb stays where it was put. Within a run that's the pinned
-        // flag above; across runs it's settings.json, keyed by the session's
-        // directory — session ids are new every time, so they'd remember
-        // nothing. Two live sessions in one directory therefore share a key:
-        // the first orb to appear claims the saved spot, the others stack
-        // normally, and whichever one you drag last is what gets remembered.
+        // flag above; across runs it's settings.json, keyed by whichever part of
+        // a session survives a restart. For Claude Code that is its directory,
+        // because its session id is new every run and would remember nothing;
+        // for a gateway session it is the id itself, which is not.
+        //
+        // A local key is the directory *and* the session's name, because two
+        // sessions in one directory are common and sharing a slot meant neither
+        // stayed put. The name can change under you — Claude Code writes an
+        // automatic title that follows the conversation — so a lookup falls back
+        // to the directory alone, which also covers positions saved before names
+        // were part of this.
 
-        private static string PositionKeyFor(SessionStatus status) =>
+        // A gateway session has no directory to be keyed by — the findings doc
+        // notes the absence of `cwd` as a *simplification*, since there is no
+        // local checkout for a key to collide with. What it missed is that the
+        // key was doing a second job: an empty one is never saved and never
+        // restored, so every agent orb went back to the stack on every launch
+        // while local ones stayed put.
+        //
+        // Its session id is the stable thing instead. Unlike a Claude Code
+        // session id, which is new every run, a gateway key is derived from the
+        // agent and the channel and is the same string next week — which is what
+        // made it a good room key and makes it a good position key.
+        private static string PositionKeyFor(SessionStatus status, string sessionId)
+        {
+            if (status.Source != SessionSource.ClaudeCode) return sessionId;
+
+            var cwd = DirectoryKeyFor(status);
+            if (cwd.Length == 0) return "";
+
+            // The directory alone is not enough when two sessions are open in
+            // one: "makayla-lawyer" and "job-lawyer" both live in Evidence, so
+            // they shared a slot — first orb to appear claimed it, the other
+            // stacked, and whichever was dragged last overwrote the one entry.
+            // Two orbs that would not stay where they were put, while every
+            // other orb did.
+            //
+            // The session's name is what separates them, and it is the right
+            // thing rather than a convenient one: it is what *you* called that
+            // session, so an orb follows the name you gave it rather than the
+            // folder it happens to share.
+            var title = (status.Title ?? "").Trim();
+            return title.Length == 0 ? cwd : cwd + "\n" + title;
+        }
+
+        private static string DirectoryKeyFor(SessionStatus status) =>
             string.IsNullOrEmpty(status.Cwd) ? "" : status.Cwd.TrimEnd('\\', '/');
 
         private void RestoreOrbPosition(OrbWindow window, SessionStatus status)
         {
-            var key = PositionKeyFor(status);
+            var key = PositionKeyFor(status, window.SessionId);
             window.PositionKey = key;
             if (string.IsNullOrEmpty(key)) return;
 
@@ -978,6 +1120,22 @@ namespace ClaudeBuddy
             }
 
             var saved = ClaudeBuddySettings.OrbPositionFor(key);
+
+            // Nothing under the name, so try the directory on its own. That
+            // covers a position saved before names were part of the key, and a
+            // session whose title has changed since — Claude Code writes an
+            // automatic one that moves as a conversation does, and losing your
+            // placement to a retitle would be a worse bug than the one this
+            // fixes.
+            if (saved is null && status.Source == SessionSource.ClaudeCode)
+            {
+                var directory = DirectoryKeyFor(status);
+                if (directory.Length > 0 && directory != key)
+                {
+                    saved = ClaudeBuddySettings.OrbPositionFor(directory);
+                }
+            }
+
             if (saved is null) return;
 
             var point = new PixelPoint(saved.X, saved.Y);

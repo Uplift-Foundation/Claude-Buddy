@@ -490,6 +490,82 @@ distinguishing part is `origin.label`, which is written for a log —
 cleans up to `#general` and `wtvamp` by cutting at `" id:"` and dropping the
 noun before it.
 
+## Replying to a cron session works
+
+A scheduled job looked like the one session kind with nobody on the other end,
+and therefore the one where a typed reply might go nowhere — the panel nearly
+shipped with cron sessions read-only for that reason.
+
+Measured instead of assumed: **a cron session accepts a message and responds to
+it.** `chat.send` against an `agent:<name>:cron:<uuid>` key behaves as it does
+anywhere else. The job's schedule is what starts a run; it is not a restriction
+on the conversation, and the session is an ordinary agent conversation that
+happens to have been started by a timer rather than by a person.
+
+So the panel treats cron like any other session, gated only by the same
+"Allow replying to agents" switch. The badge still says it is a cron job,
+because knowing a run was scheduled rather than asked for is worth seeing — but
+that is information, not a wall.
+
+## How far back a conversation goes — measured
+
+Asked because the room view stopped "suspiciously recent" and it was unclear
+whether a week-old conversation was a different session. Probed with
+`tools/openclaw-probe`, which speaks over the app's own transport.
+
+**Sessions are not per-period. There is exactly one per key.** 70 sessions, 70
+distinct `key` values, no repeats — and `agent:kubernetes:discord:channel:…`
+holds messages spanning 10–16 August in a single session with one `sessionId`.
+So last week's messages are in the same session as today's, and the two
+identifiers (`sessionKey`, `sessionId`) do not indicate per-run instances the
+way they appear to.
+
+**What limits history is the gateway, not paging.** `chat.history` returns
+everything it has in the first page and says so:
+
+| session | limit | returned | `totalMessages` | `hasMore` | span |
+| --- | --- | --- | --- | --- | --- |
+| `agent:kubernetes:…:1477192188562771978` | 40 | 33 | — | false | 10–16 Aug |
+| same | 500 | **33** | — | false | 10–16 Aug |
+| `agent:social:…:1474991965354463274` | 500 | **56** | **104** | false | 17–18 Aug |
+
+Asking for 500 returns the same 33 as asking for 40, and any `offset` past the
+end returns zero. So the client already receives the whole of what exists after
+its first request — a session holding 218,000 tokens of conversation exposes 33
+messages. Scrolling cannot reach further because there is nothing further to
+reach; the top of a room view is where the gateway's retention ends, not where
+a session began.
+
+`totalMessages` (104) exceeding what is returned (56) is the gateway counting
+rows it does not hand over — tool calls and scaffolding — rather than a page
+boundary. `hasMore` is false in the same response.
+
+This retires two theories that both looked right: that history is scoped to the
+current CLI instance and resets on "OpenClaw resumed this CLI session", and that
+deeper paging would recover older messages. Neither survives the measurement.
+
+It also explains the unattributable messages in a merged room view for good. An
+old message from another agent can only be matched against that agent's own
+assistant turn, and beyond the retention window that turn no longer exists
+anywhere. No client-side change reaches it.
+
+### Fields `sessions.list` carries that this app does not use
+
+Read off the same probe, and better than what is currently derived:
+
+```
+chatType      "channel" | "direct"     -- top level, not only inside origin
+kind          "group" | …              -- the gateway's own classification
+groupChannel  "#general"               -- the channel name, plainly
+displayName   "discord:1474991964553482400#general"
+archived, unread, pinned, space, startedAt, endedAt, status
+```
+
+`groupChannel` is the channel name without parsing, where `TitleFor`/`Where`
+currently reconstruct it from `origin.label` by cutting at " id:" and stripping
+nouns. `chatType` at the top level is a more reliable source for
+`OpenClawSessionKind` than `origin.chatType`, which is where it looks now.
+
 ## Still unknown
 
 - **The amber "needs you" state.** No `session.approval` fired in six minutes of
@@ -497,8 +573,9 @@ noun before it.
   exists in the protocol and requires `includeApprovals: true` on
   `sessions.messages.subscribe`, which in turn needs `operator.approvals` —
   a scope this device did not request. Unverified end to end.
-- Whether a Discord-originated turn behaves identically to a cron one. Only cron
-  activity occurred while watching.
+- Whether a Discord-originated turn *streams* identically to a cron one. Only
+  cron activity occurred while watching. Sending into either is now known to
+  work (above); what is untested is whether the event sequence differs.
 - What a terminal `chat` state looks like (only `state: "delta"` was seen).
 
 ## Incidental

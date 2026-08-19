@@ -159,13 +159,36 @@ namespace ClaudeBuddy
             string Channel,
             string State,
             DateTime LastActivity,
-            Delivery? Delivery);
+            Delivery? Delivery,
+            SessionKind Kind);
 
         // Where a reply in this session is supposed to end up. The gateway
         // resolves this itself when asked to deliver an agent's answer, but a
         // message *you* typed has to be posted to the channel explicitly, so
         // the client needs to know the address too.
         internal sealed record Delivery(string Channel, string To, string? AccountId);
+
+        // An agent's colour, assigned across the whole set so no two are
+        // confusable (see AgentPalette.Assign).
+        //
+        // Kept here rather than recomputed by each caller because the orb's ring
+        // and a chat bubble from the same agent have to be the same colour or
+        // the attribution means nothing — and Assign's answer depends on which
+        // other agents exist, so two callers computing it from different sets
+        // would quietly disagree.
+        private static Dictionary<string, string> _agentColours = new(StringComparer.Ordinal);
+
+        public static string ColourForAgent(string? agentId)
+        {
+            if (string.IsNullOrEmpty(agentId)) return "";
+            lock (Gate) return _agentColours.GetValueOrDefault(agentId, "");
+        }
+
+        private static void AssignColours(IEnumerable<string> agentIds)
+        {
+            var colours = AgentPalette.Assign(agentIds);
+            lock (Gate) _agentColours = colours;
+        }
 
         // What the settings window shows on its status row.
         public static string StatusText
@@ -183,6 +206,67 @@ namespace ClaudeBuddy
         }
 
         private static bool _certificateRejected;
+
+        // The conversation in a channel, as one thing. memberKeys are the
+        // gateway keys of the sessions standing in it — see
+        // OpenClawSessionKind.RoomOf for what decides that.
+        //
+        // The member chats are created here as a side effect, which is what
+        // starts their backlogs loading. That is the same thing opening any one
+        // of their orbs would do, so a room costs the same requests as reading
+        // it agent by agent, made at once instead of one at a time.
+        private static readonly Dictionary<string, OpenClawRoomChatSession> Rooms =
+            new(StringComparer.Ordinal);
+
+        // Everyone in a channel, whether or not their orb is on screen. Keyed
+        // by OpenClawSessionKind.RoomOf.
+        private static Dictionary<string, List<string>> _roomMembers = new(StringComparer.Ordinal);
+
+        public static IReadOnlyList<string> MembersOfRoom(string roomKey)
+        {
+            lock (Gate)
+                return _roomMembers.TryGetValue(roomKey, out var members)
+                    ? members.ToList()
+                    : Array.Empty<string>();
+        }
+
+        public static IRemoteChatSession? RoomChatFor(
+            string sessionId, string displayName, IReadOnlyList<string> memberKeys)
+        {
+            if (!ClaudeBuddySettings.OpenClawEnabled) return null;
+            if (memberKeys.Count == 0) return null;
+
+            OpenClawRoomChatSession room;
+            lock (Gate)
+            {
+                if (!Rooms.TryGetValue(sessionId, out var existing))
+                {
+                    existing = new OpenClawRoomChatSession(sessionId, displayName);
+                    Rooms[sessionId] = existing;
+                }
+
+                existing.DisplayName = displayName;
+                room = existing;
+            }
+
+            var members = new List<(OpenClawChatSession Chat, string Agent, string Colour)>();
+            foreach (var key in memberKeys)
+            {
+                if (ChatFor("openclaw:" + key, displayName) is not OpenClawChatSession chat) continue;
+
+                var agentId = AgentIdOf(key) ?? key;
+                members.Add((chat, AgentNameOf(agentId), ColourForAgent(agentId)));
+            }
+
+            room.SetMembers(members);
+
+            // Widening the window the merge can be trusted over, in the
+            // background: the members' first pages rarely cover the same
+            // stretch, and the room can only show where they overlap.
+            _ = room.DeepenAsync();
+
+            return room;
+        }
 
         // The panel's view of one session. sessionId is the app's namespaced
         // id; the gateway knows it without the prefix.
@@ -593,6 +677,14 @@ namespace ClaudeBuddy
             var now = DateTime.UtcNow;
             var result = new List<Session>();
 
+            var roomMembers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+            // Every agent the gateway knows of, filtered or not, so that a
+            // colour is reserved for one whose orb isn't drawn — their messages
+            // still appear in a room, and an uncoloured bubble in a coloured
+            // conversation reads as a failure rather than as an absence.
+            var everyAgent = new List<string>();
+
             foreach (var s in list.EnumerateArray())
             {
                 var key = Str(s, "key") ?? Str(s, "sessionKey");
@@ -609,6 +701,28 @@ namespace ClaudeBuddy
                 var state = StateFor(key);
                 var activity = Activity(s, key);
 
+                // Room membership is recorded *before* the recency filter, and
+                // deliberately ignores it.
+                //
+                // Those are two different questions. "Which orbs are worth
+                // showing" is about what you are working with now; "who is in
+                // this channel" is about the conversation, and an agent that
+                // spoke an hour ago is still one of the people in the room. With
+                // this after the filter, Amber's session was dropped, her
+                // transcript never loaded, and the "Nodes loaded" she posted
+                // survived only as input to the others — anonymous, unmatchable,
+                // and drawn as though you had said it.
+                var roomKey = OpenClawSessionKind.RoomOf(key);
+                if (roomKey is not null)
+                {
+                    if (!roomMembers.TryGetValue(roomKey, out var members))
+                        roomMembers[roomKey] = members = new List<string>();
+
+                    members.Add(key);
+                }
+
+                everyAgent.Add(AgentIdOf(key) ?? key);
+
                 // A session mid-run is current whatever its timestamps say —
                 // it is the one thing an orb is most worth showing.
                 var within = ActiveWithin;
@@ -620,11 +734,38 @@ namespace ClaudeBuddy
                     channel,
                     state,
                     activity,
-                    DeliveryFor(s)));
+                    DeliveryFor(s),
+                    KindFor(s, origin, key)));
             }
+
+            AssignColours(everyAgent);
+
+            lock (Gate) _roomMembers = roomMembers;
 
             return (result, list.GetArrayLength());
         }
+
+        // What kind of thing this session is: a scheduled job, a private
+        // conversation, or one in a room with other people in it.
+        //
+        // Worth telling apart because they are not the same kind of object at
+        // all — "Zara — general" and "Zara — wtvamp" read identically today,
+        // and one of them is a channel anyone can see while the other is a DM.
+        // A cron session is further still: nobody is on the other end of it.
+        //
+        // Two sources, deliberately in this order. The key is structural and
+        // always present — `agent:<name>:cron:<uuid>` cannot be anything but a
+        // cron job — while origin.chatType is the gateway's own word for a
+        // conversation and is the only thing that separates a DM from a
+        // channel. Where the key is uninformative (`agent:main:discord:…`),
+        // chatType decides; where chatType is missing, the key's fourth segment
+        // carries the same word.
+        // chatType is on the session itself as well as inside origin, and the
+        // top-level one is preferred: origin describes where a conversation came
+        // from and is absent on 12 of the 70 sessions this was measured against,
+        // while chatType is the gateway's own answer to the question being asked.
+        private static SessionKind KindFor(JsonElement session, JsonElement origin, string key) =>
+            OpenClawSessionKind.From(key, Str(session, "chatType") ?? Str(origin, "chatType"));
 
         // What to call a session. Two halves: who is talking, and where.
         //
@@ -658,7 +799,7 @@ namespace ClaudeBuddy
                     ? label!.StartsWith("Cron: ", StringComparison.OrdinalIgnoreCase)
                         ? label![6..]
                         : label!
-                    : Where(origin) ?? surface;
+                    : Group(session) ?? Where(origin) ?? surface;
 
                 return string.Equals(name, detail, StringComparison.OrdinalIgnoreCase)
                     ? name
@@ -674,6 +815,19 @@ namespace ClaudeBuddy
             }
 
             return key;
+        }
+
+        // The channel's name, as the gateway already writes it: "#general".
+        //
+        // Where() below reconstructs the same thing out of origin.label by
+        // cutting at " id:" and stripping the noun that introduces it, which was
+        // necessary before anyone looked at what else sessions.list carries.
+        // This field needs none of that and cannot be thrown off by a label
+        // whose shape changes, so it is asked first and Where is the fallback.
+        private static string? Group(JsonElement session)
+        {
+            var group = Str(session, "groupChannel");
+            return string.IsNullOrWhiteSpace(group) ? null : group!.Trim();
         }
 
         // origin.label is written for a log, not for a person: "#general channel
@@ -897,8 +1051,12 @@ namespace ClaudeBuddy
         // metadata. It isn't noise to be dropped though — it is one of your
         // agents talking — so the header is replaced by the thing it was
         // actually saying, attributed to whoever said it.
-        private static string Readable(string text)
+        private static string Readable(string text) => Readable(text, out _);
+
+        private static string Readable(string text, out string? speakerId)
         {
+            speakerId = null;
+
             // Not something a person said: OpenClaw writes this into the user
             // role when it restarts a CLI session under the covers. Dropped
             // rather than shortened, because there is nothing in it for the
@@ -941,12 +1099,18 @@ namespace ClaudeBuddy
 
             if (from is null) return rest;
 
-            // The agent's name if we have it. The key carries the id, and the
-            // id is what its owner's config calls it rather than what they do.
-            string speaker;
-            lock (Gate) speaker = AgentNames.GetValueOrDefault(from, from);
+            // Reported rather than glued to the front of the text. A name in the
+            // string is a name the panel can only draw as part of the sentence;
+            // as a field it can be a label above the bubble and can colour it.
+            speakerId = from;
+            return rest;
+        }
 
-            return $"{speaker}: {rest}";
+        // The agent's name if we have it. The key carries the id, and the id is
+        // what its owner's config calls it rather than what they do.
+        public static string AgentNameOf(string agentId)
+        {
+            lock (Gate) return AgentNames.GetValueOrDefault(agentId, agentId);
         }
 
         // The last thing the agent said, for the speak button on the orb's own
@@ -1161,7 +1325,7 @@ namespace ClaudeBuddy
             Dispatcher.UIThread.Post(() => chat.SetHistory(initial));
         }
 
-        private static async Task<(List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At)> Turns, int Messages)?>
+        private static async Task<(List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> Turns, int Messages)?>
             FetchPageAsync(OpenClawChatSession chat, int offset, CancellationToken ct)
         {
             OpenClawGateway? gateway;
@@ -1184,7 +1348,7 @@ namespace ClaudeBuddy
                     return null;
                 }
 
-                var turns = new List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At)>();
+                var turns = new List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)>();
 
                 foreach (var message in messages.EnumerateArray())
                 {
@@ -1216,7 +1380,8 @@ namespace ClaudeBuddy
                             var ms2 = Num(message, "timestamp");
                             turns.Add((role, "", url!, Str(block, "alt") ?? "", ms2 <= 0
                                 ? DateTimeOffset.Now
-                                : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime()));
+                                : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
+                                null, null));
                         }
                     }
 
@@ -1236,7 +1401,7 @@ namespace ClaudeBuddy
 
                     if (string.IsNullOrWhiteSpace(text)) continue;
 
-                    text = Readable(text);
+                    text = Readable(text, out var speakerId);
                     if (string.IsNullOrWhiteSpace(text)) continue;
 
                     var ms = Num(message, "timestamp");
@@ -1244,7 +1409,9 @@ namespace ClaudeBuddy
                         ? DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime()
                         : DateTimeOffset.Now;
 
-                    turns.Add((role, text.Trim(), null, "", at));
+                    turns.Add((role, text.Trim(), null, "", at,
+                        speakerId is null ? null : AgentNameOf(speakerId),
+                        speakerId is null ? null : ColourForAgent(speakerId)));
                 }
 
                 // The message count, not the turn count: it is what the next

@@ -588,6 +588,100 @@ foreach (var agent in agents)
 
 Check("an empty id doesn't throw", AgentPalette.HexFor("").StartsWith('#'));
 
+// --- session kinds ---
+
+// The mistake this can make is silent and directional: a channel shown as a
+// direct message says a room other people can read is private, and nothing on
+// screen contradicts it. So the unrecognised cases assert Unknown rather than a
+// guess at the commoner of the two.
+
+static SessionKind Kind(string key, string? chatType = null) =>
+    OpenClawSessionKind.From(key, chatType);
+
+// Real keys, from docs/openclaw-findings.md.
+Check("a cron job is a cron job",
+    Kind("agent:main:cron:2f54203e-1c2f-4a1e-9c0e-2b1d8e5a7c31") == SessionKind.Cron);
+
+Check("cron wins over anything attached to it",
+    Kind("agent:main:cron:2f54203e", "direct") == SessionKind.Cron,
+    "the key is structural; chatType must not override it");
+
+Check("an agent's own session is Main",
+    Kind("agent:alexis:main") == SessionKind.Main);
+
+Check("a DM is Direct",
+    Kind("agent:main:discord:direct:246722755112861696") == SessionKind.Direct);
+
+Check("a channel is a Channel",
+    Kind("agent:main:discord:channel:1474991965354463274") == SessionKind.Channel);
+
+// origin.chatType is what separates these two when the key says only the
+// surface, which is the usual case.
+Check("chatType decides when the key only names a surface",
+    Kind("agent:main:discord", "channel") == SessionKind.Channel
+    && Kind("agent:main:discord", "direct") == SessionKind.Direct);
+
+Check("chatType is preferred over the key's fourth segment",
+    Kind("agent:main:discord:direct:2467", "channel") == SessionKind.Channel,
+    "origin is the gateway's own word for the conversation");
+
+Check("the surfaces' other words for a group are all Channel",
+    new[] { "channel", "group", "guild" }.All(t => Kind("agent:m:slack", t) == SessionKind.Channel));
+
+Check("the surfaces' other words for a DM are all Direct",
+    new[] { "direct", "dm", "im" }.All(t => Kind("agent:m:slack", t) == SessionKind.Direct));
+
+Check("case doesn't matter", Kind("agent:m:CRON:x") == SessionKind.Cron
+    && Kind("agent:m:slack", "Direct") == SessionKind.Direct);
+
+// Everything below must decline to guess.
+Check("an unrecognised chatType is Unknown",
+    Kind("agent:main:discord", "thread") == SessionKind.Unknown);
+Check("a surface with no chatType is Unknown",
+    Kind("agent:main:discord") == SessionKind.Unknown);
+Check("an empty key is Unknown", Kind("") == SessionKind.Unknown);
+Check("a non-agent key is Unknown", Kind("something:else:entirely") == SessionKind.Unknown);
+Check("a null key is Unknown", OpenClawSessionKind.From(null, null) == SessionKind.Unknown);
+
+// --- rooms ---
+
+// Every agent in a channel has to agree on the room key, or a room fragments
+// into one orb per agent and the grouping is worse than none.
+static string? Room(string key) => OpenClawSessionKind.RoomOf(key);
+
+Check("agents in one channel agree on the room",
+    Room("agent:lilibeth:discord:channel:1474991965354463274")
+    == Room("agent:zara:discord:channel:1474991965354463274")
+    && Room("agent:zara:discord:channel:1474991965354463274") == "discord:1474991965354463274");
+
+Check("different channels are different rooms",
+    Room("agent:zara:discord:channel:111") != Room("agent:zara:discord:channel:222"));
+
+// The same channel id on two surfaces is not the same room.
+Check("the surface is part of the room",
+    Room("agent:z:discord:channel:111") != Room("agent:z:slack:channel:111"));
+
+// A DM is not a room: two people talking privately is not somewhere others
+// can be standing.
+Check("a direct message is not a room", Room("agent:main:discord:direct:2467") is null);
+Check("a cron job is not a room", Room("agent:main:cron:2f54203e") is null);
+Check("an agent's own session is not a room", Room("agent:alexis:main") is null);
+Check("a malformed key is not a room",
+    Room("") is null && Room("agent:z:discord") is null && Room("nonsense") is null);
+
+// A session whose "channel" is another session's key, seen on a real gateway.
+// It reports itself as a group and carries no channel name, and treating it as
+// a room split #arch into two — the real one and a nameless twin.
+Check("a key nested inside a key is not a room",
+    Room("agent:main:discord:channel:agent:ea-hope:discord:channel:1538940850376151210") is null);
+
+Check("the real session for that channel still is a room",
+    Room("agent:ea-hope:discord:channel:1538940850376151210") == "discord:1538940850376151210");
+
+// A channel id containing a colon must not be truncated into a different room.
+Check("a colon in the channel id survives",
+    Room("agent:z:matrix:channel:!abc:server.org") == "matrix:!abc:server.org");
+
 // --- report ---
 
 if (failures.Count == 0)
