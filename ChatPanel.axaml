@@ -66,10 +66,27 @@
                                FontSize="14" FontWeight="SemiBold"
                                Foreground="#F2FFFFFF"
                                TextTrimming="CharacterEllipsis"/>
-                    <TextBlock x:Name="SubtitleText"
-                               FontSize="11"
-                               Foreground="#99FFFFFF"
-                               TextTrimming="CharacterEllipsis"/>
+                    <!-- Where this conversation is, and what kind of thing it
+                         is. The second half is a chip rather than more words in
+                         the same line because "general" and "wtvamp" are the
+                         same shape as each other, and one of them is a room
+                         other people can read. -->
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <Border x:Name="KindChip"
+                                IsVisible="False"
+                                CornerRadius="4" Padding="4,1"
+                                VerticalAlignment="Center"
+                                Background="#26FFFFFF">
+                            <TextBlock x:Name="KindChipText"
+                                       FontSize="9.5"
+                                       Foreground="#CCFFFFFF"/>
+                        </Border>
+                        <TextBlock x:Name="SubtitleText"
+                                   FontSize="11"
+                                   VerticalAlignment="Center"
+                                   Foreground="#99FFFFFF"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
                 </StackPanel>
 
                 <Grid x:Name="SpeakButton" Grid.Column="2" Width="24" Height="24"
@@ -117,6 +134,17 @@
                                     Background="{Binding Bubble}"
                                     HorizontalAlignment="{Binding Side}">
                                 <StackPanel>
+                                    <!-- Who said it, when that isn't one of the
+                                         two ends of the conversation. In a
+                                         channel the transcript carries the other
+                                         agents in the room, and without this
+                                         they arrive as anonymous grey bubbles
+                                         that have to be worked out from context. -->
+                                    <TextBlock Text="{Binding SpeakerName}"
+                                               IsVisible="{Binding HasSpeaker}"
+                                               FontSize="9.5" FontWeight="SemiBold"
+                                               Margin="0,0,0,2"
+                                               Foreground="{Binding SpeakerInk}"/>
                                     <!-- Built in code rather than bound to a
                                          string, because a reply is Markdown and
                                          drawing it as one TextBlock showed the

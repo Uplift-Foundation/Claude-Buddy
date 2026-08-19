@@ -1,3 +1,4 @@
+using System;
 using System.Collections.ObjectModel;
 using Avalonia;
 using Avalonia.Controls;
@@ -31,6 +32,14 @@ namespace ClaudeBuddy
 
         private IRemoteChatSession? _session;
         private OrbWindow? _owner;
+
+        // The colour a reply is drawn in when the turn itself doesn't name one.
+        //
+        // A room's turns carry their own, because several agents are talking. In
+        // every other panel exactly one agent is, and repeating its name on
+        // every bubble would be noise — but its colour is not, so it comes from
+        // the orb rather than from each message.
+        private Color? _defaultBubble;
 
         private readonly ObservableCollection<TurnView> _turns = new();
 
@@ -238,11 +247,20 @@ namespace ClaudeBuddy
             SubtitleText.Text = parts.Length > 1 ? parts[1] : "";
             SubtitleText.IsVisible = parts.Length > 1;
 
+            // Read off the orb rather than from the session, so the panel and
+            // the badge on the thing that was clicked cannot disagree — the
+            // same reason the header takes its colour and letter from there.
+            var kind = orb.KindLabel;
+            KindChip.IsVisible = kind is not null;
+            KindChipText.Text = kind is null ? "" : $"{orb.KindGlyphText}  {kind}";
+
+            _defaultBubble = orb.AccentColor;
+
             ApplyAvatar(session.SessionId);
             OnStateChanged(session.State);
 
             _turns.Clear();
-            foreach (var turn in session.History) _turns.Add(new TurnView(turn));
+            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble));
 
             Input.Text = Drafts.GetValueOrDefault(session.SessionId, "");
             MicButton.IsVisible = ClaudeBuddySettings.VoiceInputEnabled;
@@ -279,6 +297,67 @@ namespace ClaudeBuddy
         private int _avatarFrame;
         private DispatcherTimer? _avatarTimer;
 
+        // The ring is the one part of the portrait that is always visible,
+        // whether the circle holds a photo, a colour or nothing, so it is where
+        // an identity colour belongs. Default is the flat white the XAML ships
+        // with, which is what a session with no colour of its own keeps.
+        private static readonly IBrush DefaultRing = new SolidColorBrush(Color.Parse("#40FFFFFF"));
+
+        private void RingFor(Color? color)
+        {
+            if (color is not { } c)
+            {
+                Avatar.Stroke = DefaultRing;
+                Avatar.StrokeThickness = 1;
+                return;
+            }
+
+            Avatar.Stroke = new SolidColorBrush(c);
+            // Thicker than the default hairline: a coloured ring is carrying
+            // information now, and at 1px against a dark panel it reads as an
+            // antialiasing artefact rather than a deliberate mark.
+            Avatar.StrokeThickness = 2.5;
+        }
+
+        // An agent's colour, keyed on its id so the same agent is the same
+        // colour everywhere — the orb, the team view and now this header.
+        //
+        // Asked of OpenClawSessions rather than of AgentPalette directly, which
+        // is the difference between that sentence being true and being nearly
+        // true. HexFor gives an agent the colour its id hashes to; two agents
+        // can hash close enough to be indistinguishable, so the assignment is
+        // made across the whole set and moves whichever of them collided.
+        // Calling HexFor here would hand this header the pre-collision answer
+        // and quietly disagree with the ring on the orb it opened from.
+        private static Color? AgentColorFor(string sessionId)
+        {
+            var agent = OpenClawSessions.AgentIdOf(sessionId);
+            if (string.IsNullOrEmpty(agent)) return null;
+
+            var hex = OpenClawSessions.ColourForAgent(agent);
+            return Color.TryParse(hex, out var colour) ? colour : null;
+        }
+
+        // First letters of the first two words: "Ada Lovelace" gives AL, and a
+        // single-word name gives its first two characters rather than one, which
+        // fills a 68pt circle better and still reads as a monogram.
+        private static string Initials(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "";
+
+            var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length == 0) return "";
+            if (words.Length == 1)
+            {
+                var w = words[0];
+                return (w.Length >= 2 ? w[..2] : w).ToUpperInvariant();
+            }
+
+            return string.Concat(
+                char.ToUpperInvariant(words[0][0]),
+                char.ToUpperInvariant(words[1][0]));
+        }
+
         private void ApplyAvatar(string sessionId)
         {
             StopAvatarAnimation();
@@ -301,8 +380,17 @@ namespace ClaudeBuddy
                 _avatar = null;
                 _avatarFrame = 0;
 
+                // Fill from the state, ring from the identity — which is
+                // exactly how the orb itself is drawn, so the header reads as
+                // the same object rather than as a second scheme.
+                //
+                // Both from OrbColor is what this said first, and that made the
+                // ring the state colour twice over: idle is a user setting and
+                // is commonly near black, so the "identity ring" was an
+                // invisible ring around a circle of its own colour.
                 Avatar.Fill = new SolidColorBrush(_owner.OrbColor);
                 Avatar.IsVisible = true;
+                RingFor(_owner.AccentColor);
 
                 // An initial wants less room than an emoji does.
                 AvatarEmoji.Text = _owner.GlyphText;
@@ -322,19 +410,46 @@ namespace ClaudeBuddy
 
             if (avatar is null)
             {
-                Avatar.Fill = null;
-                Avatar.IsVisible = false;
+                // No portrait. This used to leave a hollow circle — no fill, no
+                // ring, and nothing inside unless the agent happened to have an
+                // emoji, which reads as a picture that failed to load rather
+                // than as a person.
+                //
+                // An agent already has both halves of an identity elsewhere in
+                // the app: a colour from AgentPalette, keyed on its id so it is
+                // stable, and a name. So the header shows what the orb shows —
+                // that colour as the fill and ring, and the initials of the
+                // name when there is no emoji to use instead.
+                var agentColor = AgentColorFor(sessionId);
 
-                // Emoji if there is one, and the state dot moves back to the
-                // middle — a badge in the corner of an empty circle reads as a
-                // picture that failed to load rather than as a status.
-                AvatarEmoji.Text = identity?.Emoji ?? "";
-                AvatarEmoji.IsVisible = !string.IsNullOrEmpty(identity?.Emoji);
+                AvatarEmoji.Text = !string.IsNullOrEmpty(identity?.Emoji)
+                    ? identity!.Emoji!
+                    : Initials(identity?.Name);
+                AvatarEmoji.IsVisible = !string.IsNullOrEmpty(AvatarEmoji.Text);
 
-                StateDot.HorizontalAlignment = AvatarEmoji.IsVisible
+                // Initials are letterforms, not a pictograph, so they want the
+                // smaller size an emoji would overflow at.
+                if (string.IsNullOrEmpty(identity?.Emoji)) AvatarEmoji.FontSize = 26;
+
+                if (agentColor is { } c)
+                {
+                    Avatar.Fill = new SolidColorBrush(c);
+                    Avatar.IsVisible = true;
+                    RingFor(c);
+                }
+                else
+                {
+                    Avatar.Fill = null;
+                    Avatar.IsVisible = false;
+                }
+
+                // With a filled circle the badge has somewhere to sit, so it
+                // keeps its corner. Only a genuinely empty circle centres it.
+                var filled = Avatar.IsVisible || AvatarEmoji.IsVisible;
+                StateDot.HorizontalAlignment = filled
                     ? HorizontalAlignment.Right
                     : HorizontalAlignment.Center;
-                StateDot.VerticalAlignment = AvatarEmoji.IsVisible
+                StateDot.VerticalAlignment = filled
                     ? VerticalAlignment.Bottom
                     : VerticalAlignment.Center;
 
@@ -349,6 +464,9 @@ namespace ClaudeBuddy
             _avatarBrush.Source = avatar.Frames[0];
             Avatar.Fill = _avatarBrush;
             Avatar.IsVisible = true;
+            // A portrait gets the ring too. Without it the one avatar with a
+            // picture is the only one in the app not wearing its own colour.
+            RingFor(AgentColorFor(sessionId));
 
             if (!avatar.IsAnimated) return;
 
@@ -561,7 +679,7 @@ namespace ClaudeBuddy
             // start them downloading again.
             for (var i = 0; i < count && i < _session.History.Count; i++)
             {
-                _turns.Insert(i, new TurnView(_session.History[i]));
+                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble));
             }
         }
 
@@ -570,7 +688,7 @@ namespace ClaudeBuddy
             if (_session is null) return;
 
             _turns.Clear();
-            foreach (var turn in _session.History) _turns.Add(new TurnView(turn));
+            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble));
 
             // Straight to the bottom rather than the pinned-only rule: a
             // transcript that has just been replaced wholesale has no scroll
@@ -581,7 +699,7 @@ namespace ClaudeBuddy
 
         private void OnTurnAdded(ChatTurn turn)
         {
-            _turns.Add(new TurnView(turn));
+            _turns.Add(new TurnView(turn, _defaultBubble));
 
             // Your own turn always brings the view with it; everything else
             // respects where you were reading.
@@ -708,10 +826,12 @@ namespace ClaudeBuddy
         private sealed class TurnView : System.ComponentModel.INotifyPropertyChanged
         {
             private readonly ChatTurn _turn;
+            private readonly Color? _defaultBubble;
 
-            public TurnView(ChatTurn turn)
+            public TurnView(ChatTurn turn, Color? defaultBubble)
             {
                 _turn = turn;
+                _defaultBubble = defaultBubble;
 
                 turn.PropertyChanged += (_, e) =>
                 {
@@ -971,7 +1091,38 @@ namespace ClaudeBuddy
             }
 
             private bool IsSystem => _turn.Role == ChatRole.System;
-            private bool IsUser => _turn.Role == ChatRole.User;
+
+            // A named speaker is never *you*, whatever role the transport gave
+            // it. Another agent's message in a channel arrives with role "user"
+            // — it is user-role input as far as this agent is concerned — and
+            // taking that at face value drew it right-aligned in your own blue,
+            // so a room full of agents looked like you talking to yourself.
+            private bool IsUser => _turn.Role == ChatRole.User && !HasSpeaker;
+
+            public bool HasSpeaker => !string.IsNullOrEmpty(_turn.Speaker);
+
+            public string SpeakerName => _turn.Speaker ?? "";
+
+            // The agent's own colour, the one their orb's ring is drawn in.
+            private Color? SpeakerColor
+            {
+                get
+                {
+                    if (!string.IsNullOrEmpty(_turn.SpeakerColor)
+                        && Color.TryParse(_turn.SpeakerColor, out var named))
+                    {
+                        return named;
+                    }
+
+                    // Only what the session said. Your own bubbles keep their
+                    // blue, and a system note keeps none — the fallback is the
+                    // agent's colour, and neither of those is the agent.
+                    return IsSystem || IsUser ? null : _defaultBubble;
+                }
+            }
+
+            public IBrush SpeakerInk =>
+                SpeakerColor is { } c ? new SolidColorBrush(c) : SystemInk;
 
             public HorizontalAlignment Side => IsSystem
                 ? HorizontalAlignment.Center
@@ -981,7 +1132,15 @@ namespace ClaudeBuddy
             // app has trained everyone to read without being told. The blue is
             // the same #4A90D9 the speak button already uses for "live", so the
             // app keeps one accent rather than acquiring a second.
-            public IBrush Bubble => IsSystem ? Transparent : IsUser ? UserBubble : AgentBubble;
+            // A speaker's own colour, at low alpha. Full strength would be a
+            // wall of saturated colour in a busy room — the name above it is
+            // drawn in the same hue at full strength, which is enough to tie the
+            // two together and to the orb.
+            public IBrush Bubble => IsSystem
+                ? Transparent
+                : SpeakerColor is { } c
+                    ? new SolidColorBrush(Color.FromArgb(0x3D, c.R, c.G, c.B))
+                    : IsUser ? UserBubble : AgentBubble;
 
             public IBrush Ink => IsSystem ? SystemInk : BubbleInk;
 
