@@ -1,0 +1,77 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex idle"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex generating"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex generating"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "async": true,
+            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex waiting"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex generating"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex idle"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.codex/claude-buddy/ClaudeBuddyHook.sh\" codex ended"
+          }
+        ]
+      }
+    ]
+  }
+}
