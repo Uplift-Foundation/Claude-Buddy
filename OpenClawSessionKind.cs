@@ -93,7 +93,22 @@ namespace ClaudeBuddy
             var surface = parts[2];
             var id = string.Join(":", parts.Skip(4));
 
-            return string.IsNullOrWhiteSpace(id) ? null : $"{surface}:{id}";
+            if (string.IsNullOrWhiteSpace(id)) return null;
+
+            // A key whose channel id is *another session key*. Observed on a
+            // real gateway:
+            //
+            //   agent:main:discord:channel:agent:ea-hope:discord:channel:15389…
+            //
+            // It is a genuine session and the gateway reports it as a group, but
+            // the thing after "channel:" is not a channel — it carries no
+            // groupChannel, and treating it as one split #arch into two rooms:
+            // the real one, and a second named after the raw id because there
+            // was no name to find. Splitting a room in half is worse than not
+            // grouping at all, which is the whole point of grouping.
+            if (id.StartsWith("agent:", StringComparison.OrdinalIgnoreCase)) return null;
+
+            return $"{surface}:{id}";
         }
 
         private static bool Is(string a, string b) =>

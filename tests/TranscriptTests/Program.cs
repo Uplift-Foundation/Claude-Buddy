@@ -669,6 +669,15 @@ Check("an agent's own session is not a room", Room("agent:alexis:main") is null)
 Check("a malformed key is not a room",
     Room("") is null && Room("agent:z:discord") is null && Room("nonsense") is null);
 
+// A session whose "channel" is another session's key, seen on a real gateway.
+// It reports itself as a group and carries no channel name, and treating it as
+// a room split #arch into two — the real one and a nameless twin.
+Check("a key nested inside a key is not a room",
+    Room("agent:main:discord:channel:agent:ea-hope:discord:channel:100000000000000005") is null);
+
+Check("the real session for that channel still is a room",
+    Room("agent:ea-hope:discord:channel:100000000000000005") == "discord:100000000000000005");
+
 // A channel id containing a colon must not be truncated into a different room.
 Check("a colon in the channel id survives",
     Room("agent:z:matrix:channel:!abc:server.org") == "matrix:!abc:server.org");
