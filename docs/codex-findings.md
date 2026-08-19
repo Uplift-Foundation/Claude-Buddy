@@ -130,9 +130,21 @@ select coalesce(nullif(name,''), nullif(title,'')) from threads where id = ?
 ```
 
 Measured against the live database while Codex was running: **7 ms**, read-only
-through a `file:…?mode=ro` URI so a hook can never take a write lock on a
-database Codex is using. A full Codex hook invocation including this costs
-about 98 ms.
+so a hook can never take a write lock on a database Codex is using. A full Codex
+hook invocation including this costs about 98 ms.
+
+"While Codex was running" is load-bearing, and was found the hard way. The
+database is in WAL mode, so a read-only connection needs the `-shm` file to
+attach to — and when Codex is not running, that file and the `-wal` are
+checkpointed away, at which point a read-only open fails outright with
+`SQLITE_CANTOPEN`. The same query that returned `aiea` in one minute returned
+nothing in the next, purely because Codex had exited in between.
+
+That is benign in production, because a hook only ever fires while the CLI that
+called it is running — and the fallback to the rollout's first message is exactly
+what should happen anyway. It matters for anyone *testing* this: a title that
+comes back as the first prompt rather than the `/rename` name is not necessarily
+a bug in the precedence, it may just be that nothing has Codex open.
 
 Two things to know before relying on it:
 
