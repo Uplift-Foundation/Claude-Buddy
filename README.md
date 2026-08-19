@@ -1163,9 +1163,14 @@ out of the rollout. That is the same message Codex builds its own title from, so
 the name is true, just not the one you chose. It matches what a Claude Code
 session under WSL already does for the same category of reason.
 
-Windows Codex support has **not been run on a real machine** — the hook script,
-the installer and the setup wiring are written and reviewed but unverified. See
-`docs/codex-findings.md`.
+Windows Codex support is **partly verified**, and the split is worth stating
+precisely. CI builds the installer, runs it silently on a Windows runner, and
+checks the result — so the setup wiring, `install-hooks.ps1`'s detection and
+dispatch, and the "Codex is absent, write nothing for it" path are all exercised
+on a real machine every time they change. What is **not** exercised is anything
+that needs Codex actually installed: `install-codex-hooks.ps1`'s install path,
+and the hook script's own Codex branch. Those are written and reviewed but have
+never run. See `docs/codex-findings.md`.
 
 **WSL** (hooks execute via a Linux shell that then calls out to Windows):
 `claude-hooks-snippet-wsl.json` uses `powershell.exe`'s full path

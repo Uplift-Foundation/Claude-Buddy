@@ -223,6 +223,11 @@ also the cheapest way to check an installer's work without starting a session:
 
 ## Still unknown
 
+- On Windows: `install-codex-hooks.ps1`'s install path and the hook script's
+  own `-Agent codex` branch have never run, because no runner or machine here
+  has Codex installed. CI does cover the wrapper, the installer wiring and the
+  skip-when-absent path.
+
 Not measured. Do not write these down as facts until they are.
 
 - Whether a hook declared `async: true` still receives its payload on stdin. It
