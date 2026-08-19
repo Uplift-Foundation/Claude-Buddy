@@ -108,20 +108,21 @@ if ($env:WT_SESSION) { $termProgram = 'WindowsTerminal' }
 elseif ($env:TERM_PROGRAM) { $termProgram = $env:TERM_PROGRAM }
 
 $termPid = 0
-# The claude process itself, recorded so the app can tell a running session from
+# The CLI process itself, recorded so the app can tell a running session from
 # a status file left behind by one that never exited cleanly (Ctrl+C fires no
 # SessionEnd). See SessionManager.SessionGone.
 #
-# Found by walking up for the first `claude` ancestor, NOT by taking this
-# script's immediate parent — which is what this did, on the assumption that
-# "Claude Code spawns the hook directly". It does not, on Windows: the hook
-# command runs through a short-lived shell, so the immediate parent is that
-# shell, and it exits the moment the hook does. Measured on a real machine —
-# successive hook writes for one live session recorded 54076, then 83076, both
-# already dead, while the session's actual claude.exe sat at 36804 the whole
-# time. The app reads a dead session_pid as "Ctrl+C'd without a SessionEnd" and
-# suppresses the orb, so every live session on Windows went invisible while a
-# three-day-old status file with no session_pid at all kept its orb.
+# Found by walking up for the first ancestor belonging to the CLI this hook
+# speaks for, NOT by taking this script's immediate parent — which is what
+# this did, on the assumption that "Claude Code spawns the hook directly".
+# It does not, on Windows: the hook command runs through a short-lived shell,
+# so the immediate parent is that shell, and it exits the moment the hook
+# does. Measured on a real machine — successive hook writes for one live
+# session recorded 54076, then 83076, both already dead, while the session's
+# actual claude.exe sat at 36804 the whole time. The app reads a dead
+# session_pid as "Ctrl+C'd without a SessionEnd" and suppresses the orb, so
+# every live session on Windows went invisible while a three-day-old status
+# file with no session_pid at all kept its orb.
 #
 # Nothing to do with the Unix hook, which asks a different question entirely
 # (first ancestor owning a real tty) and was never wrong this way.
@@ -161,10 +162,23 @@ try {
         # Get-Process reported the renamed image, so an exact match happens to
         # work today, but which API reports which name is not worth depending on
         # when a session outliving an update is entirely ordinary.
+        #
+        # Which name counts as "the session" is whichever CLI this hook speaks
+        # for, not claude unconditionally. Hard-coding claude here made every
+        # Codex orb on Windows impossible: the walk found no claude ancestor,
+        # left session_pid at 0, and SessionManager drops a Codex file naming
+        # no process on sight — deliberately, because for Codex that means a
+        # session that ended without clearing up. Two rules each right on their
+        # own, combining into a session that could never be shown. Observed on
+        # a real chain: powershell -> pwsh -> codex.exe -> node.exe -> sh.exe.
+        #
+        # The node.exe arm matches on $Agent for the same reason it exists at
+        # all — an npm-style install puts the CLI's name on node's command line
+        # rather than in the image name, and both CLIs ship that way.
         if ($sessionPid -eq 0 -and $cur) {
             $name = "$($cur.Name)"
-            if ($name -like 'claude.exe*' -or
-                ($name -eq 'node.exe' -and "$($cur.CommandLine)" -match 'claude')) {
+            if ($name -like "$Agent.exe*" -or
+                ($name -eq 'node.exe' -and "$($cur.CommandLine)" -match $Agent)) {
                 $sessionPid = [int]$parentId
             }
         }
