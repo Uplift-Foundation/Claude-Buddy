@@ -52,18 +52,46 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public string Agent { get; set; } = "";
 
-        // Which kind of thing this session is. App-filled during the scan and
-        // never serialized, for the same reason Lead and Agent aren't: the
-        // hooks know nothing about it and write no such field. Serializing it
-        // would also be actively harmful — ResetSessionToIdle writes this whole
-        // object back over a hook-owned file, so the key would appear in that
-        // file and then vanish again on the hook's next write.
+        // Which CLI wrote this file, in its own words: "codex", or absent for
+        // Claude Code.
         //
-        // An enum rather than a string because it is entirely internal: a typo
-        // should not compile. Defaulting to ClaudeCode means every existing
-        // path keeps its behaviour without being touched.
+        // Serialized, unlike Lead and Agent and Kind, because unlike them the
+        // hook is what knows the answer. That distinction is the whole of it:
+        // ResetSessionToIdle reads a status file, changes the state and writes
+        // the object back over it, so a field the *app* derives would appear in
+        // a hook-owned file and vanish again on the next write — while a field
+        // the *hook* owns has to survive exactly that round trip or a reset
+        // turns a Codex session into a Claude Code one.
+        //
+        // Absent means Claude Code rather than unknown, so every status file
+        // already on disk and every hook older than this reads correctly with
+        // no migration.
+        //
+        // Not to be confused with Agent three fields up, which is what an
+        // agent-team member is called. Both words are right and neither is
+        // available for the other.
+        [JsonPropertyName("cli")]
+        public string Cli { get; set; } = "";
+
+        // Which kind of thing this session is. Derived from Cli rather than
+        // stored, by SourceOf, and never serialized — an enum here because it
+        // is entirely internal and a typo should not compile, a string on the
+        // wire because that is what a shell script can write.
+        //
+        // Defaulting to ClaudeCode means an object nobody has run SourceOf over
+        // behaves as everything did before this existed.
         [JsonIgnore]
         public SessionSource Source { get; set; } = SessionSource.ClaudeCode;
+
+        // Whether this session is a CLI running in a terminal on this machine.
+        //
+        // Most of the rules in this file that name ClaudeCode mean this and not
+        // that: it has a process, it has a terminal you can be sent to, and it
+        // has a transcript file on disk. Codex is all three. The ones that
+        // genuinely mean Claude Code — agent teams, background jobs, the
+        // projects directory — still say so, and each says why.
+        [JsonIgnore]
+        public bool IsLocalCli => Source is SessionSource.ClaudeCode or SessionSource.Codex;
 
         // What kind of gateway conversation this is. [JsonIgnore] for the same
         // reason Source is: it is derived from the gateway's answer during the
@@ -121,14 +149,21 @@ namespace ClaudeBuddy
         public string TranscriptPath { get; set; } = "";
     }
 
-    // What produced a session. ClaudeCode is a local process that fires the
-    // hook; OpenClaw is a conversation on a remote gateway with no process, no
-    // terminal and no transcript file here. Almost every rule in this file was
-    // written for the first and is wrong for the second, which is why this
-    // exists rather than being inferred from which fields happen to be empty.
+    // What produced a session. ClaudeCode and Codex are local processes that
+    // fire the hook; OpenClaw is a conversation on a remote gateway with no
+    // process, no terminal and no transcript file here. Almost every rule in
+    // this file was written for the first and is wrong for the third, which is
+    // why this exists rather than being inferred from which fields happen to be
+    // empty.
+    //
+    // The split that matters most is not one-of-three but two-against-one — see
+    // SessionStatus.IsLocalCli. Codex differs from Claude Code in what its
+    // transcript looks like and in what it can be asked to do, not in whether
+    // there is a terminal behind it.
     public enum SessionSource
     {
         ClaudeCode,
+        Codex,
         OpenClaw
     }
 
@@ -233,6 +268,26 @@ namespace ClaudeBuddy
         // what "how long since this session last said anything" means throughout.
         private sealed record ScanEntry(string SessionId, SessionStatus Status, DateTime Written);
 
+        // Which CLI a status file came from, as the enum the rest of the app
+        // branches on.
+        //
+        // One function, called at every point a SessionStatus is deserialized —
+        // there are two, the scan below and ResetSessionToIdle — because Source
+        // is [JsonIgnore] and therefore arrives as its default no matter what
+        // the file said. Missing one of the two does not fail loudly; it
+        // produces a Codex session that claims to be a Claude Code one until
+        // the next scan corrects it, which is long enough to send a click to
+        // the wrong place.
+        //
+        // Anything unrecognised is Claude Code, deliberately. A status file
+        // written before this key existed has no "cli" at all and was Claude
+        // Code, and a hook from some future version naming something this build
+        // has never heard of is still, at worst, a local session in a terminal.
+        private static SessionSource SourceOf(SessionStatus status) =>
+            string.Equals(status.Cli, "codex", StringComparison.OrdinalIgnoreCase)
+                ? SessionSource.Codex
+                : SessionSource.ClaudeCode;
+
         // Session ids one process has already moved on from.
         //
         // A Claude Code process mints a new session id every time you /clear,
@@ -258,12 +313,25 @@ namespace ClaudeBuddy
         // ProcessLiveness.IsRunning treats 0 as alive.
         private static HashSet<string> Superseded(List<ScanEntry> found)
         {
-            var newest = new Dictionary<int, ScanEntry>();
+            // Keyed by pid *and* which CLI, not by pid alone.
+            //
+            // A pid is only unique among the files one CLI wrote. Claude Code
+            // running `codex exec` as a Bash tool is the case that breaks the
+            // assumption: the nested codex process sits in a pipe with no tty
+            // of its own, so the hook's walk can record the pid of the Claude
+            // Code session that started it, and a Codex status file lands in
+            // the same bucket as a live Claude Code one. Being newer it would
+            // win, and this rule would delete the Claude orb — an orb the user
+            // is watching, for the session that is doing the work.
+            //
+            // Two CLIs never share a real process, so pairing the source with
+            // the pid costs nothing and cannot collapse two genuine sessions.
+            var newest = new Dictionary<(int Pid, SessionSource Source), ScanEntry>();
 
             foreach (var entry in found)
             {
-                var pid = entry.Status.SessionPid;
-                if (pid <= 0) continue;
+                var pid = (entry.Status.SessionPid, entry.Status.Source);
+                if (pid.SessionPid <= 0) continue;
 
                 // The ordinal tie-break only matters if two files somehow share an
                 // mtime, and exists so the choice doesn't depend on the order the
@@ -280,8 +348,8 @@ namespace ClaudeBuddy
             var stale = new HashSet<string>(StringComparer.Ordinal);
             foreach (var entry in found)
             {
-                var pid = entry.Status.SessionPid;
-                if (pid <= 0) continue;
+                var pid = (entry.Status.SessionPid, entry.Status.Source);
+                if (pid.SessionPid <= 0) continue;
 
                 if (newest.TryGetValue(pid, out var best) && best.SessionId != entry.SessionId)
                 {
@@ -324,8 +392,13 @@ namespace ClaudeBuddy
         // terminal is never overwritten by an older one's idea of it.
         private static void InheritTerminalInfo(List<ScanEntry> found)
         {
+            // Grouped by pid and source together, for the reason Superseded
+            // is: a nested `codex exec` can record the pid of the Claude Code
+            // session that spawned it, and this would then hand one CLI's
+            // session the tmux pane of the other's. Clicking that orb would go
+            // somewhere plausible and wrong, which is worse than a dead click.
             foreach (var group in found.Where(e => e.Status.SessionPid > 0)
-                                       .GroupBy(e => e.Status.SessionPid))
+                                       .GroupBy(e => (e.Status.SessionPid, e.Status.Source)))
             {
                 var donor = group.Where(e => KnowsATerminal(e.Status))
                                  .OrderByDescending(e => e.Written)
@@ -384,6 +457,8 @@ namespace ClaudeBuddy
                 }
 
                 if (status is null) continue;
+
+                status.Source = SourceOf(status);
 
                 found.Add(new ScanEntry(Path.GetFileNameWithoutExtension(file), status, written));
             }
@@ -583,6 +658,12 @@ namespace ClaudeBuddy
                 // would hand a remote session the tmux pane of unrelated local
                 // work, and clicking that orb would jump to it — worse than a
                 // dead click, because it looks like it worked.
+                //
+                // Not for Codex either, for a plainer reason: the viewer this
+                // adopts is a `claude agents` window, and there is no such
+                // thing to find for a Codex session. The cwd-collision hazard
+                // above applies just as much, and here both repositories would
+                // be on this machine.
                 if (status.Source == SessionSource.ClaudeCode
                     && !KnowsATerminal(status)
                     && (leadsWithLiveAgents.Contains(sessionId) || status.SessionPid <= 0))
@@ -604,7 +685,7 @@ namespace ClaudeBuddy
                 // A gateway session has none of these and never will — it has
                 // no terminal anywhere, which is the point of it. Left ungated
                 // this rule alone drops every OpenClaw orb, every scan.
-                if (status.Source == SessionSource.ClaudeCode
+                if (status.IsLocalCli
                     && string.IsNullOrEmpty(status.Tty)
                     && string.IsNullOrEmpty(status.TermProgram)
                     && string.IsNullOrEmpty(status.TmuxPane)
@@ -638,6 +719,24 @@ namespace ClaudeBuddy
                 if (status.Source == SessionSource.ClaudeCode
                     && status.SessionPid <= 0
                     && !BackgroundJobs.IsLiveJob(sessionId))
+                {
+                    continue;
+                }
+
+                // The same rule for Codex, with the exemption removed rather
+                // than reused. `claude agents` is what makes a pid-less Claude
+                // Code session worth an orb, and Codex has no equivalent — no
+                // background job to attach to, nothing to ask. So a Codex file
+                // naming no process is a session that ended without clearing
+                // up, and an orb for it is a permanent dead click.
+                //
+                // Written out rather than folded into the rule above because
+                // leaving Codex to fall through it was a real hole: the
+                // no-terminal rule two blocks up requires a pid to fire, and
+                // the liveness check treats pid 0 as alive, so nothing else
+                // would ever have removed it. With the orb lifetime set to
+                // "forever", nothing would have removed it at all.
+                if (status.Source == SessionSource.Codex && status.SessionPid <= 0)
                 {
                     continue;
                 }
@@ -828,6 +927,17 @@ namespace ClaudeBuddy
 
             if (status.Source == SessionSource.OpenClaw)
                 return OpenClawSessions.ChatFor(sessionId, status.Title);
+
+            // No panel for a Codex session yet. ClaudeCodeChatSession below
+            // reads its transcript with ChatTranscript, which understands
+            // Claude Code's JSONL and not Codex's rollout, so what it would
+            // return is a conversation with nothing in it.
+            //
+            // Explicit rather than left to fall through. The orb's chat button
+            // is hidden for Codex too, so nothing should ask — but "nothing
+            // should ask" is not the same as "nothing does", and an empty panel
+            // is a bug report about the wrong thing.
+            if (status.Source == SessionSource.Codex) return null;
 
             if (!ClaudeBuddySettings.ClaudeCodeChatEnabled) return null;
 
@@ -1081,10 +1191,25 @@ namespace ClaudeBuddy
         // made it a good room key and makes it a good position key.
         private static string PositionKeyFor(SessionStatus status, string sessionId)
         {
-            if (status.Source != SessionSource.ClaudeCode) return sessionId;
+            if (!status.IsLocalCli) return sessionId;
 
             var cwd = DirectoryKeyFor(status);
             if (cwd.Length == 0) return "";
+
+            // Which CLI, in the key, for Codex only.
+            //
+            // Not decoration: a Codex session and a Claude Code session open in
+            // one directory would otherwise share a slot whenever the Claude
+            // one has not been auto-titled yet, which is exactly the collision
+            // ccfee1d fixed for two Claude sessions. First orb to appear claims
+            // the position, the other stacks, and whichever is dragged last
+            // overwrites the one entry.
+            //
+            // Only Codex is prefixed, so every position already saved under a
+            // bare directory still matches the session it was saved for. A
+            // scheme that renamed both would have been tidier and would have
+            // moved every pinned orb on this machine back to the stack once.
+            var prefix = status.Source == SessionSource.Codex ? "codex\n" : "";
 
             // The directory alone is not enough when two sessions are open in
             // one: "makayla-lawyer" and "job-lawyer" both live in Evidence, so
@@ -1098,7 +1223,7 @@ namespace ClaudeBuddy
             // session, so an orb follows the name you gave it rather than the
             // folder it happens to share.
             var title = (status.Title ?? "").Trim();
-            return title.Length == 0 ? cwd : cwd + "\n" + title;
+            return prefix + (title.Length == 0 ? cwd : cwd + "\n" + title);
         }
 
         private static string DirectoryKeyFor(SessionStatus status) =>
@@ -1127,6 +1252,11 @@ namespace ClaudeBuddy
             // automatic one that moves as a conversation does, and losing your
             // placement to a retitle would be a worse bug than the one this
             // fixes.
+            // Claude Code only, and it has to stay that way. This exists for
+            // positions saved before names were part of the key, and there are
+            // no such Codex positions — every one of them has been written by a
+            // build that prefixes the CLI. Widening it would hand a Codex orb
+            // the place a Claude Code orb was put.
             if (saved is null && status.Source == SessionSource.ClaudeCode)
             {
                 var directory = DirectoryKeyFor(status);
@@ -1182,8 +1312,7 @@ namespace ClaudeBuddy
             // path this would build from its key ("openclaw:agent:main:…")
             // is not one this app should be writing at all. The gateway owns
             // that session's state; we only display it.
-            if (_statuses.TryGetValue(sessionId, out var known)
-                && known.Source != SessionSource.ClaudeCode)
+            if (_statuses.TryGetValue(sessionId, out var known) && !known.IsLocalCli)
             {
                 return;
             }
@@ -1199,6 +1328,19 @@ namespace ClaudeBuddy
             // Keep everything but the state (cwd, terminal info) intact.
             var reset = existing ?? new SessionStatus();
             reset.State = "idle";
+
+            // The second of the two places a status file is read, and the
+            // reason SourceOf exists rather than the scan resolving this
+            // inline. Without it the object handed to UpdateFrom below claims
+            // to be Claude Code — Source is [JsonIgnore], so it arrives as its
+            // default — and the orb would say so, and TerminalFocuser would
+            // believe it, until the next scan put it right.
+            //
+            // `existing ?? new SessionStatus()` is the case that makes this
+            // more than tidiness: a file that could not be read has no Cli
+            // either, so the fallback has to go through the same resolution
+            // rather than inheriting whatever the caller assumed.
+            reset.Source = SourceOf(reset);
             try
             {
                 File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(reset));

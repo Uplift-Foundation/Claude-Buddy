@@ -41,7 +41,13 @@ namespace ClaudeBuddy
             // the background-session branch below, which reads pid <= 0 as "a
             // local `claude daemon` session" and would open a tmux window trying
             // to attach a session id that exists only on another machine.
-            if (status.Source != SessionSource.ClaudeCode) return;
+            //
+            // Widened from Claude Code to any local CLI: a Codex session is in
+            // a terminal like any other and everything below finds it the same
+            // way, from the tmux pane or the tty the hook recorded. The one
+            // exception is that background-session branch, which stays Claude
+            // Code's — see the guard on it.
+            if (!status.IsLocalCli) return;
 
             // Resolving a target runs several short-lived processes (tmux
             // queries, ps walks, osascript) and waits on their output; doing
@@ -58,7 +64,16 @@ namespace ClaudeBuddy
                 // rather than leave the click doing nothing. Gated on having no
                 // pid so a real session whose terminal merely couldn't be
                 // resolved gets a diagnosis rather than a surprise window.
-                if (status.SessionPid <= 0 && !string.IsNullOrEmpty(sessionId))
+                //
+                // Still Claude Code's alone. This ends in `claude attach`, and
+                // there is no Codex equivalent to attach to. The scan already
+                // drops a pid-less Codex session before it can have an orb, so
+                // nothing should reach here — this is the belt to that braces,
+                // because the failure it prevents is a window opening onto
+                // someone else's session.
+                if (status.Source == SessionSource.ClaudeCode
+                    && status.SessionPid <= 0
+                    && !string.IsNullOrEmpty(sessionId))
                 {
                     var pane = AgentTeamViewer.AttachSession(sessionId, status.Cwd);
 
@@ -107,7 +122,7 @@ namespace ClaudeBuddy
             // sentence lands in an editor, a browser, or another session. That
             // is a latent hazard for any pane-less session; a gateway session
             // would make it the normal case.
-            if (status.Source != SessionSource.ClaudeCode) return Task.CompletedTask;
+            if (!status.IsLocalCli) return Task.CompletedTask;
 
             return Task.Run(async () =>
             {
@@ -165,7 +180,7 @@ namespace ClaudeBuddy
         // Whether this session can be typed into without anything coming to the
         // front. The one question the panel asks before enabling its composer.
         public static bool CanSendQuietly(SessionStatus? status) =>
-            status is { Source: SessionSource.ClaudeCode }
+            status is { IsLocalCli: true }
             && !string.IsNullOrEmpty(status.TmuxPane)
             && ResolveTmuxBinary(status.TmuxBin) is not null;
 
