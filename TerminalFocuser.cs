@@ -1024,6 +1024,25 @@ namespace ClaudeBuddy
             }
         }
 
+        // The working directory's last segment, which is what a shell puts in a
+        // Windows Terminal tab. Trailing separators are trimmed first so
+        // "C:\src\fmn\" and "C:\src\fmn" give the same answer; a path that is
+        // nothing but a root has no leaf and returns empty, which the caller
+        // treats as "don't attempt tab selection".
+        private static string LeafOf(string cwd)
+        {
+            if (string.IsNullOrEmpty(cwd)) return "";
+
+            var trimmed = cwd.TrimEnd('\\', '/');
+            if (trimmed.Length == 0) return "";
+
+            var cut = trimmed.LastIndexOfAny(new[] { '\\', '/' });
+            var leaf = cut < 0 ? trimmed : trimmed[(cut + 1)..];
+
+            // "C:" is a drive, not a directory anyone named.
+            return leaf.EndsWith(':') ? "" : leaf;
+        }
+
         // WT puts every window of one launch context in a single process, so
         // Process.MainWindowHandle can't tell tabs apart — but UI Automation
         // enumerates the real TabItem elements of every window that process
@@ -1064,7 +1083,19 @@ namespace ClaudeBuddy
         {
             tabWindow = IntPtr.Zero;
 
-            if (status.TermPid <= 0 || string.IsNullOrEmpty(status.Title)) return false;
+            // TermPid is no longer required. It is still the cheap path — one
+            // process, its windows only — but a Codex session on Windows
+            // routinely has none: Windows Terminal is not in its ancestry
+            // (measured: powershell -> pwsh -> codex.exe -> node.exe -> sh.exe,
+            // whose own parent has already exited), so the walk has nothing to
+            // record. Refusing on that left every Codex orb falling through to
+            // window activation, which raises the right *window* and shows
+            // whatever tab was already in front — a click that visibly does
+            // nothing when both sessions share one window, which is the normal
+            // case. 0 means "look at every Windows Terminal", and the
+            // one-unambiguous-match rule below is unchanged and is what keeps
+            // the wider search honest.
+            if (status.TermPid < 0) return false;
 
             // The title alone, with no glyph prefix — the script matches on the
             // tab name's *ending*. "✳ " + title was the original, and it is
@@ -1088,7 +1119,34 @@ namespace ClaudeBuddy
             // the next status glyph Claude Code invents would break a list
             // again. The one-unambiguous-match rule below is what keeps this
             // honest, and it is unchanged.
-            var target = status.Title;
+            //
+            // What a tab is actually *called* differs by CLI, so the string to
+            // match on does too.
+            //
+            // Claude Code renames the tab to the chat title, so the title is
+            // the identifying text and the tail match above is about its status
+            // glyph. Codex renames nothing: its tab keeps whatever the shell
+            // put there, which is the working directory's leaf — measured live,
+            // a Codex session titled "what branch is this repo on" sat in a tab
+            // named "fmn". Matching the title for Codex could therefore never
+            // succeed, so that was a dead click by construction rather than an
+            // intermittent one.
+            //
+            // The leaf is weaker evidence than a chat title, and it is worth
+            // being clear about that: it names a directory, not a session. Two
+            // Codex sessions in one directory, or a plain shell sitting in it,
+            // produce tabs that read the same — which is exactly what the
+            // exactly-one-match rule is for; two matches refuse and fall
+            // through to window activation rather than guess between them. The
+            // case it cannot see is a *single* non-Codex tab in that directory,
+            // which would be selected; the cost is landing on a terminal in the
+            // right directory rather than the right session, and it is why this
+            // is a leaf match and not a substring one.
+            var target = status.Source == SessionSource.Codex
+                ? LeafOf(status.Cwd)
+                : status.Title;
+
+            if (string.IsNullOrEmpty(target)) return false;
 
             // The script has to reach powershell.exe as a *file* (-File), not
             // as -Command text with trailing arguments — verified the hard
@@ -1174,17 +1232,26 @@ namespace ClaudeBuddy
             Add-Type -AssemblyName UIAutomationClient
             Add-Type -AssemblyName UIAutomationTypes
             $root = [System.Windows.Automation.AutomationElement]::RootElement
-            $procCond = New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $targetPid)
-            $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $procCond)
+            # A pid of 0 means the hook could not record one (see the caller).
+            # Every Windows Terminal is then in scope, which widens what the
+            # match has to be unambiguous across but does not weaken the rule
+            # itself: still exactly one tab, or nothing happens.
+            $targetPids = if ($targetPid -gt 0) { @($targetPid) }
+                          else { @(Get-Process WindowsTerminal -ErrorAction SilentlyContinue |
+                                   ForEach-Object { $_.Id }) }
             $tabCond = New-Object System.Windows.Automation.PropertyCondition(
                 [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
                 [System.Windows.Automation.ControlType]::TabItem)
             $found = @()
-            foreach ($win in $windows) {
-                foreach ($tab in $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)) {
-                    if ($tab.Current.Name.EndsWith($target, [System.StringComparison]::Ordinal)) {
-                        $found += [pscustomobject]@{ Tab = $tab; Window = $win; Hwnd = $win.Current.NativeWindowHandle }
+            foreach ($somePid in $targetPids) {
+                $procCond = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $somePid)
+                $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $procCond)
+                foreach ($win in $windows) {
+                    foreach ($tab in $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)) {
+                        if ($tab.Current.Name.EndsWith($target, [System.StringComparison]::Ordinal)) {
+                            $found += [pscustomobject]@{ Tab = $tab; Window = $win; Hwnd = $win.Current.NativeWindowHandle }
+                        }
                     }
                 }
             }
