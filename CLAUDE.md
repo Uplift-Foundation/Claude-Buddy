@@ -127,9 +127,10 @@ fix broke a case the previous one had fixed. Keep the geometry in
 
 Transcript and dialog parsing has one too — `dotnet run --project
 tests/TranscriptTests`. It covers `ChatTranscript`: turning Claude Code's JSONL
-into chat turns, and reading a permission dialog off a captured tmux pane. Same
-rule as the geometry — `ChatTranscript` is pure, and `ClaudeCodeChatSession`
-only decides which bytes to hand it.
+into chat turns, and reading a permission dialog off a captured tmux pane. It
+also covers `CodexTranscript`, which does the first of those for Codex's
+rollout JSONL. Same rule as the geometry — both parsers are pure, and the chat
+session only decides which bytes to hand them.
 
 Both parsers read formats nobody here controls, and both fail *quietly*: a
 mis-mapped transcript silently drops a message, and a mis-read dialog puts a
@@ -141,6 +142,11 @@ an invented fixture and failed on every real dialog. To capture one:
 tmux capture-pane -p -t %<pane> > /tmp/pane.txt
 dotnet run --project tests/TranscriptTests -- /tmp/pane.txt   # or a .jsonl
 ```
+
+Both CLIs write `.jsonl`, so the harness decides which parser to use by looking
+at the file's first row rather than its extension — hand it a Codex rollout
+from `~/.codex/sessions/<yyyy>/<mm>/<dd>/` and it says so in its first line of
+output. If that line names the wrong CLI, nothing below it means anything.
 
 Everything else about orb behavior is still verified by running the app.
 Two things make that survivable:
