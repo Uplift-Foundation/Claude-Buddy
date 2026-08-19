@@ -83,7 +83,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; Checked by default and called out in its own wizard page, because an install
 ; without it produces an app that runs correctly and displays nothing, which
 ; reads as broken software rather than an unfinished setup.
-Name: "wirehooks"; Description: "Wire up Claude Code hooks (required for orbs to appear)"; GroupDescription: "Setup:"
+Name: "wirehooks"; Description: "Wire up agent hooks for Claude Code and Codex (required for orbs to appear)"; GroupDescription: "Setup:"
 ; Only offered on a machine that actually has WSL; a plain file check is
 ; enough here since this runs at Windows-install time, not inside WSL itself.
 ; Deliberately a sub-option of "wirehooks" rather than independent: it does
@@ -94,11 +94,17 @@ Name: "startup"; Description: "Start {#AppName} automatically when I sign in"; G
 
 [Files]
 Source: "..\bin\Release\net10.0\win-x64\publish\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
-; The hook script sits at {app}\ and its installer at {app}\tools\, mirroring the
-; repo layout. install-windows-hooks.ps1 resolves the hook as ..\ClaudeBuddyHook.ps1
-; relative to itself, so this layout is what makes it work unmodified.
+; The hook script sits at {app}\ and its installers at {app}\tools\, mirroring
+; the repo layout. Each installer resolves the hook as ..\ClaudeBuddyHook.ps1
+; relative to itself, so this layout is what makes them work unmodified.
+;
+; Three installers: one per CLI, and install-hooks.ps1 over the top of them,
+; which is the only one anything else calls. Nobody should have to know which of
+; two scripts their machine needs.
 Source: "..\ClaudeBuddyHook.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\tools\install-hooks.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\tools\install-windows-hooks.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
+Source: "..\tools\install-codex-hooks.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -108,21 +114,21 @@ Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
 ; invokes Windows PowerShell 5.1, which is what install-windows-hooks.ps1 is
 ; written against, and naming it explicitly avoids resolving to a pwsh 7 that
 ; happens to shadow it on PATH.
-Name: "{group}\Wire up Claude Code hooks"; \
+Name: "{group}\Wire up agent hooks"; \
   Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\install-windows-hooks.ps1"""; \
-  Comment: "Re-run hook setup, or repair it after a Claude Code reinstall"
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\install-hooks.ps1"""; \
+  Comment: "Re-run hook setup, repair it after a reinstall, or pick up a CLI you added later"
 Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startup
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Start {#AppName} now"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-; Take the hook entries back out of settings.json, or Claude Code keeps invoking
-; a script that is about to be deleted and logs a hook error on every event.
-; runhidden because an uninstall should not flash a console window.
+; Take the hook entries back out of every CLI they were wired into, or the CLI
+; keeps invoking a script that is about to be deleted and logs a hook error on
+; every event. runhidden because an uninstall should not flash a console window.
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
-  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\install-windows-hooks.ps1"" -Uninstall"; \
+  Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\install-hooks.ps1"" -Uninstall"; \
   Flags: runhidden; RunOnceId: "unwirehooks"
 ; Restart Manager only runs during install, so stop a running instance here too.
 ; Full {sys} path rather than bare "taskkill.exe" — skipifdoesntexist tests the
@@ -145,20 +151,21 @@ var
   Script: String;
   Params: String;
 begin
-  Script := ExpandConstant('{app}\tools\install-windows-hooks.ps1');
+  Script := ExpandConstant('{app}\tools\install-hooks.ps1');
   Params := '-NoProfile -ExecutionPolicy Bypass -File "' + Script + '"';
 
-  { The script's own -Wsl skips any distro it detects wsl.exe isn't ready for
-    (see install-windows-hooks.ps1's timeout-guarded WSL discovery), so this
-    can't turn a plain Windows-only install into a hang even on a machine
-    where WSL is present but misbehaving. }
+  { -Wsl is forwarded to the Claude Code installer, whose own handling skips
+    any distro it detects wsl.exe isn't ready for (see install-windows-hooks.ps1's
+    timeout-guarded WSL discovery), so this can't turn a plain Windows-only
+    install into a hang even on a machine where WSL is present but misbehaving.
+    Codex has no WSL equivalent to forward it to. }
   if WizardIsTaskSelected('wirewslhooks') then
     Params := Params + ' -Wsl';
 
   if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
               Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
-    MsgBox('Could not start PowerShell to wire up the Claude Code hooks.' + #13#10#13#10 +
+    MsgBox('Could not start PowerShell to wire up the agent hooks.' + #13#10#13#10 +
            'Claude Buddy is installed and will run, but no orbs will appear until' + #13#10 +
            'the hooks are set up. Run this from a PowerShell prompt to finish:' + #13#10#13#10 +
            '  & "' + Script + '"',

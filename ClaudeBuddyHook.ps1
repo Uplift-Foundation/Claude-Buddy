@@ -3,6 +3,16 @@ param(
     [ValidateSet('idle', 'generating', 'waiting', 'ended')]
     [string]$State,
 
+    # Which CLI is asking. The bash twin takes this as a bare leading word
+    # because a shell command line is what it is written into; here it is a
+    # named parameter for the same reason everything else is, and the installers
+    # bake it in at wiring time.
+    #
+    # Almost nothing below cares. Finding the terminal, finding the session's
+    # process and writing the status file are the same job whoever asked.
+    [ValidateSet('claude', 'codex')]
+    [string]$Agent = 'claude',
+
     # Baked in as a literal by install-windows-hooks.ps1 at wiring time,
     # computed there in a normal, full environment — not re-derived here,
     # where a WSL-interop-launched invocation's environment can't be trusted
@@ -38,7 +48,7 @@ try {
 # so they keep the folder-name fallback — see the platform notes in README.
 $title = ''
 $color = ''
-if ($State -ne 'ended' -and $transcript -and (Test-Path $transcript)) {
+if ($Agent -eq 'claude' -and $State -ne 'ended' -and $transcript -and (Test-Path $transcript)) {
     try {
         # Read the tail first: transcripts reach tens of MB and this runs on
         # every tool call. Only scan the whole file when a long run of tool
@@ -163,8 +173,70 @@ try {
     }
 } catch {}
 
+# What Codex calls this chat.
+#
+# On macOS the hook reads this out of Codex's own state database, where
+# /rename's name and Codex's generated title both live. Windows has no sqlite
+# client to read it with — Windows 11 ships winsqlite3.dll but no sqlite3.exe,
+# and PowerShell has no built-in provider — so this takes the same first
+# message that Codex builds its own title from, out of the rollout.
+#
+# The practical difference is that /rename does not reach a Windows orb. That
+# is a smaller gap than it sounds: it matches what a Claude Code session under
+# WSL already does, and both fall back to something true rather than to
+# nothing. It is written down in the README's platform notes rather than left
+# to be discovered.
+if ($Agent -eq 'codex' -and $State -ne 'ended') {
+    try {
+        # Codex's transcript_path is nullable, so resolve the rollout by the
+        # session id its filename ends with when the payload omits it.
+        if (-not $transcript) {
+            $codexHome = $env:CODEX_HOME
+            if (-not $codexHome) { $codexHome = Join-Path $env:USERPROFILE '.codex' }
+            $sessions = Join-Path $codexHome 'sessions'
+            if (Test-Path $sessions) {
+                $match = Get-ChildItem -Path $sessions -Recurse -Filter "rollout-*-$sessionId.jsonl" |
+                    Select-Object -First 1
+                if ($match) { $transcript = $match.FullName }
+            }
+        }
+
+        if ($transcript -and (Test-Path $transcript)) {
+            # A UserMessage is within the first handful of rows, so this reads
+            # the head of the file rather than the file — which matters, since
+            # a rollout row carrying command output can reach a megabyte on its
+            # own.
+            $head = Get-Content -Path $transcript -TotalCount 40 -Encoding UTF8
+            foreach ($line in $head) {
+                if ($line -notmatch '"type":"UserMessage"') { continue }
+                if ($line -match '"type":"UserMessage".*?"text":"(.*?)"') {
+                    $title = $Matches[1] -replace '\\[nrt]', ' ' -replace '\\', ''
+                    break
+                }
+            }
+
+            if ($title) {
+                $title = ($title -replace '\s+', ' ').Trim()
+                if ($title.Length -gt 60) {
+                    $title = $title.Substring(0, 60)
+                    # Cut at 60 lands mid-word as often as not, and this is a
+                    # name rather than a summary. Back off to the last space,
+                    # unless that leaves too little to read.
+                    $lastSpace = $title.LastIndexOf(' ')
+                    if ($lastSpace -ge 30) { $title = $title.Substring(0, $lastSpace) }
+                }
+            }
+        }
+    } catch {}
+}
+
 $status = @{
     state           = $State
+
+    # Which CLI wrote this, so the app can tell a Codex session from a Claude
+    # Code one. A file from a hook older than this key has none, which reads as
+    # Claude Code — which is what it was.
+    cli             = $Agent
     cwd             = $cwd
     title           = $title
     color           = $color

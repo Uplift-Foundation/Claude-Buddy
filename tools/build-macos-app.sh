@@ -93,15 +93,22 @@ chmod +x "$CONTENTS/MacOS/ClaudeBuddy"
 # command against a stable path under /Applications. Both installers prefer a
 # hook script sitting alongside them, which is this layout.
 #
-# One hook script, two installers: the script is the same for Claude Code and
-# Codex and only takes a different first argument, but where it has to be
-# registered is completely different — settings.json under ~/.claude for one,
-# hooks.json under $CODEX_HOME for the other, with a trust step that only the
-# second has.
+# One hook script, two per-CLI installers, and install-hooks.sh over the top of
+# them. The script is the same for Claude Code and Codex and only takes a
+# different first argument, but where it has to be registered is completely
+# different — settings.json under ~/.claude for one, hooks.json under
+# $CODEX_HOME for the other, with a trust step that only the second has.
+#
+# install-hooks.sh is what every install path calls, and the per-CLI ones are
+# what it calls. Nobody should have to know which of two scripts their machine
+# needs; that knowledge belongs in a script, not in a README step someone reads
+# once.
 cp ClaudeBuddyHook.sh \
+   tools/install-hooks.sh \
    tools/install-macos-hooks.sh \
    tools/install-codex-hooks.sh "$CONTENTS/Resources/"
 chmod +x "$CONTENTS/Resources/ClaudeBuddyHook.sh" \
+         "$CONTENTS/Resources/install-hooks.sh" \
          "$CONTENTS/Resources/install-macos-hooks.sh" \
          "$CONTENTS/Resources/install-codex-hooks.sh"
 
