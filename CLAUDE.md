@@ -1,8 +1,13 @@
 # Working in this repository
 
 Notes for Claude Code (and anyone else) working here. The README is the real
-documentation — how the app works, how the hook works, how to build installers.
+documentation — how the app works, how the hooks work, how to build installers.
 This file only covers *how work gets landed*, which the code can't tell you.
+
+`AGENTS.md` is the same content for Codex, which does not read this file. Two
+files because each CLI looks for its own name and neither reads the other's —
+**if you change one, change both.** A symlink would look like one file until
+someone checks the repo out on Windows.
 
 ## Branching: gitflow
 

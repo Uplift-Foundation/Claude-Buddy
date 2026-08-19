@@ -110,6 +110,13 @@ Nothing corresponding to Claude Code's `custom-title`, `ai-title` or
 sets is not written to the rollout — the thread metadata lives in
 `~/.codex/thread_history_1.sqlite`.
 
+So the hook derives a name from the session's first prompt. Two of the three
+rollouts on this machine began with the *same* prompt, in different directories
+— the same instruction run against two repositories, which is a normal way to
+work and not a coincidence worth designing around. A derived title is therefore
+not unique on its own, and the working directory has to stay part of anything
+that identifies a session, the saved orb position included.
+
 ## The hooks
 
 Codex ships a hook system that is deliberately Claude-Code-shaped — its own
@@ -147,16 +154,47 @@ return a decision at all.
 **`SubagentStart` / `SubagentStop` carry the parent's `session_id`** alongside
 `agent_id`, so a subagent's hook writes would land on the parent's status file.
 
+### Where hooks are configured, and what is accepted
+
+Measured by writing a `hooks.json` into a scratch `CODEX_HOME` and asking a
+running `codex app-server` for `hooks/list` over JSON-RPC on stdio — which is
+also the cheapest way to check an installer's work without starting a session:
+
+```
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"probe","title":"probe","version":"0.0.1"}}}
+{"jsonrpc":"2.0","method":"initialized","params":{}}
+{"jsonrpc":"2.0","id":2,"method":"hooks/list","params":{}}
+```
+
+- **`$CODEX_HOME/hooks.json` is discovered automatically.** Nothing needs adding
+  to `config.toml`. Entries come back tagged `source: "user"`.
+- **The config shape is Claude Code's**, exactly:
+  `{"hooks": {"<Event>": [{"matcher": …, "hooks": [{"type": "command",
+  "command": …}]}]}}`. `matcher` works. Event keys are PascalCase in the file
+  and normalise to camelCase in the listing.
+- **A handler accepts `async: true`**, confirmed on `PermissionRequest` and
+  `PreToolUse`. It also accepts `timeout`, in seconds, defaulting to 600.
+- **An event name Codex does not know is dropped silently** — `Notification`
+  was accepted into the file, produced no entry, and reported nothing in either
+  `warnings` or `errors`. So a wrong event name is indistinguishable from a hook
+  that never fires, which is the single easiest way to waste an afternoon here.
+  It also means a config carried over by Codex's own `/import` from a Claude
+  Code setup can contain dead entries that nothing complains about.
+- **A `hooks.json` written by anything other than Codex starts untrusted**:
+  every entry came back `trustStatus: "untrusted"`, alongside a
+  `currentHash: "sha256:…"`, which is what re-asks after an edit. Nothing fires
+  until the user accepts it.
+
 ## Still unknown
 
 Not measured. Do not write these down as facts until they are.
 
-- Whether `async: true` is accepted on `PermissionRequest` and the other events.
-- Whether the trust flow (`hooks.state`, `trustStatus`, `startup_hooks_review`,
-  the `/hooks` command) blocks a `hooks.json` written out of band, and what
-  editing one afterwards does to its trust state.
+- Whether a hook declared `async: true` still receives its payload on stdin. It
+  is accepted and stored — see above — but nothing here has watched one fire.
+  This is the one thing the amber "waiting" state depends on.
 - Whether `allowManagedHooksOnly` is set on any machine this ships to.
-- The exact discovery path for a user-level `hooks.json` under `CODEX_HOME`.
+- What accepting the trust prompt actually requires of the user, and whether it
+  can be done without an interactive TUI.
 - What `PermissionRequest` stdin actually contains for a shell approval —
   specifically whether `tool_input` carries a `cwd`-like key, which would defeat
   a greedy `sed` extraction.
