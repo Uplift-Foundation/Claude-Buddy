@@ -328,6 +328,26 @@ The alternative would be scanning for `codex` processes and matching them to
 threads, which this app deliberately does not do for orb discovery — the whole
 design is that a session announces itself and nothing polls the CLI.
 
+### Trust is a hash of hooks.json, so the wiring must stay still
+
+Codex records a `currentHash` per hook entry, and a `trustStatus` beside it. If
+`hooks.json` changes, entries come back **`modified`** and stop running until the
+review is accepted again — with no error anywhere, which is the same
+silently-does-nothing failure the trust prompt itself causes.
+
+Measured both directions on the same machine. Adding an argument to the hook
+command flipped all seven entries from `trusted` to `modified`; putting the file
+back to its byte-identical earlier form flipped them back to `trusted` with no
+prompt at all. So it really is content-addressed, and a rewrite that changes
+nothing costs nothing.
+
+That is why the auto-colour setting is a **marker file** the app writes beside
+the status files rather than a flag baked into the hook command. A flag was the
+first design and shipped broken for exactly this reason: toggling a colour
+rewrote `hooks.json`, and every Codex orb quietly stopped appearing until the
+user happened to re-approve the hooks. Anything that toggles at runtime has to
+stay out of `hooks.json`.
+
 ## Still unknown
 
 - On Windows: `install-codex-hooks.ps1`'s install path and the hook script's

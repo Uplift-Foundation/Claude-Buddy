@@ -22,13 +22,6 @@ case "$1" in
     claude|codex) AGENT="$1"; shift ;;
 esac
 
-# Baked in by the installer rather than read from the app's settings here.
-# Reading a setting would mean an osascript per hook call — this runs on every
-# tool use — and the app already re-runs the installer when a setting like this
-# changes, which is how the extra-profile list works too.
-AUTO_COLOR=0
-if [ "$1" = "--auto-color" ]; then AUTO_COLOR=1; shift; fi
-
 STATE="$1"
 case "$STATE" in
     idle|generating|waiting|ended) ;;
@@ -65,6 +58,21 @@ TRANSCRIPT=$(field transcript_path)
 # and this script agree on the folder (both are per-user).
 DIR="${TMPDIR:-/tmp/}"
 DIR="${DIR%/}/claude_buddy"
+
+# Whether to give a session a colour when it has none.
+#
+# A marker file the app writes beside the status files, not a flag in the hook
+# command — and the difference is not stylistic. The first version baked
+# `--auto-color` into the command, which meant toggling the setting rewrote
+# Codex's hooks.json; Codex hashes that file and marks a changed entry
+# `modified`, so its hooks stop running until the review is accepted again.
+# Turning a colour on would silently stop every Codex orb until the user
+# noticed. A marker leaves the wiring untouched, so trust survives.
+#
+# Cheaper than the alternatives too: one stat, against an osascript per hook
+# call to read the app's settings, on a script that runs on every tool use.
+AUTO_COLOR=0
+[ -f "$DIR/.auto-color" ] && AUTO_COLOR=1
 FILE="$DIR/$SESSION_ID.txt"
 
 if [ "$STATE" = "ended" ]; then

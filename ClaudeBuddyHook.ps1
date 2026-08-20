@@ -107,6 +107,64 @@ $termProgram = ''
 if ($env:WT_SESSION) { $termProgram = 'WindowsTerminal' }
 elseif ($env:TERM_PROGRAM) { $termProgram = $env:TERM_PROGRAM }
 
+# Give this session a colour when it has none, the way each CLI allows.
+#
+# The bash twin has the reasoning in full. In short: for Claude Code this writes
+# the record /color writes and Claude Code reads back, so the colour is real
+# rather than a stand-in; for Codex there is no per-session colour to write, and
+# nothing displays one either, so a derived colour disagrees with nothing.
+#
+# Keyed on the working directory so a project keeps one colour across sessions
+# and across both CLIs. Windows has no cksum, so the hash is computed here — the
+# same arithmetic, over the same bytes, giving the same answer as the bash side.
+# The marker the app writes beside the status files, for the reason the bash
+# twin gives: a flag in the hook command would rewrite Codex's hooks.json and
+# cost the user their hook trust every time the setting was toggled.
+$autoColor = Test-Path (Join-Path $dir '.auto-color')
+if ($autoColor -and -not $color -and $cwd) {
+    try {
+        # cksum's CRC-32, so a directory gets the same colour on either
+        # platform. Table-free: 32 bits, one byte at a time, then the length,
+        # which is what the POSIX definition does.
+        function Get-CksumCrc([string]$text) {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+            $crc = [uint32]0
+            foreach ($b in $bytes) {
+                $crc = $crc -bxor ([uint32]$b -shl 24)
+                for ($i = 0; $i -lt 8; $i++) {
+                    if ($crc -band 0x80000000) { $crc = (($crc -shl 1) -bxor 0x04C11DB7) -band 0xFFFFFFFF }
+                    else { $crc = ($crc -shl 1) -band 0xFFFFFFFF }
+                }
+            }
+            $len = $bytes.Length
+            while ($len -gt 0) {
+                $crc = $crc -bxor ([uint32]($len -band 0xFF) -shl 24)
+                for ($i = 0; $i -lt 8; $i++) {
+                    if ($crc -band 0x80000000) { $crc = (($crc -shl 1) -bxor 0x04C11DB7) -band 0xFFFFFFFF }
+                    else { $crc = ($crc -shl 1) -band 0xFFFFFFFF }
+                }
+                $len = [math]::Floor($len / 256)
+            }
+            return (-bnot $crc) -band 0xFFFFFFFF
+        }
+
+        $names = @('red','orange','yellow','green','teal','cyan','blue','purple','violet','magenta','pink')
+        $picked = $names[(Get-CksumCrc $cwd) % $names.Length]
+
+        if ($Agent -eq 'claude' -and $transcript -and (Test-Path $transcript)) {
+            # The same single-line append the bash hook makes, and the same
+            # record /color writes. UTF-8 without a BOM, appended, for the
+            # reasons the status-file write below gives.
+            $record = '{"type":"agent-color","agentColor":"' + $picked + '","sessionId":"' + $sessionId + '"}'
+            [System.IO.File]::AppendAllText($transcript, $record + "`n", (New-Object System.Text.UTF8Encoding($false)))
+            $color = $picked
+        }
+        elseif ($Agent -eq 'codex') {
+            $color = $picked
+        }
+    } catch {}
+}
+
 $termPid = 0
 # The CLI process itself, recorded so the app can tell a running session from
 # a status file left behind by one that never exited cleanly (Ctrl+C fires no

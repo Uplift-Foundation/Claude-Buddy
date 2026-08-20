@@ -23,6 +23,18 @@ namespace ClaudeBuddy
         // to account for a WSL VM cold-booting.
         private const int TimeoutMs = 20_000;
 
+        // Re-wire every CLI. Used by settings that mean the same thing to both,
+        // where re-running only one leaves the other wired to an older hook and
+        // an older set of flags — which is exactly how the colour setting
+        // shipped broken for Codex: the toggle re-ran Claude Code's installer
+        // alone, so Codex kept a hook copy without the flag and without the
+        // code the flag turns on.
+        public static void ReapplyAll()
+        {
+            ReapplyClaudeCode();
+            ReapplyCodex();
+        }
+
         // Re-wire every Claude Code account the app knows about.
         public static void ReapplyClaudeCode()
         {
@@ -42,11 +54,11 @@ namespace ClaudeBuddy
         {
             if (OperatingSystem.IsWindows())
             {
-                RunPowerShell("install-codex-hooks.ps1");
+                RunPowerShell("install-codex-hooks.ps1", ClaudeBuddySettings.AutoColorSessions);
                 return;
             }
 
-            RunScript("install-codex-hooks.sh");
+            RunScript("install-codex-hooks.sh", ClaudeBuddySettings.AutoColorSessions);
         }
 
         private static void RunScript(string name, bool autoColor = false)
@@ -62,13 +74,18 @@ namespace ClaudeBuddy
             Run("/bin/bash", autoColor ? new[] { script, "--auto-color" } : new[] { script });
         }
 
-        private static void RunPowerShell(string name)
+        private static void RunPowerShell(string name, bool autoColor = false)
         {
             var script = Resolve(name);
             if (script is null) return;
 
-            Run(@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-                new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script });
+            var args = new List<string>
+            {
+                "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script
+            };
+            if (autoColor) args.Add("-AutoColor");
+
+            Run(@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", args.ToArray());
         }
 
         // Where the installers live, in both layouts this app runs from.
