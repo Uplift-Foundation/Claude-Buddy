@@ -145,8 +145,8 @@ was never maintained afterwards.
 ## Codex specifically
 
 `docs/codex-findings.md` is the reference for everything measured about the
-Codex CLI — the rollout format, the hook events and their payloads, and a
-clearly separated list of what has *not* been verified. Read it before changing
+Codex CLI — the rollout format, the hook events and their payloads, the TUI's
+approval prompt, and a clearly separated list of what has *not* been verified. Read it before changing
 `CodexTranscript.cs`, `ClaudeBuddyHook.sh` or `tools/install-codex-hooks.sh`,
 and add to it rather than to a commit message when you measure something new.
 

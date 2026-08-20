@@ -69,7 +69,8 @@ namespace ClaudeBuddy
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
-            "openclawReplyEnabled", "openclawActiveWithinMinutes"
+            "openclawReplyEnabled", "openclawActiveWithinMinutes",
+            "codexChatEnabled", "codexReplyEnabled"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -203,6 +204,14 @@ namespace ClaudeBuddy
             // interrupting a run, which are the two places a wrong click costs
             // most.
             public bool ClaudeCodeReplyEnabled { get; set; }
+
+            // Codex's own pair. Separate keys rather than one shared "local CLI"
+            // switch, because seeing and controlling are separate powers per CLI
+            // as well: someone can reasonably want to read a Codex session and
+            // never type into it while doing the opposite for Claude Code.
+            public bool CodexChatEnabled { get; set; } = true;
+
+            public bool CodexReplyEnabled { get; set; }
 
             // How far back a gateway session counts as current. Separate from
             // OrbLifetimeMinutes, which decides how long a session lingers after
@@ -476,6 +485,18 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.ClaudeCodeReplyEnabled = value; Save(); }
         }
 
+        public static bool CodexChatEnabled
+        {
+            get { Load(); lock (Gate) return _model.CodexChatEnabled; }
+            set { Load(); lock (Gate) _model.CodexChatEnabled = value; Save(); }
+        }
+
+        public static bool CodexReplyEnabled
+        {
+            get { Load(); lock (Gate) return _model.CodexReplyEnabled; }
+            set { Load(); lock (Gate) _model.CodexReplyEnabled = value; Save(); }
+        }
+
         public static bool NeuralVoiceEnabled
         {
             get { Load(); lock (Gate) return _model.NeuralVoiceEnabled; }
@@ -701,6 +722,8 @@ namespace ClaudeBuddy
                             root["openclawActiveWithinMinutes"]?.GetValue<int>() ?? DefaultOpenClawActiveWithin,
                         ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
+                        CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
+                        CodexReplyEnabled = root["codexReplyEnabled"]?.GetValue<bool>() ?? false,
                         TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
                         ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
                         ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing,
@@ -910,6 +933,8 @@ namespace ClaudeBuddy
                         ["openclawActiveWithinMinutes"] = _model.OpenClawActiveWithinMinutes,
                         ["claudeCodeChatEnabled"] = _model.ClaudeCodeChatEnabled,
                         ["claudeCodeReplyEnabled"] = _model.ClaudeCodeReplyEnabled,
+                        ["codexChatEnabled"] = _model.CodexChatEnabled,
+                        ["codexReplyEnabled"] = _model.CodexReplyEnabled,
                         ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
                         ["arrangeShape"] = _model.ArrangeShape,
                         ["arrangeSpacing"] = _model.ArrangeSpacing,

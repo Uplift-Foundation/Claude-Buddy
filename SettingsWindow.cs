@@ -272,6 +272,8 @@ namespace ClaudeBuddy
 
             root.Children.Add(Group("Claude Code sessions", Card(ClaudeCodeChatRows())));
 
+            root.Children.Add(Group("Codex sessions", Card(CodexChatRows())));
+
             root.Children.Add(Group("OpenClaw agents", Card(OpenClawRows())));
 
             root.Children.Add(Group("Profiles", ProfilesCard()));
@@ -464,6 +466,47 @@ namespace ClaudeBuddy
         private void OnClaudeCodeReplyToggled(bool enabled)
         {
             ClaudeBuddySettings.ClaudeCodeReplyEnabled = enabled;
+        }
+
+        // The same two powers for Codex, and its own pair of switches rather
+        // than one shared "local CLI" setting: someone can reasonably want to
+        // read a Codex session and never type into it while doing the opposite
+        // for Claude Code, and the two CLIs are wired independently anyway.
+        //
+        // The wording differs where the behaviour does, and only there.
+        private Control[] CodexChatRows()
+        {
+            var rows = new List<Control>
+            {
+                Row("Chat panel on the orb",
+                    Switch(ClaudeBuddySettings.CodexChatEnabled, OnCodexChatToggled),
+                    "The same panel Claude Code sessions get, reading the rollout transcript "
+                    + "Codex already writes. It is the same conversation as the terminal's, not "
+                    + "a copy. Clicking the orb still goes to the terminal.")
+            };
+
+            if (!ClaudeBuddySettings.CodexChatEnabled) return rows.ToArray();
+
+            rows.Add(Row("Allow replying to sessions",
+                Switch(ClaudeBuddySettings.CodexReplyEnabled, OnCodexReplyToggled),
+                "Off, the panel shows what a session is doing. On, you can type into it, "
+                + "answer its approval prompts and interrupt it — by typing into its tmux "
+                + "pane, exactly as if you had typed there yourself. Codex's approval prompts "
+                + "are numbered the same way Claude Code's are, and a digit answers one "
+                + "outright. Sessions not running under tmux stay read-only either way."));
+
+            return rows.ToArray();
+        }
+
+        private void OnCodexChatToggled(bool enabled)
+        {
+            ClaudeBuddySettings.CodexChatEnabled = enabled;
+            Rebuild();
+        }
+
+        private void OnCodexReplyToggled(bool enabled)
+        {
+            ClaudeBuddySettings.CodexReplyEnabled = enabled;
         }
 
         private Control[] OpenClawRows()

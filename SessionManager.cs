@@ -928,18 +928,10 @@ namespace ClaudeBuddy
             if (status.Source == SessionSource.OpenClaw)
                 return OpenClawSessions.ChatFor(sessionId, status.Title);
 
-            // No panel for a Codex session yet. ClaudeCodeChatSession below
-            // reads its transcript with ChatTranscript, which understands
-            // Claude Code's JSONL and not Codex's rollout, so what it would
-            // return is a conversation with nothing in it.
-            //
-            // Explicit rather than left to fall through. The orb's chat button
-            // is hidden for Codex too, so nothing should ask — but "nothing
-            // should ask" is not the same as "nothing does", and an empty panel
-            // is a bug report about the wrong thing.
-            if (status.Source == SessionSource.Codex) return null;
-
-            if (!ClaudeBuddySettings.ClaudeCodeChatEnabled) return null;
+            // Both local CLIs from here down. Which transcript format to read
+            // and which pair of settings governs it is the whole of the
+            // difference, and it lives in CliChatFormat.
+            if (!CliChatFormat.For(status.Source).ChatEnabled()) return null;
 
             // Cached rather than made per click: the session owns a file watcher
             // and a byte offset into a transcript, and rebuilding it every time
@@ -951,7 +943,7 @@ namespace ClaudeBuddy
                 return existing;
             }
 
-            var chat = new ClaudeCodeChatSession(sessionId, status);
+            var chat = new LocalCliChatSession(sessionId, status);
             _chats[sessionId] = chat;
             chat.Start();
             return chat;
@@ -960,7 +952,7 @@ namespace ClaudeBuddy
         // Local chat sessions, by session id. Only ever populated by a click —
         // there is no reason to watch a transcript nobody is reading — and
         // emptied with the orb.
-        private readonly Dictionary<string, ClaudeCodeChatSession> _chats = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, LocalCliChatSession> _chats = new(StringComparer.Ordinal);
 
         // Namespaced away from both Claude Code's UUIDs and the gateway's own
         // keys, because it is neither: nothing on the gateway answers to it.

@@ -921,6 +921,67 @@ Check("whitespace-only text is not a turn",
 
 Check("an empty list maps to nothing", CodexTranscript.Map(Array.Empty<string>()).Count == 0);
 
+// --- codex's approval dialog ---
+
+// Transcribed from `tmux capture-pane -p` against a real Codex 0.148 pane,
+// escalating a write outside its sandbox. Not composed here — the same rule
+// that produced the two Claude Code fixtures above, and it earned its keep
+// again: this parser was expected to need a Codex-specific rewrite, because the
+// strings in Codex's own binary advertise "Allow" / "Allow for this session"
+// wording with a description line under each, which would have broken the
+// contiguous-1..n rule outright. The TUI does not use that shape at all.
+const string CodexApproval = """
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Allow creating the requested empty file cb-approval-probe in your home directory?
+
+  $ touch $HOME/cb-approval-probe
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `touch $HOME/cb-approval-probe` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel
+""";
+
+var codexDialog = ChatTranscript.ParseDialog(CodexApproval);
+
+Check("codex's approval prompt parses with the shared parser",
+    codexDialog is not null,
+    "a Codex-specific parser would be dead code if this holds, and a dead click if it doesn't");
+
+Check("codex's three options come through in order",
+    codexDialog is { Options.Count: 3 }
+    && codexDialog.Options[0].Key == "1"
+    && codexDialog.Options[1].Key == "2"
+    && codexDialog.Options[2].Key == "3",
+    codexDialog is null ? "no dialog" : string.Join(" | ", codexDialog.Options.Select(o => o.Key + ":" + o.Label)));
+
+// The labels carry Codex's own key hints — (y), (p), (esc). Kept verbatim
+// rather than stripped: they are what the terminal shows, and a button whose
+// label differs from the terminal's is the start of pressing the wrong thing.
+Check("the option labels are the dialog's own wording",
+    codexDialog is not null
+    && codexDialog.Options[0].Label == "Yes, proceed (y)"
+    && codexDialog.Options[2].Label.StartsWith("No, and tell Codex", StringComparison.Ordinal),
+    codexDialog is null ? "no dialog" : codexDialog.Options[0].Label);
+
+// The hint line below the options must not be read as a fourth one, and must
+// not be mistaken for the input box's rule — which is what tells a real dialog
+// from a numbered list the model happened to write in prose.
+Check("the confirm hint below the options is not an option",
+    codexDialog is { Options.Count: 3 });
+
+// Walking up past the blank line lands on the command rather than the
+// question. That is the more useful of the two — "Would you like to run the
+// following command?" says nothing a button doesn't — so it is pinned rather
+// than worked around.
+Check("the title is the command being approved",
+    codexDialog?.Title == "$ touch $HOME/cb-approval-probe",
+    codexDialog?.Title ?? "null");
+
 // --- report ---
 
 if (failures.Count == 0)

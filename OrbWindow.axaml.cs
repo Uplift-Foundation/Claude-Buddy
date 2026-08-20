@@ -966,15 +966,12 @@ namespace ClaudeBuddy
             // Only on local sessions. A gateway orb opens its panel when you
             // click it, so a button that did the same thing one ring further out
             // would be a second way to do the thing the orb already does.
-            // Still Claude Code alone, and deliberately not widened with the
-            // rest of this change. The panel reads a transcript with
-            // ChatTranscript, which understands Claude Code's JSONL and not
-            // Codex's rollout, so a Codex orb offering this button would open
-            // an empty conversation. Clicking the orb itself already does the
-            // useful thing and goes to its terminal.
+            // Any local CLI, each behind its own setting. A gateway orb still
+            // doesn't get the button: clicking it already opens its panel, so a
+            // second way to do the same thing one ring further out is noise.
             _flyout.SetChatVisible(
-                _lastStatus?.Source == SessionSource.ClaudeCode
-                && ClaudeBuddySettings.ClaudeCodeChatEnabled);
+                (_lastStatus?.IsLocalCli ?? false)
+                && CliChatFormat.For(_lastStatus!.Source).ChatEnabled());
 
             _flyout.SetArranged(SessionManager.Instance?.IsArranged ?? false);
 
@@ -1074,14 +1071,16 @@ namespace ClaudeBuddy
             // every project directory recursively, on the UI thread, before
             // getting there.
             //
-            // Not for Codex either, and the reason is the same trap rather than
-            // the same cause. A Codex session *does* have a transcript here,
-            // but TranscriptReader looks for Claude Code's rows in it and finds
-            // none — and then falls through to exactly that cwd lookup, over
-            // ~/.claude/projects, and speaks a Claude Code session's last turn
-            // out of a Codex orb. Widening this needs a reader that understands
-            // a rollout and never touches the projects tree.
-            if (_lastStatus?.Source != SessionSource.ClaudeCode) return null;
+            if (!(_lastStatus?.IsLocalCli ?? false)) return null;
+
+            // Codex reads through its own entry point, which understands a
+            // rollout and — the part that matters — has no cwd fallback. Sharing
+            // the path below would have found no Claude Code rows in a rollout
+            // and then searched ~/.claude/projects for the same directory,
+            // speaking an unrelated Claude Code session's last turn out of a
+            // Codex orb.
+            if (_lastStatus?.Source == SessionSource.Codex)
+                return TranscriptReader.LatestCodexAgentText(_lastStatus?.TranscriptPath);
 
             var path = _lastStatus?.TranscriptPath;
             var text = TranscriptReader.LatestAssistantText(path, SessionId);

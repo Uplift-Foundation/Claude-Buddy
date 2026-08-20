@@ -14,6 +14,48 @@ namespace ClaudeBuddy
         private const int TailBytes = 262144;
         private const int MaxSpokenChars = 1500;
 
+        // The last thing a Codex session said, for the orb's speak button.
+        //
+        // Separate entry point rather than a branch inside LatestAssistantText,
+        // and the separation is the point: that method falls back to searching
+        // ~/.claude/projects when it finds nothing, which for a Codex session
+        // would find a *Claude Code* transcript for the same directory and speak
+        // an unrelated session's last turn out of a Codex orb. There is no
+        // equivalent fallback here and there should not be one — a rollout that
+        // cannot be read is silence, which is the honest answer.
+        public static string? LatestCodexAgentText(string? transcriptPath)
+        {
+            if (string.IsNullOrEmpty(transcriptPath) || !File.Exists(transcriptPath))
+                return null;
+
+            try
+            {
+                var lines = TailLines(transcriptPath);
+                for (int i = lines.Length - 1; i >= 0; i--)
+                {
+                    // The same pre-filter CodexTranscript uses, for the same
+                    // reason: the rows that carry the bytes are the ones this
+                    // does not want.
+                    if (!CodexTranscript.IsInteresting(lines[i])) continue;
+
+                    var turns = CodexTranscript.Map(new[] { lines[i] });
+                    var text = turns
+                        .Where(t => t.Turn.Role == ChatRole.Assistant)
+                        .Select(t => t.Turn.Text)
+                        .LastOrDefault();
+
+                    if (string.IsNullOrWhiteSpace(text)) continue;
+
+                    return text.Length > MaxSpokenChars ? text[..MaxSpokenChars] + "…" : text;
+                }
+            }
+            catch
+            {
+            }
+
+            return null;
+        }
+
         public static string? LatestAssistantText(string? transcriptPath, string? sessionId = null)
         {
             if (string.IsNullOrEmpty(transcriptPath) && !string.IsNullOrEmpty(sessionId))
