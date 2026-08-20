@@ -707,6 +707,21 @@ namespace ClaudeBuddy
             }
         }
 
+        // Forget a profile's name and colour, for when the profile itself is
+        // gone. Left behind they would sit waiting for something that no longer
+        // exists — and be inherited by the next profile that happened to reuse
+        // the folder name, which is not far-fetched: new ones are numbered
+        // Claude-Profile-1, -2, and the numbering reuses a gap.
+        public static void RemoveProfile(string folder)
+        {
+            Load();
+            lock (Gate)
+            {
+                if (!_model.Profiles.Remove(folder)) return;
+            }
+            Save();
+        }
+
         public static void Update(string folder, Action<ProfileSettings> change)
         {
             Load();
