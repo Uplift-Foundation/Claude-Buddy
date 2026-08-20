@@ -1465,7 +1465,7 @@ namespace ClaudeBuddy
 
         private static Grid RowGrid() => new()
         {
-            ColumnDefinitions = new ColumnDefinitions("*,130,64,54,44"),
+            ColumnDefinitions = new ColumnDefinitions("*,130,64,54,44,84"),
             Margin = new Thickness(14, 8)
         };
 
@@ -1552,7 +1552,93 @@ namespace ClaudeBuddy
             Add(grid, 4, Check(settings.TintWindow, value =>
                 ClaudeBuddySettings.Update(folder, entry => entry.TintWindow = value)));
 
+            Add(grid, 5, DeleteProfileButton(profile));
+
             return grid;
+        }
+
+        // Removing a profile, which means removing a Claude Desktop login, its
+        // chat history and its local databases. There was no way to do it at
+        // all before this — "Reveal profiles folder" and a trip to Finder was
+        // the whole story — which is a gap rather than a safeguard, because
+        // deleting the folder by hand leaves the cloned Dock icon and the saved
+        // name and colour behind.
+        //
+        // Two clicks, not a modal. The second click is the confirmation, the
+        // button says what it is about to do while it waits, and it gives up
+        // after a few seconds so a stray click cannot arm it and leave it
+        // armed. A dialog would be the heavier answer, and the thing this
+        // guards is already recoverable — it goes to the Trash.
+        private Control DeleteProfileButton(ProfileView profile)
+        {
+            // The default profile is Claude Desktop's own directory rather than
+            // one this app made, so there is nothing here to offer.
+            if (profile.IsDefault) return new Panel();
+
+            var button = new Button
+            {
+                Content = "Delete",
+                FontSize = 11,
+                Padding = new Thickness(8, 3),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var armed = false;
+            DispatcherTimer? disarm = null;
+
+            void Disarm()
+            {
+                disarm?.Stop();
+                disarm = null;
+                armed = false;
+                button.Content = "Delete";
+            }
+
+            button.Click += (_, _) =>
+            {
+                if (!armed)
+                {
+                    // Say what will happen, in the place the click will happen.
+                    armed = true;
+                    button.Content = "Trash it?";
+
+                    disarm = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
+                    disarm.Tick += (_, _) => Disarm();
+                    disarm.Start();
+                    return;
+                }
+
+                Disarm();
+                button.IsEnabled = false;
+
+                var outcome = ClaudeDesktopManager.DeleteProfile(profile);
+
+                switch (outcome)
+                {
+                    case ClaudeDesktopManager.DeleteOutcome.Deleted:
+                        // Say so on the button *and* rebuild. The rescan the
+                        // delete kicked is asynchronous, so the row may still be
+                        // in the snapshot this rebuild reads — and a row that
+                        // stays put with nothing said reads as a click that did
+                        // nothing. Whichever happens first, the user is told.
+                        button.Content = "Trashed";
+                        Rebuild();
+                        break;
+
+                    case ClaudeDesktopManager.DeleteOutcome.RefusedRunning:
+                        button.Content = "Quit it first";
+                        button.IsEnabled = true;
+                        break;
+
+                    default:
+                        button.Content = "Couldn't";
+                        button.IsEnabled = true;
+                        break;
+                }
+            };
+
+            return button;
         }
 
         private const string AutoColour = "auto";
