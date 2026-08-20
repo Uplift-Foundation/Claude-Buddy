@@ -1103,6 +1103,23 @@ namespace ClaudeBuddy
 
             public string SpeakerName => _turn.Speaker ?? "";
 
+            // The speaker's own picture, when the gateway has one for them.
+            //
+            // The first frame only, even for an animated avatar. The header
+            // animates its portrait with a timer; a room is a scrolling list of
+            // dozens of turns, and one timer per row to animate a 16-pixel
+            // circle is a lot of machinery for something too small to read a
+            // motion in. The portrait is the place you look, and it still moves.
+            public Bitmap? SpeakerAvatar =>
+                OpenClawSessions.AvatarForAgentName(_turn.Speaker)?.Frames.FirstOrDefault();
+
+            public bool HasSpeakerAvatar => SpeakerAvatar is not null;
+
+            // Initials are the fallback, not the design: an agent with a face
+            // shows the face, and the letters are for the ones without one and
+            // for a name this cannot resolve to a single agent.
+            public bool HasSpeakerInitials => !HasSpeakerAvatar;
+
             // The speaker's initials, for the chip beside their name.
             //
             // A name alone in a colour was enough while a room had two or three
