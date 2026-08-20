@@ -70,7 +70,8 @@ namespace ClaudeBuddy
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
-            "codexChatEnabled", "codexReplyEnabled", "autoColorSessions"
+            "codexChatEnabled", "codexReplyEnabled", "autoColorSessions",
+            "claudeCodeEnabled", "codexEnabled"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -218,6 +219,16 @@ namespace ClaudeBuddy
             // file that causes a write to a file the app does not own, even
             // though what it writes is the record /color writes.
             public bool AutoColorSessions { get; set; }
+
+            // Whether a CLI is tracked at all. Both default on, because both
+            // are only ever visible if the user wired their hooks — which is
+            // itself the opt-in. Off means the app ignores that CLI's status
+            // files rather than unwiring anything: the hooks are the user's own
+            // config, and a display switch that silently rewrote it would be a
+            // surprise, and for Codex would cost them their hook trust as well.
+            public bool ClaudeCodeEnabled { get; set; } = true;
+
+            public bool CodexEnabled { get; set; } = true;
 
             // How far back a gateway session counts as current. Separate from
             // OrbLifetimeMinutes, which decides how long a session lingers after
@@ -509,6 +520,18 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.AutoColorSessions = value; Save(); }
         }
 
+        public static bool ClaudeCodeEnabled
+        {
+            get { Load(); lock (Gate) return _model.ClaudeCodeEnabled; }
+            set { Load(); lock (Gate) _model.ClaudeCodeEnabled = value; Save(); }
+        }
+
+        public static bool CodexEnabled
+        {
+            get { Load(); lock (Gate) return _model.CodexEnabled; }
+            set { Load(); lock (Gate) _model.CodexEnabled = value; Save(); }
+        }
+
         public static bool NeuralVoiceEnabled
         {
             get { Load(); lock (Gate) return _model.NeuralVoiceEnabled; }
@@ -737,6 +760,8 @@ namespace ClaudeBuddy
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
                         CodexReplyEnabled = root["codexReplyEnabled"]?.GetValue<bool>() ?? false,
                         AutoColorSessions = root["autoColorSessions"]?.GetValue<bool>() ?? false,
+                        ClaudeCodeEnabled = root["claudeCodeEnabled"]?.GetValue<bool>() ?? true,
+                        CodexEnabled = root["codexEnabled"]?.GetValue<bool>() ?? true,
                         TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
                         ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
                         ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing,
@@ -949,6 +974,8 @@ namespace ClaudeBuddy
                         ["codexChatEnabled"] = _model.CodexChatEnabled,
                         ["codexReplyEnabled"] = _model.CodexReplyEnabled,
                         ["autoColorSessions"] = _model.AutoColorSessions,
+                        ["claudeCodeEnabled"] = _model.ClaudeCodeEnabled,
+                        ["codexEnabled"] = _model.CodexEnabled,
                         ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
                         ["arrangeShape"] = _model.ArrangeShape,
                         ["arrangeSpacing"] = _model.ArrangeSpacing,

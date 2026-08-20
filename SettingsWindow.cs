@@ -258,61 +258,56 @@ namespace ClaudeBuddy
                 ColorRow("Idle", "idle"),
                 ColorRow("Working", "generating"),
                 ColorRow("Needs you", "waiting"),
+                Row("Give each session a colour",
+                    Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
+                    "Off, only a colour you set with /color shows on an orb. On, a session "
+                    + "that has none is given one, from its working directory — so a project "
+                    + "keeps its colour, and both CLIs agree on it. For Claude Code this "
+                    + "writes the same record /color writes, so the colour survives a resume "
+                    + "and the terminal agrees; /color still overrides it. Codex has nowhere "
+                    + "to write one and shows none of its own, so there its orb takes the "
+                    + "colour of its Codex section if it has one and the derived colour "
+                    + "otherwise."),
+                Row("Give each session a colour",
+                    Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
+                    "Off, only a colour you set with /color shows on an orb. On, a session "
+                    + "with none is given one from its working directory, so a project keeps "
+                    + "its colour and both CLIs agree on it. For Claude Code that writes the "
+                    + "same record /color writes, so the colour survives a resume and the "
+                    + "terminal agrees; /color still overrides it. Codex has nowhere to write "
+                    + "one and shows none of its own, so a Codex orb takes its Codex section's "
+                    + "colour if it has one and the derived colour otherwise."),
                 Row("Restore the built-in colours", ResetColorsButton(),
                     "The orb's fill and its glow. The menu-bar icon follows them too — it "
                     + "shows the most urgent state across every session, so very light or "
                     + "very dark choices can disappear into the menu bar. A session's own "
                     + "/color is separate: that one goes on the orb's ring and letter."))));
 
-            root.Children.Add(Group("Claude Desktop", Card(
-                Row("Tint the active window",
-                    Switch(ClaudeDesktopOverlay.Enabled, ClaudeDesktopOverlay.SetEnabled)))));
-
             root.Children.Add(Group("Voice", Card(VoiceRows())));
 
-            root.Children.Add(Group("Claude Code sessions", Card(ClaudeCodeChatRows())));
+            // One section per agent, each starting with whether it is tracked
+            // at all and then everything about it — the panel, replying, extra
+            // accounts, and on Windows the WSL distros.
+            //
+            // These used to be six sections scattered between Voice and the
+            // Claude Desktop profiles: "Claude Code sessions" here, "Claude Code
+            // profiles" four groups later, the same again for Codex, and the
+            // Desktop app's own profiles in between. Nothing was wrong with any
+            // of them individually; the order was just the order they were
+            // added in, which is how a settings window gets that way.
+            root.Children.Add(Group("Claude Code", ClaudeCodeSection()));
 
-            root.Children.Add(Group("Codex sessions", Card(CodexChatRows())));
+            root.Children.Add(Group("Codex", CodexSection()));
 
             root.Children.Add(Group("OpenClaw agents", Card(OpenClawRows())));
 
-            root.Children.Add(Group("Profiles", ProfilesCard()));
-
-            // Extra accounts, for both CLIs, on both platforms.
-            //
-            // These were Windows-only, on the stated reasoning that the concept
-            // did not exist on macOS. That was true of WSL and wrong about
-            // profiles: CLAUDE_CONFIG_DIR and CODEX_HOME are features of the
-            // CLIs, not of Windows, and install-macos-hooks.sh has always taken
-            // a --settings path. So macOS had the mechanism, consumed the
-            // setting in TranscriptReader, and offered no way to fill it in —
-            // which left a second account wired once by hand, if at all, and
-            // never maintained by a repair or an uninstall.
-            root.Children.Add(Group("Claude Code profiles", Card(ProfileDirsCard(
-                blurb: "Wire Claude Buddy hooks into additional Claude Code accounts managed via "
-                       + "CLAUDE_CONFIG_DIR, alongside the default ~/.claude.",
-                watermark: ".claude-work",
-                current: () => ClaudeBuddySettings.ClaudeCodeProfileDirs,
-                add: ClaudeBuddySettings.AddClaudeCodeProfileDir,
-                remove: ClaudeBuddySettings.RemoveClaudeCodeProfileDir,
-                reapply: HookInstaller.ReapplyClaudeCode))));
-
-            root.Children.Add(Group("Codex profiles", Card(ProfileDirsCard(
-                blurb: "Wire Claude Buddy hooks into additional Codex accounts managed via "
-                       + "CODEX_HOME, alongside the default ~/.codex. Codex asks you to trust "
-                       + "hooks the first time it sees them, once per account.",
-                watermark: ".codex-work",
-                current: () => ClaudeBuddySettings.CodexHomes,
-                add: ClaudeBuddySettings.AddCodexHome,
-                remove: ClaudeBuddySettings.RemoveCodexHome,
-                reapply: HookInstaller.ReapplyCodex))));
-
-            // WSL genuinely is Windows-only, unlike the two above.
-            if (OperatingSystem.IsWindows())
-            {
-                var wslCard = WslCard();
-                if (wslCard is not null) root.Children.Add(Group("WSL integration", Card(wslCard)));
-            }
+            // Not an agent CLI at all — the Electron desktop app — so it sits
+            // after them with its own profiles, which is where someone looking
+            // for them would go first.
+            root.Children.Add(Group("Claude Desktop",
+                Card(Row("Tint the active window",
+                    Switch(ClaudeDesktopOverlay.Enabled, ClaudeDesktopOverlay.SetEnabled))),
+                ProfilesCard()));
 
             // macOS preference windows are dismissed by the window's own close
             // button, not by a Done inside the content. Windows expects the
@@ -432,17 +427,84 @@ namespace ClaudeBuddy
         // a panel is actually up. There is nothing to consent to.
         //
         // The second one is the OpenClaw split, for the OpenClaw reason.
+        // Everything about one CLI in one place: whether it is tracked at all,
+        // what its orb can do, and which extra accounts to wire.
+        //
+        // These used to be spread across the window — "Claude Code sessions"
+        // near the top, "Claude Code profiles" four groups below it, the same
+        // again for Codex, with the Desktop app's profiles in between. Nothing
+        // was wrong with any of them alone; the order was the order they were
+        // added in, which is how a settings window gets that way.
+        private Control[] ClaudeCodeSection()
+        {
+            var cards = new List<Control> { Card(ClaudeCodeChatRows()) };
+
+            if (!ClaudeBuddySettings.ClaudeCodeEnabled) return cards.ToArray();
+
+            cards.Add(Card(ProfileDirsCard(
+                blurb: "Wire Claude Buddy hooks into additional Claude Code accounts managed "
+                       + "via CLAUDE_CONFIG_DIR, alongside the default ~/.claude.",
+                watermark: ".claude-work",
+                current: () => ClaudeBuddySettings.ClaudeCodeProfileDirs,
+                add: ClaudeBuddySettings.AddClaudeCodeProfileDir,
+                remove: ClaudeBuddySettings.RemoveClaudeCodeProfileDir,
+                reapply: HookInstaller.ReapplyClaudeCode)));
+
+            // WSL is genuinely Windows-only, unlike the extra accounts above,
+            // and belongs here because Claude Code's sessions are what it
+            // reaches.
+            if (OperatingSystem.IsWindows())
+            {
+                var wsl = WslCard();
+                if (wsl is not null) cards.Add(Card(wsl));
+            }
+
+            return cards.ToArray();
+        }
+
+        private Control[] CodexSection()
+        {
+            var cards = new List<Control> { Card(CodexChatRows()) };
+
+            if (!ClaudeBuddySettings.CodexEnabled) return cards.ToArray();
+
+            cards.Add(Card(ProfileDirsCard(
+                blurb: "Wire Claude Buddy hooks into additional Codex accounts managed via "
+                       + "CODEX_HOME, alongside the default ~/.codex. Codex asks you to trust "
+                       + "hooks the first time it sees them, once per account.",
+                watermark: ".codex-work",
+                current: () => ClaudeBuddySettings.CodexHomes,
+                add: ClaudeBuddySettings.AddCodexHome,
+                remove: ClaudeBuddySettings.RemoveCodexHome,
+                reapply: HookInstaller.ReapplyCodex)));
+
+            return cards.ToArray();
+        }
+
+        // Switching a CLI off hides the rest of its section rather than greying
+        // it out. A column of dead switches is a worse answer to "I only use
+        // Claude Code" than a two-line section is: what remains is what still
+        // does something.
         private Control[] ClaudeCodeChatRows()
         {
             var rows = new List<Control>
             {
-                Row("Chat panel on the orb",
-                    Switch(ClaudeBuddySettings.ClaudeCodeChatEnabled, OnClaudeCodeChatToggled),
-                    "Adds a keyboard button to the orb's hover menu that opens the session's "
-                    + "conversation — the same panel OpenClaw agents use. It is the same "
-                    + "conversation as the terminal's, not a copy: it reads the transcript "
-                    + "Claude Code already writes. Clicking the orb still goes to the terminal.")
+                Row("Show Claude Code sessions",
+                    Switch(ClaudeBuddySettings.ClaudeCodeEnabled, OnClaudeCodeEnabledToggled),
+                    "Off, Claude Code sessions get no orbs and are left out of the menu bar. "
+                    + "Its hooks are left alone — they are your own config, and they keep "
+                    + "writing where the app will find them again the moment you switch this "
+                    + "back on.")
             };
+
+            if (!ClaudeBuddySettings.ClaudeCodeEnabled) return rows.ToArray();
+
+            rows.Add(Row("Chat panel on the orb",
+                Switch(ClaudeBuddySettings.ClaudeCodeChatEnabled, OnClaudeCodeChatToggled),
+                "Adds a keyboard button to the orb's hover menu that opens the session's "
+                + "conversation — the same panel OpenClaw agents use. It is the same "
+                + "conversation as the terminal's, not a copy: it reads the transcript "
+                + "Claude Code already writes. Clicking the orb still goes to the terminal."));
 
             if (!ClaudeBuddySettings.ClaudeCodeChatEnabled) return rows.ToArray();
 
@@ -453,17 +515,6 @@ namespace ClaudeBuddy
                 + "pane, exactly as if you had typed there yourself, so the terminal shows it "
                 + "too. Sessions not running under tmux stay read-only either way, because "
                 + "the only way to type into those is to bring their window to the front."));
-
-            rows.Add(Row("Give each session a colour",
-                Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
-                "Off, only a colour you set with /color shows on an orb. On, a session that "
-                + "has none is given one — the same way /color does it, by writing the record "
-                + "Claude Code itself writes and reads back, so the colour survives a resume "
-                + "and the terminal agrees. Chosen from the working directory, so a project "
-                + "keeps its colour and /color still overrides it. A Codex orb takes the "
-                + "colour of its Codex section when it has one, and otherwise the same "
-                + "directory-derived colour — Codex has nowhere to write a per-session "
-                + "colour, and displays none of its own for that to disagree with."));
 
             return rows.ToArray();
         }
@@ -499,12 +550,23 @@ namespace ClaudeBuddy
         {
             var rows = new List<Control>
             {
+                Row("Show Codex sessions",
+                    Switch(ClaudeBuddySettings.CodexEnabled, OnCodexEnabledToggled),
+                    "Off, Codex sessions get no orbs and are left out of the menu bar. Its "
+                    + "hooks are left alone, so nothing has to be re-approved when you switch "
+                    + "this back on.")
+            };
+
+            if (!ClaudeBuddySettings.CodexEnabled) return rows.ToArray();
+
+            rows.AddRange(new Control[]
+            {
                 Row("Chat panel on the orb",
                     Switch(ClaudeBuddySettings.CodexChatEnabled, OnCodexChatToggled),
                     "The same panel Claude Code sessions get, reading the rollout transcript "
                     + "Codex already writes. It is the same conversation as the terminal's, not "
                     + "a copy. Clicking the orb still goes to the terminal.")
-            };
+            });
 
             if (!ClaudeBuddySettings.CodexChatEnabled) return rows.ToArray();
 
@@ -517,6 +579,19 @@ namespace ClaudeBuddy
                 + "outright. Sessions not running under tmux stay read-only either way."));
 
             return rows.ToArray();
+        }
+
+        // Rebuild, because switching a CLI off removes the rest of its section.
+        private void OnClaudeCodeEnabledToggled(bool enabled)
+        {
+            ClaudeBuddySettings.ClaudeCodeEnabled = enabled;
+            Rebuild();
+        }
+
+        private void OnCodexEnabledToggled(bool enabled)
+        {
+            ClaudeBuddySettings.CodexEnabled = enabled;
+            Rebuild();
         }
 
         private void OnCodexChatToggled(bool enabled)
@@ -1045,6 +1120,18 @@ namespace ClaudeBuddy
 
         private IBrush Hairline => new SolidColorBrush(
             IsDark ? Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x0F, 0x00, 0x00, 0x00));
+
+        // A heading over several cards, for a section whose parts are separate
+        // lists rather than one run of rows — an agent and its extra accounts,
+        // say. Same heading treatment as the single-card form; the cards are
+        // spaced the way two groups would be, so the break still reads as a
+        // break without inventing a second heading level.
+        private Control Group(string title, params Control[] cards)
+        {
+            var stack = new StackPanel { Spacing = 10 };
+            foreach (var card in cards) stack.Children.Add(card);
+            return Group(title, (Control)stack);
+        }
 
         private Control Group(string title, Control card) => new StackPanel
         {

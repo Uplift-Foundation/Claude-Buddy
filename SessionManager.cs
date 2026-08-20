@@ -304,6 +304,19 @@ namespace ClaudeBuddy
         // what "how long since this session last said anything" means throughout.
         private sealed record ScanEntry(string SessionId, SessionStatus Status, DateTime Written);
 
+        // Whether the user wants this kind of session tracked at all.
+        //
+        // OpenClaw's switch predates this and means something stronger — while
+        // it is off the app opens no socket and generates no key — so it is
+        // consulted where the gateway is asked, not here. These two are display
+        // switches over files that are being written regardless.
+        private static bool EnabledFor(SessionSource source) => source switch
+        {
+            SessionSource.Codex => ClaudeBuddySettings.CodexEnabled,
+            SessionSource.ClaudeCode => ClaudeBuddySettings.ClaudeCodeEnabled,
+            _ => true
+        };
+
         // Which CLI a status file came from, as the enum the rest of the app
         // branches on.
         //
@@ -497,6 +510,15 @@ namespace ClaudeBuddy
                 if (status is null) continue;
 
                 status.Source = SourceOf(status);
+
+                // A CLI switched off is ignored, not unwired. Its hooks keep
+                // writing status files — they are the user's own config, and a
+                // display switch that rewrote it would be a surprise, and for
+                // Codex would cost them their hook trust on top. Skipping here
+                // rather than later means everything downstream, including the
+                // pid grouping and the tray, behaves as though those sessions
+                // were not running.
+                if (!EnabledFor(status.Source)) continue;
 
                 found.Add(new ScanEntry(Path.GetFileNameWithoutExtension(file), status, written));
             }
