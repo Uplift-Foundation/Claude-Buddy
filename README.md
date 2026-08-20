@@ -988,10 +988,10 @@ rather than because the support is unfinished:
 - **No `/color`.** Codex has no equivalent, so a Codex orb keeps the plain ring
   and carries a badge instead. Its *name* does come from Codex — `/rename` if
   you've set one, otherwise Codex's own title, taken from your first message.
-- **No chat panel yet.** Clicking a Codex orb goes to its terminal, and the
-  flyout's chat button stays hidden. Reading and replying to a Codex session
-  from the panel is a follow-up; see `docs/codex-findings.md` for what has been
-  measured and what hasn't.
+- **The chat panel works the same way**, with its own pair of switches under
+  Settings → **Codex sessions**. It reads the rollout Codex already writes, and
+  with replying on it types into the session's tmux pane — including answering
+  approval prompts, which are numbered exactly as Claude Code's are.
 
 The Windows installer runs this for you if you leave the checkbox ticked, and
 the macOS DMG's **Install Hooks.command** is a wrapper around it.

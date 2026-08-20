@@ -233,6 +233,59 @@ also the cheapest way to check an installer's work without starting a session:
   `currentHash: "sha256:…"`, which is what re-asks after an edit. Nothing fires
   until the user accepts it.
 
+## The TUI, measured in a tmux pane
+
+Captured with `tmux capture-pane -p` against a real Codex 0.148 session. Three
+things were expected to differ from Claude Code and do not — which is worth
+writing down, because "we checked and it is the same" and "nobody looked" are
+indistinguishable otherwise.
+
+**The approval prompt is a numbered 1..n list**, and
+`ChatTranscript.ParseDialog` reads it correctly, keys and labels both. A real
+escalation, verbatim:
+
+```
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Allow creating the requested empty file cb-approval-probe in your home directory?
+
+  $ touch $HOME/cb-approval-probe
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `touch $HOME/…` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel
+```
+
+This contradicts what the binary's strings suggest. Codex ships `Allow` /
+`Allow for this session` / `Allow and don't ask me again` wording, which would
+have broken the contiguous-1..n rule — but the TUI does not use it for command
+approval. A Codex-specific dialog parser was planned and turned out to be dead
+code. The fixture is in `tests/TranscriptTests`.
+
+**A digit answers immediately.** Sending `3` dismissed the prompt and acted on
+it. The "Press enter to confirm" line describes the arrow-key route, not the
+numeric one.
+
+**Escape interrupts.** Codex's own working indicator says so — `• Working (0s •
+esc to interrupt)`.
+
+**Submitting works with the sequence the app already uses**: set a tmux paste
+buffer, `paste-buffer -p -d`, then `send-keys Enter`. Replayed against a live
+Codex pane and it submitted exactly as it does for Claude Code. Note that the
+Enter has to be its own key — sending the text with a trailing `C-m` typed it
+into the composer without submitting.
+
+**The sandbox does not block the hook.** `codex exec` defaults to a read-only
+sandbox, which looked like a likely cause when status files failed to appear;
+it is not. `mkdir`, `>` redirection and `touch` all succeed from inside a hook,
+and `TMPDIR` is passed through untouched. The real cause of the missing file was
+`SessionEnd` firing at the end of a one-shot `exec` run and correctly deleting
+it — the session really had ended.
+
 ## Still unknown
 
 - On Windows: `install-codex-hooks.ps1`'s install path and the hook script's
@@ -253,14 +306,6 @@ Not measured. Do not write these down as facts until they are.
   a greedy `sed` extraction.
 - Whether the hook's ancestor walk lands on the `codex` process, and what
   `$SHELL -lc` adds to the chain.
-- The approval modal's real geometry, and which keys answer it. Codex's options
-  are worded `Allow` / `Allow for this session` / `Allow and don't ask me again`
-  / `Cancel`, each with a description line underneath, which breaks
-  `ChatTranscript.ParseDialog`'s requirement of a contiguous run numbered
-  strictly 1..n. It returns null on those — safe, but useless.
-- Whether Escape or Ctrl+C is a safe interrupt. In Codex, Esc is
-  edit/backtrack, and interrupting raises its own dialog whose options include
-  "Stop the current task and exit Codex".
 - Whether a side conversation shares a pid or a session id with its parent.
 - Whether compaction rewrites a rollout in place — a reader that treats a
   shrinking file as "start over" depends on the answer.
