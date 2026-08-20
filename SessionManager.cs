@@ -614,10 +614,19 @@ namespace ClaudeBuddy
                         // the same help it is anywhere else.
                         Kind = SessionKind.Channel,
 
-                        // Busy while anyone in it is, which is what a room being
-                        // "active" means. Its own colour stays empty: the ring
-                        // is how an *agent* is identified, and a room is not one.
+                        // Busy while anyone in it is, which is what a room
+                        // being "active" means.
                         State = room.Working ? "generating" : "idle",
+
+                        // And its own colour. This used to stay empty on the
+                        // reasoning that a ring identifies an agent and a room
+                        // is not one — true while one room was on screen, and
+                        // wrong with several, where every room is a dark circle
+                        // with a # on it and only the badge distinguishes them,
+                        // which says what they are rather than which. See
+                        // OpenClawSessions.ColourForRoom for why it is keyed on
+                        // the room rather than dealt from the agents' pool.
+                        Color = OpenClawSessions.ColourForRoom(key),
                     },
                     room.Activity));
             }
