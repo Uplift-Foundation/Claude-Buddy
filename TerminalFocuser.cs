@@ -1336,6 +1336,33 @@ namespace ClaudeBuddy
             end repeat
             """;
 
+        // How many times to re-assert a selection that has not taken yet.
+        //
+        // Settling on `frontmost of application` is not quite enough, and the
+        // gap is one step past the note above: that property flips true when the
+        // app becomes active, which is *before* macOS has finished raising the
+        // window activation itself brings forward. A select landing in that gap
+        // is overruled a moment later by the app's own most-recently-used
+        // window — and when that window is on another desktop, you are taken to
+        // the wrong desktop as well as the wrong window.
+        //
+        // Reported as orbs going somewhere wrong on the first click and right
+        // on the second, which is the same rule from the other side: by the
+        // second click the app is already frontmost, so activation raises
+        // nothing and there is no raise left to overrule the select.
+        //
+        // Checked against `frontmost of w`, which is the window's own answer and
+        // reflects what is actually in front. `id of current window` was tried
+        // first and is useless here — it is iTerm's internal notion of current
+        // and reads as correct while a different window is on screen, which is
+        // exactly the failure being chased.
+        //
+        // Deliberately *not* `set frontmost of w to true` alongside the select.
+        // That was in the first version of this and measured worse than the code
+        // it replaced — three failures in six against none — so it is out, and
+        // the loop is only a loop.
+        private const int SelectionVerifyTicks = 12;     // x 50ms = 600ms ceiling
+
         private static string ITermSelectScript(string property, string value) => $$"""
             {{ActivateThenSettle("iTerm")}}
             tell application "iTerm"
@@ -1343,9 +1370,13 @@ namespace ClaudeBuddy
                     repeat with t in tabs of w
                         repeat with s in sessions of t
                             if {{property}} of s is "{{value}}" then
-                                select w
-                                select t
-                                select s
+                                repeat {{SelectionVerifyTicks}} times
+                                    select w
+                                    select t
+                                    select s
+                                    if frontmost of w then return
+                                    delay 0.05
+                                end repeat
                                 return
                             end if
                         end repeat
@@ -1365,8 +1396,16 @@ namespace ClaudeBuddy
                 repeat with w in windows
                     repeat with t in tabs of w
                         if tty of t is "{{(tty.StartsWith("/dev/") ? tty : "/dev/" + tty)}}" then
-                            set selected of t to true
-                            set index of w to 1
+                            -- Re-asserted until it takes, for the reason
+                            -- SelectionVerifyTicks gives. Terminal windows
+                            -- answer `frontmost` too, so the check is the same
+                            -- question asked of the same kind of object.
+                            repeat {{SelectionVerifyTicks}} times
+                                set selected of t to true
+                                set index of w to 1
+                                if frontmost of w then return
+                                delay 0.05
+                            end repeat
                             return
                         end if
                     end repeat
