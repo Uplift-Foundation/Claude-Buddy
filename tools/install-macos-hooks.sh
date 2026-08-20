@@ -29,7 +29,6 @@
 set -euo pipefail
 
 UNINSTALL=0
-AUTO_COLOR=0
 NO_PROFILES=0
 EXTRA_PROFILES=()
 HOOK_DIR="$HOME/.claude/claude-buddy"
@@ -41,10 +40,6 @@ while [[ $# -gt 0 ]]; do
     --settings) SETTINGS="$2"; shift 2 ;;
     # One extra profile, explicitly. The saved list is used when this is absent.
     --profile-dir) EXTRA_PROFILES+=("$2"); shift 2 ;;
-    # Wire the hook to give a session a colour when it has none. Passed by the
-    # app when the setting is on, rather than read from settings here — the
-    # hook runs on every tool call and must not pay for a settings read.
-    --auto-color) AUTO_COLOR=1; shift ;;
     # Don't recurse into the saved profiles. Set when this script re-invokes
     # itself for one of them, which is how each gets its own settings path
     # without the merge below having to loop.
@@ -109,7 +104,6 @@ function readUtf8(path) {
 function run(argv) {
   const settingsPath = argv[0];
   const uninstall = argv[1] === 'uninstall';
-  const autoColor = argv[2] === '1' ? ' --auto-color' : '';
   // The literal string $HOME, not this shell's expansion of it: hook commands
   // run through a shell, so keeping it unexpanded makes settings.json portable
   // across machines and usernames. This matches claude-hooks-snippet-macos.json.
@@ -154,7 +148,7 @@ function run(argv) {
 
   if (!uninstall) {
     for (const entry of wanted) {
-      const group = { hooks: [{ type: 'command', command: 'bash ' + script + autoColor + ' ' + entry.state }] };
+      const group = { hooks: [{ type: 'command', command: 'bash ' + script + ' ' + entry.state }] };
       if (entry.matcher) { group.matcher = entry.matcher; }
       hooks[entry.event] = [].concat(hooks[entry.event] || []).concat([group]);
     }
@@ -179,7 +173,7 @@ trap 'rm -f "$TMP"' EXIT
 
 # No BOM and no trailing newline games: System.Text.Json, which both Claude Code
 # and this app use, rejects a leading BOM as an invalid start of value.
-osascript -l JavaScript -e "$JXA" "$SETTINGS" "$MODE" "$AUTO_COLOR" > "$TMP"
+osascript -l JavaScript -e "$JXA" "$SETTINGS" "$MODE" > "$TMP"
 
 # Refuse to install anything that isn't valid JSON — better to keep the old file.
 if ! osascript -l JavaScript -e 'ObjC.import("Foundation"); function run(a){ JSON.parse(ObjC.unwrap($.NSString.stringWithContentsOfFileEncodingError(a[0], $.NSUTF8StringEncoding, null))); return "ok" }' "$TMP" >/dev/null 2>&1; then
@@ -266,10 +260,7 @@ if [[ $NO_PROFILES -eq 0 ]]; then
     # the same path through the merge as the default one — including the
     # backup, the JSON validation and the refusal to write anything that did
     # not parse. A loop would have been a second, less-tested code path.
-    colour=()
-    [[ $AUTO_COLOR -eq 1 ]] && colour=(--auto-color)
-
-    "$0" "${mode[@]+"${mode[@]}"}" "${colour[@]+"${colour[@]}"}" --no-profiles \
+    "$0" "${mode[@]+"${mode[@]}"}" --no-profiles \
          --settings "$HOME/$profile/settings.json" \
          --hook-dir "$HOOK_DIR"
   done

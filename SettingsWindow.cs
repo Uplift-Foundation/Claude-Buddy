@@ -479,13 +479,14 @@ namespace ClaudeBuddy
             ClaudeBuddySettings.ClaudeCodeReplyEnabled = enabled;
         }
 
-        // Re-wires the hooks, because the flag that turns this on is baked into
-        // the hook command rather than read by the hook. Off the UI thread for
-        // the reason the profile list is: it shells out.
+        // No re-wiring. The hooks read a marker file beside the status files,
+        // which the scan reconciles with this setting within a couple of
+        // seconds — see SessionManager.SyncAutoColorMarker. An earlier version
+        // baked a flag into the hook command instead, which meant every toggle
+        // rewrote Codex's hooks.json and cost the user their hook trust.
         private void OnAutoColorToggled(bool enabled)
         {
             ClaudeBuddySettings.AutoColorSessions = enabled;
-            Task.Run(HookInstaller.ReapplyClaudeCode);
         }
 
         // The same two powers for Codex, and its own pair of switches rather

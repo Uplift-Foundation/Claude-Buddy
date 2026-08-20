@@ -209,10 +209,46 @@ namespace ClaudeBuddy
         private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(2) };
         private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(150) };
 
+        // The file the hooks look for to decide whether to colour a session.
+        //
+        // A marker rather than an argument in the hook command, because the
+        // command is part of Codex's hooks.json and Codex hashes that file —
+        // changing it marks the entries `modified` and stops them running until
+        // the user re-approves the review. A setting that silently switched
+        // every Codex orb off until someone noticed is not a setting.
+        //
+        // Written from the app rather than by the installer so it also needs no
+        // re-wiring: the hooks stay exactly as they were and simply see a
+        // different answer on their next call.
+        private string AutoColorMarker => Path.Combine(_statusDir, ".auto-color");
+
+        // Reconciled on every scan rather than only when the toggle is flipped.
+        // The status directory lives in the temp path, which the OS is entitled
+        // to clear out; a marker that vanished would turn the feature off with
+        // nothing said. Two cheap file operations against a directory already
+        // being enumerated.
+        private void SyncAutoColorMarker()
+        {
+            try
+            {
+                var wanted = ClaudeBuddySettings.AutoColorSessions;
+                var present = File.Exists(AutoColorMarker);
+
+                if (wanted && !present) File.WriteAllText(AutoColorMarker, "");
+                else if (!wanted && present) File.Delete(AutoColorMarker);
+            }
+            catch
+            {
+                // Worst case the colour setting does not take effect, which is
+                // not worth interrupting a scan for.
+            }
+        }
+
         public void Start()
         {
             Instance = this;
             Directory.CreateDirectory(_statusDir);
+            SyncAutoColorMarker();
 
             // Subscribed once for the app's lifetime, so no unsubscribe: this
             // object outlives every orb, which is the point — an orb closing must
@@ -424,6 +460,8 @@ namespace ClaudeBuddy
 
         private void ScanAndUpdate()
         {
+            SyncAutoColorMarker();
+
             var seen = new HashSet<string>();
             var now = DateTime.UtcNow;
             bool setChanged = false;

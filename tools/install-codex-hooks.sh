@@ -299,6 +299,7 @@ if [[ $NO_PROFILES -eq 0 ]]; then
     mode=()
     [[ $UNINSTALL -eq 1 ]] && mode=(--uninstall)
 
-    "$0" "${mode[@]+"${mode[@]}"}" --no-profiles --codex-home "$HOME/$profile"
+    "$0" "${mode[@]+"${mode[@]}"}" --no-profiles \
+         --codex-home "$HOME/$profile"
   done
 fi
