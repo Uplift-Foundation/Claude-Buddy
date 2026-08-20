@@ -54,15 +54,35 @@ the defaults. See **Orb colours** in the settings window; the rest of this file
 calls them by their default names, since that's what you'll see until you change
 them.
 
-**Only colors you set with `/color` show up.** Claude Code also gives every
-session an automatic accent (the color of its prompt border and name chip),
-but that one is per-process and isn't written to the transcript — or anywhere
-else on disk — so the hook has nothing to read and those orbs keep the plain
-hairline border. That's deliberate rather than a gap worth papering over: a
-derived stand-in would end up disagreeing with the color the terminal is
-showing, and a ring is more useful when it always means "I chose this". Run
-`/color` in a session and its orb picks the color up on the next hook fire,
-within a couple of seconds.
+**By default, only colors you set with `/color` show up.** Claude Code also
+gives every session an automatic accent (the color of its prompt border and name
+chip), but that one is per-process and isn't written to the transcript — or
+anywhere else on disk — so the hook has nothing to read and those orbs keep the
+plain hairline border. Run `/color` in a session and its orb picks the color up
+on the next hook fire, within a couple of seconds.
+
+**Or let it colour them for you.** Settings → Claude Code sessions → **Give each
+session a colour** is off by default, and when it's on a session with no colour
+gets one. It is not a stand-in the app invented: `/color` persists a colour by
+appending a single `{"type":"agent-color",…}` record to the transcript, and
+Claude Code reads those records back when a session resumes — so the hook writes
+the same record, and the colour survives a resume with the terminal agreeing.
+That is the whole reason this is offered at all; a derived colour only this app
+could see would disagree with what the terminal shows, and a ring is more useful
+when it always means something real.
+
+The colour comes from the working directory, so a project keeps the same one
+across sessions and restarts, and `/color` still wins — yours is written later
+and the newest record is the one read. It's off by default because it is the one
+setting that writes to a file the app doesn't own.
+
+**Codex has no per-session colour to write.** Its colours live on *sections* —
+named groups of threads, `/section` in its TUI — as an `{icon, color}`
+appearance. So a Codex orb takes its section's colour when the session has been
+filed under one, and the plain ring otherwise. That one is read and never
+written: creating a section to hold a colour would reorganise your own thread
+list in Codex's sidebar, which is a much larger side effect than a coloured ring
+is worth.
 
 **Agent teams get drawn as teams.** Every member of a team is a separate
 `claude` process with its own session id, so a team of four arrives as four

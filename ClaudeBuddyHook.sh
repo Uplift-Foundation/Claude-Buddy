@@ -22,6 +22,13 @@ case "$1" in
     claude|codex) AGENT="$1"; shift ;;
 esac
 
+# Baked in by the installer rather than read from the app's settings here.
+# Reading a setting would mean an osascript per hook call — this runs on every
+# tool use — and the app already re-runs the installer when a setting like this
+# changes, which is how the extra-profile list works too.
+AUTO_COLOR=0
+if [ "$1" = "--auto-color" ]; then AUTO_COLOR=1; shift; fi
+
 STATE="$1"
 case "$STATE" in
     idle|generating|waiting|ended) ;;
@@ -126,6 +133,52 @@ if [ "$AGENT" = "claude" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
     COLOR=$(cb_value "$(cb_pick agent-color)" agentColor | tr -cd 'a-zA-Z')
 fi
 
+# Give this session a colour, the way Claude Code gives one itself.
+#
+# Off unless the installer was told to switch it on, because this writes to a
+# file the app does not own. What it writes is not an invention: `/color`
+# persists a colour by appending exactly this record to the transcript — read
+# out of Claude Code's own saveAgentColor, which appends
+# {"type":"agent-color","agentColor":…,"sessionId":…} and does nothing else —
+# and the same records are read back into session state when a session resumes.
+# So a colour set here is one Claude Code itself will agree with next time it
+# loads that session, rather than a stand-in only this app can see. That
+# distinction is exactly why the README declined to derive an accent, and why
+# this is allowed to exist.
+#
+# Once per session: the moment the record is there, the read above finds it and
+# this is skipped for the rest of the session's life. A colour the user later
+# sets with /color wins for the same reason — theirs is appended later, and the
+# read takes the newest.
+#
+# One short line, appended with >>. An O_APPEND write well under a page is
+# atomic against the writer Claude Code has open on the same file, so this
+# cannot land in the middle of one of its own rows.
+if [ "$AGENT" = "claude" ] && [ "$AUTO_COLOR" = "1" ] && [ -z "$COLOR" ] \
+   && [ -n "$SESSION_ID" ] && [ "$SESSION_ID" != "unknown" ] \
+   && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+    # Keyed on the directory, not the session id. A session id is new every
+    # run, so keying on it would repaint a project's orb a different colour
+    # every time it was opened — worse than no colour, because it would look
+    # like the colour meant something. The directory is what the saved orb
+    # position is keyed by too, so a project keeps one colour.
+    #
+    # cksum because it is POSIX and gives the same answer on every machine and
+    # every run, which is what "stable" has to mean for a value written into a
+    # file that outlives the process.
+    CB_HASH=$(printf '%s' "$CWD" | cksum | awk '{print $1}')
+
+    # Names Claude Code accepts and the app knows how to draw. Deliberately
+    # not the whole palette: grey and white read as "no colour" on an orb, and
+    # the point of this is telling sessions apart.
+    set -- red orange yellow green teal cyan blue purple violet magenta pink
+    CB_INDEX=$(( CB_HASH % $# + 1 ))
+    eval "COLOR=\${$CB_INDEX}"
+
+    printf '{"type":"agent-color","agentColor":"%s","sessionId":"%s"}\n' \
+        "$COLOR" "$SESSION_ID" >> "$TRANSCRIPT" 2>/dev/null || COLOR=""
+fi
+
 # What Codex calls this chat. It has both halves of what Claude Code has, in
 # its own state database rather than in the transcript:
 #
@@ -165,6 +218,23 @@ if [ "$AGENT" = "codex" ]; then
         TITLE=$(sqlite3 -readonly "file:$CODEX_DB?mode=ro" \
             "select coalesce(nullif(name,''), nullif(title,'')) from threads where id='$SAFE_ID';" \
             2>/dev/null | head -1)
+
+        # Codex's own colour, which lives on a *section* rather than on a
+        # thread: thread_sections.appearance is {"icon":…,"color":…} and a
+        # thread points at one through thread_section_id. So a Codex orb is
+        # coloured when its session has been filed under a coloured section and
+        # not otherwise — which is the honest reading, because that is the only
+        # colour Codex itself associates with the session.
+        #
+        # Read, never written. Creating a section to hold a colour would
+        # reorganise the user's own thread list in Codex's sidebar, which is a
+        # far larger side effect than a coloured ring is worth.
+        COLOR=$(sqlite3 -readonly "file:$CODEX_DB?mode=ro" \
+            "select s.appearance from threads t
+               join thread_sections s on s.id = t.thread_section_id
+              where t.id='$SAFE_ID';" 2>/dev/null \
+            | sed -n 's/.*"color"[[:space:]]*:[[:space:]]*"\([a-zA-Z]*\)".*/\1/p' \
+            | head -1)
     fi
 
     # No database, or nothing in it about this session yet — a thread is written
