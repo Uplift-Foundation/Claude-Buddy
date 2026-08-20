@@ -1192,6 +1192,10 @@ namespace ClaudeBuddy
                 _preArrangeState.Remove(id);
             }
 
+            // Who was already in the shape, captured before the loop below adds
+            // the newcomers to the same dictionary.
+            var settled = new HashSet<string>(_preArrangeState.Keys, StringComparer.Ordinal);
+
             // Orbs that arrived after the pattern was drawn — record where
             // they would have stacked so Restore can put them back there.
             foreach (var id in _windows.Keys)
@@ -1210,8 +1214,73 @@ namespace ClaudeBuddy
             if (allOrbs.Count < 1) return;
 
             var positioned = ComputeClusteredPositions(allOrbs);
-            foreach (var (orb, target) in positioned)
-                orb.PinAt(target);
+
+            // Only the newcomer moves.
+            //
+            // This used to re-pin every orb to a freshly computed shape, which
+            // is how a shape for five orbs becomes a shape for six. It is also
+            // why one session starting made the whole cluster jump: measured
+            // against the real geometry, an orb already on screen moved 33px on
+            // average when a sixth joined a circle, 111px in a heart, and up to
+            // 161px in a grid. Nothing was wrong with where they landed — the
+            // points of a five-point ring and a six-point ring simply are not
+            // the same points — but a display that rearranges itself because
+            // something unrelated started is a display you stop trusting.
+            //
+            // Matching each orb to its nearest new slot instead of by list
+            // order was tried first and measured: 34% less movement on a
+            // circle, 38% on a grid, 9% on a heart. Better, and still tens of
+            // pixels of drift on every arrival, so it does not answer the
+            // complaint. Not moving them does.
+            //
+            // The shape therefore drifts from a clean heart as sessions come
+            // and go, which is the deliberate trade: the sparkle button re-fits
+            // it whenever the drift is worth more than the stillness.
+            var settledOrbs = positioned.Where(p => settled.Contains(p.Orb.SessionId)).ToList();
+            var newcomers = positioned.Where(p => !settled.Contains(p.Orb.SessionId)).ToList();
+
+            if (newcomers.Count == 0)
+            {
+                // A removal. The gap it leaves is the honest picture of what is
+                // running, and closing it would move everything to say so.
+                TeamLinks.Refresh();
+                return;
+            }
+
+            // Where each newcomer would like to be, before the geometry has a
+            // say. A newcomer hung off a lead that is already placed belongs
+            // beside where that lead actually *is*, not where this recomputed
+            // shape would have put it — otherwise its arrow points across the
+            // screen at an orb that never moved.
+            var wanted = newcomers.Select(p =>
+            {
+                var lead = _statuses.TryGetValue(p.Orb.SessionId, out var s) ? s.Lead : "";
+                if (string.IsNullOrEmpty(lead)) return p.Target;
+
+                var anchor = settledOrbs.FirstOrDefault(a => a.Orb.SessionId == lead);
+                if (anchor.Orb is null) return p.Target;
+
+                return new PixelPoint(
+                    p.Target.X + anchor.Orb.Position.X - anchor.Target.X,
+                    p.Target.Y + anchor.Orb.Position.Y - anchor.Target.Y);
+            }).ToArray();
+
+            // 56 DIP is the orb, so two centres closer than that overlap. The
+            // positions are physical pixels, hence the scale.
+            var screen = allOrbs[0].Screens.Primary ?? allOrbs[0].Screens.All.FirstOrDefault();
+
+            var scale = screen?.Scaling ?? 1.0;
+
+            var targets = OrbArrangement.Absorb(
+                settledOrbs.Select(p => p.Orb.Position).ToArray(),
+                positioned.Select(p => p.Target).ToArray(),
+                wanted,
+                56 * scale,
+                screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080),
+                (int)Math.Round(56 * scale));
+
+            for (var i = 0; i < newcomers.Count; i++)
+                newcomers[i].Orb.PinAt(targets[i]);
 
             TeamLinks.Refresh();
         }

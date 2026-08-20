@@ -189,6 +189,87 @@ foreach (var team in teamShapes)
 
 Console.WriteLine($"{cases} cases");
 
+// --- absorbing a newcomer without moving anybody ---------------------------
+//
+// Compute answers "where do N orbs go". Absorb answers the different question
+// a session starting asks: "where does this one go, given the others are
+// already somewhere and must stay there". The rules below are the whole of
+// what the second question is allowed to do.
+
+{
+    var work = new PixelRect(0, 25, 3024, 1865);
+    const double Apart = 112;   // 56 DIP at 2x
+
+    foreach (var shape in new[] { "heart", "circle", "diamond", "star", "grid" })
+    {
+        for (var n = 1; n <= 12; n++)
+        {
+            var layout = new OrbArrangement.Layout(work, 2.0, shape, 0.85);
+            var before = OrbArrangement.Compute(n, Enumerable.Repeat(-1, n).ToArray(), layout);
+            var after = OrbArrangement.Compute(n + 1, Enumerable.Repeat(-1, n + 1).ToArray(), layout);
+
+            // One newcomer, wanting the slot the fresh shape would give it.
+            var placed = OrbArrangement.Absorb(before, after, new[] { after[n] }, Apart, work, 112);
+
+            var where = $"{shape} {n}->{n + 1}";
+
+            if (placed.Length != 1)
+            {
+                failures.Add($"{where}: absorb returned the wrong number of positions");
+                continue;
+            }
+
+            // The one rule the whole change exists for.
+            foreach (var settled in before)
+            {
+                if (Dist(settled, placed[0]) >= Apart) continue;
+                failures.Add($"{where}: newcomer landed on top of an orb that had not moved");
+                break;
+            }
+
+            if (!Inside(placed[0], work))
+                failures.Add($"{where}: newcomer placed outside the work area");
+        }
+    }
+
+    // Nothing free: every slot of the new shape is already stood on. The
+    // newcomer still has to go somewhere, and its own slot beats 0,0.
+    var full = OrbArrangement.Compute(4, new[] { -1, -1, -1, -1 },
+        new OrbArrangement.Layout(work, 2.0, "circle", 0.85));
+    // Every slot stood on, so there is nothing in the shape to give it. It
+    // must still not be dropped on somebody, and must stay on screen.
+    var crowded = OrbArrangement.Absorb(full, full, new[] { full[0] }, Apart, work, 112);
+    if (crowded.Length != 1) failures.Add("absorb with no free slot returned nothing");
+    else
+    {
+        if (full.Any(p => Dist(p, crowded[0]) < Apart))
+            failures.Add("absorb with no free slot put the newcomer on top of an orb");
+        if (!Inside(crowded[0], work))
+            failures.Add("absorb with no free slot put the newcomer off screen");
+    }
+
+    // Two newcomers at once must not be given the same slot as each other.
+    var pair = OrbArrangement.Absorb(
+        Array.Empty<PixelPoint>(), full, new[] { full[0], full[0] }, Apart, work, 112);
+    if (pair.Length == 2 && Dist(pair[0], pair[1]) < Apart)
+        failures.Add("two newcomers at once were placed on top of each other");
+
+    // No newcomers is not a special case anywhere else, so it must not be one
+    // here either.
+    if (OrbArrangement.Absorb(full, full, Array.Empty<PixelPoint>(), Apart, work, 112).Length != 0)
+        failures.Add("absorb with no newcomers returned positions anyway");
+}
+
+static double Dist(PixelPoint a, PixelPoint b)
+{
+    double dx = a.X - b.X, dy = a.Y - b.Y;
+    return Math.Sqrt(dx * dx + dy * dy);
+}
+
+static bool Inside(PixelPoint p, PixelRect work) =>
+    p.X >= work.X && p.Y >= work.Y
+    && p.X + 112 <= work.Right && p.Y + 112 <= work.Bottom;
+
 if (failures.Count == 0)
 {
     Console.WriteLine("all passed");
