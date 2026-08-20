@@ -76,13 +76,20 @@ across sessions and restarts, and `/color` still wins — yours is written later
 and the newest record is the one read. It's off by default because it is the one
 setting that writes to a file the app doesn't own.
 
-**Codex has no per-session colour to write.** Its colours live on *sections* —
-named groups of threads, `/section` in its TUI — as an `{icon, color}`
-appearance. So a Codex orb takes its section's colour when the session has been
-filed under one, and the plain ring otherwise. That one is read and never
+**Codex has no per-session colour to write**, so its colour works the other way
+round. Codex's colours live on *sections* — named groups of threads, `/section`
+in its TUI — as an `{icon, color}` appearance, and a Codex orb takes its
+section's colour when the session is filed under one. That is read and never
 written: creating a section to hold a colour would reorganise your own thread
-list in Codex's sidebar, which is a much larger side effect than a coloured ring
-is worth.
+list in Codex's sidebar.
+
+Most sessions are in no section, so with the setting on a Codex orb falls back
+to a colour derived from the working directory — the same one the same project
+gets under Claude Code, so a project looks the same whichever CLI you opened it
+with. That is invented rather than native, and it is the one place this app
+invents a colour. It is safe here for the reason it wasn't for Claude Code:
+Codex displays no per-session colour anywhere, so there is nothing for a derived
+one to disagree with.
 
 **Agent teams get drawn as teams.** Every member of a team is a separate
 `claude` process with its own session id, so a team of four arrives as four
@@ -1008,6 +1015,12 @@ rather than because the support is unfinished:
 - **No `/color`.** Codex has no equivalent, so a Codex orb keeps the plain ring
   and carries a badge instead. Its *name* does come from Codex — `/rename` if
   you've set one, otherwise Codex's own title, taken from your first message.
+- **A Codex orb appears on the session's first message, not when Codex opens.**
+  Codex fires no hooks until a thread exists, and a thread is created when you
+  first speak to it — so an open-but-untouched session has no orb, and neither
+  does a resumed one until you send something. Claude Code fires its
+  `SessionStart` on launch, which is why the two feel different for the same
+  actions. This is Codex's behaviour and nothing the hook can change.
 - **The chat panel works the same way**, with its own pair of switches under
   Settings → **Codex sessions**. It reads the rollout Codex already writes, and
   with replying on it types into the session's tmux pane — including answering

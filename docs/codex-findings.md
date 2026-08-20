@@ -300,6 +300,34 @@ and `TMPDIR` is passed through untouched. The real cause of the missing file was
 `SessionEnd` firing at the end of a one-shot `exec` run and correctly deleting
 it — the session really had ended.
 
+### When a Codex session gets an orb, and why it isn't at startup
+
+**Codex fires no hooks until the first message of a session.** Measured by
+wiring every event to a logging probe and watching a real TUI:
+
+| moment | events |
+| --- | --- |
+| TUI opens | *nothing* |
+| first prompt submitted | `SessionStart`, `UserPromptSubmit`, `Stop` |
+| `/quit` | `SessionEnd` |
+| `codex resume` | *nothing* |
+| first prompt after resume | `SessionStart`, `UserPromptSubmit`, `Stop` |
+
+So a session's thread is created when you first speak to it, and `SessionStart`
+means "a thread started", not "the program launched". `codex exec` looks
+different only because it submits a prompt immediately.
+
+The consequence is visible and worth stating plainly: **an open-but-untouched
+Codex session has no orb, and neither does a resumed one until you send
+something.** Claude Code fires `SessionStart` on launch, so the two feel
+different for the same actions — exit and resume brings a Claude Code orb back
+at once and a Codex orb back on the next message.
+
+Nothing in the hook can improve this; the hook cannot run before Codex runs it.
+The alternative would be scanning for `codex` processes and matching them to
+threads, which this app deliberately does not do for orb discovery — the whole
+design is that a session announces itself and nothing polls the CLI.
+
 ## Still unknown
 
 - On Windows: `install-codex-hooks.ps1`'s install path and the hook script's
