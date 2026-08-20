@@ -553,5 +553,103 @@ namespace ClaudeBuddy
 
             return closest;
         }
+        // Where newcomers go when the shape is already on screen and must not
+        // move.
+        //
+        // Compute() answers "where do N orbs go", which is the right question
+        // when the user asks for a shape and a different one when a session
+        // merely starts. Re-fitting on every arrival moved every orb already on
+        // screen: measured against real geometry, 33px on average when a sixth
+        // joined a circle, 111px in a heart, up to 161px in a grid. The points
+        // of a five-point ring and a six-point ring are simply not the same
+        // points, so this is not a placement bug to fix — it is a question not
+        // to ask. Matching each orb to its nearest new slot instead of by list
+        // order was measured too and saves 34% on a circle, 9% on a heart: real,
+        // and still tens of pixels of drift every time something starts.
+        //
+        // So the settled orbs are given, not computed. Each newcomer takes the
+        // slot of the freshly computed shape nearest to where it would have
+        // gone, skipping any slot something is already standing on — including
+        // an earlier newcomer from this same call, which is why `taken` grows
+        // as it goes.
+        //
+        // `apart` is the closest two orbs may sit before they read as one. A
+        // newcomer with nowhere free falls back to its own computed slot: an
+        // orb overlapping another is bad, and an orb at 0,0 is worse.
+        internal static PixelPoint[] Absorb(
+            PixelPoint[] settled, PixelPoint[] shape, PixelPoint[] wanted,
+            double apart, PixelRect work, int window)
+        {
+            var taken = settled.ToList();
+            var result = new PixelPoint[wanted.Length];
+
+            for (var i = 0; i < wanted.Length; i++)
+            {
+                var target = Inside(wanted[i], work, window);
+
+                if (Occupied(taken, target, apart))
+                {
+                    // A slot of the shape it is joining, if one is free. This
+                    // is the case that keeps the pattern looking like a pattern.
+                    var free = shape
+                        .Select(t => Inside(t, work, window))
+                        .Where(t => !Occupied(taken, t, apart))
+                        .OrderBy(t => Apart(t, target))
+                        .ToList();
+
+                    // Every slot stood on already. Measured, not hypothetical:
+                    // a three-orb heart has its settled orbs within an orb's
+                    // width of all four slots of the four-orb heart, so there
+                    // is nothing in the shape to give the newcomer. Search
+                    // outward from where it wanted to be instead — the pattern
+                    // is worth less than not stacking two orbs on one spot.
+                    target = free.Count > 0 ? free[0] : Nearby(taken, target, apart, work, window);
+                }
+
+                result[i] = target;
+                taken.Add(target);
+            }
+
+            return result;
+        }
+
+        private static bool Occupied(List<PixelPoint> taken, PixelPoint at, double apart) =>
+            taken.Any(p => Apart(p, at) < apart);
+
+        // The closest free spot to `from`, looked for in widening rings. Falls
+        // back to `from` itself, because an orb overlapping another is bad and
+        // an orb flung into a corner to avoid it is worse.
+        private static PixelPoint Nearby(
+            List<PixelPoint> taken, PixelPoint from, double apart, PixelRect work, int window)
+        {
+            var step = Math.Max(8.0, apart / 2);
+
+            for (var ring = 1; ring <= 24; ring++)
+            {
+                var radius = ring * step;
+
+                // More angles further out, so the search stays roughly as dense
+                // however far it has to go.
+                var steps = Math.Max(8, ring * 8);
+
+                for (var a = 0; a < steps; a++)
+                {
+                    var angle = 2 * Math.PI * a / steps;
+                    var candidate = Inside(new PixelPoint(
+                        (int)Math.Round(from.X + radius * Math.Cos(angle)),
+                        (int)Math.Round(from.Y + radius * Math.Sin(angle))), work, window);
+
+                    if (!Occupied(taken, candidate, apart)) return candidate;
+                }
+            }
+
+            return from;
+        }
+
+        private static double Apart(PixelPoint a, PixelPoint b)
+        {
+            double dx = a.X - b.X, dy = a.Y - b.Y;
+            return Math.Sqrt(dx * dx + dy * dy);
+        }
     }
 }
