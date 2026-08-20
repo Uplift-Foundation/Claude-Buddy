@@ -1103,6 +1103,32 @@ namespace ClaudeBuddy
 
             public string SpeakerName => _turn.Speaker ?? "";
 
+            // The speaker's initials, for the chip beside their name.
+            //
+            // A name alone in a colour was enough while a room had two or three
+            // agents in it. With eight it is a column of similar words in
+            // similar hues, and the eye has to read each one — a shape it can
+            // recognise without reading is what a room view is for. Same
+            // letters the agent's own orb shows, so the chip and the orb are
+            // recognisably the same agent.
+            public string SpeakerInitials => Initials(_turn.Speaker);
+
+            // Filled in the speaker's own colour, with the panel's own
+            // background punched through it for the letters. Ink on a tinted
+            // chip was the alternative and reads as a third bubble; a solid
+            // dot reads as a person.
+            public IBrush SpeakerChip =>
+                SpeakerColor is { } c ? new SolidColorBrush(c) : SystemInk;
+
+            public IBrush SpeakerChipInk =>
+                SpeakerColor is not null ? ChipInk : SystemInk;
+
+            // Near-black rather than the window's background brush: the chip is
+            // a solid colour whatever is behind it, so the letters only have to
+            // read against the chip.
+            private static readonly IBrush ChipInk =
+                new SolidColorBrush(Color.FromRgb(0x1C, 0x1C, 0x1E));
+
             // The agent's own colour, the one their orb's ring is drawn in.
             private Color? SpeakerColor
             {
