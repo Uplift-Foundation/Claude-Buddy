@@ -70,7 +70,7 @@ namespace ClaudeBuddy
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
-            "codexChatEnabled", "codexReplyEnabled"
+            "codexChatEnabled", "codexReplyEnabled", "autoColorSessions"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -212,6 +212,12 @@ namespace ClaudeBuddy
             public bool CodexChatEnabled { get; set; } = true;
 
             public bool CodexReplyEnabled { get; set; }
+
+            // Whether the hook gives a Claude Code session a colour of its own
+            // when it has none. Off by default: it is the only setting in this
+            // file that causes a write to a file the app does not own, even
+            // though what it writes is the record /color writes.
+            public bool AutoColorSessions { get; set; }
 
             // How far back a gateway session counts as current. Separate from
             // OrbLifetimeMinutes, which decides how long a session lingers after
@@ -497,6 +503,12 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.CodexReplyEnabled = value; Save(); }
         }
 
+        public static bool AutoColorSessions
+        {
+            get { Load(); lock (Gate) return _model.AutoColorSessions; }
+            set { Load(); lock (Gate) _model.AutoColorSessions = value; Save(); }
+        }
+
         public static bool NeuralVoiceEnabled
         {
             get { Load(); lock (Gate) return _model.NeuralVoiceEnabled; }
@@ -724,6 +736,7 @@ namespace ClaudeBuddy
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
                         CodexReplyEnabled = root["codexReplyEnabled"]?.GetValue<bool>() ?? false,
+                        AutoColorSessions = root["autoColorSessions"]?.GetValue<bool>() ?? false,
                         TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
                         ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
                         ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing,
@@ -935,6 +948,7 @@ namespace ClaudeBuddy
                         ["claudeCodeReplyEnabled"] = _model.ClaudeCodeReplyEnabled,
                         ["codexChatEnabled"] = _model.CodexChatEnabled,
                         ["codexReplyEnabled"] = _model.CodexReplyEnabled,
+                        ["autoColorSessions"] = _model.AutoColorSessions,
                         ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
                         ["arrangeShape"] = _model.ArrangeShape,
                         ["arrangeSpacing"] = _model.ArrangeSpacing,

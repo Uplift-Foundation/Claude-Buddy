@@ -454,6 +454,16 @@ namespace ClaudeBuddy
                 + "too. Sessions not running under tmux stay read-only either way, because "
                 + "the only way to type into those is to bring their window to the front."));
 
+            rows.Add(Row("Give each session a colour",
+                Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
+                "Off, only a colour you set with /color shows on an orb. On, a session that "
+                + "has none is given one — the same way /color does it, by writing the record "
+                + "Claude Code itself writes and reads back, so the colour survives a resume "
+                + "and the terminal agrees. Chosen from the working directory, so a project "
+                + "keeps its colour and /color still overrides it. Codex has no per-session "
+                + "colour to write; a Codex orb takes the colour of its Codex section if it "
+                + "has one."));
+
             return rows.ToArray();
         }
 
@@ -466,6 +476,15 @@ namespace ClaudeBuddy
         private void OnClaudeCodeReplyToggled(bool enabled)
         {
             ClaudeBuddySettings.ClaudeCodeReplyEnabled = enabled;
+        }
+
+        // Re-wires the hooks, because the flag that turns this on is baked into
+        // the hook command rather than read by the hook. Off the UI thread for
+        // the reason the profile list is: it shells out.
+        private void OnAutoColorToggled(bool enabled)
+        {
+            ClaudeBuddySettings.AutoColorSessions = enabled;
+            Task.Run(HookInstaller.ReapplyClaudeCode);
         }
 
         // The same two powers for Codex, and its own pair of switches rather

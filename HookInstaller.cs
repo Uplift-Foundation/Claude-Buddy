@@ -34,7 +34,7 @@ namespace ClaudeBuddy
                 return;
             }
 
-            RunScript("install-macos-hooks.sh");
+            RunScript("install-macos-hooks.sh", ClaudeBuddySettings.AutoColorSessions);
         }
 
         // Re-wire every Codex home the app knows about.
@@ -49,12 +49,17 @@ namespace ClaudeBuddy
             RunScript("install-codex-hooks.sh");
         }
 
-        private static void RunScript(string name)
+        private static void RunScript(string name, bool autoColor = false)
         {
             var script = Resolve(name);
             if (script is null) return;
 
-            Run("/bin/bash", new[] { script });
+            // The flag rather than a setting the hook reads for itself: the
+            // hook runs on every tool call, and a settings read there would be
+            // an osascript each time. Re-running the installer is how a change
+            // to it takes effect, which is the same way the extra-profile list
+            // already works.
+            Run("/bin/bash", autoColor ? new[] { script, "--auto-color" } : new[] { script });
         }
 
         private static void RunPowerShell(string name)

@@ -156,8 +156,22 @@ Two things to know before relying on it:
   `UserMessage` out of the rollout, which is the same message Codex builds its
   own `title` from — so the two agree rather than compete.
 
-There is still **no `/color` equivalent**, so a Codex orb keeps the plain ring
-and the badge carries its identity.
+There is **no per-session colour**, but there is a colour. It lives on a
+*section* — a named group of threads, managed with `/section` and
+`/createsection` — as `thread_sections.appearance`, a JSON `{"icon":…,"color":…}`,
+which a thread points at through `threads.thread_section_id`. Confirmed by
+creating one over the app-server:
+
+```
+threadSection/create {"name":"cb-probe","appearance":{"icon":"circle","color":"blue"}}
+  -> {"section":{"id":"01a02004-…","name":"cb-probe","appearance":{"icon":"circle","color":"blue"}}}
+```
+
+`threadSection/create`, `/update`, `/delete` and `/list` all exist as RPCs, as
+does `thread/section`. So writing one is possible — and is deliberately not
+done. Filing a session under a section to give it a colour would reorganise the
+user's own thread list in Codex's sidebar. The hook reads the section's colour
+when there is one and leaves the ring plain otherwise.
 
 Note that a derived title is not unique. Two of the rollouts on this machine
 began with the *same* first message in different directories — the same
