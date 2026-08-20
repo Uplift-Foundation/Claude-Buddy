@@ -460,9 +460,10 @@ namespace ClaudeBuddy
                 + "has none is given one — the same way /color does it, by writing the record "
                 + "Claude Code itself writes and reads back, so the colour survives a resume "
                 + "and the terminal agrees. Chosen from the working directory, so a project "
-                + "keeps its colour and /color still overrides it. Codex has no per-session "
-                + "colour to write; a Codex orb takes the colour of its Codex section if it "
-                + "has one."));
+                + "keeps its colour and /color still overrides it. A Codex orb takes the "
+                + "colour of its Codex section when it has one, and otherwise the same "
+                + "directory-derived colour — Codex has nowhere to write a per-session "
+                + "colour, and displays none of its own for that to disagree with."));
 
             return rows.ToArray();
         }

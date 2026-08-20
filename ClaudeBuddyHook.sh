@@ -237,6 +237,30 @@ if [ "$AGENT" = "codex" ]; then
             | head -1)
     fi
 
+    # Nothing to read, because most sessions are in no section at all. Derive
+    # one instead, when the user has asked for colours.
+    #
+    # This is the one place a colour is invented rather than read, and the
+    # asymmetry with Claude Code is deliberate rather than a shortcut. There,
+    # deriving was refused for a specific reason — the terminal shows its own
+    # accent, so a stand-in would visibly disagree with it — and the fix was to
+    # write the record Claude Code itself reads back. Codex offers no such
+    # record: its only colour belongs to a *section*, a grouping the user
+    # arranges, and filing a session into one to carry a colour would rearrange
+    # their sidebar. So the choice for Codex is a derived colour or none.
+    #
+    # A derived one is safe here precisely because of what is missing: Codex
+    # shows no per-session colour anywhere, so there is nothing for this to
+    # disagree with. It is keyed on the directory like Claude Code's, so the
+    # same project is the same colour in both, and a real section colour above
+    # always wins.
+    if [ "$AUTO_COLOR" = "1" ] && [ -z "$COLOR" ] && [ -n "$CWD" ]; then
+        CB_HASH=$(printf '%s' "$CWD" | cksum | awk '{print $1}')
+        set -- red orange yellow green teal cyan blue purple violet magenta pink
+        CB_INDEX=$(( CB_HASH % $# + 1 ))
+        eval "COLOR=\${$CB_INDEX}"
+    fi
+
     # No database, or nothing in it about this session yet — a thread is written
     # there a moment after it starts, so the very first hook of a session can
     # legitimately find nothing. The rollout has the same first message that
