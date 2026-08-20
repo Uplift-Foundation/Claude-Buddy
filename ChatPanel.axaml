@@ -150,6 +150,16 @@
                                         <Border Width="16" Height="16"
                                                 CornerRadius="8"
                                                 VerticalAlignment="Center"
+                                                ClipToBounds="True"
+                                                IsVisible="{Binding HasSpeakerAvatar}">
+                                            <Image Source="{Binding SpeakerAvatar}"
+                                                   Width="16" Height="16"
+                                                   Stretch="UniformToFill"/>
+                                        </Border>
+                                        <Border Width="16" Height="16"
+                                                CornerRadius="8"
+                                                VerticalAlignment="Center"
+                                                IsVisible="{Binding HasSpeakerInitials}"
                                                 Background="{Binding SpeakerChip}">
                                             <TextBlock Text="{Binding SpeakerInitials}"
                                                        FontSize="8" FontWeight="Bold"

@@ -1150,6 +1150,40 @@ namespace ClaudeBuddy
             lock (Gate) return AgentNames.GetValueOrDefault(agentId, agentId);
         }
 
+        // The picture for an agent named in a transcript, for the chip beside
+        // their name in a room.
+        //
+        // By display name, which is the wrong way round and is what a merged
+        // room view leaves us: a turn carries who said it, not which agent id
+        // said it, because the panel's turn model is deliberately transport-
+        // agnostic and an agent id is not a thing it knows about.
+        //
+        // Two agents sharing a display name therefore cannot be told apart, so
+        // this refuses rather than guessing — the initials chip is a fine answer
+        // and the wrong face is not. Not a hypothetical: agent ids are unique
+        // and their names are whatever somebody typed.
+        public static OpenClawAvatars.Avatar? AvatarForAgentName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+
+            string? agentId = null;
+
+            lock (Gate)
+            {
+                foreach (var (id, display) in AgentNames)
+                {
+                    if (!string.Equals(display, name, StringComparison.Ordinal)) continue;
+                    if (agentId is not null) return null;   // ambiguous
+                    agentId = id;
+                }
+            }
+
+            if (agentId is null) return null;
+
+            var identity = IdentityOf(agentId);
+            return identity is null ? null : OpenClawAvatars.For(agentId, identity.Avatar);
+        }
+
         // The last thing the agent said, for the speak button on the orb's own
         // flyout — which has no panel open and so no transcript to read from.
         // Loads the history if this session has never been opened.
