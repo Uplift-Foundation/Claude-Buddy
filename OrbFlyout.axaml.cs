@@ -208,6 +208,17 @@ namespace ClaudeBuddy
                 TextToSpeech.SpeakState.Preparing => "⏳",
                 _ => "\U0001F508"
             };
+
+            // And what it says it is. This button is three things depending on
+            // state, and a tooltip fixed at "read aloud" would be wrong on two
+            // of them — the glyph already changes, and the words have to agree
+            // with the glyph or they are worse than no words.
+            ToolTip.SetTip(SpeakButton, state switch
+            {
+                TextToSpeech.SpeakState.Speaking => "Stop reading",
+                TextToSpeech.SpeakState.Preparing => "Preparing the voice…",
+                _ => "Read the latest reply aloud"
+            });
         }
 
         public bool IsPointerOverFlyout => Root.IsPointerOver;
