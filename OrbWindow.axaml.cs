@@ -577,6 +577,25 @@ namespace ClaudeBuddy
             _avatarTimer = null;
         }
 
+        // What counts as the end of a word. A space is the obvious one; the
+        // rest are here because the names this draws from are mostly not
+        // written by hand. A session is usually named for its directory, and
+        // directories are kebab or snake case — "claude-buddy" was one word to
+        // a split on spaces and drew "Cl", two letters off the front of the
+        // first half, which is exactly the "reads as a typo of it" case the
+        // two-word branch below exists to avoid. It is "Cb".
+        //
+        // All three dashes, because an em dash separates words whether or not
+        // someone put spaces around it. Spaced, it was already handled —
+        // "Lilibeth — wtvamp" split into three tokens and Initial() dropped the
+        // lone dash — but "Lilibeth—wtvamp" was one word and gave "Li". Both
+        // give "Lw" now.
+        //
+        // Not '.' or '/', deliberately. Those show up in paths and version
+        // numbers, where what follows the separator is rarely a word anyone
+        // would take an initial from.
+        internal static readonly char[] WordSeparators = { ' ', '-', '_', '–', '—' };
+
         private static string GlyphFor(string label)
         {
             label = label.TrimStart();
@@ -606,7 +625,7 @@ namespace ClaudeBuddy
             // as well is what makes "#kubernetes" contribute "k" rather than
             // being thrown away for starting with a hash.
             var words = label
-                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Split(WordSeparators, StringSplitOptions.RemoveEmptyEntries)
                 .Select(Initial)
                 .Where(initial => initial.Length > 0)
                 .ToArray();
