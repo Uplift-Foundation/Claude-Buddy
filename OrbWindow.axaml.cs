@@ -577,114 +577,10 @@ namespace ClaudeBuddy
             _avatarTimer = null;
         }
 
-        // What counts as the end of a word. A space is the obvious one; the
-        // rest are here because the names this draws from are mostly not
-        // written by hand. A session is usually named for its directory, and
-        // directories are kebab or snake case — "claude-buddy" was one word to
-        // a split on spaces and drew "Cl", two letters off the front of the
-        // first half, which is exactly the "reads as a typo of it" case the
-        // two-word branch below exists to avoid. It is "Cb".
-        //
-        // All three dashes, because an em dash separates words whether or not
-        // someone put spaces around it. Spaced, it was already handled —
-        // "Lilibeth — wtvamp" split into three tokens and Initial() dropped the
-        // lone dash — but "Lilibeth—wtvamp" was one word and gave "Li". Both
-        // give "Lw" now.
-        //
-        // Not '.' or '/', deliberately. Those show up in paths and version
-        // numbers, where what follows the separator is rarely a word anyone
-        // would take an initial from.
-        internal static readonly char[] WordSeparators = { ' ', '-', '_', '–', '—' };
-
-        private static string GlyphFor(string label)
-        {
-            label = label.TrimStart();
-            if (label.Length == 0) return "•";
-
-            if (!ClaudeBuddySettings.TwoLetterGlyphs)
-            {
-                return FirstGrapheme(label).ToUpperInvariant();
-            }
-
-            // Two words get one letter each — the initials a person would
-            // write by hand ("Menu UX" -> "Mu") — rather than two letters
-            // from the first word alone, which reads as a typo of it
-            // ("Menu UX" -> "Me"). A single word falls back to its own
-            // first two letters, since there's nothing else to draw from.
-            //
-            // Upper then lower, not both upper: two capitals side by side
-            // reads as an acronym ("MU"), where the point here is a little
-            // word-shaped mark ("Mu") — same reason a monogram is "Mu", not
-            // "MU". Only the letter case changes; which letters are picked
-            // is exactly the same either way.
-            // Only words with something readable in them count, and the initial
-            // is the first such character rather than the first character.
-            // "Lilibeth — wtvamp" splits into three tokens, the middle one a
-            // lone em dash, and taking the first two of those produced "L—" on
-            // every orb — which is how this was found. Skipping *within* a word
-            // as well is what makes "#kubernetes" contribute "k" rather than
-            // being thrown away for starting with a hash.
-            var words = label
-                .Split(WordSeparators, StringSplitOptions.RemoveEmptyEntries)
-                .Select(Initial)
-                .Where(initial => initial.Length > 0)
-                .ToArray();
-
-            if (words.Length >= 2)
-            {
-                return words[0].ToUpperInvariant() + words[1].ToLowerInvariant();
-            }
-
-            // One word, or none worth reading: take two letters from the label
-            // itself, which is the old behaviour and still right for "Menu".
-            //
-            // From where it starts *reading*, though. The two-word branch above
-            // skips leading punctuation per word, and this one did not — so
-            // "#kubernetes" gave "Ku" only because it is two words after the
-            // channel name is prefixed, while a single-word "#arch" gave "#a".
-            // A room orb is named for its channel, so that is the common case
-            // rather than an oddity.
-            var readable = ReadableStart(label);
-            var first = FirstGrapheme(readable);
-            var rest = readable[first.Length..];
-            var second = rest.Length > 0 ? FirstGrapheme(rest) : "";
-            return first.ToUpperInvariant() + second.ToLowerInvariant();
-        }
-
-        // One printable character, or a full surrogate pair if the string
-        // starts with one (e.g. an emoji) — never split in half, which is
-        // what renders as a broken box instead of the emoji.
-        // The first character of a word that a person would say out loud —
-        // skipping any leading punctuation, so "#general" gives "g" and a lone
-        // "—" gives nothing at all.
-        // The label from its first character worth reading, so "#arch" starts at
-        // "a". Only ASCII punctuation is skipped: an emoji is a perfectly good
-        // mark for an orb and is a symbol by every other measure, so skipping
-        // symbols generally would throw away the best glyph a label has.
-        private static string ReadableStart(string label)
-        {
-            for (var i = 0; i < label.Length; i++)
-            {
-                var c = label[i];
-                if (c > 127 || char.IsLetterOrDigit(c)) return label[i..];
-            }
-
-            return label;
-        }
-
-        private static string Initial(string word)
-        {
-            for (var i = 0; i < word.Length; i++)
-            {
-                if (char.IsHighSurrogate(word[i])) return word.Substring(i, Math.Min(2, word.Length - i));
-                if (char.IsLetterOrDigit(word[i])) return word.Substring(i, 1);
-            }
-
-            return "";
-        }
-
-        private static string FirstGrapheme(string s) =>
-            s.Length > 1 && char.IsHighSurrogate(s[0]) ? s[..2] : s[..1];
+        // The letters themselves live in OrbGlyph, which is pure and tested;
+        // this only supplies the one thing that is not — the user's setting.
+        private static string GlyphFor(string label) =>
+            OrbGlyph.For(label, ClaudeBuddySettings.TwoLetterGlyphs);
 
         // The colour comes from OrbColors so this switch is about *motion* only —
         // one state-to-colour mapping in the app, not two that can drift apart.
@@ -1261,7 +1157,6 @@ namespace ClaudeBuddy
         private void StartRecording()
         {
             if (_recording) return;
-
 
             try
             {

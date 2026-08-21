@@ -351,29 +351,6 @@ namespace ClaudeBuddy
             return Color.TryParse(hex, out var colour) ? colour : null;
         }
 
-        // First letters of the first two words: "Ada Lovelace" gives AL, and a
-        // single-word name gives its first two characters rather than one, which
-        // fills a 68pt circle better and still reads as a monogram.
-        private static string Initials(string? name)
-        {
-            if (string.IsNullOrWhiteSpace(name)) return "";
-
-            // Same separators as the orb's glyph, for the same reason — see
-            // OrbWindow.WordSeparators. The header sits beside the orb and has
-            // to agree with it.
-            var words = name.Split(OrbWindow.WordSeparators, StringSplitOptions.RemoveEmptyEntries);
-            if (words.Length == 0) return "";
-            if (words.Length == 1)
-            {
-                var w = words[0];
-                return (w.Length >= 2 ? w[..2] : w).ToUpperInvariant();
-            }
-
-            return string.Concat(
-                char.ToUpperInvariant(words[0][0]),
-                char.ToUpperInvariant(words[1][0]));
-        }
-
         private void ApplyAvatar(string sessionId)
         {
             StopAvatarAnimation();
@@ -440,7 +417,7 @@ namespace ClaudeBuddy
 
                 AvatarEmoji.Text = !string.IsNullOrEmpty(identity?.Emoji)
                     ? identity!.Emoji!
-                    : Initials(identity?.Name);
+                    : OrbGlyph.Initials(identity?.Name);
                 AvatarEmoji.IsVisible = !string.IsNullOrEmpty(AvatarEmoji.Text);
 
                 // Initials are letterforms, not a pictograph, so they want the
@@ -1144,7 +1121,7 @@ namespace ClaudeBuddy
             // recognise without reading is what a room view is for. Same
             // letters the agent's own orb shows, so the chip and the orb are
             // recognisably the same agent.
-            public string SpeakerInitials => Initials(_turn.Speaker);
+            public string SpeakerInitials => OrbGlyph.Initials(_turn.Speaker);
 
             // Filled in the speaker's own colour, with the panel's own
             // background punched through it for the letters. Ink on a tinted
