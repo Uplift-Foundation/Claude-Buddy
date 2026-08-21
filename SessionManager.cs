@@ -897,6 +897,8 @@ namespace ClaudeBuddy
                 ReflowPositions();
             }
 
+            RescueOffscreenOrbs();
+
             // Not only on setChanged: an orb that was already on screen can
             // gain or lose a lead, and the arrows have to follow either way.
             UpdateTeamLinks();
@@ -1413,6 +1415,56 @@ namespace ClaudeBuddy
                 Math.Clamp(point.Y, work.Y, Math.Max(work.Y, work.Bottom - size)));
 
             window.PinAt(point);
+        }
+
+        // Bring back any orb that is no longer on a screen.
+        //
+        // Nothing in the app could do this, and the gap was reported the way
+        // gaps like this always are: "I seem to have lost all my orbs." They
+        // were sitting in a neat row 223 points above the top of the display,
+        // which is exactly where they had been put while the desktop was a
+        // different shape.
+        //
+        // Nothing had moved them. A restored position is already checked
+        // against the screens it lands on — see RestoreOrbPosition — but an orb
+        // *already placed* was checked once and never again, and the thing that
+        // changes underneath it is the desktop: a monitor unplugged, an
+        // arrangement rearranged, a resolution changed. The orb keeps
+        // coordinates that were true when it got them and stops being anywhere
+        // a person can click.
+        //
+        // Judged on the orb's centre rather than its corner, so one hanging
+        // half off an edge is left alone — that is a placement somebody may
+        // have chosen, and dragging it back would be the app overruling them.
+        // Only an orb with nothing under its middle is unreachable, and only
+        // those are moved.
+        //
+        // The position is not written back to settings. If it came from there
+        // it is still a good position for the display it was saved on, and
+        // RestoreOrbPosition already declines to use it anywhere else.
+        private void RescueOffscreenOrbs()
+        {
+            foreach (var window in _windows.Values)
+            {
+                if (!window.IsVisible) continue;
+
+                var size = 56;
+                var centre = new PixelPoint(
+                    window.Position.X + size / 2,
+                    window.Position.Y + size / 2);
+
+                if (window.Screens.ScreenFromPoint(centre) is not null) continue;
+
+                var screen = window.Screens.Primary ?? window.Screens.All.FirstOrDefault();
+                if (screen is null) continue;
+
+                var work = screen.WorkingArea;
+                var orb = (int)(56 * screen.Scaling);
+
+                window.PinAt(new PixelPoint(
+                    Math.Clamp(window.Position.X, work.X, Math.Max(work.X, work.Right - orb)),
+                    Math.Clamp(window.Position.Y, work.Y, Math.Max(work.Y, work.Bottom - orb))));
+            }
         }
 
         public void RememberOrbPosition(OrbWindow window)
