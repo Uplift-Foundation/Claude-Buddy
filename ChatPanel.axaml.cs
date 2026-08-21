@@ -239,6 +239,15 @@ namespace ClaudeBuddy
             }
 
             if (_session is IRemoteChatPrompts prompts) prompts.PromptChanged -= OnPromptChanged;
+
+            // The last good name is per session, not per panel. The panel is a
+            // singleton and the box outlives a session, so leaving it set meant
+            // the *next* conversation inherited it — and because "we already
+            // knew a name" beats "we do not know one yet", a session whose
+            // title had not arrived would wear the previous session's initials
+            // on every bubble rather than none. Wrong is worse than absent
+            // here: the chip is there to say who is talking.
+            _soleSpeaker.Name = null;
         }
 
         private void Bind(OrbWindow orb, IRemoteChatSession session)
