@@ -127,6 +127,19 @@ Both CLIs write `.jsonl`, so the harness picks its parser from the file's first
 row rather than its extension and says which one it used. If that line names the
 wrong CLI, nothing below it means anything.
 
+Orb *initials* have one too — `dotnet run --project tests/GlyphTests`. It covers
+`OrbGlyph`: the two letters an orb wears and the ones the chat panel's header
+wears beside it, across kebab and snake case, all three dashes, leading
+punctuation, emoji, and the single-letter setting.
+
+It exists because the initials were wrong for a year and nobody saw it. Every
+kebab-case name drew two letters off the front of its first word, so
+`claude-buddy` was "Cl" and not "Cb" — invisible partly because it only looks
+wrong when the halves start with different letters, and partly because reading
+the answer meant looking at the screen. Same rule as the geometry: `OrbGlyph` is
+pure and takes the two-letter *setting* as an argument rather than reading it,
+so the tests do not depend on the machine they run on.
+
 ## Extra accounts
 
 Both CLIs support a second account through an environment variable —
