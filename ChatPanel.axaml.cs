@@ -37,6 +37,10 @@ namespace ClaudeBuddy
         // than an agent's own. Only that case can be refreshed from the orb.
         private bool _borrowedIdentity;
 
+        // Who is talking in this session when the transcript does not say —
+        // the agent's name, which for a terminal session is the orb's title.
+        private string? _soleSpeaker;
+
         // The colour a reply is drawn in when the turn itself doesn't name one.
         //
         // A room's turns carry their own, because several agents are talking. In
@@ -261,6 +265,10 @@ namespace ClaudeBuddy
             // agent's own main session) simply leaves the second line empty.
             var parts = session.DisplayName.Split(" — ", 2);
             TitleText.Text = parts[0];
+
+            // The name half, not the place half. "Zara — wtvamp" is one agent
+            // in one channel, and it is Zara who speaks.
+            _soleSpeaker = parts[0];
             SubtitleText.Text = parts.Length > 1 ? parts[1] : "";
             SubtitleText.IsVisible = parts.Length > 1;
 
@@ -277,7 +285,7 @@ namespace ClaudeBuddy
             OnStateChanged(session.State);
 
             _turns.Clear();
-            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble));
+            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
 
             Input.Text = Drafts.GetValueOrDefault(session.SessionId, "");
             MicButton.IsVisible = ClaudeBuddySettings.VoiceInputEnabled;
@@ -731,7 +739,7 @@ namespace ClaudeBuddy
             // start them downloading again.
             for (var i = 0; i < count && i < _session.History.Count; i++)
             {
-                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble));
+                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble, _soleSpeaker));
             }
         }
 
@@ -740,7 +748,7 @@ namespace ClaudeBuddy
             if (_session is null) return;
 
             _turns.Clear();
-            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble));
+            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
 
             // Straight to the bottom rather than the pinned-only rule: a
             // transcript that has just been replaced wholesale has no scroll
@@ -751,7 +759,7 @@ namespace ClaudeBuddy
 
         private void OnTurnAdded(ChatTurn turn)
         {
-            _turns.Add(new TurnView(turn, _defaultBubble));
+            _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
 
             // Your own turn always brings the view with it; everything else
             // respects where you were reading.
@@ -878,12 +886,20 @@ namespace ClaudeBuddy
         private sealed class TurnView : System.ComponentModel.INotifyPropertyChanged
         {
             private readonly ChatTurn _turn;
+            private readonly string? _soleSpeaker;
             private readonly Color? _defaultBubble;
 
-            public TurnView(ChatTurn turn, Color? defaultBubble)
+            // soleSpeaker is who is talking when the transcript does not say.
+            // A room stamps every turn with its speaker because there are
+            // several; a one-to-one session — a Claude Code or Codex terminal,
+            // or a single agent — stamps none, because there is only one and it
+            // was obvious to whoever wrote the transport. It is not obvious in
+            // the bubbles, which is the whole point of the chip.
+            public TurnView(ChatTurn turn, Color? defaultBubble, string? soleSpeaker)
             {
                 _turn = turn;
                 _defaultBubble = defaultBubble;
+                _soleSpeaker = soleSpeaker;
 
                 turn.PropertyChanged += (_, e) =>
                 {
@@ -1151,9 +1167,25 @@ namespace ClaudeBuddy
             // so a room full of agents looked like you talking to yourself.
             private bool IsUser => _turn.Role == ChatRole.User && !HasSpeaker;
 
-            public bool HasSpeaker => !string.IsNullOrEmpty(_turn.Speaker);
+            public bool HasSpeaker => !string.IsNullOrEmpty(SpeakerName);
 
-            public string SpeakerName => _turn.Speaker ?? "";
+            // Falls back to the session's one agent, but only on the agent's
+            // own turns. Your messages are yours whoever else is in the room,
+            // and a system note is about the conversation rather than in it —
+            // stamping either with the agent's name would say it spoke them.
+            public string SpeakerName =>
+                !string.IsNullOrEmpty(_turn.Speaker) ? _turn.Speaker!
+                : _turn.Role == ChatRole.Assistant ? _soleSpeaker ?? ""
+                : "";
+
+            // The name in words, beside the chip, only when the transcript
+            // named the speaker itself. In a room that is worth the line: eight
+            // agents talk and the names are how you follow who. In a one-to-one
+            // it is the panel's own title repeated down the whole transcript,
+            // which says nothing the header has not already said — so the chip
+            // goes on alone, the way a messaging app shows a face and not a
+            // name against every message from one person.
+            public bool ShowSpeakerName => !string.IsNullOrEmpty(_turn.Speaker);
 
             // The speaker's own picture, when the gateway has one for them.
             //
@@ -1163,7 +1195,7 @@ namespace ClaudeBuddy
             // circle is a lot of machinery for something too small to read a
             // motion in. The portrait is the place you look, and it still moves.
             public Bitmap? SpeakerAvatar =>
-                OpenClawSessions.AvatarForAgentName(_turn.Speaker)?.Frames.FirstOrDefault();
+                OpenClawSessions.AvatarForAgentName(SpeakerName)?.Frames.FirstOrDefault();
 
             public bool HasSpeakerAvatar => SpeakerAvatar is not null;
 
@@ -1180,7 +1212,7 @@ namespace ClaudeBuddy
             // recognise without reading is what a room view is for. Same
             // letters the agent's own orb shows, so the chip and the orb are
             // recognisably the same agent.
-            public string SpeakerInitials => OrbGlyph.Initials(_turn.Speaker);
+            public string SpeakerInitials => OrbGlyph.Initials(SpeakerName);
 
             // Filled in the speaker's own colour, with the panel's own
             // background punched through it for the letters. Ink on a tinted
