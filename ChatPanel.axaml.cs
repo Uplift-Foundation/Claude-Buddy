@@ -358,7 +358,10 @@ namespace ClaudeBuddy
         {
             if (string.IsNullOrWhiteSpace(name)) return "";
 
-            var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            // Same separators as the orb's glyph, for the same reason — see
+            // OrbWindow.WordSeparators. The header sits beside the orb and has
+            // to agree with it.
+            var words = name.Split(OrbWindow.WordSeparators, StringSplitOptions.RemoveEmptyEntries);
             if (words.Length == 0) return "";
             if (words.Length == 1)
             {
