@@ -772,7 +772,16 @@ namespace ClaudeBuddy
         // precisely so this control *is* the tooltip, which also means anything
         // handing ToolTip a bare string gets unstyled text floating on the
         // desktop — how the flyout's first set of tips shipped.
-        internal static Control ThoughtBubble(string title, string? path)
+        // `compact` drops the tail and tightens the type: a caption for a
+        // button, rather than a thought belonging to an orb.
+        //
+        // The tail is two dots *below* the bubble, so it reads as a thought
+        // rising from whatever is underneath — right for an orb's own tooltip,
+        // which sits above the orb and points back down at it. A button's label
+        // sits below the button, where the same dots point at nothing and read
+        // as a rendering fault. Sharing the palette and dropping the tail keeps
+        // one look without claiming a button is thinking.
+        internal static Control ThoughtBubble(string title, string? path, bool compact = false)
         {
             var bg = Color.Parse("#E6EAECF0");
             var fg = Color.Parse("#FF2A2A35");
@@ -783,7 +792,7 @@ namespace ClaudeBuddy
             content.Children.Add(new TextBlock
             {
                 Text = title,
-                FontSize = 12.5,
+                FontSize = compact ? 11 : 12.5,
                 FontFamily = font,
                 FontWeight = FontWeight.SemiBold,
                 Foreground = new SolidColorBrush(fg),
@@ -807,11 +816,13 @@ namespace ClaudeBuddy
             var bubble = new Border
             {
                 Background = new SolidColorBrush(bg),
-                CornerRadius = new CornerRadius(14),
-                Padding = new Thickness(14, 9),
+                CornerRadius = new CornerRadius(compact ? 9 : 14),
+                Padding = compact ? new Thickness(9, 5) : new Thickness(14, 9),
                 BoxShadow = BoxShadows.Parse("0 2 8 0 #30000000"),
                 Child = content
             };
+
+            if (compact) return bubble;
 
             var canvas = new Canvas
             {

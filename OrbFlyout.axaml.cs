@@ -115,8 +115,9 @@ namespace ClaudeBuddy
             ArrangeButton, SettingsButton, SpeakButton, MicButton, ChatButton
         };
 
-        // What each button is for, in the same bubble the orb's own tooltip
-        // uses.
+        // What each button is for, in the compact form of the bubble the orb's
+        // own tooltip uses — same palette, no tail. The tail belongs to a
+        // thought rising from an orb; under a button it points at nothing.
         //
         // Set here rather than in the XAML because ToolTip.Tip="some text" does
         // not work in this app and cannot: App.axaml strips the ToolTip template
@@ -137,7 +138,7 @@ namespace ClaudeBuddy
 
             static void Label(Control button, string text)
             {
-                ToolTip.SetTip(button, OrbWindow.ThoughtBubble(text, null));
+                ToolTip.SetTip(button, OrbWindow.ThoughtBubble(text, null, compact: true));
                 ToolTip.SetPlacement(button, PlacementMode.Bottom);
                 ToolTip.SetShowDelay(button, 250);
             }
@@ -247,7 +248,7 @@ namespace ClaudeBuddy
                 TextToSpeech.SpeakState.Speaking => "Stop reading",
                 TextToSpeech.SpeakState.Preparing => "Preparing the voice…",
                 _ => "Read the latest reply aloud"
-            }, null));
+            }, null, compact: true));
         }
 
         public bool IsPointerOverFlyout => Root.IsPointerOver;
