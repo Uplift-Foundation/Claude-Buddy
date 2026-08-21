@@ -238,6 +238,13 @@ namespace ClaudeBuddy
             _lastGlyphName = name;
             ApplyAvatar(status);
             if (!_hasAvatar) Glyph.Text = _agentEmoji ?? GlyphFor(name);
+
+            // An open chat panel wears this orb's letters and colours. It used
+            // to copy them once, when it opened, so a title that arrived after
+            // the panel did — or a /rename, or a /color — left the header
+            // showing the old ones. Cheap to call: the panel ignores it unless
+            // it is showing this orb, and does nothing unless something moved.
+            ChatPanel.RefreshIdentityFor(this);
             ApplyAccent(status.Color);
             // Rooms wear the badge too, now that their glyph is the channel's
             // initials rather than a hash. It was suppressed when the two would
@@ -432,6 +439,7 @@ namespace ClaudeBuddy
         {
             Glyph.Text = GlyphFor(_lastGlyphName);
             Glyph.FontSize = BaseGlyphFontSize * (_isTeamMember ? MemberScale : 1.0);
+            ChatPanel.RefreshIdentityFor(this);
         }
 
         // An agent's own picture, drawn as the orb itself.
