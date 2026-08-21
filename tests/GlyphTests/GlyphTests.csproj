@@ -16,6 +16,7 @@
          No Avalonia reference: nothing here draws, and OrbGlyph knows about
          neither windows nor settings. -->
     <Compile Include="../../OrbGlyph.cs" />
+    <Compile Include="../../ChatSpeaker.cs" />
   </ItemGroup>
 
 </Project>
