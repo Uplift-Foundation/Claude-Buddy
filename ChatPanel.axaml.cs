@@ -33,6 +33,10 @@ namespace ClaudeBuddy
         private IRemoteChatSession? _session;
         private OrbWindow? _owner;
 
+        // Whether the header is currently wearing the orb's identity rather
+        // than an agent's own. Only that case can be refreshed from the orb.
+        private bool _borrowedIdentity;
+
         // The colour a reply is drawn in when the turn itself doesn't name one.
         //
         // A room's turns carry their own, because several agents are talking. In
@@ -351,6 +355,59 @@ namespace ClaudeBuddy
             return Color.TryParse(hex, out var colour) ? colour : null;
         }
 
+        // The header borrows the orb's letters and colours, and borrowed them
+        // exactly once — at Bind. Anything that changed the orb afterwards left
+        // the panel showing what the orb used to say: a /rename, a /color, a
+        // title arriving after the first hook write, or the two-letter setting
+        // being toggled while a panel was open. Worse than stale, at open time
+        // it could be empty — an orb clicked before its first status write has
+        // no glyph yet, and the header copied the nothing and kept it.
+        //
+        // Same shape as RepositionFor and SetRecording above: the orb tells the
+        // panel, the panel checks the message is from the orb it is showing.
+        public static void RefreshIdentityFor(OrbWindow orb)
+        {
+            if (_instance is not { IsVisible: true } panel) return;
+            if (!ReferenceEquals(panel._owner, orb)) return;
+
+            panel.ApplyBorrowedIdentity();
+        }
+
+        // Only the case that borrows from the orb. An agent with a portrait or
+        // an OpenClaw identity has its own, and re-running the whole of
+        // ApplyAvatar here would restart an animated avatar on every hook
+        // write — which is several a second while a session is working.
+        private void ApplyBorrowedIdentity()
+        {
+            if (!_borrowedIdentity || _owner is null) return;
+
+            Avatar.Fill = new SolidColorBrush(_owner.OrbColor);
+            RingFor(_owner.AccentColor);
+
+            var letters = BorrowedLetters();
+            if (AvatarEmoji.Text == letters) return;
+
+            AvatarEmoji.Text = letters;
+            AvatarEmoji.IsVisible = !string.IsNullOrEmpty(letters);
+        }
+
+        // What the orb is drawing, or what it would draw if it had got round to
+        // it. The fallback matters because the panel can be bound before the
+        // orb's first status write, and an empty circle beside a perfectly good
+        // title is the one outcome that is never right. It derives them the way
+        // the orb would rather than with Initials(), so the two agree on case
+        // as well as on letters — "Cb" here and on the orb, not "CB" here.
+        private string BorrowedLetters()
+        {
+            var letters = _owner?.GlyphText ?? "";
+            if (!string.IsNullOrEmpty(letters)) return letters;
+
+            var name = TitleText.Text;
+            return string.IsNullOrWhiteSpace(name)
+                ? ""
+                : OrbGlyph.For(name, ClaudeBuddySettings.TwoLetterGlyphs);
+        }
+
         private void ApplyAvatar(string sessionId)
         {
             StopAvatarAnimation();
@@ -386,7 +443,8 @@ namespace ClaudeBuddy
                 RingFor(_owner.AccentColor);
 
                 // An initial wants less room than an emoji does.
-                AvatarEmoji.Text = _owner.GlyphText;
+                _borrowedIdentity = true;
+                AvatarEmoji.Text = BorrowedLetters();
                 AvatarEmoji.FontSize = 26;
                 AvatarEmoji.IsVisible = !string.IsNullOrEmpty(AvatarEmoji.Text);
 
@@ -397,6 +455,7 @@ namespace ClaudeBuddy
 
             _avatar = avatar;
             _avatarFrame = 0;
+            _borrowedIdentity = false;
 
             // Reset from whatever the branch above may have left behind.
             AvatarEmoji.FontSize = 38;
