@@ -336,7 +336,8 @@ namespace ClaudeBuddy
             ("Circle", "circle"),
             ("Diamond", "diamond"),
             ("Star", "star"),
-            ("Grid", "grid")
+            ("Grid", "grid"),
+            ("Line", "line")
         };
 
         private Control ShapePicker()
