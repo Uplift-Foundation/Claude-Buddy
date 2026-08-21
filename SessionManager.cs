@@ -1189,23 +1189,37 @@ namespace ClaudeBuddy
             TeamLinks.Refresh();
         }
 
-        // A new orb appeared or an old one vanished while the shape is
-        // active. Fold the newcomer in and redraw rather than dumping it
-        // into the vertical stack where it would sit outside the pattern.
+        // A new orb appeared or an old one vanished while the shape is active.
+        // Re-fit the whole shape and glide everything into it.
+        //
+        // The opposite of what this did until now, and the reversal is
+        // deliberate rather than a regression, so the old reasoning is worth
+        // keeping. Only the newcomer used to move, because re-fitting means an
+        // orb that was sitting still moves for a reason that has nothing to do
+        // with it — measured against the real geometry, an orb already on
+        // screen shifts 33px on average when a sixth joins a circle, 111px in a
+        // heart and up to 161px in a grid. The judgement was that a display
+        // which rearranges itself because something unrelated started is a
+        // display you stop trusting.
+        //
+        // Living with it says otherwise. A shape that absorbs arrivals where
+        // they happen to fit stops being the shape after a handful of them, and
+        // one orb hanging off the edge of a heart is read as something wrong —
+        // it draws the eye every time, where six orbs sliding a few dozen pixels
+        // is over in half a second and leaves a heart. Stillness was the wrong
+        // thing to optimise for; the shape is the point of the shape.
+        //
+        // Removals re-fit too, on the same reasoning. A gap in a ring is the
+        // same wrongness as a stray orb beside it, and "the gap is the honest
+        // picture of what is running" was true and not worth the look of it.
         private void AbsorbIntoArrangement()
         {
-            if (_arrangeAnimTargets is not null) return;
-
             // Orbs gone since the pattern was drawn — drop their saved state.
             foreach (var id in _preArrangeState.Keys
                          .Where(id => !_windows.ContainsKey(id)).ToList())
             {
                 _preArrangeState.Remove(id);
             }
-
-            // Who was already in the shape, captured before the loop below adds
-            // the newcomers to the same dictionary.
-            var settled = new HashSet<string>(_preArrangeState.Keys, StringComparer.Ordinal);
 
             // Orbs that arrived after the pattern was drawn — record where
             // they would have stacked so Restore can put them back there.
@@ -1217,6 +1231,16 @@ namespace ClaudeBuddy
                 w.SetFlyoutArranged(true);
             }
 
+            // Mid-glide. Asking for a second shape while the first is still
+            // being flown to would fight it, and dropping the request would
+            // strand whichever orb arrived during the half-second — which is
+            // the whole complaint. It gets picked up when this one lands.
+            if (_arrangeAnimTargets is not null)
+            {
+                _refitPending = true;
+                return;
+            }
+
             var allOrbs = DisplayOrder()
                 .Where(id => _windows.ContainsKey(id) && _windows[id].IsVisible)
                 .Select(id => _windows[id])
@@ -1226,74 +1250,27 @@ namespace ClaudeBuddy
 
             var positioned = ComputeClusteredPositions(allOrbs);
 
-            // Only the newcomer moves.
-            //
-            // This used to re-pin every orb to a freshly computed shape, which
-            // is how a shape for five orbs becomes a shape for six. It is also
-            // why one session starting made the whole cluster jump: measured
-            // against the real geometry, an orb already on screen moved 33px on
-            // average when a sixth joined a circle, 111px in a heart, and up to
-            // 161px in a grid. Nothing was wrong with where they landed — the
-            // points of a five-point ring and a six-point ring simply are not
-            // the same points — but a display that rearranges itself because
-            // something unrelated started is a display you stop trusting.
-            //
-            // Matching each orb to its nearest new slot instead of by list
-            // order was tried first and measured: 34% less movement on a
-            // circle, 38% on a grid, 9% on a heart. Better, and still tens of
-            // pixels of drift on every arrival, so it does not answer the
-            // complaint. Not moving them does.
-            //
-            // The shape therefore drifts from a clean heart as sessions come
-            // and go, which is the deliberate trade: the sparkle button re-fits
-            // it whenever the drift is worth more than the stillness.
-            var settledOrbs = positioned.Where(p => settled.Contains(p.Orb.SessionId)).ToList();
-            var newcomers = positioned.Where(p => !settled.Contains(p.Orb.SessionId)).ToList();
-
-            if (newcomers.Count == 0)
+            // Nothing to do if every orb is already where the new shape wants
+            // it. Worth the check: this runs on every scan that changes the set
+            // at all, including changes that do not move anybody.
+            if (positioned.All(p => p.Orb.Position == p.Target))
             {
-                // A removal. The gap it leaves is the honest picture of what is
-                // running, and closing it would move everything to say so.
                 TeamLinks.Refresh();
                 return;
             }
 
-            // Where each newcomer would like to be, before the geometry has a
-            // say. A newcomer hung off a lead that is already placed belongs
-            // beside where that lead actually *is*, not where this recomputed
-            // shape would have put it — otherwise its arrow points across the
-            // screen at an orb that never moved.
-            var wanted = newcomers.Select(p =>
+            _arrangeAnimTargets = new();
+            foreach (var (orb, target) in positioned)
+                _arrangeAnimTargets[orb.SessionId] = (orb.Position, target);
+
+            AnimateArrangement(() =>
             {
-                var lead = _statuses.TryGetValue(p.Orb.SessionId, out var s) ? s.Lead : "";
-                if (string.IsNullOrEmpty(lead)) return p.Target;
-
-                var anchor = settledOrbs.FirstOrDefault(a => a.Orb.SessionId == lead);
-                if (anchor.Orb is null) return p.Target;
-
-                return new PixelPoint(
-                    p.Target.X + anchor.Orb.Position.X - anchor.Target.X,
-                    p.Target.Y + anchor.Orb.Position.Y - anchor.Target.Y);
-            }).ToArray();
-
-            // 56 DIP is the orb, so two centres closer than that overlap. The
-            // positions are physical pixels, hence the scale.
-            var screen = allOrbs[0].Screens.Primary ?? allOrbs[0].Screens.All.FirstOrDefault();
-
-            var scale = screen?.Scaling ?? 1.0;
-
-            var targets = OrbArrangement.Absorb(
-                settledOrbs.Select(p => p.Orb.Position).ToArray(),
-                positioned.Select(p => p.Target).ToArray(),
-                wanted,
-                56 * scale,
-                screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080),
-                (int)Math.Round(56 * scale));
-
-            for (var i = 0; i < newcomers.Count; i++)
-                newcomers[i].Orb.PinAt(targets[i]);
-
-            TeamLinks.Refresh();
+                foreach (var (id, (_, to)) in _arrangeAnimTargets ?? new())
+                {
+                    if (_windows.TryGetValue(id, out var window))
+                        window.PinAt(to);
+                }
+            });
         }
 
         // --- dragged orb positions -------------------------------------------
@@ -1561,6 +1538,10 @@ namespace ClaudeBuddy
         private Dictionary<string, (PixelPoint From, PixelPoint To)>? _arrangeAnimTargets;
         private long _arrangeAnimStart;
         private Action? _arrangeAnimComplete;
+
+        // A membership change that arrived mid-glide, to be re-fitted once the
+        // current one lands. See AbsorbIntoArrangement.
+        private bool _refitPending;
         private const int ArrangeAnimMs = 600;
 
         public void ArrangeOrbsInPattern()
@@ -1731,6 +1712,13 @@ namespace ClaudeBuddy
             var targets = _arrangeAnimTargets;
             _arrangeAnimTargets = null;
             complete?.Invoke();
+
+            // An orb arrived or left while that was flying. Fit it in now,
+            // rather than leaving it as the one orb outside the shape.
+            if (!_refitPending) return;
+
+            _refitPending = false;
+            if (_isArranged) AbsorbIntoArrangement();
         }
 
         public List<OrbWindow> ArrangedSiblings(string excludeSessionId)
