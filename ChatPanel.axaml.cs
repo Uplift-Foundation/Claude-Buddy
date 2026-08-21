@@ -37,9 +37,19 @@ namespace ClaudeBuddy
         // than an agent's own. Only that case can be refreshed from the orb.
         private bool _borrowedIdentity;
 
-        // Who is talking in this session when the transcript does not say —
-        // the agent's name, which for a terminal session is the orb's title.
-        private string? _soleSpeaker;
+        // Who is talking in this session when the transcript does not say.
+        //
+        // A box shared by reference with every TurnView, not a value copied
+        // into each. The name is not always known when the panel binds — a
+        // terminal session's title arrives with a later hook write, and the
+        // panel opens on whatever the orb had at the time, which is often
+        // nothing. Copied, that nothing was baked into every row already built
+        // and the chips never appeared; boxed, filling it in later fills in the
+        // rows that were waiting for it. Same one-shot-read mistake the header
+        // made two commits ago, in a second place.
+        private sealed class Speaker { public string? Name; }
+
+        private readonly Speaker _soleSpeaker = new();
 
         // The colour a reply is drawn in when the turn itself doesn't name one.
         //
@@ -266,9 +276,7 @@ namespace ClaudeBuddy
             var parts = session.DisplayName.Split(" — ", 2);
             TitleText.Text = parts[0];
 
-            // The name half, not the place half. "Zara — wtvamp" is one agent
-            // in one channel, and it is Zara who speaks.
-            _soleSpeaker = parts[0];
+            RefreshSoleSpeaker();
             SubtitleText.Text = parts.Length > 1 ? parts[1] : "";
             SubtitleText.IsVisible = parts.Length > 1;
 
@@ -379,12 +387,40 @@ namespace ClaudeBuddy
             if (!ReferenceEquals(panel._owner, orb)) return;
 
             panel.ApplyBorrowedIdentity();
+            panel.RefreshSoleSpeaker();
         }
 
         // Only the case that borrows from the orb. An agent with a portrait or
         // an OpenClaw identity has its own, and re-running the whole of
         // ApplyAvatar here would restart an animated avatar on every hook
         // write — which is several a second while a session is working.
+        // The agent whose messages these are.
+        //
+        // For a gateway session that is the agent in the session key, not the
+        // panel's title: "#openclaw-management" is where the conversation is
+        // and Lilibeth is who is talking in it, and a chip reading "Op" would
+        // be naming the room as its own speaker. Only a terminal session, whose
+        // title *is* its agent, falls back to the title.
+        private void RefreshSoleSpeaker()
+        {
+            var was = _soleSpeaker.Name;
+
+            var identity = _session is null
+                ? null
+                : OpenClawSessions.IdentityForSession(_session.SessionId);
+
+            // The name half of "Zara — wtvamp", not the place half.
+            var title = TitleText.Text;
+
+            _soleSpeaker.Name = !string.IsNullOrWhiteSpace(identity?.Name)
+                ? identity!.Name
+                : string.IsNullOrWhiteSpace(title) ? null : title;
+
+            if (_soleSpeaker.Name == was) return;
+
+            foreach (var view in _turns) view.SpeakerChanged();
+        }
+
         private void ApplyBorrowedIdentity()
         {
             if (!_borrowedIdentity || _owner is null) return;
@@ -886,7 +922,7 @@ namespace ClaudeBuddy
         private sealed class TurnView : System.ComponentModel.INotifyPropertyChanged
         {
             private readonly ChatTurn _turn;
-            private readonly string? _soleSpeaker;
+            private readonly Speaker? _soleSpeaker;
             private readonly Color? _defaultBubble;
 
             // soleSpeaker is who is talking when the transcript does not say.
@@ -895,7 +931,7 @@ namespace ClaudeBuddy
             // or a single agent — stamps none, because there is only one and it
             // was obvious to whoever wrote the transport. It is not obvious in
             // the bubbles, which is the whole point of the chip.
-            public TurnView(ChatTurn turn, Color? defaultBubble, string? soleSpeaker)
+            public TurnView(ChatTurn turn, Color? defaultBubble, Speaker? soleSpeaker)
             {
                 _turn = turn;
                 _defaultBubble = defaultBubble;
@@ -1158,6 +1194,23 @@ namespace ClaudeBuddy
                 }
             }
 
+            // The name was filled in after this row was built. Everything
+            // drawn from it has to be asked again — the chip is bound to five
+            // separate properties and a stale one leaves half a chip.
+            public void SpeakerChanged()
+            {
+                foreach (var name in new[]
+                {
+                    nameof(HasSpeaker), nameof(SpeakerName), nameof(ShowSpeakerName),
+                    nameof(SpeakerInitials), nameof(SpeakerAvatar),
+                    nameof(HasSpeakerAvatar), nameof(HasSpeakerInitials),
+                    nameof(SpeakerChip), nameof(SpeakerChipInk)
+                })
+                {
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+                }
+            }
+
             private bool IsSystem => _turn.Role == ChatRole.System;
 
             // A named speaker is never *you*, whatever role the transport gave
@@ -1175,7 +1228,7 @@ namespace ClaudeBuddy
             // stamping either with the agent's name would say it spoke them.
             public string SpeakerName =>
                 !string.IsNullOrEmpty(_turn.Speaker) ? _turn.Speaker!
-                : _turn.Role == ChatRole.Assistant ? _soleSpeaker ?? ""
+                : _turn.Role == ChatRole.Assistant ? _soleSpeaker?.Name ?? ""
                 : "";
 
             // The name in words, beside the chip, only when the transcript
