@@ -252,6 +252,8 @@ namespace ClaudeBuddy
                     + "first two letters of it when there's only one word — instead of just "
                     + "the one letter every orb shows today."))));
 
+            root.Children.Add(Group("Clicking an orb", Card(ClickRows())));
+
             root.Children.Add(Group("Auto-organize", Card(AutoOrganizeRows())));
 
             root.Children.Add(Group("Orb colours", Card(
@@ -329,6 +331,59 @@ namespace ClaudeBuddy
 
         // --- Voice input ---
         // --- Auto-organize ---
+
+        // --- what a click does ---
+
+        private static readonly (string Label, string Value)[] ClickChoices =
+        {
+            ("Go to the session", "terminal"),
+            ("Open the chat panel", "chat"),
+            ("Read the latest reply", "speak"),
+            ("Nothing", "none")
+        };
+
+        // "Go to the session" rather than "Terminal", because that is what it
+        // does: for a local CLI it is the terminal, and for a gateway agent
+        // there is no terminal anywhere and the panel is the only place it
+        // exists. One label covering both beats a label that is wrong for half
+        // the orbs on screen.
+        private Control ClickPicker(Func<string> get, Action<string> set)
+        {
+            var current = get();
+            var choices = ClickChoices.ToList();
+
+            if (choices.All(c => c.Value != current)) choices.Add((current, current));
+
+            var combo = new ComboBox
+            {
+                ItemsSource = choices.Select(c => c.Label).ToList(),
+                SelectedIndex = choices.FindIndex(c => c.Value == current),
+                MinWidth = 168
+            };
+            combo.SelectionChanged += (_, _) =>
+            {
+                var index = combo.SelectedIndex;
+                if (index >= 0) set(choices[index].Value);
+            };
+            return combo;
+        }
+
+        private Control[] ClickRows() => new[]
+        {
+            Row("Click", ClickPicker(
+                () => ClaudeBuddySettings.ClickAction,
+                v => ClaudeBuddySettings.ClickAction = v)),
+            Row("Double click", ClickPicker(
+                () => ClaudeBuddySettings.DoubleClickAction,
+                v => ClaudeBuddySettings.DoubleClickAction = v)),
+            Row("Triple click", ClickPicker(
+                () => ClaudeBuddySettings.TripleClickAction,
+                v => ClaudeBuddySettings.TripleClickAction = v),
+                "Binding a second or third click makes a single click wait a moment to see "
+                + "whether another is coming — there is no way to tell them apart without "
+                + "that pause. Leave them on Nothing and a single click acts the instant "
+                + "you release, which is what the app has always done.")
+        };
 
         private static readonly (string Label, string Value)[] ShapeChoices =
         {

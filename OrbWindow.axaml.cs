@@ -1420,6 +1420,11 @@ namespace ClaudeBuddy
             {
                 _pressed = true;
                 _dragging = false;
+
+                // Recorded here because only the press carries it; the release
+                // that acts on it does not.
+                _clickCount = e.ClickCount;
+
                 _windowStart = Position;
                 _pointerStart = this.PointToScreen(e.GetPosition(this));
 
@@ -1532,25 +1537,124 @@ namespace ClaudeBuddy
                 // flyout's keyboard button opens, and it must not quietly become
                 // what a click does instead. Going to the terminal is the oldest
                 // behaviour this app has and people reach for it without looking.
-                if (!(_lastStatus?.IsLocalCli ?? false))
-                {
-                    var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
-                    if (chat is not null)
-                    {
-                        _chatOpen = true;
-                        HideFlyoutNow();
-                        ChatPanel.OpenFor(this, chat);
-                        return;
-                    }
-                }
-
-                TerminalFocuser.Focus(
-                    _lastStatus,
-                    SessionManager.Instance?.StatusFor(_lastStatus?.Lead),
-                    SessionId);
+                OnClicked(_clickCount);
             }
 
             _followers.Clear();
+        }
+
+        // --- what a click does ------------------------------------------------
+
+        // One, two or three clicks, each bound to whatever the user chose.
+        //
+        // The awkward part is that these gestures are prefixes of each other: a
+        // double click is a single click that turns out to have company. So a
+        // single click can only be acted on immediately if nothing longer is
+        // bound to something different — otherwise it has to wait long enough to
+        // find out, and going to a terminal is the most common thing this app
+        // does. The wait is therefore paid only by people who asked for it by
+        // binding a second gesture, and never by anyone leaving the defaults
+        // alone, where two and three clicks do nothing at all.
+        private const int MultiClickMs = 300;
+
+        private DispatcherTimer? _clickTimer;
+        private int _pendingClicks;
+        private int _clickCount = 1;
+
+        private void OnClicked(int clicks)
+        {
+            // Beyond three there is nothing to bind, and treating a fourth click
+            // as a fresh single would fire the single-click action in the middle
+            // of somebody drumming on the orb.
+            if (clicks > 3) return;
+
+            _clickTimer?.Stop();
+            _clickTimer = null;
+            _pendingClicks = clicks;
+
+            if (!AwaitsMoreClicks(clicks))
+            {
+                RunClickAction(clicks);
+                return;
+            }
+
+            _clickTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(MultiClickMs) };
+            _clickTimer.Tick += (_, _) =>
+            {
+                _clickTimer?.Stop();
+                _clickTimer = null;
+                RunClickAction(_pendingClicks);
+            };
+            _clickTimer.Start();
+        }
+
+        // Whether a longer gesture is bound to something this one isn't already
+        // going to do. Same action on two and three as on one means the wait
+        // would change nothing, so there is no reason to pay it.
+        private static bool AwaitsMoreClicks(int clicks)
+        {
+            var mine = ActionFor(clicks);
+
+            for (var longer = clicks + 1; longer <= 3; longer++)
+            {
+                var other = ActionFor(longer);
+                if (other != "none" && other != mine) return true;
+            }
+
+            return false;
+        }
+
+        private static string ActionFor(int clicks) => clicks switch
+        {
+            1 => ClaudeBuddySettings.ClickAction,
+            2 => ClaudeBuddySettings.DoubleClickAction,
+            _ => ClaudeBuddySettings.TripleClickAction
+        };
+
+        private void RunClickAction(int clicks)
+        {
+            switch (ActionFor(clicks))
+            {
+                case "chat":
+                    OpenChat();
+                    break;
+
+                case "speak":
+                    OnSpeakClicked();
+                    break;
+
+                case "none":
+                    break;
+
+                default:
+                    GoToSession();
+                    break;
+            }
+        }
+
+        // "Take me to this session", which for a local CLI is its terminal and
+        // for a gateway agent is the only place it exists — the panel. That
+        // second case is not a fallback bolted on for this feature; it is what a
+        // click on a gateway orb has always done, because there is no terminal
+        // anywhere to go to.
+        private void GoToSession()
+        {
+            if (!(_lastStatus?.IsLocalCli ?? false))
+            {
+                var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
+                if (chat is not null)
+                {
+                    _chatOpen = true;
+                    HideFlyoutNow();
+                    ChatPanel.OpenFor(this, chat);
+                    return;
+                }
+            }
+
+            TerminalFocuser.Focus(
+                _lastStatus,
+                SessionManager.Instance?.StatusFor(_lastStatus?.Lead),
+                SessionId);
         }
 
         // Put the orb at a position it was dragged to in an earlier run, without
