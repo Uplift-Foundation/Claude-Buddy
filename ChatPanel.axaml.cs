@@ -191,6 +191,19 @@ namespace ClaudeBuddy
         private static readonly IBrush SpeakActiveFill = new SolidColorBrush(Color.Parse("#E04A90D9"));
         private static readonly IBrush SpeakPreparingFill = new SolidColorBrush(Color.Parse("#E0B8860B"));
 
+        // Connected is green rather than the speak button's blue. The two dots
+        // sit inches apart and meant different things in the same colour: blue
+        // on the button is "this is playing right now", blue on the portrait was
+        // "this conversation is reachable". Green is what a presence dot is
+        // everywhere else, so it needs no explanation, and it leaves blue to
+        // mean one thing again.
+        //
+        // #00AF5F rather than a green picked by eye — it is the app's green
+        // already, the value Claude Code's own /color green resolves to (see
+        // OrbWindow's palette and ClaudeDesktopColors), so a connected dot and
+        // a green orb are the same green.
+        private static readonly IBrush ConnectedFill = new SolidColorBrush(Color.Parse("#E000AF5F"));
+
         private void Unbind()
         {
             if (_session is null) return;
@@ -724,7 +737,7 @@ namespace ClaudeBuddy
         {
             StateDot.Fill = state switch
             {
-                RemoteChatState.Connected => SpeakActiveFill,
+                RemoteChatState.Connected => ConnectedFill,
                 RemoteChatState.Connecting => SpeakPreparingFill,
                 RemoteChatState.Error => RecordingFill,
                 _ => IdleFill

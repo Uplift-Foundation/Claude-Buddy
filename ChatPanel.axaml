@@ -53,8 +53,9 @@
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                IsHitTestVisible="False"/>
                     <!-- The connection state rides on the portrait as a badge,
-                         the way presence dots do everywhere else: same
-                         blue/amber/red vocabulary, no extra header width. -->
+                         the way presence dots do everywhere else: green when
+                         the conversation is reachable, amber while it is
+                         attaching, red when it failed. No extra header width. -->
                     <Ellipse x:Name="StateDot"
                              Width="13" Height="13"
                              Stroke="#FF202024" StrokeThickness="2"
