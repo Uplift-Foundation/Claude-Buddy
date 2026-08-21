@@ -71,7 +71,8 @@ namespace ClaudeBuddy
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
             "codexChatEnabled", "codexReplyEnabled", "autoColorSessions",
-            "claudeCodeEnabled", "codexEnabled"
+            "claudeCodeEnabled", "codexEnabled",
+            "clickAction", "doubleClickAction", "tripleClickAction"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -229,6 +230,25 @@ namespace ClaudeBuddy
             public bool ClaudeCodeEnabled { get; set; } = true;
 
             public bool CodexEnabled { get; set; } = true;
+
+            // What clicking an orb does, per number of clicks. One of
+            // "terminal", "chat", "speak" or "none" — strings rather than an
+            // enum because they go through the same JSON round trip every other
+            // setting does, and an unknown value has to degrade rather than
+            // throw.
+            //
+            // The defaults are what the app did before any of this existed: one
+            // click goes to the session, and nothing is bound to two or three.
+            // That matters beyond taste — see OrbWindow's gesture handling. A
+            // second gesture bound to something different forces the first to
+            // wait and see whether another click is coming, so leaving these
+            // empty is what keeps a single click instant for anyone who never
+            // opens this part of the settings.
+            public string ClickAction { get; set; } = "terminal";
+
+            public string DoubleClickAction { get; set; } = "none";
+
+            public string TripleClickAction { get; set; } = "none";
 
             // How far back a gateway session counts as current. Separate from
             // OrbLifetimeMinutes, which decides how long a session lingers after
@@ -532,6 +552,24 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.CodexEnabled = value; Save(); }
         }
 
+        public static string ClickAction
+        {
+            get { Load(); lock (Gate) return _model.ClickAction; }
+            set { Load(); lock (Gate) _model.ClickAction = value; Save(); }
+        }
+
+        public static string DoubleClickAction
+        {
+            get { Load(); lock (Gate) return _model.DoubleClickAction; }
+            set { Load(); lock (Gate) _model.DoubleClickAction = value; Save(); }
+        }
+
+        public static string TripleClickAction
+        {
+            get { Load(); lock (Gate) return _model.TripleClickAction; }
+            set { Load(); lock (Gate) _model.TripleClickAction = value; Save(); }
+        }
+
         public static bool NeuralVoiceEnabled
         {
             get { Load(); lock (Gate) return _model.NeuralVoiceEnabled; }
@@ -777,6 +815,9 @@ namespace ClaudeBuddy
                         AutoColorSessions = root["autoColorSessions"]?.GetValue<bool>() ?? false,
                         ClaudeCodeEnabled = root["claudeCodeEnabled"]?.GetValue<bool>() ?? true,
                         CodexEnabled = root["codexEnabled"]?.GetValue<bool>() ?? true,
+                        ClickAction = root["clickAction"]?.GetValue<string>() ?? "terminal",
+                        DoubleClickAction = root["doubleClickAction"]?.GetValue<string>() ?? "none",
+                        TripleClickAction = root["tripleClickAction"]?.GetValue<string>() ?? "none",
                         TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
                         ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
                         ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing,
@@ -991,6 +1032,9 @@ namespace ClaudeBuddy
                         ["autoColorSessions"] = _model.AutoColorSessions,
                         ["claudeCodeEnabled"] = _model.ClaudeCodeEnabled,
                         ["codexEnabled"] = _model.CodexEnabled,
+                        ["clickAction"] = _model.ClickAction,
+                        ["doubleClickAction"] = _model.DoubleClickAction,
+                        ["tripleClickAction"] = _model.TripleClickAction,
                         ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
                         ["arrangeShape"] = _model.ArrangeShape,
                         ["arrangeSpacing"] = _model.ArrangeSpacing,
