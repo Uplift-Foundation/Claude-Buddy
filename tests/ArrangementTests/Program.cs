@@ -11,7 +11,7 @@ using ClaudeBuddy;
 // something regressed, and each failure prints the exact case so it can be
 // reproduced by hand.
 
-var shapes = new[] { "heart", "circle", "diamond", "star", "grid" };
+var shapes = new[] { "heart", "circle", "diamond", "star", "grid", "line" };
 var spacings = new[] { 0.3, 0.85, 2.0 };
 var counts = new[] { 1, 2, 3, 5, 8, 13, 20, 30 };
 
@@ -200,7 +200,7 @@ Console.WriteLine($"{cases} cases");
     var work = new PixelRect(0, 25, 3024, 1865);
     const double Apart = 112;   // 56 DIP at 2x
 
-    foreach (var shape in new[] { "heart", "circle", "diamond", "star", "grid" })
+    foreach (var shape in new[] { "heart", "circle", "diamond", "star", "grid", "line" })
     {
         for (var n = 1; n <= 12; n++)
         {
