@@ -31,7 +31,6 @@
             HorizontalAlignment="Left" VerticalAlignment="Top">
 
         <Grid x:Name="ArrangeButton"
-              ToolTip.Tip="Arrange orbs into the chosen shape" ToolTip.ShowDelay="250"
               Width="24" Height="24"
               Cursor="Hand">
             <Ellipse x:Name="ArrangeFill" Fill="#F01C1C1E" Stroke="#C0FFFFFF" StrokeThickness="1.5"/>
@@ -44,7 +43,6 @@
         </Grid>
 
         <Grid x:Name="SettingsButton"
-              ToolTip.Tip="Open Claude Buddy settings" ToolTip.ShowDelay="250"
               Width="24" Height="24"
               Cursor="Hand">
             <Ellipse Fill="#F01C1C1E" Stroke="#C0FFFFFF" StrokeThickness="1.5"/>
@@ -61,7 +59,6 @@
              while speech is playing — the button doubles as the stop
              control, so it has to be able to say which it currently is. -->
         <Grid x:Name="SpeakButton"
-              ToolTip.Tip="Read the latest reply aloud" ToolTip.ShowDelay="250"
               Width="24" Height="24"
               Cursor="Hand">
             <Ellipse x:Name="SpeakFill" Fill="#F01C1C1E" Stroke="#C0FFFFFF" StrokeThickness="1.5"/>
@@ -75,7 +72,6 @@
         </Grid>
 
         <Grid x:Name="MicButton"
-              ToolTip.Tip="Dictate a message to this session" ToolTip.ShowDelay="250"
               Width="24" Height="24"
               IsVisible="False"
               Cursor="Hand">
@@ -97,7 +93,6 @@
              those the click still opens the panel directly and this never
              appears. -->
         <Grid x:Name="ChatButton"
-              ToolTip.Tip="Open this session&apos;s conversation" ToolTip.ShowDelay="250"
               Width="24" Height="24"
               IsVisible="False"
               Cursor="Hand">

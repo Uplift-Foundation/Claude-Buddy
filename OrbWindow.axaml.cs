@@ -766,7 +766,13 @@ namespace ClaudeBuddy
             new GradientStop(Color.FromArgb(0, color.R, color.G, color.B), 1.0)
         };
 
-        private static Control ThoughtBubble(string title, string? path)
+        // Shared with the flyout's buttons, which are a different window but the
+        // same app: a second tooltip look would be a second answer to a question
+        // this already answered. The global ToolTip style is stripped to nothing
+        // precisely so this control *is* the tooltip, which also means anything
+        // handing ToolTip a bare string gets unstyled text floating on the
+        // desktop — how the flyout's first set of tips shipped.
+        internal static Control ThoughtBubble(string title, string? path)
         {
             var bg = Color.Parse("#E6EAECF0");
             var fg = Color.Parse("#FF2A2A35");
