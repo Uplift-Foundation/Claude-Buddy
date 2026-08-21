@@ -273,12 +273,8 @@ namespace ClaudeBuddy
             // "Zara — wtvamp" is built as name plus place, so it splits back
             // into the two lines the header now has. A name with no place (an
             // agent's own main session) simply leaves the second line empty.
-            var parts = session.DisplayName.Split(" — ", 2);
-            TitleText.Text = parts[0];
-
+            ApplyTitle();
             RefreshSoleSpeaker();
-            SubtitleText.Text = parts.Length > 1 ? parts[1] : "";
-            SubtitleText.IsVisible = parts.Length > 1;
 
             // Read off the orb rather than from the session, so the panel and
             // the badge on the thing that was clicked cannot disagree — the
@@ -401,22 +397,42 @@ namespace ClaudeBuddy
         // and Lilibeth is who is talking in it, and a chip reading "Op" would
         // be naming the room as its own speaker. Only a terminal session, whose
         // title *is* its agent, falls back to the title.
+        // "Zara — wtvamp" is built as name plus place, so it splits back into
+        // the two lines the header has. A name with no place — an agent's own
+        // main session — leaves the second line empty.
+        //
+        // Read from the session every time rather than once at Bind. A terminal
+        // session is usually nameless when its panel opens and gets its title
+        // from a later hook write; the header used to keep the empty string it
+        // was born with.
+        private void ApplyTitle()
+        {
+            var parts = (_session?.DisplayName ?? "").Split(" — ", 2);
+
+            TitleText.Text = parts[0];
+            SubtitleText.Text = parts.Length > 1 ? parts[1] : "";
+            SubtitleText.IsVisible = parts.Length > 1;
+        }
+
         private void RefreshSoleSpeaker()
         {
+            ApplyTitle();
+
             var was = _soleSpeaker.Name;
 
             var identity = _session is null
                 ? null
                 : OpenClawSessions.IdentityForSession(_session.SessionId);
 
-            // The name half of "Zara — wtvamp", not the place half.
-            var title = TitleText.Text;
+            // The rule itself is in ChatSpeaker, pure and tested — including
+            // the part that matters here, that a name we already knew is never
+            // replaced by not knowing it. That is what made the chips vanish
+            // after a while rather than simply never appear.
+            var name = ChatSpeaker.Resolve(identity?.Name, TitleText.Text, was);
 
-            _soleSpeaker.Name = !string.IsNullOrWhiteSpace(identity?.Name)
-                ? identity!.Name
-                : string.IsNullOrWhiteSpace(title) ? null : title;
+            if (name == was) return;
 
-            if (_soleSpeaker.Name == was) return;
+            _soleSpeaker.Name = name;
 
             foreach (var view in _turns) view.SpeakerChanged();
         }

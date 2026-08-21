@@ -86,7 +86,47 @@ var initialsCases = new (string Input, string Want)[]
     ("   ",             ""),
 };
 
+// Who a chip belongs to. Same suite because it is the same question one step
+// earlier — these letters are drawn from whatever this resolves to, and both
+// were wrong in the same way: read once, too early, from the wrong place.
+var speakerCases = new (string Why, string? Identity, string? Title, string? Previous, string? Want)[]
+{
+    // The identity wins wherever there is one. A room's title is the room.
+    ("agent in a room",      "Lilibeth", "#openclaw-management", null, "Lilibeth"),
+    ("agent, no title",      "Lilibeth", "",                     null, "Lilibeth"),
+
+    // A terminal session has no identity; its title is genuinely its agent.
+    ("terminal session",     null,       "claude-buddy",         null, "claude-buddy"),
+    ("terminal, blank id",   "",         "claude-buddy",         null, "claude-buddy"),
+    ("whitespace identity",  "   ",      "claude-buddy",         null, "claude-buddy"),
+
+    // The whole point: not knowing is never an answer. A gateway reconnect
+    // empties the agent list, and a status update in that window used to wipe
+    // the chips off a transcript that had been showing them.
+    ("identity list dropped", null,      "",                     "Lilibeth", "Lilibeth"),
+    ("everything dropped",    null,      null,                   "Lilibeth", "Lilibeth"),
+    ("blank over known",      "",        "   ",                  "Lilibeth", "Lilibeth"),
+
+    // But a real change is a real change — a rebind to another session.
+    ("rebound elsewhere",     "Alexis",  "#general",             "Lilibeth", "Alexis"),
+    ("title changed",         null,      "codex-work",           "claude-buddy", "codex-work"),
+
+    // Nothing known yet, and nothing known before. Bare bubbles are correct
+    // here: inventing a name would be worse than showing none.
+    ("nothing at all",        null,      null,                   null, null),
+    ("all blank",             "",        "",                     "",   ""),
+};
+
 var failures = new List<string>();
+
+foreach (var (why, identity, title, previous, want) in speakerCases)
+{
+    var got = ChatSpeaker.Resolve(identity, title, previous);
+    if (got != want)
+        failures.Add($"speaker ({why}): Resolve({Show(identity)}, {Show(title)}, {Show(previous)}) = {Show(got)}, wanted {Show(want)}");
+}
+
+static string Show(string? s) => s is null ? "null" : $"\"{s}\"";
 
 foreach (var (group, input, twoLetter, want) in cases)
 {
@@ -106,7 +146,7 @@ foreach (var (input, want) in initialsCases)
 if (OrbGlyph.Initials(null) != "")
     failures.Add($"header initials: Initials(null) = \"{OrbGlyph.Initials(null)}\", wanted \"\"");
 
-var total = cases.Length + initialsCases.Length + 1;
+var total = cases.Length + initialsCases.Length + speakerCases.Length + 1;
 
 if (failures.Count == 0)
 {

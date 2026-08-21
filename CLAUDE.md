@@ -156,7 +156,10 @@ output. If that line names the wrong CLI, nothing below it means anything.
 Orb *initials* have one too — `dotnet run --project tests/GlyphTests`. It covers
 `OrbGlyph`: the two letters an orb wears and the ones the chat panel's header
 wears beside it, across kebab and snake case, all three dashes, leading
-punctuation, emoji, and the single-letter setting.
+punctuation, emoji, and the single-letter setting. It also covers
+`ChatSpeaker`, which decides *whose* letters those are on a message bubble —
+the agent in the session key, or the panel's title for a terminal session, and
+never "nobody" once a name is known.
 
 It exists because the initials were wrong for a year and nobody saw it. Every
 kebab-case name drew two letters off the front of its first word, so
