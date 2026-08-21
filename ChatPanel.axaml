@@ -169,6 +169,7 @@
                                                        Foreground="{Binding SpeakerChipInk}"/>
                                         </Border>
                                         <TextBlock Text="{Binding SpeakerName}"
+                                                   IsVisible="{Binding ShowSpeakerName}"
                                                    FontSize="9.5" FontWeight="SemiBold"
                                                    VerticalAlignment="Center"
                                                    Foreground="{Binding SpeakerInk}"/>
