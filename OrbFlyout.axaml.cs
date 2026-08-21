@@ -115,9 +115,15 @@ namespace ClaudeBuddy
             ArrangeButton, SettingsButton, SpeakButton, MicButton, ChatButton
         };
 
-        // What each button is for, in the compact form of the bubble the orb's
-        // own tooltip uses — same palette, no tail. The tail belongs to a
-        // thought rising from an orb; under a button it points at nothing.
+        // What each button is, in the compact form of the bubble the orb's own
+        // tooltip uses — same palette, no tail. The tail belongs to a thought
+        // rising from an orb; under a button it points at nothing.
+        //
+        // A word or two, not a sentence. These first read "Arrange orbs into the
+        // chosen shape" and the like, which is a help topic: the bubble ended up
+        // wider than the arc of buttons it was labelling, and a caption that
+        // takes a moment to read is one you stop waiting for. The button is
+        // already in front of the pointer — the label only has to name it.
         //
         // Set here rather than in the XAML because ToolTip.Tip="some text" does
         // not work in this app and cannot: App.axaml strips the ToolTip template
@@ -130,11 +136,11 @@ namespace ClaudeBuddy
         // bubble above one would cover the orb the user is pointing at.
         private void LabelButtons()
         {
-            Label(ArrangeButton, "Arrange orbs into the chosen shape");
-            Label(SettingsButton, "Open Claude Buddy settings");
-            Label(SpeakButton, "Read the latest reply aloud");
-            Label(MicButton, "Dictate a message to this session");
-            Label(ChatButton, "Open this session's conversation");
+            Label(ArrangeButton, "Arrange");
+            Label(SettingsButton, "Settings");
+            Label(SpeakButton, "Read aloud");
+            Label(MicButton, "Dictate");
+            Label(ChatButton, "Chat");
 
             static void Label(Control button, string text)
             {
@@ -245,9 +251,9 @@ namespace ClaudeBuddy
             // with the glyph or they are worse than no words.
             ToolTip.SetTip(SpeakButton, OrbWindow.ThoughtBubble(state switch
             {
-                TextToSpeech.SpeakState.Speaking => "Stop reading",
-                TextToSpeech.SpeakState.Preparing => "Preparing the voice…",
-                _ => "Read the latest reply aloud"
+                TextToSpeech.SpeakState.Speaking => "Stop",
+                TextToSpeech.SpeakState.Preparing => "Preparing…",
+                _ => "Read aloud"
             }, null, compact: true));
         }
 
