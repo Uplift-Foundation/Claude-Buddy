@@ -72,6 +72,7 @@
     <InternalsVisibleTo Include="ClaudeBuddy.UnitTests" />
     <InternalsVisibleTo Include="ClaudeBuddy.IntegrationTests" />
     <InternalsVisibleTo Include="ClaudeBuddy.UiTests" />
+    <InternalsVisibleTo Include="ClaudeBuddy.UiScreenshots" />
   </ItemGroup>
 
   <ItemGroup>
