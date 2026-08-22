@@ -21,7 +21,7 @@ namespace ClaudeBuddy.Tests;
 public class SettingsWindowSmokeTest
 {
     [AvaloniaFact]
-    public void ConstructsAndClosesHeadlessWithNoException()
+    public void ConstructsHeadlessWithNoException()
     {
         var ctor = typeof(SettingsWindow).GetConstructor(
             BindingFlags.NonPublic | BindingFlags.Instance,
@@ -30,11 +30,24 @@ public class SettingsWindowSmokeTest
 
         var window = (Avalonia.Controls.Window)ctor.Invoke(null);
 
-        // Proves only that the window constructs and closes headless; it
-        // still reads ClaudeDesktopManager.Snapshot and other settings-backed
-        // state (via Body()/Rebuild(), called from the constructor) — this
-        // makes no claim about any of that content or about any row's
-        // behaviour, only that building the visual tree once does not throw.
-        window.Close();
+        // Proves only that the window constructs headless; it still reads
+        // ClaudeDesktopManager.Snapshot and other settings-backed state (via
+        // Body()/Rebuild(), called from the constructor) — this makes no
+        // claim about any of that content or about any row's behaviour,
+        // only that building the visual tree once does not throw.
+        //
+        // Deliberately never closed. Closing a headless Window here can
+        // corrupt a process-wide Avalonia FontManager cache for every window
+        // constructed afterward in the same run — every later test in the
+        // assembly starts throwing KeyNotFoundException for
+        // "fonts:SystemFonts" the moment it builds a Window. This was the
+        // one Close() call in the whole suite, and it is exactly what broke
+        // CI (25-26 of 28 UiTests failing with that exception). It is a
+        // race, not a certainty — reproduced on a real machine only about
+        // one run in three before this fix, clean five-for-five after — so
+        // "passed locally" was never a safe signal for this particular call.
+        // Nothing is left open on screen either way, since this window is
+        // never Shown.
+        Assert.NotNull(window);
     }
 }
