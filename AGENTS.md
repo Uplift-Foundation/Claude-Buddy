@@ -143,6 +143,46 @@ the answer meant looking at the screen. Same rule as the geometry: `OrbGlyph` is
 pure and takes the two-letter *setting* as an argument rather than reading it,
 so the tests do not depend on the machine they run on.
 
+## The automated suite
+
+Three xUnit suites — `tests/UnitTests`, `tests/IntegrationTests`,
+`tests/UiTests` — join the three above rather than replacing them: one
+command, `dotnet test tests/Tests.sln`, runs all three; `claudeBuddy.sln`
+stays app-only and `Tests.sln` holds only these, so neither `dotnet build`
+nor `dotnet test` at the root can trip over the other's projects. CI runs
+all six suites, on both runners, before packaging.
+
+They reference `ClaudeBuddy.csproj` with a `<ProjectReference>` rather than
+`<Compile Include>`-ing individual files, because `SessionManager` and
+`ClaudeBuddySettings` have dependency closures too large for that — and
+`<InternalsVisibleTo>` in `ClaudeBuddy.csproj` grants exactly these three
+assemblies visibility into anything `internal`.
+
+`UnitTests` covers more pure logic the same way as `ArrangementTests`/
+`GlyphTests`, most valuably `SessionManager`'s `Superseded` and
+`InheritTerminalInfo` — the rules deciding which status file is the live
+orb and which sibling donates terminal coordinates to one that has none.
+`IntegrationTests` runs `ClaudeBuddyHook.sh`/`.ps1` as real subprocesses,
+asserting the invariant Codex depends on (exit 0, empty stdout/stderr — its
+hook stdout is parsed as strict JSON and exit 2 means deny), plus
+`TranscriptReader`'s tail/truncation rules and `ClaudeBuddySettings`'
+unknown-key round-trip. `UiTests` runs headless via `Avalonia.Headless.XUnit`,
+using the real `App` class as its own host (its
+`OnFrameworkInitializationCompleted` guard is never true under a headless
+lifetime, so the mutex/`SessionManager.Start()`/tray body never runs) —
+covers `OrbFlyout`'s real clicks, `OrbWindow.UpdateFrom`, and `ChatPanel`
+driven by `FakeChatSession` (an in-memory `IRemoteChatSession`, the reason
+that interface exists per its own header comment). It never synthesizes a
+click on an orb itself: that reaches `TerminalFocuser`, which fires real
+`tmux`/`ps`/`osascript` off-thread with no OS guard at its own entry point.
+
+All three point `CLAUDE_BUDDY_SETTINGS_DIR` at a fresh temp directory via a
+`[ModuleInitializer]` before anything else runs — even constructing an
+`OrbWindow` reads a colour setting in a field initializer. That env var is
+checked in `ClaudeBuddySettings.Directory` before `SpecialFolder.ApplicationData`,
+the same pattern as `CLAUDE_BUDDY_PROFILE_ROOT` in `ClaudeDesktopManager.cs`;
+without it a test reads and writes the real settings.json.
+
 ## Extra accounts
 
 Both CLIs support a second account through an environment variable —
