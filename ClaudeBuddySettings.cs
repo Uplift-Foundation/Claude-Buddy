@@ -102,10 +102,18 @@ namespace ClaudeBuddy
         // %APPDATA%\ClaudeBuddy on Windows, ~/Library/Application Support/ClaudeBuddy
         // on macOS. SpecialFolder.ApplicationData resolves to both, so this is one
         // expression rather than a platform branch.
+        //
+        // Test seam, same pattern as CLAUDE_BUDDY_PROFILE_ROOT
+        // (ClaudeDesktopManager.cs): without it, a test that so much as reads a
+        // setting touches the developer's real settings.json, and a test that
+        // writes one touches it for good — settings.json does not follow HOME on
+        // macOS, so there is no per-test-run isolation otherwise.
         public static string Directory =>
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "ClaudeBuddy");
+            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR") is { Length: > 0 } scratch
+                ? scratch
+                : Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "ClaudeBuddy");
 
         public static string Path_ => Path.Combine(Directory, "settings.json");
 
@@ -967,6 +975,25 @@ namespace ClaudeBuddy
             && !string.IsNullOrWhiteSpace(text)
                 ? text
                 : null;
+
+        // Test seam: this class is static, so it caches _model and _loaded for
+        // the life of the process. A test that points CLAUDE_BUDDY_SETTINGS_DIR
+        // at a fresh directory between cases still needs this to make that
+        // directory actually get read again instead of the previous case's
+        // cached model. Not for anything else — production code never needs to
+        // re-read a settings.json that changed out from under it.
+        internal static void ReloadForTests()
+        {
+            lock (Gate)
+            {
+                _deferred?.Stop();
+                _model = new Model();
+                _unknownKeys.Clear();
+                _loaded = false;
+            }
+
+            Load();
+        }
 
         private static void Save()
         {
