@@ -3,7 +3,7 @@
         x:Class="ClaudeBuddy.AvatarPopup"
         Width="292" Height="292"
         SizeToContent="Manual"
-        SystemDecorations="None"
+        WindowDecorations="None"
         TransparencyLevelHint="Transparent"
         Background="Transparent"
         Topmost="True"

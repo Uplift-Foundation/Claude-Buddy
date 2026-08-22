@@ -221,7 +221,7 @@ namespace ClaudeBuddy
 
             var orbsItem = new NativeMenuItem("Show orbs")
             {
-                ToggleType = NativeMenuItemToggleType.CheckBox,
+                ToggleType = MenuItemToggleType.CheckBox,
                 IsChecked = SessionManager.Instance?.OrbsVisible ?? true
             };
             orbsItem.Click += (_, _) =>

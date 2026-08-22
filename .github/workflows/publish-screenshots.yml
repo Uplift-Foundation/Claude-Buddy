@@ -95,7 +95,7 @@ jobs:
             [ -n "$(find "$dir" -maxdepth 1 -name '*.png' -print -quit)" ] && pngs_found=1
           done
 
-          summary="## UI screenshots (proof of concept, not yet gating the build)"$'\n\n'
+          summary="## UI screenshots"$'\n\n'
           if [ "$pngs_found" -eq 0 ]; then
             summary+="_No screenshots were produced this run._"$'\n'
             echo "$summary" >> "$GITHUB_STEP_SUMMARY"
