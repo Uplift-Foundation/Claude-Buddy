@@ -302,7 +302,7 @@ namespace ClaudeBuddy
 
         // One status file, already parsed. Written is the file's mtime, which is
         // what "how long since this session last said anything" means throughout.
-        private sealed record ScanEntry(string SessionId, SessionStatus Status, DateTime Written);
+        internal sealed record ScanEntry(string SessionId, SessionStatus Status, DateTime Written);
 
         // Whether the user wants this kind of session tracked at all.
         //
@@ -332,7 +332,7 @@ namespace ClaudeBuddy
         // written before this key existed has no "cli" at all and was Claude
         // Code, and a hook from some future version naming something this build
         // has never heard of is still, at worst, a local session in a terminal.
-        private static SessionSource SourceOf(SessionStatus status) =>
+        internal static SessionSource SourceOf(SessionStatus status) =>
             string.Equals(status.Cli, "codex", StringComparison.OrdinalIgnoreCase)
                 ? SessionSource.Codex
                 : SessionSource.ClaudeCode;
@@ -360,7 +360,7 @@ namespace ClaudeBuddy
         // would put every such file in one bucket and drop all but one, so they're
         // left alone and keep the old behaviour — the same reason
         // ProcessLiveness.IsRunning treats 0 as alive.
-        private static HashSet<string> Superseded(List<ScanEntry> found)
+        internal static HashSet<string> Superseded(List<ScanEntry> found)
         {
             // Keyed by pid *and* which CLI, not by pid alone.
             //
@@ -439,7 +439,7 @@ namespace ClaudeBuddy
         //
         // Only the empty fields are filled, so a file that knows its own
         // terminal is never overwritten by an older one's idea of it.
-        private static void InheritTerminalInfo(List<ScanEntry> found)
+        internal static void InheritTerminalInfo(List<ScanEntry> found)
         {
             // Grouped by pid and source together, for the reason Superseded
             // is: a nested `codex exec` can record the pid of the Claude Code
@@ -1298,7 +1298,7 @@ namespace ClaudeBuddy
         // session id, which is new every run, a gateway key is derived from the
         // agent and the channel and is the same string next week — which is what
         // made it a good room key and makes it a good position key.
-        private static string PositionKeyFor(SessionStatus status, string sessionId)
+        internal static string PositionKeyFor(SessionStatus status, string sessionId)
         {
             if (!status.IsLocalCli) return sessionId;
 
@@ -1335,7 +1335,7 @@ namespace ClaudeBuddy
             return prefix + (title.Length == 0 ? cwd : cwd + "\n" + title);
         }
 
-        private static string DirectoryKeyFor(SessionStatus status) =>
+        internal static string DirectoryKeyFor(SessionStatus status) =>
             string.IsNullOrEmpty(status.Cwd) ? "" : status.Cwd.TrimEnd('\\', '/');
 
         private void RestoreOrbPosition(OrbWindow window, SessionStatus status)

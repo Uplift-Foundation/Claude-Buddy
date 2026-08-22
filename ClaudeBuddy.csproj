@@ -61,6 +61,20 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The new xUnit suites reference this project rather than compiling
+         individual shipped files (the tests/ArrangementTests-style
+         <Compile Include>), because they need SessionManager and
+         ClaudeBuddySettings, whose dependency closures are too large to pull
+         in that way. A ProjectReference alone gives them only public types,
+         so this grants the three of them the internal ones too — the same
+         private-pure-logic (SessionManager's scan rules, AgentTeam's
+         sanitizers) that made them worth testing in the first place. -->
+    <InternalsVisibleTo Include="ClaudeBuddy.UnitTests" />
+    <InternalsVisibleTo Include="ClaudeBuddy.IntegrationTests" />
+    <InternalsVisibleTo Include="ClaudeBuddy.UiTests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Avalonia" Version="11.3.7" />
     <PackageReference Include="Avalonia.Desktop" Version="11.3.7" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.7" />

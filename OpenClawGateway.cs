@@ -296,7 +296,7 @@ namespace ClaudeBuddy
             return new ConnectResult(Outcome.Connected);
         }
 
-        private static ConnectResult Classify(OpenClawRequestException ex)
+        internal static ConnectResult Classify(OpenClawRequestException ex)
         {
             // The gateway's own detail codes, which are far more specific than
             // the message text. PAIRING_REQUIRED is the expected first-run
@@ -325,7 +325,7 @@ namespace ClaudeBuddy
                 : $"{ex.DetailCode}: {ex.Message}");
         }
 
-        private static string Flatten(Exception ex)
+        internal static string Flatten(Exception ex)
         {
             var parts = new List<string>();
             for (Exception? e = ex; e is not null; e = e.InnerException)
