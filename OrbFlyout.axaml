@@ -3,7 +3,7 @@
         x:Class="ClaudeBuddy.OrbFlyout"
         Width="70" Height="32"
         SizeToContent="Manual"
-        SystemDecorations="None"
+        WindowDecorations="None"
         TransparencyLevelHint="Transparent"
         Background="Transparent"
         Topmost="True"
