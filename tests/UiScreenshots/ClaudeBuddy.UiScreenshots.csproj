@@ -7,29 +7,81 @@
     <AssemblyName>ClaudeBuddy.UiScreenshots</AssemblyName>
     <RootNamespace>ClaudeBuddy.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
+    <!-- xunit.v3's own build targets hard-error unless OutputType=Exe and
+         UseAppHost=true (see xunit.v3.core.mtp-v2.targets' _XunitValidateBuild
+         target) — every v3 test project is a standalone runnable executable,
+         not optional and not something a Library override can dodge, unlike
+         every other suite here.
+         Set explicitly here rather than left for Microsoft.NET.Test.Sdk.targets
+         to default it (which it does unconditionally): that default fires from
+         an imported .targets file, which runs too late for the SDK's own
+         _IsExecutable/RID-auto-inference logic in BeforeCommon.targets —
+         Microsoft.NET.Sdk.Common.targets even has a comment acknowledging this
+         exact ordering hazard ("Some versions of Microsoft.NET.Test.Sdk.targets
+         change the OutputType after we've set _IsExecutable"). Left to that
+         default, this project came out with OutputType=Exe but _IsExecutable
+         still false, so SelfContained below had no RID to auto-infer and
+         failed NETSDK1191. Setting it here, in the project's own PropertyGroup,
+         runs before that computation instead of after it.
+         Tried turning UseMicrosoftTestingPlatformRunner off to keep `dotnet
+         test` on the classic VSTest adapter, matching every other suite here
+         — but on the .NET 10 SDK that path is gone outright ("Testing with
+         VSTest target is no longer supported by Microsoft.Testing.Platform on
+         .NET 10 SDK and later"), not something this project's settings
+         control. So `dotnet test tests/UiScreenshots` runs the newer native
+         Microsoft Testing Platform experience instead — still `dotnet test`,
+         just a different backend under it — while every xUnit v2 suite here
+         keeps using classic VSTest, which .NET 10 still supports for v2.
+         Being a real executable now puts this project through MSBuild's
+         NETSDK1151 self-contained cross-check against the ProjectReference
+         below: ClaudeBuddy.csproj is unconditionally SelfContained (for
+         publishing), and two referenced executables must agree on that, so
+         this one matches it rather than trying to make ClaudeBuddy.csproj
+         conditional just for a test project's sake. -->
+    <OutputType>Exe</OutputType>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <!-- The actual opt-in the error message points at: without this,
+         `dotnet test` refuses to run an MTP project at all on the .NET 10
+         SDK (Microsoft.Testing.Platform.MSBuild.targets' hard Error), rather
+         than falling back to VSTest the way UseMicrosoftTestingPlatformRunner
+         alone might suggest. -->
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <SelfContained>true</SelfContained>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
-    <PackageReference Include="xunit" Version="2.9.3" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
-    <!-- Same rationale as tests/UiTests/ClaudeBuddy.UiTests.csproj: newer
-         than the app's own 11.3.7 pin, deliberately, to pick up Avalonia's
-         own headless-race fixes. This project is a separate, isolated proof
-         of concept precisely so a change here (real Skia rendering, a
-         different code path from tests/UiTests's null renderer) can never
-         destabilize that suite's already-hard-won stability. -->
-    <PackageReference Include="Avalonia" Version="11.3.20" />
-    <PackageReference Include="Avalonia.Headless" Version="11.3.20" />
-    <PackageReference Include="Avalonia.Headless.XUnit" Version="11.3.20" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.20" />
+    <!-- xUnit v3, not v2 (unlike every other suite in this repo) — forced by
+         Avalonia.Headless.XUnit 12.x, which depends on
+         xunit.v3.extensibility.core and has no v2-compatible release. The
+         FontManager race this project exists to fix a test against
+         (AvaloniaUI/Avalonia#21269) only has a real fix in Avalonia 12.x
+         (backported-12.0.x only, never to 11.3.x), so reaching that fix
+         means this one project's test framework moves too.
+         Pinned to 3.2.2, not the newest 4.0.0: Avalonia.Headless.XUnit
+         12.1.1 itself depends on xunit.v3.extensibility.core 3.2.2, and
+         4.0.0 changed a public API shape
+         (Xunit.v3.TestIntrospectionHelper.GetTestCaseDetails) in a
+         binary-incompatible way — every test failed at discovery with a
+         MissingMethodException until this was pinned down to match what
+         Avalonia.Headless.XUnit was actually built against. -->
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0" />
+    <!-- 12.x, not the 11.3.20 patch bump every other Avalonia package here
+         uses: the concurrent-FontManager-access race captured on
+         AppBuilder.WarmUpFontManager below (AvaloniaUI/Avalonia#21269) was
+         fixed upstream but explicitly never backported to 11.3.x
+         (backported-12.0.x only). A patch bump could not reach it; only a
+         major-version jump can. -->
+    <PackageReference Include="Avalonia" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Headless" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Headless.XUnit" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
     <!-- Explicit, not just transitive: ClaudeBuddy.csproj's Avalonia.Desktop
          11.3.7 pulls in Avalonia.Skia 11.3.7 too, and that older Skia
-         backend's FontManagerImpl doesn't implement a member the newer
-         11.3.20 core interface declares (TypeLoadException for
-         TryMatchCharacter) — the patch-compatibility that let the rest of
-         this bump work quietly breaks once a package is pinned somewhere
-         else in the graph and never bumped alongside it. -->
-    <PackageReference Include="Avalonia.Skia" Version="11.3.20" />
+         backend's FontManagerImpl doesn't implement members the newer core
+         interface declares — the same kind of cross-version mismatch the
+         11.3.20 bump hit, now one major version further. -->
+    <PackageReference Include="Avalonia.Skia" Version="12.1.1" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\ClaudeBuddy.csproj" />

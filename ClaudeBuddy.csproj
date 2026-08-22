@@ -17,9 +17,9 @@
          explicitly from the numeric part. Version flows into
          AssemblyInformationalVersion, which is what actually shows the
          prerelease label. -->
-    <Version>0.4.0-beta</Version>
-    <AssemblyVersion>0.4.0.0</AssemblyVersion>
-    <FileVersion>0.4.0.0</FileVersion>
+    <Version>0.4.1-beta</Version>
+    <AssemblyVersion>0.4.1.0</AssemblyVersion>
+    <FileVersion>0.4.1.0</FileVersion>
     <Product>Claude Buddy</Product>
     <Authors>Kawika Miller, Warren Thompson</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -76,14 +76,28 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="11.3.7" />
-    <PackageReference Include="Avalonia.Desktop" Version="11.3.7" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.7" />
+    <!-- 12.1.1, not the 11.3.x line the app shipped on for most of its life:
+         the concurrent-FontManager-access race captured on
+         tests/UiScreenshots' TestAppBuilder.cs (AvaloniaUI/Avalonia#21269)
+         was fixed upstream but explicitly never backported to 11.3.x
+         (backported-12.0.x only). Reaching that fix for real screenshot
+         testing meant the whole app had to move, not just a test project:
+         ClaudeBuddy.dll's compiled XAML/markup-extension IL is bound to
+         whichever major version of Avalonia.Markup.Xaml.dll the CLR actually
+         loads in-process, and a test host referencing a different major
+         version than the app it hosts fails every XAML-backed control with
+         MissingMethodException — there is no way to pin the app and its own
+         headless test hosts to different Avalonia majors. tests/UiTests and
+         tests/UiScreenshots both moved to 12.1.1 alongside this for the same
+         reason. -->
+    <PackageReference Include="Avalonia" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
     <!-- ColorPicker, for the orb-colour rows in the settings window. It arrives
          transitively via the macOS theme below, but is named here on purpose: a
          theme bump that dropped it would otherwise break the build for a reason
          with nothing to do with theming. -->
-    <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.3.7" />
+    <PackageReference Include="Avalonia.Controls.ColorPicker" Version="12.1.1" />
     <!-- Ed25519, for the OpenClaw gateway's device identity. The gateway will
          not grant operator scopes to a bearer token alone — it answers
          DEVICE_IDENTITY_REQUIRED until the connect carries a signature over its
@@ -104,8 +118,10 @@
          see App.Initialize — with Fluent kept for Windows. Hand-rolling this was
          a losing game: the shapes, metrics and states of AppKit's controls are
          not published anywhere, and a drawn imitation maintained here drifts
-         every time Apple moves. Requires Avalonia >= 11.3.7. -->
-    <PackageReference Include="Devolutions.AvaloniaTheme.MacOS" Version="2026.6.16.1" />
+         every time Apple moves. Bumped to 2026.7.30 alongside the Avalonia
+         12.1.1 move above — 2026.6.16.1 pins Avalonia 11.3.7 and 2026.7.30 is
+         the first release that targets Avalonia 12.0.2+. -->
+    <PackageReference Include="Devolutions.AvaloniaTheme.MacOS" Version="2026.7.30" />
     <PackageReference Include="Whisper.net" Version="1.9.1" />
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
   </ItemGroup>

@@ -11,8 +11,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Avalonia for PixelPoint and PixelRect only; nothing here draws. -->
-    <PackageReference Include="Avalonia" Version="11.3.7" />
+    <!-- Avalonia for PixelPoint and PixelRect only; nothing here draws.
+         Matches the app's own Avalonia 12.1.1 pin even though this project
+         has no ProjectReference to ClaudeBuddy.csproj and so isn't exposed
+         to the cross-major-version MissingMethodException that forced that
+         pin elsewhere — kept in step anyway so one Avalonia version doesn't
+         silently drift across the repo. -->
+    <PackageReference Include="Avalonia" Version="12.1.1" />
   </ItemGroup>
 
   <ItemGroup>

@@ -4,7 +4,7 @@
         Title="Claude Buddy"
         Width="56" Height="56"
         SizeToContent="Manual"
-        SystemDecorations="None"
+        WindowDecorations="None"
         TransparencyLevelHint="Transparent"
         Background="Transparent"
         Topmost="True"
