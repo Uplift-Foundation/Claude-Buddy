@@ -1,0 +1,163 @@
+name: Publish screenshots
+
+# Separate from ci.yml on purpose, not by choice — GitHub rejects a workflow
+# that lists itself as its own workflow_run trigger ("Workflow 'CI' cannot
+# listen to itself", found by pushing exactly that and watching CI fail
+# instantly), so a job that needs to react to CI finishing can't live in
+# ci.yml alongside it.
+#
+# workflow_run is the trigger, specifically because it gets a real,
+# write-capable GITHUB_TOKEN even when the run that finished was a
+# pull_request from a fork — every PR this repo gets. A pull_request run's
+# own token is always read-only on a public repo, no `permissions:` block
+# overrides that, and ci.yml's build job can only upload the captured PNGs
+# as a plain artifact as a result (see its "Upload screenshots" step). This
+# workflow never checks out or executes anything from the commit that
+# triggered ci.yml — it only downloads artifacts that untrusted run already
+# produced, then pushes those (never fork-controlled code) to a dedicated
+# branch and comments on the PR with real, renderable image URLs.
+#
+# (GitHub strips data: URIs from <img src> in both job summaries and PR
+# comments — confirmed by trying it, not assumed — so an actually-visible
+# screenshot needs a real HTTPS URL. raw.githubusercontent.com pointed at a
+# dedicated "screenshots" branch is the established, dependency-free way to
+# get one; real projects use exactly this pattern, e.g. a screenshot-history
+# blog workflow and a "screenshots" branch in openpilot's own UI test PRs.)
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+jobs:
+  publish-screenshots:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+
+    steps:
+      # merge-multiple: false (the default) keeps each matrix leg's PNGs in
+      # their own ui-screenshots-<rid>/ subdirectory — the directory name
+      # is what tells the push step below which rid a given image is from.
+      - name: Download screenshot artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ui-screenshots-*
+          path: downloaded
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      # Same clone/orphan/commit/push shape verified locally against a
+      # throwaway git remote before trusting it here (two simultaneous
+      # pushes, both survived via fetch+rebase+retry) — kept even though
+      # there's only one job doing the pushing, since two workflow_run
+      # events close together (e.g. two quick pushes to develop) could
+      # still race on the same branch.
+      - name: Publish to the screenshots branch and comment on the PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          repo="${{ github.repository }}"
+          branch="screenshots"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${repo}.git"
+          # Absolute, deliberately: everything below cd's into a sibling
+          # clone directory, and a relative "../downloaded" would then
+          # resolve against THAT directory's parent, not the workspace
+          # this script actually started in — a real bug this exact test
+          # caught locally (a bash -x trace showed the push step never
+          # even running because the loop that populates $rid/*.png found
+          # nothing to copy).
+          downloaded_abs="$(pwd)/downloaded"
+          clone_path="../screenshots-branch"
+
+          pngs_found=0
+          for dir in "$downloaded_abs"/ui-screenshots-*/; do
+            [ -d "$dir" ] || continue
+            [ -n "$(find "$dir" -maxdepth 1 -name '*.png' -print -quit)" ] && pngs_found=1
+          done
+
+          summary="## UI screenshots (proof of concept, not yet gating the build)"$'\n\n'
+          if [ "$pngs_found" -eq 0 ]; then
+            summary+="_No screenshots were produced this run._"$'\n'
+            echo "$summary" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          rm -rf "$clone_path"
+          if ! git clone --quiet --depth 1 --branch "$branch" "$remote_url" "$clone_path" 2>/dev/null; then
+            git clone --quiet --depth 1 "$remote_url" "$clone_path"
+            (cd "$clone_path" && git checkout --quiet --orphan "$branch" && git rm --quiet -rf . 2>/dev/null || true)
+          fi
+
+          cd "$clone_path"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          for dir in "$downloaded_abs"/ui-screenshots-*/; do
+            [ -d "$dir" ] || continue
+            rid="$(basename "$dir" | sed 's/^ui-screenshots-//')"
+            mkdir -p "$rid"
+            cp "$dir"*.png "$rid/" 2>/dev/null || true
+          done
+
+          git add -A
+          pushed=1
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit --quiet -m "Screenshots from run ${{ github.event.workflow_run.id }}"
+            pushed=0
+            for attempt in 1 2 3 4 5; do
+              if git push --quiet origin "HEAD:$branch" 2>/dev/null; then
+                pushed=1
+                break
+              fi
+              echo "Push conflict, retry $attempt of 5"
+              git fetch --quiet origin "$branch"
+              git rebase --quiet "origin/$branch"
+            done
+          fi
+          cd -
+
+          if [ "$pushed" -ne 1 ]; then
+            summary+="_Captured screenshots but could not publish them (push kept conflicting)._"$'\n'
+            echo "$summary" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          body="$summary"
+          for dir in "$downloaded_abs"/ui-screenshots-*/; do
+            [ -d "$dir" ] || continue
+            rid="$(basename "$dir" | sed 's/^ui-screenshots-//')"
+            for file in "$dir"*.png; do
+              [ -e "$file" ] || continue
+              name="$(basename "$file" .png)"
+              raw_url="https://raw.githubusercontent.com/${repo}/${branch}/${rid}/$(basename "$file")"
+              body+="**${name} (${rid})**"$'\n\n'
+              body+="![${name}](${raw_url})"$'\n\n'
+            done
+          done
+
+          echo "$body" >> "$GITHUB_STEP_SUMMARY"
+
+          # workflow_run.pull_requests comes back completely empty
+          # specifically when the triggering run was a pull_request from a
+          # fork — a documented GitHub limitation (github/community#170144),
+          # not a bug here — and every PR this repo gets is from a fork.
+          # Relying on it alone would mean this comment step silently never
+          # fires for the one case it exists for. Fall back to searching by
+          # head branch + fork owner, both of which ARE present on the
+          # workflow_run event regardless of fork origin.
+          pr_number="${{ github.event.workflow_run.pull_requests[0].number }}"
+          if [ -z "$pr_number" ] && [ "${{ github.event.workflow_run.event }}" = "pull_request" ]; then
+            head_owner="${{ github.event.workflow_run.head_repository.owner.login }}"
+            head_branch="${{ github.event.workflow_run.head_branch }}"
+            if [ -n "$head_owner" ] && [ -n "$head_branch" ]; then
+              pr_number="$(gh api "repos/${repo}/pulls?head=${head_owner}:${head_branch}&state=open" --jq '.[0].number // empty')"
+            fi
+          fi
+
+          if [ -n "$pr_number" ]; then
+            echo "$body" | gh pr comment "$pr_number" --repo "$repo" --body-file -
+          fi
