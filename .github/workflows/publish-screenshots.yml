@@ -27,10 +27,24 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  # workflow_run only ever fires using the copy of THIS file already on the
+  # repo's default branch (main) — confirmed before relying on it, since a
+  # trigger that silently never fires until some later release is a bad
+  # thing to discover after merging. Until this file reaches main,
+  # workflow_dispatch is the only way to exercise the real download/push/
+  # comment sequence against an already-completed CI run's artifacts.
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "CI run ID to pull screenshot artifacts from"
+        required: true
+      pr_number:
+        description: "PR number to comment on (optional)"
+        required: false
 
 jobs:
   publish-screenshots:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -47,7 +61,7 @@ jobs:
           pattern: ui-screenshots-*
           path: downloaded
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ github.event.inputs.run_id || github.event.workflow_run.id }}
 
       # Same clone/orphan/commit/push shape verified locally against a
       # throwaway git remote before trusting it here (two simultaneous
@@ -106,7 +120,7 @@ jobs:
           git add -A
           pushed=1
           if [ -n "$(git status --porcelain)" ]; then
-            git commit --quiet -m "Screenshots from run ${{ github.event.workflow_run.id }}"
+            git commit --quiet -m "Screenshots from run ${{ github.event.inputs.run_id || github.event.workflow_run.id }}"
             pushed=0
             for attempt in 1 2 3 4 5; do
               if git push --quiet origin "HEAD:$branch" 2>/dev/null; then
@@ -148,8 +162,14 @@ jobs:
           # Relying on it alone would mean this comment step silently never
           # fires for the one case it exists for. Fall back to searching by
           # head branch + fork owner, both of which ARE present on the
-          # workflow_run event regardless of fork origin.
-          pr_number="${{ github.event.workflow_run.pull_requests[0].number }}"
+          # workflow_run event regardless of fork origin. A manual
+          # workflow_dispatch run (only exercised while this file hasn't
+          # reached main yet — see the trigger's own comment) skips all of
+          # that and just uses whatever PR number was passed in, if any.
+          pr_number="${{ github.event.inputs.pr_number }}"
+          if [ -z "$pr_number" ]; then
+            pr_number="${{ github.event.workflow_run.pull_requests[0].number }}"
+          fi
           if [ -z "$pr_number" ] && [ "${{ github.event.workflow_run.event }}" = "pull_request" ]; then
             head_owner="${{ github.event.workflow_run.head_repository.owner.login }}"
             head_branch="${{ github.event.workflow_run.head_branch }}"
