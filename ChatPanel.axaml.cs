@@ -454,10 +454,22 @@ namespace ClaudeBuddy
             RingFor(_owner.AccentColor);
 
             var letters = BorrowedLetters();
+
+            // Never blank what is already there. Same rule as ChatSpeaker and
+            // the last place in the panel that still lacked it: both of this
+            // one's sources can be momentarily empty for reasons that are about
+            // us rather than about the session — the orb clears its glyph while
+            // an avatar loads, and a title is empty until a hook write brings
+            // one — and either used to wipe a circle that was reading fine.
+            //
+            // There is no case where going from letters to nothing is the truth
+            // about a conversation. Nothing to say yet is the empty circle at
+            // the start; nothing to say any more does not happen.
+            if (string.IsNullOrEmpty(letters)) return;
             if (AvatarEmoji.Text == letters) return;
 
             AvatarEmoji.Text = letters;
-            AvatarEmoji.IsVisible = !string.IsNullOrEmpty(letters);
+            AvatarEmoji.IsVisible = true;
         }
 
         // What the orb is drawing, or what it would draw if it had got round to
@@ -512,6 +524,12 @@ namespace ClaudeBuddy
                 RingFor(_owner.AccentColor);
 
                 // An initial wants less room than an emoji does.
+                // Set outright rather than through ApplyBorrowedIdentity,
+                // which refuses to blank: this is a new conversation and the
+                // letters on screen are the last one's. The never-blank rule is
+                // about refreshing what is already right, not about carrying
+                // one session's identity onto another — the same distinction
+                // Unbind draws for the speaker.
                 _borrowedIdentity = true;
                 AvatarEmoji.Text = BorrowedLetters();
                 AvatarEmoji.FontSize = 26;
