@@ -451,6 +451,7 @@ namespace ClaudeBuddy
             if (!_borrowedIdentity || _owner is null) return;
 
             Avatar.Fill = new SolidColorBrush(_owner.OrbColor);
+            AvatarEmoji.Foreground = InkOn(_owner.OrbColor);
             RingFor(_owner.AccentColor);
 
             var letters = BorrowedLetters();
@@ -489,6 +490,35 @@ namespace ClaudeBuddy
                 : OrbGlyph.For(name, ClaudeBuddySettings.TwoLetterGlyphs);
         }
 
+        // Ink that can be read on a given circle.
+        //
+        // AvatarEmoji had no Foreground at all and inherited the panel's, which
+        // is near-black — fine on nothing, because the circle it sits in was
+        // invisible until an identity was drawn behind it. Once the fill became
+        // the orb's *state* colour it was black on black, and idle is near-black
+        // by default. That is the whole of the "initials keep disappearing"
+        // report: they were there the entire time, and the letters went from
+        // legible to invisible when a session stopped working, because
+        // generating and waiting are bright and idle is not.
+        //
+        // Chosen by luminance rather than fixed at white, which is what the orb
+        // does. The orb only ever draws on a state colour and white suits all
+        // of them; this circle is also filled with an agent's own colour, and
+        // several of those are light enough that white letters vanish the same
+        // way black ones just did.
+        private static readonly IBrush LightInk = new SolidColorBrush(Color.Parse("#EEFFFFFF"));
+        private static readonly IBrush DarkInk = new SolidColorBrush(Color.Parse("#E6000000"));
+
+        private static IBrush InkOn(Color fill)
+        {
+            // Rec. 709 luminance: the eye is far more sensitive to green than
+            // to blue, so a plain average calls mid-blue light and gets it
+            // backwards.
+            var luminance = (0.2126 * fill.R + 0.7152 * fill.G + 0.0722 * fill.B) / 255.0;
+
+            return luminance > 0.55 ? DarkInk : LightInk;
+        }
+
         private void ApplyAvatar(string sessionId)
         {
             StopAvatarAnimation();
@@ -521,6 +551,7 @@ namespace ClaudeBuddy
                 // invisible ring around a circle of its own colour.
                 Avatar.Fill = new SolidColorBrush(_owner.OrbColor);
                 Avatar.IsVisible = true;
+                AvatarEmoji.Foreground = InkOn(_owner.OrbColor);
                 RingFor(_owner.AccentColor);
 
                 // An initial wants less room than an emoji does.
@@ -574,6 +605,7 @@ namespace ClaudeBuddy
                 {
                     Avatar.Fill = new SolidColorBrush(c);
                     Avatar.IsVisible = true;
+                    AvatarEmoji.Foreground = InkOn(c);
                     RingFor(c);
                 }
                 else
