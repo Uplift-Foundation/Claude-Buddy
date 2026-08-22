@@ -31,7 +31,7 @@
             HorizontalAlignment="Left" VerticalAlignment="Top"
             CornerRadius="12" Padding="10"
             Background="#E0202024" BorderBrush="#80FFFFFF" BorderThickness="1.5">
-        <Grid RowDefinitions="Auto,*,Auto,Auto" RowSpacing="6">
+        <Grid RowDefinitions="Auto,*,Auto,Auto,Auto" RowSpacing="6">
 
             <!-- A contact card: portrait, then who and where stacked beside
                  it, then the actions. The name and the place used to be one
@@ -275,7 +275,40 @@
                 </StackPanel>
             </Border>
 
-            <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="5">
+            <!-- Slash-command suggestions, shown while the input's first word
+                 is still being typed and starts with "/". Lives in the layout
+                 rather than a floating Popup: the window already resizes to
+                 its content and Reposition() already flips it above or below
+                 the orb to stay on screen, so this borrows machinery that is
+                 already there rather than teaching a second control the same
+                 trick. -->
+            <Border x:Name="SlashBox" Grid.Row="3" IsVisible="False"
+                    CornerRadius="8" Padding="4"
+                    Background="#26FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1">
+                <ScrollViewer MaxHeight="150" Focusable="False"
+                              VerticalScrollBarVisibility="Auto">
+                    <ItemsControl x:Name="SlashList" Focusable="False">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{Binding RowFill}"
+                                        CornerRadius="5" Padding="7,4" Cursor="Hand"
+                                        PointerPressed="SlashSuggestion_PointerPressed">
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <TextBlock Text="{Binding Name}" FontSize="11"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="#F2FFFFFF"/>
+                                        <TextBlock Text="{Binding Description}" FontSize="10"
+                                                   Foreground="#99FFFFFF"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+
+            <Grid Grid.Row="4" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="5">
                 <!-- AcceptsReturn so the TextBox owns newline insertion, caret
                      placement and undo; Enter-to-send is intercepted on the
                      tunnel route instead. Grows to about three lines, then
