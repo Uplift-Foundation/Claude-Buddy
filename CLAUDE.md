@@ -1,8 +1,13 @@
 # Working in this repository
 
 Notes for Claude Code (and anyone else) working here. The README is the real
-documentation — how the app works, how the hook works, how to build installers.
+documentation — how the app works, how the hooks work, how to build installers.
 This file only covers *how work gets landed*, which the code can't tell you.
+
+`AGENTS.md` is the same content for Codex, which does not read this file. Two
+files because each CLI looks for its own name and neither reads the other's —
+**if you change one, change both.** A symlink would look like one file until
+someone checks the repo out on Windows.
 
 ## Branching: gitflow
 
@@ -127,9 +132,10 @@ fix broke a case the previous one had fixed. Keep the geometry in
 
 Transcript and dialog parsing has one too — `dotnet run --project
 tests/TranscriptTests`. It covers `ChatTranscript`: turning Claude Code's JSONL
-into chat turns, and reading a permission dialog off a captured tmux pane. Same
-rule as the geometry — `ChatTranscript` is pure, and `ClaudeCodeChatSession`
-only decides which bytes to hand it.
+into chat turns, and reading a permission dialog off a captured tmux pane. It
+also covers `CodexTranscript`, which does the first of those for Codex's
+rollout JSONL. Same rule as the geometry — both parsers are pure, and the chat
+session only decides which bytes to hand them.
 
 Both parsers read formats nobody here controls, and both fail *quietly*: a
 mis-mapped transcript silently drops a message, and a mis-read dialog puts a
@@ -141,6 +147,27 @@ an invented fixture and failed on every real dialog. To capture one:
 tmux capture-pane -p -t %<pane> > /tmp/pane.txt
 dotnet run --project tests/TranscriptTests -- /tmp/pane.txt   # or a .jsonl
 ```
+
+Both CLIs write `.jsonl`, so the harness decides which parser to use by looking
+at the file's first row rather than its extension — hand it a Codex rollout
+from `~/.codex/sessions/<yyyy>/<mm>/<dd>/` and it says so in its first line of
+output. If that line names the wrong CLI, nothing below it means anything.
+
+Orb *initials* have one too — `dotnet run --project tests/GlyphTests`. It covers
+`OrbGlyph`: the two letters an orb wears and the ones the chat panel's header
+wears beside it, across kebab and snake case, all three dashes, leading
+punctuation, emoji, and the single-letter setting. It also covers
+`ChatSpeaker`, which decides *whose* letters those are on a message bubble —
+the agent in the session key, or the panel's title for a terminal session, and
+never "nobody" once a name is known.
+
+It exists because the initials were wrong for a year and nobody saw it. Every
+kebab-case name drew two letters off the front of its first word, so
+`claude-buddy` was "Cl" and not "Cb" — invisible partly because it only looks
+wrong when the halves start with different letters, and partly because reading
+the answer meant looking at the screen. Same rule as the geometry: `OrbGlyph` is
+pure and takes the two-letter *setting* as an argument rather than reading it,
+so the tests do not depend on the machine they run on.
 
 Everything else about orb behavior is still verified by running the app.
 Two things make that survivable:

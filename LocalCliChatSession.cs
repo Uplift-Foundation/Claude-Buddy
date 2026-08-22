@@ -3,10 +3,11 @@ using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
-    // One local Claude Code session, as something the chat panel can talk to.
+    // One local CLI session — Claude Code or Codex — as something the chat panel
+    // can talk to.
     //
     // The thing worth understanding before reading any of this: **there is only
-    // one conversation, and this is not a copy of it.** Claude Code writes every
+    // one conversation, and this is not a copy of it.** Both CLIs write every
     // session's transcript to a JSONL file and the hook already records where
     // (SessionStatus.TranscriptPath). That file is the conversation. This class
     // tails it, so anything typed in the terminal appears in the panel; and
@@ -14,6 +15,16 @@ namespace ClaudeBuddy
     // sent from the panel appears in the terminal. Neither surface owns a copy
     // and there is nothing to reconcile — which is why there is no sync code
     // here, only a reader and a writer pointed at the same place.
+    //
+    // What differs between the two CLIs is small and lives in CliChatFormat: how
+    // a line of their transcript maps to a turn, and which settings gate reading
+    // and replying. Everything else here is *transcript-shaped-file* machinery
+    // rather than Claude Code machinery — the byte offsets, the carry buffer so a
+    // write landing mid-codepoint cannot leave a permanent replacement character,
+    // the watcher-plus-poll pair because macOS FileSystemWatcher misses JSONL
+    // appends, the window sizes measured across six real transcripts — and Codex
+    // needs all of it unchanged, including the giant-row case: the largest single
+    // row measured in a real rollout is 1,046,104 bytes.
     //
     // Two ways this differs from OpenClawChatSession, both consequences of the
     // transcript being a file rather than an event stream:
@@ -27,7 +38,7 @@ namespace ClaudeBuddy
     //    message sent from the panel is reconciled against the transcript row it
     //    produced. The contract's "TurnUpdated carries the whole turn" holds
     //    trivially, since the whole turn is all there ever is.
-    internal sealed class ClaudeCodeChatSession :
+    internal sealed class LocalCliChatSession :
         IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer, IRemoteChatPrompts, IDisposable
     {
         // How much of the tail to read when the panel first opens.
@@ -66,6 +77,13 @@ namespace ClaudeBuddy
         private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
 
         private SessionStatus _status;
+
+        // Which CLI's transcript this is tailing. Set once from the status the
+        // session was created with and never re-resolved: a session does not
+        // change CLI, and re-reading it per pump would invite a format swap
+        // halfway through a file.
+        private readonly CliChatFormat _format;
+
         private string _transcriptPath = "";
 
         // Byte offsets into the transcript. _offset is where the live tail
@@ -90,10 +108,11 @@ namespace ClaudeBuddy
         // before that — see Pump.
         private bool _loaded;
 
-        public ClaudeCodeChatSession(string sessionId, SessionStatus status)
+        public LocalCliChatSession(string sessionId, SessionStatus status)
         {
             SessionId = sessionId;
             _status = status;
+            _format = CliChatFormat.For(status.Source);
             DisplayName = status.Title ?? "";
         }
 
@@ -459,14 +478,15 @@ namespace ClaudeBuddy
 
         // --- mapping rows onto turns ---
         //
-        // The parsing itself lives in ChatTranscript, pure and tested. What
-        // stays here is only the part that needs this session: which bytes to
-        // read and what to do with the turns afterwards.
+        // The parsing itself lives in ChatTranscript or CodexTranscript, both
+        // pure and tested. What stays here is only the part that needs this
+        // session: which bytes to read, whose format to read them as, and what
+        // to do with the turns afterwards.
 
         private readonly record struct Mapped(string? Uuid, ChatTurn Turn);
 
-        private static List<Mapped> MapLines(List<string> lines) =>
-            ChatTranscript.Map(lines).Select(r => new Mapped(r.Uuid, r.Turn)).ToList();
+        private List<Mapped> MapLines(List<string> lines) =>
+            _format.Map(lines).Select(r => new Mapped(r.Uuid, r.Turn)).ToList();
 
         // --- sending ---
 
@@ -475,7 +495,7 @@ namespace ClaudeBuddy
             get
             {
                 if (!TerminalFocuser.CanSendQuietly(_status)) return "No pane to type into";
-                return ClaudeBuddySettings.ClaudeCodeReplyEnabled ? "Message…" : "Replying is off";
+                return _format.ReplyEnabled() ? "Message…" : "Replying is off";
             }
         }
 
@@ -488,7 +508,7 @@ namespace ClaudeBuddy
 
         public async Task SendAsync(string text)
         {
-            if (!ClaudeBuddySettings.ClaudeCodeReplyEnabled)
+            if (!_format.ReplyEnabled())
             {
                 // A System turn rather than an exception, for the reason
                 // OpenClawChatSession gives at the same point: the person has
@@ -569,7 +589,7 @@ namespace ClaudeBuddy
             // place the panel can offer it. Gated with everything else that
             // types: stopping someone's work is not something a viewer should be
             // able to do.
-            if (!ClaudeBuddySettings.ClaudeCodeReplyEnabled) return;
+            if (!_format.ReplyEnabled()) return;
 
             _ = TerminalFocuser.SendPaneKey(_status, "Escape");
         }
@@ -614,7 +634,7 @@ namespace ClaudeBuddy
 
         public async Task AnswerAsync(ChatPromptOption option)
         {
-            if (!ClaudeBuddySettings.ClaudeCodeReplyEnabled)
+            if (!_format.ReplyEnabled())
             {
                 Note("Replying is off, so this can only be answered in the terminal.");
                 return;

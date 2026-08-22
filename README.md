@@ -54,15 +54,42 @@ the defaults. See **Orb colours** in the settings window; the rest of this file
 calls them by their default names, since that's what you'll see until you change
 them.
 
-**Only colors you set with `/color` show up.** Claude Code also gives every
-session an automatic accent (the color of its prompt border and name chip),
-but that one is per-process and isn't written to the transcript — or anywhere
-else on disk — so the hook has nothing to read and those orbs keep the plain
-hairline border. That's deliberate rather than a gap worth papering over: a
-derived stand-in would end up disagreeing with the color the terminal is
-showing, and a ring is more useful when it always means "I chose this". Run
-`/color` in a session and its orb picks the color up on the next hook fire,
-within a couple of seconds.
+**By default, only colors you set with `/color` show up.** Claude Code also
+gives every session an automatic accent (the color of its prompt border and name
+chip), but that one is per-process and isn't written to the transcript — or
+anywhere else on disk — so the hook has nothing to read and those orbs keep the
+plain hairline border. Run `/color` in a session and its orb picks the color up
+on the next hook fire, within a couple of seconds.
+
+**Or let it colour them for you.** Settings → Claude Code sessions → **Give each
+session a colour** is off by default, and when it's on a session with no colour
+gets one. It is not a stand-in the app invented: `/color` persists a colour by
+appending a single `{"type":"agent-color",…}` record to the transcript, and
+Claude Code reads those records back when a session resumes — so the hook writes
+the same record, and the colour survives a resume with the terminal agreeing.
+That is the whole reason this is offered at all; a derived colour only this app
+could see would disagree with what the terminal shows, and a ring is more useful
+when it always means something real.
+
+The colour comes from the working directory, so a project keeps the same one
+across sessions and restarts, and `/color` still wins — yours is written later
+and the newest record is the one read. It's off by default because it is the one
+setting that writes to a file the app doesn't own.
+
+**Codex has no per-session colour to write**, so its colour works the other way
+round. Codex's colours live on *sections* — named groups of threads, `/section`
+in its TUI — as an `{icon, color}` appearance, and a Codex orb takes its
+section's colour when the session is filed under one. That is read and never
+written: creating a section to hold a colour would reorganise your own thread
+list in Codex's sidebar.
+
+Most sessions are in no section, so with the setting on a Codex orb falls back
+to a colour derived from the working directory — the same one the same project
+gets under Claude Code, so a project looks the same whichever CLI you opened it
+with. That is invented rather than native, and it is the one place this app
+invents a colour. It is safe here for the reason it wasn't for Claude Code:
+Codex displays no per-session colour anywhere, so there is nothing for a derived
+one to disagree with.
 
 **Agent teams get drawn as teams.** Every member of a team is a separate
 `claude` process with its own session id, so a team of four arrives as four
@@ -846,7 +873,7 @@ is needed; the .NET runtime is bundled.
 | Windows 10/11, 64-bit | `ClaudeBuddy-<version>-win-x64-setup.exe` |
 
 **macOS**: open the DMG, drag Claude Buddy to Applications, then double-click
-**Install Claude Code Hooks.command** — that runs step 2 below for you. The
+**Install Hooks.command** — that runs step 2 below for you. The
 builds are signed and notarized, so they open without a Gatekeeper override.
 
 **Windows**: run the setup. It installs per-user under
@@ -936,33 +963,71 @@ The Windows one needs [Inno Setup 6](https://jrsoftware.org/isdl.php)
 (`winget install -e --id JRSoftware.InnoSetup`). Both work unsigned for local
 testing — see [Releasing](#releasing) for what CI adds on top.
 
-## 2. Wire up Claude Code
+## 2. Wire up your agent CLIs
 
-Each Claude Code install you want tracked (WSL, native Windows, macOS, ...)
-needs its own copy of these hooks added to *its own* `settings.json` —
-installs don't share config. Repeat this section once per install.
+Claude Buddy tracks **Claude Code** and **OpenAI's Codex CLI**. Each install you
+want tracked (WSL, native Windows, macOS, ...) needs its own copy of the hooks
+added to *its own* config — installs don't share config.
 
 ### The scripted way
 
-There's a script per platform, and it's the recommended route: it backs up
-`settings.json` first, preserves everything already in it (including other
-tools' hooks), and converges rather than duplicating, so re-running it repairs
-a broken setup. Pass `--uninstall` / `-Uninstall` to remove just our entries.
+One script wires whatever it finds. It's the recommended route: it backs up
+each config first, preserves everything already in it (including other tools'
+hooks), and converges rather than duplicating, so re-running it repairs a broken
+setup — or picks up the second CLI after you install it. Pass `--uninstall` /
+`-Uninstall` to remove just our entries, from everything.
 
 ```bash
-./tools/install-macos-hooks.sh
-# installed from a DMG instead of a clone? the script ships inside the app:
-"/Applications/Claude Buddy.app/Contents/Resources/install-macos-hooks.sh"
+./tools/install-hooks.sh
+# installed from a DMG instead of a clone? it ships inside the app:
+"/Applications/Claude Buddy.app/Contents/Resources/install-hooks.sh"
 ```
 
 ```powershell
-.\tools\install-windows-hooks.ps1
+.\tools\install-hooks.ps1
 # or, installed from the setup:
-& "$env:LOCALAPPDATA\Programs\ClaudeBuddy\tools\install-windows-hooks.ps1"
+& "$env:LOCALAPPDATA\Programs\ClaudeBuddy\tools\install-hooks.ps1"
 ```
 
+A CLI you don't have is skipped and said so, not treated as an error. Underneath
+it are one installer per CLI — `install-macos-hooks.sh` /
+`install-windows-hooks.ps1` for Claude Code, `install-codex-hooks.sh` /
+`install-codex-hooks.ps1` for Codex — and those still take the per-CLI options
+described below. You only need them if you want one of those options; the
+wrapper is what an install runs.
+
+### Codex
+
+**Codex will not run a hook it has not been told to trust.** A `hooks.json`
+written by anything other than Codex starts out untrusted, so after wiring, the
+first time you start Codex, accept the hook review it shows you — or run
+`/hooks` inside it and trust the Claude Buddy entries. Until you do, no hook
+fires, no Codex orb appears, and **nothing anywhere tells you why**. Editing
+`hooks.json` later, including re-running the installer, changes its hash and
+asks you again.
+
+The hooks go in `$CODEX_HOME/hooks.json` (`~/.codex/hooks.json` by default),
+which Codex discovers on its own — nothing needs adding to `config.toml`.
+
+Two differences from a Claude Code orb, both because Codex works differently
+rather than because the support is unfinished:
+
+- **No `/color`.** Codex has no equivalent, so a Codex orb keeps the plain ring
+  and carries a badge instead. Its *name* does come from Codex — `/rename` if
+  you've set one, otherwise Codex's own title, taken from your first message.
+- **A Codex orb appears on the session's first message, not when Codex opens.**
+  Codex fires no hooks until a thread exists, and a thread is created when you
+  first speak to it — so an open-but-untouched session has no orb, and neither
+  does a resumed one until you send something. Claude Code fires its
+  `SessionStart` on launch, which is why the two feel different for the same
+  actions. This is Codex's behaviour and nothing the hook can change.
+- **The chat panel works the same way**, with its own pair of switches under
+  Settings → **Codex sessions**. It reads the rollout Codex already writes, and
+  with replying on it types into the session's tmux pane — including answering
+  approval prompts, which are numbered exactly as Claude Code's are.
+
 The Windows installer runs this for you if you leave the checkbox ticked, and
-the macOS DMG's **Install Claude Code Hooks.command** is a wrapper around it.
+the macOS DMG's **Install Hooks.command** is a wrapper around it.
 
 **WSL** is covered by the same script, opt-in via a couple of extra flags —
 native Windows wiring is unaffected either way:
@@ -984,10 +1049,23 @@ every WSL distro with a checkbox per distro to wire or unwire it on the spot —
 no script or installer re-run needed for that. Both routes only reach each
 distro's *default* Linux user (see the Scope note above).
 
-**Multiple Claude Code accounts** managed via `CLAUDE_CONFIG_DIR` — e.g. an
-alias like `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"` for a
-second account — are a separate `settings.json` each, invisible to the
-default `~/.claude` wiring above. Note that `claude`'s own PATH detection
+**Multiple accounts** — `CLAUDE_CONFIG_DIR` for Claude Code, `CODEX_HOME` for
+Codex, e.g. an alias like `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"`
+— are a separate config file each, invisible to the default wiring above. The
+**Settings window** has a "Claude Code profiles" and a "Codex profiles" section
+on **both platforms**: add a directory name once and it's wired immediately and
+re-applied on every future install, repair and uninstall. The installers read
+the same list, so a fresh install picks up whatever is saved there.
+
+macOS can also pass them explicitly:
+
+```bash
+./tools/install-macos-hooks.sh --profile-dir .claude-work
+./tools/install-codex-hooks.sh --profile-dir .codex-work
+```
+
+The Windows-specific parts of this — WSL distros, and the extra flags below —
+stay Windows-only, because WSL does. Note that `claude`'s own PATH detection
 (the `-Wsl` skip/`-Force` logic just above) tries several shells before
 giving up specifically because of this: nvm/pyenv/rustup-style installs put
 their PATH line in `~/.bashrc` or `~/.zshrc` depending on which shell you
@@ -1121,6 +1199,24 @@ do). The BOM matters too: `System.Text.Json` treats a leading BOM as an
 invalid start of value, so a BOM would make the app skip the file and drop
 that orb entirely. PowerShell 7 defaults are already correct; being explicit
 is right on both.
+
+**Codex on Windows** carries one gap worth knowing about: a Codex orb there is
+named after your first message, not after `/rename`. Codex keeps both names in a
+SQLite database, and macOS can read it because the system ships a `sqlite3`
+binary — Windows ships `winsqlite3.dll` but no command-line client, and
+PowerShell has no built-in provider, so the hook falls back to the first message
+out of the rollout. That is the same message Codex builds its own title from, so
+the name is true, just not the one you chose. It matches what a Claude Code
+session under WSL already does for the same category of reason.
+
+Windows Codex support is **partly verified**, and the split is worth stating
+precisely. CI builds the installer, runs it silently on a Windows runner, and
+checks the result — so the setup wiring, `install-hooks.ps1`'s detection and
+dispatch, and the "Codex is absent, write nothing for it" path are all exercised
+on a real machine every time they change. What is **not** exercised is anything
+that needs Codex actually installed: `install-codex-hooks.ps1`'s install path,
+and the hook script's own Codex branch. Those are written and reviewed but have
+never run. See `docs/codex-findings.md`.
 
 **WSL** (hooks execute via a Linux shell that then calls out to Windows):
 `claude-hooks-snippet-wsl.json` uses `powershell.exe`'s full path

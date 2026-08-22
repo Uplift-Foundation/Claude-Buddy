@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
@@ -1121,6 +1122,133 @@ namespace ClaudeBuddy
                     ThemeMode: SystemTheme));
             });
         }
+
+        // Move a profile to the Trash.
+        //
+        // The one destructive thing this app can do to somebody else's data — a
+        // profile directory is a Claude Desktop login, its chat history and its
+        // local databases — so three rules, none of them optional.
+        //
+        // It goes to the Trash rather than being deleted. Recoverable is the
+        // whole difference between a mistake and a loss, and the OS already has
+        // the right place to put it. The default profile is refused outright:
+        // that is Claude Desktop's own data directory, not a profile this app
+        // invented, and nothing here should be able to throw it away. A running
+        // profile is refused too — deleting the directory out from under a live
+        // Electron app corrupts what is left rather than removing it, and the
+        // caller is told to quit it first.
+        //
+        // Returns what happened rather than a bool, so the caller can say which
+        // of those it was instead of a shrug.
+        internal enum DeleteOutcome { Deleted, RefusedDefault, RefusedRunning, Failed }
+
+        public static DeleteOutcome DeleteProfile(ProfileView profile)
+        {
+            if (!SupportedPlatform) return DeleteOutcome.Failed;
+            if (profile.IsDefault) return DeleteOutcome.RefusedDefault;
+            if (profile.IsRunning || profile.InstanceCount > 0 && profile.Pid != 0)
+                return DeleteOutcome.RefusedRunning;
+
+            var directory = profile.Directory;
+            if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+                return DeleteOutcome.Failed;
+
+            // Never anything but a direct child of the profile root. The path
+            // arrives from a snapshot this file built, so this cannot currently
+            // be wrong — which is exactly when a guard is cheap and the absence
+            // of one is a bet on that staying true.
+            var parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(directory));
+            if (!string.Equals(
+                    Path.TrimEndingDirectorySeparator(parent ?? ""),
+                    Path.TrimEndingDirectorySeparator(ProfileRoot),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return DeleteOutcome.Failed;
+            }
+
+            if (!Trash(directory)) return DeleteOutcome.Failed;
+
+            var folder = Path.GetFileName(directory);
+
+            // The cloned bundle that gave it a coloured Dock icon, and the name
+            // and colour saved against it. Left behind, both would be waiting
+            // for a profile that no longer exists — and would be silently
+            // inherited by the next profile that happened to reuse the name.
+            try { ClaudeDesktopBundles.Remove(folder); } catch { }
+            ClaudeBuddySettings.RemoveProfile(folder);
+
+            KickRefresh();
+            return DeleteOutcome.Deleted;
+        }
+
+        // To the Trash, using whichever facility the platform calls that.
+        private static bool Trash(string directory)
+        {
+            if (OperatingSystem.IsMacOS())
+            {
+                // Finder rather than NSFileManager: this app already talks to
+                // Finder through osascript elsewhere, and the scripted delete is
+                // exactly the Trash the user knows how to look in.
+                var escaped = directory.Replace("\\", "\\\\").Replace("\"", "\\\"");
+                return Run("/usr/bin/osascript", "-e",
+                    $"tell application \"Finder\" to delete POSIX file \"{escaped}\"");
+            }
+
+            if (OperatingSystem.IsWindows()) return RecycleOnWindows(directory);
+
+            return false;
+        }
+
+        // The Recycle Bin, through the shell's own file operation.
+        //
+        // SHFileOperation rather than Directory.Delete, for the reason the macOS
+        // side uses Finder: FOF_ALLOWUNDO is what makes this recoverable, and
+        // Directory.Delete has no such thing. The double-null terminator is
+        // required — pFrom is a list of paths, not a path.
+        //
+        // Not run on a real Windows machine. See docs/windows-*-findings.md for
+        // what that phrase is worth in this repo.
+        [SupportedOSPlatform("windows")]
+        private static bool RecycleOnWindows(string directory)
+        {
+            const uint FO_DELETE = 0x0003;
+            const ushort FOF_ALLOWUNDO = 0x0040;
+            const ushort FOF_NOCONFIRMATION = 0x0010;
+            const ushort FOF_SILENT = 0x0004;
+            const ushort FOF_NOERRORUI = 0x0400;
+
+            try
+            {
+                var op = new SHFILEOPSTRUCT
+                {
+                    wFunc = FO_DELETE,
+                    pFrom = directory + "\0\0",
+                    fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI
+                };
+
+                return SHFileOperation(ref op) == 0 && !op.fAnyOperationsAborted;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct SHFILEOPSTRUCT
+        {
+            public IntPtr hwnd;
+            public uint wFunc;
+            [MarshalAs(UnmanagedType.LPWStr)] public string pFrom;
+            [MarshalAs(UnmanagedType.LPWStr)] public string? pTo;
+            public ushort fFlags;
+            [MarshalAs(UnmanagedType.Bool)] public bool fAnyOperationsAborted;
+            public IntPtr hNameMappings;
+            [MarshalAs(UnmanagedType.LPWStr)] public string? lpszProgressTitle;
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern int SHFileOperation(ref SHFILEOPSTRUCT lpFileOp);
 
         // ---- process runner ------------------------------------------------
 

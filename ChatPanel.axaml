@@ -53,8 +53,9 @@
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                IsHitTestVisible="False"/>
                     <!-- The connection state rides on the portrait as a badge,
-                         the way presence dots do everywhere else: same
-                         blue/amber/red vocabulary, no extra header width. -->
+                         the way presence dots do everywhere else: green when
+                         the conversation is reachable, amber while it is
+                         attaching, red when it failed. No extra header width. -->
                     <Ellipse x:Name="StateDot"
                              Width="13" Height="13"
                              Stroke="#FF202024" StrokeThickness="2"
@@ -140,11 +141,39 @@
                                          agents in the room, and without this
                                          they arrive as anonymous grey bubbles
                                          that have to be worked out from context. -->
-                                    <TextBlock Text="{Binding SpeakerName}"
-                                               IsVisible="{Binding HasSpeaker}"
-                                               FontSize="9.5" FontWeight="SemiBold"
-                                               Margin="0,0,0,2"
-                                               Foreground="{Binding SpeakerInk}"/>
+                                    <StackPanel Orientation="Horizontal"
+                                                IsVisible="{Binding HasSpeaker}"
+                                                Margin="0,0,0,3" Spacing="5">
+                                        <!-- A shape the eye can recognise
+                                             without reading it, which a column
+                                             of similar names in similar hues
+                                             is not. -->
+                                        <Border Width="16" Height="16"
+                                                CornerRadius="8"
+                                                VerticalAlignment="Center"
+                                                ClipToBounds="True"
+                                                IsVisible="{Binding HasSpeakerAvatar}">
+                                            <Image Source="{Binding SpeakerAvatar}"
+                                                   Width="16" Height="16"
+                                                   Stretch="UniformToFill"/>
+                                        </Border>
+                                        <Border Width="16" Height="16"
+                                                CornerRadius="8"
+                                                VerticalAlignment="Center"
+                                                IsVisible="{Binding HasSpeakerInitials}"
+                                                Background="{Binding SpeakerChip}">
+                                            <TextBlock Text="{Binding SpeakerInitials}"
+                                                       FontSize="8" FontWeight="Bold"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{Binding SpeakerChipInk}"/>
+                                        </Border>
+                                        <TextBlock Text="{Binding SpeakerName}"
+                                                   IsVisible="{Binding ShowSpeakerName}"
+                                                   FontSize="9.5" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{Binding SpeakerInk}"/>
+                                    </StackPanel>
                                     <!-- Built in code rather than bound to a
                                          string, because a reply is Markdown and
                                          drawing it as one TextBlock showed the

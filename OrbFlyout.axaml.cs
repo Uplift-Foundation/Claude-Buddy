@@ -50,6 +50,7 @@ namespace ClaudeBuddy
         {
             InitializeComponent();
             LayoutArc();
+            LabelButtons();
 
             ArrangeButton.PointerPressed += (_, e) =>
             {
@@ -113,6 +114,41 @@ namespace ClaudeBuddy
         {
             ArrangeButton, SettingsButton, SpeakButton, MicButton, ChatButton
         };
+
+        // What each button is, in the compact form of the bubble the orb's own
+        // tooltip uses — same palette, no tail. The tail belongs to a thought
+        // rising from an orb; under a button it points at nothing.
+        //
+        // A word or two, not a sentence. These first read "Arrange orbs into the
+        // chosen shape" and the like, which is a help topic: the bubble ended up
+        // wider than the arc of buttons it was labelling, and a caption that
+        // takes a moment to read is one you stop waiting for. The button is
+        // already in front of the pointer — the label only has to name it.
+        //
+        // Set here rather than in the XAML because ToolTip.Tip="some text" does
+        // not work in this app and cannot: App.axaml strips the ToolTip template
+        // to a bare ContentPresenter so an orb's thought bubble can *be* the
+        // tooltip, which leaves a plain string as unstyled text floating on the
+        // desktop with no background. That is exactly how the first version of
+        // these tips shipped, and exactly what "weird and hard to see" meant.
+        //
+        // Below the button rather than above it. These sit under the orb, and a
+        // bubble above one would cover the orb the user is pointing at.
+        private void LabelButtons()
+        {
+            Label(ArrangeButton, "Arrange");
+            Label(SettingsButton, "Settings");
+            Label(SpeakButton, "Read aloud");
+            Label(MicButton, "Dictate");
+            Label(ChatButton, "Chat");
+
+            static void Label(Control button, string text)
+            {
+                ToolTip.SetTip(button, OrbWindow.ThoughtBubble(text, null, compact: true));
+                ToolTip.SetPlacement(button, PlacementMode.Bottom);
+                ToolTip.SetShowDelay(button, 250);
+            }
+        }
 
         private void LayoutArc()
         {
@@ -208,6 +244,17 @@ namespace ClaudeBuddy
                 TextToSpeech.SpeakState.Preparing => "⏳",
                 _ => "\U0001F508"
             };
+
+            // And what it says it is. This button is three things depending on
+            // state, and a tooltip fixed at "read aloud" would be wrong on two
+            // of them — the glyph already changes, and the words have to agree
+            // with the glyph or they are worse than no words.
+            ToolTip.SetTip(SpeakButton, OrbWindow.ThoughtBubble(state switch
+            {
+                TextToSpeech.SpeakState.Speaking => "Stop",
+                TextToSpeech.SpeakState.Preparing => "Preparing…",
+                _ => "Read aloud"
+            }, null, compact: true));
         }
 
         public bool IsPointerOverFlyout => Root.IsPointerOver;
