@@ -128,7 +128,7 @@ namespace ClaudeBuddy
 
             public LinkWindow()
             {
-                SystemDecorations = SystemDecorations.None;
+                WindowDecorations = WindowDecorations.None;
                 Background = Brushes.Transparent;
                 TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent };
                 Topmost = true;

@@ -197,7 +197,7 @@ namespace ClaudeBuddy
 
             public OverlayWindow()
             {
-                SystemDecorations = SystemDecorations.None;
+                WindowDecorations = WindowDecorations.None;
                 Background = Brushes.Transparent;
                 TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent };
                 Topmost = true;

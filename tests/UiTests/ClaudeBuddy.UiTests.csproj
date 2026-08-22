@@ -7,26 +7,46 @@
     <AssemblyName>ClaudeBuddy.UiTests</AssemblyName>
     <RootNamespace>ClaudeBuddy.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
+    <!-- Same reasoning as tests/UiScreenshots' csproj (see its own, longer
+         comment): xunit.v3's build targets require OutputType=Exe and
+         UseAppHost=true, set here (not left to Microsoft.NET.Test.Sdk.targets'
+         default) so the SDK's _IsExecutable/RID-inference logic sees it before
+         that default fires, and SelfContained is set to match
+         ClaudeBuddy.csproj so MSBuild's NETSDK1151 self-contained
+         cross-check between the two referenced executables doesn't fire. -->
+    <OutputType>Exe</OutputType>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <!-- Required on the .NET 10 SDK for `dotnet test` to run an MTP project
+         at all — see tests/UiScreenshots' csproj comment. -->
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <SelfContained>true</SelfContained>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
-    <PackageReference Include="xunit" Version="2.9.3" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
-    <!-- Newer than the app's own 11.3.7 pin (ClaudeBuddy.csproj), deliberately:
-         several race-condition fixes in Avalonia's own headless test
-         plumbing — dispatcher lifecycle between tests, "job loop detected",
-         cleanup ordering — landed in 11.3.x patches after .7 and were
-         needed to stop CI failing intermittently (see
-         AvaloniaUI/Avalonia#12588 and its descendants). Safe because these
-         are the TEST project's own packages, not the app's: patch versions
-         within one Avalonia minor line stay binary-compatible, so the app
-         assembly (compiled against the 11.3.7 API surface, unchanged) and
-         these newer Avalonia assemblies coexist fine in the test binary's
-         output. Keep this ahead of ClaudeBuddy.csproj's pin on purpose. -->
-    <PackageReference Include="Avalonia" Version="11.3.20" />
-    <PackageReference Include="Avalonia.Headless" Version="11.3.20" />
-    <PackageReference Include="Avalonia.Headless.XUnit" Version="11.3.20" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.20" />
+    <!-- xUnit v3, not v2 (this suite moved alongside tests/UiScreenshots) —
+         forced by Avalonia.Headless.XUnit 12.x, which depends on
+         xunit.v3.extensibility.core and has no v2-compatible release.
+         Pinned to 3.2.2, not the newest 4.0.0, for the same reason as
+         UiScreenshots: Avalonia.Headless.XUnit 12.1.1 itself depends on
+         xunit.v3.extensibility.core 3.2.2, and 4.0.0 changed a public API
+         shape (Xunit.v3.TestIntrospectionHelper.GetTestCaseDetails) in a
+         binary-incompatible way that fails every test at discovery. -->
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0" />
+    <!-- 12.1.1, matching the app: ClaudeBuddy.csproj moved to Avalonia 12.1.1
+         to reach the real fix for the FontManager concurrency race
+         (AvaloniaUI/Avalonia#21269, never backported to 11.3.x) needed by
+         tests/UiScreenshots, and a test project referencing the app can no
+         longer pin a different Avalonia major than the app itself —
+         mismatched majors of Avalonia.Markup.Xaml loaded in one process
+         break every XAML-backed control with MissingMethodException. This
+         suite's previous comment about staying ahead of the app's patch
+         version (11.3.20 vs 11.3.7) no longer applies now that both are on
+         the same major and CI-stability patches land continuously on 12.x. -->
+    <PackageReference Include="Avalonia" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Headless" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Headless.XUnit" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\ClaudeBuddy.csproj" />

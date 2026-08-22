@@ -59,7 +59,7 @@ namespace ClaudeBuddy
 
             var tint = new NativeMenuItem("Tint the active window")
             {
-                ToggleType = NativeMenuItemToggleType.CheckBox,
+                ToggleType = MenuItemToggleType.CheckBox,
                 IsChecked = ClaudeDesktopOverlay.Enabled
             };
             tint.Click += (_, _) => ClaudeDesktopOverlay.SetEnabled(!ClaudeDesktopOverlay.Enabled);
@@ -155,7 +155,7 @@ namespace ClaudeBuddy
             {
                 var choice = new NativeMenuItem(label)
                 {
-                    ToggleType = NativeMenuItemToggleType.CheckBox,
+                    ToggleType = MenuItemToggleType.CheckBox,
                     IsChecked = string.Equals(profile.ThemeMode, mode, StringComparison.OrdinalIgnoreCase)
                 };
                 var captured = mode;
