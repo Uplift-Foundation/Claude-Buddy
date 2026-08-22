@@ -980,34 +980,45 @@ namespace ClaudeBuddy
             // Selecting an entry records both the voice and which engine speaks it
             // (TextToSpeech.SelectVoice), so the choice is explicit rather than
             // inferred, and each engine's own key remembers what was picked there.
-            var options = TextToSpeech.AllVoiceOptions();
-            if (options.Count == 0)
-            {
-                return new ComboBox
-                {
-                    ItemsSource = new[] { "No voices found" },
-                    SelectedIndex = 0,
-                    IsEnabled = false,
-                    MinWidth = 220
-                };
-            }
-
-            var selected = TextToSpeech.SelectedVoice();
-            var labels = options.Select(o => o.Label).ToList();
+            //
+            // TextToSpeech.AllVoiceOptions() enumerates every engine, and on
+            // macOS that means `say -v ?` — a real process, launched synchronously.
+            // Building this eagerly meant constructing the settings window at all
+            // did that. The saved name alone (no scan) is enough for a placeholder
+            // item; the real list, and the ability to change it, arrives the first
+            // time the user actually opens the dropdown.
+            var placeholder = SavedVoiceNameForPlaceholder() ?? "Loading voices…";
 
             var combo = new ComboBox
             {
-                ItemsSource = labels,
-                SelectedIndex = selected is null ? 0 : Math.Max(0, options.IndexOf(selected)),
-
-                // Wider than the other pickers: these labels carry the engine as
-                // well as the name, and "Microsoft David Desktop (system)" is
-                // simply a long string.
+                ItemsSource = new[] { placeholder },
+                SelectedIndex = 0,
                 MinWidth = 220
+            };
+
+            List<TextToSpeech.VoiceOption>? options = null;
+
+            combo.DropDownOpened += (_, _) =>
+            {
+                if (options is not null) return;
+
+                options = TextToSpeech.AllVoiceOptions();
+                if (options.Count == 0)
+                {
+                    combo.ItemsSource = new[] { "No voices found" };
+                    combo.SelectedIndex = 0;
+                    combo.IsEnabled = false;
+                    return;
+                }
+
+                var selected = TextToSpeech.SelectedVoice();
+                combo.ItemsSource = options.Select(o => o.Label).ToList();
+                combo.SelectedIndex = selected is null ? 0 : Math.Max(0, options.IndexOf(selected));
             };
 
             combo.SelectionChanged += (_, _) =>
             {
+                if (options is null) return; // still the unscanned placeholder item
                 var index = combo.SelectedIndex;
                 if (index < 0 || index >= options.Count) return;
 
@@ -1016,6 +1027,17 @@ namespace ClaudeBuddy
 
             return combo;
         }
+
+        // The raw saved voice name, read straight from settings rather than via
+        // TextToSpeech.SelectedVoice() — that method calls AllVoiceOptions()
+        // itself, which is exactly the scan this placeholder exists to avoid.
+        private static string? SavedVoiceNameForPlaceholder() =>
+            ClaudeBuddySettings.SpeakEngine switch
+            {
+                "custom" => ClaudeBuddySettings.SpeakCommandVoice,
+                "neural" => ClaudeBuddySettings.NeuralVoice,
+                _ => ClaudeBuddySettings.SpeakVoice
+            };
 
         // A near-copy of OnVoiceInputToggled below, and deliberately so: the
         // download-progress dance (write the setting first, seed the status row,
