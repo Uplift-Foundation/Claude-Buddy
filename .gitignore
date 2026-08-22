@@ -17,3 +17,8 @@ Obj/
 # ":" is an illegal path character on Windows, so committing a single one of these
 # makes the entire repository impossible to check out there.
 *:*
+
+# dotnet test --results-directory output (TRX files, and now the UI
+# screenshot proof of concept's PNGs) — always local/CI-run artifacts, never
+# something to commit.
+/TestResults/

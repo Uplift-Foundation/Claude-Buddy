@@ -89,6 +89,38 @@ jobs:
           }
           exit 1
 
+      # Proof of concept, not gated on: a separate suite from UI tests above
+      # (tests/UiScreenshots), deliberately — it turns on real Skia
+      # rendering, a heavier, different code path from the null renderer the
+      # gated UI suite uses, and hasn't earned a place blocking the build
+      # yet. continue-on-error means a flake or a real regression here shows
+      # up as no screenshots downstream rather than failing the whole run.
+      - name: UI screenshots (proof of concept)
+        continue-on-error: true
+        run: dotnet test tests/UiScreenshots -c Release --logger "trx;LogFileName=ui-screenshots.trx" --results-directory TestResults
+
+      # Uploaded as a plain artifact here, not pushed anywhere — this job's
+      # GITHUB_TOKEN is deliberately read-only whenever the run was
+      # triggered by a pull_request from a fork (GitHub enforces this on
+      # every public repo; no `permissions:` block can override it), and
+      # this repo's PRs are exactly that. publish-screenshots.yml is a
+      # separate workflow, triggered by workflow_run once this one
+      # finishes, specifically because that trigger DOES get a real token
+      # even for fork-originated runs — it never checks out or executes
+      # anything from the fork itself, only downloads what already got
+      # built here. (A workflow_run job listing this same workflow by name
+      # cannot live in this file: GitHub rejects a workflow that lists
+      # itself as its own workflow_run trigger — "cannot listen to itself"
+      # — hence the separate file rather than a second job here.)
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-screenshots-${{ matrix.rid }}
+          path: TestResults/screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v7
