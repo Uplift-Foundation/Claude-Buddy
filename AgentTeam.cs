@@ -118,7 +118,7 @@ namespace ClaudeBuddy
         // session ids and looked up in a colour table — but they come from a
         // process this app doesn't own, so they get the same treatment as
         // anything else read off disk.
-        private static string Sanitize(string? value)
+        internal static string Sanitize(string? value)
         {
             if (string.IsNullOrEmpty(value) || value.Length > 64) return "";
 
@@ -134,7 +134,7 @@ namespace ClaudeBuddy
         // rejecting the whole value: anything that isn't a letter, digit or
         // ordinary separator is dropped, and what's left is trimmed. A name
         // that survives as nothing is treated as no name at all.
-        private static string SanitizeName(string? value)
+        internal static string SanitizeName(string? value)
         {
             if (string.IsNullOrEmpty(value)) return "";
 

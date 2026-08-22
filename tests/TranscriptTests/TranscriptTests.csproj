@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RollForward>LatestMajor</RollForward>
+    <AssemblyName>TranscriptTests</AssemblyName>
+    <RootNamespace>ClaudeBuddy.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The shipped files, compiled in rather than copied, so a test that
+         passes is a statement about the app and not about a snapshot of it.
+         RemoteChat comes along for ChatTurn, ChatRole and ChatPrompt, which is
+         the whole of what ChatTranscript deals in.
+
+         No Avalonia reference, unlike ArrangementTests: nothing in either file
+         knows what a window is, which is the property that makes them testable
+         at all. -->
+    <Compile Include="../../ChatTranscript.cs" />
+    <Compile Include="../../CodexTranscript.cs" />
+    <Compile Include="../../ChatMarkdown.cs" />
+    <Compile Include="../../AgentPalette.cs" />
+    <Compile Include="../../OpenClawSessionKind.cs" />
+    <Compile Include="../../RemoteChat.cs" />
+  </ItemGroup>
+
+</Project>

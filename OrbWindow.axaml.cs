@@ -73,6 +73,18 @@ namespace ClaudeBuddy
         // SessionManager seeds OrbsVisible from ClaudeBuddySettings.ShowOrbs.
         private readonly SolidColorBrush _orbBrush = new(OrbColors.Idle);
 
+        // The two halves of this orb's identity, for the chat panel's header.
+        // A local session has no portrait and no emoji to draw there, and these
+        // are what it has instead — read from the orb rather than re-derived, so
+        // the header cannot disagree with the thing that was clicked.
+        public string GlyphText => Glyph.Text ?? "";
+        public Color OrbColor => _orbBrush.Color;
+
+        // This session's own colour — /color for a Claude Code session, the
+        // derived one for a gateway agent — or null where it has none. Distinct
+        // from OrbColor, which is the *state* and changes as the session works.
+        public Color? AccentColor => _accentColor;
+
         private readonly RadialGradientBrush _glowBrush = new()
         {
             GradientOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),
@@ -106,6 +118,22 @@ namespace ClaudeBuddy
         // grace period turns that into a single smooth handoff instead.
         private DispatcherTimer? _hideFlyoutTimer;
 
+        // True while this orb's chat panel is open. The arc and the panel want
+        // the same piece of screen — ArcRadius is 56, directly below the orb —
+        // and the arc's mic and speak duplicate what the panel already offers,
+        // so one hides for the other rather than both being there.
+        private bool _chatOpen;
+
+        // The flyout used to open the instant the pointer touched an orb,
+        // which made orbs hostile to each other: the arc one orb throws out
+        // covers its neighbours, so a cursor travelling toward a second orb
+        // summoned a menu that then sat in the way of the click it was on its
+        // way to make. Requiring the pointer to *rest* on the orb separates
+        // "I want this orb's menu" from "I am passing over this orb", and
+        // costs a deliberate hover nothing it would notice.
+        private DispatcherTimer? _showFlyoutTimer;
+        private static readonly TimeSpan FlyoutHoverDelay = TimeSpan.FromMilliseconds(450);
+
         public OrbWindow(string sessionId)
         {
             SessionId = sessionId;
@@ -127,9 +155,13 @@ namespace ClaudeBuddy
             Root.PointerEntered += (_, _) =>
             {
                 CancelFlyoutHide();
-                EnsureFlyoutShown();
+                ScheduleFlyoutShow();
             };
-            Root.PointerExited += (_, _) => ScheduleFlyoutHide();
+            Root.PointerExited += (_, _) =>
+            {
+                CancelFlyoutShow();
+                ScheduleFlyoutHide();
+            };
 
             // Unlike WPF, Loaded fires *after* the first UpdateFrom here, so
             // honor any state that already arrived instead of stomping it.
@@ -145,7 +177,12 @@ namespace ClaudeBuddy
             };
 
             // A closed orb must leave the shared ticker or it keeps being ticked.
-            Closed += (_, _) => Pulsing.Remove(this);
+            Closed += (_, _) =>
+            {
+                Pulsing.Remove(this);
+                StopAvatarAnimation();
+                ChatPanel.HideFor(SessionId);
+            };
 
             // A session going away mid-dictation (the window closing) must
             // not leave a capture thread or a native mic handle running.
@@ -199,8 +236,33 @@ namespace ClaudeBuddy
             ToolTip.SetPlacement(Root, PlacementMode.Top);
 
             _lastGlyphName = name;
-            Glyph.Text = GlyphFor(name);
+            ApplyAvatar(status);
+            if (!_hasAvatar) Glyph.Text = _agentEmoji ?? GlyphFor(name);
+
+            // An open chat panel wears this orb's letters and colours. It used
+            // to copy them once, when it opened, so a title that arrived after
+            // the panel did — or a /rename, or a /color — left the header
+            // showing the old ones. Cheap to call: the panel ignores it unless
+            // it is showing this orb, and does nothing unless something moved.
+            ChatPanel.RefreshIdentityFor(this);
             ApplyAccent(status.Color);
+            // Rooms wear the badge too, now that their glyph is the channel's
+            // initials rather than a hash. It was suppressed when the two would
+            // have said the same thing; with the glyph saying *which* channel,
+            // the badge saying *that* it is one is the other half rather than a
+            // repeat — and without it a room orb is indistinguishable from an
+            // ordinary one.
+            ApplyKind(status.Kind);
+
+            // A room orb is named for its channel, like every other orb is named
+            // for its session: "#arch" draws "Ar". The hash it used to draw
+            // instead said only "this is a channel", which is true of the badge
+            // on every member orb too and so distinguished one room from
+            // another not at all.
+            if (status.IsRoom)
+            {
+                Glyph.IsVisible = true;
+            }
             SetTeamRole(!string.IsNullOrEmpty(status.Lead));
 
             SessionInfoItem.Header = string.IsNullOrEmpty(described) ? SessionId : described;
@@ -227,24 +289,98 @@ namespace ClaudeBuddy
         // doing. An unknown or missing color name leaves the orb looking the
         // way it always has, so a future addition to Claude Code's palette
         // degrades quietly instead of throwing.
-        private void ApplyAccent(string colorName)
+        //
+        // A "#RRGGBB" is accepted as well as a name, which is how a gateway
+        // agent gets an accent: it has no /color to give, so one is derived
+        // from its id (see AgentPalette). Taking it through the same field
+        // rather than adding a second one means the ring, the glyph and the
+        // team arrow all pick it up with no further wiring.
+        private void ApplyAccent(string colorName, bool force = false)
         {
-            if (colorName == _lastColor) return;
+            // force is for a redraw the colour itself did not ask for — a
+            // picture arriving or going changes how the ring is drawn while
+            // leaving the colour alone, and the early return would swallow it.
+            if (!force && colorName == _lastColor) return;
             _lastColor = colorName;
 
             Color accent = default;
             var known = !string.IsNullOrEmpty(colorName)
-                        && AgentColors.TryGetValue(colorName, out accent);
+                        && (AgentColors.TryGetValue(colorName, out accent)
+                            || (colorName[0] == '#' && Color.TryParse(colorName, out accent)));
 
             _accentColor = known ? accent : null;
 
-            Orb.Stroke = new SolidColorBrush(known ? accent : PlainStroke);
-            Orb.StrokeThickness = known ? 2 : 1;
+            // The ring says *who*, including over a picture.
+            //
+            // It used to carry the state there instead, on the reasoning that a
+            // picture takes the fill and leaves the ring as the only solid
+            // colour. That was wrong in practice for a reason the reasoning
+            // couldn't see: the idle colour is a user setting, and set near
+            // black — which most installs are, since idle is meant to be quiet —
+            // the "state ring" is a **black band** around the picture for the
+            // 95% of the time an agent is idle. It reads as a rendering fault,
+            // not as a status.
+            //
+            // Nothing is lost by giving it up. State on these orbs is carried by
+            // the glow, which appears only for the states worth noticing
+            // (GlowsFor) and pulses while they last — so "working" still
+            // announces itself, and "idle" correctly says nothing at all.
+            Orb.Stroke = new SolidColorBrush(known ? accent : _hasAvatar ? _orbBrush.Color : PlainStroke);
+
+            // Thicker over a picture: it is a ring around a photograph rather
+            // than an outline on a flat circle, and at 2px it reads as an edge.
+            Orb.StrokeThickness = _hasAvatar ? 3 : known ? 2 : 1;
+
             Glyph.Foreground = new SolidColorBrush(known ? accent : PlainGlyph);
             LinkColor = known ? accent : PlainLink;
 
             if (Glow.IsVisible)
                 _glowBrush.GradientStops = GlowStops(_accentColor ?? _orbBrush.Color);
+        }
+
+        // Re-runs ApplyAccent when something other than the colour has changed —
+        // a picture arriving or going, which changes how thick the ring is and
+        // what it falls back to. ApplyAccent returns early when the colour is
+        // the same, and here it is: where it is *drawn* is what moved.
+        private void RefreshAccent() => ApplyAccent(_lastColor, force: true);
+
+        private const double BadgeSize = 16;
+
+        // A scheduled job, a private message, or a room with other people in
+        // it. Nothing at all for a local session or for an agent's own main
+        // session: every agent has a main, so badging it would put a mark on
+        // almost every orb and distinguish nothing.
+        //
+        // @ and # are the symbols the surfaces themselves use for these two
+        // things, so they need no learning. The clock is the odd one out and
+        // has to be: a cron session is the one kind with nobody on the other
+        // end, which is the distinction most worth seeing from across a screen.
+        private static (string Glyph, string Label)? BadgeFor(SessionKind kind) => kind switch
+        {
+            SessionKind.Cron => ("\u23F1", "cron"),
+            SessionKind.Direct => ("@", "direct message"),
+            SessionKind.Channel => ("#", "channel"),
+            _ => null
+        };
+
+        // What the chat panel puts in its header. Null where there is no badge,
+        // so the panel shows nothing rather than the word "unknown".
+        public string? KindLabel => BadgeFor(_lastStatus?.Kind ?? SessionKind.Unknown)?.Label;
+
+        public string? KindGlyphText => BadgeFor(_lastStatus?.Kind ?? SessionKind.Unknown)?.Glyph;
+
+        private void ApplyKind(SessionKind kind)
+        {
+            var badge = BadgeFor(kind);
+
+            if (badge is null)
+            {
+                KindBadge.IsVisible = false;
+                return;
+            }
+
+            KindGlyph.Text = badge.Value.Glyph;
+            KindBadge.IsVisible = true;
         }
 
         // --- agent teams ------------------------------------------------------
@@ -272,6 +408,19 @@ namespace ClaudeBuddy
 
             Orb.Width = Orb.Height = 36 * scale;
             Glow.Width = Glow.Height = 56 * scale;
+
+            // Kept on the orb's edge rather than in the window's corner. The
+            // orb is a circle of radius 18*scale centred at (28,28), so its
+            // lower-right edge is at 28 + 18*scale*sin45. Solving for the
+            // margin that puts the badge's centre there is what keeps it
+            // touching the rim at both sizes instead of drifting off a team
+            // member's smaller circle.
+            KindBadge.Width = KindBadge.Height = BadgeSize * scale;
+            KindBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
+            KindGlyph.FontSize = 9 * scale;
+
+            var inset = 28 - (18 * scale * 0.7071) - (BadgeSize * scale / 2);
+            KindBadge.Margin = new Thickness(0, 0, Math.Max(0, inset), Math.Max(0, inset));
             Glyph.FontSize = BaseGlyphFontSize * scale;
             OrbRadius = 18 * scale;
         }
@@ -290,46 +439,156 @@ namespace ClaudeBuddy
         {
             Glyph.Text = GlyphFor(_lastGlyphName);
             Glyph.FontSize = BaseGlyphFontSize * (_isTeamMember ? MemberScale : 1.0);
+            ChatPanel.RefreshIdentityFor(this);
         }
 
-        private static string GlyphFor(string label)
+        // An agent's own picture, drawn as the orb itself.
+        //
+        // This is the one place the app's usual rule bends: normally the fill is
+        // the state and the letter is which session. A face says which session
+        // far better than a letter can, so the state moves outward to the ring —
+        // which still carries the colour, and the pulse and halo were always
+        // doing most of that work anyway. Sessions with no picture keep the
+        // ordinary filled orb and get their agent's emoji instead of a letter,
+        // which is why both paths stay.
+        private bool _hasAvatar;
+        private string? _agentEmoji;
+        private ImageBrush? _avatarBrush;
+
+        // The state ring on an avatar orb. One brush with its own transition,
+        // rather than a fresh SolidColorBrush per state change: the fill it
+        // replaced faded over 300ms and a ring that snaps instead reads as a
+        // different, cruder thing. Also stops allocating a brush every time a
+        // session changes state, which for a busy gateway is often.
+        private SolidColorBrush? _ringBrush;
+        private OpenClawAvatars.Avatar? _avatar;
+        private int _avatarFrame;
+        private DispatcherTimer? _avatarTimer;
+
+        private void ApplyAvatar(SessionStatus status)
         {
-            label = label.TrimStart();
-            if (label.Length == 0) return "•";
-
-            if (!ClaudeBuddySettings.TwoLetterGlyphs)
+            if (status.Source != SessionSource.OpenClaw)
             {
-                return FirstGrapheme(label).ToUpperInvariant();
+                ClearAvatar();
+                return;
             }
 
-            // Two words get one letter each — the initials a person would
-            // write by hand ("Menu UX" -> "Mu") — rather than two letters
-            // from the first word alone, which reads as a typo of it
-            // ("Menu UX" -> "Me"). A single word falls back to its own
-            // first two letters, since there's nothing else to draw from.
-            //
-            // Upper then lower, not both upper: two capitals side by side
-            // reads as an acronym ("MU"), where the point here is a little
-            // word-shaped mark ("Mu") — same reason a monogram is "Mu", not
-            // "MU". Only the letter case changes; which letters are picked
-            // is exactly the same either way.
-            var words = label.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (words.Length >= 2)
+            var identity = OpenClawSessions.IdentityForSession(SessionId);
+            _agentEmoji = identity?.Emoji;
+
+            var avatar = identity is null ? null : OpenClawAvatars.For(IdOf(SessionId), identity.Avatar);
+            if (avatar is null)
             {
-                return FirstGrapheme(words[0]).ToUpperInvariant() + FirstGrapheme(words[1]).ToLowerInvariant();
+                ClearAvatar();
+                return;
             }
 
-            var first = FirstGrapheme(label);
-            var rest = label[first.Length..];
-            var second = rest.Length > 0 ? FirstGrapheme(rest) : "";
-            return first.ToUpperInvariant() + second.ToLowerInvariant();
+            if (ReferenceEquals(avatar, _avatar)) return;
+
+            _avatar = avatar;
+            _avatarFrame = 0;
+            _hasAvatar = true;
+
+            Glyph.IsVisible = false;
+
+            _avatarBrush ??= new ImageBrush { Stretch = Stretch.UniformToFill };
+            _avatarBrush.Source = avatar.Frames[0];
+            Orb.Fill = _avatarBrush;
+
+            _ringBrush ??= new SolidColorBrush(_orbBrush.Color)
+            {
+                Transitions = new Transitions
+                {
+                    new ColorTransition
+                    {
+                        Property = SolidColorBrush.ColorProperty,
+                        Duration = TimeSpan.FromMilliseconds(300),
+                        Easing = new QuadraticEaseOut()
+                    }
+                }
+            };
+
+            _ringBrush.Color = _orbBrush.Color;
+
+            // The picture lands long after the accent did, and it is what
+            // decides how the ring is drawn — so the accent is applied again
+            // rather than assumed to have got there first. An agent with no
+            // colour at all falls back to the state ring inside ApplyAccent,
+            // which is what _ringBrush is still here for.
+            Orb.Stroke = _ringBrush;
+            RefreshAccent();
+
+            StartAvatarAnimation();
         }
 
-        // One printable character, or a full surrogate pair if the string
-        // starts with one (e.g. an emoji) — never split in half, which is
-        // what renders as a broken box instead of the emoji.
-        private static string FirstGrapheme(string s) =>
-            s.Length > 1 && char.IsHighSurrogate(s[0]) ? s[..2] : s[..1];
+        private static string IdOf(string sessionId)
+        {
+            const string Prefix = "openclaw:";
+            var key = sessionId.StartsWith(Prefix, StringComparison.Ordinal)
+                ? sessionId[Prefix.Length..]
+                : sessionId;
+
+            var parts = key.Split(':');
+            return parts.Length >= 2 ? parts[1] : key;
+        }
+
+        private void ClearAvatar()
+        {
+            if (!_hasAvatar)
+            {
+                Glyph.IsVisible = true;
+                return;
+            }
+
+            _hasAvatar = false;
+            _avatar = null;
+            StopAvatarAnimation();
+
+            Orb.Fill = _orbBrush;
+            Orb.Stroke = new SolidColorBrush(Color.Parse("#22FFFFFF"));
+            Orb.StrokeThickness = 1;
+            Glyph.IsVisible = true;
+
+            // Thinner ring, and the accent back on a flat circle.
+            RefreshAccent();
+        }
+
+        // Its own timer rather than the shared pulse ticker: frame delays are
+        // whatever each GIF's author chose, and are neither 60fps nor the same
+        // between two agents.
+        private void StartAvatarAnimation()
+        {
+            StopAvatarAnimation();
+
+            if (_avatar is null || !_avatar.IsAnimated) return;
+
+            _avatarTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(_avatar.DelaysMs[0])
+            };
+
+            _avatarTimer.Tick += (_, _) =>
+            {
+                if (_avatar is null || _avatarBrush is null) return;
+
+                _avatarFrame = (_avatarFrame + 1) % _avatar.Frames.Count;
+                _avatarBrush.Source = _avatar.Frames[_avatarFrame];
+                _avatarTimer!.Interval = TimeSpan.FromMilliseconds(_avatar.DelaysMs[_avatarFrame]);
+            };
+
+            _avatarTimer.Start();
+        }
+
+        private void StopAvatarAnimation()
+        {
+            _avatarTimer?.Stop();
+            _avatarTimer = null;
+        }
+
+        // The letters themselves live in OrbGlyph, which is pure and tested;
+        // this only supplies the one thing that is not — the user's setting.
+        private static string GlyphFor(string label) =>
+            OrbGlyph.For(label, ClaudeBuddySettings.TwoLetterGlyphs);
 
         // The colour comes from OrbColors so this switch is about *motion* only —
         // one state-to-colour mapping in the app, not two that can drift apart.
@@ -408,6 +667,11 @@ namespace ClaudeBuddy
             // stops for something nobody can see.
             Glow.IsVisible = GlowsFor(state);
             if (Glow.IsVisible) _glowBrush.GradientStops = GlowStops(_accentColor ?? to);
+
+            // With a picture in the fill, the ring is the only thing left
+            // carrying the colour, so it has to follow the same changes — and
+            // fade rather than snap, the way the fill did.
+            if (_hasAvatar && _ringBrush is not null) _ringBrush.Color = to;
         }
 
         // Opaque at the centre, gone by the edge — the same falloff a blur gave,
@@ -425,7 +689,22 @@ namespace ClaudeBuddy
             new GradientStop(Color.FromArgb(0, color.R, color.G, color.B), 1.0)
         };
 
-        private static Control ThoughtBubble(string title, string? path)
+        // Shared with the flyout's buttons, which are a different window but the
+        // same app: a second tooltip look would be a second answer to a question
+        // this already answered. The global ToolTip style is stripped to nothing
+        // precisely so this control *is* the tooltip, which also means anything
+        // handing ToolTip a bare string gets unstyled text floating on the
+        // desktop — how the flyout's first set of tips shipped.
+        // `compact` drops the tail and tightens the type: a caption for a
+        // button, rather than a thought belonging to an orb.
+        //
+        // The tail is two dots *below* the bubble, so it reads as a thought
+        // rising from whatever is underneath — right for an orb's own tooltip,
+        // which sits above the orb and points back down at it. A button's label
+        // sits below the button, where the same dots point at nothing and read
+        // as a rendering fault. Sharing the palette and dropping the tail keeps
+        // one look without claiming a button is thinking.
+        internal static Control ThoughtBubble(string title, string? path, bool compact = false)
         {
             var bg = Color.Parse("#E6EAECF0");
             var fg = Color.Parse("#FF2A2A35");
@@ -436,7 +715,7 @@ namespace ClaudeBuddy
             content.Children.Add(new TextBlock
             {
                 Text = title,
-                FontSize = 12.5,
+                FontSize = compact ? 11 : 12.5,
                 FontFamily = font,
                 FontWeight = FontWeight.SemiBold,
                 Foreground = new SolidColorBrush(fg),
@@ -460,11 +739,13 @@ namespace ClaudeBuddy
             var bubble = new Border
             {
                 Background = new SolidColorBrush(bg),
-                CornerRadius = new CornerRadius(14),
-                Padding = new Thickness(14, 9),
+                CornerRadius = new CornerRadius(compact ? 9 : 14),
+                Padding = compact ? new Thickness(9, 5) : new Thickness(14, 9),
                 BoxShadow = BoxShadows.Parse("0 2 8 0 #30000000"),
                 Child = content
             };
+
+            if (compact) return bubble;
 
             var canvas = new Canvas
             {
@@ -604,6 +885,7 @@ namespace ClaudeBuddy
                     SettingsWindow.Toggle();
                 };
                 _flyout.SpeakClicked += OnSpeakClicked;
+                _flyout.ChatClicked += OpenChat;
 
                 // The other half of the hover bridge described on
                 // _hideFlyoutTimer: entering the flyout must cancel a hide
@@ -614,8 +896,23 @@ namespace ClaudeBuddy
                 _flyout.PointerExited += (_, _) => ScheduleFlyoutHide();
             }
 
+            // Shown for both kinds now. It used to be hidden on gateway orbs
+            // because dictation had nowhere to go for them; the chat panel is
+            // that somewhere, and StopRecording opens it with the words in its
+            // input box rather than sending them.
             bool micOn = ClaudeBuddySettings.VoiceInputEnabled;
             _flyout.SetMicVisible(micOn);
+
+            // Only on local sessions. A gateway orb opens its panel when you
+            // click it, so a button that did the same thing one ring further out
+            // would be a second way to do the thing the orb already does.
+            // Any local CLI, each behind its own setting. A gateway orb still
+            // doesn't get the button: clicking it already opens its panel, so a
+            // second way to do the same thing one ring further out is noise.
+            _flyout.SetChatVisible(
+                (_lastStatus?.IsLocalCli ?? false)
+                && CliChatFormat.For(_lastStatus!.Source).ChatEnabled());
+
             _flyout.SetArranged(SessionManager.Instance?.IsArranged ?? false);
 
             // Speech is global rather than per-orb, so a flyout opening
@@ -668,10 +965,30 @@ namespace ClaudeBuddy
                 return;
             }
 
+            // A gateway session has no transcript on this machine, so the text
+            // comes from the conversation itself — fetched if this session has
+            // never been opened, which is why this branch is async where the
+            // local one isn't.
+            if (_lastStatus?.Source == SessionSource.OpenClaw)
+            {
+                _ = SpeakRemoteAsync();
+                return;
+            }
+
             var text = FindSpeakableText();
             if (text is null) return;
 
             TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+        }
+
+        private async Task SpeakRemoteAsync()
+        {
+            var title = _lastStatus?.Title ?? "";
+            var text = await OpenClawSessions.LastAssistantTextAsync(SessionId, title);
+
+            if (string.IsNullOrWhiteSpace(text)) return;
+
+            Dispatcher.UIThread.Post(() => TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice));
         }
 
         // Called by SessionManager when speech starts, changes phase or stops.
@@ -687,6 +1004,24 @@ namespace ClaudeBuddy
         // last turn" means when you click its orb.
         private string? FindSpeakableText()
         {
+            // Not for a gateway session. It has no transcript on this machine,
+            // and the cwd fallback below would match a *local* project directory
+            // with the same path and speak an unrelated local session's last
+            // turn as though it were the remote agent's. The lookup also walks
+            // every project directory recursively, on the UI thread, before
+            // getting there.
+            //
+            if (!(_lastStatus?.IsLocalCli ?? false)) return null;
+
+            // Codex reads through its own entry point, which understands a
+            // rollout and — the part that matters — has no cwd fallback. Sharing
+            // the path below would have found no Claude Code rows in a rollout
+            // and then searched ~/.claude/projects for the same directory,
+            // speaking an unrelated Claude Code session's last turn out of a
+            // Codex orb.
+            if (_lastStatus?.Source == SessionSource.Codex)
+                return TranscriptReader.LatestCodexAgentText(_lastStatus?.TranscriptPath);
+
             var path = _lastStatus?.TranscriptPath;
             var text = TranscriptReader.LatestAssistantText(path, SessionId);
             if (text is not null) return text;
@@ -709,6 +1044,36 @@ namespace ClaudeBuddy
         // arrange button would arrange or restore.
         public void SetFlyoutArranged(bool arranged) => _flyout?.SetArranged(arranged);
 
+        // Called by ChatPanel when it closes itself, so the arc becomes
+        // available again without the orb having to watch the window.
+        public void SetChatOpen(bool open) => _chatOpen = open;
+
+        // The flyout's keyboard button. Same destination a gateway orb's click
+        // reaches, arrived at differently because for a local session the click
+        // is already spoken for.
+        private void OpenChat()
+        {
+            var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
+            if (chat is null) return;
+
+            _chatOpen = true;
+            HideFlyoutNow();
+            ChatPanel.OpenFor(this, chat);
+        }
+
+        // Whether a dictation capture is in progress. The panel mirrors it on
+        // its own mic button and refuses to be dismissed while it is true.
+        public bool IsRecording => _recording;
+
+        // The panel's mic drives this orb's recorder rather than constructing a
+        // second one — that keeps one recorder per session, along with the red
+        // pulse and the 30-second cap, all working exactly as they already do.
+        public void ToggleRecording()
+        {
+            if (_recording) StopRecording();
+            else StartRecording();
+        }
+
         // Hides the flyout unconditionally — used by SessionManager before
         // starting an arrangement animation, since a flyout anchored to a
         // moving orb would look broken.
@@ -719,11 +1084,55 @@ namespace ClaudeBuddy
         // moving orb would read as broken rather than as a hover effect.
         private void HideFlyoutNow()
         {
+            CancelFlyoutShow();
             _hideFlyoutTimer?.Stop();
             _flyout?.Hide();
         }
 
         private void CancelFlyoutHide() => _hideFlyoutTimer?.Stop();
+
+        private void CancelFlyoutShow() => _showFlyoutTimer?.Stop();
+
+        // The delay is only for *opening* the flyout from nothing. Coming back
+        // onto the orb from its own open flyout is the other half of the hover
+        // bridge, not a new request, and pausing there would be a stutter in
+        // the middle of an interaction the user is already having.
+        private void ScheduleFlyoutShow()
+        {
+            // On the method rather than on PointerEntered, the same way
+            // ScheduleFlyoutHide carries its own _recording guard: the rule is
+            // "the arc does not open while the chat panel has that space", and a
+            // rule about the arc belongs where the arc is scheduled. Left on the
+            // handler it is one caller's business, and the next caller has to
+            // remember it.
+            if (_chatOpen) return;
+
+            if (_flyout?.IsVisible == true)
+            {
+                EnsureFlyoutShown();
+                return;
+            }
+
+            _showFlyoutTimer ??= new DispatcherTimer { Interval = FlyoutHoverDelay };
+            _showFlyoutTimer.Stop();
+
+            // One handler, however many hovers — same reason as the hide timer.
+            _showFlyoutTimer.Tick -= OnFlyoutShowTick;
+            _showFlyoutTimer.Tick += OnFlyoutShowTick;
+            _showFlyoutTimer.Start();
+        }
+
+        private void OnFlyoutShowTick(object? sender, EventArgs e)
+        {
+            _showFlyoutTimer!.Stop();
+
+            // PointerExited cancels this timer, but a drag that carries the orb
+            // out from under a stationary cursor, or an orb closing mid-wait,
+            // doesn't necessarily raise one — so confirm rather than assume.
+            if (!Root.IsPointerOver) return;
+
+            EnsureFlyoutShown();
+        }
 
         // A no-op while recording: the flyout is the only way to stop, so it
         // must stay up regardless of where the pointer wanders.
@@ -780,6 +1189,7 @@ namespace ClaudeBuddy
             }
 
             _recording = true;
+            ChatPanel.SetRecording(this, true);
 
             // Flat red, fast — visibly distinct from the waiting/generating
             // pulses, so "listening" reads as its own thing rather than as
@@ -801,6 +1211,7 @@ namespace ClaudeBuddy
             if (!_recording || _recorder is null) return;
 
             _recording = false;
+            ChatPanel.SetRecording(this, false);
             _recordingCap?.Stop();
             _recordingCap = null;
 
@@ -840,6 +1251,34 @@ namespace ClaudeBuddy
             var text = await SpeechTranscriber.TranscribeAsync(pcm);
             if (string.IsNullOrWhiteSpace(text)) return;
 
+            // With a chat panel open for this session, the words belong in its
+            // input box — unsent, for the reason TerminalFocuser.SendText gives
+            // at its own definition: transcription is a typing aid and doesn't
+            // get to decide you meant it. Reviewing before Enter is the whole
+            // contract, and it is the same one either way.
+            if (ChatPanel.IsOpenFor(SessionId))
+            {
+                ChatPanel.AppendToInput(text);
+                return;
+            }
+
+            // Dictated at a gateway orb with no panel up: open one and put the
+            // words in it. Still unsent — the panel is what makes "review before
+            // Enter" possible for a session that has no terminal to review in.
+            if (_lastStatus?.Source == SessionSource.OpenClaw)
+            {
+                var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
+                if (chat is not null)
+                {
+                    _chatOpen = true;
+                    HideFlyoutNow();
+                    ChatPanel.OpenFor(this, chat);
+                    ChatPanel.AppendToInput(text);
+                }
+
+                return;
+            }
+
             var status = _lastStatus;
             if (status is null) return;
 
@@ -857,6 +1296,7 @@ namespace ClaudeBuddy
             if (!_recording || _recorder is null) return;
 
             _recording = false;
+            ChatPanel.SetRecording(this, false);
             try { _recorder.Stop(); } catch { }
             _recorder.Dispose();
             _recorder = null;
@@ -902,6 +1342,11 @@ namespace ClaudeBuddy
             {
                 _pressed = true;
                 _dragging = false;
+
+                // Recorded here because only the press carries it; the release
+                // that acts on it does not.
+                _clickCount = e.ClickCount;
+
                 _windowStart = Position;
                 _pointerStart = this.PointToScreen(e.GetPosition(this));
 
@@ -962,6 +1407,7 @@ namespace ClaudeBuddy
             // enough to do per pointer move: a few windows repositioned, no
             // scan of anything.
             TeamLinks.Refresh();
+            ChatPanel.RepositionFor(this);
         }
 
         protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -1002,13 +1448,135 @@ namespace ClaudeBuddy
                 // no client attached anywhere — so a click that finds nothing
                 // falls through to the session leading it. See
                 // TerminalFocuser.Focus.
-                TerminalFocuser.Focus(
-                    _lastStatus,
-                    SessionManager.Instance?.StatusFor(_lastStatus?.Lead),
-                    SessionId);
+                // A click has always meant "take me to this session". For a
+                // Claude Code session that is its terminal; for a gateway
+                // session there is no terminal anywhere, and the honest answer
+                // is a place to read and reply — so the panel *is* the
+                // destination rather than an extra affordance.
+                //
+                // Guarded on the source rather than on RemoteChatFor answering,
+                // which it now does for local sessions as well: that is what the
+                // flyout's keyboard button opens, and it must not quietly become
+                // what a click does instead. Going to the terminal is the oldest
+                // behaviour this app has and people reach for it without looking.
+                OnClicked(_clickCount);
             }
 
             _followers.Clear();
+        }
+
+        // --- what a click does ------------------------------------------------
+
+        // One, two or three clicks, each bound to whatever the user chose.
+        //
+        // The awkward part is that these gestures are prefixes of each other: a
+        // double click is a single click that turns out to have company. So a
+        // single click can only be acted on immediately if nothing longer is
+        // bound to something different — otherwise it has to wait long enough to
+        // find out, and going to a terminal is the most common thing this app
+        // does. The wait is therefore paid only by people who asked for it by
+        // binding a second gesture, and never by anyone leaving the defaults
+        // alone, where two and three clicks do nothing at all.
+        private const int MultiClickMs = 300;
+
+        private DispatcherTimer? _clickTimer;
+        private int _pendingClicks;
+        private int _clickCount = 1;
+
+        private void OnClicked(int clicks)
+        {
+            // Beyond three there is nothing to bind, and treating a fourth click
+            // as a fresh single would fire the single-click action in the middle
+            // of somebody drumming on the orb.
+            if (clicks > 3) return;
+
+            _clickTimer?.Stop();
+            _clickTimer = null;
+            _pendingClicks = clicks;
+
+            if (!AwaitsMoreClicks(clicks))
+            {
+                RunClickAction(clicks);
+                return;
+            }
+
+            _clickTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(MultiClickMs) };
+            _clickTimer.Tick += (_, _) =>
+            {
+                _clickTimer?.Stop();
+                _clickTimer = null;
+                RunClickAction(_pendingClicks);
+            };
+            _clickTimer.Start();
+        }
+
+        // Whether a longer gesture is bound to something this one isn't already
+        // going to do. Same action on two and three as on one means the wait
+        // would change nothing, so there is no reason to pay it.
+        private static bool AwaitsMoreClicks(int clicks)
+        {
+            var mine = ActionFor(clicks);
+
+            for (var longer = clicks + 1; longer <= 3; longer++)
+            {
+                var other = ActionFor(longer);
+                if (other != "none" && other != mine) return true;
+            }
+
+            return false;
+        }
+
+        private static string ActionFor(int clicks) => clicks switch
+        {
+            1 => ClaudeBuddySettings.ClickAction,
+            2 => ClaudeBuddySettings.DoubleClickAction,
+            _ => ClaudeBuddySettings.TripleClickAction
+        };
+
+        private void RunClickAction(int clicks)
+        {
+            switch (ActionFor(clicks))
+            {
+                case "chat":
+                    OpenChat();
+                    break;
+
+                case "speak":
+                    OnSpeakClicked();
+                    break;
+
+                case "none":
+                    break;
+
+                default:
+                    GoToSession();
+                    break;
+            }
+        }
+
+        // "Take me to this session", which for a local CLI is its terminal and
+        // for a gateway agent is the only place it exists — the panel. That
+        // second case is not a fallback bolted on for this feature; it is what a
+        // click on a gateway orb has always done, because there is no terminal
+        // anywhere to go to.
+        private void GoToSession()
+        {
+            if (!(_lastStatus?.IsLocalCli ?? false))
+            {
+                var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
+                if (chat is not null)
+                {
+                    _chatOpen = true;
+                    HideFlyoutNow();
+                    ChatPanel.OpenFor(this, chat);
+                    return;
+                }
+            }
+
+            TerminalFocuser.Focus(
+                _lastStatus,
+                SessionManager.Instance?.StatusFor(_lastStatus?.Lead),
+                SessionId);
         }
 
         // Put the orb at a position it was dragged to in an earlier run, without

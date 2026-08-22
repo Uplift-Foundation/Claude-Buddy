@@ -17,9 +17,9 @@
          explicitly from the numeric part. Version flows into
          AssemblyInformationalVersion, which is what actually shows the
          prerelease label. -->
-    <Version>0.3.0-beta</Version>
-    <AssemblyVersion>0.2.0.0</AssemblyVersion>
-    <FileVersion>0.2.0.0</FileVersion>
+    <Version>0.4.0-beta</Version>
+    <AssemblyVersion>0.4.0.0</AssemblyVersion>
+    <FileVersion>0.4.0.0</FileVersion>
     <Product>Claude Buddy</Product>
     <Authors>Kawika Miller, Warren Thompson</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -52,6 +52,27 @@
          separate downloadable process exists to avoid. Harmless until tools/
          gained its first .cs file, which is exactly why it is easy to miss. -->
     <Compile Remove="tools\**" />
+
+    <!-- Same trap, second door: tests/ has its own project with its own entry
+         point, and the SDK's default glob would compile it into the app. It is
+         also where the app's own obj/ would be walked into, which shows up as
+         duplicate assembly attributes rather than as anything mentioning tests. -->
+    <Compile Remove="tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The new xUnit suites reference this project rather than compiling
+         individual shipped files (the tests/ArrangementTests-style
+         <Compile Include>), because they need SessionManager and
+         ClaudeBuddySettings, whose dependency closures are too large to pull
+         in that way. A ProjectReference alone gives them only public types,
+         so this grants the three of them the internal ones too — the same
+         private-pure-logic (SessionManager's scan rules, AgentTeam's
+         sanitizers) that made them worth testing in the first place. -->
+    <InternalsVisibleTo Include="ClaudeBuddy.UnitTests" />
+    <InternalsVisibleTo Include="ClaudeBuddy.IntegrationTests" />
+    <InternalsVisibleTo Include="ClaudeBuddy.UiTests" />
+    <InternalsVisibleTo Include="ClaudeBuddy.UiScreenshots" />
   </ItemGroup>
 
   <ItemGroup>
@@ -63,6 +84,20 @@
          theme bump that dropped it would otherwise break the build for a reason
          with nothing to do with theming. -->
     <PackageReference Include="Avalonia.Controls.ColorPicker" Version="11.3.7" />
+    <!-- Ed25519, for the OpenClaw gateway's device identity. The gateway will
+         not grant operator scopes to a bearer token alone — it answers
+         DEVICE_IDENTITY_REQUIRED until the connect carries a signature over its
+         challenge nonce (see docs/openclaw-findings.md) — and .NET 10's BCL
+         still has no Ed25519.
+
+         BouncyCastle rather than NSec deliberately: NSec is libsodium, so it
+         ships a native dylib, and this app publishes SelfContained +
+         PublishSingleFile and is signed with a Developer ID under a hardened
+         runtime. Every embedded dylib then has to be signed too, and the
+         comment at the top of tools/build-macos-app.sh records what code-identity
+         mistakes cost here — they break Automation consent invisibly. This one
+         is pure managed, so it has no packaging consequences at all. -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
     <PackageReference Include="PvRecorder" Version="1.2.13" />
     <PackageReference Include="System.Management" Version="8.0.0" />
     <!-- AppKit-shaped control styles (MIT, Devolutions). Loaded only on macOS —

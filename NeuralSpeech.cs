@@ -106,14 +106,105 @@ namespace ClaudeBuddy
 
         private static string EnginePath => Path.Combine(Root, EngineVersion, EngineExeName);
 
+        // The engine actually used to speak: the one this build asks for, or
+        // failing that the newest other version still on disk.
+        //
+        // Why a fallback exists at all. The directory is keyed by the app's
+        // version, which is right — it guarantees a build runs the engine
+        // published beside it, and a shared path would leave an engine from an
+        // older release in use forever, since nothing but a missing file ever
+        // triggers a download. But keying it that way with no fallback meant a
+        // version change *deleted the feature*: a 0.3.0-beta build looked for its
+        // own directory, found only the 0.2.0-beta one already on disk, reported
+        // "not installed", and dropped every neural voice out of the picker with
+        // no explanation and no prompt. Observed on a real machine, and only
+        // because someone noticed their voice was gone — the failure is silent by
+        // construction, since speaking falls back to a system voice that works.
+        //
+        // Nobody hit this on a released build: the engine first shipped in
+        // 0.3.0-beta, so the only 0.2.0-beta installs were built from source
+        // before the release. The upgrade after this one is when it would have
+        // started happening to everyone.
+        //
+        // An engine one release old still speaks. Its contract with the app is
+        // four things — text on stdin, "speaking" on stdout, --list-voices,
+        // --user-voices — none of which has changed, and if one ever does, the
+        // right engine is already downloading by then. So the fallback is the
+        // conservative choice, not the risky one: the alternative is silence.
+        private static string? UsableEnginePath =>
+            File.Exists(EnginePath) ? EnginePath : NewestOtherEngine();
+
+        private static string? NewestOtherEngine()
+        {
+            try
+            {
+                if (!Directory.Exists(Root)) return null;
+
+                return Directory.EnumerateDirectories(Root)
+                    .Where(directory => File.Exists(Path.Combine(directory, EngineExeName)))
+                    .OrderByDescending(directory => Path.GetFileName(directory), VersionOrder)
+                    .Select(directory => Path.Combine(directory, EngineExeName))
+                    .FirstOrDefault();
+            }
+            catch (Exception ex)
+            {
+                // A directory we cannot enumerate is the same as no fallback:
+                // speaking degrades, it does not fail.
+                Console.Error.WriteLine($"Claude Buddy: couldn't scan for a fallback engine: {ex.Message}");
+                return null;
+            }
+        }
+
+        // Newest by version number, not by string. An ordinal sort puts
+        // "0.10.0-beta" *below* "0.2.0-beta", which would pick a year-old engine
+        // over last month's the first time the minor version reaches double
+        // digits — a bug that would lie dormant until 0.10 and then look like
+        // anything but a sort order.
+        private static readonly IComparer<string> VersionOrder =
+            Comparer<string>.Create((left, right) =>
+            {
+                static Version Parse(string name)
+                {
+                    var dash = name.IndexOf('-');          // "0.3.0-beta" -> "0.3.0"
+                    var core = dash < 0 ? name : name[..dash];
+                    return Version.TryParse(core, out var version) ? version : new Version(0, 0);
+                }
+
+                var byVersion = Parse(left).CompareTo(Parse(right));
+
+                // Same numeric version, different prerelease tag: fall back to
+                // the string so the order is at least stable rather than
+                // arbitrary.
+                return byVersion != 0
+                    ? byVersion
+                    : string.Compare(left, right, StringComparison.OrdinalIgnoreCase);
+            });
+
         // Both halves have to be present, and they arrive separately — the engine
         // is ~150MB of executable and the model another 156MB, so a download
         // interrupted between them must not read as ready.
+        // "The engine this build wants is on disk." This is the download's
+        // question, deliberately still exact-version: a fallback being usable is
+        // no reason to stop fetching the right one.
         public static bool Installed =>
             File.Exists(EnginePath) && File.Exists(ModelPath);
 
-        // What TextToSpeech asks before routing anything here.
-        public static bool Available => Installed && ClaudeBuddySettings.NeuralVoiceEnabled;
+        // "Something here can speak." This is the *speaking* question, and the
+        // two are different whenever a version has just changed.
+        public static bool Usable =>
+            UsableEnginePath is not null && File.Exists(ModelPath);
+
+        // An engine is installed, but not the one this build asks for — so a
+        // download is worth starting even though nothing looks broken to the
+        // user. Distinct from `!Installed` alone, which is also true of a machine
+        // that has never enabled the feature and must not be downloaded to
+        // unasked.
+        public static bool NeedsUpdate => !Installed && Usable;
+
+        // What TextToSpeech asks before routing anything here. Usable rather than
+        // Installed, so a version bump costs an older engine for a few minutes
+        // instead of costing the user their voice.
+        public static bool Available => Usable && ClaudeBuddySettings.NeuralVoiceEnabled;
 
         public static string DefaultVoiceName => "af_heart";
 
@@ -205,6 +296,11 @@ namespace ClaudeBuddy
                     Directory.Move(staging, target);
 
                     try { File.Delete(zip); } catch { /* a leftover zip is untidy, not broken */ }
+
+                    // Only now that the right engine is in place, because until
+                    // the Move above an older one was the only thing that could
+                    // speak.
+                    RemoveSupersededEngines();
                 }
 
                 progress?.Report("High-quality voice ready.");
@@ -213,6 +309,93 @@ namespace ClaudeBuddy
             {
                 lock (DownloadGate) _downloadTask = null;
             }
+        }
+
+        // Every engine directory that isn't this build's, deleted once this
+        // build's is in place. Nothing did this before, so each release left
+        // ~188MB of dead engine in %APPDATA% forever — two of them on the machine
+        // where the version bug was found, plus the 157MB model, for 531MB of
+        // which 188MB was reachable by nothing.
+        //
+        // Safe to be indiscriminate here for one reason worth stating: voices the
+        // user added live in UserVoicesDirectory, deliberately outside Root. That
+        // decision was made so an upgrade couldn't eat them, and this is the code
+        // it was made for.
+        //
+        // Failures are ignored on purpose. A directory that won't delete — a file
+        // locked by a speech process that is still exiting, most likely — costs
+        // disk, and disk is not worth failing an install that otherwise
+        // succeeded. The next update tries again.
+        private static void RemoveSupersededEngines()
+        {
+            try
+            {
+                if (!Directory.Exists(Root)) return;
+
+                foreach (var directory in Directory.EnumerateDirectories(Root))
+                {
+                    var name = Path.GetFileName(directory);
+                    if (string.Equals(name, EngineVersion, StringComparison.OrdinalIgnoreCase)) continue;
+
+                    try
+                    {
+                        Directory.Delete(directory, recursive: true);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine(
+                            $"Claude Buddy: couldn't remove the old speech engine {name}: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Claude Buddy: couldn't tidy old speech engines: {ex.Message}");
+            }
+        }
+
+        // Called at startup. Fetches the engine for this build when an older one
+        // is already installed, and does nothing at all otherwise — in
+        // particular, nothing on a machine that has never enabled the feature,
+        // which must never be handed a 300MB download it didn't ask for.
+        //
+        // Silent rather than prompted, deliberately. The user opted into this
+        // feature and to a larger download than this one; asking again on the
+        // launch after an upgrade is a dialog with no decision behind it, and
+        // "yes" is the only answer that leaves the feature working. Settings shows
+        // progress if it happens to be open, and speech keeps working from the
+        // older engine throughout either way.
+        //
+        // Fire-and-forget by contract: the returned task completes when the
+        // download does, and the caller uses that only to refresh the voice list.
+        // A failure is logged and left — the older engine still speaks, and the
+        // next launch tries again.
+        public static Task EnsureCurrentAsync()
+        {
+            if (!ClaudeBuddySettings.NeuralVoiceEnabled) return Task.CompletedTask;
+
+            // Already current: nothing to fetch, but this is the moment to
+            // reclaim anything a previous version left behind. Without this the
+            // tidy-up only ever runs as part of an install, so a machine that
+            // upgraded before this fix existed keeps carrying its orphan until
+            // the *next* release happens to download something.
+            if (Installed)
+            {
+                RemoveSupersededEngines();
+                return Task.CompletedTask;
+            }
+
+            if (!NeedsUpdate) return Task.CompletedTask;
+
+            return DownloadAsync().ContinueWith(task =>
+            {
+                if (task.IsFaulted)
+                {
+                    Console.Error.WriteLine(
+                        "Claude Buddy: couldn't update the speech engine for this version; "
+                        + $"still using an older one. {task.Exception?.GetBaseException().Message}");
+                }
+            }, TaskScheduler.Default);
         }
 
         private static async Task DownloadFileAsync(string url, string destination)
@@ -238,11 +421,16 @@ namespace ClaudeBuddy
         public static List<string> Voices()
         {
             var voices = new List<string>();
-            if (!Installed) return voices;
+
+            // Whichever engine can run, not only the matching one: this is what
+            // the settings picker is built from, so gating it on the exact
+            // version is what made the voices vanish on a version bump.
+            var engine = UsableEnginePath;
+            if (engine is null || !File.Exists(ModelPath)) return voices;
 
             try
             {
-                var process = Process.Start(new ProcessStartInfo(EnginePath)
+                var process = Process.Start(new ProcessStartInfo(engine)
                 {
                     ArgumentList = { "--list-voices", "--user-voices", UserVoicesDirectory },
                     UseShellExecute = false,
@@ -286,9 +474,10 @@ namespace ClaudeBuddy
         // showing a stop button over silence.
         public static Process? Start(string text, string? voice, Action? onSpeaking)
         {
-            if (!Installed) return null;
+            var engine = UsableEnginePath;
+            if (engine is null || !File.Exists(ModelPath)) return null;
 
-            var startInfo = new ProcessStartInfo(EnginePath)
+            var startInfo = new ProcessStartInfo(engine)
             {
                 ArgumentList =
                 {

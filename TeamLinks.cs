@@ -32,15 +32,12 @@ namespace ClaudeBuddy
         private const double HeadLength = 9;
         private const double HeadHalfWidth = 4.5;
 
-        // Clearance between an orb's visible edge and the arrow. The lead end
-        // gets more so the arrowhead reads as pointing *at* the orb rather than
-        // touching it.
-        private const double MemberGap = 4;
-        private const double LeadGap = 7;
-
-        // An arrow shorter than its own head is a blob, not an arrow. Two orbs
-        // this close together are legible without one anyway.
-        private const double MinimumLength = HeadLength + 4;
+        // The room an arrow needs lives in TeamLinkGeometry, shared with
+        // whatever places the orbs — see the note there about the two drifting
+        // apart and every arrow silently vanishing.
+        private const double MemberGap = TeamLinkGeometry.MemberGap;
+        private const double LeadGap = TeamLinkGeometry.LeadGap;
+        private const double MinimumLength = TeamLinkGeometry.MinimumLength;
 
         // Below full opacity the arrows sit behind the orbs visually without
         // needing to sit behind them in the window stack (they can't — every

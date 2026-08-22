@@ -36,6 +36,19 @@ namespace ClaudeBuddy
         {
             if (status is null) return;
 
+            // A gateway session has no terminal anywhere and no local process,
+            // so there is nothing to focus. Returning here also keeps it out of
+            // the background-session branch below, which reads pid <= 0 as "a
+            // local `claude daemon` session" and would open a tmux window trying
+            // to attach a session id that exists only on another machine.
+            //
+            // Widened from Claude Code to any local CLI: a Codex session is in
+            // a terminal like any other and everything below finds it the same
+            // way, from the tmux pane or the tty the hook recorded. The one
+            // exception is that background-session branch, which stays Claude
+            // Code's — see the guard on it.
+            if (!status.IsLocalCli) return;
+
             // Resolving a target runs several short-lived processes (tmux
             // queries, ps walks, osascript) and waits on their output; doing
             // that on the UI thread would stall every orb's animation for the
@@ -51,7 +64,16 @@ namespace ClaudeBuddy
                 // rather than leave the click doing nothing. Gated on having no
                 // pid so a real session whose terminal merely couldn't be
                 // resolved gets a diagnosis rather than a surprise window.
-                if (status.SessionPid <= 0 && !string.IsNullOrEmpty(sessionId))
+                //
+                // Still Claude Code's alone. This ends in `claude attach`, and
+                // there is no Codex equivalent to attach to. The scan already
+                // drops a pid-less Codex session before it can have an orb, so
+                // nothing should reach here — this is the belt to that braces,
+                // because the failure it prevents is a window opening onto
+                // someone else's session.
+                if (status.Source == SessionSource.ClaudeCode
+                    && status.SessionPid <= 0
+                    && !string.IsNullOrEmpty(sessionId))
                 {
                     var pane = AgentTeamViewer.AttachSession(sessionId, status.Cwd);
 
@@ -94,6 +116,14 @@ namespace ClaudeBuddy
         {
             if (status is null || string.IsNullOrEmpty(text)) return Task.CompletedTask;
 
+            // Nowhere safe to type. Without this the macOS path falls through to
+            // SendTextMacKeystroke, which is an unconditional System Events
+            // keystroke into whatever happens to be frontmost — so a dictated
+            // sentence lands in an editor, a browser, or another session. That
+            // is a latent hazard for any pane-less session; a gateway session
+            // would make it the normal case.
+            if (!status.IsLocalCli) return Task.CompletedTask;
+
             return Task.Run(async () =>
             {
                 // Reuses FocusCore as-is rather than a bespoke synchronous
@@ -135,6 +165,109 @@ namespace ClaudeBuddy
             if (tmux is null) return false;
 
             return TryRun(tmux, out _, TmuxArgs(status, "send-keys", "-t", status.TmuxPane, "-l", text));
+        }
+
+        // --- the chat panel's half ---
+        //
+        // Everything below is tmux-only and deliberately so. The keystroke and
+        // SendInput fallbacks above type into whatever is *frontmost*, which
+        // means focusing the terminal first; that is a fine trade for dictation,
+        // which you started by reaching for the orb anyway, and the wrong one
+        // for a chat panel whose entire point is not making you leave what you
+        // are doing. A session with no pane gets a read-only panel instead —
+        // see ClaudeCodeChatSession.CanType.
+
+        // Whether this session can be typed into without anything coming to the
+        // front. The one question the panel asks before enabling its composer.
+        public static bool CanSendQuietly(SessionStatus? status) =>
+            status is { IsLocalCli: true }
+            && !string.IsNullOrEmpty(status.TmuxPane)
+            && ResolveTmuxBinary(status.TmuxBin) is not null;
+
+        // Types the text and presses Enter. The Enter is the whole difference
+        // from SendText above, and it is why this is reached only from a Send
+        // button behind a setting that is off by default: dictation is a typing
+        // aid and doesn't get to decide you meant it, but a person clicking Send
+        // has said exactly that.
+        //
+        // No FocusCore. Nothing comes forward, which is the feature.
+        public static Task<bool> SendTextAndSubmit(SessionStatus? status, string text)
+        {
+            if (status is null || string.IsNullOrEmpty(text)) return Task.FromResult(false);
+            if (!CanSendQuietly(status)) return Task.FromResult(false);
+
+            return Task.Run(() =>
+            {
+                var tmux = ResolveTmuxBinary(status.TmuxBin);
+                if (tmux is null) return false;
+
+                // Through the paste buffer rather than send-keys -l, for
+                // multi-line messages: a literal newline sent as a keystroke is
+                // indistinguishable from pressing Return, so Shift+Enter in the
+                // panel would submit half a sentence and leave the rest to
+                // arrive as a second message. paste-buffer -p wraps it in
+                // bracketed-paste markers, which the TUI reads as one paste.
+                //
+                // -p is safe when the pane's application never asked for
+                // bracketed paste: tmux then sends the text unwrapped, which for
+                // a single line is what send-keys -l would have done anyway.
+                //
+                // -- so a message starting with a dash isn't read as a flag.
+                if (!TryRun(tmux, out _, TmuxArgs(status, "set-buffer", "-b", PasteBuffer, "--", text)))
+                    return false;
+
+                // -d deletes the buffer after pasting, so a half-typed message
+                // isn't left sitting in tmux's paste stack for the next
+                // middle-click anywhere else on the machine to find.
+                if (!TryRun(tmux, out _, TmuxArgs(status,
+                        "paste-buffer", "-b", PasteBuffer, "-t", status.TmuxPane, "-p", "-d")))
+                    return false;
+
+                return TryRun(tmux, out _, TmuxArgs(status, "send-keys", "-t", status.TmuxPane, "Enter"));
+            });
+        }
+
+        private const string PasteBuffer = "claude-buddy";
+
+        // A named key — "Enter", "Escape", or a bare digit for a numbered
+        // dialog. Not -l: these are key names, which is the one case where
+        // letting tmux interpret the argument is the point rather than the
+        // hazard. Only ever called with a constant or with a digit this app
+        // read off the pane itself, never with anything a person typed.
+        public static Task<bool> SendPaneKey(SessionStatus? status, string key)
+        {
+            if (status is null || string.IsNullOrEmpty(key)) return Task.FromResult(false);
+            if (!CanSendQuietly(status)) return Task.FromResult(false);
+
+            return Task.Run(() =>
+            {
+                var tmux = ResolveTmuxBinary(status.TmuxBin);
+                if (tmux is null) return false;
+
+                return TryRun(tmux, out _, TmuxArgs(status, "send-keys", "-t", status.TmuxPane, key));
+            });
+        }
+
+        // What the pane is showing right now, as text.
+        //
+        // This is how a permission prompt gets answered from the panel without
+        // guessing. The dialog is drawn by the TUI and never reaches the
+        // transcript, so the only place its wording exists is the screen —
+        // capture-pane is reading the screen, which is exactly as much as is
+        // needed and no more. Without -e, so no escape sequences come back.
+        public static Task<string?> CapturePane(SessionStatus? status)
+        {
+            if (status is null || !CanSendQuietly(status)) return Task.FromResult<string?>(null);
+
+            return Task.Run<string?>(() =>
+            {
+                var tmux = ResolveTmuxBinary(status.TmuxBin);
+                if (tmux is null) return null;
+
+                return TryRun(tmux, out var screen, TmuxArgs(status, "capture-pane", "-p", "-t", status.TmuxPane))
+                    ? screen
+                    : null;
+            });
         }
 
         // Whether anything was actually brought forward. False means the click
@@ -891,6 +1024,25 @@ namespace ClaudeBuddy
             }
         }
 
+        // The working directory's last segment, which is what a shell puts in a
+        // Windows Terminal tab. Trailing separators are trimmed first so
+        // "C:\src\fmn\" and "C:\src\fmn" give the same answer; a path that is
+        // nothing but a root has no leaf and returns empty, which the caller
+        // treats as "don't attempt tab selection".
+        private static string LeafOf(string cwd)
+        {
+            if (string.IsNullOrEmpty(cwd)) return "";
+
+            var trimmed = cwd.TrimEnd('\\', '/');
+            if (trimmed.Length == 0) return "";
+
+            var cut = trimmed.LastIndexOfAny(new[] { '\\', '/' });
+            var leaf = cut < 0 ? trimmed : trimmed[(cut + 1)..];
+
+            // "C:" is a drive, not a directory anyone named.
+            return leaf.EndsWith(':') ? "" : leaf;
+        }
+
         // WT puts every window of one launch context in a single process, so
         // Process.MainWindowHandle can't tell tabs apart — but UI Automation
         // enumerates the real TabItem elements of every window that process
@@ -931,7 +1083,19 @@ namespace ClaudeBuddy
         {
             tabWindow = IntPtr.Zero;
 
-            if (status.TermPid <= 0 || string.IsNullOrEmpty(status.Title)) return false;
+            // TermPid is no longer required. It is still the cheap path — one
+            // process, its windows only — but a Codex session on Windows
+            // routinely has none: Windows Terminal is not in its ancestry
+            // (measured: powershell -> pwsh -> codex.exe -> node.exe -> sh.exe,
+            // whose own parent has already exited), so the walk has nothing to
+            // record. Refusing on that left every Codex orb falling through to
+            // window activation, which raises the right *window* and shows
+            // whatever tab was already in front — a click that visibly does
+            // nothing when both sessions share one window, which is the normal
+            // case. 0 means "look at every Windows Terminal", and the
+            // one-unambiguous-match rule below is unchanged and is what keeps
+            // the wider search honest.
+            if (status.TermPid < 0) return false;
 
             // The title alone, with no glyph prefix — the script matches on the
             // tab name's *ending*. "✳ " + title was the original, and it is
@@ -955,7 +1119,34 @@ namespace ClaudeBuddy
             // the next status glyph Claude Code invents would break a list
             // again. The one-unambiguous-match rule below is what keeps this
             // honest, and it is unchanged.
-            var target = status.Title;
+            //
+            // What a tab is actually *called* differs by CLI, so the string to
+            // match on does too.
+            //
+            // Claude Code renames the tab to the chat title, so the title is
+            // the identifying text and the tail match above is about its status
+            // glyph. Codex renames nothing: its tab keeps whatever the shell
+            // put there, which is the working directory's leaf — measured live,
+            // a Codex session titled "what branch is this repo on" sat in a tab
+            // named "fmn". Matching the title for Codex could therefore never
+            // succeed, so that was a dead click by construction rather than an
+            // intermittent one.
+            //
+            // The leaf is weaker evidence than a chat title, and it is worth
+            // being clear about that: it names a directory, not a session. Two
+            // Codex sessions in one directory, or a plain shell sitting in it,
+            // produce tabs that read the same — which is exactly what the
+            // exactly-one-match rule is for; two matches refuse and fall
+            // through to window activation rather than guess between them. The
+            // case it cannot see is a *single* non-Codex tab in that directory,
+            // which would be selected; the cost is landing on a terminal in the
+            // right directory rather than the right session, and it is why this
+            // is a leaf match and not a substring one.
+            var target = status.Source == SessionSource.Codex
+                ? LeafOf(status.Cwd)
+                : status.Title;
+
+            if (string.IsNullOrEmpty(target)) return false;
 
             // The script has to reach powershell.exe as a *file* (-File), not
             // as -Command text with trailing arguments — verified the hard
@@ -1041,17 +1232,26 @@ namespace ClaudeBuddy
             Add-Type -AssemblyName UIAutomationClient
             Add-Type -AssemblyName UIAutomationTypes
             $root = [System.Windows.Automation.AutomationElement]::RootElement
-            $procCond = New-Object System.Windows.Automation.PropertyCondition(
-                [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $targetPid)
-            $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $procCond)
+            # A pid of 0 means the hook could not record one (see the caller).
+            # Every Windows Terminal is then in scope, which widens what the
+            # match has to be unambiguous across but does not weaken the rule
+            # itself: still exactly one tab, or nothing happens.
+            $targetPids = if ($targetPid -gt 0) { @($targetPid) }
+                          else { @(Get-Process WindowsTerminal -ErrorAction SilentlyContinue |
+                                   ForEach-Object { $_.Id }) }
             $tabCond = New-Object System.Windows.Automation.PropertyCondition(
                 [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
                 [System.Windows.Automation.ControlType]::TabItem)
             $found = @()
-            foreach ($win in $windows) {
-                foreach ($tab in $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)) {
-                    if ($tab.Current.Name.EndsWith($target, [System.StringComparison]::Ordinal)) {
-                        $found += [pscustomobject]@{ Tab = $tab; Window = $win; Hwnd = $win.Current.NativeWindowHandle }
+            foreach ($somePid in $targetPids) {
+                $procCond = New-Object System.Windows.Automation.PropertyCondition(
+                    [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $somePid)
+                $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $procCond)
+                foreach ($win in $windows) {
+                    foreach ($tab in $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)) {
+                        if ($tab.Current.Name.EndsWith($target, [System.StringComparison]::Ordinal)) {
+                            $found += [pscustomobject]@{ Tab = $tab; Window = $win; Hwnd = $win.Current.NativeWindowHandle }
+                        }
                     }
                 }
             }
@@ -1136,6 +1336,33 @@ namespace ClaudeBuddy
             end repeat
             """;
 
+        // How many times to re-assert a selection that has not taken yet.
+        //
+        // Settling on `frontmost of application` is not quite enough, and the
+        // gap is one step past the note above: that property flips true when the
+        // app becomes active, which is *before* macOS has finished raising the
+        // window activation itself brings forward. A select landing in that gap
+        // is overruled a moment later by the app's own most-recently-used
+        // window — and when that window is on another desktop, you are taken to
+        // the wrong desktop as well as the wrong window.
+        //
+        // Reported as orbs going somewhere wrong on the first click and right
+        // on the second, which is the same rule from the other side: by the
+        // second click the app is already frontmost, so activation raises
+        // nothing and there is no raise left to overrule the select.
+        //
+        // Checked against `frontmost of w`, which is the window's own answer and
+        // reflects what is actually in front. `id of current window` was tried
+        // first and is useless here — it is iTerm's internal notion of current
+        // and reads as correct while a different window is on screen, which is
+        // exactly the failure being chased.
+        //
+        // Deliberately *not* `set frontmost of w to true` alongside the select.
+        // That was in the first version of this and measured worse than the code
+        // it replaced — three failures in six against none — so it is out, and
+        // the loop is only a loop.
+        private const int SelectionVerifyTicks = 12;     // x 50ms = 600ms ceiling
+
         private static string ITermSelectScript(string property, string value) => $$"""
             {{ActivateThenSettle("iTerm")}}
             tell application "iTerm"
@@ -1143,9 +1370,13 @@ namespace ClaudeBuddy
                     repeat with t in tabs of w
                         repeat with s in sessions of t
                             if {{property}} of s is "{{value}}" then
-                                select w
-                                select t
-                                select s
+                                repeat {{SelectionVerifyTicks}} times
+                                    select w
+                                    select t
+                                    select s
+                                    if frontmost of w then return
+                                    delay 0.05
+                                end repeat
                                 return
                             end if
                         end repeat
@@ -1165,8 +1396,16 @@ namespace ClaudeBuddy
                 repeat with w in windows
                     repeat with t in tabs of w
                         if tty of t is "{{(tty.StartsWith("/dev/") ? tty : "/dev/" + tty)}}" then
-                            set selected of t to true
-                            set index of w to 1
+                            -- Re-asserted until it takes, for the reason
+                            -- SelectionVerifyTicks gives. Terminal windows
+                            -- answer `frontmost` too, so the check is the same
+                            -- question asked of the same kind of object.
+                            repeat {{SelectionVerifyTicks}} times
+                                set selected of t to true
+                                set index of w to 1
+                                if frontmost of w then return
+                                delay 0.05
+                            end repeat
                             return
                         end if
                     end repeat

@@ -140,16 +140,82 @@ second by paying the load once. That needs a stdin framing protocol and process
 lifecycle management, and was deliberately deferred until the 3.3 s is judged
 annoying in real use rather than in theory.
 
+## The versioned engine directory needed a fallback, and nearly shipped without one
+
+Found by upgrading a real machine rather than by reading the code, which is the
+only way it *could* be found: the failure is silent by construction.
+
+The engine installs to `speech-engine/<app version>/`, and `Installed` was
+`File.Exists(EnginePath) && File.Exists(ModelPath)`. So the moment `<Version>`
+moved to `0.3.0-beta`, a machine holding a `0.2.0-beta` engine reported *not
+installed*, every neural voice disappeared from the settings picker, and speech
+fell back to a system voice. Nothing said why. The user's report was "seems to
+have lost the kokoro voices?" — there is no error, because from the app's point
+of view the feature was simply never set up.
+
+**Keying the directory to the version is still right**, and the fix does not
+change it. It is what guarantees a build runs the engine published beside it. A
+shared path would be worse in a quieter way: since only a *missing file* triggers
+a download, an engine from an older release would stay in use forever, and a
+future change to the four-item contract between app and engine — text on stdin,
+`speaking` on stdout, `--list-voices`, `--user-voices` — would then fail as a
+behaviour bug rather than as a visible absence.
+
+What was missing was everything around it. Three separate gaps, all measured:
+
+| gap | what it did | what it does now |
+| --- | --- | --- |
+| no fallback | feature vanished on any version change | speaks with the newest other engine on disk |
+| no trigger | nothing ever fetched the matching engine unless the user toggled the setting | `EnsureCurrentAsync()` at startup, silent, no-op unless already enabled and already installed |
+| no cleanup | ~188 MB orphaned per release, forever | superseded directories removed once the right one is in place |
+
+Verified by pointing a harness at the app's own `NeuralSpeech` and lying about
+the assembly version, which is where it reads the version from — so claiming
+`0.4.0-beta` *is* a version bump, with no release required:
+
+```
+this build claims  0.4.0-beta
+engines on disk    0.2.0-beta, 0.3.0-beta
+Installed False   Usable True   NeedsUpdate True
+Voices()  29      -> and audio actually played, engine exit 0
+```
+
+It picks `0.3.0-beta`, not `0.2.0-beta`, which is the part worth a test rather
+than an assumption: **the ordering has to be numeric.** An ordinal string sort
+puts `0.10.0-beta` below `0.2.0-beta`, so the first time the minor version
+reaches double digits the "newest" engine would be a year old — dormant until
+0.10, and then looking like anything except a sort order.
+
+Two more paths checked, because a repair that destroys is worse than the bug:
+
+- **A version with no published engine** (`0.4.0-beta`) logs its 404 and keeps
+  going. Both installed engines survive, the voice list is unchanged, and no
+  partial zip or staging directory is left behind.
+- **Cleanup keeps user voices.** `speech-engine/` went 531 MB → 344 MB, deleting
+  only the superseded `0.2.0-beta`, and `%APPDATA%\ClaudeBuddy\voices\` was
+  untouched. Voices live outside `Root` precisely so an upgrade cannot eat them;
+  this is the code that decision was made for.
+
+**Nobody hit this on a released build.** The engine first shipped in
+`0.3.0-beta`, so the only `0.2.0-beta` installs were built from source before the
+release. The upgrade *after* that one is when it would have started happening to
+everyone — which is why this is a `bugfix/` off `develop` and not a `hotfix/`.
+
 ## Open / unverified
 
 - Bundle size is **132 MB** zipped (self-contained runtime + 82 MB of
   dependencies + 27 MB of voices), so the full first-enable download is ~290 MB
   with the model. Every release re-uploads it.
-- **Not verified end to end:** the download path itself. Local testing used
-  `tools/build-speech-engine.ps1 -Install`, which places the bundle straight into
-  `%APPDATA%` — so extraction, validation and the URL have never actually been
-  exercised against a real release, because no release containing the asset has
-  been cut yet. The first tagged release is what proves it.
+- ~~**Not verified end to end:** the download path itself.~~ **Now verified**,
+  against `v0.3.0-beta` — the first release to carry the asset. The
+  version-derived URL resolved, the zip downloaded, extraction and the
+  validate-before-rename ran, and the engine came up with 29 voices, in **8
+  seconds** on a fast connection. Run by calling the app's own
+  `NeuralSpeech.DownloadAsync` rather than through the settings toggle, so what
+  it proves is the code path and not the button.
+  **Still untested: `ModelUrl`.** The model was already on disk, so the download
+  skipped it — as designed, but it means the one URL pointing at somebody else's
+  repository has never been fetched by this code.
 - Quality on *real* assistant turns — full of identifiers, paths and punctuation —
   has not been compared against SAPI. Kokoro's own notes warn it is weak under
   10–20 tokens and rushes over 400.

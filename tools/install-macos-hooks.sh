@@ -10,6 +10,14 @@
 #   install-macos-hooks.sh              # install / repair
 #   install-macos-hooks.sh --uninstall  # remove just our entries
 #
+# Extra Claude Code accounts — a second one run as
+# `CLAUDE_CONFIG_DIR=~/.claude-work claude` — are separate settings.json files
+# and invisible to the default wiring. Every directory name saved in the app's
+# own settings ("Claude Code profiles" in the Settings window) is wired too, in
+# addition to ~/.claude and never instead of it. That mirrors what
+# install-windows-hooks.ps1 has always done; the two had drifted, and the macOS
+# side was the half that silently left a second account unwired.
+#
 # Safe to re-run: it strips any existing Claude Buddy entries before adding
 # fresh ones, so it converges rather than accumulating duplicates.
 #
@@ -21,6 +29,8 @@
 set -euo pipefail
 
 UNINSTALL=0
+NO_PROFILES=0
+EXTRA_PROFILES=()
 HOOK_DIR="$HOME/.claude/claude-buddy"
 SETTINGS="$HOME/.claude/settings.json"
 
@@ -28,6 +38,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --uninstall) UNINSTALL=1; shift ;;
     --settings) SETTINGS="$2"; shift 2 ;;
+    # One extra profile, explicitly. The saved list is used when this is absent.
+    --profile-dir) EXTRA_PROFILES+=("$2"); shift 2 ;;
+    # Don't recurse into the saved profiles. Set when this script re-invokes
+    # itself for one of them, which is how each gets its own settings path
+    # without the merge below having to loop.
+    --no-profiles) NO_PROFILES=1; shift ;;
     --hook-dir) HOOK_DIR="$2"; shift 2 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -177,4 +193,75 @@ else
   echo
   echo "Restart any running Claude Code sessions — hooks are read at session start,"
   echo "so existing sessions will not produce orbs until they are restarted."
+fi
+
+# --- extra accounts -----------------------------------------------------------
+
+# The directory names saved in the app's own settings, one per line.
+#
+# Read with JXA for the reason the merge above uses it: a clean Mac has no jq,
+# and /usr/bin/python3 is a stub that prompts to install the Command Line Tools.
+# A missing or unreadable file is not an error — it just means no extra
+# profiles, which is the common case.
+#
+# Note this file does *not* follow HOME: SpecialFolder.ApplicationData resolves
+# through the OS, so the app reads this exact path whatever HOME says, and so
+# must this.
+saved_profiles() {
+  local settings="$HOME/Library/Application Support/ClaudeBuddy/settings.json"
+  [[ -f "$settings" ]] || return 0
+
+  osascript -l JavaScript -e '
+    ObjC.import("Foundation");
+    function run(a) {
+      const s = $.NSString.stringWithContentsOfFileEncodingError(a[0], $.NSUTF8StringEncoding, null);
+      if (s.isNil()) return "";
+      let parsed;
+      try { parsed = JSON.parse(ObjC.unwrap(s)); } catch (e) { return ""; }
+      const dirs = parsed.claudeCodeProfileDirs;
+      if (!Array.isArray(dirs)) return "";
+      return dirs.filter(function (d) { return typeof d === "string" && d.length > 0; }).join("\n");
+    }' "$settings" 2>/dev/null
+}
+
+if [[ $NO_PROFILES -eq 0 ]]; then
+  profiles=()
+  if [[ ${#EXTRA_PROFILES[@]} -gt 0 ]]; then
+    profiles=("${EXTRA_PROFILES[@]}")
+  else
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && profiles+=("$line")
+    done < <(saved_profiles)
+  fi
+
+  for profile in "${profiles[@]+"${profiles[@]}"}"; do
+    # A bare name under $HOME, the same shape the Settings window stores and
+    # the Windows installer expects. Anything with a slash in it is refused
+    # rather than resolved: CLAUDE_CONFIG_DIR pointing outside $HOME is a
+    # different feature, and guessing at it would write hooks somewhere the
+    # user did not ask for.
+    if [[ "$profile" == */* ]]; then
+      echo "Skipping profile '$profile': expected a directory name under \$HOME, not a path." >&2
+      continue
+    fi
+
+    echo
+    echo "--- profile: $profile"
+
+    # Built as an array rather than with ${UNINSTALL:+--uninstall}, which is
+    # wrong here and was: UNINSTALL is 0 or 1, and "0" is a non-empty string,
+    # so :+ expanded it every time and an *install* quietly unwired every extra
+    # profile it was supposed to be wiring. Caught only because the test looked
+    # at the resulting file rather than at the exit code.
+    mode=()
+    [[ $UNINSTALL -eq 1 ]] && mode=(--uninstall)
+
+    # Re-invoked rather than looped internally, so each profile takes exactly
+    # the same path through the merge as the default one — including the
+    # backup, the JSON validation and the refusal to write anything that did
+    # not parse. A loop would have been a second, less-tested code path.
+    "$0" "${mode[@]+"${mode[@]}"}" --no-profiles \
+         --settings "$HOME/$profile/settings.json" \
+         --hook-dir "$HOOK_DIR"
+  done
 fi

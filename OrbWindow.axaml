@@ -72,6 +72,34 @@
                  Stroke="#22FFFFFF"
                  StrokeThickness="1"/>
 
+        <!-- What kind of conversation this is, for gateway sessions: a
+             scheduled job, a private message, or a room with other people in
+             it. Bottom-right, the way a presence dot rides an avatar, because
+             the orb's other three channels are already spoken for — the fill is
+             the face or the letter, the ring is the agent, and the glow is the
+             state.
+
+             Its own opaque fill rather than a bare glyph: this sits on top of a
+             photograph as often as not, and a glyph alone disappears into a
+             light patch of one. Hidden unless the kind is known, so a local
+             session and an agent's own main session carry nothing — a mark on
+             almost every orb distinguishes nothing. -->
+        <Border x:Name="KindBadge"
+                Width="15" Height="15"
+                IsVisible="False"
+                CornerRadius="7.5"
+                Background="#F2202024"
+                BorderBrush="#59FFFFFF" BorderThickness="1"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                Margin="0,0,8,8"
+                IsHitTestVisible="False">
+            <TextBlock x:Name="KindGlyph"
+                       FontSize="8.5"
+                       Foreground="#F2FFFFFF"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Border>
+
         <!-- Folder initial so you can tell orbs apart at a glance
              (falls back to a dot until the session reports its cwd) -->
         <TextBlock x:Name="Glyph"

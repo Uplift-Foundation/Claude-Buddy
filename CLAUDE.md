@@ -1,8 +1,13 @@
 # Working in this repository
 
 Notes for Claude Code (and anyone else) working here. The README is the real
-documentation — how the app works, how the hook works, how to build installers.
+documentation — how the app works, how the hooks work, how to build installers.
 This file only covers *how work gets landed*, which the code can't tell you.
+
+`AGENTS.md` is the same content for Codex, which does not read this file. Two
+files because each CLI looks for its own name and neither reads the other's —
+**if you change one, change both.** A symlink would look like one file until
+someone checks the repo out on Windows.
 
 ## Branching: gitflow
 
@@ -17,26 +22,38 @@ Everything else is short-lived and **named for what it is**:
 
 | Prefix | For | Branches from | Merges to |
 | --- | --- | --- | --- |
-| `feature/` | anything new or changed | `develop` | `develop` |
+| `feature/` | new or changed behaviour | `develop` | `develop` |
+| `bugfix/` | fixing something that is wrong but not yet released | `develop` | `develop` |
 | `release/` | preparing a version (bump, notes, packaging fixes) | `develop` | `main` **and** `develop` |
-| `hotfix/` | a fix that can't wait for the next release | `main` | `main` **and** `develop` |
+| `hotfix/` | a fix for released code that can't wait | `main` | `main` **and** `develop` |
 
-Use `feature/` for fixes and docs too — the prefix says where the work goes,
-not how important it is. Name the rest of the branch after the change, not the
-issue number: `feature/persist-orb-positions`, not `feature/pr-12`.
+**`bugfix/` and `hotfix/` are not a severity judgement — they say where the fix
+starts.** A bug that only exists on `develop`, or one that is shipped but can
+wait for the next release, is a `bugfix/` off `develop`: it rides the normal
+train and there is nothing to fix on `main`. A `hotfix/` branches off `main`
+because it has to reach released users without waiting for whatever else is
+sitting on `develop`, and it merges to both so the fix isn't lost at the next
+release. If you're unsure which, ask what a user on the latest release
+experiences today: if the answer is "nothing wrong yet", it's a `bugfix/`.
+
+Docs and chores go on `feature/` unless they're correcting something wrong, in
+which case `bugfix/` says more.
+
+Name the rest of the branch after the change, not the issue number:
+`feature/persist-orb-positions`, not `feature/pr-12`.
 
 Releases before 0.1.2 used flat names (`release-0.1.1-beta`) and features went
 straight to `main`; that's history, not a pattern to copy.
 
 ## Pull requests
 
-Open every PR **against `develop`** unless it's a `release/` or `hotfix/`
-branch, which target `main`. The repository's default branch is still `main`, so
-GitHub will offer the wrong base — pass it explicitly:
+Open every PR **against `develop`** — `feature/` and `bugfix/` both — unless it's
+a `release/` or `hotfix/` branch, which target `main`. The repository's default
+branch is still `main`, so GitHub will offer the wrong base — pass it explicitly:
 
 ```bash
 gh pr create --repo Uplift-Foundation/Claude-Buddy --base develop \
-  --head feature/<name> --title "..." --body "..."
+  --head <branch> --title "..." --body "..."
 ```
 
 Say in the PR body what was actually verified and what wasn't. This project
@@ -50,10 +67,15 @@ gone; you have to open a fresh PR. Get the prefix right before the first push.
 
 ## Remotes
 
-- **`upstream`** → `Uplift-Foundation/Claude-Buddy`, the canonical repository.
-  Branches and PRs go here.
-- **`origin`** → `wtvamp/Claude-Buddy`, a personal fork. Older branches still
-  track it; don't add to them.
+`Uplift-Foundation/Claude-Buddy` is the canonical repository; branches and PRs go
+there. **Which remote name points at it varies by clone** — run `git remote -v`
+rather than assuming:
+
+- Clones made from the canonical repo call it **`origin`** and have no
+  `upstream`, so `git fetch upstream` fails outright.
+- Clones made from the **`wtvamp/Claude-Buddy`** fork call the fork `origin` and
+  the canonical repo `upstream`. Older branches still track the fork; don't add
+  to them.
 
 ## Commits
 
@@ -95,16 +117,133 @@ there.
 
 ## Testing UI behavior
 
-There is no test suite; changes to orb behavior are verified by running the app.
+Orb *geometry* has a test suite — `dotnet run --project tests/ArrangementTests`.
+It walks every shape at every end of the spacing slider across a range of orb
+counts and team shapes (nested teams, everything in one team, lead cycles, a
+lead that points at nothing) on three screen sizes, and asserts that nothing
+leaves the work area, nothing is drawn on top of anything else, and no team
+member ends up too far from its lead to be read as one. Run it after any change
+to `OrbArrangement`; it exits non-zero and prints the exact case that failed.
+
+That exists because the arrangement was fixed by eye half a dozen times and each
+fix broke a case the previous one had fixed. Keep the geometry in
+`OrbArrangement` — pure, no windows, no settings — so it stays testable, with
+`SessionManager` only mapping orbs onto its inputs and its answers back.
+
+Transcript and dialog parsing has one too — `dotnet run --project
+tests/TranscriptTests`. It covers `ChatTranscript`: turning Claude Code's JSONL
+into chat turns, and reading a permission dialog off a captured tmux pane. It
+also covers `CodexTranscript`, which does the first of those for Codex's
+rollout JSONL. Same rule as the geometry — both parsers are pure, and the chat
+session only decides which bytes to hand them.
+
+Both parsers read formats nobody here controls, and both fail *quietly*: a
+mis-mapped transcript silently drops a message, and a mis-read dialog puts a
+button on screen that presses something other than what it says. Write fixtures
+from real output, not from memory — the dialog parser was first written against
+an invented fixture and failed on every real dialog. To capture one:
+
+```bash
+tmux capture-pane -p -t %<pane> > /tmp/pane.txt
+dotnet run --project tests/TranscriptTests -- /tmp/pane.txt   # or a .jsonl
+```
+
+Both CLIs write `.jsonl`, so the harness decides which parser to use by looking
+at the file's first row rather than its extension — hand it a Codex rollout
+from `~/.codex/sessions/<yyyy>/<mm>/<dd>/` and it says so in its first line of
+output. If that line names the wrong CLI, nothing below it means anything.
+
+Orb *initials* have one too — `dotnet run --project tests/GlyphTests`. It covers
+`OrbGlyph`: the two letters an orb wears and the ones the chat panel's header
+wears beside it, across kebab and snake case, all three dashes, leading
+punctuation, emoji, and the single-letter setting. It also covers
+`ChatSpeaker`, which decides *whose* letters those are on a message bubble —
+the agent in the session key, or the panel's title for a terminal session, and
+never "nobody" once a name is known.
+
+It exists because the initials were wrong for a year and nobody saw it. Every
+kebab-case name drew two letters off the front of its first word, so
+`claude-buddy` was "Cl" and not "Cb" — invisible partly because it only looks
+wrong when the halves start with different letters, and partly because reading
+the answer meant looking at the screen. Same rule as the geometry: `OrbGlyph` is
+pure and takes the two-letter *setting* as an argument rather than reading it,
+so the tests do not depend on the machine they run on.
+
+## The automated suite
+
+Three more suites, all xUnit rather than the bespoke console-exe pattern
+above, live in `tests/UnitTests`, `tests/IntegrationTests` and `tests/UiTests`.
+One command runs all three: `dotnet test tests/Tests.sln`. They join the three
+suites above rather than replacing them — `Tests.sln` holds only the xUnit
+projects, so it can't accidentally try to `dotnet test` an exe with no test
+SDK reference, and `claudeBuddy.sln` stays app-only. CI (`.github/workflows/ci.yml`)
+runs all six, on both runners, before packaging — a failing test blocks the
+build the same way a failed `dotnet publish` already did.
+
+They reference `ClaudeBuddy.csproj` directly with a `<ProjectReference>`
+rather than compiling individual files in with `<Compile Include>` the way
+the three suites above do. That convention holds for a file with a small
+dependency closure; `SessionManager` and `ClaudeBuddySettings` do not have
+one, and pulling either in that way would mean compiling most of the app a
+second time. A `<ProjectReference>` also needs `<InternalsVisibleTo>` to see
+anything not `public` — granted in `ClaudeBuddy.csproj` to exactly the three
+new test assembly names, nothing else.
+
+**`tests/UnitTests`** covers more of the same pure, no-window logic as the
+suites above — most valuably `SessionManager`'s `Superseded` and
+`InheritTerminalInfo`, the rules that decide which of several status files
+for one process is the live orb and which sibling donates terminal
+coordinates to one that has none. Both are `internal`, made reachable the
+same way.
+
+**`tests/IntegrationTests`** drives `ClaudeBuddyHook.sh`/`.ps1` as real
+subprocesses — payload on stdin, a scratch `TMPDIR`/`-TempDir`, asserting the
+one invariant everything else depends on: exit 0, empty stdout, empty
+stderr, always. Codex reads a hook's stdout as strict permission-request
+JSON and treats exit code 2 as a deny, so a hook that ever prints anything
+starts silently refusing the user's own approvals — this is what actually
+enforces the rule the hook scripts' own comments state. It also covers
+`TranscriptReader`'s tail-window and truncation rules against temp `.jsonl`
+files, and `ClaudeBuddySettings`' round-trip of unknown keys — the protection
+against exactly the downgrade that once silently erased three settings from
+a real file (see the comment on `_unknownKeys` in `ClaudeBuddySettings.cs`).
+
+**`tests/UiTests`** runs headless, via `Avalonia.Headless.XUnit` — no display,
+no window ever actually shown. It uses the real `App` class as its own test
+host rather than a parallel stand-in: under Avalonia's headless lifetime,
+`App.OnFrameworkInitializationCompleted`'s guard for
+`IClassicDesktopStyleApplicationLifetime` is never true, so its entire body —
+mutex, `SessionManager.Start()`, tray icon — never runs, with no test code
+needed to arrange that. It drives `OrbFlyout` with real synthesized clicks,
+`OrbWindow.UpdateFrom` against hand-built `SessionStatus` values, and
+`ChatPanel` through `FakeChatSession` — an in-memory `IRemoteChatSession`,
+which `RemoteChat.cs`'s own header comment says the interface exists to make
+possible, used here for the first time for exactly that. It does not
+synthesize a click on an orb or a chat panel's send-via-mouse path: an orb
+click reaches `TerminalFocuser`, which fires real `tmux`/`ps`/`osascript`
+processes off-thread with no OS guard at its own entry point, so a headless
+click on a CI runner would be a real, unpredictable side effect rather than
+a test.
+
+All three new suites need settings.json out of the way, since even
+constructing an `OrbWindow` reads a color setting in a field initializer —
+see the next paragraph for why that file cannot otherwise be pointed
+elsewhere. Each project's `TestBootstrap.cs` sets `CLAUDE_BUDDY_SETTINGS_DIR`
+to a fresh temp directory via a `[ModuleInitializer]`, before any test can
+run and before any settings static constructor can fire.
+
+Everything else about orb behavior is still verified by running the app.
 Two things make that survivable:
 
 - The status directory comes from the temp path, so `TMPDIR=<dir>` plus
   hand-written `<session-id>.txt` files gives a second instance its own fake
   sessions without touching real ones.
-- Settings do **not** follow `HOME` on macOS —
-  `SpecialFolder.ApplicationData` resolves through the OS, so a test instance
-  reads the real `~/Library/Application Support/ClaudeBuddy/settings.json`.
-  Back it up and restore it if a test needs to seed values.
+- Settings now honour `CLAUDE_BUDDY_SETTINGS_DIR`, an env-var override
+  checked before `SpecialFolder.ApplicationData` — the same pattern as
+  `CLAUDE_BUDDY_PROFILE_ROOT` in `ClaudeDesktopManager.cs`. Without it a test
+  instance reads and writes the real
+  `~/Library/Application Support/ClaudeBuddy/settings.json`; a manual run
+  that skips setting it should still back that file up first.
 
 Read window geometry back out of the window server (`CGWindowListCopyWindowInfo`
 by owner pid) rather than eyeballing a screenshot when a change is about

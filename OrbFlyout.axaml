@@ -33,9 +33,10 @@
         <Grid x:Name="ArrangeButton"
               Width="24" Height="24"
               Cursor="Hand">
-            <Ellipse x:Name="ArrangeFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+            <Ellipse x:Name="ArrangeFill" Fill="#F01C1C1E" Stroke="#C0FFFFFF" StrokeThickness="1.5"/>
             <TextBlock Text="&#10024;"
-                       FontSize="12"
+                       FontSize="13"
+                       Foreground="#F2FFFFFF"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Center"
                        IsHitTestVisible="False"/>
@@ -44,9 +45,10 @@
         <Grid x:Name="SettingsButton"
               Width="24" Height="24"
               Cursor="Hand">
-            <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+            <Ellipse Fill="#F01C1C1E" Stroke="#C0FFFFFF" StrokeThickness="1.5"/>
             <TextBlock Text="&#9881;"
-                       FontSize="12"
+                       FontSize="13"
+                       Foreground="#F2FFFFFF"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Center"
                        IsHitTestVisible="False"/>
@@ -59,10 +61,11 @@
         <Grid x:Name="SpeakButton"
               Width="24" Height="24"
               Cursor="Hand">
-            <Ellipse x:Name="SpeakFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+            <Ellipse x:Name="SpeakFill" Fill="#F01C1C1E" Stroke="#C0FFFFFF" StrokeThickness="1.5"/>
             <TextBlock x:Name="SpeakGlyph"
                        Text="&#128264;"
-                       FontSize="11"
+                       FontSize="13"
+                       Foreground="#F2FFFFFF"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Center"
                        IsHitTestVisible="False"/>
@@ -72,9 +75,31 @@
               Width="24" Height="24"
               IsVisible="False"
               Cursor="Hand">
-            <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+            <Ellipse Fill="#F01C1C1E" Stroke="#C0FFFFFF" StrokeThickness="1.5"/>
             <TextBlock Text="&#127908;"
-                       FontSize="11"
+                       FontSize="13"
+                       Foreground="#F2FFFFFF"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Grid>
+
+        <!-- Opens the chat panel on this session.
+             A separate button rather than a change to what clicking the orb
+             does: for a Claude Code session the click already means "take me to
+             that terminal", which is the oldest thing this app does and still
+             the right default. This adds a second destination instead of
+             replacing the first. Gateway orbs have no terminal to go to, so for
+             those the click still opens the panel directly and this never
+             appears. -->
+        <Grid x:Name="ChatButton"
+              Width="24" Height="24"
+              IsVisible="False"
+              Cursor="Hand">
+            <Ellipse Fill="#F01C1C1E" Stroke="#C0FFFFFF" StrokeThickness="1.5"/>
+            <TextBlock Text="&#9000;"
+                       FontSize="13"
+                       Foreground="#F2FFFFFF"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Center"
                        IsHitTestVisible="False"/>

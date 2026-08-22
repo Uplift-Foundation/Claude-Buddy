@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RollForward>LatestMajor</RollForward>
+    <AssemblyName>ClaudeBuddy.UiScreenshots</AssemblyName>
+    <RootNamespace>ClaudeBuddy.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- Same rationale as tests/UiTests/ClaudeBuddy.UiTests.csproj: newer
+         than the app's own 11.3.7 pin, deliberately, to pick up Avalonia's
+         own headless-race fixes. This project is a separate, isolated proof
+         of concept precisely so a change here (real Skia rendering, a
+         different code path from tests/UiTests's null renderer) can never
+         destabilize that suite's already-hard-won stability. -->
+    <PackageReference Include="Avalonia" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Headless" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Headless.XUnit" Version="11.3.20" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.20" />
+    <!-- Explicit, not just transitive: ClaudeBuddy.csproj's Avalonia.Desktop
+         11.3.7 pulls in Avalonia.Skia 11.3.7 too, and that older Skia
+         backend's FontManagerImpl doesn't implement a member the newer
+         11.3.20 core interface declares (TypeLoadException for
+         TryMatchCharacter) — the patch-compatibility that let the rest of
+         this bump work quietly breaks once a package is pinned somewhere
+         else in the graph and never bumped alongside it. -->
+    <PackageReference Include="Avalonia.Skia" Version="11.3.20" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\ClaudeBuddy.csproj" />
+  </ItemGroup>
+</Project>
