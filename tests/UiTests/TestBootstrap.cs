@@ -1,5 +1,25 @@
 using System.IO;
 using System.Runtime.CompilerServices;
+using Xunit;
+
+// Every [AvaloniaFact] in this assembly shares one Avalonia application and
+// one headless dispatcher (see TestAppBuilder) — there is no per-test
+// instance to isolate them. xUnit's default is to run different test
+// classes as separate collections in parallel, on separate threads, which
+// against a single shared dispatcher means real concurrent construction of
+// Window objects from multiple threads — a plausible contributor to the
+// intermittent KeyNotFoundException for "fonts:SystemFonts" documented on
+// TestAppBuilder.WarmUpFontManager.
+//
+// On its own, this setting did NOT stop that failure recurring in CI
+// (confirmed by reproducing it on real hardware with this exact setting in
+// place) — it is one piece of a defense-in-depth stack alongside the
+// warm-up and the CI-level retry (see ci.yml), not a fix by itself. Kept
+// because it can only reduce the odds of a documented, still-not-fully-
+// understood upstream race, never increase them, and disabling
+// parallelization costs nothing here — 108 tests across three suites run
+// in under two seconds regardless.
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
 
 namespace ClaudeBuddy.Tests;
 
