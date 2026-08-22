@@ -1,9 +1,10 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="ClaudeBuddy.ChatPanel"
+        x:CompileBindings="False"
         Width="340" SizeToContent="Height"
         MinHeight="140" MaxHeight="520"
-        SystemDecorations="None"
+        WindowDecorations="None"
         TransparencyLevelHint="Transparent"
         Background="Transparent"
         Topmost="True"
@@ -117,6 +118,14 @@
                           VerticalScrollBarVisibility="Auto">
                 <ItemsControl x:Name="Turns" Focusable="False">
                     <ItemsControl.ItemTemplate>
+                        <!-- No x:DataType here: the items are ChatPanel's own
+                             private nested TurnView class (ChatPanel.axaml.cs),
+                             not a type this template can name from XAML.
+                             Avalonia 12's default of compiled bindings would
+                             otherwise refuse every {Binding} below at compile
+                             time; x:CompileBindings="False" on the root Window
+                             keeps this template on the older reflection-based
+                             bindings instead. -->
                         <DataTemplate>
                             <!-- One template for all three roles, with the
                                  differences bound rather than templated per
