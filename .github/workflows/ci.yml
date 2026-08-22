@@ -15,9 +15,22 @@ on:
     branches: [main, develop]
   pull_request:
   workflow_dispatch:
+  # Fires once the run above (this same workflow, named CI) finishes,
+  # whoever triggered it — including a pull_request from a fork. Unlike
+  # pull_request, workflow_run gets a real, write-capable GITHUB_TOKEN
+  # regardless of fork origin, because it never checks out or runs anything
+  # from the triggering commit; publish-screenshots below only reads
+  # artifacts the (untrusted, read-only) build job already produced. See
+  # that job's own comment for why this two-job split exists at all.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
 
 jobs:
   build:
+    # Only for the triggers that should actually build/test/package —
+    # workflow_run is publish-screenshots's trigger, not this job's.
+    if: github.event_name != 'workflow_run'
     strategy:
       fail-fast: false
       matrix:
@@ -94,42 +107,28 @@ jobs:
       # rendering, a heavier, different code path from the null renderer the
       # gated UI suite uses, and hasn't earned a place blocking the build
       # yet. continue-on-error means a flake or a real regression here shows
-      # up in the job summary below as missing images rather than failing
-      # the whole run.
+      # up as no screenshots downstream rather than failing the whole run.
       - name: UI screenshots (proof of concept)
         continue-on-error: true
         run: dotnet test tests/UiScreenshots -c Release --logger "trx;LogFileName=ui-screenshots.trx" --results-directory TestResults
 
-      # Embeds each captured PNG directly in this job's summary page as a
-      # base64 data URI — GITHUB_STEP_SUMMARY renders standard Markdown (and
-      # the safe HTML subset GitHub allows in it) inline in the Actions UI,
-      # so this needs no external host or artifact download to view. Runs
-      # unconditionally (if: always()) so a failed capture still shows
-      # "0 screenshots produced" rather than silently vanishing from the
-      # summary.
-      - name: Publish screenshots to the job summary
+      # Uploaded as a plain artifact here, not pushed anywhere — this job's
+      # GITHUB_TOKEN is deliberately read-only whenever the run was
+      # triggered by a pull_request from a fork (GitHub enforces this on
+      # every public repo; no `permissions:` block can override it), and
+      # this repo's PRs are exactly that. publish-screenshots below is a
+      # separate job, triggered by workflow_run once this one finishes,
+      # specifically because that trigger DOES get a real token even for
+      # fork-originated runs — it never checks out or executes anything
+      # from the fork itself, only downloads what already got built here.
+      - name: Upload screenshots
         if: always()
-        shell: pwsh
-        run: |
-          $dir = "TestResults/screenshots"
-          $files = @()
-          if (Test-Path $dir) { $files = Get-ChildItem "$dir/*.png" -ErrorAction SilentlyContinue }
-
-          "## UI screenshots (proof of concept, not yet gating the build)" >> $env:GITHUB_STEP_SUMMARY
-          "" >> $env:GITHUB_STEP_SUMMARY
-
-          if ($files.Count -eq 0) {
-            "_No screenshots were produced this run._" >> $env:GITHUB_STEP_SUMMARY
-          } else {
-            foreach ($file in $files) {
-              $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
-              $base64 = [System.Convert]::ToBase64String($bytes)
-              "**$($file.BaseName)**" >> $env:GITHUB_STEP_SUMMARY
-              "" >> $env:GITHUB_STEP_SUMMARY
-              "<img src=""data:image/png;base64,$base64"" alt=""$($file.BaseName)"" />" >> $env:GITHUB_STEP_SUMMARY
-              "" >> $env:GITHUB_STEP_SUMMARY
-            }
-          }
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-screenshots-${{ matrix.rid }}
+          path: TestResults/screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload test results
         if: always()
@@ -170,3 +169,144 @@ jobs:
             dist/*.exe
           if-no-files-found: error
           retention-days: 14
+
+  # See build's "Upload screenshots" step for why this is a second job
+  # rather than a step in that one: build's token is read-only for any run
+  # triggered by a pull_request from a fork (every PR on this repo, since
+  # they all come from wtvamp's fork), and no `permissions:` block changes
+  # that — it's enforced by GitHub itself on every public repo. workflow_run
+  # gets a real token precisely because it runs the base branch's own copy
+  # of this file, on a schedule of "after that other run finished", and
+  # never checks out or executes anything from the commit that triggered
+  # it. This job only ever reads artifacts build already produced.
+  publish-screenshots:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+
+    steps:
+      # merge-multiple: false (the default) keeps each matrix leg's PNGs in
+      # their own ui-screenshots-<rid>/ subdirectory — the directory name
+      # is what tells the push step below which rid a given image is from.
+      - name: Download screenshot artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ui-screenshots-*
+          path: downloaded
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      # Same clone/orphan/commit/push shape verified locally against a
+      # throwaway git remote before trusting it here (two simultaneous
+      # pushes, both survived via fetch+rebase+retry) — kept even though
+      # there's only one job now, since two workflow_run events close
+      # together (e.g. two quick pushes to develop) could still race.
+      - name: Publish to the screenshots branch and comment on the PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          repo="${{ github.repository }}"
+          branch="screenshots"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${repo}.git"
+          # Absolute, deliberately: everything below cd's into a sibling
+          # clone directory, and a relative "../downloaded" would then
+          # resolve against THAT directory's parent, not the workspace
+          # this script actually started in — a real bug this exact test
+          # caught locally (a bash -x trace showed the push step never
+          # even running because the loop that populates $rid/*.png found
+          # nothing to copy).
+          downloaded_abs="$(pwd)/downloaded"
+          clone_path="../screenshots-branch"
+
+          pngs_found=0
+          for dir in "$downloaded_abs"/ui-screenshots-*/; do
+            [ -d "$dir" ] || continue
+            [ -n "$(find "$dir" -maxdepth 1 -name '*.png' -print -quit)" ] && pngs_found=1
+          done
+
+          summary="## UI screenshots (proof of concept, not yet gating the build)"$'\n\n'
+          if [ "$pngs_found" -eq 0 ]; then
+            summary+="_No screenshots were produced this run._"$'\n'
+            echo "$summary" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          rm -rf "$clone_path"
+          if ! git clone --quiet --depth 1 --branch "$branch" "$remote_url" "$clone_path" 2>/dev/null; then
+            git clone --quiet --depth 1 "$remote_url" "$clone_path"
+            (cd "$clone_path" && git checkout --quiet --orphan "$branch" && git rm --quiet -rf . 2>/dev/null || true)
+          fi
+
+          cd "$clone_path"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          for dir in "$downloaded_abs"/ui-screenshots-*/; do
+            [ -d "$dir" ] || continue
+            rid="$(basename "$dir" | sed 's/^ui-screenshots-//')"
+            mkdir -p "$rid"
+            cp "$dir"*.png "$rid/" 2>/dev/null || true
+          done
+
+          git add -A
+          pushed=1
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit --quiet -m "Screenshots from run ${{ github.event.workflow_run.id }}"
+            pushed=0
+            for attempt in 1 2 3 4 5; do
+              if git push --quiet origin "HEAD:$branch" 2>/dev/null; then
+                pushed=1
+                break
+              fi
+              echo "Push conflict, retry $attempt of 5"
+              git fetch --quiet origin "$branch"
+              git rebase --quiet "origin/$branch"
+            done
+          fi
+          cd -
+
+          if [ "$pushed" -ne 1 ]; then
+            summary+="_Captured screenshots but could not publish them (push kept conflicting)._"$'\n'
+            echo "$summary" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          body="$summary"
+          for dir in "$downloaded_abs"/ui-screenshots-*/; do
+            [ -d "$dir" ] || continue
+            rid="$(basename "$dir" | sed 's/^ui-screenshots-//')"
+            for file in "$dir"*.png; do
+              [ -e "$file" ] || continue
+              name="$(basename "$file" .png)"
+              raw_url="https://raw.githubusercontent.com/${repo}/${branch}/${rid}/$(basename "$file")"
+              body+="**${name} (${rid})**"$'\n\n'
+              body+="![${name}](${raw_url})"$'\n\n'
+            done
+          done
+
+          echo "$body" >> "$GITHUB_STEP_SUMMARY"
+
+          # workflow_run.pull_requests comes back completely empty
+          # specifically when the triggering run was a pull_request from a
+          # fork — a documented GitHub limitation (github/community#170144),
+          # not a bug here — and every PR this repo gets is from a fork.
+          # Relying on it alone would mean this comment step silently never
+          # fires for the one case it exists for. Fall back to searching by
+          # head branch + fork owner, both of which ARE present on the
+          # workflow_run event regardless of fork origin.
+          pr_number="${{ github.event.workflow_run.pull_requests[0].number }}"
+          if [ -z "$pr_number" ] && [ "${{ github.event.workflow_run.event }}" = "pull_request" ]; then
+            head_owner="${{ github.event.workflow_run.head_repository.owner.login }}"
+            head_branch="${{ github.event.workflow_run.head_branch }}"
+            if [ -n "$head_owner" ] && [ -n "$head_branch" ]; then
+              pr_number="$(gh api "repos/${repo}/pulls?head=${head_owner}:${head_branch}&state=open" --jq '.[0].number // empty')"
+            fi
+          fi
+
+          if [ -n "$pr_number" ]; then
+            echo "$body" | gh pr comment "$pr_number" --repo "$repo" --body-file -
+          fi
