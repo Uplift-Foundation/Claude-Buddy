@@ -234,6 +234,7 @@ namespace ClaudeBuddy
                 "diamond" => Sampled(DiamondAt, n),
                 "star" => Sampled(StarAt, n),
                 "grid" => Grid(n),
+                "line" => Line(n),
                 _ => Sampled(HeartAt, n)
             };
         }
@@ -308,6 +309,30 @@ namespace ClaudeBuddy
                 pts[i] = walk[cursor];
             }
 
+            return pts;
+        }
+
+        // A single row, centred on the middle of the work area like every other
+        // shape. Fit does the rest: it scales the spacing up to whatever the
+        // slider asks for and then down again to whatever the screen allows, so
+        // a long row of orbs closes up rather than running off the edge.
+        //
+        // The plainest arrangement there is, and the one worth having for that
+        // reason — a heart is a nice thing to look at and a row is a thing you
+        // can read along.
+        //
+        // A row and not a column, though the column was written first and looked
+        // like the obvious pair. The geometry sweep threw it out: a column has
+        // only the screen's height to spend, and thirty orbs at 56 DIP need more
+        // of it than any of the three test screens has, so orbs overlapped by up
+        // to 21px on every one of them. A row spends the width instead, which is
+        // the larger budget on every display anyone has, and passes the same
+        // sweep at the same counts. Wrapping a column would have fixed it and
+        // produced a grid, which already exists.
+        private static (double X, double Y)[] Line(int n)
+        {
+            var pts = new (double X, double Y)[n];
+            for (var i = 0; i < n; i++) pts[i] = (i - (n - 1) / 2.0, 0.0);
             return pts;
         }
 

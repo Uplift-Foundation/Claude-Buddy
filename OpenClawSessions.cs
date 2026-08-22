@@ -184,6 +184,33 @@ namespace ClaudeBuddy
             lock (Gate) return _agentColours.GetValueOrDefault(agentId, "");
         }
 
+        // A room's own colour.
+        //
+        // Rooms deliberately had none: the ring identifies an *agent*, and a
+        // room is not one. That held while a room orb was the only one of its
+        // kind on screen and stopped holding as soon as there were several —
+        // "#cascadia-forensics" and "#arch" both arrive as a dark circle with a
+        // # on it, and the badge says what they are while nothing says which.
+        // The colour is the answer to *which*, exactly as it is for an agent.
+        //
+        // Dealt from AgentPalette.Assign over the rooms, not taken from
+        // HexFor on each one separately. HexFor was the first attempt and is
+        // the reason this comment exists: hashing each key independently put
+        // two of four real room keys on #5FD79B and #5FD7A1, which are the same
+        // colour to anyone looking at two orbs. Assign is the function that
+        // exists to stop that, and it is what the agents already use.
+        //
+        // A separate pool from the agents, though, so a room's colour does not
+        // move because an agent joined or left. It moves when the set of *rooms*
+        // changes, which is rare and is the same bargain the agents make.
+        public static string ColourForRoom(string? roomKey)
+        {
+            if (string.IsNullOrEmpty(roomKey)) return "";
+            lock (Gate) return _roomColours.GetValueOrDefault(roomKey, "");
+        }
+
+        private static Dictionary<string, string> _roomColours = new(StringComparer.Ordinal);
+
         private static void AssignColours(IEnumerable<string> agentIds)
         {
             var colours = AgentPalette.Assign(agentIds);
@@ -740,7 +767,17 @@ namespace ClaudeBuddy
 
             AssignColours(everyAgent);
 
-            lock (Gate) _roomMembers = roomMembers;
+            // Prefixed, so a room and an agent that happen to share a name are
+            // still two different things to the palette.
+            var roomColours = AgentPalette.Assign(roomMembers.Keys.Select(k => "room:" + k))
+                .ToDictionary(pair => pair.Key["room:".Length..], pair => pair.Value,
+                    StringComparer.Ordinal);
+
+            lock (Gate)
+            {
+                _roomMembers = roomMembers;
+                _roomColours = roomColours;
+            }
 
             return (result, list.GetArrayLength());
         }
@@ -1111,6 +1148,40 @@ namespace ClaudeBuddy
         public static string AgentNameOf(string agentId)
         {
             lock (Gate) return AgentNames.GetValueOrDefault(agentId, agentId);
+        }
+
+        // The picture for an agent named in a transcript, for the chip beside
+        // their name in a room.
+        //
+        // By display name, which is the wrong way round and is what a merged
+        // room view leaves us: a turn carries who said it, not which agent id
+        // said it, because the panel's turn model is deliberately transport-
+        // agnostic and an agent id is not a thing it knows about.
+        //
+        // Two agents sharing a display name therefore cannot be told apart, so
+        // this refuses rather than guessing — the initials chip is a fine answer
+        // and the wrong face is not. Not a hypothetical: agent ids are unique
+        // and their names are whatever somebody typed.
+        public static OpenClawAvatars.Avatar? AvatarForAgentName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+
+            string? agentId = null;
+
+            lock (Gate)
+            {
+                foreach (var (id, display) in AgentNames)
+                {
+                    if (!string.Equals(display, name, StringComparison.Ordinal)) continue;
+                    if (agentId is not null) return null;   // ambiguous
+                    agentId = id;
+                }
+            }
+
+            if (agentId is null) return null;
+
+            var identity = IdentityOf(agentId);
+            return identity is null ? null : OpenClawAvatars.For(agentId, identity.Avatar);
         }
 
         // The last thing the agent said, for the speak button on the orb's own

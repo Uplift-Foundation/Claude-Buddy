@@ -3,6 +3,16 @@ param(
     [ValidateSet('idle', 'generating', 'waiting', 'ended')]
     [string]$State,
 
+    # Which CLI is asking. The bash twin takes this as a bare leading word
+    # because a shell command line is what it is written into; here it is a
+    # named parameter for the same reason everything else is, and the installers
+    # bake it in at wiring time.
+    #
+    # Almost nothing below cares. Finding the terminal, finding the session's
+    # process and writing the status file are the same job whoever asked.
+    [ValidateSet('claude', 'codex')]
+    [string]$Agent = 'claude',
+
     # Baked in as a literal by install-windows-hooks.ps1 at wiring time,
     # computed there in a normal, full environment — not re-derived here,
     # where a WSL-interop-launched invocation's environment can't be trusted
@@ -38,7 +48,7 @@ try {
 # so they keep the folder-name fallback — see the platform notes in README.
 $title = ''
 $color = ''
-if ($State -ne 'ended' -and $transcript -and (Test-Path $transcript)) {
+if ($Agent -eq 'claude' -and $State -ne 'ended' -and $transcript -and (Test-Path $transcript)) {
     try {
         # Read the tail first: transcripts reach tens of MB and this runs on
         # every tool call. Only scan the whole file when a long run of tool
@@ -97,21 +107,80 @@ $termProgram = ''
 if ($env:WT_SESSION) { $termProgram = 'WindowsTerminal' }
 elseif ($env:TERM_PROGRAM) { $termProgram = $env:TERM_PROGRAM }
 
+# Give this session a colour when it has none, the way each CLI allows.
+#
+# The bash twin has the reasoning in full. In short: for Claude Code this writes
+# the record /color writes and Claude Code reads back, so the colour is real
+# rather than a stand-in; for Codex there is no per-session colour to write, and
+# nothing displays one either, so a derived colour disagrees with nothing.
+#
+# Keyed on the working directory so a project keeps one colour across sessions
+# and across both CLIs. Windows has no cksum, so the hash is computed here — the
+# same arithmetic, over the same bytes, giving the same answer as the bash side.
+# The marker the app writes beside the status files, for the reason the bash
+# twin gives: a flag in the hook command would rewrite Codex's hooks.json and
+# cost the user their hook trust every time the setting was toggled.
+$autoColor = Test-Path (Join-Path $dir '.auto-color')
+if ($autoColor -and -not $color -and $cwd) {
+    try {
+        # cksum's CRC-32, so a directory gets the same colour on either
+        # platform. Table-free: 32 bits, one byte at a time, then the length,
+        # which is what the POSIX definition does.
+        function Get-CksumCrc([string]$text) {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+            $crc = [uint32]0
+            foreach ($b in $bytes) {
+                $crc = $crc -bxor ([uint32]$b -shl 24)
+                for ($i = 0; $i -lt 8; $i++) {
+                    if ($crc -band 0x80000000) { $crc = (($crc -shl 1) -bxor 0x04C11DB7) -band 0xFFFFFFFF }
+                    else { $crc = ($crc -shl 1) -band 0xFFFFFFFF }
+                }
+            }
+            $len = $bytes.Length
+            while ($len -gt 0) {
+                $crc = $crc -bxor ([uint32]($len -band 0xFF) -shl 24)
+                for ($i = 0; $i -lt 8; $i++) {
+                    if ($crc -band 0x80000000) { $crc = (($crc -shl 1) -bxor 0x04C11DB7) -band 0xFFFFFFFF }
+                    else { $crc = ($crc -shl 1) -band 0xFFFFFFFF }
+                }
+                $len = [math]::Floor($len / 256)
+            }
+            return (-bnot $crc) -band 0xFFFFFFFF
+        }
+
+        $names = @('red','orange','yellow','green','teal','cyan','blue','purple','violet','magenta','pink')
+        $picked = $names[(Get-CksumCrc $cwd) % $names.Length]
+
+        if ($Agent -eq 'claude' -and $transcript -and (Test-Path $transcript)) {
+            # The same single-line append the bash hook makes, and the same
+            # record /color writes. UTF-8 without a BOM, appended, for the
+            # reasons the status-file write below gives.
+            $record = '{"type":"agent-color","agentColor":"' + $picked + '","sessionId":"' + $sessionId + '"}'
+            [System.IO.File]::AppendAllText($transcript, $record + "`n", (New-Object System.Text.UTF8Encoding($false)))
+            $color = $picked
+        }
+        elseif ($Agent -eq 'codex') {
+            $color = $picked
+        }
+    } catch {}
+}
+
 $termPid = 0
-# The claude process itself, recorded so the app can tell a running session from
+# The CLI process itself, recorded so the app can tell a running session from
 # a status file left behind by one that never exited cleanly (Ctrl+C fires no
 # SessionEnd). See SessionManager.SessionGone.
 #
-# Found by walking up for the first `claude` ancestor, NOT by taking this
-# script's immediate parent — which is what this did, on the assumption that
-# "Claude Code spawns the hook directly". It does not, on Windows: the hook
-# command runs through a short-lived shell, so the immediate parent is that
-# shell, and it exits the moment the hook does. Measured on a real machine —
-# successive hook writes for one live session recorded 54076, then 83076, both
-# already dead, while the session's actual claude.exe sat at 36804 the whole
-# time. The app reads a dead session_pid as "Ctrl+C'd without a SessionEnd" and
-# suppresses the orb, so every live session on Windows went invisible while a
-# three-day-old status file with no session_pid at all kept its orb.
+# Found by walking up for the first ancestor belonging to the CLI this hook
+# speaks for, NOT by taking this script's immediate parent — which is what
+# this did, on the assumption that "Claude Code spawns the hook directly".
+# It does not, on Windows: the hook command runs through a short-lived shell,
+# so the immediate parent is that shell, and it exits the moment the hook
+# does. Measured on a real machine — successive hook writes for one live
+# session recorded 54076, then 83076, both already dead, while the session's
+# actual claude.exe sat at 36804 the whole time. The app reads a dead
+# session_pid as "Ctrl+C'd without a SessionEnd" and suppresses the orb, so
+# every live session on Windows went invisible while a three-day-old status
+# file with no session_pid at all kept its orb.
 #
 # Nothing to do with the Unix hook, which asks a different question entirely
 # (first ancestor owning a real tty) and was never wrong this way.
@@ -151,10 +220,23 @@ try {
         # Get-Process reported the renamed image, so an exact match happens to
         # work today, but which API reports which name is not worth depending on
         # when a session outliving an update is entirely ordinary.
+        #
+        # Which name counts as "the session" is whichever CLI this hook speaks
+        # for, not claude unconditionally. Hard-coding claude here made every
+        # Codex orb on Windows impossible: the walk found no claude ancestor,
+        # left session_pid at 0, and SessionManager drops a Codex file naming
+        # no process on sight — deliberately, because for Codex that means a
+        # session that ended without clearing up. Two rules each right on their
+        # own, combining into a session that could never be shown. Observed on
+        # a real chain: powershell -> pwsh -> codex.exe -> node.exe -> sh.exe.
+        #
+        # The node.exe arm matches on $Agent for the same reason it exists at
+        # all — an npm-style install puts the CLI's name on node's command line
+        # rather than in the image name, and both CLIs ship that way.
         if ($sessionPid -eq 0 -and $cur) {
             $name = "$($cur.Name)"
-            if ($name -like 'claude.exe*' -or
-                ($name -eq 'node.exe' -and "$($cur.CommandLine)" -match 'claude')) {
+            if ($name -like "$Agent.exe*" -or
+                ($name -eq 'node.exe' -and "$($cur.CommandLine)" -match $Agent)) {
                 $sessionPid = [int]$parentId
             }
         }
@@ -163,8 +245,70 @@ try {
     }
 } catch {}
 
+# What Codex calls this chat.
+#
+# On macOS the hook reads this out of Codex's own state database, where
+# /rename's name and Codex's generated title both live. Windows has no sqlite
+# client to read it with — Windows 11 ships winsqlite3.dll but no sqlite3.exe,
+# and PowerShell has no built-in provider — so this takes the same first
+# message that Codex builds its own title from, out of the rollout.
+#
+# The practical difference is that /rename does not reach a Windows orb. That
+# is a smaller gap than it sounds: it matches what a Claude Code session under
+# WSL already does, and both fall back to something true rather than to
+# nothing. It is written down in the README's platform notes rather than left
+# to be discovered.
+if ($Agent -eq 'codex' -and $State -ne 'ended') {
+    try {
+        # Codex's transcript_path is nullable, so resolve the rollout by the
+        # session id its filename ends with when the payload omits it.
+        if (-not $transcript) {
+            $codexHome = $env:CODEX_HOME
+            if (-not $codexHome) { $codexHome = Join-Path $env:USERPROFILE '.codex' }
+            $sessions = Join-Path $codexHome 'sessions'
+            if (Test-Path $sessions) {
+                $match = Get-ChildItem -Path $sessions -Recurse -Filter "rollout-*-$sessionId.jsonl" |
+                    Select-Object -First 1
+                if ($match) { $transcript = $match.FullName }
+            }
+        }
+
+        if ($transcript -and (Test-Path $transcript)) {
+            # A UserMessage is within the first handful of rows, so this reads
+            # the head of the file rather than the file — which matters, since
+            # a rollout row carrying command output can reach a megabyte on its
+            # own.
+            $head = Get-Content -Path $transcript -TotalCount 40 -Encoding UTF8
+            foreach ($line in $head) {
+                if ($line -notmatch '"type":"UserMessage"') { continue }
+                if ($line -match '"type":"UserMessage".*?"text":"(.*?)"') {
+                    $title = $Matches[1] -replace '\\[nrt]', ' ' -replace '\\', ''
+                    break
+                }
+            }
+
+            if ($title) {
+                $title = ($title -replace '\s+', ' ').Trim()
+                if ($title.Length -gt 60) {
+                    $title = $title.Substring(0, 60)
+                    # Cut at 60 lands mid-word as often as not, and this is a
+                    # name rather than a summary. Back off to the last space,
+                    # unless that leaves too little to read.
+                    $lastSpace = $title.LastIndexOf(' ')
+                    if ($lastSpace -ge 30) { $title = $title.Substring(0, $lastSpace) }
+                }
+            }
+        }
+    } catch {}
+}
+
 $status = @{
     state           = $State
+
+    # Which CLI wrote this, so the app can tell a Codex session from a Claude
+    # Code one. A file from a hook older than this key has none, which reads as
+    # Claude Code — which is what it was.
+    cli             = $Agent
     cwd             = $cwd
     title           = $title
     color           = $color

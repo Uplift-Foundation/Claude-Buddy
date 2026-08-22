@@ -238,6 +238,13 @@ namespace ClaudeBuddy
             _lastGlyphName = name;
             ApplyAvatar(status);
             if (!_hasAvatar) Glyph.Text = _agentEmoji ?? GlyphFor(name);
+
+            // An open chat panel wears this orb's letters and colours. It used
+            // to copy them once, when it opened, so a title that arrived after
+            // the panel did — or a /rename, or a /color — left the header
+            // showing the old ones. Cheap to call: the panel ignores it unless
+            // it is showing this orb, and does nothing unless something moved.
+            ChatPanel.RefreshIdentityFor(this);
             ApplyAccent(status.Color);
             // Rooms wear the badge too, now that their glyph is the channel's
             // initials rather than a hash. It was suppressed when the two would
@@ -432,6 +439,7 @@ namespace ClaudeBuddy
         {
             Glyph.Text = GlyphFor(_lastGlyphName);
             Glyph.FontSize = BaseGlyphFontSize * (_isTeamMember ? MemberScale : 1.0);
+            ChatPanel.RefreshIdentityFor(this);
         }
 
         // An agent's own picture, drawn as the orb itself.
@@ -577,95 +585,10 @@ namespace ClaudeBuddy
             _avatarTimer = null;
         }
 
-        private static string GlyphFor(string label)
-        {
-            label = label.TrimStart();
-            if (label.Length == 0) return "•";
-
-            if (!ClaudeBuddySettings.TwoLetterGlyphs)
-            {
-                return FirstGrapheme(label).ToUpperInvariant();
-            }
-
-            // Two words get one letter each — the initials a person would
-            // write by hand ("Menu UX" -> "Mu") — rather than two letters
-            // from the first word alone, which reads as a typo of it
-            // ("Menu UX" -> "Me"). A single word falls back to its own
-            // first two letters, since there's nothing else to draw from.
-            //
-            // Upper then lower, not both upper: two capitals side by side
-            // reads as an acronym ("MU"), where the point here is a little
-            // word-shaped mark ("Mu") — same reason a monogram is "Mu", not
-            // "MU". Only the letter case changes; which letters are picked
-            // is exactly the same either way.
-            // Only words with something readable in them count, and the initial
-            // is the first such character rather than the first character.
-            // "Lilibeth — wtvamp" splits into three tokens, the middle one a
-            // lone em dash, and taking the first two of those produced "L—" on
-            // every orb — which is how this was found. Skipping *within* a word
-            // as well is what makes "#kubernetes" contribute "k" rather than
-            // being thrown away for starting with a hash.
-            var words = label
-                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                .Select(Initial)
-                .Where(initial => initial.Length > 0)
-                .ToArray();
-
-            if (words.Length >= 2)
-            {
-                return words[0].ToUpperInvariant() + words[1].ToLowerInvariant();
-            }
-
-            // One word, or none worth reading: take two letters from the label
-            // itself, which is the old behaviour and still right for "Menu".
-            //
-            // From where it starts *reading*, though. The two-word branch above
-            // skips leading punctuation per word, and this one did not — so
-            // "#kubernetes" gave "Ku" only because it is two words after the
-            // channel name is prefixed, while a single-word "#arch" gave "#a".
-            // A room orb is named for its channel, so that is the common case
-            // rather than an oddity.
-            var readable = ReadableStart(label);
-            var first = FirstGrapheme(readable);
-            var rest = readable[first.Length..];
-            var second = rest.Length > 0 ? FirstGrapheme(rest) : "";
-            return first.ToUpperInvariant() + second.ToLowerInvariant();
-        }
-
-        // One printable character, or a full surrogate pair if the string
-        // starts with one (e.g. an emoji) — never split in half, which is
-        // what renders as a broken box instead of the emoji.
-        // The first character of a word that a person would say out loud —
-        // skipping any leading punctuation, so "#general" gives "g" and a lone
-        // "—" gives nothing at all.
-        // The label from its first character worth reading, so "#arch" starts at
-        // "a". Only ASCII punctuation is skipped: an emoji is a perfectly good
-        // mark for an orb and is a symbol by every other measure, so skipping
-        // symbols generally would throw away the best glyph a label has.
-        private static string ReadableStart(string label)
-        {
-            for (var i = 0; i < label.Length; i++)
-            {
-                var c = label[i];
-                if (c > 127 || char.IsLetterOrDigit(c)) return label[i..];
-            }
-
-            return label;
-        }
-
-        private static string Initial(string word)
-        {
-            for (var i = 0; i < word.Length; i++)
-            {
-                if (char.IsHighSurrogate(word[i])) return word.Substring(i, Math.Min(2, word.Length - i));
-                if (char.IsLetterOrDigit(word[i])) return word.Substring(i, 1);
-            }
-
-            return "";
-        }
-
-        private static string FirstGrapheme(string s) =>
-            s.Length > 1 && char.IsHighSurrogate(s[0]) ? s[..2] : s[..1];
+        // The letters themselves live in OrbGlyph, which is pure and tested;
+        // this only supplies the one thing that is not — the user's setting.
+        private static string GlyphFor(string label) =>
+            OrbGlyph.For(label, ClaudeBuddySettings.TwoLetterGlyphs);
 
         // The colour comes from OrbColors so this switch is about *motion* only —
         // one state-to-colour mapping in the app, not two that can drift apart.
@@ -766,7 +689,22 @@ namespace ClaudeBuddy
             new GradientStop(Color.FromArgb(0, color.R, color.G, color.B), 1.0)
         };
 
-        private static Control ThoughtBubble(string title, string? path)
+        // Shared with the flyout's buttons, which are a different window but the
+        // same app: a second tooltip look would be a second answer to a question
+        // this already answered. The global ToolTip style is stripped to nothing
+        // precisely so this control *is* the tooltip, which also means anything
+        // handing ToolTip a bare string gets unstyled text floating on the
+        // desktop — how the flyout's first set of tips shipped.
+        // `compact` drops the tail and tightens the type: a caption for a
+        // button, rather than a thought belonging to an orb.
+        //
+        // The tail is two dots *below* the bubble, so it reads as a thought
+        // rising from whatever is underneath — right for an orb's own tooltip,
+        // which sits above the orb and points back down at it. A button's label
+        // sits below the button, where the same dots point at nothing and read
+        // as a rendering fault. Sharing the palette and dropping the tail keeps
+        // one look without claiming a button is thinking.
+        internal static Control ThoughtBubble(string title, string? path, bool compact = false)
         {
             var bg = Color.Parse("#E6EAECF0");
             var fg = Color.Parse("#FF2A2A35");
@@ -777,7 +715,7 @@ namespace ClaudeBuddy
             content.Children.Add(new TextBlock
             {
                 Text = title,
-                FontSize = 12.5,
+                FontSize = compact ? 11 : 12.5,
                 FontFamily = font,
                 FontWeight = FontWeight.SemiBold,
                 Foreground = new SolidColorBrush(fg),
@@ -801,11 +739,13 @@ namespace ClaudeBuddy
             var bubble = new Border
             {
                 Background = new SolidColorBrush(bg),
-                CornerRadius = new CornerRadius(14),
-                Padding = new Thickness(14, 9),
+                CornerRadius = new CornerRadius(compact ? 9 : 14),
+                Padding = compact ? new Thickness(9, 5) : new Thickness(14, 9),
                 BoxShadow = BoxShadows.Parse("0 2 8 0 #30000000"),
                 Child = content
             };
+
+            if (compact) return bubble;
 
             var canvas = new Canvas
             {
@@ -966,9 +906,12 @@ namespace ClaudeBuddy
             // Only on local sessions. A gateway orb opens its panel when you
             // click it, so a button that did the same thing one ring further out
             // would be a second way to do the thing the orb already does.
+            // Any local CLI, each behind its own setting. A gateway orb still
+            // doesn't get the button: clicking it already opens its panel, so a
+            // second way to do the same thing one ring further out is noise.
             _flyout.SetChatVisible(
-                _lastStatus?.Source == SessionSource.ClaudeCode
-                && ClaudeBuddySettings.ClaudeCodeChatEnabled);
+                (_lastStatus?.IsLocalCli ?? false)
+                && CliChatFormat.For(_lastStatus!.Source).ChatEnabled());
 
             _flyout.SetArranged(SessionManager.Instance?.IsArranged ?? false);
 
@@ -1067,7 +1010,17 @@ namespace ClaudeBuddy
             // turn as though it were the remote agent's. The lookup also walks
             // every project directory recursively, on the UI thread, before
             // getting there.
-            if (_lastStatus?.Source != SessionSource.ClaudeCode) return null;
+            //
+            if (!(_lastStatus?.IsLocalCli ?? false)) return null;
+
+            // Codex reads through its own entry point, which understands a
+            // rollout and — the part that matters — has no cwd fallback. Sharing
+            // the path below would have found no Claude Code rows in a rollout
+            // and then searched ~/.claude/projects for the same directory,
+            // speaking an unrelated Claude Code session's last turn out of a
+            // Codex orb.
+            if (_lastStatus?.Source == SessionSource.Codex)
+                return TranscriptReader.LatestCodexAgentText(_lastStatus?.TranscriptPath);
 
             var path = _lastStatus?.TranscriptPath;
             var text = TranscriptReader.LatestAssistantText(path, SessionId);
@@ -1212,7 +1165,6 @@ namespace ClaudeBuddy
         private void StartRecording()
         {
             if (_recording) return;
-
 
             try
             {
@@ -1390,6 +1342,11 @@ namespace ClaudeBuddy
             {
                 _pressed = true;
                 _dragging = false;
+
+                // Recorded here because only the press carries it; the release
+                // that acts on it does not.
+                _clickCount = e.ClickCount;
+
                 _windowStart = Position;
                 _pointerStart = this.PointToScreen(e.GetPosition(this));
 
@@ -1502,25 +1459,124 @@ namespace ClaudeBuddy
                 // flyout's keyboard button opens, and it must not quietly become
                 // what a click does instead. Going to the terminal is the oldest
                 // behaviour this app has and people reach for it without looking.
-                if (_lastStatus?.Source != SessionSource.ClaudeCode)
-                {
-                    var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
-                    if (chat is not null)
-                    {
-                        _chatOpen = true;
-                        HideFlyoutNow();
-                        ChatPanel.OpenFor(this, chat);
-                        return;
-                    }
-                }
-
-                TerminalFocuser.Focus(
-                    _lastStatus,
-                    SessionManager.Instance?.StatusFor(_lastStatus?.Lead),
-                    SessionId);
+                OnClicked(_clickCount);
             }
 
             _followers.Clear();
+        }
+
+        // --- what a click does ------------------------------------------------
+
+        // One, two or three clicks, each bound to whatever the user chose.
+        //
+        // The awkward part is that these gestures are prefixes of each other: a
+        // double click is a single click that turns out to have company. So a
+        // single click can only be acted on immediately if nothing longer is
+        // bound to something different — otherwise it has to wait long enough to
+        // find out, and going to a terminal is the most common thing this app
+        // does. The wait is therefore paid only by people who asked for it by
+        // binding a second gesture, and never by anyone leaving the defaults
+        // alone, where two and three clicks do nothing at all.
+        private const int MultiClickMs = 300;
+
+        private DispatcherTimer? _clickTimer;
+        private int _pendingClicks;
+        private int _clickCount = 1;
+
+        private void OnClicked(int clicks)
+        {
+            // Beyond three there is nothing to bind, and treating a fourth click
+            // as a fresh single would fire the single-click action in the middle
+            // of somebody drumming on the orb.
+            if (clicks > 3) return;
+
+            _clickTimer?.Stop();
+            _clickTimer = null;
+            _pendingClicks = clicks;
+
+            if (!AwaitsMoreClicks(clicks))
+            {
+                RunClickAction(clicks);
+                return;
+            }
+
+            _clickTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(MultiClickMs) };
+            _clickTimer.Tick += (_, _) =>
+            {
+                _clickTimer?.Stop();
+                _clickTimer = null;
+                RunClickAction(_pendingClicks);
+            };
+            _clickTimer.Start();
+        }
+
+        // Whether a longer gesture is bound to something this one isn't already
+        // going to do. Same action on two and three as on one means the wait
+        // would change nothing, so there is no reason to pay it.
+        private static bool AwaitsMoreClicks(int clicks)
+        {
+            var mine = ActionFor(clicks);
+
+            for (var longer = clicks + 1; longer <= 3; longer++)
+            {
+                var other = ActionFor(longer);
+                if (other != "none" && other != mine) return true;
+            }
+
+            return false;
+        }
+
+        private static string ActionFor(int clicks) => clicks switch
+        {
+            1 => ClaudeBuddySettings.ClickAction,
+            2 => ClaudeBuddySettings.DoubleClickAction,
+            _ => ClaudeBuddySettings.TripleClickAction
+        };
+
+        private void RunClickAction(int clicks)
+        {
+            switch (ActionFor(clicks))
+            {
+                case "chat":
+                    OpenChat();
+                    break;
+
+                case "speak":
+                    OnSpeakClicked();
+                    break;
+
+                case "none":
+                    break;
+
+                default:
+                    GoToSession();
+                    break;
+            }
+        }
+
+        // "Take me to this session", which for a local CLI is its terminal and
+        // for a gateway agent is the only place it exists — the panel. That
+        // second case is not a fallback bolted on for this feature; it is what a
+        // click on a gateway orb has always done, because there is no terminal
+        // anywhere to go to.
+        private void GoToSession()
+        {
+            if (!(_lastStatus?.IsLocalCli ?? false))
+            {
+                var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
+                if (chat is not null)
+                {
+                    _chatOpen = true;
+                    HideFlyoutNow();
+                    ChatPanel.OpenFor(this, chat);
+                    return;
+                }
+            }
+
+            TerminalFocuser.Focus(
+                _lastStatus,
+                SessionManager.Instance?.StatusFor(_lastStatus?.Lead),
+                SessionId);
         }
 
         // Put the orb at a position it was dragged to in an earlier run, without

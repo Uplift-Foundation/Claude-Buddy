@@ -80,16 +80,19 @@ ln -s /Applications "$STAGE/Applications"
 # a double-clickable script instead. It resolves the installed app first so it
 # keeps working after the DMG is ejected, which is the normal case: people drag
 # the app across, then run this.
-cat > "$STAGE/Install Claude Code Hooks.command" <<'COMMAND'
+cat > "$STAGE/Install Hooks.command" <<'COMMAND'
 #!/bin/bash
-# Wires the Claude Buddy hook into Claude Code, so sessions show up as orbs.
-# Re-run this any time to repair it; pass --uninstall to remove the entries.
+# Wires the Claude Buddy hook into every agent CLI on this machine — Claude Code,
+# Codex, or both — so their sessions show up as orbs.
+#
+# Re-run this any time to repair it, or after installing a second CLI; it
+# converges rather than duplicating. Pass --uninstall to remove the entries.
 set -euo pipefail
 
 for app in "/Applications/Claude Buddy.app" \
            "$HOME/Applications/Claude Buddy.app" \
            "$(cd "$(dirname "$0")" && pwd)/Claude Buddy.app"; do
-  script="$app/Contents/Resources/install-macos-hooks.sh"
+  script="$app/Contents/Resources/install-hooks.sh"
   if [[ -x "$script" ]]; then
     echo "Using $app"
     echo
@@ -101,7 +104,7 @@ echo "Couldn't find Claude Buddy.app in /Applications, ~/Applications, or next"
 echo "to this script. Drag Claude Buddy to Applications first, then run this again."
 exit 1
 COMMAND
-chmod +x "$STAGE/Install Claude Code Hooks.command"
+chmod +x "$STAGE/Install Hooks.command"
 
 cat > "$STAGE/Read Me First.txt" <<READ_ME
 Claude Buddy $VERSION
@@ -109,25 +112,35 @@ Claude Buddy $VERSION
 
 1. Drag "Claude Buddy" onto the Applications folder in this window.
 
-2. Double-click "Install Claude Code Hooks.command".
+2. Double-click "Install Hooks.command".
 
-   This step is not optional. Claude Buddy shows an orb per Claude Code
-   session, and it learns about sessions from a hook that Claude Code runs.
-   Until that hook is wired into ~/.claude/settings.json, the app runs
-   correctly but displays nothing at all -- which looks broken but isn't.
+   This step is not optional. Claude Buddy shows an orb per coding-agent
+   session, and it learns about sessions from a hook that the agent runs.
+   Until that hook is wired up, the app runs correctly but displays nothing
+   at all -- which looks broken but isn't.
 
-   Your existing settings are backed up to
-   ~/.claude/settings.json.claudebuddy-backup first.
+   It wires whichever of Claude Code and Codex it finds, and says so for
+   either one it doesn't. Run it again after installing the other; it repairs
+   rather than duplicating.
 
-   Already-running Claude Code sessions won't produce orbs until you restart
-   them, because hooks are read once at session start.
+   Your existing config is backed up first -- to
+   ~/.claude/settings.json.claudebuddy-backup and
+   ~/.codex/hooks.json.claudebuddy-backup respectively.
+
+   Already-running sessions won't produce orbs until you restart them,
+   because hooks are read once at session start.
+
+   Codex only: Codex will not run a hook it has not been told to trust. The
+   first time you start Codex after this, accept the hook review it shows
+   you, or run /hooks inside it and trust the Claude Buddy entries. Until
+   you do, no Codex hook fires and no Codex orb appears -- and nothing
+   anywhere tells you why.
 
 3. Launch Claude Buddy from Applications.
 
    Nothing appears in the Dock and no window opens -- that is correct. Look
-   for the icon in the menu bar. With no Claude Code sessions running you
-   should see zero orbs and a slate-colored menu bar icon that says
-   "No Claude Code sessions".
+   for the icon in the menu bar. With no sessions running you should see zero
+   orbs and a slate-colored menu bar icon.
 
 4. The first time you click an orb, macOS asks for Automation permission.
    Click-to-focus needs it to bring the session's terminal window forward.
@@ -136,8 +149,8 @@ To start it automatically, add it in System Settings > General >
 Login Items & Extensions.
 
 Uninstalling: drag the app to the Trash, and run
-  "Install Claude Code Hooks.command" --uninstall
-from a Terminal to take the hook entries back out of settings.json.
+  "Install Hooks.command" --uninstall
+from a Terminal to take the hook entries back out of every CLI it wired.
 
 Source, issues and docs: https://github.com/Uplift-Foundation/Claude-Buddy
 MIT licensed.
@@ -147,7 +160,7 @@ if [[ -n "$SIGN_IDENTITY" ]]; then
   # Sign the helper script too. A quarantined shell script from a downloaded
   # image trips Gatekeeper on double-click; a Developer ID signature clears it.
   codesign --force --timestamp --sign "$SIGN_IDENTITY" \
-    "$STAGE/Install Claude Code Hooks.command"
+    "$STAGE/Install Hooks.command"
 fi
 
 echo "==> Building $DMG"

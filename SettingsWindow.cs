@@ -252,40 +252,64 @@ namespace ClaudeBuddy
                     + "first two letters of it when there's only one word — instead of just "
                     + "the one letter every orb shows today."))));
 
+            root.Children.Add(Group("Clicking an orb", Card(ClickRows())));
+
             root.Children.Add(Group("Auto-organize", Card(AutoOrganizeRows())));
 
             root.Children.Add(Group("Orb colours", Card(
                 ColorRow("Idle", "idle"),
                 ColorRow("Working", "generating"),
                 ColorRow("Needs you", "waiting"),
+                Row("Give each session a colour",
+                    Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
+                    "Off, only a colour you set with /color shows on an orb. On, a session "
+                    + "that has none is given one, from its working directory — so a project "
+                    + "keeps its colour, and both CLIs agree on it. For Claude Code this "
+                    + "writes the same record /color writes, so the colour survives a resume "
+                    + "and the terminal agrees; /color still overrides it. Codex has nowhere "
+                    + "to write one and shows none of its own, so there its orb takes the "
+                    + "colour of its Codex section if it has one and the derived colour "
+                    + "otherwise."),
+                Row("Give each session a colour",
+                    Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
+                    "Off, only a colour you set with /color shows on an orb. On, a session "
+                    + "with none is given one from its working directory, so a project keeps "
+                    + "its colour and both CLIs agree on it. For Claude Code that writes the "
+                    + "same record /color writes, so the colour survives a resume and the "
+                    + "terminal agrees; /color still overrides it. Codex has nowhere to write "
+                    + "one and shows none of its own, so a Codex orb takes its Codex section's "
+                    + "colour if it has one and the derived colour otherwise."),
                 Row("Restore the built-in colours", ResetColorsButton(),
                     "The orb's fill and its glow. The menu-bar icon follows them too — it "
                     + "shows the most urgent state across every session, so very light or "
                     + "very dark choices can disappear into the menu bar. A session's own "
                     + "/color is separate: that one goes on the orb's ring and letter."))));
 
-            root.Children.Add(Group("Claude Desktop", Card(
-                Row("Tint the active window",
-                    Switch(ClaudeDesktopOverlay.Enabled, ClaudeDesktopOverlay.SetEnabled)))));
-
             root.Children.Add(Group("Voice", Card(VoiceRows())));
 
-            root.Children.Add(Group("Claude Code sessions", Card(ClaudeCodeChatRows())));
+            // One section per agent, each starting with whether it is tracked
+            // at all and then everything about it — the panel, replying, extra
+            // accounts, and on Windows the WSL distros.
+            //
+            // These used to be six sections scattered between Voice and the
+            // Claude Desktop profiles: "Claude Code sessions" here, "Claude Code
+            // profiles" four groups later, the same again for Codex, and the
+            // Desktop app's own profiles in between. Nothing was wrong with any
+            // of them individually; the order was just the order they were
+            // added in, which is how a settings window gets that way.
+            root.Children.Add(Group("Claude Code", ClaudeCodeSection()));
+
+            root.Children.Add(Group("Codex", CodexSection()));
 
             root.Children.Add(Group("OpenClaw agents", Card(OpenClawRows())));
 
-            root.Children.Add(Group("Profiles", ProfilesCard()));
-
-            // Native wiring for extra Claude Code (CLI) accounts, and WSL's own
-            // per-distro toggles — neither concept exists on macOS, where the
-            // hook installer only ever touches ~/.claude.
-            if (OperatingSystem.IsWindows())
-            {
-                root.Children.Add(Group("Claude Code profiles", Card(ClaudeCodeProfilesCard())));
-
-                var wslCard = WslCard();
-                if (wslCard is not null) root.Children.Add(Group("WSL integration", Card(wslCard)));
-            }
+            // Not an agent CLI at all — the Electron desktop app — so it sits
+            // after them with its own profiles, which is where someone looking
+            // for them would go first.
+            root.Children.Add(Group("Claude Desktop",
+                Card(Row("Tint the active window",
+                    Switch(ClaudeDesktopOverlay.Enabled, ClaudeDesktopOverlay.SetEnabled))),
+                ProfilesCard()));
 
             // macOS preference windows are dismissed by the window's own close
             // button, not by a Done inside the content. Windows expects the
@@ -308,13 +332,67 @@ namespace ClaudeBuddy
         // --- Voice input ---
         // --- Auto-organize ---
 
+        // --- what a click does ---
+
+        private static readonly (string Label, string Value)[] ClickChoices =
+        {
+            ("Go to the session", "terminal"),
+            ("Open the chat panel", "chat"),
+            ("Read the latest reply", "speak"),
+            ("Nothing", "none")
+        };
+
+        // "Go to the session" rather than "Terminal", because that is what it
+        // does: for a local CLI it is the terminal, and for a gateway agent
+        // there is no terminal anywhere and the panel is the only place it
+        // exists. One label covering both beats a label that is wrong for half
+        // the orbs on screen.
+        private Control ClickPicker(Func<string> get, Action<string> set)
+        {
+            var current = get();
+            var choices = ClickChoices.ToList();
+
+            if (choices.All(c => c.Value != current)) choices.Add((current, current));
+
+            var combo = new ComboBox
+            {
+                ItemsSource = choices.Select(c => c.Label).ToList(),
+                SelectedIndex = choices.FindIndex(c => c.Value == current),
+                MinWidth = 168
+            };
+            combo.SelectionChanged += (_, _) =>
+            {
+                var index = combo.SelectedIndex;
+                if (index >= 0) set(choices[index].Value);
+            };
+            return combo;
+        }
+
+        private Control[] ClickRows() => new[]
+        {
+            Row("Click", ClickPicker(
+                () => ClaudeBuddySettings.ClickAction,
+                v => ClaudeBuddySettings.ClickAction = v)),
+            Row("Double click", ClickPicker(
+                () => ClaudeBuddySettings.DoubleClickAction,
+                v => ClaudeBuddySettings.DoubleClickAction = v)),
+            Row("Triple click", ClickPicker(
+                () => ClaudeBuddySettings.TripleClickAction,
+                v => ClaudeBuddySettings.TripleClickAction = v),
+                "Binding a second or third click makes a single click wait a moment to see "
+                + "whether another is coming — there is no way to tell them apart without "
+                + "that pause. Leave them on Nothing and a single click acts the instant "
+                + "you release, which is what the app has always done.")
+        };
+
         private static readonly (string Label, string Value)[] ShapeChoices =
         {
             ("Heart", "heart"),
             ("Circle", "circle"),
             ("Diamond", "diamond"),
             ("Star", "star"),
-            ("Grid", "grid")
+            ("Grid", "grid"),
+            ("Line", "line")
         };
 
         private Control ShapePicker()
@@ -405,17 +483,84 @@ namespace ClaudeBuddy
         // a panel is actually up. There is nothing to consent to.
         //
         // The second one is the OpenClaw split, for the OpenClaw reason.
+        // Everything about one CLI in one place: whether it is tracked at all,
+        // what its orb can do, and which extra accounts to wire.
+        //
+        // These used to be spread across the window — "Claude Code sessions"
+        // near the top, "Claude Code profiles" four groups below it, the same
+        // again for Codex, with the Desktop app's profiles in between. Nothing
+        // was wrong with any of them alone; the order was the order they were
+        // added in, which is how a settings window gets that way.
+        private Control[] ClaudeCodeSection()
+        {
+            var cards = new List<Control> { Card(ClaudeCodeChatRows()) };
+
+            if (!ClaudeBuddySettings.ClaudeCodeEnabled) return cards.ToArray();
+
+            cards.Add(Card(ProfileDirsCard(
+                blurb: "Wire Claude Buddy hooks into additional Claude Code accounts managed "
+                       + "via CLAUDE_CONFIG_DIR, alongside the default ~/.claude.",
+                watermark: ".claude-work",
+                current: () => ClaudeBuddySettings.ClaudeCodeProfileDirs,
+                add: ClaudeBuddySettings.AddClaudeCodeProfileDir,
+                remove: ClaudeBuddySettings.RemoveClaudeCodeProfileDir,
+                reapply: HookInstaller.ReapplyClaudeCode)));
+
+            // WSL is genuinely Windows-only, unlike the extra accounts above,
+            // and belongs here because Claude Code's sessions are what it
+            // reaches.
+            if (OperatingSystem.IsWindows())
+            {
+                var wsl = WslCard();
+                if (wsl is not null) cards.Add(Card(wsl));
+            }
+
+            return cards.ToArray();
+        }
+
+        private Control[] CodexSection()
+        {
+            var cards = new List<Control> { Card(CodexChatRows()) };
+
+            if (!ClaudeBuddySettings.CodexEnabled) return cards.ToArray();
+
+            cards.Add(Card(ProfileDirsCard(
+                blurb: "Wire Claude Buddy hooks into additional Codex accounts managed via "
+                       + "CODEX_HOME, alongside the default ~/.codex. Codex asks you to trust "
+                       + "hooks the first time it sees them, once per account.",
+                watermark: ".codex-work",
+                current: () => ClaudeBuddySettings.CodexHomes,
+                add: ClaudeBuddySettings.AddCodexHome,
+                remove: ClaudeBuddySettings.RemoveCodexHome,
+                reapply: HookInstaller.ReapplyCodex)));
+
+            return cards.ToArray();
+        }
+
+        // Switching a CLI off hides the rest of its section rather than greying
+        // it out. A column of dead switches is a worse answer to "I only use
+        // Claude Code" than a two-line section is: what remains is what still
+        // does something.
         private Control[] ClaudeCodeChatRows()
         {
             var rows = new List<Control>
             {
-                Row("Chat panel on the orb",
-                    Switch(ClaudeBuddySettings.ClaudeCodeChatEnabled, OnClaudeCodeChatToggled),
-                    "Adds a keyboard button to the orb's hover menu that opens the session's "
-                    + "conversation — the same panel OpenClaw agents use. It is the same "
-                    + "conversation as the terminal's, not a copy: it reads the transcript "
-                    + "Claude Code already writes. Clicking the orb still goes to the terminal.")
+                Row("Show Claude Code sessions",
+                    Switch(ClaudeBuddySettings.ClaudeCodeEnabled, OnClaudeCodeEnabledToggled),
+                    "Off, Claude Code sessions get no orbs and are left out of the menu bar. "
+                    + "Its hooks are left alone — they are your own config, and they keep "
+                    + "writing where the app will find them again the moment you switch this "
+                    + "back on.")
             };
+
+            if (!ClaudeBuddySettings.ClaudeCodeEnabled) return rows.ToArray();
+
+            rows.Add(Row("Chat panel on the orb",
+                Switch(ClaudeBuddySettings.ClaudeCodeChatEnabled, OnClaudeCodeChatToggled),
+                "Adds a keyboard button to the orb's hover menu that opens the session's "
+                + "conversation — the same panel OpenClaw agents use. It is the same "
+                + "conversation as the terminal's, not a copy: it reads the transcript "
+                + "Claude Code already writes. Clicking the orb still goes to the terminal."));
 
             if (!ClaudeBuddySettings.ClaudeCodeChatEnabled) return rows.ToArray();
 
@@ -439,6 +584,81 @@ namespace ClaudeBuddy
         private void OnClaudeCodeReplyToggled(bool enabled)
         {
             ClaudeBuddySettings.ClaudeCodeReplyEnabled = enabled;
+        }
+
+        // No re-wiring. The hooks read a marker file beside the status files,
+        // which the scan reconciles with this setting within a couple of
+        // seconds — see SessionManager.SyncAutoColorMarker. An earlier version
+        // baked a flag into the hook command instead, which meant every toggle
+        // rewrote Codex's hooks.json and cost the user their hook trust.
+        private void OnAutoColorToggled(bool enabled)
+        {
+            ClaudeBuddySettings.AutoColorSessions = enabled;
+        }
+
+        // The same two powers for Codex, and its own pair of switches rather
+        // than one shared "local CLI" setting: someone can reasonably want to
+        // read a Codex session and never type into it while doing the opposite
+        // for Claude Code, and the two CLIs are wired independently anyway.
+        //
+        // The wording differs where the behaviour does, and only there.
+        private Control[] CodexChatRows()
+        {
+            var rows = new List<Control>
+            {
+                Row("Show Codex sessions",
+                    Switch(ClaudeBuddySettings.CodexEnabled, OnCodexEnabledToggled),
+                    "Off, Codex sessions get no orbs and are left out of the menu bar. Its "
+                    + "hooks are left alone, so nothing has to be re-approved when you switch "
+                    + "this back on.")
+            };
+
+            if (!ClaudeBuddySettings.CodexEnabled) return rows.ToArray();
+
+            rows.AddRange(new Control[]
+            {
+                Row("Chat panel on the orb",
+                    Switch(ClaudeBuddySettings.CodexChatEnabled, OnCodexChatToggled),
+                    "The same panel Claude Code sessions get, reading the rollout transcript "
+                    + "Codex already writes. It is the same conversation as the terminal's, not "
+                    + "a copy. Clicking the orb still goes to the terminal.")
+            });
+
+            if (!ClaudeBuddySettings.CodexChatEnabled) return rows.ToArray();
+
+            rows.Add(Row("Allow replying to sessions",
+                Switch(ClaudeBuddySettings.CodexReplyEnabled, OnCodexReplyToggled),
+                "Off, the panel shows what a session is doing. On, you can type into it, "
+                + "answer its approval prompts and interrupt it — by typing into its tmux "
+                + "pane, exactly as if you had typed there yourself. Codex's approval prompts "
+                + "are numbered the same way Claude Code's are, and a digit answers one "
+                + "outright. Sessions not running under tmux stay read-only either way."));
+
+            return rows.ToArray();
+        }
+
+        // Rebuild, because switching a CLI off removes the rest of its section.
+        private void OnClaudeCodeEnabledToggled(bool enabled)
+        {
+            ClaudeBuddySettings.ClaudeCodeEnabled = enabled;
+            Rebuild();
+        }
+
+        private void OnCodexEnabledToggled(bool enabled)
+        {
+            ClaudeBuddySettings.CodexEnabled = enabled;
+            Rebuild();
+        }
+
+        private void OnCodexChatToggled(bool enabled)
+        {
+            ClaudeBuddySettings.CodexChatEnabled = enabled;
+            Rebuild();
+        }
+
+        private void OnCodexReplyToggled(bool enabled)
+        {
+            ClaudeBuddySettings.CodexReplyEnabled = enabled;
         }
 
         private Control[] OpenClawRows()
@@ -957,6 +1177,18 @@ namespace ClaudeBuddy
         private IBrush Hairline => new SolidColorBrush(
             IsDark ? Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x0F, 0x00, 0x00, 0x00));
 
+        // A heading over several cards, for a section whose parts are separate
+        // lists rather than one run of rows — an agent and its extra accounts,
+        // say. Same heading treatment as the single-card form; the cards are
+        // spaced the way two groups would be, so the break still reads as a
+        // break without inventing a second heading level.
+        private Control Group(string title, params Control[] cards)
+        {
+            var stack = new StackPanel { Spacing = 10 };
+            foreach (var card in cards) stack.Children.Add(card);
+            return Group(title, (Control)stack);
+        }
+
         private Control Group(string title, Control card) => new StackPanel
         {
             Children =
@@ -1289,7 +1521,7 @@ namespace ClaudeBuddy
 
         private static Grid RowGrid() => new()
         {
-            ColumnDefinitions = new ColumnDefinitions("*,130,64,54,44"),
+            ColumnDefinitions = new ColumnDefinitions("*,130,64,54,44,84"),
             Margin = new Thickness(14, 8)
         };
 
@@ -1376,7 +1608,93 @@ namespace ClaudeBuddy
             Add(grid, 4, Check(settings.TintWindow, value =>
                 ClaudeBuddySettings.Update(folder, entry => entry.TintWindow = value)));
 
+            Add(grid, 5, DeleteProfileButton(profile));
+
             return grid;
+        }
+
+        // Removing a profile, which means removing a Claude Desktop login, its
+        // chat history and its local databases. There was no way to do it at
+        // all before this — "Reveal profiles folder" and a trip to Finder was
+        // the whole story — which is a gap rather than a safeguard, because
+        // deleting the folder by hand leaves the cloned Dock icon and the saved
+        // name and colour behind.
+        //
+        // Two clicks, not a modal. The second click is the confirmation, the
+        // button says what it is about to do while it waits, and it gives up
+        // after a few seconds so a stray click cannot arm it and leave it
+        // armed. A dialog would be the heavier answer, and the thing this
+        // guards is already recoverable — it goes to the Trash.
+        private Control DeleteProfileButton(ProfileView profile)
+        {
+            // The default profile is Claude Desktop's own directory rather than
+            // one this app made, so there is nothing here to offer.
+            if (profile.IsDefault) return new Panel();
+
+            var button = new Button
+            {
+                Content = "Delete",
+                FontSize = 11,
+                Padding = new Thickness(8, 3),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var armed = false;
+            DispatcherTimer? disarm = null;
+
+            void Disarm()
+            {
+                disarm?.Stop();
+                disarm = null;
+                armed = false;
+                button.Content = "Delete";
+            }
+
+            button.Click += (_, _) =>
+            {
+                if (!armed)
+                {
+                    // Say what will happen, in the place the click will happen.
+                    armed = true;
+                    button.Content = "Trash it?";
+
+                    disarm = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
+                    disarm.Tick += (_, _) => Disarm();
+                    disarm.Start();
+                    return;
+                }
+
+                Disarm();
+                button.IsEnabled = false;
+
+                var outcome = ClaudeDesktopManager.DeleteProfile(profile);
+
+                switch (outcome)
+                {
+                    case ClaudeDesktopManager.DeleteOutcome.Deleted:
+                        // Say so on the button *and* rebuild. The rescan the
+                        // delete kicked is asynchronous, so the row may still be
+                        // in the snapshot this rebuild reads — and a row that
+                        // stays put with nothing said reads as a click that did
+                        // nothing. Whichever happens first, the user is told.
+                        button.Content = "Trashed";
+                        Rebuild();
+                        break;
+
+                    case ClaudeDesktopManager.DeleteOutcome.RefusedRunning:
+                        button.Content = "Quit it first";
+                        button.IsEnabled = true;
+                        break;
+
+                    default:
+                        button.Content = "Couldn't";
+                        button.IsEnabled = true;
+                        break;
+                }
+            };
+
+            return button;
         }
 
         private const string AutoColour = "auto";
@@ -1413,49 +1731,56 @@ namespace ClaudeBuddy
             return box;
         }
 
-        // ---- Windows-only: extra Claude Code (CLI) profile directories ------
+        // ---- extra CLI account directories ----------------------------------
 
         // Distinct from "Profiles" above (Claude Desktop, the Electron app) —
-        // these are Claude Code *CLI* config directory names, for a second
-        // (or third...) account managed via CLAUDE_CONFIG_DIR, e.g. an alias
-        // like `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"`. Each
-        // one is wired in *addition* to the default ~/.claude, on native
-        // Windows and every WSL distro below — never a replacement for it,
-        // and never auto-discovered: only names added here (or passed
-        // explicitly to install-windows-hooks.ps1's -ProfileDir/
-        // -WslProfileDir) are ever touched. Always shown, unlike the WSL card:
-        // native wiring applies regardless of whether WSL is even installed.
-        [SupportedOSPlatform("windows")]
-        private static Control ClaudeCodeProfilesCard()
+        // these are *CLI* config directory names, for a second (or third...)
+        // account: CLAUDE_CONFIG_DIR for Claude Code, CODEX_HOME for Codex,
+        // e.g. an alias like `alias kwork="CLAUDE_CONFIG_DIR=~/.claude-work claude"`.
+        // Each one is wired in *addition* to the default, never as a
+        // replacement, and never auto-discovered: only names added here (or
+        // passed explicitly to an installer's --profile-dir) are ever touched.
+        //
+        // One card, used twice. The two lists are separate settings because
+        // they are separate products and someone can easily have extras of one
+        // and not the other, but nothing about the *UI* differs between them,
+        // and two near-identical copies would have drifted the way the
+        // platforms did.
+        private static Control ProfileDirsCard(
+            string blurb,
+            string watermark,
+            Func<IReadOnlyList<string>> current,
+            Action<string> add,
+            Action<string> remove,
+            Action reapply)
         {
             var content = new StackPanel { Spacing = 8, Margin = new Thickness(14, 10) };
 
             content.Children.Add(new TextBlock
             {
-                Text = "Wire Claude Buddy hooks into additional Claude Code accounts managed via "
-                       + "CLAUDE_CONFIG_DIR, alongside the default ~/.claude.",
+                Text = blurb,
                 TextWrapping = TextWrapping.Wrap,
                 Opacity = 0.55,
                 FontSize = 11
             });
 
             var itemsPanel = new StackPanel { Spacing = 4 };
-            foreach (var dirName in ClaudeBuddySettings.ClaudeCodeProfileDirs)
+            foreach (var dirName in current())
             {
-                itemsPanel.Children.Add(ProfileDirRow(dirName, itemsPanel));
+                itemsPanel.Children.Add(ProfileDirRow(dirName, itemsPanel, remove));
             }
             content.Children.Add(itemsPanel);
 
-            var input = new TextBox { Watermark = ".claude-work", Width = 220 };
+            var input = new TextBox { Watermark = watermark, Width = 220 };
             var browseButton = new Button { Content = "Browse…" };
             var addButton = new Button { Content = "Add" };
             var status = new TextBlock { FontSize = 11, Opacity = 0.7 };
 
             // A folder picker is the more discoverable way to do this, but
-            // typing stays available too: CLAUDE_CONFIG_DIR can point at a
-            // directory that doesn't exist yet (Claude Code creates it on
-            // first use with that alias), which a picker — browsing existing
-            // folders only — can't select.
+            // typing stays available too: these variables can point at a
+            // directory that doesn't exist yet (the CLI creates it on first use
+            // with that alias), which a picker — browsing existing folders only
+            // — can't select.
             browseButton.Click += async (_, _) =>
             {
                 var picked = await BrowseForProfileDir(browseButton, status);
@@ -1468,18 +1793,18 @@ namespace ClaudeBuddy
                 if (string.IsNullOrEmpty(name)) return;
 
                 status.Text = "";
-                ClaudeBuddySettings.AddClaudeCodeProfileDir(name);
-                itemsPanel.Children.Add(ProfileDirRow(name, itemsPanel));
+                add(name);
+                itemsPanel.Children.Add(ProfileDirRow(name, itemsPanel, remove));
                 input.Text = "";
 
-                // Off the UI thread: this shells out (native wiring, plus a
-                // re-run for every already-wired WSL distro), and the window
-                // must stay responsive the whole time — ReapplyProfiles'
-                // own internal timeouts guarantee it eventually returns
+                // Off the UI thread: this shells out to an installer, and on
+                // Windows that means a re-run for every already-wired WSL
+                // distro. The window must stay responsive the whole time; the
+                // installers' own timeouts guarantee it eventually returns
                 // either way.
                 addButton.IsEnabled = false;
                 input.IsEnabled = false;
-                Task.Run(WslIntegration.ReapplyProfiles).ContinueWith(_ =>
+                Task.Run(reapply).ContinueWith(_ =>
                 {
                     Dispatcher.UIThread.Post(() =>
                     {
@@ -1500,7 +1825,7 @@ namespace ClaudeBuddy
             content.Children.Add(new TextBlock
             {
                 Text = "Removing a profile stops it from being wired on future changes; it doesn't "
-                       + "remove hooks already written to that profile's own settings.json.",
+                       + "remove hooks already written to that profile's own config.",
                 TextWrapping = TextWrapping.Wrap,
                 Opacity = 0.5,
                 FontSize = 11
@@ -1512,9 +1837,13 @@ namespace ClaudeBuddy
         // Returns the picked folder's bare name (e.g. ".claude-work"), or
         // null if the user cancelled or picked something invalid — in which
         // case `status` is set to say why, since a folder outside the home
-        // directory would resolve to the wrong place on both native Windows
-        // and WSL (see ClaudeCodeProfilesCard's own doc comment).
-        [SupportedOSPlatform("windows")]
+        // directory would resolve to the wrong place everywhere: native
+        // Windows, WSL, and macOS alike (see ProfileDirsCard's doc comment).
+        //
+        // No longer Windows-only. GetWslHomeUncPaths already returns an empty
+        // list off Windows, so the validation below reduces to "a direct child
+        // of $HOME", which is exactly the rule the macOS installers enforce
+        // when they refuse a profile name containing a slash.
         private static async Task<string?> BrowseForProfileDir(Control owner, TextBlock status)
         {
             var storageProvider = TopLevel.GetTopLevel(owner)?.StorageProvider;
@@ -1525,7 +1854,7 @@ namespace ClaudeBuddy
 
             var result = await storageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
             {
-                Title = "Select a Claude Code config directory",
+                Title = "Select a config directory",
                 SuggestedStartLocation = startLocation,
                 AllowMultiple = false
             });
@@ -1569,7 +1898,8 @@ namespace ClaudeBuddy
         }
 
         [SupportedOSPlatform("windows")]
-        private static Control ProfileDirRow(string dirName, StackPanel itemsPanel)
+        private static Control ProfileDirRow(
+            string dirName, StackPanel itemsPanel, Action<string> remove)
         {
             var label = new TextBlock
             {
@@ -1577,18 +1907,18 @@ namespace ClaudeBuddy
                 VerticalAlignment = VerticalAlignment.Center,
                 Width = 220
             };
-            var remove = new Button { Content = "Remove" };
+            var removeButton = new Button { Content = "Remove" };
 
             var row = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 Spacing = 8,
-                Children = { label, remove }
+                Children = { label, removeButton }
             };
 
-            remove.Click += (_, _) =>
+            removeButton.Click += (_, _) =>
             {
-                ClaudeBuddySettings.RemoveClaudeCodeProfileDir(dirName);
+                remove(dirName);
                 itemsPanel.Children.Remove(row);
             };
 

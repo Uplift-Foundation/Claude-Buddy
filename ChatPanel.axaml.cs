@@ -33,6 +33,24 @@ namespace ClaudeBuddy
         private IRemoteChatSession? _session;
         private OrbWindow? _owner;
 
+        // Whether the header is currently wearing the orb's identity rather
+        // than an agent's own. Only that case can be refreshed from the orb.
+        private bool _borrowedIdentity;
+
+        // Who is talking in this session when the transcript does not say.
+        //
+        // A box shared by reference with every TurnView, not a value copied
+        // into each. The name is not always known when the panel binds — a
+        // terminal session's title arrives with a later hook write, and the
+        // panel opens on whatever the orb had at the time, which is often
+        // nothing. Copied, that nothing was baked into every row already built
+        // and the chips never appeared; boxed, filling it in later fills in the
+        // rows that were waiting for it. Same one-shot-read mistake the header
+        // made two commits ago, in a second place.
+        private sealed class Speaker { public string? Name; }
+
+        private readonly Speaker _soleSpeaker = new();
+
         // The colour a reply is drawn in when the turn itself doesn't name one.
         //
         // A room's turns carry their own, because several agents are talking. In
@@ -191,6 +209,19 @@ namespace ClaudeBuddy
         private static readonly IBrush SpeakActiveFill = new SolidColorBrush(Color.Parse("#E04A90D9"));
         private static readonly IBrush SpeakPreparingFill = new SolidColorBrush(Color.Parse("#E0B8860B"));
 
+        // Connected is green rather than the speak button's blue. The two dots
+        // sit inches apart and meant different things in the same colour: blue
+        // on the button is "this is playing right now", blue on the portrait was
+        // "this conversation is reachable". Green is what a presence dot is
+        // everywhere else, so it needs no explanation, and it leaves blue to
+        // mean one thing again.
+        //
+        // #00AF5F rather than a green picked by eye — it is the app's green
+        // already, the value Claude Code's own /color green resolves to (see
+        // OrbWindow's palette and ClaudeDesktopColors), so a connected dot and
+        // a green orb are the same green.
+        private static readonly IBrush ConnectedFill = new SolidColorBrush(Color.Parse("#E000AF5F"));
+
         private void Unbind()
         {
             if (_session is null) return;
@@ -208,6 +239,15 @@ namespace ClaudeBuddy
             }
 
             if (_session is IRemoteChatPrompts prompts) prompts.PromptChanged -= OnPromptChanged;
+
+            // The last good name is per session, not per panel. The panel is a
+            // singleton and the box outlives a session, so leaving it set meant
+            // the *next* conversation inherited it — and because "we already
+            // knew a name" beats "we do not know one yet", a session whose
+            // title had not arrived would wear the previous session's initials
+            // on every bubble rather than none. Wrong is worse than absent
+            // here: the chip is there to say who is talking.
+            _soleSpeaker.Name = null;
         }
 
         private void Bind(OrbWindow orb, IRemoteChatSession session)
@@ -242,10 +282,8 @@ namespace ClaudeBuddy
             // "Zara — wtvamp" is built as name plus place, so it splits back
             // into the two lines the header now has. A name with no place (an
             // agent's own main session) simply leaves the second line empty.
-            var parts = session.DisplayName.Split(" — ", 2);
-            TitleText.Text = parts[0];
-            SubtitleText.Text = parts.Length > 1 ? parts[1] : "";
-            SubtitleText.IsVisible = parts.Length > 1;
+            ApplyTitle();
+            RefreshSoleSpeaker();
 
             // Read off the orb rather than from the session, so the panel and
             // the badge on the thing that was clicked cannot disagree — the
@@ -260,7 +298,7 @@ namespace ClaudeBuddy
             OnStateChanged(session.State);
 
             _turns.Clear();
-            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble));
+            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
 
             Input.Text = Drafts.GetValueOrDefault(session.SessionId, "");
             MicButton.IsVisible = ClaudeBuddySettings.VoiceInputEnabled;
@@ -338,24 +376,147 @@ namespace ClaudeBuddy
             return Color.TryParse(hex, out var colour) ? colour : null;
         }
 
-        // First letters of the first two words: "Ada Lovelace" gives AL, and a
-        // single-word name gives its first two characters rather than one, which
-        // fills a 68pt circle better and still reads as a monogram.
-        private static string Initials(string? name)
+        // The header borrows the orb's letters and colours, and borrowed them
+        // exactly once — at Bind. Anything that changed the orb afterwards left
+        // the panel showing what the orb used to say: a /rename, a /color, a
+        // title arriving after the first hook write, or the two-letter setting
+        // being toggled while a panel was open. Worse than stale, at open time
+        // it could be empty — an orb clicked before its first status write has
+        // no glyph yet, and the header copied the nothing and kept it.
+        //
+        // Same shape as RepositionFor and SetRecording above: the orb tells the
+        // panel, the panel checks the message is from the orb it is showing.
+        public static void RefreshIdentityFor(OrbWindow orb)
         {
-            if (string.IsNullOrWhiteSpace(name)) return "";
+            if (_instance is not { IsVisible: true } panel) return;
+            if (!ReferenceEquals(panel._owner, orb)) return;
 
-            var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (words.Length == 0) return "";
-            if (words.Length == 1)
-            {
-                var w = words[0];
-                return (w.Length >= 2 ? w[..2] : w).ToUpperInvariant();
-            }
+            panel.ApplyBorrowedIdentity();
+            panel.RefreshSoleSpeaker();
+        }
 
-            return string.Concat(
-                char.ToUpperInvariant(words[0][0]),
-                char.ToUpperInvariant(words[1][0]));
+        // Only the case that borrows from the orb. An agent with a portrait or
+        // an OpenClaw identity has its own, and re-running the whole of
+        // ApplyAvatar here would restart an animated avatar on every hook
+        // write — which is several a second while a session is working.
+        // The agent whose messages these are.
+        //
+        // For a gateway session that is the agent in the session key, not the
+        // panel's title: "#openclaw-management" is where the conversation is
+        // and Lilibeth is who is talking in it, and a chip reading "Op" would
+        // be naming the room as its own speaker. Only a terminal session, whose
+        // title *is* its agent, falls back to the title.
+        // "Zara — wtvamp" is built as name plus place, so it splits back into
+        // the two lines the header has. A name with no place — an agent's own
+        // main session — leaves the second line empty.
+        //
+        // Read from the session every time rather than once at Bind. A terminal
+        // session is usually nameless when its panel opens and gets its title
+        // from a later hook write; the header used to keep the empty string it
+        // was born with.
+        private void ApplyTitle()
+        {
+            var parts = (_session?.DisplayName ?? "").Split(" — ", 2);
+
+            TitleText.Text = parts[0];
+            SubtitleText.Text = parts.Length > 1 ? parts[1] : "";
+            SubtitleText.IsVisible = parts.Length > 1;
+        }
+
+        private void RefreshSoleSpeaker()
+        {
+            ApplyTitle();
+
+            var was = _soleSpeaker.Name;
+
+            var identity = _session is null
+                ? null
+                : OpenClawSessions.IdentityForSession(_session.SessionId);
+
+            // The rule itself is in ChatSpeaker, pure and tested — including
+            // the part that matters here, that a name we already knew is never
+            // replaced by not knowing it. That is what made the chips vanish
+            // after a while rather than simply never appear.
+            var name = ChatSpeaker.Resolve(identity?.Name, TitleText.Text, was);
+
+            if (name == was) return;
+
+            _soleSpeaker.Name = name;
+
+            foreach (var view in _turns) view.SpeakerChanged();
+        }
+
+        private void ApplyBorrowedIdentity()
+        {
+            if (!_borrowedIdentity || _owner is null) return;
+
+            Avatar.Fill = new SolidColorBrush(_owner.OrbColor);
+            AvatarEmoji.Foreground = InkOn(_owner.OrbColor);
+            RingFor(_owner.AccentColor);
+
+            var letters = BorrowedLetters();
+
+            // Never blank what is already there. Same rule as ChatSpeaker and
+            // the last place in the panel that still lacked it: both of this
+            // one's sources can be momentarily empty for reasons that are about
+            // us rather than about the session — the orb clears its glyph while
+            // an avatar loads, and a title is empty until a hook write brings
+            // one — and either used to wipe a circle that was reading fine.
+            //
+            // There is no case where going from letters to nothing is the truth
+            // about a conversation. Nothing to say yet is the empty circle at
+            // the start; nothing to say any more does not happen.
+            if (string.IsNullOrEmpty(letters)) return;
+            if (AvatarEmoji.Text == letters) return;
+
+            AvatarEmoji.Text = letters;
+            AvatarEmoji.IsVisible = true;
+        }
+
+        // What the orb is drawing, or what it would draw if it had got round to
+        // it. The fallback matters because the panel can be bound before the
+        // orb's first status write, and an empty circle beside a perfectly good
+        // title is the one outcome that is never right. It derives them the way
+        // the orb would rather than with Initials(), so the two agree on case
+        // as well as on letters — "Cb" here and on the orb, not "CB" here.
+        private string BorrowedLetters()
+        {
+            var letters = _owner?.GlyphText ?? "";
+            if (!string.IsNullOrEmpty(letters)) return letters;
+
+            var name = TitleText.Text;
+            return string.IsNullOrWhiteSpace(name)
+                ? ""
+                : OrbGlyph.For(name, ClaudeBuddySettings.TwoLetterGlyphs);
+        }
+
+        // Ink that can be read on a given circle.
+        //
+        // AvatarEmoji had no Foreground at all and inherited the panel's, which
+        // is near-black — fine on nothing, because the circle it sits in was
+        // invisible until an identity was drawn behind it. Once the fill became
+        // the orb's *state* colour it was black on black, and idle is near-black
+        // by default. That is the whole of the "initials keep disappearing"
+        // report: they were there the entire time, and the letters went from
+        // legible to invisible when a session stopped working, because
+        // generating and waiting are bright and idle is not.
+        //
+        // Chosen by luminance rather than fixed at white, which is what the orb
+        // does. The orb only ever draws on a state colour and white suits all
+        // of them; this circle is also filled with an agent's own colour, and
+        // several of those are light enough that white letters vanish the same
+        // way black ones just did.
+        private static readonly IBrush LightInk = new SolidColorBrush(Color.Parse("#EEFFFFFF"));
+        private static readonly IBrush DarkInk = new SolidColorBrush(Color.Parse("#E6000000"));
+
+        private static IBrush InkOn(Color fill)
+        {
+            // Rec. 709 luminance: the eye is far more sensitive to green than
+            // to blue, so a plain average calls mid-blue light and gets it
+            // backwards.
+            var luminance = (0.2126 * fill.R + 0.7152 * fill.G + 0.0722 * fill.B) / 255.0;
+
+            return luminance > 0.55 ? DarkInk : LightInk;
         }
 
         private void ApplyAvatar(string sessionId)
@@ -390,10 +551,18 @@ namespace ClaudeBuddy
                 // invisible ring around a circle of its own colour.
                 Avatar.Fill = new SolidColorBrush(_owner.OrbColor);
                 Avatar.IsVisible = true;
+                AvatarEmoji.Foreground = InkOn(_owner.OrbColor);
                 RingFor(_owner.AccentColor);
 
                 // An initial wants less room than an emoji does.
-                AvatarEmoji.Text = _owner.GlyphText;
+                // Set outright rather than through ApplyBorrowedIdentity,
+                // which refuses to blank: this is a new conversation and the
+                // letters on screen are the last one's. The never-blank rule is
+                // about refreshing what is already right, not about carrying
+                // one session's identity onto another — the same distinction
+                // Unbind draws for the speaker.
+                _borrowedIdentity = true;
+                AvatarEmoji.Text = BorrowedLetters();
                 AvatarEmoji.FontSize = 26;
                 AvatarEmoji.IsVisible = !string.IsNullOrEmpty(AvatarEmoji.Text);
 
@@ -404,6 +573,7 @@ namespace ClaudeBuddy
 
             _avatar = avatar;
             _avatarFrame = 0;
+            _borrowedIdentity = false;
 
             // Reset from whatever the branch above may have left behind.
             AvatarEmoji.FontSize = 38;
@@ -424,7 +594,7 @@ namespace ClaudeBuddy
 
                 AvatarEmoji.Text = !string.IsNullOrEmpty(identity?.Emoji)
                     ? identity!.Emoji!
-                    : Initials(identity?.Name);
+                    : OrbGlyph.Initials(identity?.Name);
                 AvatarEmoji.IsVisible = !string.IsNullOrEmpty(AvatarEmoji.Text);
 
                 // Initials are letterforms, not a pictograph, so they want the
@@ -435,6 +605,7 @@ namespace ClaudeBuddy
                 {
                     Avatar.Fill = new SolidColorBrush(c);
                     Avatar.IsVisible = true;
+                    AvatarEmoji.Foreground = InkOn(c);
                     RingFor(c);
                 }
                 else
@@ -679,7 +850,7 @@ namespace ClaudeBuddy
             // start them downloading again.
             for (var i = 0; i < count && i < _session.History.Count; i++)
             {
-                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble));
+                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble, _soleSpeaker));
             }
         }
 
@@ -688,7 +859,7 @@ namespace ClaudeBuddy
             if (_session is null) return;
 
             _turns.Clear();
-            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble));
+            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
 
             // Straight to the bottom rather than the pinned-only rule: a
             // transcript that has just been replaced wholesale has no scroll
@@ -699,7 +870,7 @@ namespace ClaudeBuddy
 
         private void OnTurnAdded(ChatTurn turn)
         {
-            _turns.Add(new TurnView(turn, _defaultBubble));
+            _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
 
             // Your own turn always brings the view with it; everything else
             // respects where you were reading.
@@ -724,7 +895,7 @@ namespace ClaudeBuddy
         {
             StateDot.Fill = state switch
             {
-                RemoteChatState.Connected => SpeakActiveFill,
+                RemoteChatState.Connected => ConnectedFill,
                 RemoteChatState.Connecting => SpeakPreparingFill,
                 RemoteChatState.Error => RecordingFill,
                 _ => IdleFill
@@ -826,12 +997,20 @@ namespace ClaudeBuddy
         private sealed class TurnView : System.ComponentModel.INotifyPropertyChanged
         {
             private readonly ChatTurn _turn;
+            private readonly Speaker? _soleSpeaker;
             private readonly Color? _defaultBubble;
 
-            public TurnView(ChatTurn turn, Color? defaultBubble)
+            // soleSpeaker is who is talking when the transcript does not say.
+            // A room stamps every turn with its speaker because there are
+            // several; a one-to-one session — a Claude Code or Codex terminal,
+            // or a single agent — stamps none, because there is only one and it
+            // was obvious to whoever wrote the transport. It is not obvious in
+            // the bubbles, which is the whole point of the chip.
+            public TurnView(ChatTurn turn, Color? defaultBubble, Speaker? soleSpeaker)
             {
                 _turn = turn;
                 _defaultBubble = defaultBubble;
+                _soleSpeaker = soleSpeaker;
 
                 turn.PropertyChanged += (_, e) =>
                 {
@@ -1090,6 +1269,23 @@ namespace ClaudeBuddy
                 }
             }
 
+            // The name was filled in after this row was built. Everything
+            // drawn from it has to be asked again — the chip is bound to five
+            // separate properties and a stale one leaves half a chip.
+            public void SpeakerChanged()
+            {
+                foreach (var name in new[]
+                {
+                    nameof(HasSpeaker), nameof(SpeakerName), nameof(ShowSpeakerName),
+                    nameof(SpeakerInitials), nameof(SpeakerAvatar),
+                    nameof(HasSpeakerAvatar), nameof(HasSpeakerInitials),
+                    nameof(SpeakerChip), nameof(SpeakerChipInk)
+                })
+                {
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+                }
+            }
+
             private bool IsSystem => _turn.Role == ChatRole.System;
 
             // A named speaker is never *you*, whatever role the transport gave
@@ -1099,9 +1295,68 @@ namespace ClaudeBuddy
             // so a room full of agents looked like you talking to yourself.
             private bool IsUser => _turn.Role == ChatRole.User && !HasSpeaker;
 
-            public bool HasSpeaker => !string.IsNullOrEmpty(_turn.Speaker);
+            public bool HasSpeaker => !string.IsNullOrEmpty(SpeakerName);
 
-            public string SpeakerName => _turn.Speaker ?? "";
+            // Falls back to the session's one agent, but only on the agent's
+            // own turns. Your messages are yours whoever else is in the room,
+            // and a system note is about the conversation rather than in it —
+            // stamping either with the agent's name would say it spoke them.
+            public string SpeakerName =>
+                !string.IsNullOrEmpty(_turn.Speaker) ? _turn.Speaker!
+                : _turn.Role == ChatRole.Assistant ? _soleSpeaker?.Name ?? ""
+                : "";
+
+            // The name in words, beside the chip, only when the transcript
+            // named the speaker itself. In a room that is worth the line: eight
+            // agents talk and the names are how you follow who. In a one-to-one
+            // it is the panel's own title repeated down the whole transcript,
+            // which says nothing the header has not already said — so the chip
+            // goes on alone, the way a messaging app shows a face and not a
+            // name against every message from one person.
+            public bool ShowSpeakerName => !string.IsNullOrEmpty(_turn.Speaker);
+
+            // The speaker's own picture, when the gateway has one for them.
+            //
+            // The first frame only, even for an animated avatar. The header
+            // animates its portrait with a timer; a room is a scrolling list of
+            // dozens of turns, and one timer per row to animate a 16-pixel
+            // circle is a lot of machinery for something too small to read a
+            // motion in. The portrait is the place you look, and it still moves.
+            public Bitmap? SpeakerAvatar =>
+                OpenClawSessions.AvatarForAgentName(SpeakerName)?.Frames.FirstOrDefault();
+
+            public bool HasSpeakerAvatar => SpeakerAvatar is not null;
+
+            // Initials are the fallback, not the design: an agent with a face
+            // shows the face, and the letters are for the ones without one and
+            // for a name this cannot resolve to a single agent.
+            public bool HasSpeakerInitials => !HasSpeakerAvatar;
+
+            // The speaker's initials, for the chip beside their name.
+            //
+            // A name alone in a colour was enough while a room had two or three
+            // agents in it. With eight it is a column of similar words in
+            // similar hues, and the eye has to read each one — a shape it can
+            // recognise without reading is what a room view is for. Same
+            // letters the agent's own orb shows, so the chip and the orb are
+            // recognisably the same agent.
+            public string SpeakerInitials => OrbGlyph.Initials(SpeakerName);
+
+            // Filled in the speaker's own colour, with the panel's own
+            // background punched through it for the letters. Ink on a tinted
+            // chip was the alternative and reads as a third bubble; a solid
+            // dot reads as a person.
+            public IBrush SpeakerChip =>
+                SpeakerColor is { } c ? new SolidColorBrush(c) : SystemInk;
+
+            public IBrush SpeakerChipInk =>
+                SpeakerColor is not null ? ChipInk : SystemInk;
+
+            // Near-black rather than the window's background brush: the chip is
+            // a solid colour whatever is behind it, so the letters only have to
+            // read against the chip.
+            private static readonly IBrush ChipInk =
+                new SolidColorBrush(Color.FromRgb(0x1C, 0x1C, 0x1E));
 
             // The agent's own colour, the one their orb's ring is drawn in.
             private Color? SpeakerColor

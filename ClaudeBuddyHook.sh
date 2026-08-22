@@ -1,7 +1,26 @@
 #!/bin/bash
 # Claude Buddy hook for macOS/Linux — bash twin of ClaudeBuddyHook.ps1.
-# Usage (from a Claude Code hook): ClaudeBuddyHook.sh <idle|generating|waiting|ended>
+# Usage (from a Claude Code or Codex hook):
+#   ClaudeBuddyHook.sh <idle|generating|waiting|ended>
+#   ClaudeBuddyHook.sh codex <idle|generating|waiting|ended>
 # Reads the hook payload JSON on stdin for session_id and cwd.
+#
+# One script for both CLIs rather than two, because almost none of it is about
+# either: finding the terminal, finding the session's process, and writing the
+# status file are the same job whoever asked. The agent word only gates the
+# handful of places where the two genuinely differ, and each of those says why.
+#
+# It must exit 0 and print nothing, whatever happens. That has always been good
+# manners; under Codex it is load-bearing. Codex reads a hook's stdout as JSON
+# with `additionalProperties: false`, so anything printed is
+# "hook returned invalid permission-request JSON output" — and **exit status 2
+# is a deny**. A hook that fails noisily would start refusing the user's own
+# approvals. See docs/codex-findings.md.
+
+AGENT="claude"
+case "$1" in
+    claude|codex) AGENT="$1"; shift ;;
+esac
 
 STATE="$1"
 case "$STATE" in
@@ -11,12 +30,70 @@ esac
 
 PAYLOAD=$(cat)
 
-# No jq dependency: session_id is a UUID and cwd is a path, neither of which
-# contains embedded quotes in practice, so simple sed extraction is enough.
-SESSION_ID=$(printf '%s' "$PAYLOAD" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-CWD=$(printf '%s' "$PAYLOAD" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-TRANSCRIPT=$(printf '%s' "$PAYLOAD" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+# Pull one top-level string out of the payload.
+#
+# The obvious `sed 's/.*"key":"\([^"]*\)".*/\1/'` is greedy and takes the
+# *last* match on the line, which was fine while the only payloads came from
+# Claude Code. Codex's PreToolUse and PermissionRequest payloads embed
+# `tool_input` as arbitrary JSON, and its own command records carry
+# `"cwd":"file:///…"` — so a nested key would win and CWD would become
+# something that is not a directory. Everything downstream keys off cwd: the
+# orb's name, its saved position, which sessions are siblings.
+#
+# grep -o takes the first, which is the top-level one, because the payload
+# writes its own fields before nesting anything.
+field() {
+    printf '%s' "$PAYLOAD" \
+        | grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
+        | head -1 \
+        | sed 's/.*:[[:space:]]*"\(.*\)"$/\1/'
+}
+
+SESSION_ID=$(field session_id)
+CWD=$(field cwd)
+TRANSCRIPT=$(field transcript_path)
 [ -n "$SESSION_ID" ] || SESSION_ID="unknown"
+
+# ${TMPDIR} is what .NET's Path.GetTempPath() returns on macOS, so the app
+# and this script agree on the folder (both are per-user).
+DIR="${TMPDIR:-/tmp/}"
+DIR="${DIR%/}/claude_buddy"
+
+# Whether to give a session a colour when it has none.
+#
+# A marker file the app writes beside the status files, not a flag in the hook
+# command — and the difference is not stylistic. The first version baked
+# `--auto-color` into the command, which meant toggling the setting rewrote
+# Codex's hooks.json; Codex hashes that file and marks a changed entry
+# `modified`, so its hooks stop running until the review is accepted again.
+# Turning a colour on would silently stop every Codex orb until the user
+# noticed. A marker leaves the wiring untouched, so trust survives.
+#
+# Cheaper than the alternatives too: one stat, against an osascript per hook
+# call to read the app's settings, on a script that runs on every tool use.
+AUTO_COLOR=0
+[ -f "$DIR/.auto-color" ] && AUTO_COLOR=1
+FILE="$DIR/$SESSION_ID.txt"
+
+if [ "$STATE" = "ended" ]; then
+    rm -f "$FILE"
+    exit 0
+fi
+
+# Codex's transcript_path is nullable, and a null is not a quoted string so it
+# arrives here empty. The rollout is findable anyway — its filename ends in the
+# session id — and only this script can see CODEX_HOME, which is where the app
+# would otherwise have to guess. Resolving it here keeps the same division of
+# labour the rest of the file has: the hook knows the environment, the app
+# reads files.
+if [ "$AGENT" = "codex" ] && [ -z "$TRANSCRIPT" ]; then
+    for candidate in "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/rollout-*-"$SESSION_ID".jsonl; do
+        [ -f "$candidate" ] && TRANSCRIPT="$candidate"
+    done
+fi
+
+TITLE=""
+COLOR=""
 
 # What the chat is called and what color it's been given. Claude Code keeps
 # all three of these in the transcript, re-emitting them as the session goes:
@@ -30,9 +107,11 @@ TRANSCRIPT=$(printf '%s' "$PAYLOAD" | sed -n 's/.*"transcript_path"[[:space:]]*:
 # Anchoring the match at the start of the line is what makes this safe:
 # transcripts are full of quoted text that would otherwise match, but content
 # inside a message is JSON-escaped, so only a real record can start this way.
-TITLE=""
-COLOR=""
-if [ "$STATE" != "ended" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+#
+# Claude Code only. A Codex rollout contains none of these three records, so
+# the tail below would never match and the whole-file fallback would re-read a
+# multi-megabyte transcript on every single tool call.
+if [ "$AGENT" = "claude" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
     # Transcripts reach tens of MB and this runs on every tool call, so pull
     # all three record types out of the tail in one read — each is normally
     # within ~25KB of the end — and only scan the whole file when a long run
@@ -60,6 +139,175 @@ if [ "$STATE" != "ended" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
 
     # Color names only — letters, nothing that could need escaping.
     COLOR=$(cb_value "$(cb_pick agent-color)" agentColor | tr -cd 'a-zA-Z')
+fi
+
+# Give this session a colour, the way Claude Code gives one itself.
+#
+# Off unless the installer was told to switch it on, because this writes to a
+# file the app does not own. What it writes is not an invention: `/color`
+# persists a colour by appending exactly this record to the transcript — read
+# out of Claude Code's own saveAgentColor, which appends
+# {"type":"agent-color","agentColor":…,"sessionId":…} and does nothing else —
+# and the same records are read back into session state when a session resumes.
+# So a colour set here is one Claude Code itself will agree with next time it
+# loads that session, rather than a stand-in only this app can see. That
+# distinction is exactly why the README declined to derive an accent, and why
+# this is allowed to exist.
+#
+# Once per session: the moment the record is there, the read above finds it and
+# this is skipped for the rest of the session's life. A colour the user later
+# sets with /color wins for the same reason — theirs is appended later, and the
+# read takes the newest.
+#
+# One short line, appended with >>. An O_APPEND write well under a page is
+# atomic against the writer Claude Code has open on the same file, so this
+# cannot land in the middle of one of its own rows.
+if [ "$AGENT" = "claude" ] && [ "$AUTO_COLOR" = "1" ] && [ -z "$COLOR" ] \
+   && [ -n "$SESSION_ID" ] && [ "$SESSION_ID" != "unknown" ] \
+   && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+    # Keyed on the directory, not the session id. A session id is new every
+    # run, so keying on it would repaint a project's orb a different colour
+    # every time it was opened — worse than no colour, because it would look
+    # like the colour meant something. The directory is what the saved orb
+    # position is keyed by too, so a project keeps one colour.
+    #
+    # cksum because it is POSIX and gives the same answer on every machine and
+    # every run, which is what "stable" has to mean for a value written into a
+    # file that outlives the process.
+    CB_HASH=$(printf '%s' "$CWD" | cksum | awk '{print $1}')
+
+    # Names Claude Code accepts and the app knows how to draw. Deliberately
+    # not the whole palette: grey and white read as "no colour" on an orb, and
+    # the point of this is telling sessions apart.
+    set -- red orange yellow green teal cyan blue purple violet magenta pink
+    CB_INDEX=$(( CB_HASH % $# + 1 ))
+    eval "COLOR=\${$CB_INDEX}"
+
+    printf '{"type":"agent-color","agentColor":"%s","sessionId":"%s"}\n' \
+        "$COLOR" "$SESSION_ID" >> "$TRANSCRIPT" 2>/dev/null || COLOR=""
+fi
+
+# What Codex calls this chat. It has both halves of what Claude Code has, in
+# its own state database rather than in the transcript:
+#
+#   name   <- /rename, the name you chose
+#   title  <- Codex's own, taken from the first thing you asked
+#
+# Same precedence as the Claude Code branch above, and for the same reason: a
+# name you set by hand outranks a generated one however recently the generated
+# one was written. There is still no /color equivalent, so COLOR stays empty and
+# a Codex orb keeps the plain ring.
+#
+# Read from the database on every hook rather than cached in the status file,
+# which is what the first version of this did. Caching was there to avoid
+# grepping a multi-megabyte rollout, and a primary-key lookup costs nothing —
+# measured at 7ms against the live file. It also means /rename shows up on the
+# orb at the next hook instead of never, which is a limitation Claude Code
+# sessions still have.
+#
+# Read-only, via a file: URI, so a hook can never take a write lock on a
+# database Codex is using. Anything that goes wrong here — no sqlite3, a
+# database mid-write, a schema this doesn't recognise — falls through to the
+# rollout, which is the same answer by a slower route.
+if [ "$AGENT" = "codex" ]; then
+    # The filename carries a schema version (state_5.sqlite today) and will be
+    # bumped by some future Codex. Take the highest rather than naming one, so
+    # an upgrade degrades to the fallback below only if the *schema* changes,
+    # not merely because the number did.
+    CODEX_DB=$(ls -1 "${CODEX_HOME:-$HOME/.codex}"/state_*.sqlite 2>/dev/null | sort -V | tail -1)
+
+    # The session id goes into a SQL string, and it arrives from a hook payload
+    # this script does not control. Everything but hex and dashes is stripped —
+    # a real thread id is a UUID, so nothing legitimate is lost, and there is
+    # no quoting to get right.
+    SAFE_ID=$(printf '%s' "$SESSION_ID" | tr -cd '0-9a-fA-F-')
+
+    if [ -n "$CODEX_DB" ] && [ -n "$SAFE_ID" ] && command -v sqlite3 >/dev/null 2>&1; then
+        TITLE=$(sqlite3 -readonly "file:$CODEX_DB?mode=ro" \
+            "select coalesce(nullif(name,''), nullif(title,'')) from threads where id='$SAFE_ID';" \
+            2>/dev/null | head -1)
+
+        # Codex's own colour, which lives on a *section* rather than on a
+        # thread: thread_sections.appearance is {"icon":…,"color":…} and a
+        # thread points at one through thread_section_id. So a Codex orb is
+        # coloured when its session has been filed under a coloured section and
+        # not otherwise — which is the honest reading, because that is the only
+        # colour Codex itself associates with the session.
+        #
+        # Read, never written. Creating a section to hold a colour would
+        # reorganise the user's own thread list in Codex's sidebar, which is a
+        # far larger side effect than a coloured ring is worth.
+        COLOR=$(sqlite3 -readonly "file:$CODEX_DB?mode=ro" \
+            "select s.appearance from threads t
+               join thread_sections s on s.id = t.thread_section_id
+              where t.id='$SAFE_ID';" 2>/dev/null \
+            | sed -n 's/.*"color"[[:space:]]*:[[:space:]]*"\([a-zA-Z]*\)".*/\1/p' \
+            | head -1)
+    fi
+
+    # Nothing to read, because most sessions are in no section at all. Derive
+    # one instead, when the user has asked for colours.
+    #
+    # This is the one place a colour is invented rather than read, and the
+    # asymmetry with Claude Code is deliberate rather than a shortcut. There,
+    # deriving was refused for a specific reason — the terminal shows its own
+    # accent, so a stand-in would visibly disagree with it — and the fix was to
+    # write the record Claude Code itself reads back. Codex offers no such
+    # record: its only colour belongs to a *section*, a grouping the user
+    # arranges, and filing a session into one to carry a colour would rearrange
+    # their sidebar. So the choice for Codex is a derived colour or none.
+    #
+    # A derived one is safe here precisely because of what is missing: Codex
+    # shows no per-session colour anywhere, so there is nothing for this to
+    # disagree with. It is keyed on the directory like Claude Code's, so the
+    # same project is the same colour in both, and a real section colour above
+    # always wins.
+    if [ "$AUTO_COLOR" = "1" ] && [ -z "$COLOR" ] && [ -n "$CWD" ]; then
+        CB_HASH=$(printf '%s' "$CWD" | cksum | awk '{print $1}')
+        set -- red orange yellow green teal cyan blue purple violet magenta pink
+        CB_INDEX=$(( CB_HASH % $# + 1 ))
+        eval "COLOR=\${$CB_INDEX}"
+    fi
+
+    # No database, or nothing in it about this session yet — a thread is written
+    # there a moment after it starts, so the very first hook of a session can
+    # legitimately find nothing. The rollout has the same first message that
+    # Codex's own title is built from, so this agrees with the database rather
+    # than competing with it.
+    if [ -z "$TITLE" ] && [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+        # -m1 stops at the first match, and a UserMessage is within the first
+        # handful of rows, so this reads the head of the file rather than the
+        # file. The row is one line of compact JSON; the prompt is the first
+        # "text" value inside the first UserMessage item.
+        TITLE=$(grep -m1 '"type":"UserMessage"' "$TRANSCRIPT" 2>/dev/null \
+            | sed -n 's/.*"type":"UserMessage".*"text":"\([^"]*\)".*/\1/p')
+    fi
+
+    # Whichever it came from, it has to survive being spliced into the JSON this
+    # script hand-rolls, and it has to fit on an orb's tooltip.
+    #
+    # The two sed passes before the trim are not tidying. A first message is
+    # several lines as often as not, and its newlines arrive as the two
+    # characters \ and n — so stripping backslashes first would weld the lines
+    # together with an "n" in the seam ("first linensecond line").
+    if [ -n "$TITLE" ]; then
+        TITLE=$(printf '%s' "$TITLE" \
+            | sed 's/\\[nrt]/ /g' \
+            | tr -d '\\' \
+            | tr -s '[:space:]' ' ' \
+            | cut -c1-60 \
+            | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+
+        # Cut at 60 characters lands mid-word about as often as not, and this is
+        # a name rather than a summary — "remove all usa" reads as a bug in the
+        # app. Back off to the last space, but only when that still leaves
+        # something worth reading; a first word longer than 30 characters is a
+        # path or a URL, and half of one is better than none of it.
+        SHORTER="${TITLE% *}"
+        if [ "$SHORTER" != "$TITLE" ] && [ "${#SHORTER}" -ge 30 ]; then
+            TITLE="$SHORTER"
+        fi
+    fi
 fi
 
 # Identify the terminal hosting this session so a click on the orb can jump
@@ -96,29 +344,45 @@ fi
 # session killed with Ctrl+C never fires SessionEnd, so its file survives, and
 # without a pid the only way to notice is to wait out the orb lifetime — which
 # is forever if that is what you picked. See SessionManager.SessionGone.
+#
+# For Codex the walk looks for the codex process by name first, and only then
+# for a tty. The two usually land on the same process and the distinction only
+# shows up in one case — but it is a case that costs someone an orb they were
+# using. Claude Code running `codex exec` as a Bash tool puts a codex process
+# in a pipe with no tty of its own, so a tty-only walk would run straight past
+# it and record *Claude's* pid. The app groups status files by pid to work out
+# which one supersedes which, so the nested codex file would be the newest in
+# Claude's bucket and would delete the live Claude orb.
 TTY=""
 SESSION_PID=""
 PID=$$
 for _ in 1 2 3 4 5; do
     PID=$(ps -o ppid= -p "$PID" 2>/dev/null | tr -d ' ')
     { [ -z "$PID" ] || [ "$PID" = "0" ] || [ "$PID" = "1" ]; } && break
+
     T=$(ps -o tty= -p "$PID" 2>/dev/null | tr -d ' ')
+
+    if [ "$AGENT" = "codex" ]; then
+        COMM=$(basename "$(ps -o comm= -p "$PID" 2>/dev/null)" 2>/dev/null)
+        if [ "$COMM" = "codex" ]; then
+            SESSION_PID="$PID"
+            [ -n "$T" ] && [ "$T" != "??" ] && TTY="$T"
+            break
+        fi
+    fi
+
     if [ -n "$T" ] && [ "$T" != "??" ]; then TTY="$T"; SESSION_PID="$PID"; break; fi
 done
 
-# ${TMPDIR} is what .NET's Path.GetTempPath() returns on macOS, so the app
-# and this script agree on the folder (both are per-user).
-DIR="${TMPDIR:-/tmp/}"
-DIR="${DIR%/}/claude_buddy"
-FILE="$DIR/$SESSION_ID.txt"
+mkdir -p "$DIR"
 
-if [ "$STATE" = "ended" ]; then
-    rm -f "$FILE"
-else
-    mkdir -p "$DIR"
-    printf '{"state":"%s","cwd":"%s","title":"%s","color":"%s","term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s","tmux_pane":"%s","tmux_bin":"%s","session_pid":%s,"transcript_path":"%s"}' \
-        "$STATE" "$CWD" "$TITLE" "$COLOR" "$TERM_PROGRAM" "$TERM_ID" "$TTY" \
-        "$TMUX_SOCKET" "$TMUX_PANE_ID" "$TMUX_BIN" "${SESSION_PID:-0}" "$TRANSCRIPT" > "$FILE"
-fi
+# "cli" is what tells the app which of the two wrote this. Written by name
+# rather than left to be inferred from which fields happen to be empty — the
+# app has an enum for it and the whole point is that a typo shouldn't be
+# indistinguishable from a Claude Code session. A file from an older hook has
+# no such key, which reads as Claude Code, which is what it was.
+printf '{"state":"%s","cli":"%s","cwd":"%s","title":"%s","color":"%s","term_program":"%s","term_id":"%s","tty":"%s","tmux_socket":"%s","tmux_pane":"%s","tmux_bin":"%s","session_pid":%s,"transcript_path":"%s"}' \
+    "$STATE" "$AGENT" "$CWD" "$TITLE" "$COLOR" "$TERM_PROGRAM" "$TERM_ID" "$TTY" \
+    "$TMUX_SOCKET" "$TMUX_PANE_ID" "$TMUX_BIN" "${SESSION_PID:-0}" "$TRANSCRIPT" > "$FILE"
 
 exit 0

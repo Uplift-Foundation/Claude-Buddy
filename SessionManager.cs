@@ -52,18 +52,46 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public string Agent { get; set; } = "";
 
-        // Which kind of thing this session is. App-filled during the scan and
-        // never serialized, for the same reason Lead and Agent aren't: the
-        // hooks know nothing about it and write no such field. Serializing it
-        // would also be actively harmful — ResetSessionToIdle writes this whole
-        // object back over a hook-owned file, so the key would appear in that
-        // file and then vanish again on the hook's next write.
+        // Which CLI wrote this file, in its own words: "codex", or absent for
+        // Claude Code.
         //
-        // An enum rather than a string because it is entirely internal: a typo
-        // should not compile. Defaulting to ClaudeCode means every existing
-        // path keeps its behaviour without being touched.
+        // Serialized, unlike Lead and Agent and Kind, because unlike them the
+        // hook is what knows the answer. That distinction is the whole of it:
+        // ResetSessionToIdle reads a status file, changes the state and writes
+        // the object back over it, so a field the *app* derives would appear in
+        // a hook-owned file and vanish again on the next write — while a field
+        // the *hook* owns has to survive exactly that round trip or a reset
+        // turns a Codex session into a Claude Code one.
+        //
+        // Absent means Claude Code rather than unknown, so every status file
+        // already on disk and every hook older than this reads correctly with
+        // no migration.
+        //
+        // Not to be confused with Agent three fields up, which is what an
+        // agent-team member is called. Both words are right and neither is
+        // available for the other.
+        [JsonPropertyName("cli")]
+        public string Cli { get; set; } = "";
+
+        // Which kind of thing this session is. Derived from Cli rather than
+        // stored, by SourceOf, and never serialized — an enum here because it
+        // is entirely internal and a typo should not compile, a string on the
+        // wire because that is what a shell script can write.
+        //
+        // Defaulting to ClaudeCode means an object nobody has run SourceOf over
+        // behaves as everything did before this existed.
         [JsonIgnore]
         public SessionSource Source { get; set; } = SessionSource.ClaudeCode;
+
+        // Whether this session is a CLI running in a terminal on this machine.
+        //
+        // Most of the rules in this file that name ClaudeCode mean this and not
+        // that: it has a process, it has a terminal you can be sent to, and it
+        // has a transcript file on disk. Codex is all three. The ones that
+        // genuinely mean Claude Code — agent teams, background jobs, the
+        // projects directory — still say so, and each says why.
+        [JsonIgnore]
+        public bool IsLocalCli => Source is SessionSource.ClaudeCode or SessionSource.Codex;
 
         // What kind of gateway conversation this is. [JsonIgnore] for the same
         // reason Source is: it is derived from the gateway's answer during the
@@ -121,14 +149,21 @@ namespace ClaudeBuddy
         public string TranscriptPath { get; set; } = "";
     }
 
-    // What produced a session. ClaudeCode is a local process that fires the
-    // hook; OpenClaw is a conversation on a remote gateway with no process, no
-    // terminal and no transcript file here. Almost every rule in this file was
-    // written for the first and is wrong for the second, which is why this
-    // exists rather than being inferred from which fields happen to be empty.
+    // What produced a session. ClaudeCode and Codex are local processes that
+    // fire the hook; OpenClaw is a conversation on a remote gateway with no
+    // process, no terminal and no transcript file here. Almost every rule in
+    // this file was written for the first and is wrong for the third, which is
+    // why this exists rather than being inferred from which fields happen to be
+    // empty.
+    //
+    // The split that matters most is not one-of-three but two-against-one — see
+    // SessionStatus.IsLocalCli. Codex differs from Claude Code in what its
+    // transcript looks like and in what it can be asked to do, not in whether
+    // there is a terminal behind it.
     public enum SessionSource
     {
         ClaudeCode,
+        Codex,
         OpenClaw
     }
 
@@ -174,10 +209,46 @@ namespace ClaudeBuddy
         private readonly DispatcherTimer _pollTimer = new() { Interval = TimeSpan.FromSeconds(2) };
         private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(150) };
 
+        // The file the hooks look for to decide whether to colour a session.
+        //
+        // A marker rather than an argument in the hook command, because the
+        // command is part of Codex's hooks.json and Codex hashes that file —
+        // changing it marks the entries `modified` and stops them running until
+        // the user re-approves the review. A setting that silently switched
+        // every Codex orb off until someone noticed is not a setting.
+        //
+        // Written from the app rather than by the installer so it also needs no
+        // re-wiring: the hooks stay exactly as they were and simply see a
+        // different answer on their next call.
+        private string AutoColorMarker => Path.Combine(_statusDir, ".auto-color");
+
+        // Reconciled on every scan rather than only when the toggle is flipped.
+        // The status directory lives in the temp path, which the OS is entitled
+        // to clear out; a marker that vanished would turn the feature off with
+        // nothing said. Two cheap file operations against a directory already
+        // being enumerated.
+        private void SyncAutoColorMarker()
+        {
+            try
+            {
+                var wanted = ClaudeBuddySettings.AutoColorSessions;
+                var present = File.Exists(AutoColorMarker);
+
+                if (wanted && !present) File.WriteAllText(AutoColorMarker, "");
+                else if (!wanted && present) File.Delete(AutoColorMarker);
+            }
+            catch
+            {
+                // Worst case the colour setting does not take effect, which is
+                // not worth interrupting a scan for.
+            }
+        }
+
         public void Start()
         {
             Instance = this;
             Directory.CreateDirectory(_statusDir);
+            SyncAutoColorMarker();
 
             // Subscribed once for the app's lifetime, so no unsubscribe: this
             // object outlives every orb, which is the point — an orb closing must
@@ -233,6 +304,39 @@ namespace ClaudeBuddy
         // what "how long since this session last said anything" means throughout.
         private sealed record ScanEntry(string SessionId, SessionStatus Status, DateTime Written);
 
+        // Whether the user wants this kind of session tracked at all.
+        //
+        // OpenClaw's switch predates this and means something stronger — while
+        // it is off the app opens no socket and generates no key — so it is
+        // consulted where the gateway is asked, not here. These two are display
+        // switches over files that are being written regardless.
+        private static bool EnabledFor(SessionSource source) => source switch
+        {
+            SessionSource.Codex => ClaudeBuddySettings.CodexEnabled,
+            SessionSource.ClaudeCode => ClaudeBuddySettings.ClaudeCodeEnabled,
+            _ => true
+        };
+
+        // Which CLI a status file came from, as the enum the rest of the app
+        // branches on.
+        //
+        // One function, called at every point a SessionStatus is deserialized —
+        // there are two, the scan below and ResetSessionToIdle — because Source
+        // is [JsonIgnore] and therefore arrives as its default no matter what
+        // the file said. Missing one of the two does not fail loudly; it
+        // produces a Codex session that claims to be a Claude Code one until
+        // the next scan corrects it, which is long enough to send a click to
+        // the wrong place.
+        //
+        // Anything unrecognised is Claude Code, deliberately. A status file
+        // written before this key existed has no "cli" at all and was Claude
+        // Code, and a hook from some future version naming something this build
+        // has never heard of is still, at worst, a local session in a terminal.
+        private static SessionSource SourceOf(SessionStatus status) =>
+            string.Equals(status.Cli, "codex", StringComparison.OrdinalIgnoreCase)
+                ? SessionSource.Codex
+                : SessionSource.ClaudeCode;
+
         // Session ids one process has already moved on from.
         //
         // A Claude Code process mints a new session id every time you /clear,
@@ -258,12 +362,25 @@ namespace ClaudeBuddy
         // ProcessLiveness.IsRunning treats 0 as alive.
         private static HashSet<string> Superseded(List<ScanEntry> found)
         {
-            var newest = new Dictionary<int, ScanEntry>();
+            // Keyed by pid *and* which CLI, not by pid alone.
+            //
+            // A pid is only unique among the files one CLI wrote. Claude Code
+            // running `codex exec` as a Bash tool is the case that breaks the
+            // assumption: the nested codex process sits in a pipe with no tty
+            // of its own, so the hook's walk can record the pid of the Claude
+            // Code session that started it, and a Codex status file lands in
+            // the same bucket as a live Claude Code one. Being newer it would
+            // win, and this rule would delete the Claude orb — an orb the user
+            // is watching, for the session that is doing the work.
+            //
+            // Two CLIs never share a real process, so pairing the source with
+            // the pid costs nothing and cannot collapse two genuine sessions.
+            var newest = new Dictionary<(int Pid, SessionSource Source), ScanEntry>();
 
             foreach (var entry in found)
             {
-                var pid = entry.Status.SessionPid;
-                if (pid <= 0) continue;
+                var pid = (entry.Status.SessionPid, entry.Status.Source);
+                if (pid.SessionPid <= 0) continue;
 
                 // The ordinal tie-break only matters if two files somehow share an
                 // mtime, and exists so the choice doesn't depend on the order the
@@ -280,8 +397,8 @@ namespace ClaudeBuddy
             var stale = new HashSet<string>(StringComparer.Ordinal);
             foreach (var entry in found)
             {
-                var pid = entry.Status.SessionPid;
-                if (pid <= 0) continue;
+                var pid = (entry.Status.SessionPid, entry.Status.Source);
+                if (pid.SessionPid <= 0) continue;
 
                 if (newest.TryGetValue(pid, out var best) && best.SessionId != entry.SessionId)
                 {
@@ -324,8 +441,13 @@ namespace ClaudeBuddy
         // terminal is never overwritten by an older one's idea of it.
         private static void InheritTerminalInfo(List<ScanEntry> found)
         {
+            // Grouped by pid and source together, for the reason Superseded
+            // is: a nested `codex exec` can record the pid of the Claude Code
+            // session that spawned it, and this would then hand one CLI's
+            // session the tmux pane of the other's. Clicking that orb would go
+            // somewhere plausible and wrong, which is worse than a dead click.
             foreach (var group in found.Where(e => e.Status.SessionPid > 0)
-                                       .GroupBy(e => e.Status.SessionPid))
+                                       .GroupBy(e => (e.Status.SessionPid, e.Status.Source)))
             {
                 var donor = group.Where(e => KnowsATerminal(e.Status))
                                  .OrderByDescending(e => e.Written)
@@ -351,6 +473,8 @@ namespace ClaudeBuddy
 
         private void ScanAndUpdate()
         {
+            SyncAutoColorMarker();
+
             var seen = new HashSet<string>();
             var now = DateTime.UtcNow;
             bool setChanged = false;
@@ -384,6 +508,17 @@ namespace ClaudeBuddy
                 }
 
                 if (status is null) continue;
+
+                status.Source = SourceOf(status);
+
+                // A CLI switched off is ignored, not unwired. Its hooks keep
+                // writing status files — they are the user's own config, and a
+                // display switch that rewrote it would be a surprise, and for
+                // Codex would cost them their hook trust on top. Skipping here
+                // rather than later means everything downstream, including the
+                // pid grouping and the tray, behaves as though those sessions
+                // were not running.
+                if (!EnabledFor(status.Source)) continue;
 
                 found.Add(new ScanEntry(Path.GetFileNameWithoutExtension(file), status, written));
             }
@@ -479,10 +614,19 @@ namespace ClaudeBuddy
                         // the same help it is anywhere else.
                         Kind = SessionKind.Channel,
 
-                        // Busy while anyone in it is, which is what a room being
-                        // "active" means. Its own colour stays empty: the ring
-                        // is how an *agent* is identified, and a room is not one.
+                        // Busy while anyone in it is, which is what a room
+                        // being "active" means.
                         State = room.Working ? "generating" : "idle",
+
+                        // And its own colour. This used to stay empty on the
+                        // reasoning that a ring identifies an agent and a room
+                        // is not one — true while one room was on screen, and
+                        // wrong with several, where every room is a dark circle
+                        // with a # on it and only the badge distinguishes them,
+                        // which says what they are rather than which. See
+                        // OpenClawSessions.ColourForRoom for why it is keyed on
+                        // the room rather than dealt from the agents' pool.
+                        Color = OpenClawSessions.ColourForRoom(key),
                     },
                     room.Activity));
             }
@@ -583,6 +727,12 @@ namespace ClaudeBuddy
                 // would hand a remote session the tmux pane of unrelated local
                 // work, and clicking that orb would jump to it — worse than a
                 // dead click, because it looks like it worked.
+                //
+                // Not for Codex either, for a plainer reason: the viewer this
+                // adopts is a `claude agents` window, and there is no such
+                // thing to find for a Codex session. The cwd-collision hazard
+                // above applies just as much, and here both repositories would
+                // be on this machine.
                 if (status.Source == SessionSource.ClaudeCode
                     && !KnowsATerminal(status)
                     && (leadsWithLiveAgents.Contains(sessionId) || status.SessionPid <= 0))
@@ -604,7 +754,7 @@ namespace ClaudeBuddy
                 // A gateway session has none of these and never will — it has
                 // no terminal anywhere, which is the point of it. Left ungated
                 // this rule alone drops every OpenClaw orb, every scan.
-                if (status.Source == SessionSource.ClaudeCode
+                if (status.IsLocalCli
                     && string.IsNullOrEmpty(status.Tty)
                     && string.IsNullOrEmpty(status.TermProgram)
                     && string.IsNullOrEmpty(status.TmuxPane)
@@ -638,6 +788,24 @@ namespace ClaudeBuddy
                 if (status.Source == SessionSource.ClaudeCode
                     && status.SessionPid <= 0
                     && !BackgroundJobs.IsLiveJob(sessionId))
+                {
+                    continue;
+                }
+
+                // The same rule for Codex, with the exemption removed rather
+                // than reused. `claude agents` is what makes a pid-less Claude
+                // Code session worth an orb, and Codex has no equivalent — no
+                // background job to attach to, nothing to ask. So a Codex file
+                // naming no process is a session that ended without clearing
+                // up, and an orb for it is a permanent dead click.
+                //
+                // Written out rather than folded into the rule above because
+                // leaving Codex to fall through it was a real hole: the
+                // no-terminal rule two blocks up requires a pid to fire, and
+                // the liveness check treats pid 0 as alive, so nothing else
+                // would ever have removed it. With the orb lifetime set to
+                // "forever", nothing would have removed it at all.
+                if (status.Source == SessionSource.Codex && status.SessionPid <= 0)
                 {
                     continue;
                 }
@@ -728,6 +896,8 @@ namespace ClaudeBuddy
             {
                 ReflowPositions();
             }
+
+            RescueOffscreenOrbs();
 
             // Not only on setChanged: an orb that was already on screen can
             // gain or lose a lead, and the arrows have to follow either way.
@@ -829,7 +999,10 @@ namespace ClaudeBuddy
             if (status.Source == SessionSource.OpenClaw)
                 return OpenClawSessions.ChatFor(sessionId, status.Title);
 
-            if (!ClaudeBuddySettings.ClaudeCodeChatEnabled) return null;
+            // Both local CLIs from here down. Which transcript format to read
+            // and which pair of settings governs it is the whole of the
+            // difference, and it lives in CliChatFormat.
+            if (!CliChatFormat.For(status.Source).ChatEnabled()) return null;
 
             // Cached rather than made per click: the session owns a file watcher
             // and a byte offset into a transcript, and rebuilding it every time
@@ -841,7 +1014,7 @@ namespace ClaudeBuddy
                 return existing;
             }
 
-            var chat = new ClaudeCodeChatSession(sessionId, status);
+            var chat = new LocalCliChatSession(sessionId, status);
             _chats[sessionId] = chat;
             chat.Start();
             return chat;
@@ -850,7 +1023,7 @@ namespace ClaudeBuddy
         // Local chat sessions, by session id. Only ever populated by a click —
         // there is no reason to watch a transcript nobody is reading — and
         // emptied with the orb.
-        private readonly Dictionary<string, ClaudeCodeChatSession> _chats = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, LocalCliChatSession> _chats = new(StringComparer.Ordinal);
 
         // Namespaced away from both Claude Code's UUIDs and the gateway's own
         // keys, because it is neither: nothing on the gateway answers to it.
@@ -1016,13 +1189,31 @@ namespace ClaudeBuddy
             TeamLinks.Refresh();
         }
 
-        // A new orb appeared or an old one vanished while the shape is
-        // active. Fold the newcomer in and redraw rather than dumping it
-        // into the vertical stack where it would sit outside the pattern.
+        // A new orb appeared or an old one vanished while the shape is active.
+        // Re-fit the whole shape and glide everything into it.
+        //
+        // The opposite of what this did until now, and the reversal is
+        // deliberate rather than a regression, so the old reasoning is worth
+        // keeping. Only the newcomer used to move, because re-fitting means an
+        // orb that was sitting still moves for a reason that has nothing to do
+        // with it — measured against the real geometry, an orb already on
+        // screen shifts 33px on average when a sixth joins a circle, 111px in a
+        // heart and up to 161px in a grid. The judgement was that a display
+        // which rearranges itself because something unrelated started is a
+        // display you stop trusting.
+        //
+        // Living with it says otherwise. A shape that absorbs arrivals where
+        // they happen to fit stops being the shape after a handful of them, and
+        // one orb hanging off the edge of a heart is read as something wrong —
+        // it draws the eye every time, where six orbs sliding a few dozen pixels
+        // is over in half a second and leaves a heart. Stillness was the wrong
+        // thing to optimise for; the shape is the point of the shape.
+        //
+        // Removals re-fit too, on the same reasoning. A gap in a ring is the
+        // same wrongness as a stray orb beside it, and "the gap is the honest
+        // picture of what is running" was true and not worth the look of it.
         private void AbsorbIntoArrangement()
         {
-            if (_arrangeAnimTargets is not null) return;
-
             // Orbs gone since the pattern was drawn — drop their saved state.
             foreach (var id in _preArrangeState.Keys
                          .Where(id => !_windows.ContainsKey(id)).ToList())
@@ -1040,6 +1231,16 @@ namespace ClaudeBuddy
                 w.SetFlyoutArranged(true);
             }
 
+            // Mid-glide. Asking for a second shape while the first is still
+            // being flown to would fight it, and dropping the request would
+            // strand whichever orb arrived during the half-second — which is
+            // the whole complaint. It gets picked up when this one lands.
+            if (_arrangeAnimTargets is not null)
+            {
+                _refitPending = true;
+                return;
+            }
+
             var allOrbs = DisplayOrder()
                 .Where(id => _windows.ContainsKey(id) && _windows[id].IsVisible)
                 .Select(id => _windows[id])
@@ -1048,10 +1249,28 @@ namespace ClaudeBuddy
             if (allOrbs.Count < 1) return;
 
             var positioned = ComputeClusteredPositions(allOrbs);
-            foreach (var (orb, target) in positioned)
-                orb.PinAt(target);
 
-            TeamLinks.Refresh();
+            // Nothing to do if every orb is already where the new shape wants
+            // it. Worth the check: this runs on every scan that changes the set
+            // at all, including changes that do not move anybody.
+            if (positioned.All(p => p.Orb.Position == p.Target))
+            {
+                TeamLinks.Refresh();
+                return;
+            }
+
+            _arrangeAnimTargets = new();
+            foreach (var (orb, target) in positioned)
+                _arrangeAnimTargets[orb.SessionId] = (orb.Position, target);
+
+            AnimateArrangement(() =>
+            {
+                foreach (var (id, (_, to)) in _arrangeAnimTargets ?? new())
+                {
+                    if (_windows.TryGetValue(id, out var window))
+                        window.PinAt(to);
+                }
+            });
         }
 
         // --- dragged orb positions -------------------------------------------
@@ -1081,10 +1300,25 @@ namespace ClaudeBuddy
         // made it a good room key and makes it a good position key.
         private static string PositionKeyFor(SessionStatus status, string sessionId)
         {
-            if (status.Source != SessionSource.ClaudeCode) return sessionId;
+            if (!status.IsLocalCli) return sessionId;
 
             var cwd = DirectoryKeyFor(status);
             if (cwd.Length == 0) return "";
+
+            // Which CLI, in the key, for Codex only.
+            //
+            // Not decoration: a Codex session and a Claude Code session open in
+            // one directory would otherwise share a slot whenever the Claude
+            // one has not been auto-titled yet, which is exactly the collision
+            // ccfee1d fixed for two Claude sessions. First orb to appear claims
+            // the position, the other stacks, and whichever is dragged last
+            // overwrites the one entry.
+            //
+            // Only Codex is prefixed, so every position already saved under a
+            // bare directory still matches the session it was saved for. A
+            // scheme that renamed both would have been tidier and would have
+            // moved every pinned orb on this machine back to the stack once.
+            var prefix = status.Source == SessionSource.Codex ? "codex\n" : "";
 
             // The directory alone is not enough when two sessions are open in
             // one: "makayla-lawyer" and "job-lawyer" both live in Evidence, so
@@ -1098,7 +1332,7 @@ namespace ClaudeBuddy
             // session, so an orb follows the name you gave it rather than the
             // folder it happens to share.
             var title = (status.Title ?? "").Trim();
-            return title.Length == 0 ? cwd : cwd + "\n" + title;
+            return prefix + (title.Length == 0 ? cwd : cwd + "\n" + title);
         }
 
         private static string DirectoryKeyFor(SessionStatus status) =>
@@ -1127,6 +1361,11 @@ namespace ClaudeBuddy
             // automatic one that moves as a conversation does, and losing your
             // placement to a retitle would be a worse bug than the one this
             // fixes.
+            // Claude Code only, and it has to stay that way. This exists for
+            // positions saved before names were part of the key, and there are
+            // no such Codex positions — every one of them has been written by a
+            // build that prefixes the CLI. Widening it would hand a Codex orb
+            // the place a Claude Code orb was put.
             if (saved is null && status.Source == SessionSource.ClaudeCode)
             {
                 var directory = DirectoryKeyFor(status);
@@ -1153,6 +1392,56 @@ namespace ClaudeBuddy
                 Math.Clamp(point.Y, work.Y, Math.Max(work.Y, work.Bottom - size)));
 
             window.PinAt(point);
+        }
+
+        // Bring back any orb that is no longer on a screen.
+        //
+        // Nothing in the app could do this, and the gap was reported the way
+        // gaps like this always are: "I seem to have lost all my orbs." They
+        // were sitting in a neat row 223 points above the top of the display,
+        // which is exactly where they had been put while the desktop was a
+        // different shape.
+        //
+        // Nothing had moved them. A restored position is already checked
+        // against the screens it lands on — see RestoreOrbPosition — but an orb
+        // *already placed* was checked once and never again, and the thing that
+        // changes underneath it is the desktop: a monitor unplugged, an
+        // arrangement rearranged, a resolution changed. The orb keeps
+        // coordinates that were true when it got them and stops being anywhere
+        // a person can click.
+        //
+        // Judged on the orb's centre rather than its corner, so one hanging
+        // half off an edge is left alone — that is a placement somebody may
+        // have chosen, and dragging it back would be the app overruling them.
+        // Only an orb with nothing under its middle is unreachable, and only
+        // those are moved.
+        //
+        // The position is not written back to settings. If it came from there
+        // it is still a good position for the display it was saved on, and
+        // RestoreOrbPosition already declines to use it anywhere else.
+        private void RescueOffscreenOrbs()
+        {
+            foreach (var window in _windows.Values)
+            {
+                if (!window.IsVisible) continue;
+
+                var size = 56;
+                var centre = new PixelPoint(
+                    window.Position.X + size / 2,
+                    window.Position.Y + size / 2);
+
+                if (window.Screens.ScreenFromPoint(centre) is not null) continue;
+
+                var screen = window.Screens.Primary ?? window.Screens.All.FirstOrDefault();
+                if (screen is null) continue;
+
+                var work = screen.WorkingArea;
+                var orb = (int)(56 * screen.Scaling);
+
+                window.PinAt(new PixelPoint(
+                    Math.Clamp(window.Position.X, work.X, Math.Max(work.X, work.Right - orb)),
+                    Math.Clamp(window.Position.Y, work.Y, Math.Max(work.Y, work.Bottom - orb))));
+            }
         }
 
         public void RememberOrbPosition(OrbWindow window)
@@ -1182,8 +1471,7 @@ namespace ClaudeBuddy
             // path this would build from its key ("openclaw:agent:main:…")
             // is not one this app should be writing at all. The gateway owns
             // that session's state; we only display it.
-            if (_statuses.TryGetValue(sessionId, out var known)
-                && known.Source != SessionSource.ClaudeCode)
+            if (_statuses.TryGetValue(sessionId, out var known) && !known.IsLocalCli)
             {
                 return;
             }
@@ -1199,6 +1487,19 @@ namespace ClaudeBuddy
             // Keep everything but the state (cwd, terminal info) intact.
             var reset = existing ?? new SessionStatus();
             reset.State = "idle";
+
+            // The second of the two places a status file is read, and the
+            // reason SourceOf exists rather than the scan resolving this
+            // inline. Without it the object handed to UpdateFrom below claims
+            // to be Claude Code — Source is [JsonIgnore], so it arrives as its
+            // default — and the orb would say so, and TerminalFocuser would
+            // believe it, until the next scan put it right.
+            //
+            // `existing ?? new SessionStatus()` is the case that makes this
+            // more than tidiness: a file that could not be read has no Cli
+            // either, so the fallback has to go through the same resolution
+            // rather than inheriting whatever the caller assumed.
+            reset.Source = SourceOf(reset);
             try
             {
                 File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(reset));
@@ -1237,6 +1538,10 @@ namespace ClaudeBuddy
         private Dictionary<string, (PixelPoint From, PixelPoint To)>? _arrangeAnimTargets;
         private long _arrangeAnimStart;
         private Action? _arrangeAnimComplete;
+
+        // A membership change that arrived mid-glide, to be re-fitted once the
+        // current one lands. See AbsorbIntoArrangement.
+        private bool _refitPending;
         private const int ArrangeAnimMs = 600;
 
         public void ArrangeOrbsInPattern()
@@ -1407,6 +1712,13 @@ namespace ClaudeBuddy
             var targets = _arrangeAnimTargets;
             _arrangeAnimTargets = null;
             complete?.Invoke();
+
+            // An orb arrived or left while that was flying. Fit it in now,
+            // rather than leaving it as the one orb outside the shape.
+            if (!_refitPending) return;
+
+            _refitPending = false;
+            if (_isArranged) AbsorbIntoArrangement();
         }
 
         public List<OrbWindow> ArrangedSiblings(string excludeSessionId)

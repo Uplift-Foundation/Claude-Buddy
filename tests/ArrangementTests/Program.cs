@@ -11,7 +11,7 @@ using ClaudeBuddy;
 // something regressed, and each failure prints the exact case so it can be
 // reproduced by hand.
 
-var shapes = new[] { "heart", "circle", "diamond", "star", "grid" };
+var shapes = new[] { "heart", "circle", "diamond", "star", "grid", "line" };
 var spacings = new[] { 0.3, 0.85, 2.0 };
 var counts = new[] { 1, 2, 3, 5, 8, 13, 20, 30 };
 
