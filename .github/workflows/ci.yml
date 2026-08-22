@@ -89,6 +89,48 @@ jobs:
           }
           exit 1
 
+      # Proof of concept, not gated on: a separate suite from UI tests above
+      # (tests/UiScreenshots), deliberately — it turns on real Skia
+      # rendering, a heavier, different code path from the null renderer the
+      # gated UI suite uses, and hasn't earned a place blocking the build
+      # yet. continue-on-error means a flake or a real regression here shows
+      # up in the job summary below as missing images rather than failing
+      # the whole run.
+      - name: UI screenshots (proof of concept)
+        continue-on-error: true
+        run: dotnet test tests/UiScreenshots -c Release --logger "trx;LogFileName=ui-screenshots.trx" --results-directory TestResults
+
+      # Embeds each captured PNG directly in this job's summary page as a
+      # base64 data URI — GITHUB_STEP_SUMMARY renders standard Markdown (and
+      # the safe HTML subset GitHub allows in it) inline in the Actions UI,
+      # so this needs no external host or artifact download to view. Runs
+      # unconditionally (if: always()) so a failed capture still shows
+      # "0 screenshots produced" rather than silently vanishing from the
+      # summary.
+      - name: Publish screenshots to the job summary
+        if: always()
+        shell: pwsh
+        run: |
+          $dir = "TestResults/screenshots"
+          $files = @()
+          if (Test-Path $dir) { $files = Get-ChildItem "$dir/*.png" -ErrorAction SilentlyContinue }
+
+          "## UI screenshots (proof of concept, not yet gating the build)" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+
+          if ($files.Count -eq 0) {
+            "_No screenshots were produced this run._" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            foreach ($file in $files) {
+              $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
+              $base64 = [System.Convert]::ToBase64String($bytes)
+              "**$($file.BaseName)**" >> $env:GITHUB_STEP_SUMMARY
+              "" >> $env:GITHUB_STEP_SUMMARY
+              "<img src=""data:image/png;base64,$base64"" alt=""$($file.BaseName)"" />" >> $env:GITHUB_STEP_SUMMARY
+              "" >> $env:GITHUB_STEP_SUMMARY
+            }
+          }
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v7
