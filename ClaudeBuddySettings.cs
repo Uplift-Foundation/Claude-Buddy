@@ -21,6 +21,16 @@ namespace ClaudeBuddy
     {
         private const int CurrentVersion = 1;
 
+        // OpenClaw's own default. Only worth changing for a gateway that was
+        // moved off it.
+        public const int DefaultOpenClawPort = 18789;
+
+        // An hour of history by default. Long enough to cover the conversation
+        // you were just having, short enough that a gateway holding a year of
+        // Discord channels doesn't fill the screen.
+        public const int DefaultOpenClawActiveWithin = 60;
+        public const int OpenClawActiveWithinAll = 0;
+
         private static readonly object Gate = new();
         private static Model _model = new();
         private static bool _loaded;
@@ -57,7 +67,12 @@ namespace ClaudeBuddy
             "speakVoice", "neuralVoiceEnabled", "neuralVoice",
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
-            "orbColors", "claudeCodeProfileDirs", "profiles", "orbPositions"
+            "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions",
+            "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
+            "openclawReplyEnabled", "openclawActiveWithinMinutes",
+            "codexChatEnabled", "codexReplyEnabled", "autoColorSessions",
+            "claudeCodeEnabled", "codexEnabled",
+            "clickAction", "doubleClickAction", "tripleClickAction"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -87,10 +102,18 @@ namespace ClaudeBuddy
         // %APPDATA%\ClaudeBuddy on Windows, ~/Library/Application Support/ClaudeBuddy
         // on macOS. SpecialFolder.ApplicationData resolves to both, so this is one
         // expression rather than a platform branch.
+        //
+        // Test seam, same pattern as CLAUDE_BUDDY_PROFILE_ROOT
+        // (ClaudeDesktopManager.cs): without it, a test that so much as reads a
+        // setting touches the developer's real settings.json, and a test that
+        // writes one touches it for good — settings.json does not follow HOME on
+        // macOS, so there is no per-test-run isolation otherwise.
         public static string Directory =>
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "ClaudeBuddy");
+            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR") is { Length: > 0 } scratch
+                ? scratch
+                : Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "ClaudeBuddy");
 
         public static string Path_ => Path.Combine(Directory, "settings.json");
 
@@ -147,6 +170,99 @@ namespace ClaudeBuddy
             // Windows-only in practice — see NeuralSpeech, and note that macOS's
             // own Enhanced and Premium voices are already better than this.
             public bool NeuralVoiceEnabled { get; set; }
+
+            // Off by default, and for a stronger reason than the voice features
+            // above: an app that reaches out to a machine on the network is not
+            // something a Claude Code tool should start doing because it was
+            // upgraded. Most installs will never point at an OpenClaw gateway,
+            // and while this is off nothing here is constructed, no socket is
+            // opened, and no key is generated — the only trace of the feature is
+            // the settings row that turns it on. Same discipline as
+            // VoiceInputEnabled and the mic permission prompt.
+            public bool OpenClawEnabled { get; set; }
+
+            // Where the gateway lives. An address rather than a name on purpose:
+            // the certificate it serves is self-signed with no subjectAltName,
+            // so a hostname buys nothing and pinning does the identity work.
+            public string? OpenClawHost { get; set; }
+
+            public int OpenClawPort { get; set; } = DefaultOpenClawPort;
+
+            // The certificate fingerprint this install has agreed to trust,
+            // recorded the first time it connects. Empty means "trust whatever
+            // is presented next and remember it"; once set, a different
+            // certificate is refused rather than silently accepted.
+            public string? OpenClawFingerprint { get; set; }
+
+            // Off by default, and separately from OpenClawEnabled on purpose:
+            // showing what your agents are doing and being able to make them do
+            // things are different powers, and the second one should be asked
+            // for. Turning it on widens the scopes this device requests, which
+            // the gateway treats as a new pairing to approve.
+            public bool OpenClawReplyEnabled { get; set; }
+
+            // The chat panel on a local Claude Code orb. On by default, unlike
+            // everything else here that is off: it opens no socket, starts no
+            // engine and asks for no permission — it reads a file the hook
+            // already tells us about, and only while a panel is up.
+            public bool ClaudeCodeChatEnabled { get; set; } = true;
+
+            // Typing into that session from the panel. Off by default, and the
+            // same split as OpenClawReplyEnabled for the same reason: watching a
+            // session work and being able to drive it are different powers. The
+            // second one also covers answering permission prompts and
+            // interrupting a run, which are the two places a wrong click costs
+            // most.
+            public bool ClaudeCodeReplyEnabled { get; set; }
+
+            // Codex's own pair. Separate keys rather than one shared "local CLI"
+            // switch, because seeing and controlling are separate powers per CLI
+            // as well: someone can reasonably want to read a Codex session and
+            // never type into it while doing the opposite for Claude Code.
+            public bool CodexChatEnabled { get; set; } = true;
+
+            public bool CodexReplyEnabled { get; set; }
+
+            // Whether the hook gives a Claude Code session a colour of its own
+            // when it has none. Off by default: it is the only setting in this
+            // file that causes a write to a file the app does not own, even
+            // though what it writes is the record /color writes.
+            public bool AutoColorSessions { get; set; }
+
+            // Whether a CLI is tracked at all. Both default on, because both
+            // are only ever visible if the user wired their hooks — which is
+            // itself the opt-in. Off means the app ignores that CLI's status
+            // files rather than unwiring anything: the hooks are the user's own
+            // config, and a display switch that silently rewrote it would be a
+            // surprise, and for Codex would cost them their hook trust as well.
+            public bool ClaudeCodeEnabled { get; set; } = true;
+
+            public bool CodexEnabled { get; set; } = true;
+
+            // What clicking an orb does, per number of clicks. One of
+            // "terminal", "chat", "speak" or "none" — strings rather than an
+            // enum because they go through the same JSON round trip every other
+            // setting does, and an unknown value has to degrade rather than
+            // throw.
+            //
+            // The defaults are what the app did before any of this existed: one
+            // click goes to the session, and nothing is bound to two or three.
+            // That matters beyond taste — see OrbWindow's gesture handling. A
+            // second gesture bound to something different forces the first to
+            // wait and see whether another click is coming, so leaving these
+            // empty is what keeps a single click instant for anyone who never
+            // opens this part of the settings.
+            public string ClickAction { get; set; } = "terminal";
+
+            public string DoubleClickAction { get; set; } = "none";
+
+            public string TripleClickAction { get; set; } = "none";
+
+            // How far back a gateway session counts as current. Separate from
+            // OrbLifetimeMinutes, which decides how long a session lingers after
+            // it goes quiet — this decides which of a gateway's many
+            // conversations are candidates at all. Zero means all of them.
+            public int OpenClawActiveWithinMinutes { get; set; } = DefaultOpenClawActiveWithin;
 
             // A command of the user's own to speak with, replacing every built-in
             // engine. Null means "use the built-in ones".
@@ -252,6 +368,12 @@ namespace ClaudeBuddy
             // here rather than needing its own separate wizard UI for it.
             public List<string> ClaudeCodeProfileDirs { get; init; } = new();
 
+            // The Codex analogue: directory names under $HOME that a second
+            // account is run out of via CODEX_HOME. Separate from the list
+            // above because they are separate products with separate configs,
+            // and someone can easily have extras of one and not the other.
+            public List<string> CodexHomes { get; init; } = new();
+
             // Auto-organize: which shape and how much space between orbs.
             public string ArrangeShape { get; set; } = DefaultArrangeShape;
             public double ArrangeSpacing { get; set; } = DefaultArrangeSpacing;
@@ -352,6 +474,108 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.SpeakEngine ?? "system"; }
             set { Load(); lock (Gate) _model.SpeakEngine = value; Save(); }
+        }
+
+        // Turning this on or off takes effect immediately rather than at the
+        // next launch: SessionManager asks OpenClawSessions for a snapshot every
+        // scan, and that returns nothing at all while this is false.
+        public static bool OpenClawEnabled
+        {
+            get { Load(); lock (Gate) return _model.OpenClawEnabled; }
+            set { Load(); lock (Gate) _model.OpenClawEnabled = value; Save(); }
+        }
+
+        public static string OpenClawHost
+        {
+            get { Load(); lock (Gate) return _model.OpenClawHost ?? ""; }
+            set { Load(); lock (Gate) _model.OpenClawHost = value; Save(); }
+        }
+
+        public static int OpenClawPort
+        {
+            get { Load(); lock (Gate) return _model.OpenClawPort; }
+            set { Load(); lock (Gate) _model.OpenClawPort = value; Save(); }
+        }
+
+        // Empty until the first successful connection, which records what it
+        // was shown. See OpenClawSocket for why a fingerprint rather than the
+        // system trust store.
+        public static string OpenClawFingerprint
+        {
+            get { Load(); lock (Gate) return _model.OpenClawFingerprint ?? ""; }
+            set { Load(); lock (Gate) _model.OpenClawFingerprint = value; Save(); }
+        }
+
+        public static int OpenClawActiveWithinMinutes
+        {
+            get { Load(); lock (Gate) return _model.OpenClawActiveWithinMinutes; }
+            set { Load(); lock (Gate) _model.OpenClawActiveWithinMinutes = value; Save(); }
+        }
+
+        public static bool OpenClawReplyEnabled
+        {
+            get { Load(); lock (Gate) return _model.OpenClawReplyEnabled; }
+            set { Load(); lock (Gate) _model.OpenClawReplyEnabled = value; Save(); }
+        }
+
+        public static bool ClaudeCodeChatEnabled
+        {
+            get { Load(); lock (Gate) return _model.ClaudeCodeChatEnabled; }
+            set { Load(); lock (Gate) _model.ClaudeCodeChatEnabled = value; Save(); }
+        }
+
+        public static bool ClaudeCodeReplyEnabled
+        {
+            get { Load(); lock (Gate) return _model.ClaudeCodeReplyEnabled; }
+            set { Load(); lock (Gate) _model.ClaudeCodeReplyEnabled = value; Save(); }
+        }
+
+        public static bool CodexChatEnabled
+        {
+            get { Load(); lock (Gate) return _model.CodexChatEnabled; }
+            set { Load(); lock (Gate) _model.CodexChatEnabled = value; Save(); }
+        }
+
+        public static bool CodexReplyEnabled
+        {
+            get { Load(); lock (Gate) return _model.CodexReplyEnabled; }
+            set { Load(); lock (Gate) _model.CodexReplyEnabled = value; Save(); }
+        }
+
+        public static bool AutoColorSessions
+        {
+            get { Load(); lock (Gate) return _model.AutoColorSessions; }
+            set { Load(); lock (Gate) _model.AutoColorSessions = value; Save(); }
+        }
+
+        public static bool ClaudeCodeEnabled
+        {
+            get { Load(); lock (Gate) return _model.ClaudeCodeEnabled; }
+            set { Load(); lock (Gate) _model.ClaudeCodeEnabled = value; Save(); }
+        }
+
+        public static bool CodexEnabled
+        {
+            get { Load(); lock (Gate) return _model.CodexEnabled; }
+            set { Load(); lock (Gate) _model.CodexEnabled = value; Save(); }
+        }
+
+        public static string ClickAction
+        {
+            get { Load(); lock (Gate) return _model.ClickAction; }
+            set { Load(); lock (Gate) _model.ClickAction = value; Save(); }
+        }
+
+        public static string DoubleClickAction
+        {
+            get { Load(); lock (Gate) return _model.DoubleClickAction; }
+            set { Load(); lock (Gate) _model.DoubleClickAction = value; Save(); }
+        }
+
+        public static string TripleClickAction
+        {
+            get { Load(); lock (Gate) return _model.TripleClickAction; }
+            set { Load(); lock (Gate) _model.TripleClickAction = value; Save(); }
         }
 
         public static bool NeuralVoiceEnabled
@@ -483,6 +707,31 @@ namespace ClaudeBuddy
             Save();
         }
 
+        public static IReadOnlyList<string> CodexHomes
+        {
+            get { Load(); lock (Gate) return _model.CodexHomes.ToList(); }
+        }
+
+        public static void AddCodexHome(string dirName)
+        {
+            Load();
+            lock (Gate)
+            {
+                if (!_model.CodexHomes.Contains(dirName, StringComparer.Ordinal))
+                {
+                    _model.CodexHomes.Add(dirName);
+                }
+            }
+            Save();
+        }
+
+        public static void RemoveCodexHome(string dirName)
+        {
+            Load();
+            lock (Gate) { _model.CodexHomes.Remove(dirName); }
+            Save();
+        }
+
         // ---- per profile ----------------------------------------------------
 
         // A copy, so callers can't mutate the store without going through Update.
@@ -502,6 +751,21 @@ namespace ClaudeBuddy
                     TintWindow = found.TintWindow
                 };
             }
+        }
+
+        // Forget a profile's name and colour, for when the profile itself is
+        // gone. Left behind they would sit waiting for something that no longer
+        // exists — and be inherited by the next profile that happened to reuse
+        // the folder name, which is not far-fetched: new ones are numbered
+        // Claude-Profile-1, -2, and the numbering reuses a gap.
+        public static void RemoveProfile(string folder)
+        {
+            Load();
+            lock (Gate)
+            {
+                if (!_model.Profiles.Remove(folder)) return;
+            }
+            Save();
         }
 
         public static void Update(string folder, Action<ProfileSettings> change)
@@ -545,6 +809,23 @@ namespace ClaudeBuddy
                         OrbLifetimeMinutes =
                             root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes,
                         VoiceInputEnabled = root["voiceInputEnabled"]?.GetValue<bool>() ?? false,
+                        OpenClawEnabled = root["openclawEnabled"]?.GetValue<bool>() ?? false,
+                        OpenClawHost = Text(root["openclawHost"]),
+                        OpenClawPort = root["openclawPort"]?.GetValue<int>() ?? DefaultOpenClawPort,
+                        OpenClawFingerprint = Text(root["openclawFingerprint"]),
+                        OpenClawReplyEnabled = root["openclawReplyEnabled"]?.GetValue<bool>() ?? false,
+                        OpenClawActiveWithinMinutes =
+                            root["openclawActiveWithinMinutes"]?.GetValue<int>() ?? DefaultOpenClawActiveWithin,
+                        ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
+                        ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
+                        CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
+                        CodexReplyEnabled = root["codexReplyEnabled"]?.GetValue<bool>() ?? false,
+                        AutoColorSessions = root["autoColorSessions"]?.GetValue<bool>() ?? false,
+                        ClaudeCodeEnabled = root["claudeCodeEnabled"]?.GetValue<bool>() ?? true,
+                        CodexEnabled = root["codexEnabled"]?.GetValue<bool>() ?? true,
+                        ClickAction = root["clickAction"]?.GetValue<string>() ?? "terminal",
+                        DoubleClickAction = root["doubleClickAction"]?.GetValue<string>() ?? "none",
+                        TripleClickAction = root["tripleClickAction"]?.GetValue<string>() ?? "none",
                         TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
                         ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
                         ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing,
@@ -601,6 +882,17 @@ namespace ClaudeBuddy
                             if (node?.GetValue<string>() is { Length: > 0 } dirName)
                             {
                                 model.ClaudeCodeProfileDirs.Add(dirName);
+                            }
+                        }
+                    }
+
+                    if (root["codexHomes"] is JsonArray codexHomes)
+                    {
+                        foreach (var node in codexHomes)
+                        {
+                            if (node?.GetValue<string>() is { Length: > 0 } dirName)
+                            {
+                                model.CodexHomes.Add(dirName);
                             }
                         }
                     }
@@ -684,6 +976,25 @@ namespace ClaudeBuddy
                 ? text
                 : null;
 
+        // Test seam: this class is static, so it caches _model and _loaded for
+        // the life of the process. A test that points CLAUDE_BUDDY_SETTINGS_DIR
+        // at a fresh directory between cases still needs this to make that
+        // directory actually get read again instead of the previous case's
+        // cached model. Not for anything else — production code never needs to
+        // re-read a settings.json that changed out from under it.
+        internal static void ReloadForTests()
+        {
+            lock (Gate)
+            {
+                _deferred?.Stop();
+                _model = new Model();
+                _unknownKeys.Clear();
+                _loaded = false;
+            }
+
+            Load();
+        }
+
         private static void Save()
         {
             try
@@ -719,6 +1030,9 @@ namespace ClaudeBuddy
                     var profileDirs = new JsonArray();
                     foreach (var dirName in _model.ClaudeCodeProfileDirs) profileDirs.Add(dirName);
 
+                    var codexHomeDirs = new JsonArray();
+                    foreach (var dirName in _model.CodexHomes) codexHomeDirs.Add(dirName);
+
                     var speakArgs = new JsonArray();
                     foreach (var argument in _model.SpeakCommandArgs) speakArgs.Add(argument);
 
@@ -732,6 +1046,22 @@ namespace ClaudeBuddy
                         ["tintActiveWindow"] = _model.TintActiveWindow,
                         ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
                         ["voiceInputEnabled"] = _model.VoiceInputEnabled,
+                        ["openclawEnabled"] = _model.OpenClawEnabled,
+                        ["openclawHost"] = _model.OpenClawHost,
+                        ["openclawPort"] = _model.OpenClawPort,
+                        ["openclawFingerprint"] = _model.OpenClawFingerprint,
+                        ["openclawReplyEnabled"] = _model.OpenClawReplyEnabled,
+                        ["openclawActiveWithinMinutes"] = _model.OpenClawActiveWithinMinutes,
+                        ["claudeCodeChatEnabled"] = _model.ClaudeCodeChatEnabled,
+                        ["claudeCodeReplyEnabled"] = _model.ClaudeCodeReplyEnabled,
+                        ["codexChatEnabled"] = _model.CodexChatEnabled,
+                        ["codexReplyEnabled"] = _model.CodexReplyEnabled,
+                        ["autoColorSessions"] = _model.AutoColorSessions,
+                        ["claudeCodeEnabled"] = _model.ClaudeCodeEnabled,
+                        ["codexEnabled"] = _model.CodexEnabled,
+                        ["clickAction"] = _model.ClickAction,
+                        ["doubleClickAction"] = _model.DoubleClickAction,
+                        ["tripleClickAction"] = _model.TripleClickAction,
                         ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
                         ["arrangeShape"] = _model.ArrangeShape,
                         ["arrangeSpacing"] = _model.ArrangeSpacing,
@@ -760,6 +1090,7 @@ namespace ClaudeBuddy
                             ["waiting"] = _model.WaitingColor
                         },
                         ["claudeCodeProfileDirs"] = profileDirs,
+                        ["codexHomes"] = codexHomeDirs,
                         ["profiles"] = profiles,
                         ["orbPositions"] = positions
                     };

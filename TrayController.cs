@@ -182,7 +182,18 @@ namespace ClaudeBuddy
 
             if (sessions.Count == 0)
             {
-                menu.Add(new NativeMenuItem("No Claude Code sessions") { IsEnabled = false });
+                // Just "No sessions", for everyone.
+                //
+                // This used to name Claude Code unless the OpenClaw feature was
+                // on, on the reasoning that naming the only kind of session
+                // that could exist is more helpful than a generic phrase. Codex
+                // retires that reasoning: it has no enable switch to test —
+                // wiring its hooks is the whole of turning it on, and that
+                // happens in Codex's config where this app cannot see it. So
+                // there is no longer any state in which "no Claude Code
+                // sessions" is known to be the whole truth, and naming one CLI
+                // while another is quietly running reads as a bug in the other.
+                menu.Add(new NativeMenuItem("No sessions") { IsEnabled = false });
             }
             else
             {

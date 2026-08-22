@@ -1,0 +1,298 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ClaudeBuddy.ChatPanel"
+        Width="340" SizeToContent="Height"
+        MinHeight="140" MaxHeight="520"
+        SystemDecorations="None"
+        TransparencyLevelHint="Transparent"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        CanResize="False"
+        ShowActivated="True"
+        RequestedThemeVariant="Dark"
+        WindowStartupLocation="Manual">
+
+    <!-- ShowActivated="True" is the deliberate departure from OrbFlyout, which
+         is False. The flyout is a hover surface and must never take focus; this
+         has a text box in it, so it must. For the same reason nothing here is
+         driven by the hover bridge in OrbWindow — a panel that vanished when the
+         pointer left would be unusable.
+
+         RequestedThemeVariant is pinned because the macOS theme is per-variant:
+         left to the OS appearance it would hand a light TextBox to a dark card.
+         Root is anchored top-left and given an explicit width for the same
+         reason OrbWindow.axaml pins its own: on Windows a top-level window can't
+         go below SM_CXMINTRACK, so the window's size is never a layout input.
+
+         Colours are lifted from OrbFlyout.axaml so the two read as one app. -->
+    <Border x:Name="Root" Width="340"
+            HorizontalAlignment="Left" VerticalAlignment="Top"
+            CornerRadius="12" Padding="10"
+            Background="#E0202024" BorderBrush="#80FFFFFF" BorderThickness="1.5">
+        <Grid RowDefinitions="Auto,*,Auto,Auto" RowSpacing="6">
+
+            <!-- A contact card: portrait, then who and where stacked beside
+                 it, then the actions. The name and the place used to be one
+                 line squeezed next to a 68pt circle, which left the row looking
+                 top-heavy and wasted the height the portrait had already spent.
+                 Two lines fill it and read faster — the name is what you look
+                 for, the place is what you check. -->
+            <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="10">
+                <Grid x:Name="AvatarBox" Grid.Column="0" Width="68" Height="68"
+                      VerticalAlignment="Center" Cursor="Hand"
+                      Background="Transparent">
+                    <Ellipse x:Name="Avatar" Width="68" Height="68"
+                             Stroke="#40FFFFFF" StrokeThickness="1"
+                             IsVisible="False"/>
+                    <!-- Agents without a picture have an emoji, and it is a
+                         better mark than the first letter of their name. -->
+                    <TextBlock x:Name="AvatarEmoji"
+                               FontSize="38"
+                               IsVisible="False"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsHitTestVisible="False"/>
+                    <!-- The connection state rides on the portrait as a badge,
+                         the way presence dots do everywhere else: green when
+                         the conversation is reachable, amber while it is
+                         attaching, red when it failed. No extra header width. -->
+                    <Ellipse x:Name="StateDot"
+                             Width="13" Height="13"
+                             Stroke="#FF202024" StrokeThickness="2"
+                             HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
+                </Grid>
+
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock x:Name="TitleText"
+                               FontSize="14" FontWeight="SemiBold"
+                               Foreground="#F2FFFFFF"
+                               TextTrimming="CharacterEllipsis"/>
+                    <!-- Where this conversation is, and what kind of thing it
+                         is. The second half is a chip rather than more words in
+                         the same line because "general" and "wtvamp" are the
+                         same shape as each other, and one of them is a room
+                         other people can read. -->
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <Border x:Name="KindChip"
+                                IsVisible="False"
+                                CornerRadius="4" Padding="4,1"
+                                VerticalAlignment="Center"
+                                Background="#26FFFFFF">
+                            <TextBlock x:Name="KindChipText"
+                                       FontSize="9.5"
+                                       Foreground="#CCFFFFFF"/>
+                        </Border>
+                        <TextBlock x:Name="SubtitleText"
+                                   FontSize="11"
+                                   VerticalAlignment="Center"
+                                   Foreground="#99FFFFFF"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <Grid x:Name="SpeakButton" Grid.Column="2" Width="24" Height="24"
+                      VerticalAlignment="Center" Cursor="Hand">
+                    <Ellipse x:Name="SpeakFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+                    <TextBlock x:Name="SpeakGlyph" Text="&#128264;" FontSize="11"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsHitTestVisible="False"/>
+                </Grid>
+                <Grid x:Name="CloseButton" Grid.Column="3" Width="24" Height="24"
+                      VerticalAlignment="Center" Cursor="Hand">
+                    <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+                    <TextBlock Text="&#10005;" FontSize="10" Foreground="#DDFFFFFF"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsHitTestVisible="False"/>
+                </Grid>
+            </Grid>
+
+            <!-- Focusable="False" throughout: the input is the only focusable
+                 thing in this window, so a wheel scroll or a stray click can
+                 never pull focus out of it while a reply is streaming. That is
+                 also what keeps the focus story a single point rather than a
+                 scatter. -->
+            <ScrollViewer x:Name="Scroll" Grid.Row="1"
+                          MaxHeight="340" Focusable="False"
+                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto">
+                <ItemsControl x:Name="Turns" Focusable="False">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <!-- One template for all three roles, with the
+                                 differences bound rather than templated per
+                                 role: a message bubble and a system line differ
+                                 in colour, alignment and corner shape, not in
+                                 structure.
+
+                                 CornerRadius is asymmetric on purpose — the
+                                 corner nearest the speaker is squared off, which
+                                 is what makes a stack of bubbles read as a
+                                 conversation with two sides rather than as a
+                                 list of rounded rectangles. -->
+                            <Border Margin="{Binding Gap}" Padding="{Binding Pad}"
+                                    CornerRadius="{Binding Corners}"
+                                    MaxWidth="{Binding MaxBubbleWidth}"
+                                    Background="{Binding Bubble}"
+                                    HorizontalAlignment="{Binding Side}">
+                                <StackPanel>
+                                    <!-- Who said it, when that isn't one of the
+                                         two ends of the conversation. In a
+                                         channel the transcript carries the other
+                                         agents in the room, and without this
+                                         they arrive as anonymous grey bubbles
+                                         that have to be worked out from context. -->
+                                    <StackPanel Orientation="Horizontal"
+                                                IsVisible="{Binding HasSpeaker}"
+                                                Margin="0,0,0,3" Spacing="5">
+                                        <!-- A shape the eye can recognise
+                                             without reading it, which a column
+                                             of similar names in similar hues
+                                             is not. -->
+                                        <Border Width="16" Height="16"
+                                                CornerRadius="8"
+                                                VerticalAlignment="Center"
+                                                ClipToBounds="True"
+                                                IsVisible="{Binding HasSpeakerAvatar}">
+                                            <Image Source="{Binding SpeakerAvatar}"
+                                                   Width="16" Height="16"
+                                                   Stretch="UniformToFill"/>
+                                        </Border>
+                                        <Border Width="16" Height="16"
+                                                CornerRadius="8"
+                                                VerticalAlignment="Center"
+                                                IsVisible="{Binding HasSpeakerInitials}"
+                                                Background="{Binding SpeakerChip}">
+                                            <TextBlock Text="{Binding SpeakerInitials}"
+                                                       FontSize="8" FontWeight="Bold"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{Binding SpeakerChipInk}"/>
+                                        </Border>
+                                        <TextBlock Text="{Binding SpeakerName}"
+                                                   IsVisible="{Binding ShowSpeakerName}"
+                                                   FontSize="9.5" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{Binding SpeakerInk}"/>
+                                    </StackPanel>
+                                    <!-- Built in code rather than bound to a
+                                         string, because a reply is Markdown and
+                                         drawing it as one TextBlock showed the
+                                         asterisks and backticks. TurnView.Body
+                                         is a small stack of paragraphs, lists
+                                         and code blocks — see BuildBody. -->
+                                    <ContentControl Content="{Binding Body}"
+                                                    IsVisible="{Binding HasText}"/>
+                                    <!-- A picture sent in the conversation.
+                                         Width-constrained and free in height so
+                                         a tall render keeps its proportions;
+                                         the source arrives asynchronously, so
+                                         the row simply has nothing in it until
+                                         the bytes land. -->
+                                    <Image Source="{Binding Image}"
+                                           IsVisible="{Binding HasImage}"
+                                           Width="228"
+                                           Stretch="Uniform"
+                                           Cursor="Hand"
+                                           PointerPressed="Image_PointerPressed"
+                                           HorizontalAlignment="Left"/>
+                                    <!-- Inside the bubble, trailing edge, the
+                                         way a messaging app puts it. Hidden on
+                                         system lines, which are notes about the
+                                         conversation rather than part of it. -->
+                                    <TextBlock Text="{Binding TimeText}"
+                                               IsVisible="{Binding ShowTime}"
+                                               HorizontalAlignment="Right"
+                                               Margin="0,1,0,0"
+                                               FontSize="8.5" Opacity="0.5"
+                                               Foreground="{Binding Ink}"/>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- A dialog the session has stopped on, almost always a permission
+                 prompt. It sits between the transcript and the input because
+                 that is what it is: the thing standing between what has been
+                 said and saying anything else.
+
+                 Amber, matching "preparing" on the speak button and the arrange
+                 button's active state, so the app keeps one vocabulary for
+                 "waiting on something" rather than acquiring a second.
+
+                 The options are not ours. Their labels are read off the pane by
+                 ClaudeCodeChatSession.ParsePrompt, because the dialog is drawn
+                 by the TUI and never reaches the transcript — and a button that
+                 said "Approve" while sending a digit that meant something else
+                 is the one failure this feature must not have. When the screen
+                 can't be parsed there are no options and only the terminal
+                 button, which is the honest answer at that point. -->
+            <Border x:Name="PromptBox" Grid.Row="2" IsVisible="False"
+                    CornerRadius="8" Padding="8,6"
+                    Background="#26B8860B" BorderBrush="#80B8860B" BorderThickness="1">
+                <StackPanel Spacing="6">
+                    <TextBlock x:Name="PromptTitle" TextWrapping="Wrap"
+                               FontSize="11" FontWeight="SemiBold"
+                               Foreground="#F2FFFFFF"/>
+                    <ItemsControl x:Name="PromptOptions">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Spacing="4"/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#33FFFFFF"
+                                        BorderBrush="#40FFFFFF" BorderThickness="1"
+                                        CornerRadius="6" Padding="7,4" Cursor="Hand"
+                                        PointerPressed="PromptOption_PointerPressed">
+                                    <TextBlock Text="{Binding Label}" TextWrapping="Wrap"
+                                               FontSize="11" Foreground="#EEFFFFFF"/>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <!-- Always offered, not only as a fall back: the dialog's
+                         last option is usually "no, and tell Claude what to do
+                         differently", which needs a sentence typed rather than
+                         a button pressed. -->
+                    <TextBlock x:Name="PromptElsewhere"
+                               Text="Answer in the terminal"
+                               FontSize="10.5" Cursor="Hand"
+                               TextDecorations="Underline"
+                               Foreground="#B3FFFFFF"
+                               PointerPressed="PromptElsewhere_PointerPressed"/>
+                </StackPanel>
+            </Border>
+
+            <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="5">
+                <!-- AcceptsReturn so the TextBox owns newline insertion, caret
+                     placement and undo; Enter-to-send is intercepted on the
+                     tunnel route instead. Grows to about three lines, then
+                     scrolls inside itself. -->
+                <TextBox x:Name="Input" Grid.Column="0"
+                         AcceptsReturn="True" TextWrapping="Wrap"
+                         MaxHeight="66" MinHeight="26" FontSize="11.5"
+                         Watermark="Message…"
+                         Background="#33FFFFFF" Foreground="#EEFFFFFF"
+                         CaretBrush="#EEFFFFFF"
+                         BorderBrush="#40FFFFFF" BorderThickness="1"
+                         CornerRadius="6" Padding="6,3"/>
+                <Grid x:Name="MicButton" Grid.Column="1" Width="24" Height="24"
+                      IsVisible="False" Cursor="Hand">
+                    <Ellipse x:Name="MicFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+                    <TextBlock Text="&#127908;" FontSize="11"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsHitTestVisible="False"/>
+                </Grid>
+                <Grid x:Name="SendButton" Grid.Column="2" Width="24" Height="24" Cursor="Hand">
+                    <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+                    <TextBlock Text="&#10148;" FontSize="11" Foreground="#DDFFFFFF"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsHitTestVisible="False"/>
+                </Grid>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

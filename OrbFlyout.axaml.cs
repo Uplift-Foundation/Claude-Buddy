@@ -38,6 +38,7 @@ namespace ClaudeBuddy
         public event Action? ArrangeClicked;
         public event Action? SettingsClicked;
         public event Action? SpeakClicked;
+        public event Action? ChatClicked;
 
         // Where the orb's centre maps to in this window's DIP space.
         // Computed by LayoutArc, read by OrbWindow.EnsureFlyoutShown to
@@ -49,6 +50,7 @@ namespace ClaudeBuddy
         {
             InitializeComponent();
             LayoutArc();
+            LabelButtons();
 
             ArrangeButton.PointerPressed += (_, e) =>
             {
@@ -74,6 +76,12 @@ namespace ClaudeBuddy
                 MicClicked?.Invoke();
             };
 
+            ChatButton.PointerPressed += (_, e) =>
+            {
+                e.Handled = true;
+                ChatClicked?.Invoke();
+            };
+
             Opened += (_, _) =>
             {
                 this.ShowOnAllSpaces();
@@ -87,31 +95,91 @@ namespace ClaudeBuddy
             LayoutArc();
         }
 
+        public void SetChatVisible(bool visible)
+        {
+            ChatButton.IsVisible = visible;
+            LayoutArc();
+        }
+
         // Computes button positions along a semicircular arc and sizes
         // the Canvas to the tight bounding box around all buttons.
         // Angles are in degrees, measured from the positive X axis with
         // Y pointing down (screen coordinates): 90° is straight down
         // (6 o'clock), <90° swings right (toward 5), >90° swings left
         // (toward 7).
+        // The order buttons appear along the arc, left end to right end. Which
+        // of them are actually on the arc is each one's IsVisible; the angles
+        // are derived from how many that turns out to be.
+        private Grid[] ArcButtons => new[]
+        {
+            ArrangeButton, SettingsButton, SpeakButton, MicButton, ChatButton
+        };
+
+        // What each button is, in the compact form of the bubble the orb's own
+        // tooltip uses — same palette, no tail. The tail belongs to a thought
+        // rising from an orb; under a button it points at nothing.
+        //
+        // A word or two, not a sentence. These first read "Arrange orbs into the
+        // chosen shape" and the like, which is a help topic: the bubble ended up
+        // wider than the arc of buttons it was labelling, and a caption that
+        // takes a moment to read is one you stop waiting for. The button is
+        // already in front of the pointer — the label only has to name it.
+        //
+        // Set here rather than in the XAML because ToolTip.Tip="some text" does
+        // not work in this app and cannot: App.axaml strips the ToolTip template
+        // to a bare ContentPresenter so an orb's thought bubble can *be* the
+        // tooltip, which leaves a plain string as unstyled text floating on the
+        // desktop with no background. That is exactly how the first version of
+        // these tips shipped, and exactly what "weird and hard to see" meant.
+        //
+        // Below the button rather than above it. These sit under the orb, and a
+        // bubble above one would cover the orb the user is pointing at.
+        private void LabelButtons()
+        {
+            Label(ArrangeButton, "Arrange");
+            Label(SettingsButton, "Settings");
+            Label(SpeakButton, "Read aloud");
+            Label(MicButton, "Dictate");
+            Label(ChatButton, "Chat");
+
+            static void Label(Control button, string text)
+            {
+                ToolTip.SetTip(button, OrbWindow.ThoughtBubble(text, null, compact: true));
+                ToolTip.SetPlacement(button, PlacementMode.Bottom);
+                ToolTip.SetShowDelay(button, 250);
+            }
+        }
+
         private void LayoutArc()
         {
-            double[] angles;
-            Grid[] buttons;
+            // Spread evenly between the two ends, which keeps the arc symmetric
+            // about 90° (straight down) whichever set is showing and spreads it
+            // wider as buttons are added rather than packing them tighter —
+            // ArcRadius is fixed, so the spacing between neighbours is what has
+            // to give.
+            //
+            // This used to be two hardcoded angle arrays chosen by a single
+            // `if (MicButton.IsVisible)`. The values below reproduce those
+            // exactly — three buttons still land on 140/90/40 and four on
+            // 140/106.7/73.3/40 — but a second independently-hidden button made
+            // the old shape unrepresentable rather than merely inconvenient:
+            // it needed one branch per combination, and got them wrong in the
+            // combinations nobody had on screen while writing it.
+            const double FromAngle = 140.0;
+            const double ToAngle = 40.0;
 
-            // Kept symmetric about 90° (straight down) so the arc stays
-            // centred under the orb whichever set is showing, and spread
-            // wider as buttons are added rather than packed tighter —
-            // ArcRadius is fixed, so the spacing between neighbours is
-            // what has to give.
-            if (MicButton.IsVisible)
+            var buttons = ArcButtons.Where(b => b.IsVisible).ToArray();
+            if (buttons.Length == 0) return;
+
+            var angles = new double[buttons.Length];
+            for (int i = 0; i < buttons.Length; i++)
             {
-                angles = new[] { 140.0, 106.7, 73.3, 40.0 };
-                buttons = new[] { ArrangeButton, SettingsButton, SpeakButton, MicButton };
-            }
-            else
-            {
-                angles = new[] { 140.0, 90.0, 40.0 };
-                buttons = new[] { ArrangeButton, SettingsButton, SpeakButton };
+                // A lone button goes straight down rather than to the left end,
+                // which is what the midpoint gives and what the division by
+                // zero below would not.
+                angles[i] = buttons.Length == 1
+                    ? (FromAngle + ToAngle) / 2
+                    : FromAngle + (ToAngle - FromAngle) * i / (buttons.Length - 1);
             }
 
             var cx = new double[angles.Length];
@@ -176,6 +244,17 @@ namespace ClaudeBuddy
                 TextToSpeech.SpeakState.Preparing => "⏳",
                 _ => "\U0001F508"
             };
+
+            // And what it says it is. This button is three things depending on
+            // state, and a tooltip fixed at "read aloud" would be wrong on two
+            // of them — the glyph already changes, and the words have to agree
+            // with the glyph or they are worse than no words.
+            ToolTip.SetTip(SpeakButton, OrbWindow.ThoughtBubble(state switch
+            {
+                TextToSpeech.SpeakState.Speaking => "Stop",
+                TextToSpeech.SpeakState.Preparing => "Preparing…",
+                _ => "Read aloud"
+            }, null, compact: true));
         }
 
         public bool IsPointerOverFlyout => Root.IsPointerOver;
