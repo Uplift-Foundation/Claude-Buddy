@@ -3,9 +3,16 @@ name: CI
 # Builds every push and PR on both platforms. The point is to catch a break in
 # the packaging path before a tag is pushed, because a Release run that fails
 # halfway leaves a tag with no assets attached to it.
+#
+# Tests run before packaging, in the same job, on purpose: a failing test
+# blocks the artifact the same way a failed publish already does, rather than
+# racing a separate job that might finish (and upload) first. develop is in
+# the push trigger alongside main because that is where feature/ and bugfix/
+# branches land first and sit for a while — untested until a release branch
+# cuts, previously.
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
   workflow_dispatch:
 
@@ -27,6 +34,69 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
+
+      # The three bespoke suites predate xUnit here and keep their own
+      # contract: exit non-zero on failure, `dotnet run` rather than
+      # `dotnet test`. Platform-neutral, so both legs run all three.
+      - name: Unit tests (arrangement, glyph, transcript)
+        run: |
+          dotnet run --project tests/ArrangementTests -c Release
+          dotnet run --project tests/GlyphTests -c Release
+          dotnet run --project tests/TranscriptTests -c Release
+
+      # Everything added after those three is xUnit, in tests/Tests.sln. Run
+      # as separate `dotnet test` invocations rather than one pass over the
+      # whole solution, so a red run in one attributes to a suite by its own
+      # job-log section instead of one merged wall of output — this matters
+      # most for the headless UI suite, which is the one most likely to be
+      # flaky on a runner with no real display.
+      #
+      # Hook-script integration tests self-gate by OS: HookScriptShTests
+      # needs bash (this leg, on macOS) and HookScriptPs1Tests needs pwsh
+      # (the Windows leg) — the other half reports as Skipped rather than
+      # silently not existing.
+      - name: Unit tests (xUnit)
+        run: dotnet test tests/UnitTests -c Release --logger "trx;LogFileName=unit-tests.trx" --results-directory TestResults
+
+      - name: Integration tests (xUnit)
+        run: dotnet test tests/IntegrationTests -c Release --logger "trx;LogFileName=integration-tests.trx" --results-directory TestResults
+
+      # Retried, not run once: Avalonia.Headless.XUnit has a documented,
+      # still-not-fully-resolved inter-test race in its own dispatcher
+      # lifecycle/FontManager cache (AvaloniaUI/Avalonia#12588 and several
+      # newer descendants — its own maintainer calls it "very hard to
+      # diagnose... much more frequent on CI"). It surfaces here as an
+      # intermittent KeyNotFoundException for "fonts:SystemFonts" that,
+      # once hit, breaks every window built afterward in that run.
+      # Reproduced directly on real Windows hardware (not just inferred
+      # from a CI log) at roughly 1 run in 6-8, unchanged by: never closing
+      # a headless window, disabling xUnit's cross-collection
+      # parallelization, forcing one synchronous FontManager warm-up before
+      # any test runs, or bumping this project's own Avalonia packages past
+      # the app's pin (tests/UiTests/ClaudeBuddy.UiTests.csproj) to pick up
+      # later headless-race fixes. All four of those are kept — each lowers
+      # the odds — but none removes them, so retrying the whole run is the
+      # honest mitigation for a known third-party flake rather than a way
+      # to hide a real regression: a genuinely broken test fails identically
+      # on every attempt, retried or not.
+      - name: UI tests (xUnit, headless)
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            dotnet test tests/UiTests -c Release --logger "trx;LogFileName=ui-tests.trx" --results-directory TestResults
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "UI tests failed on attempt $attempt of 3"
+          }
+          exit 1
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.rid }}
+          path: TestResults/*.trx
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Build
         run: dotnet publish ClaudeBuddy.csproj -c Release -r ${{ matrix.rid }} -p:DebugType=none --nologo
