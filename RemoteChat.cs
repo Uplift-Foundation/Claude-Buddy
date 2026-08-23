@@ -161,6 +161,26 @@ namespace ClaudeBuddy
         string ComposerHint { get; }
     }
 
+    // A session where a pasted picture can actually go somewhere.
+    //
+    // Not on IRemoteChatSession itself, for the same reason the three
+    // interfaces above aren't: only one implementation exists yet, and a
+    // session that doesn't implement this simply leaves a paste of a
+    // picture as the ordinary text paste it would otherwise have been —
+    // which is the only honest answer for a transport with nowhere to put
+    // a file. A local CLI session has somewhere, because its own reader is
+    // on this machine; a gateway session's is on the other end of a
+    // websocket, and handing it a path on this machine would name a file it
+    // cannot open.
+    public interface IRemoteChatImages
+    {
+        // Sends text together with pictures already saved to disk. Called
+        // instead of SendAsync exactly when the panel is holding at least
+        // one pasted picture; a message with none still goes through
+        // SendAsync alone.
+        Task SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths);
+    }
+
     // One option in a dialog the session is blocked on. Key is what gets sent —
     // a digit, for the numbered lists Claude Code puts up — and Label is the
     // dialog's own wording, read off the screen rather than guessed at.

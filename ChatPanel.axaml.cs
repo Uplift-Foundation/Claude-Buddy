@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Controls.Documents;
@@ -61,6 +62,12 @@ namespace ClaudeBuddy
 
         private readonly ObservableCollection<TurnView> _turns = new();
 
+        // Pictures pasted since the last send, waiting to go out with
+        // whatever gets typed next. Not part of a session's own draft store
+        // below — a paste is only ever meant for the message being composed
+        // right now, so switching sessions clears it rather than saving it.
+        private readonly ObservableCollection<PendingImage> _pendingImages = new();
+
         // Distance from the orb's centre to the panel's near edge. Clears the
         // 56pt orb with a small gap, the same way OrbFlyout's ArcRadius does.
         private const int Gap = 34;
@@ -70,6 +77,7 @@ namespace ClaudeBuddy
             InitializeComponent();
 
             Turns.ItemsSource = _turns;
+            Attachments.ItemsSource = _pendingImages;
 
             CloseButton.PointerPressed += (_, e) => { e.Handled = true; HideNow(); };
 
@@ -227,6 +235,12 @@ namespace ClaudeBuddy
             if (_session is null) return;
 
             Drafts[_session.SessionId] = Input.Text ?? "";
+
+            // Not carried to Drafts with the text: a picture pasted for one
+            // conversation attached to whichever session happens to be open
+            // next would be a silent misdirection rather than a convenience.
+            _pendingImages.Clear();
+            Attachments.IsVisible = false;
 
             _session.TurnAdded -= OnTurnAdded;
             _session.TurnUpdated -= OnTurnUpdated;
@@ -717,6 +731,17 @@ namespace ClaudeBuddy
 
         private void OnInputKeyDown(object? sender, KeyEventArgs e)
         {
+            // Only a session that has somewhere to put a picture gets its
+            // paste intercepted at all — see IRemoteChatImages. Anything
+            // else falls straight through to the TextBox's own paste, which
+            // is exactly what happened here before this feature existed.
+            if (_session is IRemoteChatImages && IsPasteGesture(e))
+            {
+                e.Handled = true;
+                _ = HandlePasteAsync();
+                return;
+            }
+
             if (e.Key != Key.Enter && e.Key != Key.Return) return;
 
             // Shift+Enter is left entirely alone so the TextBox inserts the
@@ -726,6 +751,102 @@ namespace ClaudeBuddy
             e.Handled = true;
             Send();
         }
+
+        // TextBox's own PasteGesture rather than a hard-coded Ctrl/Cmd+V:
+        // it is already the platform-correct chord (Cmd on macOS, Ctrl
+        // elsewhere), and asking Input for its own answer means this never
+        // drifts from whatever the TextBox itself would have matched.
+        private static bool IsPasteGesture(KeyEventArgs e)
+        {
+            var gesture = TextBox.PasteGesture;
+            return gesture is not null && e.Key == gesture.Key && e.KeyModifiers == gesture.KeyModifiers;
+        }
+
+        // Whether the paste this preempted turns out to be a picture can
+        // only be known asynchronously, so the keystroke is always taken
+        // first and one of two things is done with it here: a picture
+        // becomes a pending attachment, and anything else — plain text, or
+        // a clipboard with nothing this app can read — is pasted by hand,
+        // since the TextBox's own paste handler never got the chance to.
+        private async Task HandlePasteAsync()
+        {
+            var clipboard = Clipboard;
+            if (clipboard is null) return;
+
+            Bitmap? bitmap;
+            try
+            {
+                bitmap = await clipboard.TryGetBitmapAsync();
+            }
+            catch
+            {
+                bitmap = null;
+            }
+
+            if (bitmap is not null)
+            {
+                await AttachImageAsync(bitmap);
+                return;
+            }
+
+            string? text;
+            try
+            {
+                text = await clipboard.TryGetTextAsync();
+            }
+            catch
+            {
+                text = null;
+            }
+
+            if (!string.IsNullOrEmpty(text)) PasteText(text);
+        }
+
+        // What TextBox.Paste() would have done with the same string: replace
+        // the selection, or insert at the caret when there isn't one.
+        private void PasteText(string text)
+        {
+            var current = Input.Text ?? "";
+            var start = Math.Clamp(Math.Min(Input.SelectionStart, Input.SelectionEnd), 0, current.Length);
+            var end = Math.Clamp(Math.Max(Input.SelectionStart, Input.SelectionEnd), 0, current.Length);
+
+            Input.Text = current[..start] + text + current[end..];
+            Input.CaretIndex = start + text.Length;
+        }
+
+        // Saved to disk immediately rather than held as a bitmap until Send:
+        // Send needs a path to type into the terminal, and writing it once
+        // here means a picture that sits pasted for an hour is written once
+        // rather than re-encoded at the moment it is finally needed.
+        //
+        // The encode itself runs off the UI thread — the same reasoning
+        // TurnView.LoadImage gives for decoding a received picture there:
+        // a full-screen screenshot is large enough that PNG-encoding it is a
+        // visible hitch on the thread that draws, and nothing here needs the
+        // result before the next frame.
+        private async Task AttachImageAsync(Bitmap bitmap)
+        {
+            var path = await Task.Run(() => ChatAttachments.Save(bitmap));
+
+            _pendingImages.Add(new PendingImage(path, bitmap));
+            Attachments.IsVisible = true;
+        }
+
+        private void Attachment_Remove_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            e.Handled = true;
+
+            if ((sender as Control)?.DataContext is not PendingImage image) return;
+
+            _pendingImages.Remove(image);
+            Attachments.IsVisible = _pendingImages.Count > 0;
+        }
+
+        // What a pasted picture looks like before it has been sent: a path
+        // already on disk (see AttachImage), and the same decoded bitmap the
+        // clipboard handed over, small enough at 40pt that reusing it as
+        // its own thumbnail costs nothing worth a second decode.
+        private sealed record PendingImage(string Path, Bitmap Thumbnail);
 
         private void OnPanelKeyDown(object? sender, KeyEventArgs e)
         {
@@ -752,9 +873,13 @@ namespace ClaudeBuddy
         private void Send()
         {
             var text = (Input.Text ?? "").Trim();
-            if (text.Length == 0 || _session is null) return;
+            if ((text.Length == 0 && _pendingImages.Count == 0) || _session is null) return;
 
             Input.Text = "";
+
+            var images = _pendingImages.Select(p => p.Path).ToList();
+            _pendingImages.Clear();
+            Attachments.IsVisible = false;
 
             // Sending is the one time the view should jump to the bottom
             // regardless. The autoscroll rule elsewhere deliberately leaves you
@@ -765,7 +890,14 @@ namespace ClaudeBuddy
             // Deliberately not inserting the user's turn here: the session
             // raises TurnAdded for it, so one thing owns the transcript and a
             // failed send leaves nothing behind to clean up.
-            _ = _session.SendAsync(text);
+            if (images.Count > 0 && _session is IRemoteChatImages withImages)
+            {
+                _ = withImages.SendWithImagesAsync(text, images);
+            }
+            else
+            {
+                _ = _session.SendAsync(text);
+            }
         }
 
         private void SpeakLatest()
