@@ -272,6 +272,17 @@ namespace ClaudeBuddy
             // address; otherwise this returns having done nothing at all.
             OpenClawSessions.Restart();
 
+            // Subscribed unconditionally, unlike OpenClawSessions.Restart above:
+            // this only wires up an event, and starting the bridge is a separate,
+            // deliberate act because it costs the user's quota. Nothing fires
+            // here until something asks for it.
+            //
+            // Routed centrally rather than each chat session subscribing for
+            // itself, because there is one bridge feeding all of them and a
+            // message names only who it came from — so the fan-out belongs
+            // wherever the sessions are already indexed by name, which is here.
+            RemoteControlSessions.MessageReceived += OnRemoteMessage;
+
             _debounce.Tick += (_, _) =>
             {
                 _debounce.Stop();
@@ -1067,6 +1078,35 @@ namespace ClaudeBuddy
             if (status.Source == SessionSource.OpenClaw)
                 return OpenClawSessions.ChatFor(sessionId, status.Title);
 
+            // A session on another machine. Cached like the local ones below,
+            // and for a stronger reason: this conversation exists *only* here.
+            // A local panel rebuilt from scratch re-reads the transcript and
+            // loses nothing but scroll position, whereas rebuilding this one
+            // would throw away the entire exchange — there is no file on this
+            // machine to read it back from.
+            if (status.Source == SessionSource.RemoteControl)
+            {
+                if (_remoteChats.TryGetValue(sessionId, out var existingRemote)) return existingRemote;
+
+                // The peer name, recovered from the id the scan minted. Taken
+                // from the id rather than the title so it survives a title that
+                // gets prettied up later — the name is what SendMessage
+                // addresses, and it has to stay exact.
+                var remoteName = sessionId.StartsWith("rc:", StringComparison.Ordinal)
+                    ? sessionId[3..]
+                    : status.Title;
+
+                var remote = new RemoteControlChatSession(sessionId, remoteName);
+                _remoteChats[sessionId] = remote;
+
+                // Opening the panel counts as asking for the bridge, so the
+                // conversation is usable the moment it appears rather than only
+                // after the first message is typed.
+                RemoteControlSessions.EnsureStarted();
+
+                return remote;
+            }
+
             // Both local CLIs from here down. Which transcript format to read
             // and which pair of settings governs it is the whole of the
             // difference, and it lives in CliChatFormat.
@@ -1093,6 +1133,13 @@ namespace ClaudeBuddy
         // emptied with the orb.
         private readonly Dictionary<string, LocalCliChatSession> _chats = new(StringComparer.Ordinal);
 
+        // Separate from _chats above because these are not disposable and are
+        // not keyed to a status file's lifetime. A remote conversation outlives
+        // the orb: the bridge idling out empties the snapshot and the orb goes,
+        // but what was said should still be there when it comes back.
+        private readonly Dictionary<string, RemoteControlChatSession> _remoteChats =
+            new(StringComparer.Ordinal);
+
         // Namespaced away from both Claude Code's UUIDs and the gateway's own
         // keys, because it is neither: nothing on the gateway answers to it.
         private static string RoomId(string roomKey) => "openclaw:room:" + roomKey;
@@ -1102,6 +1149,30 @@ namespace ClaudeBuddy
         {
             var dash = sessionTitle.IndexOf(" — ", StringComparison.Ordinal);
             return dash > 0 ? sessionTitle[(dash + 3)..].Trim() : sessionTitle;
+        }
+
+        // A message from a session on another machine, handed to the one
+        // conversation it belongs to.
+        //
+        // Delivered only to an already-open conversation, and that is the right
+        // shape rather than a gap: this channel is a reply to something someone
+        // typed here, so an inbound message with no panel behind it would be a
+        // reply to nothing. A remote session cannot start a conversation.
+        private void OnRemoteMessage(BridgeProtocol.InboundMessage message)
+        {
+            // Keyed the way the scan mints ids, so this is a lookup rather than
+            // a walk — and it means a remote session named the same as a local
+            // one cannot be delivered to the local one's panel.
+            if (_remoteChats.TryGetValue("rc:" + message.FromName, out var chat))
+            {
+                chat.OnInbound(message);
+                return;
+            }
+
+            // Fall back to a scan by name for the case the id doesn't match
+            // exactly — the peer list's casing is upstream's to change, and
+            // losing a reply over a capital letter would be a poor trade.
+            foreach (var candidate in _remoteChats.Values) candidate.OnInbound(message);
         }
 
         public SessionStatus? StatusFor(string? sessionId) =>
