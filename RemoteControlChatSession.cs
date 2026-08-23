@@ -108,6 +108,10 @@ namespace ClaudeBuddy
             if (!message.FromName.Equals(_remoteName, StringComparison.OrdinalIgnoreCase)) return;
             if (string.IsNullOrWhiteSpace(message.Body)) return;
 
+            // The answer supersedes the "working" line, so that comes off first —
+            // leaving it above the reply would read as though it were still going.
+            ClearWorkingNote();
+
             Add(new ChatTurn
             {
                 Role = ChatRole.Assistant,
@@ -115,6 +119,61 @@ namespace ClaudeBuddy
                 IsComplete = true
             });
         }
+
+        // The waiting indicator, and the reason it is not decorative.
+        //
+        // A reply can be minutes away — the remote session may be running a
+        // whole command — and until it lands the panel is a message you typed
+        // and nothing else. That is indistinguishable from a send that silently
+        // failed, which is the wrong thing to leave someone guessing about. The
+        // orb pulses for the same reason, but the orb is behind the panel you
+        // are looking at.
+        private ChatTurn? _workingNote;
+
+        public void SetWorking(bool working)
+        {
+            if (working)
+            {
+                if (_workingNote is not null) return;
+
+                // IsComplete false rather than true: this is a turn still in
+                // progress, which is what the flag means everywhere else, and it
+                // keeps the row from reading as a finished statement.
+                _workingNote = new ChatTurn
+                {
+                    Role = ChatRole.System,
+                    Text = $"{_remoteName} is working…",
+                    IsComplete = false
+                };
+
+                Add(_workingNote);
+                return;
+            }
+
+            // Went idle without answering. The note still comes off — a stale
+            // "working…" is worse than no indicator, because it is a claim rather
+            // than an absence.
+            ClearWorkingNote();
+        }
+
+        private void ClearWorkingNote()
+        {
+            if (_workingNote is null) return;
+
+            var note = _workingNote;
+            _workingNote = null;
+
+            // Removed rather than rewritten. Turning it into "finished" would
+            // leave a line nobody needs in a transcript that is only ever a
+            // handful of turns long.
+            if (_history.Remove(note)) Removed?.Invoke(note);
+        }
+
+        // The panel rebuilds its list from History when this fires. There is no
+        // TurnRemoved on IRemoteChatSession — nothing else has ever needed to
+        // take a turn back — so this is deliberately local to this class and the
+        // panel subscribes only when it recognises the type.
+        public event Action<ChatTurn>? Removed;
 
         // Said out loud rather than silently dropping the conversation, because
         // an idle shutdown is invisible from the panel: nothing on screen

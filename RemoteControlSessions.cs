@@ -110,6 +110,19 @@ namespace ClaudeBuddy
 
         public static event Action<BridgeProtocol.InboundMessage>? MessageReceived;
 
+        // Raised when a remote session starts or stops working, so an open chat
+        // panel can say so. Separate from the orb, which learns the same thing
+        // from the snapshot on the next scan — a panel has no scan to wait for
+        // and would otherwise show nothing at all between a send and a reply
+        // that can be minutes apart.
+        public static event Action<string, bool>? WorkingChanged;
+
+        // Last known working state per remote, so only transitions are raised.
+        // Re-announcing "still working" every 20 seconds would fill a panel with
+        // the same line.
+        private static readonly Dictionary<string, bool> WorkingNow =
+            new(StringComparer.OrdinalIgnoreCase);
+
         // Brings the bridge up if it isn't, and marks it as wanted either way.
         // Every entry point that means "a person is looking at remote sessions"
         // calls this — the tray item, opening a remote chat, sending to one.
@@ -253,6 +266,21 @@ namespace ClaudeBuddy
 
             _snapshot = remotes;
 
+            // Transitions only, and computed before the state is overwritten.
+            foreach (var remote in remotes)
+            {
+                bool was;
+                lock (Gate) WorkingNow.TryGetValue(remote.Name, out was);
+
+                if (was == remote.Working) continue;
+
+                lock (Gate) WorkingNow[remote.Name] = remote.Working;
+
+                var name = remote.Name;
+                var working = remote.Working;
+                Dispatcher.UIThread.Post(() => WorkingChanged?.Invoke(name, working));
+            }
+
             lock (Gate)
             {
                 _polled = true;
@@ -303,6 +331,7 @@ namespace ClaudeBuddy
                 _state = why;
                 _warning = null;
                 _polled = false;
+                WorkingNow.Clear();
             }
 
             _snapshot = Array.Empty<Remote>();

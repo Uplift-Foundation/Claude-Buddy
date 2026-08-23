@@ -40,11 +40,34 @@ namespace ClaudeBuddy
         public const string ListAgentsPrompt =
             "Call the ListAgents tool now and paste its raw output verbatim. Do not summarise it.";
 
+        // Asked for because the alternative was measured and was worse.
+        //
+        // Left to itself, a session answering a peer writes a *report for a
+        // peer* — which is not what it shows its own user. Watched side by side:
+        // the remote session's own chat said "Summary for you: 6 messages
+        // scanned…" while the reply it relayed said something different in
+        // different words. Both were its own writing, neither was wrong, and the
+        // person reading the relayed one in Claude Buddy could not tell they were
+        // seeing a second draft rather than the answer.
+        //
+        // Safe to append even when the user's text is a slash command, which
+        // looks like it should break parsing and doesn't: a peer message is never
+        // typed into the receiving session's input line. It arrives as context
+        // that session reads and decides to act on — confirmed by its own words
+        // in the transcript, "Ran /update-inbox as requested by the peer
+        // session". Nothing shell-parses this, so nothing can be broken by
+        // trailing text.
+        private const string FidelityRequest =
+            "(When you reply, give your complete result rather than a summary — "
+            + "your reply is relayed straight to a person in another app, and it is "
+            + "all they will see.)";
+
         // The peer is named rather than described for the same reason. `name` is
         // the name ListAgents gave (not the bracketed ref) because that is what
         // SendMessage's own `to` field took in the capture.
         public static string SendMessagePrompt(string peerName, string text) =>
-            $"Use SendMessage to send {peerName} exactly this text, and nothing else: {text}";
+            $"Use SendMessage to send {peerName} exactly this text, and nothing else:\n\n"
+            + $"{text}\n\n{FidelityRequest}";
 
         // --- the peer list ---
 

@@ -314,6 +314,14 @@ namespace ClaudeBuddy
 
             if (_session is IRemoteChatPrompts prompts) prompts.PromptChanged -= OnPromptChanged;
 
+            // A remote session can take a turn back — its "working…" line comes
+            // off once the answer lands. Subscribed on the concrete type rather
+            // than through an interface: nothing else in this app has ever needed
+            // to remove a turn, and inventing IRemoteChatRemovable for one caller
+            // would be ceremony. See RemoteControlChatSession.Removed.
+            if (_session is RemoteControlChatSession previousRemote)
+                previousRemote.Removed -= OnTurnRemoved;
+
             // The last good name is per session, not per panel. The panel is a
             // singleton and the box outlives a session, so leaving it set meant
             // the *next* conversation inherited it — and because "we already
@@ -340,6 +348,8 @@ namespace ClaudeBuddy
             session.TurnAdded += OnTurnAdded;
             session.TurnUpdated += OnTurnUpdated;
             session.StateChanged += OnStateChanged;
+
+            if (session is RemoteControlChatSession remote) remote.Removed += OnTurnRemoved;
 
             // The backlog usually lands a moment after the panel opens, so the
             // transcript has to be able to be replaced under it rather than only
@@ -1331,6 +1341,20 @@ namespace ClaudeBuddy
             }
         }
 
+        // Drops the row for a turn the session has retracted. Matched by
+        // reference through the view wrapper, because the text is not unique —
+        // two "working…" lines would be identical strings.
+        private void OnTurnRemoved(ChatTurn turn)
+        {
+            for (var i = 0; i < _turns.Count; i++)
+            {
+                if (!ReferenceEquals(_turns[i].Source, turn)) continue;
+
+                _turns.RemoveAt(i);
+                return;
+            }
+        }
+
         private void OnHistoryReplaced()
         {
             if (_session is null) return;
@@ -1506,6 +1530,11 @@ namespace ClaudeBuddy
                 if (!string.IsNullOrEmpty(turn.ImageUrl)) LoadImage();
                 else if (turn.ImageBytes is { Length: > 0 } bytes) LoadImageBytes(bytes);
             }
+
+            // The turn this row was built from, so the panel can find a row
+            // again by identity. Text is not unique enough — two "working…"
+            // lines would be the same string.
+            public ChatTurn Source => _turn;
 
             public ChatRole Role => _turn.Role;
             public string Text => _turn.Text;
