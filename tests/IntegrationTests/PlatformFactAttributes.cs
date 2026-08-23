@@ -48,6 +48,16 @@ public sealed class LiveBridgeFactAttribute : FactAttribute
         }
 
         if (Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LIVE_BRIDGE_TESTS") != "1")
+        {
             Skip = "opt-in: starts a real Claude Code session and spends quota (set CLAUDE_BUDDY_LIVE_BRIDGE_TESTS=1)";
+            return;
+        }
+
+        // Keeps these relays out of the installed app's way. The relay name is a
+        // machine-wide mutex per account, so without a tag a test kills the
+        // running app's relay, the app takes it back, and they trade it until one
+        // loses a race — observed as the same test passing and failing on
+        // consecutive runs.
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_RC_BRIDGE_TAG", "test");
     }
 }

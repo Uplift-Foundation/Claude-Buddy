@@ -99,6 +99,24 @@ namespace ClaudeBuddy
         // account, which is another reason not to make it eager.
         private static readonly TimeSpan PollEvery = TimeSpan.FromSeconds(20);
 
+        // Faster while something is actually being waited on.
+        //
+        // 20 seconds is right for "is anything out there", and far too slow for
+        // "did the thing I just asked for start yet" — a command can finish
+        // inside one tick, so the orb never pulses and the panel never says
+        // anything, which reads as nothing having happened. While at least one
+        // remote session is working, or a send has just gone out, the poll drops
+        // to this. It is still a real prompt per tick, which is why it is
+        // temporary rather than the default.
+        private static readonly TimeSpan PollEveryBusy = TimeSpan.FromSeconds(5);
+
+        // When to go back to the slow cadence: a short grace period after the
+        // last send, so a reply that takes a moment to start is still caught
+        // promptly rather than falling into a 20-second gap.
+        private static readonly TimeSpan BusyGrace = TimeSpan.FromSeconds(90);
+
+        private static DateTime _lastSend = DateTime.MinValue;
+
         // Empty whenever the feature is off, which is what makes the scan's job
         // trivial — it never has to know why.
         public static IReadOnlyList<Remote> Snapshot() =>
@@ -383,6 +401,31 @@ namespace ClaudeBuddy
 
             Republish();
             RaiseWorkingTransitions(remotes);
+            RetuneTimer();
+        }
+
+        // Picks the cadence from what is actually happening. Called after every
+        // poll rather than on a schedule of its own, because the thing it reacts
+        // to — a session going busy — is exactly what a poll discovers.
+        private static void RetuneTimer()
+        {
+            var wanted = ShouldPollFast() ? PollEveryBusy : PollEvery;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_poll is null || _poll.Interval == wanted) return;
+                _poll.Interval = wanted;
+            });
+        }
+
+        private static bool ShouldPollFast()
+        {
+            if (_snapshot.Any(r => r.Working)) return true;
+
+            DateTime lastSend;
+            lock (Gate) lastSend = _lastSend;
+
+            return DateTime.UtcNow - lastSend < BusyGrace;
         }
 
         // Every relay's sessions, flattened into the one list the scan reads.
@@ -439,7 +482,16 @@ namespace ClaudeBuddy
             if (bridge is null) return null;
 
             Touch();
-            return await bridge.SendToAsync(remoteName, text).ConfigureAwait(false);
+            lock (Gate) _lastSend = DateTime.UtcNow;
+
+            var id = await bridge.SendToAsync(remoteName, text).ConfigureAwait(false);
+
+            // Straight back to the relay rather than waiting up to a full tick:
+            // the moment after a send is exactly when whether it started is
+            // worth knowing, and it is also when someone is watching.
+            if (id is not null) _ = PollAsync(account);
+
+            return id;
         }
 
         public static void Stop(string account, string why = "off")

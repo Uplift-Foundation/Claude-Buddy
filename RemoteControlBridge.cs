@@ -86,6 +86,24 @@ namespace ClaudeBuddy
             // tmux session names cannot contain a dot or a colon — it parses
             // them as window/pane separators — and a profile dir starts with one.
             var safe = _profileDir.Replace('.', '-').Replace(':', '-');
+
+            // Test seam, same pattern as CLAUDE_BUDDY_SETTINGS_DIR and
+            // CLAUDE_BUDDY_PROFILE_ROOT: without it a live test and the
+            // installed app fight over one relay.
+            //
+            // The per-account name is deliberately a machine-wide mutex — a
+            // second Buddy adopting-or-replacing the first is the right answer
+            // for a user, who wants one relay and not two bills. But it means a
+            // test that starts a relay kills the running app's, and the app then
+            // takes its own back, and the two trade it until one of them loses a
+            // race. Measured exactly that way: the same live test passed and
+            // failed on consecutive runs with the app up.
+            //
+            // Never set in production, so the mutex is unaffected where it
+            // matters.
+            var tag = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_RC_BRIDGE_TAG");
+            if (!string.IsNullOrWhiteSpace(tag)) safe += "-" + tag.Replace('.', '-').Replace(':', '-');
+
             _tmuxSessionName = TmuxSessionPrefix + safe;
 
             // "=" forces an exact match. Without it tmux resolves a target by
@@ -657,10 +675,14 @@ namespace ClaudeBuddy
                 // Per account, for the same reason the tmux name is: two relays
                 // sharing a status directory would each adopt whichever file
                 // landed first, and both would tail one transcript.
+                // Keyed off the session name rather than the profile alone, so
+                // the test seam above separates status directories too — two
+                // relays sharing one would each adopt whichever file landed
+                // first and both tail one transcript.
                 var root = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                     "Library", "Caches", "ClaudeBuddy", "rc-bridge",
-                    _profileDir.Replace('.', '-'));
+                    _tmuxSessionName);
 
                 // Cleared on every start: a status file from a previous bridge
                 // would be adopted as this one's, pointing the tail at a
