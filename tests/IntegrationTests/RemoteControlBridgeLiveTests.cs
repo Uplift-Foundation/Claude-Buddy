@@ -95,4 +95,81 @@ public class RemoteControlBridgeLiveTests
 
         second.Stop();
     }
+
+    // The path the tray item and the Settings button both take, end to end:
+    // EnsureStarted -> bridge up -> peers polled -> snapshot published, which is
+    // what the orb scan reads.
+    //
+    // Driven from here rather than by clicking the real menu, deliberately.
+    // Synthesizing a menu-bar click hangs on a machine someone is using — the
+    // modal menu blocks the script, which is the hazard CLAUDE.md already warns
+    // about — and it would be testing AppleScript rather than this app. This
+    // calls the same method the menu item's handler calls, one line in.
+    [LiveBridgeFact]
+    public async Task EnsureStarted_PublishesASnapshotTheOrbScanCanRead()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cb-live-bridge-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.RemoteControlProfileDir = ProfileDir;
+
+        try
+        {
+            // Off first: this is the cost guarantee, and it is the one thing here
+            // worth failing loudly over. Enabling the feature must not start
+            // anything; something has to ask.
+            Assert.False(ClaudeBuddySettings.RemoteControlEnabled);
+            Assert.Empty(RemoteControlSessions.Snapshot());
+
+            ClaudeBuddySettings.RemoteControlEnabled = true;
+
+            // Still nothing, with the setting on but nobody having asked.
+            Assert.Empty(RemoteControlSessions.Snapshot());
+
+            RemoteControlSessions.EnsureStarted();
+
+            // EnsureStarted is fire-and-forget by design — the caller is a menu
+            // click and must not block the UI thread — so this waits on the
+            // observable result rather than on a task.
+            //
+            // Waiting on HasPolled, not on the status line. The first version of
+            // this test watched the status and passed in 3 seconds having proved
+            // nothing: the state goes to "connected" the moment the process is
+            // up, which is before the peer list has been asked for even once. A
+            // test that cannot tell "started" from "started and looked" is a test
+            // that would keep passing if the polling broke entirely.
+            var deadline = DateTime.UtcNow.AddSeconds(120);
+            while (DateTime.UtcNow < deadline
+                   && !RemoteControlSessions.HasPolled
+                   && !RemoteControlSessions.StatusText.Contains("failed", StringComparison.Ordinal))
+            {
+                await Task.Delay(500);
+            }
+
+            _output.WriteLine($"relay status: {RemoteControlSessions.StatusText}");
+
+            foreach (var r in RemoteControlSessions.Snapshot())
+                _output.WriteLine($"snapshot: {r.Key} status={r.Status} working={r.Working}");
+
+            Assert.DoesNotContain("failed", RemoteControlSessions.StatusText);
+
+            // A completed poll is the real assertion. Whether it *found* anything
+            // depends on what is running elsewhere at the time, and a test that
+            // fails because a machine somewhere went to sleep is a test nobody
+            // trusts — but the poll having happened proves the whole chain:
+            // launch, RC attach, prompt injection, tool call, transcript tail,
+            // parse, publish.
+            Assert.True(
+                RemoteControlSessions.HasPolled,
+                $"relay never completed a poll; status was '{RemoteControlSessions.StatusText}'");
+        }
+        finally
+        {
+            // Always, even on a failed assert: leaving a live Claude Code session
+            // running because a test threw would keep spending after the run.
+            RemoteControlSessions.Stop("test over");
+            ClaudeBuddySettings.RemoteControlEnabled = false;
+        }
+    }
 }

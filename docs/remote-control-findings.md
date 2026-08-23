@@ -239,6 +239,37 @@ proxy for RC health** and should not be used as one.
 - **Windows.** Untested and out of scope for v1; the bridge as designed is
   tmux-shaped, and chat-send is already macOS-only in this app.
 
+## Two things only a stronger test found
+
+Both were found by tightening one live test, and both are worth recording
+because each had *already passed* a weaker version of it.
+
+**The status line hid its own answer.** It was written `warning ?? count`, so
+anyone with a warning never learned whether the relay had found anything — and
+since the login-expiry notice starts three days out, that is eventually
+everybody. Now composed from both facts: `1 remote session · Your login expires
+in 3 days`.
+
+**A test can pass while measuring nothing.** The first live test of the
+tray path waited for the status to leave `"starting"` and passed in 3 seconds,
+which felt like success. It wasn't: the state goes to `connected` the moment the
+process is up, which is *before* the peer list has been asked for once. So the
+test would have kept passing if polling broke entirely. It now waits on a
+`HasPolled` flag, and on doing so immediately failed — a 2-minute timeout with
+the relay sitting at `connected`, never polling.
+
+The cause was startup awaiting `Dispatcher.UIThread.InvokeAsync` to create the
+poll timer, one line before the first poll. In the real app a dispatcher is
+pumping and that completes; in a test host none is, so it blocked forever. So
+this was a *testability* failure rather than a user-facing one — but the fix
+(post the timer, run the first poll inline) is better regardless: the recurring
+poll is a convenience, the first one is the point, and it should not be queued
+behind the UI thread being free.
+
+The lesson worth keeping is the ordering: the weak assertion was chosen because
+it was the only thing observable from outside, and the right move was to add an
+observable rather than to trust the one that existed.
+
 ## One product-shaped warning: the bridge is not actually hidden
 
 Text kept appearing in the bridge's input box that the spike did not send
