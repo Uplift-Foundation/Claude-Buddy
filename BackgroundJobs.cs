@@ -30,12 +30,15 @@ namespace ClaudeBuddy
 
         // Whether this session is a background job that is still going.
         //
-        // Asked of sessions that record no pid, which is a wider group than it
-        // sounds: a background agent has none, but neither does a subagent, and
-        // neither does a session whose status file outlived it. Only the first
-        // is something to show an orb for, and the difference isn't on disk —
-        // every one of them writes the same "idle" — so the daemon's own list
-        // is the only place to settle it.
+        // Asked of two shapes of session. The first records no pid at all — a
+        // wider group than it sounds: a background agent has none, but neither
+        // does a subagent, and neither does a session whose status file outlived
+        // it. The second is a status file that lost SessionManager.Superseded's
+        // pid tie-break — which happens for real to an Agent View background
+        // session, since dispatching one shares its parent's pid rather than
+        // getting one of its own. Both shapes write the same "idle" whether they
+        // still have work to do or not, so the daemon's own list is the only
+        // place to settle it.
         //
         // Absent from a listing that was read successfully means not a job at
         // all: a subagent, or a session that ended. "done" means it was one and
