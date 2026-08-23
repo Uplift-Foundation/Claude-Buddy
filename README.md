@@ -902,12 +902,16 @@ and the panel says "…is working" while it is busy, which is as close to watchi
 it work as this can get — there is no stream to subscribe to, only a message
 when it has something to say.
 
-Two things a remote orb cannot know, because a remote session's own description
-of itself never reaches this machine: **which computer it is on**, and **what
-colour it gave itself**. A peer is reported as a name, a kind and a status, so
-the title is that name and the colour is derived from it — stable, but unrelated
-to whatever `/color` it wears at home. `docs/remote-control-findings.md` has the
-detail if that gap ever needs closing.
+One thing a remote orb cannot know: **which computer it is on**. A peer is
+reported as a name, a kind and a status, with no hostname anywhere, so the title
+is that name alone.
+
+Its **colour** it does know, by asking. A session's `/color` lives on its own
+machine, so Buddy asks each remote session once what colour it is and uses the
+answer; until it replies, or if it has none set, the orb takes a colour derived
+from its name so several remote orbs are still telling apart. That costs one
+message per remote session each time Buddy starts, which is the only route
+available — `docs/remote-control-findings.md` explains why nothing cheaper works.
 
 `docs/remote-control-findings.md` records what was measured against two real
 machines before any of this was built — including what the relay does and does

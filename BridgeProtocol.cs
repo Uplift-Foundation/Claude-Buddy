@@ -69,6 +69,72 @@ namespace ClaudeBuddy
             $"Use SendMessage to send {peerName} exactly this text, and nothing else:\n\n"
             + $"{text}\n\n{FidelityRequest}";
 
+        // --- asking a session what colour it is ---
+
+        // A remote session's colour cannot be derived, only asked for.
+        //
+        // A local orb gets its colour from the hook, which reads it one of two
+        // ways: `/color` writes {"type":"agent-color","agentColor":…} into that
+        // session's own transcript, and auto-colour hashes the session's *cwd*.
+        // A peer row carries neither the transcript nor the cwd, so there is no
+        // arithmetic that recovers it — the only way is to ask the session
+        // itself.
+        //
+        // The marker is the important part. A reply comes back as an ordinary
+        // cross-session message, indistinguishable from an answer meant for the
+        // person reading the panel, so without something to recognise it by the
+        // word "green" would appear in their chat as though the remote session
+        // had said it to them. Echoing a fixed prefix makes the answer
+        // identifiable and lets it be swallowed.
+        public const string ColorMarker = "CB-COLOR:";
+
+        public static string ColorQueryPrompt(string peerName) =>
+            $"Use SendMessage to send {peerName} exactly this text, and nothing else:\n\n"
+            + $"Reply with only one line, no other words: {ColorMarker}<the colour your /color is set to, "
+            + $"or the word none if you have not set one>";
+
+        // Known colour names, from the palette OrbWindow actually draws
+        // (AgentColors). Matched against that rather than accepted as free text
+        // so a chatty answer — "I'm set to green!" — yields "green" and an
+        // unrecognised one yields nothing, leaving the derived colour in place.
+        private static readonly string[] ColorNames =
+        {
+            "red", "orange", "yellow", "green", "teal", "cyan", "blue",
+            "purple", "violet", "magenta", "pink", "gray", "grey", "white"
+        };
+
+        private static readonly Regex HexColor = new(@"#[0-9a-fA-F]{6}", RegexOptions.Compiled);
+
+        // True for a reply that is answering the colour question rather than
+        // talking to the user. Kept separate from ParseColorReply so an
+        // unparseable answer is still swallowed rather than shown — the person
+        // never asked the question, so they should not see the fumbled answer.
+        public static bool IsColorReply(string body) =>
+            body is not null && body.Contains(ColorMarker, StringComparison.OrdinalIgnoreCase);
+
+        // The colour, or null for "none" and for anything unrecognised.
+        public static string? ParseColorReply(string body)
+        {
+            if (string.IsNullOrEmpty(body)) return null;
+
+            var at = body.IndexOf(ColorMarker, StringComparison.OrdinalIgnoreCase);
+            if (at < 0) return null;
+
+            var answer = body[(at + ColorMarker.Length)..].Trim();
+
+            var hex = HexColor.Match(answer);
+            if (hex.Success) return hex.Value;
+
+            foreach (var name in ColorNames)
+            {
+                // Word-ish match so "none" cannot match "orange" by substring,
+                // and a sentence around the word still resolves.
+                if (Regex.IsMatch(answer, $@"\b{name}\b", RegexOptions.IgnoreCase)) return name;
+            }
+
+            return null;
+        }
+
         // --- the peer list ---
 
         // One row of ListAgents' output. Kind is kept as the raw label rather

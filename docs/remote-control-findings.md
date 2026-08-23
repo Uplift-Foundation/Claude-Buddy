@@ -264,10 +264,28 @@ wears on its own machine. Checked rather than assumed: the tempting theory was
 that hashing the name would coincidentally agree with auto-colour, and it
 cannot, because auto-colour hashes a different input.
 
-Making the colours agree would mean asking the remote session for its own —
-a message round-trip per orb, landing in that session's chat, for something
-cosmetic. Not done, and recorded here so the next person weighs the same
-trade rather than assuming it was overlooked.
+Making the colours agree means asking the remote session for its own, and that
+is now what happens — a message per session, once per run of Buddy.
+
+The marker is the part worth knowing about. A reply arrives as an ordinary
+cross-session message, indistinguishable from an answer meant for whoever is
+reading the panel, so the question asks for a fixed prefix (`CB-COLOR:`) to be
+echoed. That makes the answer identifiable and lets it be swallowed instead of
+appearing as a chat bubble saying "green" in response to a question the person
+never asked. Answers are swallowed whether or not they parse, for the same
+reason.
+
+Cached in memory rather than persisted: saving it would spare a message per
+launch but go stale the moment someone runs `/color` on the other machine, and a
+wrong colour that never corrects itself is worse than one extra message at
+startup. Asked at most once per session per run, and only for sessions already
+judged worth an orb, so nothing is spent on relays or dead registrations.
+
+Verified against the mini: `job-hunter` answered `CB-COLOR:none`, which is a
+real answer — it has no `/color` set — and correctly falls back to the derived
+colour. The positive path (a session that *does* have one) is covered by
+fixtures rather than live, since setting a colour on someone's working session
+to prove it would be a poor trade.
 
 **No streaming, either.** Peer messaging delivers one message when the remote
 session chooses to send it; there is nothing to subscribe to and its transcript

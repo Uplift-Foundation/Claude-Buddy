@@ -362,6 +362,19 @@ namespace ClaudeBuddy
             return raw is null ? null : BridgeProtocol.ParseSentMessageId(raw);
         }
 
+        // Asks a session what colour it is. Fire-and-forget by nature: the
+        // answer arrives later as an ordinary inbound message, which
+        // RemoteControlSessions recognises by its marker and swallows.
+        public async Task<bool> AskColorAsync(string peerName)
+        {
+            var raw = await AskAsync(
+                BridgeProtocol.ColorQueryPrompt(peerName),
+                t => t.Contains("msg_id", StringComparison.Ordinal))
+                .ConfigureAwait(false);
+
+            return raw is not null;
+        }
+
         // One prompt in, the matching tool result out. Serialized: this is a
         // single interactive session with a single input line, and two prompts
         // pasted at once interleave into nonsense.
