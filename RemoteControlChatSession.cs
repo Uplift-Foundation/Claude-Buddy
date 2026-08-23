@@ -56,7 +56,16 @@ namespace ClaudeBuddy
         public IReadOnlyList<ChatTurn> History => _history;
 
         public event Action<ChatTurn>? TurnAdded;
+
+        // Declared and never raised, which the compiler notes as CS0067 —
+        // deliberately, and the same way OpenClawRoomChatSession carries the
+        // identical warning. A turn here is never edited after the fact: a
+        // message either arrives whole or does not arrive, since there is no
+        // streaming to revise (see this class's header). The interface requires
+        // the event, so it exists and stays quiet rather than being raised with
+        // nothing to say.
         public event Action<ChatTurn>? TurnUpdated;
+
         public event Action<RemoteChatState>? StateChanged;
 
         // Said in the input box itself. "Message…" would be a lie by omission
