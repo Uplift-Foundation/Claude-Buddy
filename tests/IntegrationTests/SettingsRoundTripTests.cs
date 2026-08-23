@@ -142,4 +142,47 @@ public class SettingsRoundTripTests
         Assert.NotNull(orbColors);
         Assert.Equal("green", orbColors!["idle"]!.GetValue<string>());
     }
+    // One panel size per agent, keyed and reloaded independently — the whole
+    // point of the setting, and the part a shared-singleton bug would break
+    // silently: ChatPanel is one window serving every session, so a size
+    // stored under the wrong key looks fine until a second agent is opened.
+    [Fact]
+    public void ChatPanelSizes_RoundTripPerAgentThroughDisk()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500, 600);
+        ClaudeBuddySettings.SetChatPanelSize("agent-b", 300.4, 250.6);
+
+        var root = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
+        var sizes = root!["chatPanelSizes"] as JsonObject;
+        Assert.NotNull(sizes);
+
+        // Rounded on the way in, so a drag that ends on a fraction of a DIP
+        // doesn't leave 250.60000000000002 in a file people hand-edit.
+        Assert.Equal(300, sizes!["agent-b"]!["width"]!.GetValue<double>());
+        Assert.Equal(251, sizes["agent-b"]!["height"]!.GetValue<double>());
+
+        // Read back from disk rather than from the model that just wrote it:
+        // the parse side is its own code path and had to be added by hand to
+        // Load, which is exactly the step speakVoice was once missing.
+        PointSettingsAt(dir);
+
+        var a = ClaudeBuddySettings.ChatPanelSizeFor("agent-a");
+        Assert.NotNull(a);
+        Assert.Equal(500, a!.Width);
+        Assert.Equal(600, a.Height);
+
+        Assert.Equal(300, ClaudeBuddySettings.ChatPanelSizeFor("agent-b")!.Width);
+
+        // Never resized means null, not a copy of the shipped default — that
+        // is what lets ChatPanel keep owning what "default" means.
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-never-opened"));
+
+        // A session with no stable identity (a local CLI orb with no cwd) has
+        // nothing to save under, and saying so must not create a "" entry.
+        ClaudeBuddySettings.SetChatPanelSize("", 400, 400);
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor(""));
+    }
 }

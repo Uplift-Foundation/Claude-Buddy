@@ -67,7 +67,7 @@ namespace ClaudeBuddy
             "speakVoice", "neuralVoiceEnabled", "neuralVoice",
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
-            "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions",
+            "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions", "chatPanelSizes",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
             "codexChatEnabled", "codexReplyEnabled", "autoColorSessions",
@@ -125,6 +125,12 @@ namespace ClaudeBuddy
         // desktop-wide DIP space on a mixed-DPI setup, so raw pixels it is —
         // SessionManager clamps a restored point back onto a real screen.
         internal sealed record OrbPlacement(int X, int Y);
+
+        // How big one agent's chat panel is, in DIPs. Doubles rather than the
+        // ints above because this is a layout size and not a screen coordinate:
+        // a resize drag lands on fractions, and the panel's own Min/MaxWidth are
+        // doubles it gets clamped against.
+        internal sealed record PanelSize(double Width, double Height);
 
         internal sealed class ProfileSettings
         {
@@ -354,6 +360,17 @@ namespace ClaudeBuddy
             // Case-insensitive because Windows paths are, and the same repo
             // shouldn't get two entries over a capitalization difference.
             public Dictionary<string, OrbPlacement> OrbPositions { get; init; } =
+                new(StringComparer.OrdinalIgnoreCase);
+
+            // Keyed exactly the way OrbPositions above is — by the orb's
+            // position key, which is the closest thing this app has to "which
+            // agent is this" across runs. A session id would have been the
+            // obvious key and is the wrong one: Claude Code mints a new one
+            // every conversation, so a size saved under it would never be found
+            // again. Sharing the key with the orb's own saved place also means
+            // an agent's panel and its orb agree about what counts as the same
+            // agent, rather than drifting apart on a retitle.
+            public Dictionary<string, PanelSize> ChatPanelSizes { get; init; } =
                 new(StringComparer.OrdinalIgnoreCase);
 
             // Distinct from Profiles above (Claude Desktop, the Electron app):
@@ -691,6 +708,44 @@ namespace ClaudeBuddy
             Save();
         }
 
+        // ---- chat panel sizes -----------------------------------------------
+
+        // Null means "never resized", which is what leaves the panel at the
+        // size its XAML ships — the same reason the colours and the voice above
+        // store null rather than a copy of today's default. Storing 340x420 the
+        // first time a panel opened would freeze the shipped default into every
+        // settings.json on disk and a future retune would reach nobody.
+        public static PanelSize? ChatPanelSizeFor(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+
+            Load();
+            lock (Gate) return _model.ChatPanelSizes.GetValueOrDefault(key);
+        }
+
+        public static void SetChatPanelSize(string key, double width, double height)
+        {
+            // No key means no stable identity to save under — a local CLI
+            // session with no cwd. Silently nothing, the same as an orb in that
+            // position gets no saved place.
+            if (string.IsNullOrEmpty(key)) return;
+
+            // Rounded here rather than at the call site so the file stays
+            // readable whoever writes to it: a drag ends on whatever fraction
+            // of a DIP the pointer was at, and nobody wants 341.99998 in their
+            // settings.
+            var size = new PanelSize(Math.Round(width), Math.Round(height));
+
+            Load();
+            lock (Gate)
+            {
+                if (_model.ChatPanelSizes.GetValueOrDefault(key) == size) return;
+                _model.ChatPanelSizes[key] = size;
+            }
+
+            Save();
+        }
+
         // ---- extra Claude Code (CLI) profile directories ---------------------
 
         // A copy, so callers can't mutate the store without going through
@@ -941,6 +996,26 @@ namespace ClaudeBuddy
                         }
                     }
 
+                    if (root["chatPanelSizes"] is JsonObject panelSizes)
+                    {
+                        foreach (var (key, node) in panelSizes)
+                        {
+                            if (node is not JsonObject entry) continue;
+
+                            var w = entry["width"]?.GetValue<double>();
+                            var h = entry["height"]?.GetValue<double>();
+                            if (w is null || h is null) continue;
+
+                            // Not clamped here. ChatPanel clamps what it reads
+                            // against its own Min/Max, which is where those
+                            // numbers actually live — and a size saved by a
+                            // build with a wider maximum should come back
+                            // intact if that build is run again, rather than
+                            // being permanently truncated by an older one.
+                            model.ChatPanelSizes[key] = new PanelSize(w.Value, h.Value);
+                        }
+                    }
+
                     // Anything above this line is a key this build understands.
                     // Whatever is left belongs to a different version and is kept
                     // aside for Save to write back untouched — see _unknownKeys
@@ -1040,6 +1115,16 @@ namespace ClaudeBuddy
                         };
                     }
 
+                    var panelSizes = new JsonObject();
+                    foreach (var (key, size) in _model.ChatPanelSizes)
+                    {
+                        panelSizes[key] = new JsonObject
+                        {
+                            ["width"] = size.Width,
+                            ["height"] = size.Height
+                        };
+                    }
+
                     var profileDirs = new JsonArray();
                     foreach (var dirName in _model.ClaudeCodeProfileDirs) profileDirs.Add(dirName);
 
@@ -1105,7 +1190,8 @@ namespace ClaudeBuddy
                         ["claudeCodeProfileDirs"] = profileDirs,
                         ["codexHomes"] = codexHomeDirs,
                         ["profiles"] = profiles,
-                        ["orbPositions"] = positions
+                        ["orbPositions"] = positions,
+                        ["chatPanelSizes"] = panelSizes
                     };
 
                     // Keys this build doesn't understand, put back exactly as they
