@@ -282,6 +282,7 @@ namespace ClaudeBuddy
             // message names only who it came from — so the fan-out belongs
             // wherever the sessions are already indexed by name, which is here.
             RemoteControlSessions.MessageReceived += OnRemoteMessage;
+            RemoteControlSessions.WorkingChanged += OnRemoteWorkingChanged;
 
             _debounce.Tick += (_, _) =>
             {
@@ -1173,6 +1174,15 @@ namespace ClaudeBuddy
             // exactly — the peer list's casing is upstream's to change, and
             // losing a reply over a capital letter would be a poor trade.
             foreach (var candidate in _remoteChats.Values) candidate.OnInbound(message);
+        }
+
+        // A remote session started or stopped working. The orb learns this from
+        // the snapshot on the next scan; this is for the panel, which has no scan
+        // to wait on and would otherwise show a sent message and nothing else
+        // for however long the other machine takes.
+        private void OnRemoteWorkingChanged(string remoteName, bool working)
+        {
+            if (_remoteChats.TryGetValue("rc:" + remoteName, out var chat)) chat.SetWorking(working);
         }
 
         public SessionStatus? StatusFor(string? sessionId) =>

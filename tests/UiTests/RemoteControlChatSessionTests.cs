@@ -137,6 +137,63 @@ public class RemoteControlChatSessionTests
         Assert.Contains("start it back up", turn.Text);
     }
 
+    // The waiting indicator. A reply can be minutes away while the remote
+    // session runs a command, and until then the panel is a message you typed
+    // and nothing else — indistinguishable from a send that silently failed.
+    [AvaloniaFact]
+    public void WorkingShowsAWaitingLineAndTheReplyTakesItAway()
+    {
+        var session = NewSession();
+
+        session.SetWorking(true);
+
+        var note = Assert.Single(session.History);
+        Assert.Equal(ChatRole.System, note.Role);
+        Assert.Contains("job-hunter", note.Text);
+        Assert.Contains("working", note.Text);
+
+        // Not complete: it is a turn still in progress, which is what the flag
+        // means everywhere else.
+        Assert.False(note.IsComplete);
+
+        session.OnInbound(new BridgeProtocol.InboundMessage(
+            "job-hunter", "b", "prompting", "done"));
+
+        // The answer replaced it rather than stacking under it — a "working…"
+        // line above a finished reply reads as though it were still going.
+        var turn = Assert.Single(session.History);
+        Assert.Equal(ChatRole.Assistant, turn.Role);
+        Assert.Equal("done", turn.Text);
+    }
+
+    // Polls arrive every 20 seconds; re-announcing the same state would fill the
+    // panel with identical lines.
+    [AvaloniaFact]
+    public void RepeatedWorkingSignalsDoNotStack()
+    {
+        var session = NewSession();
+
+        session.SetWorking(true);
+        session.SetWorking(true);
+        session.SetWorking(true);
+
+        Assert.Single(session.History);
+    }
+
+    // Went quiet without answering — the line still comes off. A stale
+    // "working…" is worse than no indicator, because it is a claim rather than
+    // an absence.
+    [AvaloniaFact]
+    public void GoingIdleWithoutReplyingClearsTheWaitingLine()
+    {
+        var session = NewSession();
+
+        session.SetWorking(true);
+        session.SetWorking(false);
+
+        Assert.Empty(session.History);
+    }
+
     // Bounded like the local sessions' history: a panel left open should not
     // grow without limit. Generous, because every turn here is something a
     // person typed or a machine answered.
