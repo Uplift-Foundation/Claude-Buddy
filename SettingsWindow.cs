@@ -303,6 +303,11 @@ namespace ClaudeBuddy
 
             root.Children.Add(Group("OpenClaw agents", Card(OpenClawRows())));
 
+            // Straight after the CLI sections and before the Desktop app,
+            // because that is what it is about: the same Claude Code sessions
+            // those two sections govern, just not on this machine.
+            root.Children.Add(Group("Other machines", Card(RemoteControlRows())));
+
             // Not an agent CLI at all — the Electron desktop app — so it sits
             // after them with its own profiles, which is where someone looking
             // for them would go first.
@@ -814,6 +819,7 @@ namespace ClaudeBuddy
         }
 
         private TextBlock? _openClawStatus;
+        private TextBlock? _remoteControlStatus;
         private DispatcherTimer? _openClawStatusTimer;
 
         private void StartStatusTicker()
@@ -824,12 +830,26 @@ namespace ClaudeBuddy
             _openClawStatusTimer.Start();
         }
 
+        // Ticks both status lines, whichever of them the current window actually
+        // built. Each is null unless its own section is expanded, so this is one
+        // timer serving at most two labels rather than a timer each.
         private void OnStatusTick(object? sender, EventArgs e)
         {
-            if (_openClawStatus is null) return;
+            if (_openClawStatus is not null)
+            {
+                var gateway = OpenClawSessions.StatusText;
+                if (_openClawStatus.Text != gateway) _openClawStatus.Text = gateway;
+            }
 
-            var text = OpenClawSessions.StatusText;
-            if (_openClawStatus.Text != text) _openClawStatus.Text = text;
+            if (_remoteControlStatus is not null)
+            {
+                // The relay changes state while you are looking at it — it takes
+                // a few seconds to start, and it stops itself when idle — so a
+                // line that was only true when the window opened would be worse
+                // than none.
+                var relay = RemoteControlSessions.StatusText;
+                if (_remoteControlStatus.Text != relay) _remoteControlStatus.Text = relay;
+            }
         }
 
         private Control GatewayHostBox()
@@ -907,6 +927,187 @@ namespace ClaudeBuddy
             // the orbs off the screen and the socket off the network while the
             // user is still looking at the switch.
             OpenClawSessions.Restart();
+            Rebuild();
+        }
+
+        private Control[] RemoteControlRows()
+        {
+            // Dropped before anything is built, because Rebuild() replaces the
+            // whole content tree: left set, this would point at a label that is
+            // no longer on screen and the ticker would spend every second
+            // writing to it.
+            _remoteControlStatus = null;
+
+            // The bridge is tmux-based, so there is nothing to offer on Windows
+            // yet. Said plainly rather than hidden: a feature that exists in the
+            // docs and nowhere in the window reads as a broken install.
+            if (!RemoteControlBridge.IsSupported)
+            {
+                return new[]
+                {
+                    NoteRow(new TextBlock
+                    {
+                        Text = "Sessions from other machines are macOS-only for now. "
+                             + "The relay runs inside tmux, which Windows has no equivalent of here.",
+                        FontSize = 12,
+                        Opacity = 0.75,
+                        TextWrapping = TextWrapping.Wrap
+                    })
+                };
+            }
+
+            var rows = new List<Control>
+            {
+                Row("Show sessions from other machines",
+                    Switch(ClaudeBuddySettings.RemoteControlEnabled, OnRemoteControlToggled),
+
+                    // The cost is stated up front because it is the one thing
+                    // about this feature a person cannot discover by looking at
+                    // it: every other switch in this window only changes what is
+                    // drawn.
+                    "Shows an orb for each of your Claude Code sessions that has Remote Control "
+                    + "on, wherever it is running. To reach them, Claude Buddy runs a hidden "
+                    + "Claude Code session of its own as a relay — so this uses your account, "
+                    + "and counts against your usage while it is running.")
+            };
+
+            if (!ClaudeBuddySettings.RemoteControlEnabled) return rows.ToArray();
+
+            rows.Add(Row("Account", RemoteControlProfilePicker(),
+                "Which Claude Code config directory the relay signs in as. Remote Control only "
+                + "shows sessions on the same account, so pick the one your other machines use. "
+                + "Add more under \"Claude Code profiles\" above."));
+
+            rows.Add(Row("Stop the relay after", RemoteControlIdlePicker(),
+                "The relay shuts down once you stop using it, and starts again by itself the "
+                + "next time you open or send to a remote session."));
+
+            // Shares the OpenClaw ticker's TextBlock slot deliberately — see
+            // OnStatusTick, which now reports whichever of the two is switched
+            // on. Both being on at once is possible but rare, and a second
+            // one-second timer for a line of text nobody is watching is worse
+            // than the ambiguity.
+            _remoteControlStatus = new TextBlock
+            {
+                Text = RemoteControlSessions.StatusText,
+                FontSize = 12,
+                Opacity = 0.75,
+                TextWrapping = TextWrapping.Wrap
+            };
+
+            rows.Add(NoteRow(_remoteControlStatus));
+
+            // Starting it from here rather than only from the tray, because this
+            // is where someone has just switched the feature on and wants to
+            // know whether it works — and "nothing appeared" is the least
+            // helpful possible answer at that moment.
+            var start = new Button
+            {
+                Content = "Start the relay now",
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left
+            };
+            start.Click += (_, _) => RemoteControlSessions.EnsureStarted();
+            rows.Add(Row("", start));
+
+            return rows.ToArray();
+        }
+
+        // The config directories a relay could sign in as: the default one, plus
+        // whatever the user has already told the Claude Code section about. Not a
+        // free-text box — a name that is not a real profile fails by producing no
+        // sessions at all, which is indistinguishable from having none.
+        private Control RemoteControlProfilePicker()
+        {
+            var choices = new List<string> { ClaudeBuddySettings.DefaultRemoteControlProfileDir };
+            foreach (var dir in ClaudeBuddySettings.ClaudeCodeProfileDirs)
+            {
+                if (!choices.Contains(dir, StringComparer.Ordinal)) choices.Add(dir);
+            }
+
+            var current = ClaudeBuddySettings.RemoteControlProfileDir;
+
+            // The same courtesy the other pickers extend: a value put in
+            // settings.json by hand shows as itself rather than being silently
+            // replaced by the first entry on the list.
+            if (!choices.Contains(current, StringComparer.Ordinal)) choices.Add(current);
+
+            var combo = new ComboBox
+            {
+                ItemsSource = choices,
+                SelectedIndex = choices.IndexOf(current),
+                MinWidth = 172
+            };
+
+            combo.SelectionChanged += (_, _) =>
+            {
+                var index = combo.SelectedIndex;
+                if (index < 0 || index >= choices.Count) return;
+                if (choices[index] == ClaudeBuddySettings.RemoteControlProfileDir) return;
+
+                ClaudeBuddySettings.RemoteControlProfileDir = choices[index];
+
+                // The account is baked into the running relay at launch, so it
+                // cannot be changed underneath one. Stopped rather than
+                // restarted: the next thing that wants it will start it, and
+                // starting one here would spend quota on a switch flip.
+                RemoteControlSessions.Stop("account changed");
+            };
+
+            return combo;
+        }
+
+        private static readonly (string Label, int Minutes)[] RemoteIdleChoices =
+        {
+            ("2 minutes", 2),
+            ("10 minutes", ClaudeBuddySettings.DefaultRemoteControlIdle),
+            ("30 minutes", 30),
+            ("1 hour", 60),
+            ("Never", ClaudeBuddySettings.RemoteControlIdleNever)
+        };
+
+        private Control RemoteControlIdlePicker()
+        {
+            var current = ClaudeBuddySettings.RemoteControlIdleMinutes;
+            var choices = RemoteIdleChoices.ToList();
+
+            if (choices.All(choice => choice.Minutes != current))
+            {
+                choices.Insert(choices.Count - 1, ($"{current} minutes", current));
+            }
+
+            var combo = new ComboBox
+            {
+                ItemsSource = choices.Select(choice => choice.Label).ToList(),
+                SelectedIndex = choices.FindIndex(choice => choice.Minutes == current),
+                MinWidth = 132
+            };
+
+            combo.SelectionChanged += (_, _) =>
+            {
+                var index = combo.SelectedIndex;
+                if (index < 0 || index >= choices.Count) return;
+
+                var minutes = choices[index].Minutes;
+                if (minutes == ClaudeBuddySettings.RemoteControlIdleMinutes) return;
+
+                // Read on every idle check rather than captured when the relay
+                // started, so shortening this takes effect on the next poll
+                // instead of at the next launch.
+                ClaudeBuddySettings.RemoteControlIdleMinutes = minutes;
+            };
+
+            return combo;
+        }
+
+        private void OnRemoteControlToggled(bool enabled)
+        {
+            ClaudeBuddySettings.RemoteControlEnabled = enabled;
+
+            // Only ever tears down, unlike OnOpenClawToggled above. Turning this
+            // on must not start the relay by itself — that spends the user's
+            // quota, so something has to ask for it (the tray item, opening a
+            // remote session, or the button in this section).
+            RemoteControlSessions.Restart();
             Rebuild();
         }
 

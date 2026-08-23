@@ -30,6 +30,8 @@ namespace ClaudeBuddy
         private static DateTime _lastUse = DateTime.MinValue;
         private static bool _starting;
         private static string _state = "off";
+        private static string? _warning;
+        private static bool _polled;
 
         // A session on another machine, as the orb scan wants it. Kept separate
         // from BridgeProtocol.RemoteAgent so the parser stays a parser: this one
@@ -61,9 +63,33 @@ namespace ClaudeBuddy
 
         // For the settings window's status line, in the same vocabulary
         // OpenClawSessions.StatusText uses.
+        //
+        // Composed from two independent facts rather than one string, because
+        // the first version wrote `warning ?? count` and so hid the count from
+        // anyone who had a warning — which is everybody eventually, since the
+        // login-expiry notice starts three days out. "Your login expires in 3
+        // days" is useful; being unable to tell whether it also found anything
+        // is not.
         public static string StatusText
         {
-            get { lock (Gate) return _state; }
+            get
+            {
+                lock (Gate)
+                {
+                    if (_warning is null) return _state;
+                    return _state is "off" or "starting" ? _warning : $"{_state} · {_warning}";
+                }
+            }
+        }
+
+        // True once a poll has actually completed, so a caller can tell "up, and
+        // has looked" from "up, about to look". Without it the only observable
+        // is the status line, which reads as connected the moment the process
+        // starts — a distinction a test cannot otherwise make, and the reason
+        // the first live test of this passed while measuring nothing.
+        public static bool HasPolled
+        {
+            get { lock (Gate) return _polled; }
         }
 
         public static event Action<BridgeProtocol.InboundMessage>? MessageReceived;
@@ -118,6 +144,7 @@ namespace ClaudeBuddy
                 {
                     _starting = false;
                     _state = "failed to start";
+                    _warning = null;
                 }
 
                 return;
@@ -127,12 +154,23 @@ namespace ClaudeBuddy
             {
                 _bridge = bridge;
                 _starting = false;
-                _state = bridge.Warning ?? "connected";
+                _polled = false;
+                _state = "connected";
+                _warning = bridge.Warning;
             }
 
-            // The timer lives on the UI thread because that is the only
-            // dispatcher this app runs, the same as every other poll here.
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            // Posted, not awaited. The timer has to be created on the UI thread
+            // because DispatcherTimer belongs to it, but waiting for that to
+            // happen would put the first poll behind the dispatcher being free —
+            // and awaiting InvokeAsync where no dispatcher is pumping blocks
+            // forever, which is exactly what it did: the relay reported
+            // "connected" and then never asked for a peer list, because startup
+            // stopped one line short of doing so.
+            //
+            // The recurring poll is a convenience; the first one is the point.
+            // So the timer is arranged in the background and the first poll runs
+            // right here, on the thread that started the bridge.
+            Dispatcher.UIThread.Post(() =>
             {
                 _poll?.Stop();
                 _poll = new DispatcherTimer { Interval = PollEvery };
@@ -198,7 +236,18 @@ namespace ClaudeBuddy
                 .ToList();
 
             _snapshot = remotes;
-            lock (Gate) _state = bridge.Warning ?? $"{remotes.Count} remote session(s)";
+
+            lock (Gate)
+            {
+                _polled = true;
+                _warning = bridge.Warning;
+                _state = remotes.Count switch
+                {
+                    0 => "no remote sessions found",
+                    1 => "1 remote session",
+                    _ => $"{remotes.Count} remote sessions"
+                };
+            }
         }
 
         private static bool IdleExpired()
@@ -236,6 +285,8 @@ namespace ClaudeBuddy
                 bridge = _bridge;
                 _bridge = null;
                 _state = why;
+                _warning = null;
+                _polled = false;
             }
 
             _snapshot = Array.Empty<Remote>();
