@@ -345,6 +345,55 @@ public class ChatPanelTests : IDisposable
         Assert.False(attachments.IsVisible);
     }
 
+    // A turn that already carries ImageBytes — what a local CLI's own
+    // transcript produces for a pasted picture once ChatTranscript has
+    // decoded it (see ChatTranscript.MapUser) — has to actually render as a
+    // picture in the bubble, not just toggle some flag the panel never
+    // draws. This is the one part of the feature the paste tests above
+    // don't reach: those cover the *pending* attachment strip above the
+    // input box, not a turn already in history.
+    [AvaloniaFact]
+    public async Task ATurnWithImageBytesRendersAsAThumbnail()
+    {
+        var orb = NewOrb();
+
+        // A one-pixel PNG, the same fixture ChatTranscript's own tests use —
+        // the pixels don't matter, only that this decodes as a real image.
+        var bytes = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==");
+
+        var turn = new ChatTurn
+        {
+            Role = ChatRole.User,
+            Text = "a screenshot",
+            IsComplete = true,
+            ImageBytes = bytes
+        };
+
+        var fake = NewFake(new[] { turn });
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+
+        // Matched on the picture's own fixed width (228, per ChatPanel.axaml)
+        // rather than just "any Image in the row": the same row template also
+        // draws a 16pt Image for a speaker's avatar, and the two would
+        // otherwise be indistinguishable by type alone.
+        Image? picture = null;
+        for (var i = 0; i < 40; i++)
+        {
+            Flush();
+            picture = panel.GetVisualDescendants().OfType<Image>().FirstOrDefault(im => im.Width == 228);
+            if (picture?.Source is not null) break;
+            await Task.Delay(10);
+        }
+
+        Assert.NotNull(picture);
+        Assert.NotNull(picture!.Source);
+    }
+
     // Nothing but the four required members of IRemoteChatSession — no
     // IRemoteChatImages — so a test can be sure the panel behaves correctly
     // for the transport that doesn't have one yet.
