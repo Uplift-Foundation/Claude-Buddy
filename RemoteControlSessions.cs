@@ -201,7 +201,23 @@ namespace ClaudeBuddy
         private static readonly Dictionary<string, string> KnownColors =
             new(StringComparer.OrdinalIgnoreCase);
 
-        private static readonly HashSet<string> ColorAsked =
+        // The slash commands each far session says it can actually run. Empty
+        // until it answers, and empty is the right starting point: offering a
+        // command that cannot work over this channel is worse than offering none.
+        private static readonly Dictionary<string, IReadOnlyList<SlashCommand>> KnownCommands =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public static IReadOnlyList<SlashCommand> CommandsFor(string account, string name)
+        {
+            lock (Gate)
+            {
+                return KnownCommands.TryGetValue(account + ":" + name, out var c)
+                    ? c
+                    : Array.Empty<SlashCommand>();
+            }
+        }
+
+        private static readonly HashSet<string> InfoAsked =
             new(StringComparer.OrdinalIgnoreCase);
 
         // Brings up a relay for every configured account that hasn't got one, and
@@ -466,7 +482,7 @@ namespace ClaudeBuddy
             RaiseWorkingTransitions(remotes);
             RetuneTimer();
 
-            await AskForMissingColorsAsync(account, remotes, bridge).ConfigureAwait(false);
+            await AskForMissingInfoAsync(account, remotes, bridge).ConfigureAwait(false);
         }
 
         // Asks each newly seen session what colour it is, once.
@@ -480,7 +496,7 @@ namespace ClaudeBuddy
         // Sequential rather than fanned out: the relay serializes requests
         // anyway, and firing five at once would just queue five deep behind one
         // input line.
-        private static async Task AskForMissingColorsAsync(
+        private static async Task AskForMissingInfoAsync(
             string account, IReadOnlyList<Remote> remotes, RemoteControlBridge bridge)
         {
             foreach (var remote in remotes)
@@ -490,12 +506,12 @@ namespace ClaudeBuddy
                 lock (Gate)
                 {
                     if (KnownColors.ContainsKey(key)) continue;
-                    if (!ColorAsked.Add(key)) continue;
+                    if (!InfoAsked.Add(key)) continue;
                 }
 
                 try
                 {
-                    await bridge.AskColorAsync(remote.Name).ConfigureAwait(false);
+                    await bridge.AskCapabilitiesAsync(remote.Name).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -670,17 +686,21 @@ namespace ClaudeBuddy
             // they never asked the question. Swallowed whether or not it parses,
             // because showing someone a fumbled answer to a question they did
             // not ask is worse than showing nothing.
-            if (BridgeProtocol.IsColorReply(message.Body))
+            if (BridgeProtocol.IsInfoReply(message.Body))
             {
+                var key = account + ":" + message.FromName;
                 var colour = BridgeProtocol.ParseColorReply(message.Body);
-                if (colour is not null)
-                {
-                    lock (Gate) KnownColors[account + ":" + message.FromName] = colour;
+                var commands = BridgeProtocol.ParseCommandsReply(message.Body);
 
-                    // Republished so the next scan picks the colour up without
-                    // waiting for another poll to rebuild the list.
-                    RepublishWithColors();
+                lock (Gate)
+                {
+                    if (colour is not null) KnownColors[key] = colour;
+                    if (commands.Count > 0) KnownCommands[key] = commands;
                 }
+
+                // Republished so the next scan picks the colour up without
+                // waiting for another poll to rebuild the list.
+                if (colour is not null) RepublishWithColors();
 
                 return;
             }

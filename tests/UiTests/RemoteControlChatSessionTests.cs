@@ -259,17 +259,22 @@ public class RemoteControlChatSessionTests
         Assert.Single(Said(session));
     }
 
-    // Autocomplete for "/" is most of what this channel is for: a command is
-    // exactly the kind of thing worth asking a machine elsewhere to run. Only
-    // the built-in floor, though — see SlashCommandCatalog.ForRemoteClaudeCode.
+    // Offers nothing until the far session says what it can run, and that empty
+    // start is the point rather than a gap.
+    //
+    // The first version offered Claude Code's built-in commands, which cannot
+    // work over this channel at all: a peer message never reaches the receiving
+    // session's command handler, so only the model reads it — measured, with
+    // /color coming back "I can't run /color ... only the harness's own command
+    // handler can set" it. A suggestion that does nothing when accepted is worse
+    // than no suggestion, so the list is asked for.
     [AvaloniaFact]
-    public void OffersSlashCommandsSoTheyCanBeTypedWithoutGuessing()
+    public void OffersNoSlashCommandsUntilTheFarSessionReportsThem()
     {
         var session = NewSession();
 
         Assert.IsAssignableFrom<IRemoteChatSlashCommands>(session);
-        Assert.NotEmpty(session.SlashCommands);
-        Assert.All(session.SlashCommands, c => Assert.StartsWith("/", c.Name));
+        Assert.Empty(session.SlashCommands);
     }
 
     // Bounded like the local sessions' history: a panel left open should not

@@ -913,6 +913,15 @@ from its name so several remote orbs are still telling apart. That costs one
 message per remote session each time Buddy starts, which is the only route
 available — `docs/remote-control-findings.md` explains why nothing cheaper works.
 
+The same question asks **which slash commands that session can run**, and those
+are what the panel offers when you type `/`. It is a shorter list than a local
+session's, and the surprise is *which* commands are missing: Claude Code's
+**built-ins** — `/compact`, `/color`, `/agents` — cannot work over this channel
+at all, because a message reaches the other session's *model* and never its
+command handler. Custom commands can, since those are just instructions the
+model reads. Until a session answers, the panel offers nothing rather than
+offering commands that would fail.
+
 `docs/remote-control-findings.md` records what was measured against two real
 machines before any of this was built — including what the relay does and does
 not expose, and the two things a stronger test caught that a weaker one had

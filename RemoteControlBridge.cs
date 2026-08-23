@@ -362,13 +362,13 @@ namespace ClaudeBuddy
             return raw is null ? null : BridgeProtocol.ParseSentMessageId(raw);
         }
 
-        // Asks a session what colour it is. Fire-and-forget by nature: the
-        // answer arrives later as an ordinary inbound message, which
+        // Asks a session what it is and what it can do. Fire-and-forget by
+        // nature: the answer arrives later as an ordinary inbound message, which
         // RemoteControlSessions recognises by its marker and swallows.
-        public async Task<bool> AskColorAsync(string peerName)
+        public async Task<bool> AskCapabilitiesAsync(string peerName)
         {
             var raw = await AskAsync(
-                BridgeProtocol.ColorQueryPrompt(peerName),
+                BridgeProtocol.CapabilitiesQueryPrompt(peerName),
                 t => t.Contains("msg_id", StringComparison.Ordinal))
                 .ConfigureAwait(false);
 

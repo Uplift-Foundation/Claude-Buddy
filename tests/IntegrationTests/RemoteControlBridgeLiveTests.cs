@@ -96,15 +96,22 @@ public class RemoteControlBridgeLiveTests
         second.Stop();
     }
 
-    // Whether a remote session will actually tell us its colour.
+    // Whether a remote session will actually tell us its colour and what it can
+    // run.
     //
-    // This is the one part of the colour feature that cannot be unit-tested: the
-    // parsing is covered by fixtures, but whether a real session answers a
-    // question phrased this way, with the marker intact, is a fact about a model
-    // on another machine. It sends a real message to a real session, which is
-    // why it lives behind the same opt-in as everything else here.
+    // This is the part that cannot be unit-tested: the parsing is covered by
+    // fixtures, but whether a real session answers a question phrased this way,
+    // with the marker intact, is a fact about a model on another machine. It
+    // sends a real message to a real session, which is why it lives behind the
+    // same opt-in as everything else here.
+    //
+    // The command half matters more than the colour half. The panel used to
+    // offer Claude Code's built-in commands to remote sessions, and none of them
+    // could work: a peer message is read by the model, so it never reaches the
+    // receiving CLI's command handler. Asking the session what it can run is the
+    // fix, and this is the only test that can show the question gets answered.
     [LiveBridgeFact]
-    public async Task ARemoteSessionReportsItsOwnColour()
+    public async Task ARemoteSessionReportsItsColourAndCommands()
     {
         var dir = Path.Combine(Path.GetTempPath(), "cb-live-bridge-" + Guid.NewGuid());
         Directory.CreateDirectory(dir);
@@ -129,10 +136,10 @@ public class RemoteControlBridgeLiveTests
         string? answer = null;
         bridge.MessageReceived += m =>
         {
-            if (BridgeProtocol.IsColorReply(m.Body)) answer = m.Body;
+            if (BridgeProtocol.IsInfoReply(m.Body)) answer = m.Body;
         };
 
-        Assert.True(await bridge.AskColorAsync(target.Name), "the colour question was not delivered");
+        Assert.True(await bridge.AskCapabilitiesAsync(target.Name), "the capabilities question was not delivered");
 
         // The answer comes back on a later turn, so this drains rather than
         // awaits — the same asynchrony every reply has.
@@ -145,15 +152,20 @@ public class RemoteControlBridgeLiveTests
 
         _output.WriteLine($"asked {target.Name}; raw answer: {answer ?? "(none within 90s)"}");
         if (answer is not null)
+        {
             _output.WriteLine($"parsed colour: {BridgeProtocol.ParseColorReply(answer) ?? "(none set)"}");
+            var cmds = BridgeProtocol.ParseCommandsReply(answer);
+            _output.WriteLine($"parsed commands ({cmds.Count}): "
+                + (cmds.Count == 0 ? "(none)" : string.Join(" ", cmds.Select(c => c.Name))));
+        }
 
         bridge.Stop();
 
         // Asserted, because the whole point is that a real session answers in a
-        // shape this can read. "none" is a valid answer and parses to null; what
-        // must not happen is no marker coming back at all.
+        // shape this can read. Both "none" answers are valid and parse to
+        // nothing; what must not happen is no marker coming back at all.
         Assert.NotNull(answer);
-        Assert.True(BridgeProtocol.IsColorReply(answer!));
+        Assert.True(BridgeProtocol.IsInfoReply(answer!));
     }
 
     // Two accounts, two relays, one merged snapshot.

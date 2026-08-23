@@ -86,12 +86,33 @@ namespace ClaudeBuddy
         // word "green" would appear in their chat as though the remote session
         // had said it to them. Echoing a fixed prefix makes the answer
         // identifiable and lets it be swallowed.
-        public const string ColorMarker = "CB-COLOR:";
+        public const string InfoMarker = "CB-INFO:";
 
-        public static string ColorQueryPrompt(string peerName) =>
+        // One question, two answers, because both cost the same round trip and
+        // asking twice would double a bill nobody wants.
+        //
+        // The commands half exists because the first version of this feature got
+        // it exactly backwards. It offered Claude Code's *built-in* commands to
+        // remote sessions and withheld the custom ones, on the reasoning that
+        // built-ins ship with the CLI and custom ones live on the far machine.
+        // That is true and it is the wrong way round: a peer message is never
+        // typed into the receiving session's input line, so its command handler
+        // never sees it. The model reads the message and decides what to do,
+        // which means a *custom* command works — it can read the command file and
+        // follow it — and a built-in cannot, because only the CLI itself can run
+        // one.
+        //
+        // Measured, not reasoned: /update-inbox ran on the far machine and came
+        // back with results, while /color came back with "I can't run /color —
+        // it's not one of my available skills/tools ... only the harness's own
+        // command handler can set" it. So the only honest list is the one the
+        // session itself reports.
+        public static string CapabilitiesQueryPrompt(string peerName) =>
             $"Use SendMessage to send {peerName} exactly this text, and nothing else:\n\n"
-            + $"Reply with only one line, no other words: {ColorMarker}<the colour your /color is set to, "
-            + $"or the word none if you have not set one>";
+            + $"Reply with only one line, no other words, in this exact form: "
+            + $"{InfoMarker} color=<the colour your /color is set to, or none>; "
+            + $"commands=<a comma-separated list of the custom slash commands and skills you can "
+            + $"actually run, or none>";
 
         // Known colour names, from the palette OrbWindow actually draws
         // (AgentColors). Matched against that rather than accepted as free text
@@ -109,18 +130,50 @@ namespace ClaudeBuddy
         // talking to the user. Kept separate from ParseColorReply so an
         // unparseable answer is still swallowed rather than shown — the person
         // never asked the question, so they should not see the fumbled answer.
-        public static bool IsColorReply(string body) =>
-            body is not null && body.Contains(ColorMarker, StringComparison.OrdinalIgnoreCase);
+        public static bool IsInfoReply(string body) =>
+            body is not null && body.Contains(InfoMarker, StringComparison.OrdinalIgnoreCase);
+
+        // The commands the far session says it can run, as SlashCommand rows.
+        //
+        // Capped, because this becomes an autocomplete list and a session with a
+        // hundred skills would push the input box off the screen. Descriptions
+        // are deliberately empty: the far session was asked for names only, and
+        // inventing a description for someone else's command would be a guess
+        // presented as documentation.
+        private static readonly Regex CommandName = new(@"/[A-Za-z][\w-]*", RegexOptions.Compiled);
+
+        public static IReadOnlyList<SlashCommand> ParseCommandsReply(string body)
+        {
+            var found = new List<SlashCommand>();
+            if (string.IsNullOrEmpty(body)) return found;
+
+            var at = body.IndexOf("commands=", StringComparison.OrdinalIgnoreCase);
+            if (at < 0) return found;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match m in CommandName.Matches(body[(at + "commands=".Length)..]))
+            {
+                if (!seen.Add(m.Value)) continue;
+                found.Add(new SlashCommand(m.Value, ""));
+                if (found.Count == 60) break;
+            }
+
+            return found;
+        }
 
         // The colour, or null for "none" and for anything unrecognised.
         public static string? ParseColorReply(string body)
         {
             if (string.IsNullOrEmpty(body)) return null;
 
-            var at = body.IndexOf(ColorMarker, StringComparison.OrdinalIgnoreCase);
+            var at = body.IndexOf("color=", StringComparison.OrdinalIgnoreCase);
             if (at < 0) return null;
 
-            var answer = body[(at + ColorMarker.Length)..].Trim();
+            // Stops at the separator so "commands=/colorise" downstream cannot
+            // be read as the colour.
+            var rest = body[(at + "color=".Length)..];
+            var end = rest.IndexOf(';');
+            var answer = (end >= 0 ? rest[..end] : rest).Trim();
 
             var hex = HexColor.Match(answer);
             if (hex.Success) return hex.Value;
