@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Headless;
@@ -80,6 +81,82 @@ public class ChatPanelTests : IDisposable
 
     private static IEnumerable<TextBlock> TextBlocksIn(Avalonia.Controls.Control root) =>
         root.GetVisualDescendants().OfType<TextBlock>();
+
+    // The bubble is the DataTemplate's own root Border (see ChatPanel.axaml's
+    // per-turn template), so it is the first Border a depth-first walk from
+    // the row's ContentPresenter reaches — before the speaker-avatar/initials
+    // chip Borders nested two levels deeper inside it.
+    private static Border BubbleBorderOf(Avalonia.Controls.Control row) =>
+        row.GetVisualDescendants().OfType<Border>().First();
+
+    // A resize handle's centre, in panel coordinates — used as the position
+    // carried by Drag's synthesized pointer events, not as a hit-test
+    // target (see Drag's own comment for why hit-testing isn't used here).
+    // TranslatePoint rather than OrbFlyoutTests' Canvas.GetLeft/Top: these
+    // handles are alignment-positioned, not Canvas-positioned.
+    private static Point CenterOf(Avalonia.Controls.Control control, Visual ancestor) =>
+        control.TranslatePoint(new Point(control.Bounds.Width / 2, control.Bounds.Height / 2), ancestor)
+        ?? throw new InvalidOperationException($"{control} is not inside {ancestor}");
+
+    private static void FlushRender()
+    {
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    // MouseDown/MouseMove rely on hit-testing against the *rendered* scene
+    // graph, and that went stale after enough resizes of this class's
+    // reused ChatPanel singleton — a point inside Root's own correctly
+    // laid-out Bounds hit-tested to nothing at all, even after forcing
+    // extra render ticks. Same fix TypingAndPressingEnterSendsTheTypedText
+    // AndClearsTheBox already needed for a different flakiness on this same
+    // reused window: raise the routed event directly on whichever element
+    // the real handler is registered on (the handle itself for
+    // PointerPressed, the panel for PointerMoved/PointerReleased — see
+    // where ChatPanel's constructor wires each one up), which sidesteps
+    // hit-testing while still exercising the real production handlers.
+    private static void Drag(ChatPanel panel, string handleName, Vector delta)
+    {
+        var handle = panel.FindControl<Avalonia.Controls.Control>(handleName)!;
+        var pointer = new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, isPrimary: true);
+        var start = CenterOf(handle, panel);
+        var end = start + delta;
+
+        handle.RaiseEvent(new PointerPressedEventArgs(
+            handle, pointer, panel, start, 0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed),
+            KeyModifiers.None, 1));
+        FlushRender();
+
+        panel.RaiseEvent(new PointerEventArgs(
+            InputElement.PointerMovedEvent, panel, pointer, panel, end, 0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.Other),
+            KeyModifiers.None));
+        FlushRender();
+
+        panel.RaiseEvent(new PointerReleasedEventArgs(
+            panel, pointer, panel, end, 0,
+            new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.LeftButtonReleased),
+            KeyModifiers.None, MouseButton.Left));
+        FlushRender();
+    }
+
+    // Every resize-related test needs this: ChatPanel is a reused singleton
+    // across the whole class (see the class comment), and nothing resets
+    // Width/Height/Position between tests the way HideFor resets the
+    // session binding — a resize test run after another one otherwise
+    // inherits whatever size or position the previous one's drag left
+    // behind, which is exactly what made this suite flaky to write (a
+    // "grows by 40" assertion fails outright if a prior test already left
+    // the panel sitting at MaxWidth, with nowhere left to grow).
+    private static void ResetGeometry(ChatPanel panel)
+    {
+        panel.Width = 340;
+        panel.Height = 420;
+        panel.Position = new PixelPoint(100, 100);
+        FlushRender();
+    }
 
     [AvaloniaFact]
     public void OpenForRendersOneRowPerHistoryTurnWithMatchingText()
@@ -231,6 +308,202 @@ public class ChatPanelTests : IDisposable
 
         Assert.Equal(new[] { "hello from a test" }, fake.SentTexts);
         Assert.Equal("", input.Text);
+    }
+
+    // BeginResizeDrag looked like the obvious way to drive this (see the
+    // long comment beside it in ChatPanel.axaml.cs) but is a silent no-op on
+    // Avalonia.Native's macOS backend, which is exactly the kind of failure
+    // that compiles, runs, and does nothing — worth a real drag-simulated
+    // test rather than trusting that the hand-rolled replacement works.
+    [AvaloniaFact]
+    public void DraggingTheSouthEastCornerGrowsWidthAndHeightWithoutMovingThePanel()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+        ChatPanel.OpenFor(orb, fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        ResetGeometry(panel);
+        var (width0, height0, pos0) = (panel.Width, panel.Height, panel.Position);
+
+        Drag(panel, "ResizeSE", new Vector(40, 30));
+
+        // A tolerance rather than exact equality: the drag's delta is
+        // recovered by converting a screen-pixel difference back through
+        // RenderScaling, which for a non-1.0 scale would not land on an
+        // exact fraction of a DIP.
+        Assert.True(Math.Abs(panel.Width - (width0 + 40)) < 1.0);
+        Assert.True(Math.Abs(panel.Height - (height0 + 30)) < 1.0);
+        Assert.Equal(pos0, panel.Position);
+    }
+
+    // The opposite corner has to pull the window's own Position along with
+    // it — growing away from a fixed bottom-right corner means the top-left
+    // one has to move, the same way any OS window's own resize border does.
+    [AvaloniaFact]
+    public void DraggingTheNorthWestCornerGrowsThePanelAndMovesItsPosition()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+        ChatPanel.OpenFor(orb, fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        ResetGeometry(panel);
+        var (width0, height0, pos0) = (panel.Width, panel.Height, panel.Position);
+
+        Drag(panel, "ResizeNW", new Vector(-20, -15));
+
+        Assert.True(panel.Width > width0 + 19);
+        Assert.True(panel.Height > height0 + 14);
+        Assert.True(panel.Position.X < pos0.X);
+        Assert.True(panel.Position.Y < pos0.Y);
+    }
+
+    [AvaloniaFact]
+    public void ResizeClampsToTheConfiguredMaximumWidth()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+        ChatPanel.OpenFor(orb, fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        ResetGeometry(panel);
+        Drag(panel, "ResizeE", new Vector(2000, 0));
+
+        Assert.Equal(panel.MaxWidth, panel.Width);
+    }
+
+    [AvaloniaFact]
+    public void ResizeClampsToTheConfiguredMinimumWidth()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+        ChatPanel.OpenFor(orb, fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        ResetGeometry(panel);
+        // Dragging the west edge to the right shrinks the panel.
+        Drag(panel, "ResizeW", new Vector(2000, 0));
+
+        Assert.Equal(panel.MinWidth, panel.Width);
+    }
+
+    [AvaloniaFact]
+    public void ResizeClampsToTheConfiguredMaximumHeight()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+        ChatPanel.OpenFor(orb, fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        ResetGeometry(panel);
+        Drag(panel, "ResizeS", new Vector(0, 2000));
+
+        Assert.Equal(panel.MaxHeight, panel.Height);
+    }
+
+    // TurnView.MaxBubbleWidth used to be a fixed 244px; it's now a fraction
+    // of Scroll's actual width, kept live by ChatPanel's Scroll.SizeChanged
+    // hook so an already-rendered message doesn't stay pinned to whatever
+    // width the panel happened to open at.
+    [AvaloniaFact]
+    public void WideningThePanelWidensAnExistingBubble()
+    {
+        var orb = NewOrb();
+        var fake = NewFake(new[] { new ChatTurn { Role = ChatRole.User, Text = "hi" } });
+        ChatPanel.OpenFor(orb, fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        ResetGeometry(panel);
+        var bubble = BubbleBorderOf(RenderedRows(panel)[0]);
+        var maxWidth0 = bubble.MaxWidth;
+
+        Drag(panel, "ResizeE", new Vector(200, 0));
+
+        Assert.True(bubble.MaxWidth > maxWidth0 + 100);
+    }
+
+    // The other half of the same wiring: a turn that arrives after the
+    // resize has to pick up the current width too, which is what
+    // ChatPanel's _turns.CollectionChanged hook is for — TurnView otherwise
+    // defaults to a width sized for the panel's original, narrower opening.
+    [AvaloniaFact]
+    public void ATurnAddedAfterAResizeAlsoGetsTheWiderBubbleWidth()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+        ChatPanel.OpenFor(orb, fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        ResetGeometry(panel);
+        Drag(panel, "ResizeE", new Vector(200, 0));
+
+        fake.RaiseTurnAdded(new ChatTurn { Role = ChatRole.User, Text = "hi" });
+        FlushRender();
+
+        var bubble = BubbleBorderOf(RenderedRows(panel)[0]);
+
+        // 244 was the old fixed cap for a non-system bubble; a turn that
+        // still landed there would mean the new turn missed the resize.
+        Assert.True(bubble.MaxWidth > 244);
+    }
+
+    // System lines read as a note about the conversation rather than one
+    // side of it, and get almost the full width (0.95x) rather than the
+    // 0.8x a user/assistant bubble gets — at the same available width, that
+    // has to make the system line visibly wider.
+    [AvaloniaFact]
+    public void SystemLineBubbleIsWiderThanARegularBubbleAtTheSameAvailableWidth()
+    {
+        var orb = NewOrb();
+        var fake = NewFake(new[]
+        {
+            new ChatTurn { Role = ChatRole.User, Text = "hi" },
+            new ChatTurn { Role = ChatRole.System, Text = "connected" },
+        });
+        ChatPanel.OpenFor(orb, fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var rows = RenderedRows(panel);
+        var userBubble = BubbleBorderOf(rows[0]);
+        var systemBubble = BubbleBorderOf(rows[1]);
+
+        Assert.True(systemBubble.MaxWidth > userBubble.MaxWidth);
+    }
+
+    // StandardCursorType has no diagonal resize member Avalonia.Native's
+    // macOS backend actually draws (see BuildDiagonalCursor's own comment),
+    // so the two diagonals are hand-drawn bitmaps built once and shared by
+    // both of their corners — this is the observable half of that wiring a
+    // black-box test can reach without touching the private static fields
+    // themselves.
+    [AvaloniaFact]
+    public void DiagonalCornersShareOneCursorPerDiagonalAndTheTwoDiagonalsDiffer()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+        ChatPanel.OpenFor(orb, fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var nw = panel.FindControl<Avalonia.Controls.Control>("ResizeNW")!;
+        var ne = panel.FindControl<Avalonia.Controls.Control>("ResizeNE")!;
+        var sw = panel.FindControl<Avalonia.Controls.Control>("ResizeSW")!;
+        var se = panel.FindControl<Avalonia.Controls.Control>("ResizeSE")!;
+
+        Assert.NotNull(nw.Cursor);
+        Assert.NotNull(ne.Cursor);
+        Assert.Same(nw.Cursor, se.Cursor);
+        Assert.Same(ne.Cursor, sw.Cursor);
+        Assert.NotSame(nw.Cursor, ne.Cursor);
     }
 
     // Setting Input.Text directly (rather than TextInputEventArgs character
