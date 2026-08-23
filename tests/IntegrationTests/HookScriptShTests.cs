@@ -70,8 +70,28 @@ public class HookScriptShTests
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start bash");
 
-        process.StandardInput.Write(payloadJson);
-        process.StandardInput.Close();
+        // A broken pipe here is a pass, not a failure.
+        //
+        // The hook is allowed to exit before it ever reads stdin, and one test
+        // below asserts precisely that: an unrecognised state hits `*) exit 0`
+        // before `PAYLOAD=$(cat)`. When it wins that race the pipe is already
+        // closed and this write throws IOException("Broken pipe") — so the
+        // harness was failing the very behaviour it exists to verify. Locally
+        // the process was usually still alive and it passed; under CI load it
+        // was not, and it failed on both runners.
+        //
+        // Swallowed only around the write: the assertions on exit code, stdout
+        // and stderr below are untouched, so a hook that genuinely misbehaves
+        // still fails.
+        try
+        {
+            process.StandardInput.Write(payloadJson);
+            process.StandardInput.Close();
+        }
+        catch (IOException)
+        {
+            // Exited without reading its input, which some states do by design.
+        }
 
         string stdout = process.StandardOutput.ReadToEnd();
         string stderr = process.StandardError.ReadToEnd();
