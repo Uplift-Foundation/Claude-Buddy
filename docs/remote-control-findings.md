@@ -239,6 +239,43 @@ proxy for RC health** and should not be used as one.
 - **Windows.** Untested and out of scope for v1; the bridge as designed is
   tmux-shaped, and chat-send is already macOS-only in this app.
 
+## What a peer row does and does not carry
+
+The whole of it: `name`, a bracketed `ref`, `kind`, `status`. That is the
+budget for everything shown about a remote session, and two consequences are
+worth stating because both look like bugs from the outside.
+
+**No machine name.** Asked directly, the bridge answered `"machine":"unknown"`.
+So a remote orb's title is the session's own name and nothing else — there is
+nowhere to get "which computer" from, and inventing one would be a guess
+presented as a fact.
+
+**No colour, and it cannot be derived.** A local orb's colour comes from the
+hook, which gets it one of two ways, neither reachable from here:
+
+- `/color` writes `{"type":"agent-color","agentColor":…}` into *that session's*
+  transcript — on the other machine's disk.
+- auto-colour hashes the session's **CWD** (`ClaudeBuddyHook.sh`, the
+  `cksum` line) — and the peer row carries no cwd either.
+
+So Buddy derives a colour by hashing the remote session's *name*. It is stable
+for a given session and deliberately unrelated to whatever colour that session
+wears on its own machine. Checked rather than assumed: the tempting theory was
+that hashing the name would coincidentally agree with auto-colour, and it
+cannot, because auto-colour hashes a different input.
+
+Making the colours agree would mean asking the remote session for its own —
+a message round-trip per orb, landing in that session's chat, for something
+cosmetic. Not done, and recorded here so the next person weighs the same
+trade rather than assuming it was overlooked.
+
+**No streaming, either.** Peer messaging delivers one message when the remote
+session chooses to send it; there is nothing to subscribe to and its transcript
+is on the other machine. The closest honest substitute is the `status` field —
+`running` while it works — which is why the poll drops to five seconds while
+something is in flight and why the panel says "…is working" rather than
+pretending to show progress.
+
 ## Two things only a stronger test found
 
 Both were found by tightening one live test, and both are worth recording
