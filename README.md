@@ -897,7 +897,17 @@ Clicking one opens a chat panel, since there is no terminal on this machine to
 jump to. That panel is a **messaging channel rather than a mirror**: it shows
 what you sent and what came back, like a text thread, and does not show what
 that session is doing the rest of the time. Its transcript lives on the other
-machine, and this is a way to talk to it, not a window onto it.
+machine, and this is a way to talk to it, not a window onto it. The orb pulses
+and the panel says "…is working" while it is busy, which is as close to watching
+it work as this can get — there is no stream to subscribe to, only a message
+when it has something to say.
+
+Two things a remote orb cannot know, because a remote session's own description
+of itself never reaches this machine: **which computer it is on**, and **what
+colour it gave itself**. A peer is reported as a name, a kind and a status, so
+the title is that name and the colour is derived from it — stable, but unrelated
+to whatever `/color` it wears at home. `docs/remote-control-findings.md` has the
+detail if that gap ever needs closing.
 
 `docs/remote-control-findings.md` records what was measured against two real
 machines before any of this was built — including what the relay does and does
