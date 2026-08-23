@@ -195,26 +195,70 @@ For the record, the model did obey a strict fenced-JSON instruction on the first
 try (`{"request_id":"spike-001","agents":[…]}`, no surrounding prose). It works;
 it is just unnecessary, and parsing the tool result is strictly more reliable.
 
+## Startup banners — what `BridgeState` can read
+
+A second bridge launch captured the header, which is where readiness and health
+are actually legible:
+
+```
+ ⚠ 2 MCP servers need authentication · run /mcp
+ ⚠ Your login expires in 3 days · run /login to renew
+  /remote-control is active · Continue here, on your phone, or at https://claude.ai/code/session_01XfZfJnPe9EGxapEmtzrhBL
+```
+
+- **`/remote-control is active`** is the readiness signal, and it carries the
+  relay session URL. Worth preferring over the private status file for
+  confirming *RC specifically* came up: the status file proves the session
+  started, this proves RC attached.
+- **`Your login expires in N days · run /login to renew`** is a real
+  degradation pattern — the one failure mode observed in the wild. An expired
+  login is the likeliest way a long-lived bridge dies quietly.
+- Banner lines are prefixed `⚠` and use ` · ` as an internal separator, the same
+  convention as the peer rows.
+
+Still not captured: quota exhaustion and RC-dropped-mid-session. `Degraded`
+classification for those remains guesswork.
+
+Note `daemon-auth-status.json` in the profile read `{"status":"auth_required"}`
+throughout, while RC itself worked normally — so **daemon auth state is not a
+proxy for RC health** and should not be used as one.
+
 ## Assumed, not confirmed
 
-- **Whether `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is required.** It was set
-  two ways at once during the spike — exported on the launch line *and* already
-  present in `~/.claude-board/settings.json`'s `env` block — so its necessity was
-  never isolated. **Assumed required.** This matters for shipping: if the peer
-  tools are gated behind an experimental flag, the feature either sets it for the
-  bridge or is limited to users who have it. Retest on a clean profile.
-- **Failure-mode banners.** Nothing was captured for login-expired, quota
-  exhausted, or RC-dropped, so `BridgeState`'s `Degraded(reason)` classification
-  has no real patterns behind it yet. The `.claude-board` profile did show
-  `{"status":"auth_required"}` in `daemon-auth-status.json` while RC itself
-  worked fine, so daemon auth state is **not** a proxy for RC health.
+- **Whether `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is required — unresolved,
+  and deliberately made moot.** Both profiles on this machine set it in
+  `settings.json`'s `env`, so it could not be isolated from an existing profile;
+  relaunching with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=0` on the launch line
+  still produced a working `ListAgents`, which only shows that a process-env `0`
+  does not beat a settings-file `1` — not that the flag is unnecessary. Rather
+  than keep chasing it, **Buddy sets the flag unconditionally on the bridge it
+  launches.** Setting it is harmless if redundant and load-bearing if not, which
+  retires the risk without needing the answer. A clean-profile test would still
+  be worth doing before claiming the feature works for users who have never
+  enabled agent teams.
 - **Windows.** Untested and out of scope for v1; the bridge as designed is
   tmux-shaped, and chat-send is already macOS-only in this app.
 
-## One product-shaped warning
+## One product-shaped warning: the bridge is not actually hidden
 
-Text appeared in the bridge's input box that the spike did not send — an
-attached client, or the account's own RC device, typing into the same session.
-Injected prompts and a human's typing **interleave in the same pty**. That is an
-argument for the bridge being a dedicated hidden session a user never attaches
-to, and for not reusing a session the user might also be driving.
+Text kept appearing in the bridge's input box that the spike did not send
+("which machine is job-hunter on?", "send job-hunter a message"). The banner
+explains it: *"Continue here, on your phone, or at https://claude.ai/code/…"*.
+Enabling RC on the bridge **publishes it to the account's own RC surface**, so it
+shows up on the user's phone and web session list, and they can type into it.
+During this spike the user did exactly that, from a diner.
+
+Two consequences, and the first is a real design problem:
+
+1. **The private `TMPDIR` hides the bridge from Buddy's orb scan, not from the
+   user.** They will see an unexplained session appear in their own Claude
+   session list whenever Buddy starts the bridge. It needs a name that says what
+   it is — which makes the unresolved `--remote-control <name>` behaviour (the
+   name passed was ignored in favour of a cwd-derived `claude-buddy-52` /
+   `claude-buddy-a8`) worth fixing rather than shrugging at.
+2. **Injected prompts and a human's typing interleave in the same pty.** Buddy
+   can paste a prompt into the same input line a user is mid-sentence in. So the
+   bridge must be a session Buddy owns exclusively, and Buddy should tolerate
+   unexpected turns in the transcript rather than assuming every row is a reply
+   to something it sent — which the `from-name`/`msg_id` correlation already
+   handles, and is another reason not to rely on turn ordering.
