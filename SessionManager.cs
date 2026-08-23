@@ -821,9 +821,26 @@ namespace ClaudeBuddy
                 // thing to find for a Codex session. The cwd-collision hazard
                 // above applies just as much, and here both repositories would
                 // be on this machine.
+                // "pid <= 0" here was standing in for "this is a background
+                // agent", and it stopped being true the moment the hook learned
+                // to record a background agent's own pid instead of whatever
+                // ancestor owned a terminal. The proxy is replaced by the thing
+                // it was approximating rather than kept alongside it: a session
+                // with no pid is either a background job — in which case
+                // IsLiveJob says so — or a leftover that should not be adopting
+                // a viewer window in the first place.
+                //
+                // Getting this wrong is not subtle. With the pid recorded and
+                // this condition unchanged, adoption stopped running for every
+                // background agent, so none of them found the `claude agents`
+                // window they are watched through, and the rule below then
+                // dropped them for having no terminal. One orb vanished on this
+                // machine before the cause was obvious.
                 if (status.Source == SessionSource.ClaudeCode
                     && !KnowsATerminal(status)
-                    && (leadsWithLiveAgents.Contains(sessionId) || status.SessionPid <= 0))
+                    && (leadsWithLiveAgents.Contains(sessionId)
+                        || status.SessionPid <= 0
+                        || BackgroundJobs.IsLiveJob(sessionId)))
                 {
                     AgentTeamViewer.TryAdopt(status);
                 }
@@ -842,12 +859,18 @@ namespace ClaudeBuddy
                 // A gateway session has none of these and never will — it has
                 // no terminal anywhere, which is the point of it. Left ungated
                 // this rule alone drops every OpenClaw orb, every scan.
+                // A live background job is exempt for the same reason a lead
+                // with live agents is: it has no terminal of its own by nature,
+                // not because it is a leftover. That used to be covered for free
+                // by the pid test below — a background agent recorded no pid — and
+                // is now stated, because the hook records its real pid.
                 if (status.IsLocalCli
                     && string.IsNullOrEmpty(status.Tty)
                     && string.IsNullOrEmpty(status.TermProgram)
                     && string.IsNullOrEmpty(status.TmuxPane)
                     && status.TermPid == 0
                     && !leadsWithLiveAgents.Contains(sessionId)
+                    && !(status.Source == SessionSource.ClaudeCode && BackgroundJobs.IsLiveJob(sessionId))
                     && status.SessionPid > 0)
                 {
                     continue;
