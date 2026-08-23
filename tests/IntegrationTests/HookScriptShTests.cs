@@ -148,6 +148,40 @@ public class HookScriptShTests
         }
     }
 
+    // The pid walk must never record a process that is not this session.
+    //
+    // Run from a test harness there is no claude ancestor at all, which
+    // exercises the fallback: the first ancestor owning a real tty. What this
+    // pins is that the fallback still produces *something* usable rather than
+    // regressing to 0 — on macOS a Claude Code file naming no process is
+    // dropped outright, so "safe" here means recording the terminal-owning
+    // ancestor, not recording nothing.
+    //
+    // The case that motivated the change cannot be staged from here: it needs a
+    // real background agent whose ancestry runs through `claude agents`, and
+    // that walk recorded the *viewer's* pid — a process that outlives the
+    // session, so the orb never expired. Verified by hand on a real machine
+    // instead (the fix records the session's own pid, 28091, where the old walk
+    // recorded 0 or the viewer's 10190), and the Windows twin has always worked
+    // this way, matching by process name rather than by who owns a terminal.
+    [UnixFact]
+    public void HookRecordsAUsablePid_EvenWithNoClaudeAncestor()
+    {
+        var tmp = Directory.CreateTempSubdirectory("cb-hook-");
+        var payload = Payload(new { session_id = "pid-walk", cwd = "/tmp/proj", transcript_path = "" });
+
+        var result = RunHook("claude", "idle", payload, tmp.FullName);
+        AssertSilentSuccess(result);
+
+        var json = File.ReadAllText(StatusFile(tmp.FullName, "pid-walk"));
+        var status = JsonSerializer.Deserialize<SessionStatus>(json);
+        Assert.NotNull(status);
+
+        // Whatever it found, it must not be this test process — the walk starts
+        // at the hook and climbs, so its own pid would mean the loop never ran.
+        Assert.NotEqual(Environment.ProcessId, status!.SessionPid);
+    }
+
     [UnixFact]
     public void HookIgnoresAnUnrecognisedState_SilentlyAndWithoutReadingStdin()
     {
