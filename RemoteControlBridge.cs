@@ -127,6 +127,15 @@ namespace ClaudeBuddy
 
         public string ProfileDir => _profileDir;
 
+        // Where a relay's scratch lives, and what this one's is called. Exposed
+        // so RemoteControlSessions can clear out the ones nothing owns any more —
+        // see SweepStaleScratch, and ScratchRoot below for why they pile up.
+        public string ScratchName => _tmuxSessionName;
+
+        public static string ScratchRoot => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Library", "Caches", "ClaudeBuddy", "rc-bridge");
+
         // How long to wait for the hook's status file to appear, then for the
         // Remote Control banner. Starting Claude Code cold — plugin sync, MCP,
         // auth — was ~12s when measured, so this is generous on purpose; the
@@ -679,10 +688,7 @@ namespace ClaudeBuddy
                 // the test seam above separates status directories too — two
                 // relays sharing one would each adopt whichever file landed
                 // first and both tail one transcript.
-                var root = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    "Library", "Caches", "ClaudeBuddy", "rc-bridge",
-                    _tmuxSessionName);
+                var root = Path.Combine(ScratchRoot, _tmuxSessionName);
 
                 // Cleared on every start: a status file from a previous bridge
                 // would be adopted as this one's, pointing the tail at a
