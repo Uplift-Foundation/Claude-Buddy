@@ -354,13 +354,34 @@ namespace ClaudeBuddy
         //
         // Within one process only the newest file is the live session, so the rest
         // go now. Two genuinely concurrent sessions are two processes with two
-        // pids, so this can't collapse them into one.
+        // pids, so this can't collapse them into one — or so it was until Agent
+        // View. Dispatching a background session from `←` doesn't fork a new OS
+        // process; it starts a second conversation inside the one `claude` process
+        // already running, so that process's pid now names several *simultaneously
+        // live* status files, not a trail of ones the terminal has moved on from.
+        // Observed directly: one pid, four files, three different titles, one of
+        // them in a different cwd entirely (a worktree) — plainly not the same
+        // conversation re-minting its session id.
+        //
+        // The two cases can't be told apart by mtime alone — a live background
+        // session and last week's abandoned /clear both just sit there once
+        // nothing is happening to them. `isLiveJob` (the caller passes
+        // BackgroundJobs.IsLiveJob) is what actually knows: it asks the daemon's
+        // own job list, which a leftover /clear id was never on and a running
+        // background session still is. A non-newest entry only goes stale if that
+        // check also says it's not live — so the original single-terminal case is
+        // untouched, and a pid hosting several genuine Agent View sessions keeps
+        // an orb for each.
+        //
+        // Passed in rather than called directly so this stays what the rest of
+        // the file's rules are — pure and fast to test — instead of shelling out
+        // to `claude agents --json` from inside a unit test.
         //
         // A pid of 0 means a hook older than the session_pid field. Grouping those
         // would put every such file in one bucket and drop all but one, so they're
         // left alone and keep the old behaviour — the same reason
         // ProcessLiveness.IsRunning treats 0 as alive.
-        internal static HashSet<string> Superseded(List<ScanEntry> found)
+        internal static HashSet<string> Superseded(List<ScanEntry> found, Func<string, bool> isLiveJob)
         {
             // Keyed by pid *and* which CLI, not by pid alone.
             //
@@ -400,7 +421,8 @@ namespace ClaudeBuddy
                 var pid = (entry.Status.SessionPid, entry.Status.Source);
                 if (pid.SessionPid <= 0) continue;
 
-                if (newest.TryGetValue(pid, out var best) && best.SessionId != entry.SessionId)
+                if (newest.TryGetValue(pid, out var best) && best.SessionId != entry.SessionId
+                    && !isLiveJob(entry.SessionId))
                 {
                     stale.Add(entry.SessionId);
                 }
@@ -633,7 +655,7 @@ namespace ClaudeBuddy
 
             InheritTerminalInfo(found);
 
-            var superseded = Superseded(found);
+            var superseded = Superseded(found, BackgroundJobs.IsLiveJob);
 
             // Sessions that live agents name as their lead. Used for two things
             // below, and for nothing else — in particular *not* to excuse a
