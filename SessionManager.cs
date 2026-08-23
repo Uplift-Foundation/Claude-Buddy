@@ -164,7 +164,13 @@ namespace ClaudeBuddy
     {
         ClaudeCode,
         Codex,
-        OpenClaw
+        OpenClaw,
+
+        // A Claude Code session on another machine, seen through the bridge (see
+        // RemoteControlBridge). Its own CLI is Claude Code, but it is not local
+        // and there is no terminal here to focus, which is the distinction
+        // IsLocalCli draws and the only one the rest of the app cares about.
+        RemoteControl
     }
 
     // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude
@@ -651,6 +657,46 @@ namespace ClaudeBuddy
                         Color = OpenClawSessions.ColourForRoom(key),
                     },
                     room.Activity));
+            }
+
+            // Claude Code sessions on the user's other machines, seen through
+            // the bridge. Empty unless the feature is on *and* something has
+            // asked for the bridge — see RemoteControlSessions.EnsureStarted for
+            // why merely enabling it isn't enough.
+            //
+            // Much simpler than the gateway branch above, and for a reason worth
+            // stating: there are no rooms, no leads and no colour pool here. A
+            // remote session is one Claude Code session on one machine, so the
+            // only thing being invented is the namespaced id.
+            foreach (var remote in RemoteControlSessions.Snapshot())
+            {
+                found.Add(new ScanEntry(
+                    remote.Key,
+                    new SessionStatus
+                    {
+                        Source = SessionSource.RemoteControl,
+
+                        // The peer list's own word, translated into the two
+                        // states an orb draws. Anything that isn't recognisably
+                        // work counts as idle: an orb that spins forever because
+                        // a label changed upstream is worse than one that never
+                        // spins.
+                        State = remote.Working ? "generating" : "idle",
+
+                        // Its name on the other machine, which is all the peer
+                        // list gives us — no hostname, no path. That is thin for
+                        // a title, and deliberately not padded out with a guess:
+                        // see docs/remote-control-findings.md.
+                        Title = remote.Name,
+
+                        // Keyed on the name so the same remote session keeps its
+                        // colour across restarts without anything being stored,
+                        // the same trick the gateway branch uses for agents.
+                        Color = OpenClawSessions.ColourForAgent(remote.Name),
+
+                        Kind = SessionKind.Remote,
+                    },
+                    remote.Seen));
             }
 
             InheritTerminalInfo(found);
