@@ -13,11 +13,16 @@ namespace ClaudeBuddy.Tests;
 //  4. History is pre-bounded and already ordered oldest to newest — callers
 //     of this fake are expected to build it that way; it does no trimming or
 //     sorting of its own.
-internal sealed class FakeChatSession : IRemoteChatSession, IRemoteChatImages
+internal sealed class FakeChatSession : IRemoteChatSession, IRemoteChatImages, IRemoteChatSlashCommands
 {
     public string SessionId { get; init; } = "fake-session";
     public string DisplayName { get; init; } = "Fake Session";
     public RemoteChatState State { get; set; } = RemoteChatState.Connected;
+
+    // Empty by default, the same as a session with nothing to say about
+    // IRemoteChatSlashCommands — a test opts in by setting this before
+    // ChatPanel.OpenFor, which is the only point ChatPanel itself reads it.
+    public IReadOnlyList<SlashCommand> SlashCommands { get; init; } = Array.Empty<SlashCommand>();
 
     private readonly List<ChatTurn> _history;
     public IReadOnlyList<ChatTurn> History => _history;

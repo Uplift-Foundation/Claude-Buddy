@@ -40,7 +40,7 @@ namespace ClaudeBuddy
     //    trivially, since the whole turn is all there ever is.
     internal sealed class LocalCliChatSession :
         IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer, IRemoteChatPrompts,
-        IRemoteChatImages, IDisposable
+        IRemoteChatImages, IRemoteChatSlashCommands, IDisposable
     {
         // How much of the tail to read when the panel first opens.
         //
@@ -488,6 +488,17 @@ namespace ClaudeBuddy
 
         private List<Mapped> MapLines(List<string> lines) =>
             _format.Map(lines).Select(r => new Mapped(r.Uuid, r.Turn)).ToList();
+
+        // --- slash commands ---
+
+        // Scanned once per session rather than per keystroke: the commands a
+        // running CLI understands don't change while it's running, so
+        // rescanning ~/.claude on every character typed in the chat panel
+        // would be disk I/O for something that never differs between reads.
+        private IReadOnlyList<SlashCommand>? _slashCommands;
+
+        public IReadOnlyList<SlashCommand> SlashCommands =>
+            _slashCommands ??= SlashCommandCatalog.For(_status.Source, _status.Cwd);
 
         // --- sending ---
 
