@@ -31,6 +31,11 @@ public class SessionScanRulesTests
 
     // --- Superseded ---------------------------------------------------------
 
+    // None of these care about the daemon's job list, so they all pass a stub
+    // that says nothing is a live background job — equivalent to Superseded's
+    // behaviour before that check existed.
+    private static readonly Func<string, bool> NeverLive = _ => false;
+
     [Fact]
     public void Superseded_MarksOlderOfSamePidAndSourceStale()
     {
@@ -39,7 +44,7 @@ public class SessionScanRulesTests
         var older = Entry("older", pid: 100, SessionSource.ClaudeCode, t0);
         var newer = Entry("newer", pid: 100, SessionSource.ClaudeCode, t1);
 
-        var stale = SessionManager.Superseded(new List<SessionManager.ScanEntry> { older, newer });
+        var stale = SessionManager.Superseded(new List<SessionManager.ScanEntry> { older, newer }, NeverLive);
 
         Assert.Contains("older", stale);
         Assert.DoesNotContain("newer", stale);
@@ -53,7 +58,7 @@ public class SessionScanRulesTests
         var a = Entry("a", pid: 100, SessionSource.ClaudeCode, t0);
         var b = Entry("b", pid: 200, SessionSource.ClaudeCode, t1);
 
-        var stale = SessionManager.Superseded(new List<SessionManager.ScanEntry> { a, b });
+        var stale = SessionManager.Superseded(new List<SessionManager.ScanEntry> { a, b }, NeverLive);
 
         Assert.Empty(stale);
     }
@@ -73,7 +78,7 @@ public class SessionScanRulesTests
         var a = Entry("a", pidA, SessionSource.ClaudeCode, t0);
         var b = Entry("b", pidB, SessionSource.ClaudeCode, t1);
 
-        var stale = SessionManager.Superseded(new List<SessionManager.ScanEntry> { a, b });
+        var stale = SessionManager.Superseded(new List<SessionManager.ScanEntry> { a, b }, NeverLive);
 
         Assert.Empty(stale);
     }
@@ -89,8 +94,8 @@ public class SessionScanRulesTests
         var small = Entry("aaa", pid: 100, SessionSource.ClaudeCode, t0);
         var large = Entry("bbb", pid: 100, SessionSource.ClaudeCode, t0);
 
-        var staleInOrder = SessionManager.Superseded(new List<SessionManager.ScanEntry> { small, large });
-        var staleReversed = SessionManager.Superseded(new List<SessionManager.ScanEntry> { large, small });
+        var staleInOrder = SessionManager.Superseded(new List<SessionManager.ScanEntry> { small, large }, NeverLive);
+        var staleReversed = SessionManager.Superseded(new List<SessionManager.ScanEntry> { large, small }, NeverLive);
 
         Assert.Contains("aaa", staleInOrder);
         Assert.DoesNotContain("bbb", staleInOrder);
@@ -111,9 +116,49 @@ public class SessionScanRulesTests
         var claude = Entry("claude-session", pid: 100, SessionSource.ClaudeCode, t0);
         var codex = Entry("codex-session", pid: 100, SessionSource.Codex, t1);
 
-        var stale = SessionManager.Superseded(new List<SessionManager.ScanEntry> { claude, codex });
+        var stale = SessionManager.Superseded(new List<SessionManager.ScanEntry> { claude, codex }, NeverLive);
 
         Assert.Empty(stale);
+    }
+
+    [Fact]
+    public void Superseded_OlderEntryConfirmedAsLiveJobIsNotStale()
+    {
+        // The Agent View case: a background session shares its parent's pid,
+        // so it can be the older of two entries under one pid while still
+        // being a wholly separate, currently-running conversation. The daemon's
+        // job list is what tells the two apart, not the timestamp.
+        var t0 = new DateTime(2026, 1, 1, 0, 0, 0);
+        var t1 = t0.AddMinutes(5);
+        var backgroundSession = Entry("background", pid: 100, SessionSource.ClaudeCode, t0);
+        var foregroundSession = Entry("foreground", pid: 100, SessionSource.ClaudeCode, t1);
+
+        var stale = SessionManager.Superseded(
+            new List<SessionManager.ScanEntry> { backgroundSession, foregroundSession },
+            isLiveJob: id => id == "background");
+
+        Assert.Empty(stale);
+    }
+
+    [Fact]
+    public void Superseded_OlderEntryNotConfirmedLiveStaysStaleEvenWhenSiblingIsALiveJob()
+    {
+        // A daemon that vouches for one sibling under a pid doesn't blanket-
+        // exempt the whole group — each entry is asked for individually.
+        var t0 = new DateTime(2026, 1, 1, 0, 0, 0);
+        var t1 = t0.AddMinutes(5);
+        var t2 = t0.AddMinutes(10);
+        var abandoned = Entry("abandoned", pid: 100, SessionSource.ClaudeCode, t0);
+        var liveJob = Entry("live-job", pid: 100, SessionSource.ClaudeCode, t1);
+        var newest = Entry("newest", pid: 100, SessionSource.ClaudeCode, t2);
+
+        var stale = SessionManager.Superseded(
+            new List<SessionManager.ScanEntry> { abandoned, liveJob, newest },
+            isLiveJob: id => id == "live-job");
+
+        Assert.Contains("abandoned", stale);
+        Assert.DoesNotContain("live-job", stale);
+        Assert.DoesNotContain("newest", stale);
     }
 
     // --- InheritTerminalInfo ------------------------------------------------
