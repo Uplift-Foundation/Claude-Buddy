@@ -117,6 +117,24 @@ const string SlashCommand =
 const string MetaRow =
     """{"type":"user","uuid":"u5","isMeta":true,"timestamp":"2026-08-16T10:00:08Z","message":{"role":"user","content":"hook output"}}""";
 
+// A picture pasted into the chat panel (see LocalCliChatSession and
+// ChatAttachments), typed into the pane as a caption plus the file's path.
+// This shape — a "text" block carrying Claude Code's own "[Image #1]"
+// placeholder, alongside a sibling "image" block — is transcribed from the
+// real row a live paste produced, not composed here; only the picture's own
+// bytes are swapped for a one-pixel PNG, since the pixels aren't what this
+// tests. The companion "isMeta" row Claude Code also writes alongside it
+// (its own note of the picture's source path, meant for its own bookkeeping
+// rather than the model) is covered separately below.
+const string PastedImage =
+    """{"type":"user","uuid":"u6","timestamp":"2026-08-16T10:00:09Z","message":{"role":"user","content":[{"type":"text","text":"[Image #1]cam you see this image?"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="}}]}}""";
+
+const string PastedImageCompanion =
+    """{"type":"user","uuid":"u7","isMeta":true,"turnCompanion":true,"timestamp":"2026-08-16T10:00:09Z","message":{"role":"user","content":[{"type":"text","text":"[Image: source: /tmp/claude_buddy_pasted_images/paste-abc123.png]"}]}}""";
+
+const string PastedImageNoCaption =
+    """{"type":"user","uuid":"u8","timestamp":"2026-08-16T10:00:10Z","message":{"role":"user","content":[{"type":"text","text":"[Image #1]"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="}}]}}""";
+
 const string Queued =
     """{"type":"queue-operation","operation":"enqueue","uuid":"q1","timestamp":"2026-08-16T10:00:10Z","content":"and run the tests"}""";
 
@@ -167,6 +185,31 @@ Check("system-reminder is dropped", all.All(r => !r.Turn.Text.Contains("remember
 Check("slash command scaffolding is dropped", all.All(r => !r.Turn.Text.Contains("/clear")));
 Check("isMeta row is dropped", all.All(r => r.Turn.Text != "hook output"));
 Check("dequeue adds nothing", all.Count(r => r.Turn.Text.Contains("run the tests")) == 1);
+
+// A pasted picture: one turn, not two, with the picture's own placeholder
+// gone from the text it rides on.
+var pasted = ChatTranscript.Map(new[] { PastedImage });
+Check("a pasted picture becomes exactly one turn", pasted.Count == 1, "got " + pasted.Count);
+Check("its placeholder is stripped from the caption",
+    pasted.Count == 1 && pasted[0].Turn.Text == "cam you see this image?",
+    pasted.Count == 1 ? pasted[0].Turn.Text : "");
+Check("its picture decodes to real bytes",
+    pasted.Count == 1 && pasted[0].Turn.ImageBytes is { Length: 67 },
+    pasted.Count == 1 ? (pasted[0].Turn.ImageBytes?.Length.ToString() ?? "null") : "");
+
+Check("the companion row Claude Code writes alongside it is dropped, same as any isMeta row",
+    ChatTranscript.Map(new[] { PastedImage, PastedImageCompanion })
+        .All(r => !r.Turn.Text.Contains("source:")));
+
+// A picture pasted with nothing typed: still a turn, just with no caption —
+// the emptiness check that drops a blank text row must not also drop this.
+var pastedBare = ChatTranscript.Map(new[] { PastedImageNoCaption });
+Check("a caption-less picture still produces a turn", pastedBare.Count == 1, "got " + pastedBare.Count);
+Check("its caption is empty rather than the placeholder",
+    pastedBare.Count == 1 && pastedBare[0].Turn.Text == "",
+    pastedBare.Count == 1 ? pastedBare[0].Turn.Text : "");
+Check("it still carries the picture",
+    pastedBare.Count == 1 && pastedBare[0].Turn.ImageBytes is { Length: 67 });
 
 // The cheap pre-filter and the real mapper have to agree about which rows
 // matter. If IsInteresting ever says no to something MapRow would have mapped,

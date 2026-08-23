@@ -71,6 +71,15 @@ namespace ClaudeBuddy
 
         public string ImageAlt { get; init; } = "";
 
+        // A picture already decoded, for the two cases where there is no
+        // gateway to resolve ImageUrl against: a local CLI's own transcript
+        // carries an attached picture inline as base64 (see ChatTranscript's
+        // image handling), and a picture the panel itself just pasted and
+        // wrote to disk is read straight back rather than round-tripped
+        // through a fetch it would only fail. Never both this and ImageUrl
+        // on the same turn.
+        public byte[]? ImageBytes { get; init; }
+
         // Who said this, when that is someone other than the two ends of the
         // conversation. In a channel an agent's transcript carries messages from
         // the other agents in the room, and "Zara" and "Lilibeth" arriving in
@@ -159,6 +168,26 @@ namespace ClaudeBuddy
     public interface IRemoteChatComposer
     {
         string ComposerHint { get; }
+    }
+
+    // A session where a pasted picture can actually go somewhere.
+    //
+    // Not on IRemoteChatSession itself, for the same reason the three
+    // interfaces above aren't: only one implementation exists yet, and a
+    // session that doesn't implement this simply leaves a paste of a
+    // picture as the ordinary text paste it would otherwise have been —
+    // which is the only honest answer for a transport with nowhere to put
+    // a file. A local CLI session has somewhere, because its own reader is
+    // on this machine; a gateway session's is on the other end of a
+    // websocket, and handing it a path on this machine would name a file it
+    // cannot open.
+    public interface IRemoteChatImages
+    {
+        // Sends text together with pictures already saved to disk. Called
+        // instead of SendAsync exactly when the panel is holding at least
+        // one pasted picture; a message with none still goes through
+        // SendAsync alone.
+        Task SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths);
     }
 
     // One option in a dialog the session is blocked on. Key is what gets sent —

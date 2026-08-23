@@ -4,6 +4,8 @@ using Avalonia.Controls.Documents;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Xunit;
@@ -54,6 +56,22 @@ public class ChatPanelTests : IDisposable
     private static void Flush()
     {
         Dispatcher.UIThread.RunJobs();
+    }
+
+    // Flush() alone drains only the dispatcher's own queue, which is enough
+    // for everything else in this file because nothing else leaves that
+    // thread. Attaching a pasted picture does — AttachImageAsync's encode
+    // runs on a real ThreadPool thread via Task.Run — so this waits on real
+    // wall-clock time for that thread to actually finish and post its
+    // continuation back before flushing again, instead of asserting against
+    // a dispatcher queue the background work hasn't reached yet.
+    private static async Task FlushAsync()
+    {
+        for (var i = 0; i < 40; i++)
+        {
+            Flush();
+            await Task.Delay(10);
+        }
     }
 
     // ItemsControl's default panel (a StackPanel, per ChatPanel.axaml not
@@ -650,5 +668,182 @@ public class ChatPanelTests : IDisposable
         Flush();
 
         Assert.False(slashBox.IsVisible);
+    }
+
+    // A picture on the clipboard, pasted into a session that implements
+    // IRemoteChatImages: it should show as a thumbnail rather than being
+    // typed as text, and sending should route through SendWithImagesAsync
+    // carrying the path of the file the panel actually wrote — not through
+    // SendAsync, which would mean the picture went nowhere.
+    [AvaloniaFact]
+    public async Task PastingAPictureAttachesItAndSendingCarriesItsPath()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var input = panel.FindControl<TextBox>("Input")!;
+        var attachments = panel.FindControl<ItemsControl>("Attachments")!;
+
+        input.Focus();
+        Flush();
+
+        var bitmap = new WriteableBitmap(new PixelSize(4, 4), new Vector(96, 96));
+        await panel.Clipboard!.SetBitmapAsync(bitmap);
+
+        var gesture = TextBox.PasteGesture!;
+        input.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = InputElement.KeyDownEvent,
+            Key = gesture.Key,
+            KeyModifiers = gesture.KeyModifiers
+        });
+        await FlushAsync();
+
+        Assert.True(attachments.IsVisible);
+        Assert.Single((System.Collections.IEnumerable)attachments.ItemsSource!);
+
+        input.RaiseEvent(new TextInputEventArgs
+        {
+            RoutedEvent = InputElement.TextInputEvent,
+            Text = "a screenshot"
+        });
+        Flush();
+
+        input.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = InputElement.KeyDownEvent,
+            Key = Key.Enter
+        });
+        Flush();
+
+        Assert.Empty(fake.SentTexts);
+        var sent = Assert.Single(fake.SentWithImages);
+        Assert.Equal("a screenshot", sent.Text);
+        var path = Assert.Single(sent.ImagePaths);
+        Assert.True(File.Exists(path));
+
+        Assert.False(attachments.IsVisible);
+        Assert.Equal("", input.Text);
+
+        File.Delete(path);
+    }
+
+    // The same paste against a session that does *not* implement
+    // IRemoteChatImages — a gateway room, today — must not be swallowed:
+    // OnInputKeyDown only intercepts the gesture when the bound session has
+    // somewhere to put a picture, so this has to fall through to the
+    // TextBox's own paste rather than silently doing nothing.
+    [AvaloniaFact]
+    public async Task PastingAPictureOnASessionWithoutImageSupportLeavesItToTheTextBox()
+    {
+        var orb = NewOrb();
+        var bare = new BareChatSession();
+        _sessionIdsToClean.Add(bare.SessionId);
+
+        ChatPanel.OpenFor(orb, bare);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var input = panel.FindControl<TextBox>("Input")!;
+        var attachments = panel.FindControl<ItemsControl>("Attachments")!;
+
+        input.Focus();
+        Flush();
+
+        var bitmap = new WriteableBitmap(new PixelSize(4, 4), new Vector(96, 96));
+        await panel.Clipboard!.SetBitmapAsync(bitmap);
+
+        var gesture = TextBox.PasteGesture!;
+        input.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = InputElement.KeyDownEvent,
+            Key = gesture.Key,
+            KeyModifiers = gesture.KeyModifiers
+        });
+        Flush();
+
+        Assert.False(attachments.IsVisible);
+    }
+
+    // A turn that already carries ImageBytes — what a local CLI's own
+    // transcript produces for a pasted picture once ChatTranscript has
+    // decoded it (see ChatTranscript.MapUser) — has to actually render as a
+    // picture in the bubble, not just toggle some flag the panel never
+    // draws. This is the one part of the feature the paste tests above
+    // don't reach: those cover the *pending* attachment strip above the
+    // input box, not a turn already in history.
+    [AvaloniaFact]
+    public async Task ATurnWithImageBytesRendersAsAThumbnail()
+    {
+        var orb = NewOrb();
+
+        // A one-pixel PNG, the same fixture ChatTranscript's own tests use —
+        // the pixels don't matter, only that this decodes as a real image.
+        var bytes = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==");
+
+        var turn = new ChatTurn
+        {
+            Role = ChatRole.User,
+            Text = "a screenshot",
+            IsComplete = true,
+            ImageBytes = bytes
+        };
+
+        var fake = NewFake(new[] { turn });
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+
+        // Matched on the picture's own fixed width (228, per ChatPanel.axaml)
+        // rather than just "any Image in the row": the same row template also
+        // draws a 16pt Image for a speaker's avatar, and the two would
+        // otherwise be indistinguishable by type alone.
+        Image? picture = null;
+        for (var i = 0; i < 40; i++)
+        {
+            Flush();
+            picture = panel.GetVisualDescendants().OfType<Image>().FirstOrDefault(im => im.Width == 228);
+            if (picture?.Source is not null) break;
+            await Task.Delay(10);
+        }
+
+        Assert.NotNull(picture);
+        Assert.NotNull(picture!.Source);
+    }
+
+    // Nothing but the four required members of IRemoteChatSession — no
+    // IRemoteChatImages — so a test can be sure the panel behaves correctly
+    // for the transport that doesn't have one yet.
+    private sealed class BareChatSession : IRemoteChatSession
+    {
+        public string SessionId { get; } = "bare-" + Guid.NewGuid();
+        public string DisplayName { get; init; } = "Bare Session";
+        public RemoteChatState State { get; set; } = RemoteChatState.Connected;
+
+        private readonly List<ChatTurn> _history = new();
+        public IReadOnlyList<ChatTurn> History => _history;
+
+        public event Action<ChatTurn>? TurnAdded;
+        public event Action<ChatTurn>? TurnUpdated;
+        public event Action<RemoteChatState>? StateChanged;
+
+        public Task SendAsync(string text)
+        {
+            var turn = new ChatTurn { Role = ChatRole.User, Text = text };
+            _history.Add(turn);
+            TurnAdded?.Invoke(turn);
+            return Task.CompletedTask;
+        }
+
+        public void Cancel()
+        {
+        }
     }
 }
