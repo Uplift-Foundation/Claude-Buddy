@@ -103,7 +103,7 @@ public class RemoteScanRulesTests
     // unrecognised reads as idle rather than working: an orb spinning forever
     // because a label changed upstream is worse than one that never spins.
     [Theory]
-    [InlineData("busy", "generating")]
+    [InlineData("running", "generating")]
     [InlineData("idle", "idle")]
     [InlineData("something-new", "idle")]
     public void RemoteStatus_MapsOntoTheTwoStatesAnOrbDraws(string peerStatus, string expected)
