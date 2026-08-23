@@ -13,7 +13,7 @@ namespace ClaudeBuddy.Tests;
 //  4. History is pre-bounded and already ordered oldest to newest — callers
 //     of this fake are expected to build it that way; it does no trimming or
 //     sorting of its own.
-internal sealed class FakeChatSession : IRemoteChatSession, IRemoteChatSlashCommands
+internal sealed class FakeChatSession : IRemoteChatSession, IRemoteChatImages, IRemoteChatSlashCommands
 {
     public string SessionId { get; init; } = "fake-session";
     public string DisplayName { get; init; } = "Fake Session";
@@ -55,6 +55,22 @@ internal sealed class FakeChatSession : IRemoteChatSession, IRemoteChatSlashComm
     public void Cancel()
     {
         // No-op: nothing is ever in flight in this fake.
+    }
+
+    // What SendWithImagesAsync was actually called with — the panel's paste
+    // path takes this route instead of SendAsync whenever it is holding at
+    // least one pending picture (see IRemoteChatImages).
+    public List<(string Text, List<string> ImagePaths)> SentWithImages { get; } = new();
+
+    public Task SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths)
+    {
+        SentWithImages.Add((text, imagePaths.ToList()));
+
+        var turn = new ChatTurn { Role = ChatRole.User, Text = text };
+        _history.Add(turn);
+        TurnAdded?.Invoke(turn);
+
+        return Task.CompletedTask;
     }
 
     // Test helpers, not part of the interface: raise the two events the
