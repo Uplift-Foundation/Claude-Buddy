@@ -12,15 +12,17 @@ namespace ClaudeBuddy.Tests;
 // a wrong Working leaves an orb claiming a remote session is idle while it works.
 public class RemoteSnapshotTests
 {
+    private const string Account = ".claude-board";
+
     private static RemoteControlSessions.Remote Remote(string name, string status = "idle") =>
-        new(name, "94f106", status, DateTime.UtcNow);
+        new(name, "94f106", status, DateTime.UtcNow, Account);
 
     // Namespaced like OpenClaw's "openclaw:" keys, so one glance says which
     // source owns an id.
     [Fact]
     public void Key_IsNamespaced()
     {
-        Assert.Equal("rc:job-hunter", Remote("job-hunter").Key);
+        Assert.Equal("rc:.claude-board:job-hunter", Remote("job-hunter").Key);
     }
 
     // The collision that matters: SessionManager keys orbs by session id, and a

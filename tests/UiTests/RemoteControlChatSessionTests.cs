@@ -18,8 +18,14 @@ namespace ClaudeBuddy.Tests;
 // running it money — see LiveBridgeFactAttribute for where that is allowed.
 public class RemoteControlChatSessionTests
 {
+    private const string Account = ".claude-board";
+
     private static RemoteControlChatSession NewSession(string name = "job-hunter") =>
-        new("rc:" + name, name);
+        new($"rc:{Account}:{name}", Account, name);
+
+    private static BridgeProtocol.InboundMessage From(
+        string name, string body, string account = Account) =>
+        new(name, "bridge:session_1", "prompting", body, account);
 
     // The input box has to say where the message is going. A panel that looks
     // exactly like a local one but delivers to a different computer is a
@@ -74,8 +80,7 @@ public class RemoteControlChatSessionTests
     {
         var session = NewSession();
 
-        session.OnInbound(new BridgeProtocol.InboundMessage(
-            "job-hunter", "bridge:session_1", "prompting", "avatar.internal"));
+        session.OnInbound(From("job-hunter", "avatar.internal"));
 
         var turn = Assert.Single(session.History);
         Assert.Equal(ChatRole.Assistant, turn.Role);
@@ -91,8 +96,7 @@ public class RemoteControlChatSessionTests
     {
         var session = NewSession("job-hunter");
 
-        session.OnInbound(new BridgeProtocol.InboundMessage(
-            "resumes-2b", "bridge:session_2", "prompting", "not for you"));
+        session.OnInbound(From("resumes-2b", "not for you"));
 
         Assert.Empty(session.History);
     }
@@ -104,8 +108,7 @@ public class RemoteControlChatSessionTests
     {
         var session = NewSession("job-hunter");
 
-        session.OnInbound(new BridgeProtocol.InboundMessage(
-            "Job-Hunter", "bridge:session_1", "prompting", "still me"));
+        session.OnInbound(From("Job-Hunter", "still me"));
 
         Assert.Single(session.History);
     }
@@ -115,7 +118,7 @@ public class RemoteControlChatSessionTests
     {
         var session = NewSession();
 
-        session.OnInbound(new BridgeProtocol.InboundMessage("job-hunter", "b", "prompting", "   "));
+        session.OnInbound(From("job-hunter", "   "));
 
         Assert.Empty(session.History);
     }
@@ -156,8 +159,7 @@ public class RemoteControlChatSessionTests
         // means everywhere else.
         Assert.False(note.IsComplete);
 
-        session.OnInbound(new BridgeProtocol.InboundMessage(
-            "job-hunter", "b", "prompting", "done"));
+        session.OnInbound(From("job-hunter", "done"));
 
         // The answer replaced it rather than stacking under it — a "working…"
         // line above a finished reply reads as though it were still going.
@@ -192,6 +194,59 @@ public class RemoteControlChatSessionTests
         session.SetWorking(false);
 
         Assert.Empty(session.History);
+    }
+
+    // The collision multi-account creates, and the reason the account is in the
+    // key rather than only in the record. The same person naming a session the
+    // same thing on two accounts is the normal case, not a corner one — and
+    // without this check one machine's reply lands in the other's window.
+    [AvaloniaFact]
+    public void AMessageFromTheSameNameOnADifferentAccountIsIgnored()
+    {
+        var session = NewSession("job-hunter");
+
+        session.OnInbound(From("job-hunter", "from the other account", account: ".claude"));
+
+        Assert.Empty(session.History);
+    }
+
+    [AvaloniaFact]
+    public void AMessageFromTheSameNameOnTheSameAccountIsAccepted()
+    {
+        var session = NewSession("job-hunter");
+
+        session.OnInbound(From("job-hunter", "mine"));
+
+        var turn = Assert.Single(session.History);
+        Assert.Equal("mine", turn.Text);
+    }
+
+    // A message with no account on it is accepted rather than dropped. Nothing
+    // produces one today, but the field is defaulted, so a caller that forgets
+    // to stamp it should degrade to name-only matching — the old behaviour —
+    // instead of silently delivering nothing at all.
+    [AvaloniaFact]
+    public void AnUnstampedMessageStillMatchesOnNameAlone()
+    {
+        var session = NewSession("job-hunter");
+
+        session.OnInbound(new BridgeProtocol.InboundMessage(
+            "job-hunter", "bridge:session_1", "prompting", "unstamped"));
+
+        Assert.Single(session.History);
+    }
+
+    // Autocomplete for "/" is most of what this channel is for: a command is
+    // exactly the kind of thing worth asking a machine elsewhere to run. Only
+    // the built-in floor, though — see SlashCommandCatalog.ForRemoteClaudeCode.
+    [AvaloniaFact]
+    public void OffersSlashCommandsSoTheyCanBeTypedWithoutGuessing()
+    {
+        var session = NewSession();
+
+        Assert.IsAssignableFrom<IRemoteChatSlashCommands>(session);
+        Assert.NotEmpty(session.SlashCommands);
+        Assert.All(session.SlashCommands, c => Assert.StartsWith("/", c.Name));
     }
 
     // Bounded like the local sessions' history: a panel left open should not

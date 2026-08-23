@@ -82,6 +82,30 @@ namespace ClaudeBuddy
             // distinction is available to us at all.
             public bool IsRemoteControl =>
                 Kind.Equals("Remote Control", StringComparison.OrdinalIgnoreCase);
+
+            // A relay of Buddy's own, not a session anyone wants an orb for.
+            //
+            // The current relay excludes itself — ListAgents says so in its own
+            // header — but a *previous* one does not: its Remote Control
+            // registration outlives the process, so an earlier relay turns up as
+            // a peer with status "offline". Observed exactly that way, and it
+            // would have put a phantom orb on screen named after Buddy's own
+            // plumbing.
+            //
+            // Matched on the name prefix RemoteControlBridge builds, which is the
+            // only thing about a relay that is recognisable from out here.
+            public bool IsOwnRelay =>
+                Name.StartsWith("claude-buddy-rc-", StringComparison.OrdinalIgnoreCase);
+
+            // A session that has gone away. Worth an orb only if it is actually
+            // there — "offline" is the state a peer's registration sits in after
+            // its process is gone, and drawing it would be an orb for something
+            // nothing can be sent to.
+            public bool IsOffline =>
+                Status.Contains("offline", StringComparison.OrdinalIgnoreCase);
+
+            // Everything that has to be true for this to become an orb.
+            public bool IsWorthAnOrb => IsRemoteControl && !IsOwnRelay && !IsOffline;
         }
 
         // "  job-hunter [94f106]  ·  Remote Control  ·  idle"
@@ -125,7 +149,12 @@ namespace ClaudeBuddy
         // it matches the Name of the RemoteAgent that was messaged, and it is
         // the only link back, because replies arrive on some later turn with
         // nothing tying them to the send that caused them.
-        public readonly record struct InboundMessage(string FromName, string From, string Mode, string Body);
+        // Account is filled in by RemoteControlSessions, not by the parser — a
+        // transcript row has no idea which relay read it. It is here rather than
+        // alongside because routing needs it: with one relay per account, a name
+        // alone no longer identifies which conversation a reply belongs to.
+        public readonly record struct InboundMessage(
+            string FromName, string From, string Mode, string Body, string Account = "");
 
         // <cross-session-message from="bridge:session_01SX9H…" from-name="job-hunter" from-mode="prompting">
         // avatar.internal
@@ -219,6 +248,56 @@ namespace ClaudeBuddy
         private static readonly Regex LoginWarning = new(
             @"^\s*⚠\s*(?<text>.*login.*)$",
             RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
+
+        // Why a relay is stuck on a screen instead of starting, or null if it
+        // isn't.
+        //
+        // This exists because the failure it catches is silent and expensive. An
+        // account whose `.claude.json` has no `lastOnboardingVersion` gets the
+        // onboarding theme picker on every new session — measured on a real
+        // machine where one account recorded 2.1.220 and skipped it while
+        // another recorded nothing and hit it every time. In a detached tmux
+        // session nobody is looking at that screen, so nothing answers it: the
+        // relay waits out its whole 45-second timeout and then reports "failed
+        // to start", which is true and useless.
+        //
+        // Detected rather than answered. Picking a theme on someone's behalf is
+        // not this app's business, and answering an unknown prompt blind is how
+        // you end up accepting something nobody agreed to. Saying which screen
+        // it is, so a person can run `claude` once themselves, is both cheaper
+        // and honest.
+        //
+        // Matched on the numbered options rather than a title, because the title
+        // varies by version while the option list is the distinctive part.
+        private static readonly Regex ThemePrompt = new(
+            @"Auto \(match terminal\)|Dark mode \(colorblind-friendly\)|Syntax theme:",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // "Do you trust the files in this folder?" — the workspace-trust gate.
+        // Same shape of problem: an interactive question with nobody to answer.
+        private static readonly Regex TrustPrompt = new(
+            @"Do you trust the files|trust the files in this folder",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        public static string? ReadSetupBlock(string paneText)
+        {
+            if (string.IsNullOrEmpty(paneText)) return null;
+
+            if (ThemePrompt.IsMatch(paneText))
+            {
+                return "this account has not finished Claude Code's first-run setup "
+                     + "(it is asking which theme to use). Run `claude` in a terminal once "
+                     + "under that account, answer it, then try again.";
+            }
+
+            if (TrustPrompt.IsMatch(paneText))
+            {
+                return "Claude Code is asking whether to trust this folder. Run `claude` in a "
+                     + "terminal once from the same directory to answer it, then try again.";
+            }
+
+            return null;
+        }
 
         public static BridgeHealth ReadHealth(string paneText)
         {
