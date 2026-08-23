@@ -68,6 +68,20 @@ namespace ClaudeBuddy
         // right now, so switching sessions clears it rather than saving it.
         private readonly ObservableCollection<PendingImage> _pendingImages = new();
 
+        // What the bound session's CLI understands, so "/" in the box can
+        // offer the same autocomplete the terminal itself would. Empty for a
+        // session with no answer for IRemoteChatSlashCommands, which quietly
+        // turns the whole feature off for it rather than needing a check at
+        // every call site.
+        private IReadOnlyList<SlashCommand> _slashCommands = Array.Empty<SlashCommand>();
+
+        // The suggestions currently shown, and which one Up/Down has landed
+        // on. Kept as a plain list rather than something observable: the
+        // popup is small and rebuilt wholesale on every keystroke or arrow
+        // press anyway, so there is nothing an incremental update would save.
+        private List<SlashCommand> _slashMatches = new();
+        private int _slashSelected;
+
         // Distance from the orb's centre to the panel's near edge. Clears the
         // 56pt orb with a small gap, the same way OrbFlyout's ArcRadius does.
         private const int Gap = 34;
@@ -78,6 +92,30 @@ namespace ClaudeBuddy
 
             Turns.ItemsSource = _turns;
             Attachments.ItemsSource = _pendingImages;
+
+            // Bubbles size themselves off Scroll's actual width (see
+            // TurnView.MaxBubbleWidth) rather than a fixed pixel cap, since
+            // the panel is user-resizable now. Two hooks cover the two ways a
+            // turn's width can go stale: the collection hook catches a turn
+            // that didn't exist yet at the last resize, and SizeChanged
+            // catches turns that were already on screen when the resize
+            // happened.
+            _turns.CollectionChanged += (_, e) =>
+            {
+                if (e.NewItems is null) return;
+
+                var width = Scroll.Bounds.Width;
+                if (width <= 0) return;
+
+                foreach (TurnView turn in e.NewItems) turn.AvailableWidth = width;
+            };
+            Scroll.SizeChanged += (_, _) =>
+            {
+                var width = Scroll.Bounds.Width;
+                if (width <= 0) return;
+
+                foreach (var turn in _turns) turn.AvailableWidth = width;
+            };
 
             CloseButton.PointerPressed += (_, e) => { e.Handled = true; HideNow(); };
 
@@ -103,6 +141,7 @@ namespace ClaudeBuddy
             // KeyDown += would fire after the newline had already been inserted.
             // Getting there first is the whole point.
             Input.AddHandler(KeyDownEvent, OnInputKeyDown, RoutingStrategies.Tunnel);
+            Input.TextChanged += (_, _) => UpdateSlashSuggestions();
 
             KeyDown += OnPanelKeyDown;
 
@@ -135,10 +174,31 @@ namespace ClaudeBuddy
                 HideNow();
             }, DispatcherPriority.Background);
 
-            // SizeToContent means the height isn't known until after layout, so
-            // the first open of a tall transcript would otherwise be positioned
-            // as though it were a short one.
-            SizeChanged += (_, _) => Reposition();
+            // The window's Width/Height are the resize target now (see the
+            // XAML comment), so they're known synchronously and Reposition()
+            // is called explicitly wherever the size or the orb changes —
+            // Bind and RepositionFor — rather than off SizeChanged. Doing it
+            // off SizeChanged too would refire Reposition() on every pixel of
+            // a user's own resize drag and recentre the window on the orb out
+            // from under their cursor.
+            ResizeN.PointerPressed += (_, e) => BeginResize(WindowEdge.North, e);
+            ResizeS.PointerPressed += (_, e) => BeginResize(WindowEdge.South, e);
+            ResizeE.PointerPressed += (_, e) => BeginResize(WindowEdge.East, e);
+            ResizeW.PointerPressed += (_, e) => BeginResize(WindowEdge.West, e);
+            ResizeNE.PointerPressed += (_, e) => BeginResize(WindowEdge.NorthEast, e);
+            ResizeNW.PointerPressed += (_, e) => BeginResize(WindowEdge.NorthWest, e);
+            ResizeSE.PointerPressed += (_, e) => BeginResize(WindowEdge.SouthEast, e);
+            ResizeSW.PointerPressed += (_, e) => BeginResize(WindowEdge.SouthWest, e);
+            PointerMoved += OnResizePointerMoved;
+            PointerReleased += OnResizePointerReleased;
+
+            // See NwSeCursor/NeSwCursor: no StandardCursorType member draws
+            // as an actual diagonal on this platform, so these two corner
+            // pairs get a cursor bitmap built by hand instead.
+            ResizeNW.Cursor = NwSeCursor;
+            ResizeSE.Cursor = NwSeCursor;
+            ResizeNE.Cursor = NeSwCursor;
+            ResizeSW.Cursor = NeSwCursor;
 
             // Reaching the top asks for the page before. A threshold rather than
             // exactly zero, because a trackpad flick lands a few pixels short of
@@ -313,6 +373,9 @@ namespace ClaudeBuddy
 
             _turns.Clear();
             foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
+
+            _slashCommands = (session as IRemoteChatSlashCommands)?.SlashCommands ?? Array.Empty<SlashCommand>();
+            HideSlashSuggestions();
 
             Input.Text = Drafts.GetValueOrDefault(session.SessionId, "");
             MicButton.IsVisible = ClaudeBuddySettings.VoiceInputEnabled;
@@ -699,6 +762,152 @@ namespace ClaudeBuddy
             if ((sender as Control)?.DataContext is TurnView turn) turn.OpenFullSize();
         }
 
+        // Avalonia.Native's macOS cursor factory (libAvaloniaNative.dylib)
+        // only ever asks AppKit for arrow, crosshair, hand, I-beam, and the
+        // two straight resize cursors (up/down, left/right) — nothing in it
+        // answers to a diagonal, because AppKit itself has no public diagonal
+        // resize NSCursor to hand back. TopLeftCorner and friends fall
+        // through to plain crosshairCursor there, and Hand doesn't read as
+        // "resize" at all. So the corners get a real double-headed arrow,
+        // drawn once here and shared by both ends of each diagonal — NwSeCursor
+        // for the ↖↘ corners, NeSwCursor (the same arrow mirrored) for ↗↙.
+        private static readonly Cursor NwSeCursor = BuildDiagonalCursor(mirrored: false);
+        private static readonly Cursor NeSwCursor = BuildDiagonalCursor(mirrored: true);
+
+        private static Cursor BuildDiagonalCursor(bool mirrored)
+        {
+            // Avalonia's macOS cursor images came out at the bitmap's raw
+            // pixel count, not that divided by dpiScale — so the first version
+            // of this, drawn on a 22-unit canvas at 2x for retina crispness,
+            // rendered as a 44px cursor and looked about double the size it
+            // should have. Sizes below are fractions of `size` rather than
+            // the original design's absolute numbers, so this can be tuned
+            // again without redoing the arithmetic by hand.
+            const double size = 11;
+            const double dpiScale = 2;
+
+            double margin = size / 11; // corner inset for a head's right-angle vertex
+            double headEnd = size * 9 / 22; // how far a head's short legs reach
+            double shaftA = size * 3 / 11; // shaft's near end
+            double shaftB = size * 8 / 11; // shaft's far end
+            double farHeadStart = size - headEnd;
+            double far = size - margin;
+
+            double X(double x) => mirrored ? size - x : x;
+
+            var target = new RenderTargetBitmap(
+                new PixelSize((int)(size * dpiScale), (int)(size * dpiScale)),
+                new Vector(96 * dpiScale, 96 * dpiScale));
+
+            using (var ctx = target.CreateDrawingContext())
+            {
+                // The shaft, drawn as a black line with a white one on top of
+                // it rather than a single stroke, so it reads against either
+                // a light or a dark background — the same reason this panel's
+                // own bubbles carry an outline color at all.
+                var outline = new Pen(Brushes.Black, size * 4.5 / 22, lineCap: PenLineCap.Round);
+                ctx.DrawLine(outline, new Point(X(shaftA), shaftA), new Point(X(shaftB), shaftB));
+                var inner = new Pen(Brushes.White, size * 2 / 22, lineCap: PenLineCap.Round);
+                ctx.DrawLine(inner, new Point(X(shaftA), shaftA), new Point(X(shaftB), shaftB));
+
+                // Two right-triangle heads, one at each end of the shaft, each
+                // with its right angle at the corner it points into — the
+                // same shape Windows' own SIZENWSE/SIZENESW cursors use.
+                var heads = new StreamGeometry();
+                using (var g = heads.Open())
+                {
+                    g.BeginFigure(new Point(X(margin), margin), true);
+                    g.LineTo(new Point(X(headEnd), margin), true);
+                    g.LineTo(new Point(X(margin), headEnd), true);
+                    g.EndFigure(true);
+
+                    g.BeginFigure(new Point(X(far), far), true);
+                    g.LineTo(new Point(X(farHeadStart), far), true);
+                    g.LineTo(new Point(X(far), farHeadStart), true);
+                    g.EndFigure(true);
+                }
+
+                ctx.DrawGeometry(Brushes.White, new Pen(Brushes.Black, size * 1.25 / 22), heads);
+            }
+
+            return new Cursor(target, new PixelPoint(target.PixelSize.Width / 2, target.PixelSize.Height / 2));
+        }
+
+        // BeginResizeDrag hands the drag to the platform's window manager, which
+        // is where Win32 and X11 implement it — but Avalonia.Native carries no
+        // such hook on macOS (nothing in libAvaloniaNative.dylib answers to it),
+        // so the call is a silent no-op there: the cursor still swaps, because
+        // that part is pure managed code, but nothing ever moves. Tracked by
+        // hand instead, uniformly on every platform, rather than branching on
+        // OS to use the native call where it happens to exist.
+        private WindowEdge? _resizeEdge;
+        private PixelPoint _resizeStartPos;
+        private double _resizeStartWidth;
+        private double _resizeStartHeight;
+        private PixelPoint _resizeStartScreen;
+
+        private void BeginResize(WindowEdge edge, PointerPressedEventArgs e)
+        {
+            if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+
+            e.Handled = true;
+            _resizeEdge = edge;
+            _resizeStartPos = Position;
+            _resizeStartWidth = Width;
+            _resizeStartHeight = Height;
+            _resizeStartScreen = this.PointToScreen(e.GetPosition(this));
+
+            // Captured on the window rather than the strip under the pointer:
+            // the drag routinely carries the pointer off a 6px strip, and
+            // capture is what keeps the events coming anyway.
+            e.Pointer.Capture(this);
+        }
+
+        private void OnResizePointerMoved(object? sender, PointerEventArgs e)
+        {
+            if (_resizeEdge is not { } edge) return;
+
+            var nowScreen = this.PointToScreen(e.GetPosition(this));
+            var scale = RenderScaling;
+            var dx = (nowScreen.X - _resizeStartScreen.X) / scale;
+            var dy = (nowScreen.Y - _resizeStartScreen.Y) / scale;
+
+            var west = edge is WindowEdge.West or WindowEdge.NorthWest or WindowEdge.SouthWest;
+            var east = edge is WindowEdge.East or WindowEdge.NorthEast or WindowEdge.SouthEast;
+            var north = edge is WindowEdge.North or WindowEdge.NorthWest or WindowEdge.NorthEast;
+            var south = edge is WindowEdge.South or WindowEdge.SouthWest or WindowEdge.SouthEast;
+
+            var pos = _resizeStartPos;
+            var width = _resizeStartWidth;
+            var height = _resizeStartHeight;
+
+            if (east) width = Math.Clamp(_resizeStartWidth + dx, MinWidth, MaxWidth);
+            if (west)
+            {
+                width = Math.Clamp(_resizeStartWidth - dx, MinWidth, MaxWidth);
+                pos = pos.WithX(_resizeStartPos.X - (int)Math.Round((width - _resizeStartWidth) * scale));
+            }
+
+            if (south) height = Math.Clamp(_resizeStartHeight + dy, MinHeight, MaxHeight);
+            if (north)
+            {
+                height = Math.Clamp(_resizeStartHeight - dy, MinHeight, MaxHeight);
+                pos = pos.WithY(_resizeStartPos.Y - (int)Math.Round((height - _resizeStartHeight) * scale));
+            }
+
+            Width = width;
+            Height = height;
+            Position = pos;
+        }
+
+        private void OnResizePointerReleased(object? sender, PointerReleasedEventArgs e)
+        {
+            if (_resizeEdge is null) return;
+
+            _resizeEdge = null;
+            e.Pointer.Capture(null);
+        }
+
         private void Reposition()
         {
             if (_owner is null) return;
@@ -713,8 +922,11 @@ namespace ClaudeBuddy
             var scale = screen.Scaling;
             var work = screen.WorkingArea;
 
-            var width = (int)(340 * scale);
-            var height = (int)(Math.Max(Root.Bounds.Height, MinHeight) * scale);
+            // Width and Height are the resize target (see the XAML comment),
+            // so unlike the old SizeToContent world these are already final —
+            // no need to wait on Root's laid-out bounds.
+            var width = (int)(Width * scale);
+            var height = (int)(Height * scale);
             var gap = (int)(Gap * scale);
 
             // Below by default, flipped above when it would run off the bottom.
@@ -740,6 +952,48 @@ namespace ClaudeBuddy
                 e.Handled = true;
                 _ = HandlePasteAsync();
                 return;
+            }
+
+            // While suggestions are up, the keys that would otherwise send or
+            // insert a newline instead drive the popup — the same keys a
+            // terminal's own "/" autocomplete would claim.
+            if (_slashMatches.Count > 0)
+            {
+                if (e.Key == Key.Down)
+                {
+                    _slashSelected = (_slashSelected + 1) % _slashMatches.Count;
+                    RenderSlashSuggestions();
+                    e.Handled = true;
+                    return;
+                }
+
+                if (e.Key == Key.Up)
+                {
+                    _slashSelected = (_slashSelected - 1 + _slashMatches.Count) % _slashMatches.Count;
+                    RenderSlashSuggestions();
+                    e.Handled = true;
+                    return;
+                }
+
+                if (e.Key == Key.Escape)
+                {
+                    // Dismisses the popup only. A second Escape then reaches
+                    // OnPanelKeyDown and closes the panel — the same
+                    // two-step precedent recording already sets below.
+                    HideSlashSuggestions();
+                    e.Handled = true;
+                    return;
+                }
+
+                var accepting = e.Key == Key.Tab
+                    || (e.Key is Key.Enter or Key.Return && !e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+
+                if (accepting)
+                {
+                    AcceptSlashSuggestion(_slashMatches[_slashSelected]);
+                    e.Handled = true;
+                    return;
+                }
             }
 
             if (e.Key != Key.Enter && e.Key != Key.Return) return;
@@ -847,6 +1101,97 @@ namespace ClaudeBuddy
         // clipboard handed over, small enough at 40pt that reusing it as
         // its own thumbnail costs nothing worth a second decode.
         private sealed record PendingImage(string Path, Bitmap Thumbnail);
+        // Only while the input's first word is still being typed and starts
+        // with "/" — a slash command is the whole message, not something
+        // that can appear after other text, so anything past the first space
+        // isn't a command being completed any more.
+        private void UpdateSlashSuggestions()
+        {
+            if (_slashCommands.Count == 0) { HideSlashSuggestions(); return; }
+
+            var text = Input.Text ?? "";
+            var caret = Math.Clamp(Input.CaretIndex, 0, text.Length);
+            var token = text[..caret];
+
+            if (token.Length == 0 || token[0] != '/' || token.Contains(' ') || token.Contains('\n'))
+            {
+                HideSlashSuggestions();
+                return;
+            }
+
+            _slashMatches = _slashCommands
+                .Where(c => c.Name.StartsWith(token, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // Also closes once the only match is exactly what's already
+            // typed — otherwise finishing a command by hand and pressing
+            // Enter would "accept" it into itself instead of sending.
+            if (_slashMatches.Count == 0
+                || (_slashMatches.Count == 1 && string.Equals(_slashMatches[0].Name, token, StringComparison.OrdinalIgnoreCase)))
+            {
+                HideSlashSuggestions();
+                return;
+            }
+
+            _slashSelected = 0;
+            RenderSlashSuggestions();
+            SlashBox.IsVisible = true;
+        }
+
+        private static readonly IBrush SlashRowFill = new SolidColorBrush(Colors.Transparent);
+        private static readonly IBrush SlashRowSelected = new SolidColorBrush(Color.Parse("#33FFFFFF"));
+
+        private void RenderSlashSuggestions()
+        {
+            SlashList.ItemsSource = _slashMatches
+                .Select((c, i) => new SlashSuggestionView(c, i == _slashSelected ? SlashRowSelected : SlashRowFill))
+                .ToList();
+        }
+
+        private void HideSlashSuggestions()
+        {
+            if (_slashMatches.Count == 0 && !SlashBox.IsVisible) return;
+
+            _slashMatches = new List<SlashCommand>();
+            _slashSelected = 0;
+            SlashBox.IsVisible = false;
+            SlashList.ItemsSource = null;
+        }
+
+        // Replaces the token being completed with the chosen command, the
+        // way every other editor's autocomplete does — not sent outright.
+        // Deciding a bare "/rename" is done and should go is the same
+        // judgement call Send() already leaves to whoever is typing.
+        private void AcceptSlashSuggestion(SlashCommand command)
+        {
+            var text = Input.Text ?? "";
+            var caret = Math.Clamp(Input.CaretIndex, 0, text.Length);
+            var rest = text[caret..];
+            var replacement = command.Name + " ";
+
+            Input.Text = replacement + rest;
+            Input.CaretIndex = replacement.Length;
+
+            // Last, not first: setting Text above already re-ran this via
+            // TextChanged, and calling it again here is what makes the
+            // outcome "closed" regardless of what that intermediate pass
+            // computed.
+            HideSlashSuggestions();
+            Input.Focus();
+        }
+
+        private void SlashSuggestion_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            e.Handled = true;
+
+            if ((sender as Control)?.DataContext is SlashSuggestionView view) AcceptSlashSuggestion(view.Command);
+        }
+
+        private sealed record SlashSuggestionView(SlashCommand Command, IBrush RowFill)
+        {
+            public string Name => Command.Name;
+            public string Description => Command.Description;
+        }
 
         private void OnPanelKeyDown(object? sender, KeyEventArgs e)
         {
@@ -1560,7 +1905,31 @@ namespace ClaudeBuddy
                 ? new Thickness(0, 2, 0, 2)
                 : IsUser ? new Thickness(40, 2, 0, 3) : new Thickness(0, 2, 40, 3);
 
-            public double MaxBubbleWidth => IsSystem ? 300 : 244;
+            // Set from outside — see ChatPanel's Scroll.SizeChanged handler and
+            // the _turns.CollectionChanged hook that seeds it on every new
+            // turn — rather than read some ambient static, so a TurnView stays
+            // a plain value holder that answers what it's told.
+            private double _availableWidth = 306;
+
+            public double AvailableWidth
+            {
+                get => _availableWidth;
+                set
+                {
+                    if (_availableWidth.Equals(value)) return;
+
+                    _availableWidth = value;
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(MaxBubbleWidth)));
+                }
+            }
+
+            // A fraction of what's actually available rather than a fixed
+            // 244px, now that the panel is user-resizable: a message keeps a
+            // comfortable line length instead of either hugging the old cap
+            // forever on a wide window or never using the room a narrow one
+            // freed up. System lines run almost the full width because they
+            // read as a note about the conversation, not one side of it.
+            public double MaxBubbleWidth => Math.Max(140, AvailableWidth * (IsSystem ? 0.95 : 0.8));
 
             public double Size => IsSystem ? 10 : 11.5;
 
