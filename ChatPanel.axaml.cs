@@ -71,6 +71,30 @@ namespace ClaudeBuddy
 
             Turns.ItemsSource = _turns;
 
+            // Bubbles size themselves off Scroll's actual width (see
+            // TurnView.MaxBubbleWidth) rather than a fixed pixel cap, since
+            // the panel is user-resizable now. Two hooks cover the two ways a
+            // turn's width can go stale: the collection hook catches a turn
+            // that didn't exist yet at the last resize, and SizeChanged
+            // catches turns that were already on screen when the resize
+            // happened.
+            _turns.CollectionChanged += (_, e) =>
+            {
+                if (e.NewItems is null) return;
+
+                var width = Scroll.Bounds.Width;
+                if (width <= 0) return;
+
+                foreach (TurnView turn in e.NewItems) turn.AvailableWidth = width;
+            };
+            Scroll.SizeChanged += (_, _) =>
+            {
+                var width = Scroll.Bounds.Width;
+                if (width <= 0) return;
+
+                foreach (var turn in _turns) turn.AvailableWidth = width;
+            };
+
             CloseButton.PointerPressed += (_, e) => { e.Handled = true; HideNow(); };
 
             // The portrait opens at four times the size, centred on itself.
@@ -127,10 +151,31 @@ namespace ClaudeBuddy
                 HideNow();
             }, DispatcherPriority.Background);
 
-            // SizeToContent means the height isn't known until after layout, so
-            // the first open of a tall transcript would otherwise be positioned
-            // as though it were a short one.
-            SizeChanged += (_, _) => Reposition();
+            // The window's Width/Height are the resize target now (see the
+            // XAML comment), so they're known synchronously and Reposition()
+            // is called explicitly wherever the size or the orb changes —
+            // Bind and RepositionFor — rather than off SizeChanged. Doing it
+            // off SizeChanged too would refire Reposition() on every pixel of
+            // a user's own resize drag and recentre the window on the orb out
+            // from under their cursor.
+            ResizeN.PointerPressed += (_, e) => BeginResize(WindowEdge.North, e);
+            ResizeS.PointerPressed += (_, e) => BeginResize(WindowEdge.South, e);
+            ResizeE.PointerPressed += (_, e) => BeginResize(WindowEdge.East, e);
+            ResizeW.PointerPressed += (_, e) => BeginResize(WindowEdge.West, e);
+            ResizeNE.PointerPressed += (_, e) => BeginResize(WindowEdge.NorthEast, e);
+            ResizeNW.PointerPressed += (_, e) => BeginResize(WindowEdge.NorthWest, e);
+            ResizeSE.PointerPressed += (_, e) => BeginResize(WindowEdge.SouthEast, e);
+            ResizeSW.PointerPressed += (_, e) => BeginResize(WindowEdge.SouthWest, e);
+            PointerMoved += OnResizePointerMoved;
+            PointerReleased += OnResizePointerReleased;
+
+            // See NwSeCursor/NeSwCursor: no StandardCursorType member draws
+            // as an actual diagonal on this platform, so these two corner
+            // pairs get a cursor bitmap built by hand instead.
+            ResizeNW.Cursor = NwSeCursor;
+            ResizeSE.Cursor = NwSeCursor;
+            ResizeNE.Cursor = NeSwCursor;
+            ResizeSW.Cursor = NeSwCursor;
 
             // Reaching the top asks for the page before. A threshold rather than
             // exactly zero, because a trackpad flick lands a few pixels short of
@@ -685,6 +730,152 @@ namespace ClaudeBuddy
             if ((sender as Control)?.DataContext is TurnView turn) turn.OpenFullSize();
         }
 
+        // Avalonia.Native's macOS cursor factory (libAvaloniaNative.dylib)
+        // only ever asks AppKit for arrow, crosshair, hand, I-beam, and the
+        // two straight resize cursors (up/down, left/right) — nothing in it
+        // answers to a diagonal, because AppKit itself has no public diagonal
+        // resize NSCursor to hand back. TopLeftCorner and friends fall
+        // through to plain crosshairCursor there, and Hand doesn't read as
+        // "resize" at all. So the corners get a real double-headed arrow,
+        // drawn once here and shared by both ends of each diagonal — NwSeCursor
+        // for the ↖↘ corners, NeSwCursor (the same arrow mirrored) for ↗↙.
+        private static readonly Cursor NwSeCursor = BuildDiagonalCursor(mirrored: false);
+        private static readonly Cursor NeSwCursor = BuildDiagonalCursor(mirrored: true);
+
+        private static Cursor BuildDiagonalCursor(bool mirrored)
+        {
+            // Avalonia's macOS cursor images came out at the bitmap's raw
+            // pixel count, not that divided by dpiScale — so the first version
+            // of this, drawn on a 22-unit canvas at 2x for retina crispness,
+            // rendered as a 44px cursor and looked about double the size it
+            // should have. Sizes below are fractions of `size` rather than
+            // the original design's absolute numbers, so this can be tuned
+            // again without redoing the arithmetic by hand.
+            const double size = 11;
+            const double dpiScale = 2;
+
+            double margin = size / 11; // corner inset for a head's right-angle vertex
+            double headEnd = size * 9 / 22; // how far a head's short legs reach
+            double shaftA = size * 3 / 11; // shaft's near end
+            double shaftB = size * 8 / 11; // shaft's far end
+            double farHeadStart = size - headEnd;
+            double far = size - margin;
+
+            double X(double x) => mirrored ? size - x : x;
+
+            var target = new RenderTargetBitmap(
+                new PixelSize((int)(size * dpiScale), (int)(size * dpiScale)),
+                new Vector(96 * dpiScale, 96 * dpiScale));
+
+            using (var ctx = target.CreateDrawingContext())
+            {
+                // The shaft, drawn as a black line with a white one on top of
+                // it rather than a single stroke, so it reads against either
+                // a light or a dark background — the same reason this panel's
+                // own bubbles carry an outline color at all.
+                var outline = new Pen(Brushes.Black, size * 4.5 / 22, lineCap: PenLineCap.Round);
+                ctx.DrawLine(outline, new Point(X(shaftA), shaftA), new Point(X(shaftB), shaftB));
+                var inner = new Pen(Brushes.White, size * 2 / 22, lineCap: PenLineCap.Round);
+                ctx.DrawLine(inner, new Point(X(shaftA), shaftA), new Point(X(shaftB), shaftB));
+
+                // Two right-triangle heads, one at each end of the shaft, each
+                // with its right angle at the corner it points into — the
+                // same shape Windows' own SIZENWSE/SIZENESW cursors use.
+                var heads = new StreamGeometry();
+                using (var g = heads.Open())
+                {
+                    g.BeginFigure(new Point(X(margin), margin), true);
+                    g.LineTo(new Point(X(headEnd), margin), true);
+                    g.LineTo(new Point(X(margin), headEnd), true);
+                    g.EndFigure(true);
+
+                    g.BeginFigure(new Point(X(far), far), true);
+                    g.LineTo(new Point(X(farHeadStart), far), true);
+                    g.LineTo(new Point(X(far), farHeadStart), true);
+                    g.EndFigure(true);
+                }
+
+                ctx.DrawGeometry(Brushes.White, new Pen(Brushes.Black, size * 1.25 / 22), heads);
+            }
+
+            return new Cursor(target, new PixelPoint(target.PixelSize.Width / 2, target.PixelSize.Height / 2));
+        }
+
+        // BeginResizeDrag hands the drag to the platform's window manager, which
+        // is where Win32 and X11 implement it — but Avalonia.Native carries no
+        // such hook on macOS (nothing in libAvaloniaNative.dylib answers to it),
+        // so the call is a silent no-op there: the cursor still swaps, because
+        // that part is pure managed code, but nothing ever moves. Tracked by
+        // hand instead, uniformly on every platform, rather than branching on
+        // OS to use the native call where it happens to exist.
+        private WindowEdge? _resizeEdge;
+        private PixelPoint _resizeStartPos;
+        private double _resizeStartWidth;
+        private double _resizeStartHeight;
+        private PixelPoint _resizeStartScreen;
+
+        private void BeginResize(WindowEdge edge, PointerPressedEventArgs e)
+        {
+            if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+
+            e.Handled = true;
+            _resizeEdge = edge;
+            _resizeStartPos = Position;
+            _resizeStartWidth = Width;
+            _resizeStartHeight = Height;
+            _resizeStartScreen = this.PointToScreen(e.GetPosition(this));
+
+            // Captured on the window rather than the strip under the pointer:
+            // the drag routinely carries the pointer off a 6px strip, and
+            // capture is what keeps the events coming anyway.
+            e.Pointer.Capture(this);
+        }
+
+        private void OnResizePointerMoved(object? sender, PointerEventArgs e)
+        {
+            if (_resizeEdge is not { } edge) return;
+
+            var nowScreen = this.PointToScreen(e.GetPosition(this));
+            var scale = RenderScaling;
+            var dx = (nowScreen.X - _resizeStartScreen.X) / scale;
+            var dy = (nowScreen.Y - _resizeStartScreen.Y) / scale;
+
+            var west = edge is WindowEdge.West or WindowEdge.NorthWest or WindowEdge.SouthWest;
+            var east = edge is WindowEdge.East or WindowEdge.NorthEast or WindowEdge.SouthEast;
+            var north = edge is WindowEdge.North or WindowEdge.NorthWest or WindowEdge.NorthEast;
+            var south = edge is WindowEdge.South or WindowEdge.SouthWest or WindowEdge.SouthEast;
+
+            var pos = _resizeStartPos;
+            var width = _resizeStartWidth;
+            var height = _resizeStartHeight;
+
+            if (east) width = Math.Clamp(_resizeStartWidth + dx, MinWidth, MaxWidth);
+            if (west)
+            {
+                width = Math.Clamp(_resizeStartWidth - dx, MinWidth, MaxWidth);
+                pos = pos.WithX(_resizeStartPos.X - (int)Math.Round((width - _resizeStartWidth) * scale));
+            }
+
+            if (south) height = Math.Clamp(_resizeStartHeight + dy, MinHeight, MaxHeight);
+            if (north)
+            {
+                height = Math.Clamp(_resizeStartHeight - dy, MinHeight, MaxHeight);
+                pos = pos.WithY(_resizeStartPos.Y - (int)Math.Round((height - _resizeStartHeight) * scale));
+            }
+
+            Width = width;
+            Height = height;
+            Position = pos;
+        }
+
+        private void OnResizePointerReleased(object? sender, PointerReleasedEventArgs e)
+        {
+            if (_resizeEdge is null) return;
+
+            _resizeEdge = null;
+            e.Pointer.Capture(null);
+        }
+
         private void Reposition()
         {
             if (_owner is null) return;
@@ -699,8 +890,11 @@ namespace ClaudeBuddy
             var scale = screen.Scaling;
             var work = screen.WorkingArea;
 
-            var width = (int)(340 * scale);
-            var height = (int)(Math.Max(Root.Bounds.Height, MinHeight) * scale);
+            // Width and Height are the resize target (see the XAML comment),
+            // so unlike the old SizeToContent world these are already final —
+            // no need to wait on Root's laid-out bounds.
+            var width = (int)(Width * scale);
+            var height = (int)(Height * scale);
             var gap = (int)(Gap * scale);
 
             // Below by default, flipped above when it would run off the bottom.
@@ -1416,7 +1610,31 @@ namespace ClaudeBuddy
                 ? new Thickness(0, 2, 0, 2)
                 : IsUser ? new Thickness(40, 2, 0, 3) : new Thickness(0, 2, 40, 3);
 
-            public double MaxBubbleWidth => IsSystem ? 300 : 244;
+            // Set from outside — see ChatPanel's Scroll.SizeChanged handler and
+            // the _turns.CollectionChanged hook that seeds it on every new
+            // turn — rather than read some ambient static, so a TurnView stays
+            // a plain value holder that answers what it's told.
+            private double _availableWidth = 306;
+
+            public double AvailableWidth
+            {
+                get => _availableWidth;
+                set
+                {
+                    if (_availableWidth.Equals(value)) return;
+
+                    _availableWidth = value;
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(MaxBubbleWidth)));
+                }
+            }
+
+            // A fraction of what's actually available rather than a fixed
+            // 244px, now that the panel is user-resizable: a message keeps a
+            // comfortable line length instead of either hugging the old cap
+            // forever on a wide window or never using the room a narrow one
+            // freed up. System lines run almost the full width because they
+            // read as a note about the conversation, not one side of it.
+            public double MaxBubbleWidth => Math.Max(140, AvailableWidth * (IsSystem ? 0.95 : 0.8));
 
             public double Size => IsSystem ? 10 : 11.5;
 
