@@ -377,6 +377,13 @@ namespace ClaudeBuddy
             // Auto-organize: which shape and how much space between orbs.
             public string ArrangeShape { get; set; } = DefaultArrangeShape;
             public double ArrangeSpacing { get; set; } = DefaultArrangeSpacing;
+
+            // Where the arranged shape is centred on screen — physical pixels,
+            // same space as OrbPlacement above. Null means "never arranged
+            // yet"; SessionManager fills it in with the screen's centre the
+            // first time and keeps reusing it after, which is what stops the
+            // shape recentring every time an orb joins or leaves.
+            public OrbPlacement? ArrangeAnchor { get; set; }
         }
 
         // ---- app-wide -------------------------------------------------------
@@ -613,6 +620,12 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.ArrangeSpacing; }
             set { Load(); lock (Gate) _model.ArrangeSpacing = value; Save(); }
+        }
+
+        public static OrbPlacement? ArrangeAnchor
+        {
+            get { Load(); lock (Gate) return _model.ArrangeAnchor; }
+            set { Load(); lock (Gate) _model.ArrangeAnchor = value; Save(); }
         }
 
         // ---- orb state colours ----------------------------------------------
