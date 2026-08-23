@@ -1797,16 +1797,45 @@ namespace ClaudeBuddy
             }
 
             var screen = allOrbs[0].Screens.Primary ?? allOrbs[0].Screens.All.FirstOrDefault();
+            var work = screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080);
 
             var layout = new OrbArrangement.Layout(
-                screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080),
+                work,
                 screen?.Scaling ?? 1.0,
                 ClaudeBuddySettings.ArrangeShape,
-                ClaudeBuddySettings.ArrangeSpacing);
+                ClaudeBuddySettings.ArrangeSpacing,
+                ArrangementAnchor(work));
 
             var placed = OrbArrangement.Compute(allOrbs.Count, leadOf, layout);
 
             return allOrbs.Select((orb, i) => (orb, placed[i])).ToList();
+        }
+
+        // Where the shape gets drawn. The first time ever, that's the middle
+        // of the work area — same point OrbArrangement used to compute on its
+        // own — but saved from then on, so a later orb joining or leaving
+        // re-fits around where the shape already is rather than the screen's
+        // middle. ShiftArrangementAnchor below is the other way this moves:
+        // the user dragging the whole shape somewhere else.
+        private static PixelPoint ArrangementAnchor(PixelRect work)
+        {
+            if (ClaudeBuddySettings.ArrangeAnchor is { } saved) return new PixelPoint(saved.X, saved.Y);
+
+            var center = new PixelPoint(work.X + work.Width / 2, work.Y + work.Height / 2);
+            ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(center.X, center.Y);
+            return center;
+        }
+
+        // A whole-shape drag (see OrbWindow.OnPointerReleased) moves every
+        // arranged orb by the same delta, so the shape's saved centre needs
+        // the same nudge or the next membership change would snap it back to
+        // wherever it was before the drag.
+        public void ShiftArrangementAnchor(int dx, int dy)
+        {
+            if (dx == 0 && dy == 0) return;
+            if (ClaudeBuddySettings.ArrangeAnchor is not { } anchor) return;
+
+            ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(anchor.X + dx, anchor.Y + dy);
         }
 
         private void RestoreFromPattern()
