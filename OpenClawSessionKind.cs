@@ -19,7 +19,15 @@ namespace ClaudeBuddy
 
         Direct,
         Channel,
-        Cron
+        Cron,
+
+        // A Claude Code session on another machine, reached over Remote Control.
+        // Badged, unlike Main, because it is the exception rather than the rule:
+        // almost every orb on screen is local, so the few that aren't are worth
+        // marking — clicking one opens a chat instead of jumping to a terminal,
+        // and knowing that before you click is the difference between the app
+        // feeling consistent and feeling broken.
+        Remote
     }
 
     // Working out what kind of conversation a gateway session is, from the two
