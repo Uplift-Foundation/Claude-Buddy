@@ -855,6 +855,55 @@ connection rather than through the system trust store. `docs/openclaw-findings.m
 records what was measured against a real gateway, including several places where
 the published protocol documentation disagrees with the running software.
 
+## Sessions on other machines (macOS, off by default)
+
+If you run Claude Code on more than one machine — a desktop at home, a server,
+a laptop you left on — Claude Buddy can show those sessions as orbs too, and let
+you send them instructions from anywhere. There is no port to open, no tunnel,
+and nothing to install on the other machine: it works from a hotel or a diner
+exactly as it does from your desk.
+
+The requirement is that the session on the other machine has **Remote Control
+on** (`claude --remote-control`, or `/remote-control` in a running session).
+Those are the sessions you could already reach from your phone; this makes them
+reachable from Claude Buddy as well. A session without it stays invisible here,
+which is the right default — it is also how you keep one private.
+
+How it works is worth knowing, because it explains the one cost. Anthropic's
+Remote Control relay has no API for third-party apps, so Claude Buddy cannot ask
+it anything directly. What it can do is start **a hidden Claude Code session of
+its own** with Remote Control on, because such a session is given tools that
+reach the account's other sessions wherever they are. That session is the relay:
+your own account, no server of ours in the path. It also means the feature uses
+your account and counts against your usage while it is running — which is why it
+is off until you turn it on, why it only starts when you ask, and why it shuts
+itself down again when you stop using it.
+
+Turn it on in **Settings → Other machines**, then:
+
+- **Account** — which Claude Code config directory the relay signs in as. Remote
+  Control only shows sessions on the same account, so pick the one your other
+  machines use. If that is a second account, add it under **Claude Code
+  profiles** first.
+- **Stop the relay after** — how long it may sit unused before shutting down. It
+  starts again by itself the next time you open or send to a remote session.
+
+Nothing starts merely because the switch is on. Use **Connect to other
+machines** in the tray menu, or the button in Settings, or just open a remote
+session's chat — any of those brings the relay up, and orbs for the sessions it
+can see appear a few seconds later, badged `⇄`.
+
+Clicking one opens a chat panel, since there is no terminal on this machine to
+jump to. That panel is a **messaging channel rather than a mirror**: it shows
+what you sent and what came back, like a text thread, and does not show what
+that session is doing the rest of the time. Its transcript lives on the other
+machine, and this is a way to talk to it, not a window onto it.
+
+`docs/remote-control-findings.md` records what was measured against two real
+machines before any of this was built — including what the relay does and does
+not expose, and the two things a stronger test caught that a weaker one had
+passed.
+
 ## 1. Install it
 
 Either download an installer or build from source — both are fully supported,
