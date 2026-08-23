@@ -20,11 +20,17 @@ public class ChatPanelTests : IDisposable
 {
     private readonly List<string> _sessionIdsToClean = new();
 
-    private FakeChatSession NewFake(IEnumerable<ChatTurn>? history = null, string? sessionId = null)
+    private FakeChatSession NewFake(IEnumerable<ChatTurn>? history = null, string? sessionId = null,
+        IReadOnlyList<SlashCommand>? slashCommands = null)
     {
         var id = sessionId ?? "fake-" + Guid.NewGuid();
         _sessionIdsToClean.Add(id);
-        return new FakeChatSession(history) { SessionId = id, DisplayName = "Fake Session" };
+        return new FakeChatSession(history)
+        {
+            SessionId = id,
+            DisplayName = "Fake Session",
+            SlashCommands = slashCommands ?? Array.Empty<SlashCommand>()
+        };
     }
 
     // Deliberately never closed: closing an OrbWindow tears down its
@@ -498,5 +504,151 @@ public class ChatPanelTests : IDisposable
         Assert.Same(nw.Cursor, se.Cursor);
         Assert.Same(ne.Cursor, sw.Cursor);
         Assert.NotSame(nw.Cursor, ne.Cursor);
+    }
+
+    // Setting Input.Text directly (rather than TextInputEventArgs character
+    // by character) is enough here: ChatPanel wires UpdateSlashSuggestions to
+    // TextBox.TextChanged, which a direct property set fires the same as
+    // typing does — the same mechanism Send()'s own `Input.Text = ""` and
+    // Bind()'s draft restore already rely on in production code.
+    [AvaloniaFact]
+    public void TypingASlashShowsMatchingSuggestionsAndFiltersAsYouType()
+    {
+        var orb = NewOrb();
+        var fake = NewFake(slashCommands: new[]
+        {
+            new SlashCommand("/clear", "Clear the conversation"),
+            new SlashCommand("/clean-cache", "Shares a prefix with /clear"),
+            new SlashCommand("/color", "Set the prompt color"),
+        });
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var input = panel.FindControl<TextBox>("Input")!;
+        var slashBox = panel.FindControl<Border>("SlashBox")!;
+
+        input.Text = "/cl";
+        input.CaretIndex = input.Text.Length;
+        Flush();
+
+        Assert.True(slashBox.IsVisible);
+        var suggestions = panel.FindControl<ItemsControl>("SlashList")!.ItemsSource!.Cast<object>().ToList();
+        Assert.Equal(2, suggestions.Count);
+
+        // Narrowing further to something only /color matches switches the
+        // popup's contents rather than just appending to them.
+        input.Text = "/co";
+        input.CaretIndex = input.Text.Length;
+        Flush();
+
+        suggestions = panel.FindControl<ItemsControl>("SlashList")!.ItemsSource!.Cast<object>().ToList();
+        Assert.Single(suggestions);
+    }
+
+    [AvaloniaFact]
+    public void ArrowDownThenEnterAcceptsTheSecondSuggestionRatherThanSending()
+    {
+        var orb = NewOrb();
+        var fake = NewFake(slashCommands: new[]
+        {
+            new SlashCommand("/clear", "Clear the conversation"),
+            new SlashCommand("/clean-cache", "Shares a prefix with /clear"),
+        });
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var input = panel.FindControl<TextBox>("Input")!;
+
+        input.Text = "/cl";
+        input.CaretIndex = input.Text.Length;
+        Flush();
+
+        input.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Down });
+        Flush();
+        input.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Enter });
+        Flush();
+
+        // Accepted, not sent: the panel fills the box for you to add
+        // arguments to, the same as any other editor's autocomplete.
+        Assert.Equal("/clean-cache ", input.Text);
+        Assert.Empty(fake.SentTexts);
+    }
+
+    [AvaloniaFact]
+    public void FinishingACommandByHandClosesSuggestionsInsteadOfOfferingItself()
+    {
+        var orb = NewOrb();
+        var fake = NewFake(slashCommands: new[]
+        {
+            new SlashCommand("/clear", "Clear the conversation"),
+            new SlashCommand("/clean-cache", "Shares a prefix with /clear"),
+        });
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var input = panel.FindControl<TextBox>("Input")!;
+        var slashBox = panel.FindControl<Border>("SlashBox")!;
+
+        input.Text = "/clear";
+        input.CaretIndex = input.Text.Length;
+        Flush();
+
+        Assert.False(slashBox.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void EscapeDismissesSuggestionsWithoutClosingThePanelOrSending()
+    {
+        var orb = NewOrb();
+        var fake = NewFake(slashCommands: new[]
+        {
+            new SlashCommand("/clear", "Clear the conversation"),
+            new SlashCommand("/color", "Set the prompt color"),
+        });
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var input = panel.FindControl<TextBox>("Input")!;
+        var slashBox = panel.FindControl<Border>("SlashBox")!;
+
+        input.Text = "/c";
+        input.CaretIndex = input.Text.Length;
+        Flush();
+        Assert.True(slashBox.IsVisible);
+
+        input.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Escape });
+        Flush();
+
+        Assert.False(slashBox.IsVisible);
+        Assert.Empty(fake.SentTexts);
+        Assert.True(panel.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void SessionWithNoSlashCommandsNeverShowsSuggestions()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var input = panel.FindControl<TextBox>("Input")!;
+        var slashBox = panel.FindControl<Border>("SlashBox")!;
+
+        input.Text = "/anything";
+        input.CaretIndex = input.Text.Length;
+        Flush();
+
+        Assert.False(slashBox.IsVisible);
     }
 }
