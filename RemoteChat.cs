@@ -168,6 +168,21 @@ namespace ClaudeBuddy
 
     public sealed record ChatPrompt(string Title, IReadOnlyList<ChatPromptOption> Options);
 
+    // One slash command a CLI understands, offered the same way typing "/" in
+    // its own terminal would. Name includes the leading "/" so the panel can
+    // compare it against the input box's text directly.
+    public sealed record SlashCommand(string Name, string Description);
+
+    // The slash commands a session's underlying CLI understands, so the panel
+    // can offer autocomplete for a message that is about to be typed straight
+    // into that CLI's own input line. Only a local CLI session has an answer:
+    // an OpenClaw conversation isn't parsed by a command grammar on the far
+    // end, so there is nothing to suggest.
+    public interface IRemoteChatSlashCommands
+    {
+        IReadOnlyList<SlashCommand> SlashCommands { get; }
+    }
+
     // A session that has stopped and is waiting to be answered.
     //
     // The case this exists for is a permission prompt: the session is doing

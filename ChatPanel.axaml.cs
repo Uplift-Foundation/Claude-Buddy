@@ -61,6 +61,20 @@ namespace ClaudeBuddy
 
         private readonly ObservableCollection<TurnView> _turns = new();
 
+        // What the bound session's CLI understands, so "/" in the box can
+        // offer the same autocomplete the terminal itself would. Empty for a
+        // session with no answer for IRemoteChatSlashCommands, which quietly
+        // turns the whole feature off for it rather than needing a check at
+        // every call site.
+        private IReadOnlyList<SlashCommand> _slashCommands = Array.Empty<SlashCommand>();
+
+        // The suggestions currently shown, and which one Up/Down has landed
+        // on. Kept as a plain list rather than something observable: the
+        // popup is small and rebuilt wholesale on every keystroke or arrow
+        // press anyway, so there is nothing an incremental update would save.
+        private List<SlashCommand> _slashMatches = new();
+        private int _slashSelected;
+
         // Distance from the orb's centre to the panel's near edge. Clears the
         // 56pt orb with a small gap, the same way OrbFlyout's ArcRadius does.
         private const int Gap = 34;
@@ -119,6 +133,7 @@ namespace ClaudeBuddy
             // KeyDown += would fire after the newline had already been inserted.
             // Getting there first is the whole point.
             Input.AddHandler(KeyDownEvent, OnInputKeyDown, RoutingStrategies.Tunnel);
+            Input.TextChanged += (_, _) => UpdateSlashSuggestions();
 
             KeyDown += OnPanelKeyDown;
 
@@ -344,6 +359,9 @@ namespace ClaudeBuddy
 
             _turns.Clear();
             foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
+
+            _slashCommands = (session as IRemoteChatSlashCommands)?.SlashCommands ?? Array.Empty<SlashCommand>();
+            HideSlashSuggestions();
 
             Input.Text = Drafts.GetValueOrDefault(session.SessionId, "");
             MicButton.IsVisible = ClaudeBuddySettings.VoiceInputEnabled;
@@ -911,6 +929,48 @@ namespace ClaudeBuddy
 
         private void OnInputKeyDown(object? sender, KeyEventArgs e)
         {
+            // While suggestions are up, the keys that would otherwise send or
+            // insert a newline instead drive the popup — the same keys a
+            // terminal's own "/" autocomplete would claim.
+            if (_slashMatches.Count > 0)
+            {
+                if (e.Key == Key.Down)
+                {
+                    _slashSelected = (_slashSelected + 1) % _slashMatches.Count;
+                    RenderSlashSuggestions();
+                    e.Handled = true;
+                    return;
+                }
+
+                if (e.Key == Key.Up)
+                {
+                    _slashSelected = (_slashSelected - 1 + _slashMatches.Count) % _slashMatches.Count;
+                    RenderSlashSuggestions();
+                    e.Handled = true;
+                    return;
+                }
+
+                if (e.Key == Key.Escape)
+                {
+                    // Dismisses the popup only. A second Escape then reaches
+                    // OnPanelKeyDown and closes the panel — the same
+                    // two-step precedent recording already sets below.
+                    HideSlashSuggestions();
+                    e.Handled = true;
+                    return;
+                }
+
+                var accepting = e.Key == Key.Tab
+                    || (e.Key is Key.Enter or Key.Return && !e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+
+                if (accepting)
+                {
+                    AcceptSlashSuggestion(_slashMatches[_slashSelected]);
+                    e.Handled = true;
+                    return;
+                }
+            }
+
             if (e.Key != Key.Enter && e.Key != Key.Return) return;
 
             // Shift+Enter is left entirely alone so the TextBox inserts the
@@ -919,6 +979,98 @@ namespace ClaudeBuddy
 
             e.Handled = true;
             Send();
+        }
+
+        // Only while the input's first word is still being typed and starts
+        // with "/" — a slash command is the whole message, not something
+        // that can appear after other text, so anything past the first space
+        // isn't a command being completed any more.
+        private void UpdateSlashSuggestions()
+        {
+            if (_slashCommands.Count == 0) { HideSlashSuggestions(); return; }
+
+            var text = Input.Text ?? "";
+            var caret = Math.Clamp(Input.CaretIndex, 0, text.Length);
+            var token = text[..caret];
+
+            if (token.Length == 0 || token[0] != '/' || token.Contains(' ') || token.Contains('\n'))
+            {
+                HideSlashSuggestions();
+                return;
+            }
+
+            _slashMatches = _slashCommands
+                .Where(c => c.Name.StartsWith(token, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // Also closes once the only match is exactly what's already
+            // typed — otherwise finishing a command by hand and pressing
+            // Enter would "accept" it into itself instead of sending.
+            if (_slashMatches.Count == 0
+                || (_slashMatches.Count == 1 && string.Equals(_slashMatches[0].Name, token, StringComparison.OrdinalIgnoreCase)))
+            {
+                HideSlashSuggestions();
+                return;
+            }
+
+            _slashSelected = 0;
+            RenderSlashSuggestions();
+            SlashBox.IsVisible = true;
+        }
+
+        private static readonly IBrush SlashRowFill = new SolidColorBrush(Colors.Transparent);
+        private static readonly IBrush SlashRowSelected = new SolidColorBrush(Color.Parse("#33FFFFFF"));
+
+        private void RenderSlashSuggestions()
+        {
+            SlashList.ItemsSource = _slashMatches
+                .Select((c, i) => new SlashSuggestionView(c, i == _slashSelected ? SlashRowSelected : SlashRowFill))
+                .ToList();
+        }
+
+        private void HideSlashSuggestions()
+        {
+            if (_slashMatches.Count == 0 && !SlashBox.IsVisible) return;
+
+            _slashMatches = new List<SlashCommand>();
+            _slashSelected = 0;
+            SlashBox.IsVisible = false;
+            SlashList.ItemsSource = null;
+        }
+
+        // Replaces the token being completed with the chosen command, the
+        // way every other editor's autocomplete does — not sent outright.
+        // Deciding a bare "/rename" is done and should go is the same
+        // judgement call Send() already leaves to whoever is typing.
+        private void AcceptSlashSuggestion(SlashCommand command)
+        {
+            var text = Input.Text ?? "";
+            var caret = Math.Clamp(Input.CaretIndex, 0, text.Length);
+            var rest = text[caret..];
+            var replacement = command.Name + " ";
+
+            Input.Text = replacement + rest;
+            Input.CaretIndex = replacement.Length;
+
+            // Last, not first: setting Text above already re-ran this via
+            // TextChanged, and calling it again here is what makes the
+            // outcome "closed" regardless of what that intermediate pass
+            // computed.
+            HideSlashSuggestions();
+            Input.Focus();
+        }
+
+        private void SlashSuggestion_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            e.Handled = true;
+
+            if ((sender as Control)?.DataContext is SlashSuggestionView view) AcceptSlashSuggestion(view.Command);
+        }
+
+        private sealed record SlashSuggestionView(SlashCommand Command, IBrush RowFill)
+        {
+            public string Name => Command.Name;
+            public string Description => Command.Description;
         }
 
         private void OnPanelKeyDown(object? sender, KeyEventArgs e)
