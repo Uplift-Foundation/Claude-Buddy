@@ -86,9 +86,20 @@ namespace ClaudeBuddy
         // 56pt orb with a small gap, the same way OrbFlyout's ArcRadius does.
         private const int Gap = 34;
 
+        // The size the XAML ships, captured before anything has been restored
+        // over it. An agent with no saved size has to go *back* to this, not
+        // keep whatever the previously bound agent was dragged to — one window
+        // serves every session, so without this the first resize would silently
+        // become the size of every panel opened after it.
+        private readonly double _defaultWidth;
+        private readonly double _defaultHeight;
+
         public ChatPanel()
         {
             InitializeComponent();
+
+            _defaultWidth = Width;
+            _defaultHeight = Height;
 
             Turns.ItemsSource = _turns;
             Attachments.ItemsSource = _pendingImages;
@@ -336,6 +347,11 @@ namespace ClaudeBuddy
 
             _owner = orb;
             _session = session;
+
+            // Whatever this agent's panel was last dragged to. Before the
+            // transcript is built and before Reposition(), because the height
+            // decides whether the panel goes above or below the orb.
+            ApplySavedSize(orb);
 
             session.TurnAdded += OnTurnAdded;
             session.TurnUpdated += OnTurnUpdated;
@@ -906,6 +922,36 @@ namespace ClaudeBuddy
 
             _resizeEdge = null;
             e.Pointer.Capture(null);
+
+            // Once per drag, not once per pixel: OnResizePointerMoved fires
+            // continuously and this writes a file. Saved against the orb rather
+            // than the session so the size follows the agent across runs — see
+            // ChatPanelSizes in ClaudeBuddySettings for why a session id would
+            // not have survived one.
+            if (_owner is { } owner)
+            {
+                ClaudeBuddySettings.SetChatPanelSize(owner.PositionKey, Width, Height);
+            }
+        }
+
+        // The size this agent's panel should open at: what it was last dragged
+        // to, or the shipped default if it never has been.
+        //
+        // Clamped against this build's own Min/Max rather than trusted: the
+        // bounds are in the XAML and could tighten in a later version, and a
+        // hand-edited settings.json is a normal thing to find. An out-of-range
+        // Width set on a Window is not politely ignored — it is honoured, and a
+        // panel wider than any screen has no visible way back.
+        private void ApplySavedSize(OrbWindow orb)
+        {
+            var saved = ClaudeBuddySettings.ChatPanelSizeFor(orb.PositionKey);
+
+            Width = saved is null
+                ? _defaultWidth
+                : Math.Clamp(saved.Width, MinWidth, MaxWidth);
+            Height = saved is null
+                ? _defaultHeight
+                : Math.Clamp(saved.Height, MinHeight, MaxHeight);
         }
 
         private void Reposition()

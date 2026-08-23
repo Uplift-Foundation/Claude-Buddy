@@ -425,6 +425,71 @@ public class ChatPanelTests : IDisposable
         Assert.Equal(panel.MaxHeight, panel.Height);
     }
 
+    // A resize is saved against the *agent*, not against the window. There is
+    // only one window (see the class comment), so the bug this guards against
+    // is the one a shared singleton invites: the second agent opening at
+    // whatever size the first one was dragged to, and the first agent's own
+    // size being lost the moment another orb is clicked.
+    [AvaloniaFact]
+    public void EachAgentsPanelReopensAtTheSizeThatAgentWasLastDraggedTo()
+    {
+        var resized = NewOrb();
+        resized.PositionKey = "ui-agent-resized-" + Guid.NewGuid();
+        var untouched = NewOrb();
+        untouched.PositionKey = "ui-agent-untouched-" + Guid.NewGuid();
+
+        var resizedChat = NewFake();
+        var untouchedChat = NewFake();
+
+        ChatPanel.OpenFor(resized, resizedChat);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+
+        // Not ResetGeometry: the size a never-resized agent opens at is the
+        // thing under test here, so it has to come from the panel itself.
+        var shipped = (panel.Width, panel.Height);
+
+        Drag(panel, "ResizeSE", new Vector(60, 50));
+        var dragged = (panel.Width, panel.Height);
+        Assert.True(dragged.Width > shipped.Width);
+        Assert.True(dragged.Height > shipped.Height);
+
+        // A different agent, never resized: back to the shipped size rather
+        // than inheriting the one just dragged.
+        ChatPanel.OpenFor(untouched, untouchedChat);
+        FlushRender();
+        Assert.Equal(shipped.Width, panel.Width);
+        Assert.Equal(shipped.Height, panel.Height);
+
+        // And back to the first, which is still its own size. Tolerances for
+        // the same reason the drag tests above use them — the drag's delta
+        // round-trips through RenderScaling, and the saved value is rounded.
+        ChatPanel.OpenFor(resized, resizedChat);
+        FlushRender();
+        Assert.True(Math.Abs(panel.Width - dragged.Width) < 1.0);
+        Assert.True(Math.Abs(panel.Height - dragged.Height) < 1.0);
+    }
+
+    // Settings are a file people hand-edit, and the bounds live in the XAML
+    // where a later version can tighten them. Width set past MaxWidth on a
+    // Window is honoured rather than ignored, so an unclamped restore would
+    // open a panel wider than the screen with no visible way back.
+    [AvaloniaFact]
+    public void ASavedSizeBeyondTheAllowedRangeIsClampedWhenThePanelOpens()
+    {
+        var orb = NewOrb();
+        orb.PositionKey = "ui-agent-oversized-" + Guid.NewGuid();
+        ClaudeBuddySettings.SetChatPanelSize(orb.PositionKey, 5000, 5000);
+
+        ChatPanel.OpenFor(orb, NewFake());
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Assert.Equal(panel.MaxWidth, panel.Width);
+        Assert.Equal(panel.MaxHeight, panel.Height);
+    }
+
     // TurnView.MaxBubbleWidth used to be a fixed 244px; it's now a fraction
     // of Scroll's actual width, kept live by ChatPanel's Scroll.SizeChanged
     // hook so an already-rendered message doesn't stay pinned to whatever
