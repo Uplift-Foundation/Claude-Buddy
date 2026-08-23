@@ -23,6 +23,13 @@ public class RemoteControlChatSessionTests
     private static RemoteControlChatSession NewSession(string name = "job-hunter") =>
         new($"rc:{Account}:{name}", Account, name);
 
+    // Everything after the opening explainer, which is always first and is
+    // asserted on its own in OpensWithALineExplainingWhatThePanelIs. Named so
+    // each test below still reads as a statement about the conversation rather
+    // than about an off-by-one.
+    private static IReadOnlyList<ChatTurn> Said(RemoteControlChatSession session) =>
+        session.History.Skip(1).ToList();
+
     private static BridgeProtocol.InboundMessage From(
         string name, string body, string account = Account) =>
         new(name, "bridge:session_1", "prompting", body, account);
@@ -64,17 +71,33 @@ public class RemoteControlChatSessionTests
         // this reaches the guard rather than any bridge.
         await session.SendAsync("run the tests");
 
-        Assert.Equal(2, session.History.Count);
+        var said = Said(session);
+        Assert.Equal(2, said.Count);
 
-        Assert.Equal(ChatRole.User, session.History[0].Role);
-        Assert.Equal("run the tests", session.History[0].Text);
+        Assert.Equal(ChatRole.User, said[0].Role);
+        Assert.Equal("run the tests", said[0].Text);
 
-        Assert.Equal(ChatRole.System, session.History[1].Role);
-        Assert.Contains("switched off", session.History[1].Text);
+        Assert.Equal(ChatRole.System, said[1].Role);
+        Assert.Contains("switched off", said[1].Text);
     }
 
     // A reply from the other machine arrives as an assistant turn, the same as
     // any other answer in any other panel.
+    // The panel opens with one line explaining what it is, so an empty remote
+    // conversation reads as "nothing said yet" rather than "failed to load" —
+    // every other panel in this app fills itself from a transcript on this disk,
+    // and this one cannot.
+    [AvaloniaFact]
+    public void OpensWithALineExplainingWhatThePanelIs()
+    {
+        var session = NewSession();
+
+        var opening = Assert.Single(session.History);
+        Assert.Equal(ChatRole.System, opening.Role);
+        Assert.Contains("job-hunter", opening.Text);
+        Assert.Contains("stays on the machine", opening.Text);
+    }
+
     [AvaloniaFact]
     public void AnInboundMessageBecomesAnAssistantTurn()
     {
@@ -82,7 +105,7 @@ public class RemoteControlChatSessionTests
 
         session.OnInbound(From("job-hunter", "avatar.internal"));
 
-        var turn = Assert.Single(session.History);
+        var turn = Assert.Single(Said(session));
         Assert.Equal(ChatRole.Assistant, turn.Role);
         Assert.Equal("avatar.internal", turn.Text);
     }
@@ -98,7 +121,7 @@ public class RemoteControlChatSessionTests
 
         session.OnInbound(From("resumes-2b", "not for you"));
 
-        Assert.Empty(session.History);
+        Assert.Empty(Said(session));
     }
 
     // The peer list's casing is upstream's to change, and losing a reply over a
@@ -110,7 +133,7 @@ public class RemoteControlChatSessionTests
 
         session.OnInbound(From("Job-Hunter", "still me"));
 
-        Assert.Single(session.History);
+        Assert.Single(Said(session));
     }
 
     [AvaloniaFact]
@@ -120,7 +143,7 @@ public class RemoteControlChatSessionTests
 
         session.OnInbound(From("job-hunter", "   "));
 
-        Assert.Empty(session.History);
+        Assert.Empty(Said(session));
     }
 
     // An idle shutdown is invisible from the panel — nothing on screen changes —
@@ -132,7 +155,7 @@ public class RemoteControlChatSessionTests
 
         session.OnBridgeStopped("idle");
 
-        var turn = Assert.Single(session.History);
+        var turn = Assert.Single(Said(session));
         Assert.Equal(ChatRole.System, turn.Role);
         Assert.Contains("idle", turn.Text);
 
@@ -150,7 +173,7 @@ public class RemoteControlChatSessionTests
 
         session.SetWorking(true);
 
-        var note = Assert.Single(session.History);
+        var note = Assert.Single(Said(session));
         Assert.Equal(ChatRole.System, note.Role);
         Assert.Contains("job-hunter", note.Text);
         Assert.Contains("working", note.Text);
@@ -163,7 +186,7 @@ public class RemoteControlChatSessionTests
 
         // The answer replaced it rather than stacking under it — a "working…"
         // line above a finished reply reads as though it were still going.
-        var turn = Assert.Single(session.History);
+        var turn = Assert.Single(Said(session));
         Assert.Equal(ChatRole.Assistant, turn.Role);
         Assert.Equal("done", turn.Text);
     }
@@ -179,7 +202,7 @@ public class RemoteControlChatSessionTests
         session.SetWorking(true);
         session.SetWorking(true);
 
-        Assert.Single(session.History);
+        Assert.Single(Said(session));
     }
 
     // Went quiet without answering — the line still comes off. A stale
@@ -193,7 +216,7 @@ public class RemoteControlChatSessionTests
         session.SetWorking(true);
         session.SetWorking(false);
 
-        Assert.Empty(session.History);
+        Assert.Empty(Said(session));
     }
 
     // The collision multi-account creates, and the reason the account is in the
@@ -207,7 +230,7 @@ public class RemoteControlChatSessionTests
 
         session.OnInbound(From("job-hunter", "from the other account", account: ".claude"));
 
-        Assert.Empty(session.History);
+        Assert.Empty(Said(session));
     }
 
     [AvaloniaFact]
@@ -217,7 +240,7 @@ public class RemoteControlChatSessionTests
 
         session.OnInbound(From("job-hunter", "mine"));
 
-        var turn = Assert.Single(session.History);
+        var turn = Assert.Single(Said(session));
         Assert.Equal("mine", turn.Text);
     }
 
@@ -233,7 +256,7 @@ public class RemoteControlChatSessionTests
         session.OnInbound(new BridgeProtocol.InboundMessage(
             "job-hunter", "bridge:session_1", "prompting", "unstamped"));
 
-        Assert.Single(session.History);
+        Assert.Single(Said(session));
     }
 
     // Autocomplete for "/" is most of what this channel is for: a command is
