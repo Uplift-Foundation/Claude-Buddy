@@ -503,11 +503,62 @@ namespace ClaudeBuddy
         // A message sent from the panel, waiting for the transcript row it will
         // produce. Held so the two can be reconciled instead of the same
         // sentence appearing twice a second apart.
+        //
+        // Two candidate texts rather than one, because an image-bearing send
+        // can come back from the transcript in either of two shapes and
+        // there is no way to know in advance which this CLI does. _pendingRaw
+        // is what was actually typed — caption and path both — which is what
+        // comes back verbatim if the CLI never noticed the path was a
+        // picture. _pendingCaption is the caption alone, which is what comes
+        // back if it did: see ChatTranscript's image handling, confirmed
+        // against a real transcript row, for why the two diverge only then.
+        // For a plain text send the two are identical, so nothing here
+        // changes that path's behaviour.
         private ChatTurn? _pending;
-        private string _pendingText = "";
+        private string _pendingRaw = "";
+        private string _pendingCaption = "";
         private DateTimeOffset _pendingAt;
 
-        public async Task SendAsync(string text)
+        public Task SendAsync(string text) => SendCoreAsync(typedText: text, displayText: text, imageBytes: null);
+
+        // The picture is already a file by the time this is called — the
+        // panel wrote it there before pasting its path in, the same way a
+        // Finder drag-and-drop already puts a path in front of these two
+        // CLIs rather than a picture. So the terminal gets the caption with
+        // the paths appended as their own words, which is what a drop looks
+        // like once it lands in the terminal's own input — but the bubble
+        // shown locally gets the caption alone plus a thumbnail read
+        // straight back from the same file, since there is no reason to make
+        // this app's own echo wait on whether the CLI recognises the path.
+        //
+        // Only the first picture gets a thumbnail before the real transcript
+        // row lands, matching the one-picture-per-turn a received image
+        // already has; every path is still typed, so nothing beyond the
+        // preview is limited to one.
+        public async Task SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths)
+        {
+            if (imagePaths.Count == 0)
+            {
+                await SendAsync(text);
+                return;
+            }
+
+            var caption = text.Trim();
+            var typed = imagePaths.Aggregate(caption, (line, path) => line.Length == 0 ? path : line + " " + path);
+
+            byte[]? thumbnail = null;
+            try { thumbnail = await File.ReadAllBytesAsync(imagePaths[0]); }
+            catch
+            {
+                // No preview before the real row lands is not a reason to
+                // fail the send — the file is still on disk and the
+                // terminal still gets its path.
+            }
+
+            await SendCoreAsync(typed, caption, thumbnail);
+        }
+
+        private async Task SendCoreAsync(string typedText, string displayText, byte[]? imageBytes)
         {
             if (!_format.ReplyEnabled())
             {
@@ -528,7 +579,13 @@ namespace ClaudeBuddy
                 return;
             }
 
-            var mine = new ChatTurn { Role = ChatRole.User, Text = text, IsComplete = true };
+            var mine = new ChatTurn
+            {
+                Role = ChatRole.User,
+                Text = displayText,
+                IsComplete = true,
+                ImageBytes = imageBytes
+            };
 
             // Added *before* being marked pending, not after. Add() runs every
             // turn through Reconcile, so setting _pending first made the user's
@@ -537,43 +594,15 @@ namespace ClaudeBuddy
             Add(mine);
 
             _pending = mine;
-            _pendingText = text.Trim();
+            _pendingRaw = typedText.Trim();
+            _pendingCaption = displayText.Trim();
             _pendingAt = DateTimeOffset.Now;
 
-            var sent = await TerminalFocuser.SendTextAndSubmit(_status, text);
+            var sent = await TerminalFocuser.SendTextAndSubmit(_status, typedText);
             if (sent) return;
 
             _pending = null;
             Note("Couldn't send that to the terminal.");
-        }
-
-        // The picture is already a file by the time this is called — the
-        // panel wrote it there before pasting its path in, the same way a
-        // Finder drag-and-drop already puts a path in front of these two
-        // CLIs rather than a picture. So this is SendAsync with the paths
-        // appended to the line as their own words, which is what a drop
-        // looks like once it lands in the terminal's own input.
-        //
-        // What the reconciliation two methods up does with the result is
-        // unverified against a real image-bearing transcript row — nobody
-        // has captured one yet, unlike every other fixture this file's
-        // parsing leans on. If the CLI's own record of the turn doesn't
-        // carry the path verbatim in its text, Reconcile's exact match will
-        // miss and the panel briefly shows the message twice rather than
-        // once; it does not lose it or crash. Worth a real fixture the
-        // first time this is used against a live paste.
-        public async Task SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths)
-        {
-            if (imagePaths.Count == 0)
-            {
-                await SendAsync(text);
-                return;
-            }
-
-            var withPaths = imagePaths.Aggregate(text.Trim(), (line, path) =>
-                line.Length == 0 ? path : line + " " + path);
-
-            await SendAsync(withPaths);
         }
 
         // The transcript will produce the message we just sent, because it went
@@ -600,11 +629,26 @@ namespace ClaudeBuddy
             if (ReferenceEquals(incoming, _pending)) return false;
 
             if (incoming.Role != ChatRole.User) return false;
-            if (!string.Equals(incoming.Text.Trim(), _pendingText, StringComparison.Ordinal)) return false;
+
+            var incomingText = incoming.Text.Trim();
+
+            // Either the CLI never noticed the path (the row comes back
+            // exactly as typed) or it did and swapped it for a real picture
+            // plus its own placeholder, which ChatTranscript has already
+            // stripped down to the caption alone. Both are "this is the
+            // message that was just sent" — see the two fields' own comment.
+            if (!string.Equals(incomingText, _pendingRaw, StringComparison.Ordinal)
+                && !string.Equals(incomingText, _pendingCaption, StringComparison.Ordinal))
+            {
+                return false;
+            }
 
             // Keep the transcript's timestamp: it is when the session actually
             // received it, which for a message queued behind a long turn is
-            // minutes after it was typed.
+            // minutes after it was typed. The settled turn's own ImageBytes,
+            // if any, is left alone rather than replaced from incoming — it
+            // was already read straight from the file that was pasted, and
+            // is the same picture either way this matched.
             var settled = _pending;
             _pending = null;
 

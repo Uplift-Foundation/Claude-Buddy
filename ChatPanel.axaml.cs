@@ -1159,6 +1159,7 @@ namespace ClaudeBuddy
                 };
 
                 if (!string.IsNullOrEmpty(turn.ImageUrl)) LoadImage();
+                else if (turn.ImageBytes is { Length: > 0 } bytes) LoadImageBytes(bytes);
             }
 
             public ChatRole Role => _turn.Role;
@@ -1370,6 +1371,17 @@ namespace ClaudeBuddy
                 var bytes = await OpenClawSessions.FetchMediaAsync(_turn.ImageUrl!, CancellationToken.None);
                 if (bytes is null || bytes.Length == 0) return;
 
+                await DecodeAndShowAsync(bytes);
+            }
+
+            // The bytes are already in hand — decoded from a local CLI's own
+            // transcript (ChatTranscript's image handling), or read straight
+            // back off a picture the panel itself just wrote to disk — so
+            // there is nothing to fetch, only to decode.
+            public async void LoadImageBytes(byte[] bytes) => await DecodeAndShowAsync(bytes);
+
+            private async Task DecodeAndShowAsync(byte[] bytes)
+            {
                 // Kept as they arrived, not as they were decoded: opening the
                 // picture full size should hand over the original rather than
                 // the 456px copy the bubble draws.
