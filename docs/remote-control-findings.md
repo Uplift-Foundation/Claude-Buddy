@@ -265,11 +265,13 @@ that hashing the name would coincidentally agree with auto-colour, and it
 cannot, because auto-colour hashes a different input.
 
 Making the colours agree means asking the remote session for its own, and that
-is now what happens — a message per session, once per run of Buddy.
+is now what happens — a message per session, once per run of Buddy, carrying the
+command list as well (see the next section, which is why it is one question and
+not two).
 
 The marker is the part worth knowing about. A reply arrives as an ordinary
 cross-session message, indistinguishable from an answer meant for whoever is
-reading the panel, so the question asks for a fixed prefix (`CB-COLOR:`) to be
+reading the panel, so the question asks for a fixed prefix (`CB-INFO:`) to be
 echoed. That makes the answer identifiable and lets it be swallowed instead of
 appearing as a chat bubble saying "green" in response to a question the person
 never asked. Answers are swallowed whether or not they parse, for the same
@@ -281,11 +283,37 @@ wrong colour that never corrects itself is worse than one extra message at
 startup. Asked at most once per session per run, and only for sessions already
 judged worth an orb, so nothing is spent on relays or dead registrations.
 
-Verified against the mini: `job-hunter` answered `CB-COLOR:none`, which is a
-real answer — it has no `/color` set — and correctly falls back to the derived
+Verified against the mini: `job-hunter` answered `none` for its colour, which is
+a real answer — it has no `/color` set — and correctly falls back to the derived
 colour. The positive path (a session that *does* have one) is covered by
 fixtures rather than live, since setting a colour on someone's working session
 to prove it would be a poor trade.
+
+**A remote session's slash commands cannot be guessed, and the built-ins are
+exactly the wrong guess.** The panel first offered Claude Code's own built-in
+list — `/agents`, `/color`, `/compact` and the rest — on the reasoning that
+every Claude Code session has them. Every one of them fails, and the reason is
+the same reason this whole feature works at all: a peer message is delivered to
+the **model**, not typed into the receiving CLI's input line. Only that CLI's
+own command handler can run a built-in, and it never sees the text.
+
+Measured, not reasoned about. Sending `/color green` to the mini came back:
+
+> I can't run `/color` — it's not one of my available skills/tools … only the
+> harness's own command handler can set that.
+
+while `/update-inbox` — a **custom** command, which is just a file of
+instructions the model reads — worked. So the rule inverts what you would
+expect: the universal commands are the impossible ones, and the bespoke
+per-project ones are the ones that work.
+
+That makes the list unguessable from here, so it is asked for. `CB-INFO` carries
+`color=` and `commands=` in one reply, because both facts are wanted about the
+same session at the same moment and a second message would double the cost for
+nothing. Until a session answers, its panel offers **no** completions at all —
+an empty list is honest, and a suggestion that does nothing when accepted is
+worse than no suggestion. Capped at 60, since this becomes an autocomplete
+popup and a session with a hundred skills would push it off the screen.
 
 **No streaming, either.** Peer messaging delivers one message when the remote
 session chooses to send it; there is nothing to subscribe to and its transcript

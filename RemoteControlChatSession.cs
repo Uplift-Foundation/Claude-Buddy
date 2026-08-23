@@ -90,14 +90,19 @@ namespace ClaudeBuddy
         // here: this one leaves the machine.
         public string ComposerHint => $"Message {_remoteName} on the other machine…";
 
-        // The built-in floor only — see SlashCommandCatalog.ForRemoteClaudeCode
-        // for why the disk-discovered half is left out. Worth having even so:
-        // sending "/" commands is most of what this channel is for, since a
-        // command is exactly the kind of thing worth asking a machine elsewhere
-        // to run, and typing one blind into a panel that offers no completion is
-        // the worst version of that.
-        public IReadOnlyList<SlashCommand> SlashCommands { get; } =
-            SlashCommandCatalog.ForRemoteClaudeCode();
+        // Only what the far session said it can run, and nothing until it has
+        // said so.
+        //
+        // The first version offered Claude Code's built-in commands, which was
+        // exactly wrong: a peer message never reaches the receiving session's
+        // command handler, so a built-in cannot run — measured, with /color
+        // coming back "I can't run /color ... only the harness's own command
+        // handler can set" it. A custom command can, because the model reads the
+        // message and can follow a command file. So the list is asked for rather
+        // than assumed, and an unanswered session offers nothing, which beats
+        // offering commands that quietly do nothing when accepted.
+        public IReadOnlyList<SlashCommand> SlashCommands =>
+            RemoteControlSessions.CommandsFor(_account, _remoteName);
 
         public async Task SendAsync(string text)
         {

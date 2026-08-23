@@ -300,10 +300,10 @@ public class BridgeProtocolTests
     // land in the panel as though the remote session had said it to the person
     // reading — who never asked the question.
     [Theory]
-    [InlineData("CB-COLOR:green", "green")]
-    [InlineData("CB-COLOR: blue", "blue")]
-    [InlineData("CB-COLOR:#D75F5F", "#D75F5F")]
-    [InlineData("cb-color:Purple", "purple")]
+    [InlineData("CB-INFO: color=green; commands=none", "green")]
+    [InlineData("CB-INFO: color=blue; commands=/a", "blue")]
+    [InlineData("CB-INFO: color=#D75F5F; commands=none", "#D75F5F")]
+    [InlineData("cb-info: color=Purple", "purple")]
     public void ParseColorReply_ReadsTheAnswer(string body, string expected)
     {
         Assert.Equal(expected, BridgeProtocol.ParseColorReply(body), ignoreCase: true);
@@ -314,7 +314,7 @@ public class BridgeProtocolTests
     [Fact]
     public void ParseColorReply_SurvivesAChattyAnswer()
     {
-        Assert.Equal("teal", BridgeProtocol.ParseColorReply("CB-COLOR: I'm set to teal right now"));
+        Assert.Equal("teal", BridgeProtocol.ParseColorReply("CB-INFO: color=I'm set to teal right now"));
     }
 
     // "none" must not match "orange" by substring — the whole reason the match
@@ -322,38 +322,81 @@ public class BridgeProtocolTests
     [Fact]
     public void ParseColorReply_TreatsNoneAsNoColour()
     {
-        Assert.Null(BridgeProtocol.ParseColorReply("CB-COLOR:none"));
-        Assert.Null(BridgeProtocol.ParseColorReply("CB-COLOR: I have not set one"));
+        Assert.Null(BridgeProtocol.ParseColorReply("CB-INFO: color=none; commands=/x"));
+        Assert.Null(BridgeProtocol.ParseColorReply("CB-INFO: color=I have not set one"));
     }
 
     // Swallowed whether or not it parses: showing someone a fumbled answer to a
     // question they did not ask is worse than showing nothing.
     [Fact]
-    public void IsColorReply_RecognisesTheAnswerEvenWhenItCannotBeParsed()
+    public void IsInfoReply_RecognisesTheAnswerEvenWhenItCannotBeParsed()
     {
-        Assert.True(BridgeProtocol.IsColorReply("CB-COLOR:none"));
-        Assert.True(BridgeProtocol.IsColorReply("CB-COLOR: no idea sorry"));
-        Assert.Null(BridgeProtocol.ParseColorReply("CB-COLOR: no idea sorry"));
+        Assert.True(BridgeProtocol.IsInfoReply("CB-INFO: color=none"));
+        Assert.True(BridgeProtocol.IsInfoReply("CB-INFO: no idea sorry"));
+        Assert.Null(BridgeProtocol.ParseColorReply("CB-INFO: no idea sorry"));
+    }
+
+    // The list that replaced a wrong one. Built-ins were offered and cannot
+    // work — a peer message never reaches the receiving session's command
+    // handler — so only what the session reports counts.
+    [Fact]
+    public void ParseCommandsReply_ReadsTheReportedCommands()
+    {
+        var cmds = BridgeProtocol.ParseCommandsReply(
+            "CB-INFO: color=none; commands=/update-inbox, /discover, /gmail-apply");
+
+        Assert.Equal(3, cmds.Count);
+        Assert.Equal("/update-inbox", cmds[0].Name);
+        Assert.Contains(cmds, c => c.Name == "/gmail-apply");
+    }
+
+    // "none" carries no slash, so nothing is invented from it.
+    [Fact]
+    public void ParseCommandsReply_IsEmptyWhenTheSessionHasNone()
+    {
+        Assert.Empty(BridgeProtocol.ParseCommandsReply("CB-INFO: color=green; commands=none"));
+        Assert.Empty(BridgeProtocol.ParseCommandsReply("CB-INFO: color=green"));
+    }
+
+    // A colour named after a command must not be swallowed by the command list,
+    // and vice versa — which is why the colour parse stops at the separator.
+    [Fact]
+    public void ParseColorReply_StopsAtTheSeparator()
+    {
+        Assert.Equal("green", BridgeProtocol.ParseColorReply("CB-INFO: color=green; commands=/colorise"));
+    }
+
+    // Capped, because this becomes an autocomplete list and a session with a
+    // hundred skills would push the input box off the screen.
+    [Fact]
+    public void ParseCommandsReply_IsCapped()
+    {
+        var many = "CB-INFO: commands=" + string.Join(",", Enumerable.Range(0, 200).Select(i => $"/cmd{i}"));
+
+        Assert.Equal(60, BridgeProtocol.ParseCommandsReply(many).Count);
     }
 
     // And an ordinary reply is never mistaken for one, or a real answer would
     // vanish from the panel.
     [Fact]
-    public void IsColorReply_IsFalseForAnOrdinaryReply()
+    public void IsInfoReply_IsFalseForAnOrdinaryReply()
     {
-        Assert.False(BridgeProtocol.IsColorReply("avatar.internal"));
-        Assert.False(BridgeProtocol.IsColorReply("I painted the fence green"));
+        Assert.False(BridgeProtocol.IsInfoReply("avatar.internal"));
+        Assert.False(BridgeProtocol.IsInfoReply("I painted the fence green"));
     }
 
     [Fact]
-    public void ColorQueryPrompt_AsksForTheMarkerAndNamesThePeer()
+    public void CapabilitiesQueryPrompt_AsksForBothHalvesAndNamesThePeer()
     {
-        var prompt = BridgeProtocol.ColorQueryPrompt("job-hunter");
+        var prompt = BridgeProtocol.CapabilitiesQueryPrompt("job-hunter");
 
         Assert.Contains("SendMessage", prompt);
         Assert.Contains("job-hunter", prompt);
-        Assert.Contains(BridgeProtocol.ColorMarker, prompt);
+        Assert.Contains(BridgeProtocol.InfoMarker, prompt);
         Assert.Contains("/color", prompt);
+
+        // Asks for what it can *actually* run, which is the whole correction.
+        Assert.Contains("actually run", prompt);
     }
 
     // The prompts are instructions to a model, so the only thing worth
