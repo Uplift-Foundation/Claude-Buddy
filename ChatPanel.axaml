@@ -275,33 +275,76 @@
                 </StackPanel>
             </Border>
 
-            <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="5">
-                <!-- AcceptsReturn so the TextBox owns newline insertion, caret
-                     placement and undo; Enter-to-send is intercepted on the
-                     tunnel route instead. Grows to about three lines, then
-                     scrolls inside itself. -->
-                <TextBox x:Name="Input" Grid.Column="0"
-                         AcceptsReturn="True" TextWrapping="Wrap"
-                         MaxHeight="66" MinHeight="26" FontSize="11.5"
-                         Watermark="Message…"
-                         Background="#33FFFFFF" Foreground="#EEFFFFFF"
-                         CaretBrush="#EEFFFFFF"
-                         BorderBrush="#40FFFFFF" BorderThickness="1"
-                         CornerRadius="6" Padding="6,3"/>
-                <Grid x:Name="MicButton" Grid.Column="1" Width="24" Height="24"
-                      IsVisible="False" Cursor="Hand">
-                    <Ellipse x:Name="MicFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
-                    <TextBlock Text="&#127908;" FontSize="11"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                               IsHitTestVisible="False"/>
+            <StackPanel Grid.Row="3" Spacing="6">
+                <!-- Pictures pasted since the last send, waiting to go out
+                     with whatever gets typed next. Hidden rather than
+                     collapsed-to-nothing by an empty items source, so
+                     showing it is one flag rather than a size recompute on
+                     every paste. -->
+                <ItemsControl x:Name="Attachments" IsVisible="False">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="6"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <!-- The remove button sits over the corner of the
+                                 thumbnail rather than beside it: a row of
+                                 several pastes is already tight at 40pt each,
+                                 and a full second control per thumbnail would
+                                 double the row's width for no picture worth
+                                 more of it. -->
+                            <Grid Width="40" Height="40">
+                                <Border CornerRadius="6" ClipToBounds="True">
+                                    <Image Source="{Binding Thumbnail}"
+                                           Width="40" Height="40"
+                                           Stretch="UniformToFill"/>
+                                </Border>
+                                <Grid Width="16" Height="16"
+                                      HorizontalAlignment="Right" VerticalAlignment="Top"
+                                      Margin="0,-4,-4,0" Cursor="Hand"
+                                      PointerPressed="Attachment_Remove_PointerPressed">
+                                    <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1"/>
+                                    <TextBlock Text="&#10005;" FontSize="8" Foreground="#DDFFFFFF"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               IsHitTestVisible="False"/>
+                                </Grid>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="5">
+                    <!-- AcceptsReturn so the TextBox owns newline insertion,
+                         caret placement and undo; Enter-to-send is
+                         intercepted on the tunnel route instead, and so is a
+                         paste that turns out to be a picture — see
+                         OnInputKeyDown. Grows to about three lines, then
+                         scrolls inside itself. -->
+                    <TextBox x:Name="Input" Grid.Column="0"
+                             AcceptsReturn="True" TextWrapping="Wrap"
+                             MaxHeight="66" MinHeight="26" FontSize="11.5"
+                             Watermark="Message…"
+                             Background="#33FFFFFF" Foreground="#EEFFFFFF"
+                             CaretBrush="#EEFFFFFF"
+                             BorderBrush="#40FFFFFF" BorderThickness="1"
+                             CornerRadius="6" Padding="6,3"/>
+                    <Grid x:Name="MicButton" Grid.Column="1" Width="24" Height="24"
+                          IsVisible="False" Cursor="Hand">
+                        <Ellipse x:Name="MicFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+                        <TextBlock Text="&#127908;" FontSize="11"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   IsHitTestVisible="False"/>
+                    </Grid>
+                    <Grid x:Name="SendButton" Grid.Column="2" Width="24" Height="24" Cursor="Hand">
+                        <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+                        <TextBlock Text="&#10148;" FontSize="11" Foreground="#DDFFFFFF"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   IsHitTestVisible="False"/>
+                    </Grid>
                 </Grid>
-                <Grid x:Name="SendButton" Grid.Column="2" Width="24" Height="24" Cursor="Hand">
-                    <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
-                    <TextBlock Text="&#10148;" FontSize="11" Foreground="#DDFFFFFF"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                               IsHitTestVisible="False"/>
-                </Grid>
-            </Grid>
+            </StackPanel>
         </Grid>
     </Border>
 </Window>

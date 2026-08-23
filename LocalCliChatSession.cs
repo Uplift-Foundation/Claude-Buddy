@@ -39,7 +39,8 @@ namespace ClaudeBuddy
     //    produced. The contract's "TurnUpdated carries the whole turn" holds
     //    trivially, since the whole turn is all there ever is.
     internal sealed class LocalCliChatSession :
-        IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer, IRemoteChatPrompts, IDisposable
+        IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer, IRemoteChatPrompts,
+        IRemoteChatImages, IDisposable
     {
         // How much of the tail to read when the panel first opens.
         //
@@ -544,6 +545,35 @@ namespace ClaudeBuddy
 
             _pending = null;
             Note("Couldn't send that to the terminal.");
+        }
+
+        // The picture is already a file by the time this is called — the
+        // panel wrote it there before pasting its path in, the same way a
+        // Finder drag-and-drop already puts a path in front of these two
+        // CLIs rather than a picture. So this is SendAsync with the paths
+        // appended to the line as their own words, which is what a drop
+        // looks like once it lands in the terminal's own input.
+        //
+        // What the reconciliation two methods up does with the result is
+        // unverified against a real image-bearing transcript row — nobody
+        // has captured one yet, unlike every other fixture this file's
+        // parsing leans on. If the CLI's own record of the turn doesn't
+        // carry the path verbatim in its text, Reconcile's exact match will
+        // miss and the panel briefly shows the message twice rather than
+        // once; it does not lose it or crash. Worth a real fixture the
+        // first time this is used against a live paste.
+        public async Task SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths)
+        {
+            if (imagePaths.Count == 0)
+            {
+                await SendAsync(text);
+                return;
+            }
+
+            var withPaths = imagePaths.Aggregate(text.Trim(), (line, path) =>
+                line.Length == 0 ? path : line + " " + path);
+
+            await SendAsync(withPaths);
         }
 
         // The transcript will produce the message we just sent, because it went
