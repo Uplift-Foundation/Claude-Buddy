@@ -217,7 +217,48 @@ namespace ClaudeBuddy
                 }
             }
 
+            SweepStaleScratch(wanted);
+
             foreach (var account in toStart) _ = StartAsync(account);
+        }
+
+        // Deletes scratch directories no configured account owns.
+        //
+        // Each relay's private TMPDIR collects a Node compile cache — about
+        // 2.5MB a time — and a relay only removes its *own* on a clean stop. So
+        // the ones left by a crash, by an earlier version that used a different
+        // layout, by an account since un-ticked, or by a tagged test run are
+        // never reclaimed by anything. Measured at 7.2MB across four directories
+        // after a day of development, three of them belonging to nothing.
+        //
+        // Keyed on the names a relay would build for the accounts currently
+        // selected, so a live relay's directory is never a candidate — including
+        // a sibling account's, which matters now that several can run at once.
+        // The one case this can catch mid-flight is an account un-ticked while
+        // its relay is still winding down, which the next poll was about to
+        // retire anyway.
+        private static void SweepStaleScratch(IReadOnlyList<string> wanted)
+        {
+            try
+            {
+                var root = RemoteControlBridge.ScratchRoot;
+                if (!Directory.Exists(root)) return;
+
+                var keep = new HashSet<string>(
+                    wanted.Select(a => new RemoteControlBridge(a).ScratchName),
+                    StringComparer.Ordinal);
+
+                foreach (var dir in Directory.EnumerateDirectories(root))
+                {
+                    if (keep.Contains(Path.GetFileName(dir))) continue;
+
+                    try { Directory.Delete(dir, recursive: true); } catch { }
+                }
+            }
+            catch
+            {
+                // Housekeeping. Never a reason to fail a start.
+            }
         }
 
         // Keeps relays that are being used from being idled out from under
