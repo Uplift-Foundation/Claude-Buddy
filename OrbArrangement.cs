@@ -27,11 +27,16 @@ namespace ClaudeBuddy
         internal const double CircleDip = 36;
         internal const double MemberScale = 0.72;
 
+        // Center, when given, is where the shape is drawn instead of the
+        // middle of Work — the saved anchor that keeps a shape from
+        // recentering every time an orb joins or leaves. Work still bounds
+        // where Fit/Slide are allowed to put it.
         internal readonly record struct Layout(
             PixelRect Work,
             double Scale,
             string Shape,
-            double Spacing);
+            double Spacing,
+            PixelPoint? Center = null);
 
         // leadOf[i] is the index of orb i's team lead, or -1 if it leads itself.
         internal static PixelPoint[] Compute(int count, int[] leadOf, Layout layout)
@@ -361,8 +366,11 @@ namespace ClaudeBuddy
             // arithmetic away from both extremes.
             var s = layout.Work.Height / 40.0;
 
-            var cx = layout.Work.X + layout.Work.Width / 2.0 - window / 2.0;
-            var cy = layout.Work.Y + layout.Work.Height / 2.0 - window / 2.0;
+            var centerX = layout.Center is { } c1 ? c1.X : layout.Work.X + layout.Work.Width / 2.0;
+            var centerY = layout.Center is { } c2 ? c2.Y : layout.Work.Y + layout.Work.Height / 2.0;
+
+            var cx = centerX - window / 2.0;
+            var cy = centerY - window / 2.0;
 
             return unit.Select(p => new PixelPoint(
                 (int)Math.Round(cx + p.X * s),
