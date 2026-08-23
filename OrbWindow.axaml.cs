@@ -1441,6 +1441,16 @@ namespace ClaudeBuddy
                         SessionManager.Instance?.RememberOrbPosition(member);
                     }
                 }
+
+                // When arranged, every orb in the pattern moved by this same
+                // delta (see OnPointerPressed's ArrangedSiblings) — the shape's
+                // saved centre needs to move with it, or absorbing the next
+                // orb to join or leave would snap it back to where it was.
+                if (SessionManager.Instance?.IsArranged == true)
+                {
+                    SessionManager.Instance.ShiftArrangementAnchor(
+                        Position.X - _windowStart.X, Position.Y - _windowStart.Y);
+                }
             }
             else
             {
