@@ -44,8 +44,24 @@ namespace ClaudeBuddy
             // "evidence" can never collide with a local one of the same name.
             public string Key => "rc:" + Name;
 
+            // "running" is the one that matters, and it is the one the first
+            // version of this missed.
+            //
+            // The peer list's vocabulary is **not** the same as `claude agents
+            // --json`'s. That prints "busy" for a working local session, so this
+            // was written against "busy" — and a remote session actually reports
+            // `running`, which meant the orb sat still for the entire time a
+            // machine elsewhere was working. Caught only by watching a real
+            // relay transcript: idle → running → idle across four polls while
+            // nothing on screen moved.
+            //
+            // Exactly the mistake this repo's fixture rule exists to prevent,
+            // made by taking a vocabulary from the wrong source rather than from
+            // the output being parsed. The other two are kept as tolerance, not
+            // because either has been seen here.
             public bool Working =>
-                Status.Contains("busy", StringComparison.OrdinalIgnoreCase)
+                Status.Contains("running", StringComparison.OrdinalIgnoreCase)
+                || Status.Contains("busy", StringComparison.OrdinalIgnoreCase)
                 || Status.Contains("working", StringComparison.OrdinalIgnoreCase);
         }
 

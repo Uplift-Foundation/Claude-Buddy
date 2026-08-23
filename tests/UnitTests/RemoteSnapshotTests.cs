@@ -36,13 +36,24 @@ public class RemoteSnapshotTests
         Assert.StartsWith("rc:", remote);
     }
 
-    // "busy" is what ListAgents actually printed for a working session during
-    // the spike (docs/remote-control-findings.md), and "idle" for a waiting one.
+    // The two values a real relay transcript actually showed for a remote peer:
+    // "idle", and "running" while it worked. Both observed across four polls of
+    // one live exchange with a session on another machine.
+    //
+    // "running" gets its own test because the first version of this code did not
+    // match it. It was written against "busy", which is what `claude agents
+    // --json` prints for a *local* session — a different vocabulary from the
+    // peer list's, taken from the wrong source. The visible consequence was an
+    // orb that sat perfectly still for the whole time a machine elsewhere was
+    // working, which is the single thing an orb exists to show.
     [Theory]
-    [InlineData("busy", true)]
-    [InlineData("working", true)]
+    [InlineData("running", true)]
     [InlineData("idle", false)]
     [InlineData("", false)]
+    // Tolerated but never observed on a peer row; kept so a vocabulary change
+    // upstream degrades toward "working" rather than toward "asleep".
+    [InlineData("busy", true)]
+    [InlineData("working", true)]
     public void Working_ReadsTheStatusLabel(string status, bool expected)
     {
         Assert.Equal(expected, Remote("job-hunter", status).Working);
@@ -53,8 +64,8 @@ public class RemoteSnapshotTests
     [Fact]
     public void Working_IgnoresCase()
     {
-        Assert.True(Remote("job-hunter", "Busy").Working);
-        Assert.True(Remote("job-hunter", "BUSY").Working);
+        Assert.True(Remote("job-hunter", "Running").Working);
+        Assert.True(Remote("job-hunter", "RUNNING").Working);
     }
 
     // Off means nothing at all is published, so the scan never has to ask why —
