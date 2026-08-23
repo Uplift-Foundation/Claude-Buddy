@@ -1093,11 +1093,16 @@ namespace ClaudeBuddy
                 // from the id rather than the title so it survives a title that
                 // gets prettied up later — the name is what SendMessage
                 // addresses, and it has to stay exact.
-                var remoteName = sessionId.StartsWith("rc:", StringComparison.Ordinal)
-                    ? sessionId[3..]
-                    : status.Title;
+                // "rc:<account>:<name>". Split from the right, because a session
+                // name can itself contain a colon and an account directory
+                // cannot — so the *first* separator after the prefix is the one
+                // that divides them.
+                var rest = sessionId.StartsWith("rc:", StringComparison.Ordinal) ? sessionId[3..] : "";
+                var split = rest.IndexOf(':');
+                var account = split > 0 ? rest[..split] : ClaudeBuddySettings.DefaultRemoteControlProfileDir;
+                var remoteName = split > 0 ? rest[(split + 1)..] : status.Title;
 
-                var remote = new RemoteControlChatSession(sessionId, remoteName);
+                var remote = new RemoteControlChatSession(sessionId, account, remoteName);
                 _remoteChats[sessionId] = remote;
 
                 // Opening the panel counts as asking for the bridge, so the
@@ -1164,15 +1169,10 @@ namespace ClaudeBuddy
             // Keyed the way the scan mints ids, so this is a lookup rather than
             // a walk — and it means a remote session named the same as a local
             // one cannot be delivered to the local one's panel.
-            if (_remoteChats.TryGetValue("rc:" + message.FromName, out var chat))
-            {
-                chat.OnInbound(message);
-                return;
-            }
-
-            // Fall back to a scan by name for the case the id doesn't match
-            // exactly — the peer list's casing is upstream's to change, and
-            // losing a reply over a capital letter would be a poor trade.
+            // Offered to every open remote conversation and filtered by each.
+            // A direct dictionary hit would need the exact key, and the peer
+            // list's casing is upstream's to change — so the sessions decide,
+            // each checking both the name and the account it belongs to.
             foreach (var candidate in _remoteChats.Values) candidate.OnInbound(message);
         }
 
@@ -1180,9 +1180,9 @@ namespace ClaudeBuddy
         // the snapshot on the next scan; this is for the panel, which has no scan
         // to wait on and would otherwise show a sent message and nothing else
         // for however long the other machine takes.
-        private void OnRemoteWorkingChanged(string remoteName, bool working)
+        private void OnRemoteWorkingChanged(string sessionKey, bool working)
         {
-            if (_remoteChats.TryGetValue("rc:" + remoteName, out var chat)) chat.SetWorking(working);
+            if (_remoteChats.TryGetValue(sessionKey, out var chat)) chat.SetWorking(working);
         }
 
         public SessionStatus? StatusFor(string? sessionId) =>

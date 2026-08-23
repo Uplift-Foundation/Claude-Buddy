@@ -24,6 +24,21 @@ namespace ClaudeBuddy
         public static IReadOnlyList<SlashCommand> For(SessionSource source, string cwd) =>
             source == SessionSource.Codex ? ForCodex() : ForClaudeCode(cwd);
 
+        // For a Claude Code session on **another machine**: the built-in floor
+        // and nothing else.
+        //
+        // The disk half is deliberately dropped. Custom commands and skills come
+        // from ".claude/commands" and ".claude/skills" on the machine running the
+        // session, and this process can only see its own — so merging them would
+        // offer a remote session commands that exist here and not there, which is
+        // worse than offering none. A suggestion that does nothing when accepted
+        // is a lie the autocomplete told.
+        //
+        // The built-ins are safe because they ship with the CLI, so any Claude
+        // Code new enough to have Remote Control has them.
+        public static IReadOnlyList<SlashCommand> ForRemoteClaudeCode() =>
+            ClaudeCodeBuiltins.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
+
         // --- Claude Code ---
 
         private static IReadOnlyList<SlashCommand> ForClaudeCode(string cwd)

@@ -84,7 +84,8 @@ namespace ClaudeBuddy
             "codexChatEnabled", "codexReplyEnabled", "autoColorSessions",
             "claudeCodeEnabled", "codexEnabled",
             "clickAction", "doubleClickAction", "tripleClickAction",
-            "remoteControlEnabled", "remoteControlProfileDir", "remoteControlIdleMinutes"
+            "remoteControlEnabled", "remoteControlProfileDir", "remoteControlProfileDirs",
+            "remoteControlIdleMinutes"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -294,6 +295,16 @@ namespace ClaudeBuddy
             // as, so a user whose remote machines are on a second account has to
             // be able to say so.
             public string? RemoteControlProfileDir { get; set; }
+
+            // Every account to run a relay for.
+            //
+            // Replaces the single RemoteControlProfileDir above, which is kept
+            // only so an existing setting isn't silently dropped — see the
+            // RemoteControlProfileDirs accessor, which reads the old key when
+            // this list is empty. Remote Control is account-scoped, so two
+            // accounts genuinely need two relays; nothing about one relay can be
+            // stretched to see both.
+            public List<string> RemoteControlProfileDirs { get; init; } = new();
 
             // How long the bridge may sit unused before it is shut down.
             //
@@ -571,6 +582,53 @@ namespace ClaudeBuddy
                 }
             }
             set { Load(); lock (Gate) _model.RemoteControlProfileDir = value; Save(); }
+        }
+
+        // The accounts to run relays for, never empty when the feature is on.
+        //
+        // Falls back through the old single-account key before the default, so
+        // turning this into a list does not quietly reset someone who had
+        // already chosen an account.
+        public static IReadOnlyList<string> RemoteControlProfileDirs
+        {
+            get
+            {
+                Load();
+                lock (Gate)
+                {
+                    if (_model.RemoteControlProfileDirs.Count > 0)
+                        return _model.RemoteControlProfileDirs.ToList();
+
+                    var single = _model.RemoteControlProfileDir;
+                    return new List<string>
+                    {
+                        string.IsNullOrWhiteSpace(single) ? DefaultRemoteControlProfileDir : single!
+                    };
+                }
+            }
+        }
+
+        public static void SetRemoteControlProfileDirs(IEnumerable<string> dirs)
+        {
+            Load();
+            lock (Gate)
+            {
+                _model.RemoteControlProfileDirs.Clear();
+                foreach (var dir in dirs)
+                {
+                    if (string.IsNullOrWhiteSpace(dir)) continue;
+                    if (_model.RemoteControlProfileDirs.Contains(dir, StringComparer.Ordinal)) continue;
+                    _model.RemoteControlProfileDirs.Add(dir);
+                }
+
+                // Cleared so the two keys cannot disagree: once a list exists it
+                // is the only answer, and a leftover single value would be a
+                // second source of truth that only surfaces if the list is
+                // emptied again.
+                _model.RemoteControlProfileDir = null;
+            }
+
+            Save();
         }
 
         public static int RemoteControlIdleMinutes
@@ -967,6 +1025,17 @@ namespace ClaudeBuddy
                         }
                     }
 
+                    if (root["remoteControlProfileDirs"] is JsonArray remoteDirs)
+                    {
+                        foreach (var node in remoteDirs)
+                        {
+                            if (node?.GetValue<string>() is { Length: > 0 } dirName)
+                            {
+                                model.RemoteControlProfileDirs.Add(dirName);
+                            }
+                        }
+                    }
+
                     if (root["codexHomes"] is JsonArray codexHomes)
                     {
                         foreach (var node in codexHomes)
@@ -1117,6 +1186,9 @@ namespace ClaudeBuddy
                     var speakArgs = new JsonArray();
                     foreach (var argument in _model.SpeakCommandArgs) speakArgs.Add(argument);
 
+                    var remoteProfileDirs = new JsonArray();
+                    foreach (var dir in _model.RemoteControlProfileDirs) remoteProfileDirs.Add(dir);
+
                     var voicesArgs = new JsonArray();
                     foreach (var argument in _model.SpeakVoicesCommandArgs) voicesArgs.Add(argument);
 
@@ -1139,6 +1211,7 @@ namespace ClaudeBuddy
                         // changing which profile ships as the default still
                         // reaches everyone who never picked one.
                         ["remoteControlProfileDir"] = _model.RemoteControlProfileDir,
+                        ["remoteControlProfileDirs"] = remoteProfileDirs,
                         ["remoteControlIdleMinutes"] = _model.RemoteControlIdleMinutes,
                         ["claudeCodeChatEnabled"] = _model.ClaudeCodeChatEnabled,
                         ["claudeCodeReplyEnabled"] = _model.ClaudeCodeReplyEnabled,

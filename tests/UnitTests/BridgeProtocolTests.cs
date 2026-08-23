@@ -92,6 +92,49 @@ public class BridgeProtocolTests
         Assert.Equal("job-hunter", remote.Name);
     }
 
+    // Buddy's own relay, seen from a later relay. Real output: an earlier
+    // relay's Remote Control registration outlives its process, so it comes back
+    // as a peer with status "offline" — and without filtering it would put a
+    // phantom orb on screen named after Buddy's own plumbing.
+    [Fact]
+    public void ARelayOfOurOwnIsNotWorthAnOrb()
+    {
+        const string withOwnRelay =
+            "Peer sessions (2):\n" +
+            "  claude-buddy-rc--claude-board [6dfd49]  ·  Remote Control  ·  offline\n" +
+            "  job-hunter [94f106]  ·  Remote Control  ·  running";
+
+        var agents = BridgeProtocol.ParseAgents(withOwnRelay);
+        Assert.Equal(2, agents.Count);
+
+        var worth = Assert.Single(agents, a => a.IsWorthAnOrb);
+        Assert.Equal("job-hunter", worth.Name);
+
+        var own = agents.Single(a => a.Name.StartsWith("claude-buddy-rc-"));
+        Assert.True(own.IsOwnRelay);
+        Assert.True(own.IsOffline);
+    }
+
+    // An offline peer that is not ours is still not worth an orb: there is
+    // nothing there to send to.
+    [Fact]
+    public void AnOfflinePeerIsNotWorthAnOrb()
+    {
+        var agents = BridgeProtocol.ParseAgents("  gone [111111]  ·  Remote Control  ·  offline");
+
+        var agent = Assert.Single(agents);
+        Assert.True(agent.IsRemoteControl);
+        Assert.False(agent.IsWorthAnOrb);
+    }
+
+    [Fact]
+    public void ARunningPeerIsWorthAnOrb()
+    {
+        var agents = BridgeProtocol.ParseAgents("  job-hunter [94f106]  ·  Remote Control  ·  running");
+
+        Assert.True(Assert.Single(agents).IsWorthAnOrb);
+    }
+
     [Fact]
     public void ParseAgents_ReturnsEmptyRatherThanThrowing_OnJunk()
     {
@@ -204,6 +247,52 @@ public class BridgeProtocolTests
         Assert.False(health.RemoteControlActive);
         Assert.False(health.IsUsable);
         Assert.Null(health.Warning);
+    }
+
+    // Captured verbatim from a relay that would not start: an account whose
+    // .claude.json had no lastOnboardingVersion got the first-run theme picker
+    // on every new session, and in a detached tmux pane nobody was there to
+    // answer it. Real output, trimmed to the distinctive lines.
+    private const string RealThemePrompt =
+        " ❯ 1. Auto (match terminal) ✔\n" +
+        "   2. Dark mode\n" +
+        "   3. Light mode\n" +
+        "   4. Dark mode (colorblind-friendly)\n" +
+        "  Syntax theme: Monokai Extended (ctrl+t to disable)";
+
+    // The whole point of this check: without it the relay waits out its full
+    // 45-second timeout and then says "failed to start", which is true and tells
+    // the person nothing they can act on.
+    [Fact]
+    public void ReadSetupBlock_RecognisesTheFirstRunThemePicker()
+    {
+        var reason = BridgeProtocol.ReadSetupBlock(RealThemePrompt);
+
+        Assert.NotNull(reason);
+        Assert.Contains("first-run setup", reason);
+
+        // And says what to do about it, because that is the only reason to
+        // report it rather than just failing.
+        Assert.Contains("Run `claude` in a terminal", reason);
+    }
+
+    [Fact]
+    public void ReadSetupBlock_RecognisesTheTrustPrompt()
+    {
+        var reason = BridgeProtocol.ReadSetupBlock("Do you trust the files in this folder?");
+
+        Assert.NotNull(reason);
+        Assert.Contains("trust", reason);
+    }
+
+    // A healthy session must not be mistaken for a blocked one, or the relay
+    // would refuse to start for everybody.
+    [Fact]
+    public void ReadSetupBlock_IsNullForAWorkingSession()
+    {
+        Assert.Null(BridgeProtocol.ReadSetupBlock(RealBanner));
+        Assert.Null(BridgeProtocol.ReadSetupBlock(""));
+        Assert.Null(BridgeProtocol.ReadSetupBlock("Peer sessions (1):"));
     }
 
     // The prompts are instructions to a model, so the only thing worth

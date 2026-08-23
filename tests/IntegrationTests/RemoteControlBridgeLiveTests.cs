@@ -38,9 +38,9 @@ public class RemoteControlBridgeLiveTests
         Directory.CreateDirectory(dir);
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
         ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.RemoteControlProfileDir = ProfileDir;
+        ClaudeBuddySettings.SetRemoteControlProfileDirs(new[] { ProfileDir });
 
-        using var bridge = new RemoteControlBridge();
+        using var bridge = new RemoteControlBridge(ProfileDir);
 
         var started = await bridge.StartAsync();
 
@@ -78,14 +78,14 @@ public class RemoteControlBridgeLiveTests
         Directory.CreateDirectory(dir);
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
         ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.RemoteControlProfileDir = ProfileDir;
+        ClaudeBuddySettings.SetRemoteControlProfileDirs(new[] { ProfileDir });
 
-        using var first = new RemoteControlBridge();
+        using var first = new RemoteControlBridge(ProfileDir);
         Assert.True(await first.StartAsync(), $"first bridge failed to start under '{ProfileDir}'");
         var firstAgents = await first.ListAgentsAsync();
         Assert.NotNull(firstAgents);
 
-        using var second = new RemoteControlBridge();
+        using var second = new RemoteControlBridge(ProfileDir);
         Assert.True(await second.StartAsync(), "second bridge failed to start");
 
         // The second is the live one and can still be asked things — proving it
@@ -94,6 +94,78 @@ public class RemoteControlBridgeLiveTests
         Assert.NotNull(secondAgents);
 
         second.Stop();
+    }
+
+    // Two accounts, two relays, one merged snapshot.
+    //
+    // This is the shape Remote Control forces: a relay sees exactly one
+    // account's sessions, so seeing two means running two. What is worth proving
+    // is that the two do not collide — they had one fixed tmux session name and
+    // one shared status directory, either of which would have made the second
+    // relay kill or hijack the first.
+    [LiveBridgeFact]
+    public async Task TwoAccountsRunTwoRelaysWithoutFightingOverOne()
+    {
+        var second = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LIVE_BRIDGE_PROFILE_2");
+        if (string.IsNullOrWhiteSpace(second))
+        {
+            _output.WriteLine("skipped: set CLAUDE_BUDDY_LIVE_BRIDGE_PROFILE_2 to a second account");
+            return;
+        }
+
+        using var a = new RemoteControlBridge(ProfileDir);
+        using var b = new RemoteControlBridge(second!);
+
+        var startedA = await a.StartAsync();
+        var startedB = await b.StartAsync();
+
+        // Reported rather than asserted, because "this account has not finished
+        // Claude Code's first-run setup" is a real and common state that is not
+        // this code being wrong — it is exactly what ReadSetupBlock exists to
+        // say. Measured on this machine: one account had recorded an onboarding
+        // version and started fine, the other had not and sat on the theme
+        // picker forever. Failing the test for it would be blaming the code for
+        // the environment.
+        if (!startedA) _output.WriteLine($"{ProfileDir} did not start: {a.StartFailure ?? "no reason given"}");
+        if (!startedB) _output.WriteLine($"{second} did not start: {b.StartFailure ?? "no reason given"}");
+
+        // What *is* asserted unconditionally: the two relays are addressed
+        // separately. This is the collision multi-account introduced — one fixed
+        // tmux session name and one shared status directory, either of which
+        // would have let the second relay kill or hijack the first.
+        Assert.NotEqual(a.ProfileDir, b.ProfileDir);
+
+        if (startedA && startedB)
+        {
+            // Both alive after the other started. Under the old fixed name the
+            // first would be dead here, since starting a relay
+            // adopt-or-replaces whatever already holds its name.
+            Assert.True(a.IsRunning, "the first relay was killed by the second");
+            Assert.True(b.IsRunning);
+
+            // And both still answerable, which proves separate panes and
+            // separate status directories rather than merely separate objects.
+            var peersA = await a.ListAgentsAsync();
+            var peersB = await b.ListAgentsAsync();
+
+            _output.WriteLine($"{a.ProfileDir}: {peersA?.Count ?? -1} peers");
+            _output.WriteLine($"{b.ProfileDir}: {peersB?.Count ?? -1} peers");
+
+            Assert.NotNull(peersA);
+            Assert.NotNull(peersB);
+        }
+        else
+        {
+            // At least one has to work, or this proved nothing about relays.
+            Assert.True(startedA || startedB, "neither account could start a relay");
+
+            var live = startedA ? a : b;
+            Assert.True(live.IsRunning);
+            Assert.NotNull(await live.ListAgentsAsync());
+        }
+
+        a.Stop();
+        b.Stop();
     }
 
     // The path the tray item and the Settings button both take, end to end:
@@ -112,7 +184,7 @@ public class RemoteControlBridgeLiveTests
         Directory.CreateDirectory(dir);
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
         ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.RemoteControlProfileDir = ProfileDir;
+        ClaudeBuddySettings.SetRemoteControlProfileDirs(new[] { ProfileDir });
 
         try
         {

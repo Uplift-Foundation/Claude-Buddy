@@ -973,10 +973,11 @@ namespace ClaudeBuddy
 
             if (!ClaudeBuddySettings.RemoteControlEnabled) return rows.ToArray();
 
-            rows.Add(Row("Account", RemoteControlProfilePicker(),
-                "Which Claude Code config directory the relay signs in as. Remote Control only "
-                + "shows sessions on the same account, so pick the one your other machines use. "
-                + "Add more under \"Claude Code profiles\" above."));
+            rows.Add(Row("Accounts", RemoteControlAccountList(),
+                "Which Claude Code config directories to look through. Remote Control only shows "
+                + "sessions on the same account, so tick the ones your other machines use — "
+                + "each ticked account runs its own relay, and each relay costs usage while it is "
+                + "running. Add more under \"Claude Code profiles\" above."));
 
             rows.Add(Row("Stop the relay after", RemoteControlIdlePicker(),
                 "The relay shuts down once you stop using it, and starts again by itself the "
@@ -1012,48 +1013,81 @@ namespace ClaudeBuddy
             return rows.ToArray();
         }
 
-        // The config directories a relay could sign in as: the default one, plus
-        // whatever the user has already told the Claude Code section about. Not a
-        // free-text box — a name that is not a real profile fails by producing no
-        // sessions at all, which is indistinguishable from having none.
-        private Control RemoteControlProfilePicker()
+        // Every config directory a relay could sign into, each with a tick.
+        //
+        // A list of checkboxes rather than one picker because Remote Control is
+        // account-scoped: one relay sees exactly one account's sessions, so
+        // seeing two accounts means running two relays. That is a real cost
+        // multiplier — each is a live Claude Code session — which is why it is
+        // opt-in per account rather than "all of them, automatically".
+        //
+        // Not free text: a directory name that is not a real profile fails by
+        // producing no sessions at all, which is indistinguishable from having
+        // none, so the only offer is what actually exists.
+        private Control RemoteControlAccountList()
         {
-            var choices = new List<string> { ClaudeBuddySettings.DefaultRemoteControlProfileDir };
+            var offered = new List<string> { ClaudeBuddySettings.DefaultRemoteControlProfileDir };
             foreach (var dir in ClaudeBuddySettings.ClaudeCodeProfileDirs)
             {
-                if (!choices.Contains(dir, StringComparer.Ordinal)) choices.Add(dir);
+                if (!offered.Contains(dir, StringComparer.Ordinal)) offered.Add(dir);
             }
 
-            var current = ClaudeBuddySettings.RemoteControlProfileDir;
+            var selected = ClaudeBuddySettings.RemoteControlProfileDirs.ToList();
 
-            // The same courtesy the other pickers extend: a value put in
-            // settings.json by hand shows as itself rather than being silently
-            // replaced by the first entry on the list.
-            if (!choices.Contains(current, StringComparer.Ordinal)) choices.Add(current);
-
-            var combo = new ComboBox
+            // A previously ticked account whose profile has since been removed
+            // from the Claude Code section still shows, ticked, rather than
+            // silently disappearing — otherwise a relay would keep running for
+            // something the window claims is not selected.
+            foreach (var dir in selected)
             {
-                ItemsSource = choices,
-                SelectedIndex = choices.IndexOf(current),
-                MinWidth = 172
-            };
+                if (!offered.Contains(dir, StringComparer.Ordinal)) offered.Add(dir);
+            }
 
-            combo.SelectionChanged += (_, _) =>
+            var stack = new StackPanel { Spacing = 2 };
+            var boxes = new List<CheckBox>();
+
+            void Apply()
             {
-                var index = combo.SelectedIndex;
-                if (index < 0 || index >= choices.Count) return;
-                if (choices[index] == ClaudeBuddySettings.RemoteControlProfileDir) return;
+                var chosen = boxes.Where(b => b.IsChecked == true)
+                                  .Select(b => (string)b.Content!)
+                                  .ToList();
 
-                ClaudeBuddySettings.RemoteControlProfileDir = choices[index];
+                // Never all-unticked: with none selected the feature is on and
+                // can do nothing, which reads as broken. Falling back to the
+                // default account is the least surprising answer, and the switch
+                // above is the way to actually turn it off.
+                if (chosen.Count == 0)
+                {
+                    chosen.Add(ClaudeBuddySettings.DefaultRemoteControlProfileDir);
+                    foreach (var box in boxes)
+                    {
+                        if ((string)box.Content! == ClaudeBuddySettings.DefaultRemoteControlProfileDir)
+                            box.IsChecked = true;
+                    }
+                }
 
-                // The account is baked into the running relay at launch, so it
-                // cannot be changed underneath one. Stopped rather than
-                // restarted: the next thing that wants it will start it, and
-                // starting one here would spend quota on a switch flip.
-                RemoteControlSessions.Stop("account changed");
-            };
+                ClaudeBuddySettings.SetRemoteControlProfileDirs(chosen);
 
-            return combo;
+                // Relays for accounts that were just un-ticked are retired by the
+                // next poll, which is where the "which relays should exist"
+                // decision lives. Nothing is started here: ticking an account
+                // must not begin spending on it until something asks.
+            }
+
+            foreach (var dir in offered)
+            {
+                var box = new CheckBox
+                {
+                    Content = dir,
+                    IsChecked = selected.Contains(dir, StringComparer.Ordinal)
+                };
+
+                box.IsCheckedChanged += (_, _) => Apply();
+                boxes.Add(box);
+                stack.Children.Add(box);
+            }
+
+            return stack;
         }
 
         private static readonly (string Label, int Minutes)[] RemoteIdleChoices =

@@ -23,7 +23,8 @@ namespace ClaudeBuddy
     // where the message is going, because typing into a panel that looks exactly
     // like a local one and having it arrive on a different computer is a
     // surprise worth spending a line of text on.
-    internal sealed class RemoteControlChatSession : IRemoteChatSession, IRemoteChatComposer
+    internal sealed class RemoteControlChatSession :
+        IRemoteChatSession, IRemoteChatComposer, IRemoteChatSlashCommands
     {
         private readonly List<ChatTurn> _history = new();
 
@@ -33,9 +34,15 @@ namespace ClaudeBuddy
         // of the bridge's conversation with nothing tying them to the send.
         private readonly string _remoteName;
 
-        public RemoteControlChatSession(string sessionId, string remoteName)
+        // Which account's relay this conversation goes through. Needed because
+        // there is one relay per account now, and a name alone no longer says
+        // which machine — or which login — a message should leave by.
+        private readonly string _account;
+
+        public RemoteControlChatSession(string sessionId, string account, string remoteName)
         {
             SessionId = sessionId;
+            _account = account;
             _remoteName = remoteName;
             DisplayName = remoteName;
         }
@@ -55,6 +62,15 @@ namespace ClaudeBuddy
         // Said in the input box itself. "Message…" would be a lie by omission
         // here: this one leaves the machine.
         public string ComposerHint => $"Message {_remoteName} on the other machine…";
+
+        // The built-in floor only — see SlashCommandCatalog.ForRemoteClaudeCode
+        // for why the disk-discovered half is left out. Worth having even so:
+        // sending "/" commands is most of what this channel is for, since a
+        // command is exactly the kind of thing worth asking a machine elsewhere
+        // to run, and typing one blind into a panel that offers no completion is
+        // the worst version of that.
+        public IReadOnlyList<SlashCommand> SlashCommands { get; } =
+            SlashCommandCatalog.ForRemoteClaudeCode();
 
         public async Task SendAsync(string text)
         {
@@ -77,7 +93,7 @@ namespace ClaudeBuddy
                 // idle shutdown just works rather than needing the tray item
                 // again. The wait is the price of that, and it is why the
                 // composer stays enabled rather than being disabled while down.
-                id = await RemoteControlSessions.SendToAsync(_remoteName, text).ConfigureAwait(true);
+                id = await RemoteControlSessions.SendToAsync(_account, _remoteName, text).ConfigureAwait(true);
             }
             catch (Exception ex)
             {
@@ -105,7 +121,15 @@ namespace ClaudeBuddy
         // RemoteControlSessions, which is the contract IRemoteChatSession states.
         public void OnInbound(BridgeProtocol.InboundMessage message)
         {
+            // Both halves must match. The name says which session and the
+            // account says whose — and with two accounts in play, a name on its
+            // own can be true of two different machines at once.
             if (!message.FromName.Equals(_remoteName, StringComparison.OrdinalIgnoreCase)) return;
+            if (message.Account.Length > 0
+                && !message.Account.Equals(_account, StringComparison.Ordinal))
+            {
+                return;
+            }
             if (string.IsNullOrWhiteSpace(message.Body)) return;
 
             // The answer supersedes the "working" line, so that comes off first —

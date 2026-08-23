@@ -51,9 +51,63 @@ namespace ClaudeBuddy
     // correlation already does.
     internal sealed class RemoteControlBridge : IDisposable
     {
-        // Fixed, so it doubles as a machine-wide mutex: a second Buddy (or a
-        // leftover from a crash) is found by name rather than left to pile up.
-        private const string TmuxSessionName = "claude-buddy-rc-bridge";
+        // Per account, not fixed.
+        //
+        // It was one fixed name, which doubled as a machine-wide mutex — fine
+        // while one relay could exist. With one relay per account that name
+        // becomes a collision: starting the second would kill the first (they
+        // adopt-or-replace by name), and the two would fight over one pane
+        // forever. Suffixed by profile, it is still a mutex, just per account,
+        // which is the granularity that was actually meant.
+        private readonly string _tmuxSessionName;
+
+        // The same name as an exact-match target. Used everywhere a session is
+        // addressed; the bare name is only for creating it.
+        private readonly string _tmuxTarget;
+
+        // The same session as a *pane* target — exact, and resolving to its
+        // active pane. Used before the hook has told us a real pane id.
+        private readonly string _tmuxPaneTarget;
+
+        private const string TmuxSessionPrefix = "claude-buddy-rc-";
+
+        // The account this relay signs in as, fixed at construction. Not read
+        // from settings on demand: a relay's account is baked in when its
+        // process starts, so reading it later could report one thing while the
+        // running session is another.
+        private readonly string _profileDir;
+
+        public RemoteControlBridge(string profileDir)
+        {
+            _profileDir = string.IsNullOrWhiteSpace(profileDir)
+                ? ClaudeBuddySettings.DefaultRemoteControlProfileDir
+                : profileDir;
+
+            // tmux session names cannot contain a dot or a colon — it parses
+            // them as window/pane separators — and a profile dir starts with one.
+            var safe = _profileDir.Replace('.', '-').Replace(':', '-');
+            _tmuxSessionName = TmuxSessionPrefix + safe;
+
+            // "=" forces an exact match. Without it tmux resolves a target by
+            // prefix, and one account's name is a prefix of another's the moment
+            // someone has ".claude" and ".claude-board" — which is the common
+            // case, not a contrived one. Measured: `kill-session -t
+            // claude-buddy-rc--claude` killed `claude-buddy-rc--claude-board`,
+            // so starting the second relay silently destroyed the first and the
+            // survivor then answered nothing. Every target below is exact.
+            _tmuxTarget = "=" + _tmuxSessionName;
+
+            // A pane target needs the trailing colon as well as the "=".
+            // Measured: `send-keys -t =name` answers "can't find pane", because
+            // for a pane target tmux wants session:window.pane and "=name" alone
+            // is not one — while "=name:" resolves to that exact session's
+            // active pane, which is what a freshly created session has exactly
+            // one of. Same reason AgentTeamViewer's new-window passes
+            // "<session>:" rather than the bare name.
+            _tmuxPaneTarget = _tmuxTarget + ":";
+        }
+
+        public string ProfileDir => _profileDir;
 
         // How long to wait for the hook's status file to appear, then for the
         // Remote Control banner. Starting Claude Code cold — plugin sync, MCP,
@@ -92,6 +146,11 @@ namespace ClaudeBuddy
 
         public string? Warning { get; private set; }
 
+        // Why the relay could not start, when the reason is knowable. Null for
+        // an ordinary failure — a missing binary, no tmux — where there is
+        // nothing useful to add beyond what the caller already knows.
+        public string? StartFailure { get; private set; }
+
         // Every message another session has sent the bridge since it started.
         // Raised on a background thread; callers marshal onto the UI thread
         // themselves, the way OpenClawSessions does.
@@ -119,16 +178,15 @@ namespace ClaudeBuddy
             // left behind by a crash is indistinguishable from a live one from
             // out here, and its transcript offset is lost either way, so the
             // honest move is to start clean.
-            Run(_tmux, 3000, out _, "kill-session", "-t", TmuxSessionName);
+            Run(_tmux, 3000, out _, "kill-session", "-t", _tmuxTarget);
 
             _privateTmp = PreparePrivateTmp();
             if (_privateTmp is null) return false;
 
-            var profile = ClaudeBuddySettings.RemoteControlProfileDir;
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var configDir = Path.Combine(home, profile);
+            var configDir = Path.Combine(home, _profileDir);
 
-            if (!Run(_tmux, 5000, out _, "new-session", "-d", "-s", TmuxSessionName,
+            if (!Run(_tmux, 5000, out _, "new-session", "-d", "-s", _tmuxSessionName,
                     "-x", "200", "-y", "50", "-c", home))
             {
                 return false;
@@ -148,10 +206,10 @@ namespace ClaudeBuddy
                 .Append("CLAUDE_CONFIG_DIR=").Append(Quote(configDir)).Append(' ')
                 .Append("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 ")
                 .Append(Quote(claude))
-                .Append(" --remote-control ").Append(Quote(TmuxSessionName))
+                .Append(" --remote-control ").Append(Quote(_tmuxSessionName))
                 .ToString();
 
-            if (!Run(_tmux, 5000, out _, "send-keys", "-t", TmuxSessionName, line, "Enter"))
+            if (!Run(_tmux, 5000, out _, "send-keys", "-t", _tmuxPaneTarget, line, "Enter"))
             {
                 Stop();
                 return false;
@@ -193,6 +251,17 @@ namespace ClaudeBuddy
                 catch
                 {
                     // Mid-write, or the directory appearing under us.
+                }
+
+                // An interactive setup screen means nothing will ever arrive:
+                // the session is sitting on a question with nobody to answer it.
+                // Checked here rather than after the timeout so 45 seconds of
+                // waiting turns into an immediate, actionable message.
+                var blocked = BridgeProtocol.ReadSetupBlock(CapturePane());
+                if (blocked is not null)
+                {
+                    StartFailure = blocked;
+                    return false;
                 }
 
                 await Task.Delay(ReadyPollMs).ConfigureAwait(false);
@@ -508,7 +577,7 @@ namespace ClaudeBuddy
         public void Stop()
         {
             var tmux = _tmux;
-            if (tmux is not null) Run(tmux, 3000, out _, "kill-session", "-t", TmuxSessionName);
+            if (tmux is not null) Run(tmux, 3000, out _, "kill-session", "-t", _tmuxTarget);
 
             lock (_gate)
             {
@@ -545,8 +614,8 @@ namespace ClaudeBuddy
 
             if (tmux is null || string.IsNullOrEmpty(pane)) return false;
 
-            if (!Run(tmux, 3000, out _, Args("set-buffer", "-b", "claude-buddy-rc", "--", text))) return false;
-            if (!Run(tmux, 3000, out _, Args("paste-buffer", "-b", "claude-buddy-rc", "-t", pane!, "-p", "-d"))) return false;
+            if (!Run(tmux, 3000, out _, Args("set-buffer", "-b", _tmuxSessionName, "--", text))) return false;
+            if (!Run(tmux, 3000, out _, Args("paste-buffer", "-b", _tmuxSessionName, "-t", pane!, "-p", "-d"))) return false;
 
             return Run(tmux, 3000, out _, Args("send-keys", "-t", pane!, "Enter"));
         }
@@ -559,7 +628,7 @@ namespace ClaudeBuddy
 
             // Before the status file lands there is no pane id yet, so the
             // session name stands in — it resolves to its own active pane.
-            var target = string.IsNullOrEmpty(pane) ? TmuxSessionName : pane!;
+            var target = string.IsNullOrEmpty(pane) ? _tmuxPaneTarget : pane!;
 
             if (tmux is null) return "";
             return Run(tmux, 3000, out var text, Args("capture-pane", "-p", "-t", target)) ? text : "";
@@ -585,9 +654,13 @@ namespace ClaudeBuddy
         {
             try
             {
+                // Per account, for the same reason the tmux name is: two relays
+                // sharing a status directory would each adopt whichever file
+                // landed first, and both would tail one transcript.
                 var root = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    "Library", "Caches", "ClaudeBuddy", "rc-bridge");
+                    "Library", "Caches", "ClaudeBuddy", "rc-bridge",
+                    _profileDir.Replace('.', '-'));
 
                 // Cleared on every start: a status file from a previous bridge
                 // would be adopted as this one's, pointing the tail at a

@@ -21,7 +21,7 @@ public class RemoteScanRulesTests
 {
     private static SessionManager.ScanEntry Remote(string name, DateTime written, string state = "idle") =>
         new(
-            "rc:" + name,
+            "rc:.claude:" + name,
             new SessionStatus
             {
                 Source = SessionSource.RemoteControl,
@@ -108,7 +108,7 @@ public class RemoteScanRulesTests
     [InlineData("something-new", "idle")]
     public void RemoteStatus_MapsOntoTheTwoStatesAnOrbDraws(string peerStatus, string expected)
     {
-        var remote = new RemoteControlSessions.Remote("job-hunter", "94f106", peerStatus, DateTime.UtcNow);
+        var remote = new RemoteControlSessions.Remote("job-hunter", "94f106", peerStatus, DateTime.UtcNow, ".claude");
 
         Assert.Equal(expected, remote.Working ? "generating" : "idle");
     }
