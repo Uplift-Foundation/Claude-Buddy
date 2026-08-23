@@ -60,7 +60,8 @@ namespace ClaudeBuddy
         // from BridgeProtocol.RemoteAgent so the parser stays a parser: this one
         // carries which account it was seen through and when, neither of which
         // the peer list has an opinion about.
-        internal sealed record Remote(string Name, string Ref, string Status, DateTime Seen, string Account)
+        internal sealed record Remote(
+            string Name, string Ref, string Status, DateTime Seen, string Account, string? Color = null)
         {
             // The account is in the key, not just the record.
             //
@@ -186,6 +187,21 @@ namespace ClaudeBuddy
         // Re-announcing "still working" every 20 seconds would fill a panel with
         // the same line.
         private static readonly Dictionary<string, bool> WorkingNow =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        // What each remote session said its colour was, and which ones have
+        // already been asked.
+        //
+        // In memory rather than in settings, deliberately. Persisting it would
+        // save a message per launch but go stale the moment someone runs
+        // /color on the other machine, and a wrong colour that never corrects
+        // itself is worse than one extra message when Buddy starts. Asked
+        // separately from answered so a session that never replies is not asked
+        // again every poll.
+        private static readonly Dictionary<string, string> KnownColors =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly HashSet<string> ColorAsked =
             new(StringComparer.OrdinalIgnoreCase);
 
         // Brings up a relay for every configured account that hasn't got one, and
@@ -421,7 +437,13 @@ namespace ClaudeBuddy
             var now = DateTime.UtcNow;
             var remotes = agents
                 .Where(a => a.IsWorthAnOrb)
-                .Select(a => new Remote(a.Name, a.Ref, a.Status, now, account))
+                .Select(a =>
+                {
+                    var key = account + ":" + a.Name;
+                    string? colour;
+                    lock (Gate) KnownColors.TryGetValue(key, out colour);
+                    return new Remote(a.Name, a.Ref, a.Status, now, account, colour);
+                })
                 .ToList();
 
             lock (Gate)
@@ -443,6 +465,44 @@ namespace ClaudeBuddy
             Republish();
             RaiseWorkingTransitions(remotes);
             RetuneTimer();
+
+            await AskForMissingColorsAsync(account, remotes, bridge).ConfigureAwait(false);
+        }
+
+        // Asks each newly seen session what colour it is, once.
+        //
+        // This costs a message per remote session — there is no cheaper route,
+        // since a peer row carries neither the transcript nor the cwd a colour
+        // is derived from (see BridgeProtocol's own note). Bounded by asking
+        // only once per session per run, and only for sessions already deemed
+        // worth an orb, so nothing is spent on relays or dead registrations.
+        //
+        // Sequential rather than fanned out: the relay serializes requests
+        // anyway, and firing five at once would just queue five deep behind one
+        // input line.
+        private static async Task AskForMissingColorsAsync(
+            string account, IReadOnlyList<Remote> remotes, RemoteControlBridge bridge)
+        {
+            foreach (var remote in remotes)
+            {
+                var key = account + ":" + remote.Name;
+
+                lock (Gate)
+                {
+                    if (KnownColors.ContainsKey(key)) continue;
+                    if (!ColorAsked.Add(key)) continue;
+                }
+
+                try
+                {
+                    await bridge.AskColorAsync(remote.Name).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Cosmetic. A colour that never arrives leaves the derived
+                    // one in place, which is what every orb had before this.
+                }
+            }
         }
 
         // Picks the cadence from what is actually happening. Called after every
@@ -604,8 +664,49 @@ namespace ClaudeBuddy
             if (any) StopAll("restarting");
         }
 
-        private static void OnMessage(string account, BridgeProtocol.InboundMessage message) =>
+        private static void OnMessage(string account, BridgeProtocol.InboundMessage message)
+        {
+            // A colour answer is not a message to the person reading the panel —
+            // they never asked the question. Swallowed whether or not it parses,
+            // because showing someone a fumbled answer to a question they did
+            // not ask is worse than showing nothing.
+            if (BridgeProtocol.IsColorReply(message.Body))
+            {
+                var colour = BridgeProtocol.ParseColorReply(message.Body);
+                if (colour is not null)
+                {
+                    lock (Gate) KnownColors[account + ":" + message.FromName] = colour;
+
+                    // Republished so the next scan picks the colour up without
+                    // waiting for another poll to rebuild the list.
+                    RepublishWithColors();
+                }
+
+                return;
+            }
+
             Dispatcher.UIThread.Post(() => MessageReceived?.Invoke(
                 message with { Account = account }));
+        }
+
+        // Re-stamps the published snapshot with whatever colours are now known.
+        private static void RepublishWithColors()
+        {
+            lock (Gate)
+            {
+                foreach (var relay in Relays)
+                {
+                    relay.Value.Sessions = relay.Value.Sessions
+                        .Select(r =>
+                        {
+                            KnownColors.TryGetValue(relay.Key + ":" + r.Name, out var colour);
+                            return colour is null ? r : r with { Color = colour };
+                        })
+                        .ToList();
+                }
+
+                _snapshot = Relays.Values.SelectMany(r => r.Sessions).ToList();
+            }
+        }
     }
 }

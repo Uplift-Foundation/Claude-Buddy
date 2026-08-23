@@ -295,6 +295,67 @@ public class BridgeProtocolTests
         Assert.Null(BridgeProtocol.ReadSetupBlock("Peer sessions (1):"));
     }
 
+    // A colour answer must be recognisable, because it comes back as an
+    // ordinary cross-session message. Without the marker the word "green" would
+    // land in the panel as though the remote session had said it to the person
+    // reading — who never asked the question.
+    [Theory]
+    [InlineData("CB-COLOR:green", "green")]
+    [InlineData("CB-COLOR: blue", "blue")]
+    [InlineData("CB-COLOR:#D75F5F", "#D75F5F")]
+    [InlineData("cb-color:Purple", "purple")]
+    public void ParseColorReply_ReadsTheAnswer(string body, string expected)
+    {
+        Assert.Equal(expected, BridgeProtocol.ParseColorReply(body), ignoreCase: true);
+    }
+
+    // A model that answers in a sentence instead of one word still yields the
+    // colour, because asking politely does not guarantee obedience.
+    [Fact]
+    public void ParseColorReply_SurvivesAChattyAnswer()
+    {
+        Assert.Equal("teal", BridgeProtocol.ParseColorReply("CB-COLOR: I'm set to teal right now"));
+    }
+
+    // "none" must not match "orange" by substring — the whole reason the match
+    // is word-bounded rather than a Contains.
+    [Fact]
+    public void ParseColorReply_TreatsNoneAsNoColour()
+    {
+        Assert.Null(BridgeProtocol.ParseColorReply("CB-COLOR:none"));
+        Assert.Null(BridgeProtocol.ParseColorReply("CB-COLOR: I have not set one"));
+    }
+
+    // Swallowed whether or not it parses: showing someone a fumbled answer to a
+    // question they did not ask is worse than showing nothing.
+    [Fact]
+    public void IsColorReply_RecognisesTheAnswerEvenWhenItCannotBeParsed()
+    {
+        Assert.True(BridgeProtocol.IsColorReply("CB-COLOR:none"));
+        Assert.True(BridgeProtocol.IsColorReply("CB-COLOR: no idea sorry"));
+        Assert.Null(BridgeProtocol.ParseColorReply("CB-COLOR: no idea sorry"));
+    }
+
+    // And an ordinary reply is never mistaken for one, or a real answer would
+    // vanish from the panel.
+    [Fact]
+    public void IsColorReply_IsFalseForAnOrdinaryReply()
+    {
+        Assert.False(BridgeProtocol.IsColorReply("avatar.internal"));
+        Assert.False(BridgeProtocol.IsColorReply("I painted the fence green"));
+    }
+
+    [Fact]
+    public void ColorQueryPrompt_AsksForTheMarkerAndNamesThePeer()
+    {
+        var prompt = BridgeProtocol.ColorQueryPrompt("job-hunter");
+
+        Assert.Contains("SendMessage", prompt);
+        Assert.Contains("job-hunter", prompt);
+        Assert.Contains(BridgeProtocol.ColorMarker, prompt);
+        Assert.Contains("/color", prompt);
+    }
+
     // The prompts are instructions to a model, so the only thing worth
     // asserting is that they name the tool and carry the payload through
     // unmangled — a summarised or paraphrased message is the failure here.

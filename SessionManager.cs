@@ -701,10 +701,18 @@ namespace ClaudeBuddy
                         // see docs/remote-control-findings.md.
                         Title = remote.Name,
 
-                        // Keyed on the name so the same remote session keeps its
-                        // colour across restarts without anything being stored,
-                        // the same trick the gateway branch uses for agents.
-                        Color = OpenClawSessions.ColourForAgent(remote.Name),
+                        // What the session itself said, when it has been asked
+                        // and answered — a remote session's colour cannot be
+                        // derived here, because a peer row carries neither the
+                        // transcript /color writes into nor the cwd auto-colour
+                        // hashes. See RemoteControlSessions.AskForMissingColorsAsync.
+                        //
+                        // Falls back to a colour hashed from the name, which is
+                        // stable per session and unrelated to whatever it wears
+                        // at home — better than every remote orb being identical
+                        // while the answer is still in flight, or if it never
+                        // comes.
+                        Color = remote.Color ?? OpenClawSessions.ColourForAgent(remote.Name),
 
                         Kind = SessionKind.Remote,
                     },

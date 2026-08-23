@@ -96,6 +96,66 @@ public class RemoteControlBridgeLiveTests
         second.Stop();
     }
 
+    // Whether a remote session will actually tell us its colour.
+    //
+    // This is the one part of the colour feature that cannot be unit-tested: the
+    // parsing is covered by fixtures, but whether a real session answers a
+    // question phrased this way, with the marker intact, is a fact about a model
+    // on another machine. It sends a real message to a real session, which is
+    // why it lives behind the same opt-in as everything else here.
+    [LiveBridgeFact]
+    public async Task ARemoteSessionReportsItsOwnColour()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cb-live-bridge-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.SetRemoteControlProfileDirs(new[] { ProfileDir });
+
+        using var bridge = new RemoteControlBridge(ProfileDir);
+        Assert.True(await bridge.StartAsync(), $"relay for '{ProfileDir}' failed to start");
+
+        var agents = await bridge.ListAgentsAsync();
+        Assert.NotNull(agents);
+
+        var target = agents!.FirstOrDefault(a => a.IsWorthAnOrb);
+        if (target.Name is null)
+        {
+            _output.WriteLine("skipped: no remote session available to ask");
+            bridge.Stop();
+            return;
+        }
+
+        string? answer = null;
+        bridge.MessageReceived += m =>
+        {
+            if (BridgeProtocol.IsColorReply(m.Body)) answer = m.Body;
+        };
+
+        Assert.True(await bridge.AskColorAsync(target.Name), "the colour question was not delivered");
+
+        // The answer comes back on a later turn, so this drains rather than
+        // awaits — the same asynchrony every reply has.
+        var deadline = DateTime.UtcNow.AddSeconds(90);
+        while (DateTime.UtcNow < deadline && answer is null)
+        {
+            bridge.Pump();
+            await Task.Delay(1000);
+        }
+
+        _output.WriteLine($"asked {target.Name}; raw answer: {answer ?? "(none within 90s)"}");
+        if (answer is not null)
+            _output.WriteLine($"parsed colour: {BridgeProtocol.ParseColorReply(answer) ?? "(none set)"}");
+
+        bridge.Stop();
+
+        // Asserted, because the whole point is that a real session answers in a
+        // shape this can read. "none" is a valid answer and parses to null; what
+        // must not happen is no marker coming back at all.
+        Assert.NotNull(answer);
+        Assert.True(BridgeProtocol.IsColorReply(answer!));
+    }
+
     // Two accounts, two relays, one merged snapshot.
     //
     // This is the shape Remote Control forces: a relay sees exactly one
