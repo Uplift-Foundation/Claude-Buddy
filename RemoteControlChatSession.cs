@@ -45,6 +45,24 @@ namespace ClaudeBuddy
             _account = account;
             _remoteName = remoteName;
             DisplayName = remoteName;
+
+            // Opens with a line saying what this panel is, because otherwise it
+            // opens empty and an empty panel reads as broken.
+            //
+            // Every other panel in this app fills itself from a transcript on
+            // this disk, so a person reasonably expects to see the conversation
+            // that session is already having. There is no such file here — it is
+            // on the other machine — and this channel only carries what passes
+            // through it. Saying so once, up front, is the difference between
+            // "nothing loaded" and "nothing has been said yet".
+            //
+            // It also survives the one case that surprised me in testing: the
+            // history is in memory, so restarting Claude Buddy empties it. With
+            // this line the panel still explains itself after a restart instead
+            // of being a blank box.
+            Note($"Messages you send {remoteName} appear here, with its replies. "
+                + "Its own conversation stays on the machine it is running on — this is a way to "
+                + "talk to it, not a view of it.");
         }
 
         public string SessionId { get; }
