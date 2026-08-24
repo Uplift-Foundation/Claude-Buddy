@@ -302,17 +302,7 @@ namespace ClaudeBuddy
             // macOS preference windows are dismissed by the window's own close
             // button, not by a Done inside the content. Windows expects the
             // button, so it keeps it.
-            if (!OperatingSystem.IsMacOS())
-            {
-                var done = new Button
-                {
-                    Content = "Done",
-                    HorizontalAlignment = HorizontalAlignment.Right,
-                    MinWidth = 90
-                };
-                done.Click += (_, _) => CloseFromDoneButton();
-                root.Children.Add(done);
-            }
+            if (!OperatingSystem.IsMacOS()) root.Children.Add(DoneButton());
 
             return root;
         }
@@ -1069,6 +1059,43 @@ namespace ClaudeBuddy
             Rebuild();
         }
 
+        // Both of the builders below used to sit inline inside a platform gate,
+        // which made them reachable on exactly one CI leg — and what they build is
+        // a decision about what to tell the user, not a platform detail. Pulled
+        // out so it can be asserted from either runner, leaving one line of
+        // genuine platform behaviour behind at each call site.
+
+        // macOS preference windows are dismissed by the window's own close button,
+        // not by a Done inside the content. Windows expects the button, so it
+        // keeps it.
+        internal Button DoneButton()
+        {
+            var done = new Button
+            {
+                Content = "Done",
+                HorizontalAlignment = HorizontalAlignment.Right,
+                MinWidth = 90
+            };
+
+            done.Click += (_, _) => CloseFromDoneButton();
+            return done;
+        }
+
+        // The bridge is tmux-based, so there is nothing to offer on Windows yet.
+        // Said plainly rather than hidden: a feature that exists in the docs and
+        // nowhere in the window reads as a broken install.
+        internal Control[] RemoteControlUnsupportedRows() => new[]
+        {
+            NoteRow(new TextBlock
+            {
+                Text = "Sessions from other machines are macOS-only for now. "
+                     + "The relay runs inside tmux, which Windows has no equivalent of here.",
+                FontSize = 12,
+                Opacity = 0.75,
+                TextWrapping = TextWrapping.Wrap
+            })
+        };
+
         internal Control[] RemoteControlRows()
         {
             // Dropped before anything is built, because Rebuild() replaces the
@@ -1080,20 +1107,7 @@ namespace ClaudeBuddy
             // The bridge is tmux-based, so there is nothing to offer on Windows
             // yet. Said plainly rather than hidden: a feature that exists in the
             // docs and nowhere in the window reads as a broken install.
-            if (!RemoteControlBridge.IsSupported)
-            {
-                return new[]
-                {
-                    NoteRow(new TextBlock
-                    {
-                        Text = "Sessions from other machines are macOS-only for now. "
-                             + "The relay runs inside tmux, which Windows has no equivalent of here.",
-                        FontSize = 12,
-                        Opacity = 0.75,
-                        TextWrapping = TextWrapping.Wrap
-                    })
-                };
-            }
+            if (!RemoteControlBridge.IsSupported) return RemoteControlUnsupportedRows();
 
             var rows = new List<Control>
             {
