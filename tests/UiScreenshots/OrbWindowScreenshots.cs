@@ -79,6 +79,44 @@ public class OrbWindowScreenshots
     }
 
     [AvaloniaFact]
+    public void AHeartbeatSessionWearsABeatingHeart()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Heartbeat = true;
+        orb.UpdateFrom(status);
+
+        ScreenshotHelper.Capture(orb, "orb-window-heartbeat-heart-badge.png");
+    }
+
+    [AvaloniaFact]
+    public void TheHeartAndTheKindBadgeAreIndependent()
+    {
+        // Both corners at once — the case that would show a collision if the
+        // heart had been put in the kind badge's slot.
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = SessionKind.Channel;
+        status.Heartbeat = true;
+        orb.UpdateFrom(status);
+
+        ScreenshotHelper.Capture(orb, "orb-window-heartbeat-and-channel-badges.png");
+    }
+
+    [AvaloniaFact]
+    public void AHeartbeatOrbInATeamKeepsItsHeartOnTheSmallerRim()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Heartbeat = true;
+        status.Kind = SessionKind.Channel;
+        status.Lead = "lead-session-id";
+        orb.UpdateFrom(status);
+
+        ScreenshotHelper.Capture(orb, "orb-window-heartbeat-team-member.png");
+    }
+
+    [AvaloniaFact]
     public void KnownColorNameSetsTheOrbsAccentColor()
     {
         var orb = new OrbWindow(Guid.NewGuid().ToString());

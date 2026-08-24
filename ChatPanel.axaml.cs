@@ -401,6 +401,8 @@ namespace ClaudeBuddy
             KindChip.IsVisible = kind is not null;
             KindChipText.Text = kind is null ? "" : $"{orb.KindGlyphText}  {kind}";
 
+            ApplyHeartbeat(orb.IsHeartbeat);
+
             _defaultBubble = orb.AccentColor;
 
             ApplyAvatar(session.SessionId);
@@ -784,6 +786,64 @@ namespace ClaudeBuddy
         {
             _avatarTimer?.Stop();
             _avatarTimer = null;
+        }
+
+        // --- the heartbeat chip's beat ---------------------------------------
+        // Same curve as the orb badge's (OpenClawHeartbeat.Beat), driven by a
+        // timer of this panel's own.
+        //
+        // A timer rather than an Avalonia animation for the reason the orb's
+        // pulse gives, and rather than *sharing* the orb's ticker because that
+        // one's roster is orb windows: there is at most one chat panel, so a
+        // second 20Hz timer that only runs while a heartbeat chat is open costs
+        // nothing worth pooling. It stops the moment the chip goes away, which
+        // is what keeps that true.
+
+        private DispatcherTimer? _heartTimer;
+        private long _heartStartedAt;
+        private readonly ScaleTransform _heartScale = new();
+
+        private void ApplyHeartbeat(bool heartbeat)
+        {
+            HeartChip.IsVisible = heartbeat;
+
+            if (!heartbeat)
+            {
+                StopHeartAnimation();
+                return;
+            }
+
+            HeartChipText.RenderTransform = _heartScale;
+            HeartChipText.RenderTransformOrigin = RelativePoint.Center;
+            _heartStartedAt = Environment.TickCount64;
+
+            if (_heartTimer is not null) return;
+
+            _heartTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(1000.0 / 20)
+            };
+            _heartTimer.Tick += (_, _) =>
+            {
+                var beat = OpenClawHeartbeat.Beat(
+                    (Environment.TickCount64 - _heartStartedAt) / OpenClawHeartbeat.PeriodMs);
+
+                // Smaller swell than the orb's: this heart sits on a line of
+                // text, and one that grew by a third would shift the chip's
+                // neighbours every beat.
+                _heartScale.ScaleX = _heartScale.ScaleY = 1.0 + (0.14 * beat);
+                HeartChipText.Opacity = 0.55 + (0.45 * beat);
+            };
+            _heartTimer.Start();
+        }
+
+        private void StopHeartAnimation()
+        {
+            _heartTimer?.Stop();
+            _heartTimer = null;
+
+            _heartScale.ScaleX = _heartScale.ScaleY = 1.0;
+            HeartChipText.Opacity = 1.0;
         }
 
         // Clicking a picture opens it full size in whatever this machine views
@@ -1528,6 +1588,12 @@ namespace ClaudeBuddy
             if (_session is not null) Drafts[_session.SessionId] = Input.Text ?? "";
 
             StopAvatarAnimation();
+
+            // Nothing on screen to beat for. Without this the timer outlives the
+            // panel and goes on scaling a hidden TextBlock 20 times a second for
+            // as long as the app runs.
+            StopHeartAnimation();
+
             AvatarPopup.Close();
 
             // Cleared with the panel, not left standing: the next session bound
