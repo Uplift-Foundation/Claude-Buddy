@@ -117,6 +117,19 @@ namespace ClaudeBuddy
             }
 
             // Every orb in a team means no shape at all. One of them leads.
+            //
+            // This has never been observed to run, and reasoning about Resolves
+            // suggests it cannot: an orb is an anchor exactly when Resolves says
+            // no, and Resolves only says yes after hopping to a lead that is out
+            // of range — which makes the orb it landed on an anchor itself. So
+            // any non-empty set has at least one. The 20736-case sweep in
+            // tests/ArrangementTests has never produced anchors.Count == 0 either.
+            //
+            // Left in place rather than deleted: it is three lines of insurance
+            // against a lead table this reasoning does not anticipate, and the
+            // failure it prevents — every orb hidden, nothing drawn at all — is
+            // far worse than three uncovered lines. Named here so the next person
+            // reading a coverage report knows it is deliberate.
             if (anchors.Count == 0 && count > 0)
             {
                 anchors.Add(0);
@@ -125,7 +138,12 @@ namespace ClaudeBuddy
             }
         }
 
-        private static bool Resolves(int start, int[] leadOf, int count)
+        // internal so the shapes a full sweep never produces can be asked for
+        // directly — see OrbArrangementResolvesTests. A lead chain that runs into
+        // a cycle it is not part of is the case in point: the walk never returns
+        // to where it began and never leaves the range, so only the hop budget
+        // ends it.
+        internal static bool Resolves(int start, int[] leadOf, int count)
         {
             var at = start;
 

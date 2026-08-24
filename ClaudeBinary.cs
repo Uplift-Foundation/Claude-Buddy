@@ -104,6 +104,18 @@ namespace ClaudeBuddy
                 catch
                 {
                     // A malformed PATH entry is not worth failing the lookup for.
+                    //
+                    // Not reached on .NET 10, and worth saying so rather than
+                    // leaving it as a mystery in a coverage report: .NET Core
+                    // dropped Path.Combine's invalid-character check, so an entry
+                    // containing a NUL now combines happily and simply fails
+                    // File.Exists. AMalformedPathEntryIsSteppedOver asserts the
+                    // outcome — the good directory after it still answers — but it
+                    // reaches that outcome without this catch.
+                    //
+                    // Kept anyway: the runtime's behaviour here has changed once
+                    // already, and a PATH entry is the user's shell config rather
+                    // than anything this app controls.
                 }
             }
 

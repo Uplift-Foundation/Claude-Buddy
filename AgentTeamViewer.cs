@@ -26,6 +26,18 @@ namespace ClaudeBuddy
     // teams led from one directory would be ambiguous — the cost of that is
     // landing on the other team's viewer, which is a window you wanted to see
     // anyway, so it degrades to something harmless rather than wrong.
+    // Excluded from coverage, as a class. Every member of it either runs tmux as
+    // a real subprocess to find or open a viewer pane, or shells out to `open -a`
+    // to bring a terminal application forward — fourteen members already carried
+    // the attribute individually, and what was left uncovered was the static
+    // fields they share, which only exist because those members do.
+    //
+    // Marking the class rather than the members also fixes something the
+    // per-member version could not: a field initializer belongs to the type
+    // initializer, not to any method, so it is reported unhit whenever nothing
+    // touches the class at all — which is exactly the situation a fully excluded
+    // class is in.
+    [ExcludeFromCodeCoverage]
     internal static class AgentTeamViewer
     {
         // The lookup runs `ps` and `lsof`, so it is cached rather than repeated
