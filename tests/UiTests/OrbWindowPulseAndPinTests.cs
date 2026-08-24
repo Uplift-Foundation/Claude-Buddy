@@ -189,4 +189,14 @@ public class OrbWindowPulseAndPinTests
         // arm is covered elsewhere, so a count that resolves to nothing is fine.
         return 1;
     }
+
+    // The flyout's arrange button, which is safe for the same reason the tray's
+    // is: SessionManager.Instance is null outside the running app, so this is a
+    // no-op. A version that dereferenced instead of using ?. would throw here,
+    // and nothing else would have caught it.
+    [AvaloniaFact]
+    public void ArrangingWithNoSessionManagerIsANoOp()
+    {
+        OrbWindow.ArrangeAllOrbs();
+    }
 }
