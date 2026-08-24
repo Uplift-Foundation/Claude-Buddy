@@ -52,20 +52,19 @@ The roles, and who hands to whom:
 
 ### Product manager: requirement first, then plan
 
-The PM agent creates the requirement in CB as a **`Feature`** and moves it to
-**Refining**. CB's issue types are `Epic`, `Feature`, `Story`, `Task`, `Bug` and
-`Subtask` (one word, no hyphen); `Feature` sits at the same level as `Story`
-rather than above it, so an `Epic` is still what groups a multi-ticket effort.
+The PM agent creates the requirement in CB as a **`Feature`** and leaves it in
+**Refinement**, which is where CB's workflow puts a new issue anyway. CB's issue
+types are `Epic`, `Feature`, `Story`, `Task`, `Bug` and `Subtask` (one word, no
+hyphen); `Feature` sits at the same level as `Story` rather than above it, so an
+`Epic` is still what groups a multi-ticket effort.
 
-**One thing here is unverified, and the first real ticket should settle it.** CB
-is a team-managed project and is currently empty, so its workflow statuses
-cannot be read back from the API at all — there is no issue to ask for
-transitions, and JQL does not validate status names against a project, so a
-query returning nothing proves nothing either. "Refining" is *confirmed* as a
-status name in use on this Jira site (project FMN has 69 issues sitting in it)
-and *unconfirmed* on CB's own board, which a team-managed project owns
-separately. Whoever files the first CB ticket should read the board's columns
-and correct the name here if it differs.
+**CB's board has four columns, and they are now confirmed** — read off CB-1, the
+first ticket filed, which is what this paragraph used to ask for. They are
+**Refinement → Development → Testing → Done**, with transition ids 11, 21, 31 and
+41; every transition is global, so any status can be reached from any other. The
+name this file guessed was "Refining", which is a status on project FMN and not
+one CB has: a team-managed project owns its workflow separately, and the guess
+was wrong. Nothing else here needed correcting.
 
 Then the PM writes a plan, and **plans on a stronger model than the one that
 will implement it.** Planning is where a wrong decision is cheapest to fix and
