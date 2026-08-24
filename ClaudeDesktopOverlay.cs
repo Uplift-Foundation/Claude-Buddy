@@ -69,6 +69,36 @@ namespace ClaudeBuddy
             _timer.Start();
         }
 
+        // Which Claude Desktop window, if any, should be wearing a tint right now.
+        //
+        // Pulled out of Tick() because it is the only *decision* in there — the
+        // rest of that method asks CGWindowList where windows are and moves real
+        // ones onto them, which is why it is excluded. A lambda inside an excluded
+        // method is not itself excluded, incidentally: the compiler hoists it to
+        // its own method and the attribute does not follow, so the predicate this
+        // replaces was being counted while the method around it was not.
+        //
+        // Three ways to be "nothing in front", and they are easy to conflate:
+        //   - no profile is running as the frontmost pid;
+        //   - a pid of 0, which is what a profile that has never been launched
+        //     reports, and which would otherwise match a frontmost pid of 0 and
+        //     tint an instance that is not running at all;
+        //   - the profile is frontmost but has opted out of the window tint while
+        //     keeping its swatch and Dock icon, which is a real setting and not
+        //     the same thing as the feature being off.
+        internal static ProfileView? TintTarget(
+            IEnumerable<ProfileView> profiles, int frontmostPid)
+        {
+            var profile = profiles.FirstOrDefault(
+                p => p.IsRunning && p.Pid == frontmostPid && p.Pid != 0);
+
+            if (profile is null) return null;
+
+            return ClaudeBuddySettings.For(Path.GetFileName(profile.Directory)).TintWindow
+                ? profile
+                : null;
+        }
+
         public static void SetEnabled(bool enabled)
         {
             if (Enabled == enabled) return;
@@ -91,13 +121,9 @@ namespace ClaudeBuddy
             }
 
             var frontmost = MacOSWindowList.FrontmostPid();
-            var profile = ClaudeDesktopManager.Snapshot.Profiles
-                .FirstOrDefault(p => p.IsRunning && p.Pid == frontmost && p.Pid != 0);
+            var profile = TintTarget(ClaudeDesktopManager.Snapshot.Profiles, frontmost);
 
-            // A profile can opt out of the window tint while keeping its swatch
-            // and Dock icon, so treat an opted-out instance as "nothing in front".
-            if (profile is null
-                || !ClaudeBuddySettings.For(Path.GetFileName(profile.Directory)).TintWindow)
+            if (profile is null)
             {
                 if (_timer is not null) _timer.Interval = IdlePoll;
                 HideAll();
@@ -205,6 +231,22 @@ namespace ClaudeBuddy
             if (Parked.Count < MaxParked) Parked.Push(overlay);
         }
 
+        // Excluded from coverage, as a class: there is no member of this type that
+        // does anything but drive a real native window. The constructor asks for a
+        // transparent, undecorated, topmost, non-activating window; Apply() calls
+        // Show() and sets a native frame in physical pixels; Park() calls Hide();
+        // MakeClickThrough() reaches through TryGetPlatformHandle to an NSWindow
+        // and sends it setIgnoresMouseEvents: via objc_msgSend. Under the headless
+        // platform there is no NSWindow to send it to, so a test could construct
+        // one of these and learn only that the P/Invoke was skipped.
+        //
+        // The one thing in here that is a decision rather than a native call —
+        // "has the frame actually changed", which drives the poll rate — is
+        // reported by Apply()'s return value and observable from Tick() alone,
+        // and Tick() is excluded for the same reason. Worth revisiting if this
+        // window ever grows logic that is not about placing pixels on top of
+        // another application.
+        [ExcludeFromCodeCoverage]
         private sealed class OverlayWindow : Window
         {
             private readonly Border _frame;
