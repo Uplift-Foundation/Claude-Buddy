@@ -70,6 +70,7 @@ namespace ClaudeBuddy
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
+            "openclawShowHeartbeats",
             "codexChatEnabled", "codexReplyEnabled", "autoColorSessions",
             "claudeCodeEnabled", "codexEnabled",
             "clickAction", "doubleClickAction", "tripleClickAction"
@@ -263,6 +264,17 @@ namespace ClaudeBuddy
             // it goes quiet — this decides which of a gateway's many
             // conversations are candidates at all. Zero means all of them.
             public int OpenClawActiveWithinMinutes { get; set; } = DefaultOpenClawActiveWithin;
+
+            // Whether the sessions the gateway's heartbeat drives get orbs at
+            // all. See OpenClawHeartbeat for which those are.
+            //
+            // On by default, which is deliberately the *noisier* choice: these
+            // orbs are on screen today, and an upgrade that quietly removed
+            // several of somebody's agents would read as the gateway having
+            // dropped them rather than as a new setting having a default. The
+            // heart badge is what makes the noise explainable, and this is the
+            // switch for anyone who, having had it explained, wants it gone.
+            public bool OpenClawShowHeartbeats { get; set; } = true;
 
             // A command of the user's own to speak with, replacing every built-in
             // engine. Null means "use the built-in ones".
@@ -517,6 +529,15 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.OpenClawActiveWithinMinutes; }
             set { Load(); lock (Gate) _model.OpenClawActiveWithinMinutes = value; Save(); }
+        }
+
+        // Read once per scan by OpenClawSessions, like OpenClawActiveWithinMinutes
+        // above and for the same reason: turning it off should take the orbs off
+        // the screen on the next poll rather than at the next launch.
+        public static bool OpenClawShowHeartbeats
+        {
+            get { Load(); lock (Gate) return _model.OpenClawShowHeartbeats; }
+            set { Load(); lock (Gate) _model.OpenClawShowHeartbeats = value; Save(); }
         }
 
         public static bool OpenClawReplyEnabled
@@ -829,6 +850,8 @@ namespace ClaudeBuddy
                         OpenClawReplyEnabled = root["openclawReplyEnabled"]?.GetValue<bool>() ?? false,
                         OpenClawActiveWithinMinutes =
                             root["openclawActiveWithinMinutes"]?.GetValue<int>() ?? DefaultOpenClawActiveWithin,
+                        OpenClawShowHeartbeats =
+                            root["openclawShowHeartbeats"]?.GetValue<bool>() ?? true,
                         ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
@@ -1065,6 +1088,7 @@ namespace ClaudeBuddy
                         ["openclawFingerprint"] = _model.OpenClawFingerprint,
                         ["openclawReplyEnabled"] = _model.OpenClawReplyEnabled,
                         ["openclawActiveWithinMinutes"] = _model.OpenClawActiveWithinMinutes,
+                        ["openclawShowHeartbeats"] = _model.OpenClawShowHeartbeats,
                         ["claudeCodeChatEnabled"] = _model.ClaudeCodeChatEnabled,
                         ["claudeCodeReplyEnabled"] = _model.ClaudeCodeReplyEnabled,
                         ["codexChatEnabled"] = _model.CodexChatEnabled,
