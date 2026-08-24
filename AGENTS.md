@@ -379,19 +379,34 @@ you added, which is the figure that actually says whether new code is tested —
 a file-level percentage is dominated by whatever was already there.
 
 Two collectors, deliberately: `UnitTests`/`IntegrationTests` are VSTest and use
-`coverlet.collector`, while `UiTests` runs on the Microsoft Testing Platform
-(xUnit v3, forced by `Avalonia.Headless.XUnit` 12.x) where VSTest collectors do
-not apply, so it uses `Microsoft.Testing.Extensions.CodeCoverage` — **pinned to
-17.14.2**, because 18.x wants `Microsoft.Testing.Platform` 2.x while xunit.v3
-3.2.2 brings `mtp-v1`, and the mix throws `TypeLoadException` for
-`IDataConsumer` before a test runs. `tools/merge-coverage.py` then unions the
-three cobertura files, which all measure the same assembly; summing them would
-double-count the denominator and undercount the numerator at the same time.
+`coverlet.collector`, while `UiTests` and `UiScreenshots` run on the Microsoft
+Testing Platform (xUnit v3, forced by `Avalonia.Headless.XUnit` 12.x) where
+VSTest collectors do not apply, so they use
+`Microsoft.Testing.Extensions.CodeCoverage` — **pinned to 17.14.2** in both,
+because 18.x wants `Microsoft.Testing.Platform` 2.x while xunit.v3 3.2.2 brings
+`mtp-v1`, and the mix throws `TypeLoadException` for `IDataConsumer` before a
+test runs. `tools/merge-coverage.py` then unions the four cobertura files, which
+all measure the same assembly; summing them would double-count the denominator
+and undercount the numerator at the same time.
 
-The number excludes the three console suites — `ArrangementTests`,
-`GlyphTests`, `TranscriptTests` are plain exes, not test-SDK projects — so
-`OrbArrangement` reads 0% while being the most exhaustively verified file here.
-It is "coverage from the xUnit suites", not the sum of what this repo verifies.
+`UiScreenshots` counts as of CB-3 and did not before. CI always ran it, and it
+is the only suite drawing through **real Skia** rather than the null renderer, so
+a few things are reachable only there — a bitmap actually written to disk most
+obviously (`ClaudeDesktopBundles.WriteTinted`). Leaving it out meant those lines
+were verified and counted nowhere.
+
+The three console suites still contribute nothing *as suites* —
+`ArrangementTests`, `GlyphTests`, `TranscriptTests` are plain exes, not test-SDK
+projects. Their **cases** do count now: CB-3 moved each matrix into a class that
+`UnitTests` compiles in and runs (`ArrangementSweep`, `GlyphSuite`,
+`TranscriptSuite`), so `OrbArrangement` no longer reads 0% while being the most
+exhaustively verified file here. Run the exes for the grouped failure report.
+
+And read the headline as coverage **of what remains**: both engines honour
+`[ExcludeFromCodeCoverage]` by omitting code entirely, so an excluded file and a
+deleted one look identical in a report. `merge-coverage.py` reads the attributes
+back out of the sources and prints what was held out, what is excluded inside
+measured files, and what is absent for no stated reason.
 
 ## Extra accounts
 

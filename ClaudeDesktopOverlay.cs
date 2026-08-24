@@ -79,6 +79,9 @@ namespace ClaudeBuddy
             TrayController.Instance?.Refresh();
         }
 
+        // Excluded from coverage: asks CGWindowListCopyWindowInfo where every
+        // Claude Desktop window is and moves real overlay windows onto them.
+        [ExcludeFromCodeCoverage]
         private static void Tick()
         {
             if (!Enabled)
@@ -152,6 +155,9 @@ namespace ClaudeBuddy
         // Frames are CoreGraphics points; Avalonia screen bounds are physical
         // pixels, hence the divide by scaling. A window only counts if its centre
         // falls inside a display.
+        // Excluded from coverage: compares a window-server frame against the live
+        // screen list.
+        [ExcludeFromCodeCoverage]
         private static bool OnAVisibleScreen(MacOSWindowList.WindowFrame frame)
         {
             var screens = (Application.Current?.ApplicationLifetime
@@ -180,6 +186,8 @@ namespace ClaudeBuddy
             return false;
         }
 
+        // Excluded from coverage: hides real overlay windows.
+        [ExcludeFromCodeCoverage]
         private static void HideAll()
         {
             if (Overlays.Count == 0) return;
@@ -188,6 +196,9 @@ namespace ClaudeBuddy
             Overlays.Clear();
         }
 
+        // Excluded from coverage: hides a real overlay window and returns it to
+        // the pool.
+        [ExcludeFromCodeCoverage]
         private static void Park(OverlayWindow overlay)
         {
             overlay.Park();

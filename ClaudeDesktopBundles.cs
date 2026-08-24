@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Media;
@@ -54,6 +55,9 @@ namespace ClaudeBuddy
         // Returns the clone's path, creating or refreshing it as needed, or null
         // if anything went wrong — callers fall back to launching the real bundle,
         // so a failure here costs the colour and nothing else.
+        // Excluded from coverage: copies a real .app bundle on disk and shells out
+        // to codesign.
+        [ExcludeFromCodeCoverage]
         public static string? Ensure(string profileFolder, string sourceApp, Color tint)
         {
             if (!OperatingSystem.IsMacOS()) return null;
@@ -89,6 +93,8 @@ namespace ClaudeBuddy
         // Squirrel updates /Applications/Claude.app only, so clones go stale and
         // would keep running an old version indefinitely. Compare bundle versions
         // rather than mtimes, which cp -Rc preserves.
+        // Excluded from coverage: compares bundle versions read by plutil.
+        [ExcludeFromCodeCoverage]
         private static bool IsStale(string clone, string sourceApp)
         {
             var cloneVersion = BundleVersion(clone);
@@ -113,15 +119,23 @@ namespace ClaudeBuddy
         public static bool IsStaleFor(string profileFolder, string sourceApp) =>
             Exists(profileFolder) && IsStale(PathFor(profileFolder), sourceApp);
 
+        // Excluded from coverage: reads a binary Info.plist through plutil.
+        [ExcludeFromCodeCoverage]
         private static string? BundleVersion(string appPath) =>
             PlistValue(Path.Combine(appPath, "Contents", "Info.plist"), "CFBundleVersion");
 
+        // Excluded from coverage: runs plutil against a real plist.
+        [ExcludeFromCodeCoverage]
         private static string? PlistValue(string plist, string key)
         {
             // Info.plist is a binary plist; plutil reads either form.
             return RunCapture("/usr/bin/plutil", "-extract", key, "raw", "-o", "-", plist)?.Trim();
         }
 
+        // Excluded from coverage: unpacks an .icns with iconutil and writes it
+        // back into a bundle; the pixel maths it calls is WriteTinted, which is
+        // tested.
+        [ExcludeFromCodeCoverage]
         private static void ApplyTintedIcon(string clone, string sourceApp, string profileFolder, Color tint)
         {
             var work = DirectoryFor(profileFolder);
@@ -157,7 +171,11 @@ namespace ClaudeBuddy
         // toward white, alpha untouched. Keeps Claude's mark legible instead of
         // flat-filling it, and preserves the rounded-corner alpha that makes it
         // look like a real app icon.
-        private static void WriteTinted(string sourcePng, string destinationPng, Color tint)
+        // internal: pure pixel maths over two files, and the one part of this
+        // file that decides what the user actually sees. The comment inside about
+        // undoing premultiplication is the kind of claim worth a test — muddy
+        // icon edges are hard to notice and impossible to attribute.
+        internal static void WriteTinted(string sourcePng, string destinationPng, Color tint)
         {
             using var source = new Bitmap(sourcePng);
             var size = source.PixelSize;
@@ -231,6 +249,8 @@ namespace ClaudeBuddy
         // cached icon. Rebuilding the clone instead re-runs the path that already
         // works (create, then set the icon on something we just made) and needs no
         // permission. An APFS clone costs ~0.3s and ~0 disk, so this is cheap.
+        // Excluded from coverage: rewrites a real bundle icon.
+        [ExcludeFromCodeCoverage]
         public static bool Retint(string profileFolder, string sourceApp, Color tint)
         {
             if (!OperatingSystem.IsMacOS()) return false;
@@ -247,12 +267,16 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: deletes a real bundle from disk.
+        [ExcludeFromCodeCoverage]
         public static void Remove(string profileFolder)
         {
             if (!OperatingSystem.IsMacOS()) return;
             try { DeleteDirectory(DirectoryFor(profileFolder)); } catch { }
         }
 
+        // Excluded from coverage: deletes a real directory tree.
+        [ExcludeFromCodeCoverage]
         private static void DeleteDirectory(string path)
         {
             if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
@@ -260,9 +284,13 @@ namespace ClaudeBuddy
 
         // ---- process helpers (local, same reasoning as the manager's) --------
 
+        // Excluded from coverage: starts a subprocess.
+        [ExcludeFromCodeCoverage]
         private static bool Run(string executable, params string[] arguments) =>
             RunCapture(executable, arguments) is not null;
 
+        // Excluded from coverage: starts a subprocess and reads its output.
+        [ExcludeFromCodeCoverage]
         private static string? RunCapture(string executable, params string[] arguments)
         {
             try
