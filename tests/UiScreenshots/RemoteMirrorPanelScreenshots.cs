@@ -60,12 +60,21 @@ public class RemoteMirrorPanelScreenshots : IDisposable
     [AvaloniaFact]
     public async Task ALiveViewShowsTheFarSessionsOwnConversation()
     {
+        // Deliberately short enough that the panel does not scroll.
+        //
+        // The first version of this was a four-turn conversation, and it cost
+        // the screenshot both of the things it exists to show: the banner
+        // explaining what a live view *is* scrolled off the top, and on the
+        // Windows runner the last bubble captured empty — laid out but not yet
+        // measured, because ScrollToEnd posts at Loaded priority and the capture
+        // does not wait for the text to arrive. A conversation that fits needs
+        // no scroll, so there is no race and the banner stays on screen.
+        //
+        // A slash command is the conversation on purpose: it is the half of this
+        // bug a picture can actually show.
         Wire(
-            ("user", "did the release build come out clean on both runners?"),
-            ("assistant", "Yes — macos-latest and windows-latest both green. "
-                        + "The dmg and the installer are on the run's artifacts."),
             ("user", "/color green"),
-            ("assistant", "Set. This session's orb is green now."));
+            ("assistant", "Set — this session's orb is green now."));
 
         var session = Open();
         await _client.DiscoverAsync(Peers, new[] { Name });
