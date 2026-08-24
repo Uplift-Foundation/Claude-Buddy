@@ -104,7 +104,18 @@ namespace ClaudeBuddy
             var tag = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_RC_BRIDGE_TAG");
             if (!string.IsNullOrWhiteSpace(tag)) safe += "-" + tag.Replace('.', '-').Replace(':', '-');
 
-            _tmuxSessionName = TmuxSessionPrefix + safe;
+            // The machine's own name goes in, and it is not cosmetic.
+            //
+            // Two machines signed into one account with the same profile
+            // directory — the ordinary case, and the exact case the mirror
+            // exists for — used to build the identical relay name, and that name
+            // is what SendMessage addresses. One relay's own name is excluded
+            // from its peer list, so with exactly two machines it happened to
+            // work; with three, "send this to claude-buddy-rc--claude" names two
+            // different relays and there is nothing to say which answered. The
+            // prefix is untouched, so IsOwnRelay still recognises every relay as
+            // one, which is what keeps them off the board.
+            _tmuxSessionName = TmuxSessionPrefix + safe + "-" + MachineTag();
 
             // "=" forces an exact match. Without it tmux resolves a target by
             // prefix, and one account's name is a prefix of another's the moment
@@ -362,6 +373,24 @@ namespace ClaudeBuddy
             return raw is null ? null : BridgeProtocol.ParseSentMessageId(raw);
         }
 
+        // Hands one MirrorProtocol frame to another machine's Buddy.
+        //
+        // Separate from SendToAsync above rather than a flag on it, because the
+        // two are different errands with different prompts: that one is carrying
+        // a person's sentence to a model, this one is carrying a line of machine
+        // data to a parser. The receipt is all that is waited for — a frame's
+        // *answer* comes back later as its own inbound frame, correlated by the
+        // id inside it, exactly as a reply to a message is.
+        public async Task<bool> SendFrameToAsync(string peerName, string frame)
+        {
+            var raw = await AskAsync(
+                BridgeProtocol.SendFramePrompt(peerName, frame),
+                t => t.Contains("msg_id", StringComparison.Ordinal))
+                .ConfigureAwait(false);
+
+            return raw is not null;
+        }
+
         // Asks a session what it is and what it can do. Fire-and-forget by
         // nature: the answer arrives later as an ordinary inbound message, which
         // RemoteControlSessions recognises by its marker and swallows.
@@ -537,12 +566,19 @@ namespace ClaudeBuddy
                     }
                 }
 
+                // Which kind of turn this row is, which decides whether anything
+                // in it can be a message from another machine. See Deliver.
+                var rowType = root.TryGetProperty("type", out var rt)
+                              && rt.ValueKind == JsonValueKind.String
+                    ? rt.GetString() ?? ""
+                    : "";
+
                 if (!root.TryGetProperty("message", out var message)) return;
                 if (!message.TryGetProperty("content", out var content)) return;
 
                 if (content.ValueKind == JsonValueKind.String)
                 {
-                    Deliver(content.GetString() ?? "");
+                    Deliver(content.GetString() ?? "", rowType);
                     return;
                 }
 
@@ -556,14 +592,15 @@ namespace ClaudeBuddy
                     switch (type.GetString())
                     {
                         case "tool_result":
-                            Deliver(Flatten(block));
+                            Deliver(Flatten(block), rowType);
                             break;
 
-                        // The bridge narrating a reply rather than the reply row
-                        // itself. Worth reading: a paraphrase still carries the
-                        // tag when the model quotes it back.
+                        // The relay narrating a reply rather than the reply row
+                        // itself. Still read, because it can satisfy the request
+                        // in flight — but no longer treated as a message; see
+                        // Deliver.
                         case "text":
-                            Deliver(block.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "");
+                            Deliver(block.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "", rowType);
                             break;
                     }
                 }
@@ -591,7 +628,22 @@ namespace ClaudeBuddy
         // Two unrelated things can be true of one piece of text, so both are
         // checked: it may satisfy the request in flight *and* carry a message
         // from another machine.
-        private void Deliver(string text)
+        //
+        // The row's own type decides the second of those, and getting that wrong
+        // is what put paraphrases in the chat panel. A message from another
+        // machine always arrives as a **user** row — the relay is handed it, the
+        // same way a person's typing is handed to a session (see
+        // docs/remote-control-findings.md, which captures one). An assistant row
+        // carrying the same tag is the relay's *model* quoting a message back
+        // while it narrates what it just did, and that quote is its own writing:
+        // sometimes abridged, sometimes reworded, always a second draft. It was
+        // being delivered as though the far session had said it, which meant the
+        // panel could show a summary of a message beside the message.
+        //
+        // Tool results keep coming through from whatever row they land in,
+        // because they are how a request is answered rather than something
+        // anyone reads.
+        private void Deliver(string text, string rowType)
         {
             if (string.IsNullOrEmpty(text)) return;
 
@@ -608,8 +660,12 @@ namespace ClaudeBuddy
 
             waiter?.TrySetResult(text);
 
-            var inbound = BridgeProtocol.ParseInboundMessage(text);
-            if (inbound is not null) MessageReceived?.Invoke(inbound.Value);
+            if (!string.Equals(rowType, "user", StringComparison.Ordinal)) return;
+
+            // Every message in the row, not just the first: two peers answering
+            // in one turn is ordinary once frames are in flight.
+            foreach (var inbound in BridgeProtocol.ParseInboundMessages(text))
+                MessageReceived?.Invoke(inbound);
         }
 
         // --- stopping ---
@@ -723,6 +779,32 @@ namespace ClaudeBuddy
             if (dir is null) return;
 
             try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+
+        // A short, stable, tmux-safe stand-in for this machine.
+        //
+        // Truncated because the whole name is pasted around as a peer address
+        // and some machine names are a sentence; sanitised because tmux parses a
+        // dot or a colon as a window/pane separator, and a Mac's hostname
+        // routinely contains both ("Warrens-MacBook-Pro.local").
+        internal static string MachineTag()
+        {
+            string name;
+            try { name = Environment.MachineName; }
+            catch { name = ""; }
+
+            var safe = new string(name
+                .Where(c => char.IsLetterOrDigit(c) || c == '-')
+                .ToArray())
+                .Trim('-')
+                .ToLowerInvariant();
+
+            if (safe.Length > 20) safe = safe[..20];
+
+            // Never empty: an empty tag would put a trailing dash on the name
+            // and, worse, would make two machines that both failed to report a
+            // name collide again.
+            return safe.Length == 0 ? "machine" : safe;
         }
 
         private static string Quote(string value) => "'" + value.Replace("'", "'\\''") + "'";

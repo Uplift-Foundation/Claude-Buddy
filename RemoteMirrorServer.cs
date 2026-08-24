@@ -1,0 +1,713 @@
+using System.Text;
+
+namespace ClaudeBuddy
+{
+    // This machine answering another machine's Buddy about the sessions running
+    // here: what they are, what their transcripts actually say, and — when asked
+    // — typing a line into one of them.
+    //
+    // The half that makes a mirror possible at all. A relay model can only ever
+    // tell you what it *thinks* a session said, because that is all it has; this
+    // opens the file and reads the bytes. Everything it sends is hashed on the
+    // way out (MirrorProtocol), so the courier in the middle can lose or mangle
+    // a frame but cannot quietly change one.
+    //
+    // Every seam that touches the operating system is a delegate rather than a
+    // direct call — sending, listing sessions, reading the agent registry,
+    // checking the reply setting, and typing. Not for elegance: it is what lets
+    // the whole request/response contract be driven in a test with no tmux, no
+    // relay, no second machine and no model, which is the only way any of this
+    // could be covered at all. The defaults wire up the real ones.
+    //
+    // Two powers are gated here rather than trusted to the far side, because the
+    // far side is exactly what cannot be trusted to gate them:
+    //
+    //  * **Typing** honours this machine's own "allow replying to sessions"
+    //    setting, the same one a local panel obeys. A person who has turned
+    //    replying off has said something about this machine, and a request
+    //    arriving over a wire does not change it.
+    //  * **Requests are only served to a Buddy relay**, matched on the name
+    //    prefix RemoteControlBridge builds. It is a weak check on its own — the
+    //    account is shared, so anything on it could wear the name — and it is
+    //    named as such in the PR rather than presented as a boundary.
+    internal sealed class RemoteMirrorServer
+    {
+        // Everything this needs from the world outside itself.
+        internal sealed record Seams(
+            Func<string, string, Task<bool>> SendFrame,
+            Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> LocalSessions,
+            Func<IReadOnlyList<AgentRoster.Entry>> Agents,
+            Func<SessionSource, bool> ReplyEnabled,
+            Func<SessionStatus, bool> CanType,
+            Func<SessionStatus, string, Task<bool>> TypeInto);
+
+        private readonly string _account;
+        private readonly Seams _seams;
+        private readonly object _gate = new();
+
+        // One subscription: someone is watching a session and wants what's new.
+        private sealed class Subscription
+        {
+            public required string Watcher;
+            public required string Name;
+            public required string Id;
+            public required string Cli;
+            public long Offset;
+            public long Gen;
+            public DateTime Expires;
+        }
+
+        private readonly Dictionary<string, Subscription> _watches = new(StringComparer.Ordinal);
+
+        // The pieces of recent transfers, so a frame that failed its hash on the
+        // way over can be sent again without rebuilding — and, more to the
+        // point, without re-reading a file that has moved on since. A resend
+        // must be the *same bytes*, or the whole-payload hash the client is
+        // holding could never match.
+        private readonly Dictionary<string, Transfer> _transfers = new(StringComparer.Ordinal);
+        private readonly Queue<string> _transferOrder = new();
+        private const int KeepTransfers = 8;
+
+        private sealed class Transfer
+        {
+            public required string Watcher;
+            public required List<byte[]> Pieces;
+            public required Dictionary<string, string> Fields;
+            public required string WholeHash;
+        }
+
+        public RemoteMirrorServer(string account, Seams seams)
+        {
+            _account = account;
+            _seams = seams;
+        }
+
+        // The real wiring. Split out so the constructor above stays free of it
+        // and a test never has to opt out of anything.
+        public static Seams RealSeams(
+            string profileDir,
+            Func<string, string, Task<bool>> sendFrame,
+            Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> localSessions) =>
+            new(
+                sendFrame,
+                localSessions,
+                () => AgentRoster.Read(profileDir),
+                source => CliChatFormat.For(source).ReplyEnabled(),
+                status => TerminalFocuser.CanSendQuietly(status),
+                (status, text) => TerminalFocuser.SendTextAndSubmit(status, text));
+
+        // --- serving ---------------------------------------------------------
+
+        public async Task HandleAsync(string fromPeer, MirrorProtocol.MirrorFrame frame)
+        {
+            // Only another Buddy's relay is answered. See the class note: this
+            // is a guard rather than a boundary, and it is cheap enough to keep
+            // for the one thing it does catch — a person on the same account
+            // typing something that happens to look like a frame.
+            if (!IsRelayName(fromPeer)) return;
+
+            switch (frame.Type)
+            {
+                case MirrorProtocol.Hello:
+                    await HelloAsync(fromPeer, frame).ConfigureAwait(false);
+                    break;
+
+                case MirrorProtocol.Fetch:
+                    await FetchAsync(fromPeer, frame).ConfigureAwait(false);
+                    break;
+
+                case MirrorProtocol.Watch:
+                    await WatchAsync(fromPeer, frame).ConfigureAwait(false);
+                    break;
+
+                case MirrorProtocol.Unwatch:
+                    lock (_gate) _watches.Remove(frame.Id);
+                    break;
+
+                case MirrorProtocol.Input:
+                    await InputAsync(fromPeer, frame).ConfigureAwait(false);
+                    break;
+
+                case MirrorProtocol.Resend:
+                    await ResendAsync(fromPeer, frame).ConfigureAwait(false);
+                    break;
+            }
+        }
+
+        internal static bool IsRelayName(string name) =>
+            name.StartsWith("claude-buddy-rc-", StringComparison.OrdinalIgnoreCase);
+
+        // What of this machine the asker can see.
+        //
+        // Answers only about the names it asked about, which is the reason HELLO
+        // carries a payload at all. Listing everything running here would tell
+        // the other machine about sessions its own peer list cannot see — a
+        // session with Remote Control switched off is deliberately invisible
+        // over there, and a roster is no place to undo that.
+        private async Task HelloAsync(string fromPeer, MirrorProtocol.MirrorFrame frame)
+        {
+            var wanted = frame.Payload is null
+                ? null
+                : MirrorProtocol.UnpackRows(frame.Payload);
+
+            if (wanted is null || wanted.Count == 0)
+            {
+                await SendAsync(fromPeer, MirrorProtocol.BuildFrame(
+                    MirrorProtocol.Err, frame.Id,
+                    new Dictionary<string, string> { ["code"] = MirrorProtocol.ErrNoSession }))
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            var agents = _seams.Agents();
+            var sessions = _seams.LocalSessions();
+            var entries = new List<MirrorProtocol.MirrorRosterEntry>();
+
+            foreach (var name in wanted.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var resolved = Resolve(name, agents, sessions);
+                if (resolved is null) continue;
+
+                var status = resolved.Value.Status;
+
+                // A local CLI only. An OpenClaw conversation has no transcript
+                // on this disk and no pane to type into, so offering it here
+                // would be offering something that cannot be delivered.
+                if (!status.IsLocalCli) continue;
+
+                var hasTranscript = !string.IsNullOrEmpty(status.TranscriptPath)
+                                    && File.Exists(status.TranscriptPath);
+
+                entries.Add(new MirrorProtocol.MirrorRosterEntry(
+                    name,
+                    MirrorProtocol.CliFor(status.Source),
+                    hasTranscript,
+                    _seams.CanType(status),
+                    string.IsNullOrWhiteSpace(status.Color) ? null : status.Color,
+                    Commands(status)));
+            }
+
+            await SendTransferAsync(
+                fromPeer, frame.Id, MirrorProtocol.EncodeRoster(entries),
+                new Dictionary<string, string>(), sub: null)
+                .ConfigureAwait(false);
+        }
+
+        // The commands that session can actually run, read off this machine's
+        // disk rather than asked of a model.
+        //
+        // This is the honest version of a question Buddy has been answering
+        // badly. It used to ask the far session to *list* its commands, which
+        // meant trusting a model to enumerate and punctuate — and it could only
+        // ever return the custom ones, because a peer message never reaches a
+        // command handler and built-ins genuinely could not run. Over a mirror
+        // the input is typed into the session's own input line, so every
+        // built-in works exactly as it does locally; and the catalogue reads the
+        // real ~/.claude on the machine the commands live on.
+        private static IReadOnlyList<string> Commands(SessionStatus status)
+        {
+            try
+            {
+                return SlashCommandCatalog.For(status.Source, status.Cwd)
+                    .Select(c => c.Name)
+                    .Take(120)
+                    .ToList();
+            }
+            catch
+            {
+                return Array.Empty<string>();
+            }
+        }
+
+        // A peer name, resolved to a session on this machine — or nothing.
+        //
+        // Nothing is a perfectly good answer and the caller turns it into "no
+        // live view". See AgentRoster.Resolve for why an ambiguous name refuses
+        // rather than picks.
+        private static (string SessionId, SessionStatus Status)? Resolve(
+            string name,
+            IReadOnlyList<AgentRoster.Entry> agents,
+            IReadOnlyList<(string SessionId, SessionStatus Status)> sessions)
+        {
+            var entry = AgentRoster.Resolve(agents, name);
+            if (entry is null) return null;
+
+            foreach (var session in sessions)
+            {
+                if (string.Equals(session.SessionId, entry.Value.SessionId, StringComparison.OrdinalIgnoreCase))
+                    return session;
+            }
+
+            // The registry knows it and Buddy does not, which happens for a
+            // session whose hook has not fired yet. Matching on pid as well
+            // costs nothing and covers it.
+            if (entry.Value.Pid > 0)
+            {
+                foreach (var session in sessions)
+                {
+                    if (session.Status.SessionPid == entry.Value.Pid) return session;
+                }
+            }
+
+            return null;
+        }
+
+        // --- reading a transcript --------------------------------------------
+
+        private async Task FetchAsync(string fromPeer, MirrorProtocol.MirrorFrame frame)
+        {
+            var name = frame.Text("n");
+            if (name is null)
+            {
+                await ErrAsync(fromPeer, frame.Id, MirrorProtocol.ErrNoSession, "no name").ConfigureAwait(false);
+                return;
+            }
+
+            var resolved = Resolve(name, _seams.Agents(), _seams.LocalSessions());
+            if (resolved is null)
+            {
+                await ErrAsync(fromPeer, frame.Id, MirrorProtocol.ErrNoSession, name).ConfigureAwait(false);
+                return;
+            }
+
+            var status = resolved.Value.Status;
+            if (string.IsNullOrEmpty(status.TranscriptPath))
+            {
+                await ErrAsync(fromPeer, frame.Id, MirrorProtocol.ErrNoTranscript, name).ConfigureAwait(false);
+                return;
+            }
+
+            var cli = MirrorProtocol.CliFor(status.Source);
+            var tail = string.Equals(frame.Get("w"), "tail", StringComparison.Ordinal);
+
+            Window window;
+            try
+            {
+                window = ReadFor(status.TranscriptPath, tail, frame.Num("from", 0), frame.Num("to", 0), cli);
+            }
+            catch
+            {
+                await ErrAsync(fromPeer, frame.Id, MirrorProtocol.ErrNoTranscript, name).ConfigureAwait(false);
+                return;
+            }
+
+            // A watch on this session starts where its opening read ended, so
+            // the two cannot overlap or leave a gap between them.
+            if (tail) SetWatchOffset(fromPeer, name, window.To);
+
+            var fields = new Dictionary<string, string>
+            {
+                ["wfrom"] = window.From.ToString(),
+                ["wto"] = window.To.ToString(),
+                ["flen"] = window.Length.ToString(),
+                ["gen"] = GenFor(name).ToString()
+            };
+
+            await SendTransferAsync(
+                fromPeer, frame.Id, MirrorProtocol.PackRows(window.Rows), fields, sub: null)
+                .ConfigureAwait(false);
+        }
+
+        private readonly record struct Window(List<string> Rows, long From, long To, long Length);
+
+        private static Window ReadFor(string path, bool tail, long from, long to, string cli)
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var length = fs.Length;
+
+            if (tail)
+            {
+                from = Math.Max(0, length - MirrorProtocol.InitialBytes);
+                to = length;
+            }
+            else
+            {
+                from = Math.Max(0, from);
+                to = Math.Min(to <= 0 ? length : to, length);
+            }
+
+            var read = ReadRange(fs, from, to, alignStart: true);
+            return new Window(
+                MirrorProtocol.SelectInterestingRows(read.Lines, cli), read.From, read.To, length);
+        }
+
+        // A byte range as whole lines, and the two offsets that bound what was
+        // actually read.
+        //
+        // **`alignStart` is the whole subtlety here, and getting it wrong drops
+        // messages silently.** There are two different reads in this file and
+        // they need opposite answers:
+        //
+        //  * An opening window or a page of backlog starts at a *computed*
+        //    offset — "half a megabyte back from the end" — which almost
+        //    certainly lands in the middle of a row. That partial row has to go,
+        //    and `From` reports where the first whole row actually began, so the
+        //    next page back stops there rather than reading it twice.
+        //
+        //  * Following a live transcript starts where the last read *finished*,
+        //    which is exactly a row boundary. Dropping the first line there
+        //    throws away a complete row — and it is always the newest one, so
+        //    every single update loses its first message and nothing about the
+        //    panel looks wrong. Caught by a test that appended one line and
+        //    watched nothing arrive.
+        //
+        // The end is aligned in both cases: a transcript is being written to
+        // while it is read, so the last line in a window is routinely a row the
+        // writer has not finished. `To` reports the end of the last *complete*
+        // row, which is where the next read must resume.
+        //
+        // The step-over rule is ported from LocalCliChatSession unchanged: a
+        // window that lands entirely inside one row — which a megabyte-long
+        // file-history snapshot manages — reports `from` rather than `to`, so
+        // paging steps over it instead of asking for the same megabyte forever.
+        internal static (List<string> Lines, long From, long To) ReadRange(
+            FileStream fs, long from, long to, bool alignStart)
+        {
+            if (to <= from) return (new List<string>(), from, from);
+
+            fs.Seek(from, SeekOrigin.Begin);
+            var buffer = new byte[to - from];
+            fs.ReadExactly(buffer);
+
+            var start = 0;
+            if (alignStart && from > 0)
+            {
+                var nl = Array.IndexOf(buffer, (byte)'\n');
+                if (nl < 0) return (new List<string>(), from, from);
+
+                start = nl + 1;
+            }
+
+            var last = Array.LastIndexOf(buffer, (byte)'\n');
+            if (last < start) return (new List<string>(), from + start, from + start);
+
+            var text = Encoding.UTF8.GetString(buffer, start, last + 1 - start);
+
+            return (
+                text.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList(),
+                from + start,
+                from + last + 1);
+        }
+
+        // --- watching ---------------------------------------------------------
+
+        private async Task WatchAsync(string fromPeer, MirrorProtocol.MirrorFrame frame)
+        {
+            var name = frame.Text("n");
+            if (name is null) return;
+
+            var resolved = Resolve(name, _seams.Agents(), _seams.LocalSessions());
+            if (resolved is null)
+            {
+                await ErrAsync(fromPeer, frame.Id, MirrorProtocol.ErrNoSession, name).ConfigureAwait(false);
+                return;
+            }
+
+            var ttl = frame.Num("ttl", MirrorProtocol.WatchTtlSeconds);
+            if (ttl <= 0 || ttl > MirrorProtocol.WatchTtlSeconds) ttl = MirrorProtocol.WatchTtlSeconds;
+
+            var from = frame.Num("from", -1);
+
+            lock (_gate)
+            {
+                // Keyed by the watch's own id so renewing one is an update
+                // rather than a second subscription — a panel left open for an
+                // afternoon renews every ninety seconds, and thirty stacked
+                // subscriptions would send the same delta thirty times.
+                _watches[frame.Id] = new Subscription
+                {
+                    Watcher = fromPeer,
+                    Name = name,
+                    Id = frame.Id,
+                    Cli = MirrorProtocol.CliFor(resolved.Value.Status.Source),
+                    Offset = from >= 0 ? from : PendingOffset(fromPeer, name),
+                    Gen = GenFor(name),
+                    Expires = DateTime.UtcNow.AddSeconds(ttl)
+                };
+            }
+
+            await SendAsync(fromPeer, MirrorProtocol.BuildFrame(
+                MirrorProtocol.Ok, frame.Id)).ConfigureAwait(false);
+        }
+
+        // Where a watch should start when the client didn't say: exactly where
+        // its opening read finished.
+        private readonly Dictionary<string, long> _pendingOffsets = new(StringComparer.OrdinalIgnoreCase);
+
+        private void SetWatchOffset(string watcher, string name, long offset)
+        {
+            lock (_gate) _pendingOffsets[watcher + " " + name] = offset;
+        }
+
+        private long PendingOffset(string watcher, string name)
+        {
+            lock (_gate)
+            {
+                return _pendingOffsets.TryGetValue(watcher + " " + name, out var at) ? at : 0;
+            }
+        }
+
+        // Which incarnation of a transcript we are reading.
+        //
+        // /clear starts a new file, and Claude Code can rewrite one wholesale.
+        // Without something to say so, a client holding a byte offset into the
+        // old file would go on asking for a position that now means something
+        // else entirely. Bumping a counter lets it throw away what it has and
+        // re-anchor, which is the only correct answer.
+        private readonly Dictionary<string, long> _gens = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, long> _lengths = new(StringComparer.OrdinalIgnoreCase);
+
+        private long GenFor(string name)
+        {
+            lock (_gate) return _gens.TryGetValue(name, out var gen) ? gen : 0;
+        }
+
+        // Anything new on any watched session. Called on a timer by
+        // RemoteControlSessions — a local file read, so it costs nothing and can
+        // run far more often than anything that spends a model turn.
+        public async Task TickAsync()
+        {
+            List<Subscription> due;
+            var now = DateTime.UtcNow;
+
+            lock (_gate)
+            {
+                foreach (var expired in _watches.Where(w => w.Value.Expires <= now).Select(w => w.Key).ToList())
+                    _watches.Remove(expired);
+
+                due = _watches.Values.ToList();
+            }
+
+            if (due.Count == 0) return;
+
+            var agents = _seams.Agents();
+            var sessions = _seams.LocalSessions();
+
+            foreach (var watch in due)
+            {
+                var resolved = Resolve(watch.Name, agents, sessions);
+                if (resolved is null) continue;
+
+                var path = resolved.Value.Status.TranscriptPath;
+                if (string.IsNullOrEmpty(path)) continue;
+
+                Window window;
+                long gen;
+
+                try
+                {
+                    using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    var length = fs.Length;
+
+                    lock (_gate)
+                    {
+                        // Shorter than where this watch was reading means the
+                        // file was replaced under it.
+                        if (length < watch.Offset)
+                        {
+                            _gens[watch.Name] = GenFor(watch.Name) + 1;
+                            watch.Offset = 0;
+                        }
+
+                        _lengths[watch.Name] = length;
+                        gen = GenFor(watch.Name);
+                    }
+
+                    if (length <= watch.Offset) continue;
+
+                    // alignStart false: this offset is where the last read
+                    // finished, so it is already a row boundary and the first
+                    // line here is a whole row. See ReadRange.
+                    var read = ReadRange(fs, watch.Offset, length, alignStart: false);
+
+                    window = new Window(
+                        MirrorProtocol.SelectInterestingRows(read.Lines, watch.Cli),
+                        read.From, read.To, length);
+
+                    // Only over the complete rows. A row the writer had not
+                    // finished is left for the next tick rather than half-sent
+                    // and then skipped.
+                    watch.Offset = read.To;
+                }
+                catch
+                {
+                    // Mid-write, or gone. The next tick tries again.
+                    continue;
+                }
+
+                // Nothing displayable in the new bytes — a stretch of tool
+                // results, which is most of a transcript. The offset still
+                // moved, so this is silence rather than a gap.
+                if (window.Rows.Count == 0) continue;
+
+                var fields = new Dictionary<string, string>
+                {
+                    ["wfrom"] = window.From.ToString(),
+                    ["wto"] = window.To.ToString(),
+                    ["flen"] = window.Length.ToString(),
+                    ["gen"] = gen.ToString()
+                };
+
+                await SendTransferAsync(
+                    watch.Watcher, MirrorProtocol.NewId(),
+                    MirrorProtocol.PackRows(window.Rows), fields, sub: watch.Id)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        // --- typing ------------------------------------------------------------
+
+        private async Task InputAsync(string fromPeer, MirrorProtocol.MirrorFrame frame)
+        {
+            // An unverified payload is refused before anything is resolved. This
+            // one is not a display concern: typing text that arrived corrupted
+            // into somebody's terminal is the worst thing in this file.
+            if (!frame.PayloadVerified || frame.Payload is null)
+            {
+                await ErrAsync(fromPeer, frame.Id, MirrorProtocol.ErrBadHash, "input failed its hash")
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            var name = frame.Text("n");
+            if (name is null)
+            {
+                await ErrAsync(fromPeer, frame.Id, MirrorProtocol.ErrNoSession, "no name").ConfigureAwait(false);
+                return;
+            }
+
+            var resolved = Resolve(name, _seams.Agents(), _seams.LocalSessions());
+            if (resolved is null)
+            {
+                await ErrAsync(fromPeer, frame.Id, MirrorProtocol.ErrNoSession, name).ConfigureAwait(false);
+                return;
+            }
+
+            var status = resolved.Value.Status;
+
+            // This machine's own setting, not the asker's. See the class note.
+            if (!_seams.ReplyEnabled(status.Source))
+            {
+                await ErrAsync(fromPeer, frame.Id, MirrorProtocol.ErrReplyOff, name).ConfigureAwait(false);
+                return;
+            }
+
+            if (!_seams.CanType(status))
+            {
+                await ErrAsync(fromPeer, frame.Id, MirrorProtocol.ErrNoPane, name).ConfigureAwait(false);
+                return;
+            }
+
+            var text = Encoding.UTF8.GetString(frame.Payload);
+
+            bool typed;
+            try { typed = await _seams.TypeInto(status, text).ConfigureAwait(false); }
+            catch { typed = false; }
+
+            await SendAsync(fromPeer, typed
+                ? MirrorProtocol.BuildFrame(MirrorProtocol.Ok, frame.Id)
+                : MirrorProtocol.BuildFrame(MirrorProtocol.Err, frame.Id, new Dictionary<string, string>
+                {
+                    ["code"] = MirrorProtocol.ErrNoPane,
+                    ["msg"] = MirrorProtocol.Encode("couldn't type into the pane")
+                })).ConfigureAwait(false);
+        }
+
+        // --- sending ------------------------------------------------------------
+
+        private async Task ResendAsync(string fromPeer, MirrorProtocol.MirrorFrame frame)
+        {
+            var seq = (int)frame.Num("seq", -1);
+
+            Transfer? transfer;
+            lock (_gate) _transfers.TryGetValue(frame.Id, out transfer);
+
+            if (transfer is null || seq < 0 || seq >= transfer.Pieces.Count)
+            {
+                await ErrAsync(fromPeer, frame.Id, MirrorProtocol.ErrBadHash, "nothing to resend")
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            await SendAsync(fromPeer, Piece(frame.Id, transfer, seq)).ConfigureAwait(false);
+        }
+
+        // Splits a payload, remembers the pieces, and sends them in order.
+        private async Task SendTransferAsync(
+            string toPeer, string id, byte[] payload,
+            Dictionary<string, string> fields, string? sub)
+        {
+            var pieces = MirrorProtocol.Split(payload);
+
+            var transfer = new Transfer
+            {
+                Watcher = toPeer,
+                Pieces = pieces,
+                Fields = fields,
+                WholeHash = MirrorProtocol.Hash(payload)
+            };
+
+            if (sub is not null) transfer.Fields["sub"] = sub;
+
+            lock (_gate)
+            {
+                _transfers[id] = transfer;
+                _transferOrder.Enqueue(id);
+
+                while (_transferOrder.Count > KeepTransfers)
+                    _transfers.Remove(_transferOrder.Dequeue());
+            }
+
+            for (var seq = 0; seq < pieces.Count; seq++)
+            {
+                if (!await SendAsync(toPeer, Piece(id, transfer, seq)).ConfigureAwait(false))
+                {
+                    // The relay refused or timed out. Stopping is right: the
+                    // client will time the transfer out and can ask again, and
+                    // pushing the rest would spend turns filling in a transfer
+                    // nobody can complete.
+                    return;
+                }
+            }
+        }
+
+        private static string Piece(string id, Transfer transfer, int seq)
+        {
+            var fields = new Dictionary<string, string>(transfer.Fields, StringComparer.Ordinal)
+            {
+                ["seq"] = seq.ToString(),
+                ["of"] = transfer.Pieces.Count.ToString()
+            };
+
+            // The digest of the whole rides on the last piece, where it is the
+            // signal that there is nothing further to wait for as well as the
+            // final check.
+            if (seq == transfer.Pieces.Count - 1) fields["H"] = transfer.WholeHash;
+
+            return MirrorProtocol.BuildFrame(MirrorProtocol.Chunk, id, fields, transfer.Pieces[seq]);
+        }
+
+        private Task ErrAsync(string toPeer, string id, string code, string detail) =>
+            SendAsync(toPeer, MirrorProtocol.BuildFrame(
+                MirrorProtocol.Err, id, new Dictionary<string, string>
+                {
+                    ["code"] = code,
+                    ["msg"] = MirrorProtocol.Encode(detail)
+                }));
+
+        private async Task<bool> SendAsync(string toPeer, string frame)
+        {
+            try { return await _seams.SendFrame(toPeer, frame).ConfigureAwait(false); }
+            catch { return false; }
+        }
+
+        public string Account => _account;
+
+        // True while anything is being watched, which is what tells
+        // RemoteControlSessions to keep draining the relay quickly.
+        public bool Busy
+        {
+            get { lock (_gate) return _watches.Count > 0; }
+        }
+    }
+}

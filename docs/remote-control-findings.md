@@ -397,10 +397,133 @@ Two consequences, and the first is a real design problem:
    session list whenever Buddy starts the bridge. It needs a name that says what
    it is — which makes the unresolved `--remote-control <name>` behaviour (the
    name passed was ignored in favour of a cwd-derived `claude-buddy-52` /
-   `claude-buddy-a8`) worth fixing rather than shrugging at.
+   `claude-buddy-a8`) worth fixing rather than shrugging at. **Still unresolved,
+   and now load-bearing** — see "Confirmed vs assumed" at the bottom of this
+   file: the verbatim mirror finds a far Buddy by that name's prefix.
 2. **Injected prompts and a human's typing interleave in the same pty.** Buddy
    can paste a prompt into the same input line a user is mid-sentence in. So the
    bridge must be a session Buddy owns exclusively, and Buddy should tolerate
    unexpected turns in the transcript rather than assuming every row is a reply
    to something it sent — which the `from-name`/`msg_id` correlation already
    handles, and is another reason not to rely on turn ordering.
+
+---
+
+# The verbatim mirror (bugfix/remote-chat-verbatim-mirror)
+
+Everything above describes a **messaging channel**, and everything above is
+still true of one. What follows is what was added when that channel turned out
+not to be enough, and — importantly — what about it has and has not been
+confirmed on real machines.
+
+## The bug, stated precisely
+
+A remote session's panel showed **a model's second draft of a conversation, in a
+window that looked exactly like the one showing a real conversation.** That is
+worse than showing less, because nothing about it reads as a summary.
+
+The cause is in the transport and was already written down, at the top of
+`BridgeProtocol.SendMessagePrompt`: a peer message reaches the far session's
+*model*, which then composes a reply *for a peer*. Watched side by side, the
+remote session's own chat said "Summary for you: 6 messages scanned…" while the
+reply it relayed said something different in different words. Both were its own
+writing; neither was wrong; the person reading the relayed one could not tell
+they were seeing a second draft.
+
+`FidelityRequest` — a parenthetical asking it to give its complete result rather
+than a summary — was the mitigation, and it is a request to a model, not a
+guarantee. The same mechanism is why `/color` came back *"I can't run /color …
+only the harness's own command handler can set"* it: nothing typed into that
+panel ever reached the far CLI's input line.
+
+## What was added
+
+When the far machine is **also running Claude Buddy**, the two Buddies talk to
+each other through the relays they already run, using framed `CB-MIRROR:`
+messages that ride inside the same `<cross-session-message>` bodies. The far
+Buddy reads its session's transcript **off its own disk** and types input into
+its **own tmux pane**. The relay model in the middle is demoted from author to
+courier.
+
+- **Identity is exact, not guessed.** `claude agents --json` (captured live —
+  see `AgentRosterTests`) reports `name`, `pid` **and `sessionId`** per
+  registration, and the session id is what Buddy's own status files are named
+  after. So peer name → registration → status file is a join, not a
+  resemblance. An ambiguous name (two sessions, one name) refuses rather than
+  picking; the panel then says "no live view", which is visible and honest,
+  where a wrong pick would silently show someone's other conversation.
+- **Verify or refuse.** Every frame carries a SHA-256 of its payload and the
+  last carries one of the whole. An unverified payload is *nulled at the parse
+  boundary* so no later code can reach it by forgetting to check. One bad piece
+  is re-requested twice; after that the transfer fails and the panel shows an
+  error and nothing else. It deliberately does **not** fall back to the
+  messaging-channel version on failure — that would substitute a summary at
+  precisely the moment integrity failed.
+- **Base64, standard alphabet, not url-safe.** Two reasons, both load-bearing:
+  standard base64 cannot contain `<` or `>`, so a payload can never close the
+  `</cross-session-message>` tag it is travelling inside; and it cannot contain
+  `_`, so a payload can never spell `msg_id`, which is the string
+  `RemoteControlBridge.AskAsync` waits for to decide a send has been receipted.
+  Both are covered by tests.
+
+## Two bugs found on the way, worth recording
+
+1. **`ParseInboundMessage` used `Match`, not `Matches`.** A transcript row
+   carrying two `<cross-session-message>` tags — two sessions answering in one
+   turn — silently dropped all but the first. No error, no gap, just a message
+   that never arrived. Rare with hand-typed messages; ordinary once frames are
+   in flight.
+2. **The relay's own narration was being delivered as a chat message.**
+   `Route` fed *every* `text` block to `ParseInboundMessage`, and the relay
+   model quotes the tag back while narrating what it just did. That quote is its
+   own writing — sometimes abridged, sometimes reworded — so the panel could
+   show a summary of a message beside the message. Fixed by delivering only from
+   `user`-type rows, which is where a genuine inbound message lands (captured
+   above: *"Replies … arrive on a later turn, as a `role=user` transcript
+   row"*). Tool results still come through from any row, since they answer
+   requests rather than being read.
+
+## Confirmed vs assumed
+
+**Confirmed**, by the automated suites (`MirrorProtocolTests`,
+`AgentRosterTests`, `MirrorRoundTripTests`, `RemoteMirrorChatSessionTests`,
+`RemoteMirrorPanelScreenshots`):
+
+- A transcript on disk arrives at the panel byte-identical to the rows a local
+  panel would have been given, through chunking, gzip, base64, framing,
+  reassembly and window alignment — including a file large enough to need many
+  frames.
+- A payload altered in flight is refused, not shown, at every level: the parser,
+  the assembler, the client, and the panel.
+- Window alignment matches `LocalCliChatSession`'s, including the step-over rule
+  for a window that lands entirely inside one enormous row.
+- Typing is refused when the *far* machine has replying switched off, or that
+  session has no pane. The far machine's setting is what decides.
+- `/clear` on the far side bumps a generation counter and the client re-anchors
+  instead of appending to a file that no longer exists.
+
+**Assumed, and needing a real two-machine run** — these are the honest gaps:
+
+- **That `--remote-control <name>` sticks.** Discovery finds a far Buddy by the
+  `claude-buddy-rc-` prefix on its relay's peer name. This document says above
+  that the name passed was *ignored* in favour of a cwd-derived one;
+  `BridgeProtocol.IsOwnRelay` says a previous relay was *observed* wearing the
+  prefix. **These disagree, and the mirror's discovery depends on which is
+  true.** If the name does not stick, mirroring simply never engages and every
+  panel stays a messaging channel — degraded, never wrong. Settle this first.
+- **The size limit on a `SendMessage` body.** Frames carry 6KB of payload
+  (~8KB encoded) on the assumption it fits. Nothing here has sent one big
+  enough to find the ceiling. `MirrorProtocol.ChunkBytes` is the single knob.
+- **Whether the relay model reliably relays base64 verbatim, and at what rate.**
+  Mangling is caught by the hashes; refusal shows as a timeout. Neither has been
+  observed in the wild. Worth recording a real frames-per-minute figure and what
+  a mirror costs in quota.
+- **The residual trust boundary.** Requests are only served to a peer whose name
+  wears the relay prefix. Everything on the account shares one namespace, so
+  this is a guard against confusion, not against a determined actor with access
+  to the account. Typing into a session remains gated by the far machine's own
+  reply setting.
+- **Windows.** No new surface: Remote Control is gated off entirely by
+  `RemoteControlBridge.IsSupported`, and local chat-send already requires a tmux
+  pane. The protocol, unit and integration suites still run on the Windows CI
+  leg.

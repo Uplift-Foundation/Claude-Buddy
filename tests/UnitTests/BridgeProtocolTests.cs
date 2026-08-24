@@ -479,4 +479,109 @@ public class BridgeProtocolTests
         Assert.Contains("ListAgents", BridgeProtocol.ListAgentsPrompt);
         Assert.Contains("verbatim", BridgeProtocol.ListAgentsPrompt);
     }
+
+    // --- more than one message in a row ---------------------------------------
+
+    // Match was wrong and quietly so, which is the worst way to be wrong.
+    //
+    // One transcript row can carry two tags — two sessions answering in the same
+    // turn — and reading only the first dropped the rest with nothing to show it
+    // had happened: no error, no gap, just a message that never arrived. Mirror
+    // frames make it ordinary rather than rare, because they go out as fast as
+    // the relay will take them.
+    [Fact]
+    public void ParseInboundMessages_ReadsBothMessagesInOneRow()
+    {
+        const string row =
+            "Another Claude session sent a message:\n" +
+            "<cross-session-message from=\"bridge:session_A\" from-name=\"job-hunter\" from-mode=\"prompting\">\n" +
+            "first\n" +
+            "</cross-session-message>\n" +
+            "<cross-session-message from=\"bridge:session_B\" from-name=\"resumes-2b\" from-mode=\"prompting\">\n" +
+            "second\n" +
+            "</cross-session-message>";
+
+        var all = BridgeProtocol.ParseInboundMessages(row);
+
+        Assert.Equal(2, all.Count);
+        Assert.Equal("job-hunter", all[0].FromName);
+        Assert.Equal("first", all[0].Body);
+        Assert.Equal("resumes-2b", all[1].FromName);
+        Assert.Equal("second", all[1].Body);
+    }
+
+    // The singular is kept as the first of the plural rather than a second
+    // parser, so the two can never disagree about what a row says.
+    [Fact]
+    public void ParseInboundMessage_IsStillTheFirstOfThem()
+    {
+        var single = BridgeProtocol.ParseInboundMessage(RealCrossSessionRow);
+        var all = BridgeProtocol.ParseInboundMessages(RealCrossSessionRow);
+
+        Assert.Equal(Assert.Single(all), single);
+    }
+
+    [Fact]
+    public void ParseInboundMessages_SkipsTheOneWithNoSenderAndKeepsTheRest()
+    {
+        const string row =
+            "<cross-session-message from=\"bridge:session_A\">orphan</cross-session-message>\n" +
+            "<cross-session-message from-name=\"job-hunter\">kept</cross-session-message>";
+
+        var only = Assert.Single(BridgeProtocol.ParseInboundMessages(row));
+
+        Assert.Equal("job-hunter", only.FromName);
+        Assert.Equal("kept", only.Body);
+    }
+
+    [Fact]
+    public void ParseInboundMessages_IsEmptyOnAnOrdinaryRow()
+    {
+        Assert.Empty(BridgeProtocol.ParseInboundMessages("I'll go ahead and check that for you."));
+        Assert.Empty(BridgeProtocol.ParseInboundMessages(""));
+    }
+
+    // --- relaying a frame ------------------------------------------------------
+
+    // The frame has to arrive byte for byte, so it goes into the prompt exactly
+    // as written. Anything the model adds around it is harmless — the parser
+    // reads to the first newline — but anything it changes *inside* the line
+    // fails a hash on the far end and costs a round trip.
+    [Fact]
+    public void SendFramePrompt_CarriesTheFrameVerbatim()
+    {
+        var frame = MirrorProtocol.BuildFrame(
+            MirrorProtocol.Fetch, "abcd1234",
+            new Dictionary<string, string> { ["n"] = MirrorProtocol.Encode("job-hunter") });
+
+        var prompt = BridgeProtocol.SendFramePrompt("claude-buddy-rc--claude-mini", frame);
+
+        Assert.Contains(frame, prompt, StringComparison.Ordinal);
+        Assert.Contains("claude-buddy-rc--claude-mini", prompt);
+        Assert.Contains("exactly as written", prompt);
+    }
+
+    // The plea not to summarise is aimed at a *model* on the far end deciding
+    // how much of its answer to relay. Nothing on the other end of a frame is a
+    // model — the far Buddy parses it — so including it would put an instruction
+    // to a reader inside a line whose only reader is a parser.
+    [Fact]
+    public void SendFramePrompt_DoesNotCarryTheFidelityPleaMeantForAModel()
+    {
+        var prompt = BridgeProtocol.SendFramePrompt("peer", "CB-MIRROR:v1;t=OK;id=abcd1234");
+
+        Assert.DoesNotContain("rather than a summary", prompt);
+        Assert.DoesNotContain("all they will see", prompt);
+    }
+
+    // The ordinary message path is unchanged and still carries the plea, because
+    // there the far end genuinely is a model writing a reply for a person.
+    [Fact]
+    public void SendMessagePrompt_StillAsksAModelNotToSummarise()
+    {
+        var prompt = BridgeProtocol.SendMessagePrompt("job-hunter", "how did the build go?");
+
+        Assert.Contains("how did the build go?", prompt);
+        Assert.Contains("rather than a summary", prompt);
+    }
 }
