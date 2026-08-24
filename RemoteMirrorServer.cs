@@ -309,11 +309,12 @@ namespace ClaudeBuddy
             };
 
             await SendTransferAsync(
-                fromPeer, frame.Id, MirrorProtocol.PackRows(window.Rows), fields, sub: null)
+                fromPeer, frame.Id, MirrorProtocol.EncodeTurns(window.Turns), fields, sub: null)
                 .ConfigureAwait(false);
         }
 
-        private readonly record struct Window(List<string> Rows, long From, long To, long Length);
+        private readonly record struct Window(
+            List<MirrorProtocol.MirrorTurn> Turns, long From, long To, long Length);
 
         private static Window ReadFor(string path, bool tail, long from, long to, string cli)
         {
@@ -333,7 +334,7 @@ namespace ClaudeBuddy
 
             var read = ReadRange(fs, from, to, alignStart: true);
             return new Window(
-                MirrorProtocol.SelectInterestingRows(read.Lines, cli), read.From, read.To, length);
+                MirrorProtocol.TurnsFrom(read.Lines, cli), read.From, read.To, length);
         }
 
         // A byte range as whole lines, and the two offsets that bound what was
@@ -526,7 +527,7 @@ namespace ClaudeBuddy
                     var read = ReadRange(fs, watch.Offset, length, alignStart: false);
 
                     window = new Window(
-                        MirrorProtocol.SelectInterestingRows(read.Lines, watch.Cli),
+                        MirrorProtocol.TurnsFrom(read.Lines, watch.Cli),
                         read.From, read.To, length);
 
                     // Only over the complete rows. A row the writer had not
@@ -543,7 +544,7 @@ namespace ClaudeBuddy
                 // Nothing displayable in the new bytes — a stretch of tool
                 // results, which is most of a transcript. The offset still
                 // moved, so this is silence rather than a gap.
-                if (window.Rows.Count == 0) continue;
+                if (window.Turns.Count == 0) continue;
 
                 var fields = new Dictionary<string, string>
                 {
@@ -555,7 +556,7 @@ namespace ClaudeBuddy
 
                 await SendTransferAsync(
                     watch.Watcher, MirrorProtocol.NewId(),
-                    MirrorProtocol.PackRows(window.Rows), fields, sub: watch.Id)
+                    MirrorProtocol.EncodeTurns(window.Turns), fields, sub: watch.Id)
                     .ConfigureAwait(false);
             }
         }

@@ -198,7 +198,8 @@ namespace ClaudeBuddy
         }
 
         internal readonly record struct MirrorRows(
-            string Name, MirrorDelivery Mode, IReadOnlyList<string> Rows, string Cli, long Gen);
+            string Name, MirrorDelivery Mode,
+            IReadOnlyList<MirrorProtocol.MirrorTurn> Turns, string Cli, long Gen);
 
         // Verified rows, ready to be parsed by the same parsers a local panel
         // uses. Raised on a background thread; the chat session marshals.
@@ -268,8 +269,8 @@ namespace ClaudeBuddy
                 return false;
             }
 
-            var rows = MirrorProtocol.UnpackRows(reply.Payload);
-            if (rows is null)
+            var turns = MirrorProtocol.DecodeTurns(reply.Payload);
+            if (turns is null)
             {
                 Failed?.Invoke(name, "the transcript arrived unreadable");
                 return false;
@@ -287,7 +288,7 @@ namespace ClaudeBuddy
                 }
             }
 
-            Delivered?.Invoke(new MirrorRows(name, MirrorDelivery.Window, rows, cli, gen));
+            Delivered?.Invoke(new MirrorRows(name, MirrorDelivery.Window, turns, cli, gen));
 
             await RenewWatchAsync(name).ConfigureAwait(false);
             return true;
@@ -310,7 +311,7 @@ namespace ClaudeBuddy
 
         // One page further back, for scrollback. Null when there is no more, or
         // when the request failed — the two are told apart by HasMore.
-        public async Task<IReadOnlyList<string>?> LoadOlderAsync(string name)
+        public async Task<IReadOnlyList<MirrorProtocol.MirrorTurn>?> LoadOlderAsync(string name)
         {
             string relay;
             long to;
@@ -339,8 +340,8 @@ namespace ClaudeBuddy
 
             if (!reply.Ok || reply.Payload is null) return null;
 
-            var rows = MirrorProtocol.UnpackRows(reply.Payload);
-            if (rows is null) return null;
+            var turns = MirrorProtocol.DecodeTurns(reply.Payload);
+            if (turns is null) return null;
 
             lock (_gate)
             {
@@ -355,7 +356,7 @@ namespace ClaudeBuddy
                 }
             }
 
-            return rows;
+            return turns;
         }
 
         // Subscribes, or renews a subscription that is about to lapse.
@@ -669,8 +670,8 @@ namespace ClaudeBuddy
                 return;
             }
 
-            var rows = MirrorProtocol.UnpackRows(delta.Payload);
-            if (rows is null || rows.Count == 0) return;
+            var turns = MirrorProtocol.DecodeTurns(delta.Payload);
+            if (turns is null || turns.Count == 0) return;
 
             var gen = Num(frame.Fields, "gen");
 
@@ -686,7 +687,7 @@ namespace ClaudeBuddy
                 return;
             }
 
-            Delivered?.Invoke(new MirrorRows(name, MirrorDelivery.Delta, rows, cli, gen));
+            Delivered?.Invoke(new MirrorRows(name, MirrorDelivery.Delta, turns, cli, gen));
         }
 
         private void Settle(string id, Reply reply)
