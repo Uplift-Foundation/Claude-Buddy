@@ -121,6 +121,17 @@ namespace ClaudeBuddy
 
         // Empty whenever the feature is off, which is what makes the scan's job
         // trivial — it never has to know why.
+        //
+        // A test seam, matching OpenClawSessions.SetSnapshotForTests and there for
+        // the same reason: the only thing that publishes a snapshot in production
+        // is the poll loop, which drives a live relay and is excluded. Without
+        // this, the scan entries built from a remote session are unreachable for
+        // a reason that has nothing to do with the code being hard to test.
+        internal static void SetSnapshotForTests(IReadOnlyList<Remote> remotes)
+        {
+            _snapshot = remotes;
+        }
+
         public static IReadOnlyList<Remote> Snapshot() =>
             ClaudeBuddySettings.RemoteControlEnabled && RemoteControlBridge.IsSupported
                 ? _snapshot
