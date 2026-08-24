@@ -21,6 +21,7 @@ namespace ClaudeBuddy.Tests;
 // TerminalFocuser, SettingsWindow.Toggle, a real Shutdown and (for the remote
 // item) a bridge that costs the person running the tests money — see
 // TrayRemoteItemTests, which records that last one.
+[Collection("Settings")]
 public class TrayMenuTests
 {
     private const string NoSessions = "No sessions";

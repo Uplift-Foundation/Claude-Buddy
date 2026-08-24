@@ -19,6 +19,7 @@ namespace ClaudeBuddy.Tests;
 // that call is a no-op. Nothing else in these rows reaches the OS. The voice
 // pickers are deliberately not driven: opening one enumerates the machine's
 // voices, which launches `say`.
+[Collection("Settings")]
 public class SettingsWindowPickerTests
 {
     private static SettingsWindow NewWindow()

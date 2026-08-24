@@ -16,6 +16,7 @@ namespace ClaudeBuddy.Tests;
 // there is only one conversation and this is not a copy of it. The file *is* the
 // conversation, so what these tests assert is that the panel reads the same thing
 // the terminal is writing — including the parts of that file it must not show.
+[Collection("Settings")]
 public class LocalCliChatSessionTests : IDisposable
 {
     private readonly string _root =

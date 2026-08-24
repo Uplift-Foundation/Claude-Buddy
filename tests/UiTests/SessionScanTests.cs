@@ -32,6 +32,7 @@ namespace ClaudeBuddy.Tests;
 // a CLI either, which is what would put Superseded's job-list lookup in play.
 // The rules those calls sit behind are covered in ScanVerdictTests, where they
 // are passed in rather than performed.
+[Collection("Settings")]
 public class SessionScanTests
 {
     // Alive for certain, and asking the kernel about it is a kill(pid, 0) —

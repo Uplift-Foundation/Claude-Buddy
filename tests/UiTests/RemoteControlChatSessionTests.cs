@@ -16,6 +16,7 @@ namespace ClaudeBuddy.Tests;
 // path below either fails before reaching one or is fed a message as though one
 // had. A test that started a real Claude Code session would cost the person
 // running it money — see LiveBridgeFactAttribute for where that is allowed.
+[Collection("Settings")]
 public class RemoteControlChatSessionTests
 {
     private const string Account = ".claude-board";

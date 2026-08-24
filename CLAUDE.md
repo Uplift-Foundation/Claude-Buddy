@@ -472,7 +472,20 @@ maths is tested there for exactly this reason). Leaving it out meant those lines
 were verified and counted nowhere, which is the same invisible-verification
 problem the console suites had.
 
-Three things the number does not say, worth remembering before quoting it:
+Four things the number does not say, worth remembering before quoting it:
+
+- **The number is only reproducible because the settings-touching UI classes are
+  serialised — keep them that way.** `ClaudeBuddySettings` is a process-wide
+  static and nearly every visual class reads it while being constructed, so two
+  test classes running in parallel with one of them flipping a setting do not
+  race to a failure, they race to a *different set of executed lines*. Before
+  CB-3 serialised them, three consecutive runs of `tests/UiTests` over an
+  identical binary reported 1914, 2024 and 1914 covered lines in
+  `SettingsWindow.cs`. That swing is bigger than most real changes, so it reads
+  as one — and it cost this ticket an hour of chasing a 145-line "regression"
+  that was scheduling. Anything new that reads or writes settings joins
+  `[Collection("Settings")]` in `tests/UiTests/SettingsCollection.cs`, whose
+  comment has the rest of the story.
 
 - **`--base` is the number that matters when reviewing a change.** A file-level
   percentage is dominated by whatever was already in the file; the added-lines

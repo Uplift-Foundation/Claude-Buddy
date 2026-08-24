@@ -16,6 +16,7 @@ namespace ClaudeBuddy.Tests;
 // Orbs are never closed here, for the reason ChatPanelTests documents at length:
 // closing a headless window corrupts a process-wide font resource shared with
 // every other one. They are never shown either, so nothing is left on screen.
+[Collection("Settings")]
 public class OrbWindowStateTests
 {
     // The pulse amplitude, which is what actually differs between states — the

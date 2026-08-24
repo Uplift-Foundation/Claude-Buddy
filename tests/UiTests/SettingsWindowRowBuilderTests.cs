@@ -20,6 +20,7 @@ namespace ClaudeBuddy.Tests;
 // Buttons are never clicked. The gateway section holds one that trusts a new
 // certificate and reconnects, and the host box reconnects when it loses focus —
 // so that box is built and read but never given a focus change.
+[Collection("Settings")]
 public class SettingsWindowRowBuilderTests
 {
     private static SettingsWindow NewWindow()

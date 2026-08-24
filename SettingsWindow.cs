@@ -30,6 +30,15 @@ namespace ClaudeBuddy
     {
         private static SettingsWindow? _open;
 
+        // Excluded from coverage: this is the one entry point the app uses, and
+        // it does more than construct a window — MacOSActivation.SetRegular(),
+        // Show(), Activate(), StartStatusTicker(). tests/UiTests'
+        // SettingsWindowSmokeTest says the same thing from the other side, and
+        // reaches the private constructor directly for exactly this reason. The
+        // rows the window builds are covered; putting the app in the Dock and
+        // taking a window key is not something a headless suite has any business
+        // doing.
+        [ExcludeFromCodeCoverage]
         public static void Toggle()
         {
             if (_open is not null)
