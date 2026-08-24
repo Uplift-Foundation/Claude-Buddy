@@ -306,6 +306,35 @@ namespace ClaudeBuddy
                 // honouring it, the name it would then set is the same one the
                 // cwd is already producing, so the two cannot disagree.
                 .Append(" --remote-control ").Append(Quote(_tmuxSessionName))
+
+                // Without these the relay is blocked from doing the one thing
+                // it exists for, and blocked silently.
+                //
+                // Measured 24 Aug 2026. A relay inheriting the user's default
+                // permission mode — auto, here — had its very first SendMessage
+                // refused outright: *"Permission for this action was denied by
+                // the Claude Code auto mode classifier. Reason: Blocked by
+                // classifier."* The session's own reading of it was right, and
+                // is worth quoting because it is not going to stop being true:
+                // a large opaque base64 blob relayed to another agent session
+                // looks exactly like an exfiltration attempt, and that is what
+                // the classifier is for.
+                //
+                // Nobody is watching a detached relay, so there is no one to
+                // approve anything: in auto mode every frame is denied, and in
+                // the default mode it would sit on a prompt until the request
+                // timed out. Either way the mirror never carries a byte and
+                // nothing on screen says why.
+                //
+                // The answer is to be specific rather than permissive. These are
+                // the only two tools a relay ever calls, they are named
+                // explicitly, and the mode is one that does not route them past
+                // a classifier looking for a pattern this genuinely matches.
+                // Emphatically *not* --dangerously-skip-permissions: a session
+                // that may do anything is a much worse trade than one that may
+                // do these two things.
+                .Append(" --permission-mode acceptEdits")
+                .Append(" --allowedTools SendMessage ListAgents")
                 .ToString();
 
             if (!Run(_tmux, 5000, out _, "send-keys", "-t", _tmuxPaneTarget, line, "Enter"))

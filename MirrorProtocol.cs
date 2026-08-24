@@ -453,6 +453,94 @@ namespace ClaudeBuddy
         // conversation is text and text is where gzip earns its keep — measured
         // at roughly five to ten times on real transcript rows, which is the
         // difference between one frame and ten.
+        // --- what actually crosses the wire ----------------------------------
+
+        // One turn, as small as it can be and still be the turn.
+        //
+        // **Turns rather than transcript rows, and the difference is the whole
+        // difference between usable and not.** The first version shipped the raw
+        // JSONL and let the far side parse it, which is a lovely property —
+        // identical bytes, identical parser, nothing to argue about — and it was
+        // measured costing 13 to 30 frames to open one panel. At roughly eight
+        // thousand output tokens and a minute and a half per frame, that is
+        // twenty minutes and a hundred thousand tokens to look at a
+        // conversation. Measured, on this machine, against eight real
+        // transcripts.
+        //
+        // The reason is that an assistant row is enormous and almost none of it
+        // is shown: tool_use blocks, thinking, tool results. ChatTranscript.Map
+        // renders a tool call as one summary line and drops thinking entirely,
+        // so the row being paid for is ten to thirty times the size of the turn
+        // it produces. Sending the same eight transcripts as turns: **one or two
+        // frames**, worst case two.
+        //
+        // What is given up is smaller than it looks. The far Buddy still reads
+        // the file off its own disk and still parses it with the *same*
+        // ChatTranscript this app uses locally — the parse simply happens on the
+        // side that has the file, which is the side that would have to be
+        // trusted anyway. Nothing composed by a model is in the path, and the
+        // hash still proves the turns arrive exactly as that Buddy produced
+        // them. What is displayed is still, byte for byte, what a local panel
+        // would display.
+        public sealed record MirrorTurn(
+            [property: JsonPropertyName("r")] string Role,
+            [property: JsonPropertyName("t")] string Text,
+            [property: JsonPropertyName("u")] string? Uuid = null,
+            [property: JsonPropertyName("a")] long At = 0);
+
+        private static readonly JsonSerializerOptions TurnJson = new()
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+
+        public static byte[] EncodeTurns(IReadOnlyList<MirrorTurn> turns) =>
+            Gzip(JsonSerializer.SerializeToUtf8Bytes(turns, TurnJson));
+
+        public static IReadOnlyList<MirrorTurn>? DecodeTurns(byte[] payload)
+        {
+            try
+            {
+                return JsonSerializer.Deserialize<List<MirrorTurn>>(Gunzip(payload), TurnJson);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // The mapped rows of a transcript, as turns ready to send.
+        //
+        // Goes through CliChatFormat so it is the same Map a local panel uses —
+        // that is what keeps the two from drifting.
+        public static List<MirrorTurn> TurnsFrom(IEnumerable<string> lines, string cli)
+        {
+            var source = string.Equals(cli, CliCodex, StringComparison.OrdinalIgnoreCase)
+                ? SessionSource.Codex
+                : SessionSource.ClaudeCode;
+
+            var mapped = CliChatFormat.For(source).Map(SelectInterestingRows(lines, cli));
+
+            return mapped
+                .Select(r => new MirrorTurn(
+                    r.Turn.Role switch
+                    {
+                        ChatRole.User => "u",
+                        ChatRole.System => "s",
+                        _ => "a"
+                    },
+                    r.Turn.Text,
+                    r.Uuid,
+                    r.Turn.At.ToUnixTimeSeconds()))
+                .ToList();
+        }
+
+        public static ChatRole RoleOf(string role) => role switch
+        {
+            "u" => ChatRole.User,
+            "s" => ChatRole.System,
+            _ => ChatRole.Assistant
+        };
+
         public static byte[] PackRows(IReadOnlyList<string> rows) =>
             Gzip(Encoding.UTF8.GetBytes(string.Join("\n", rows)));
 

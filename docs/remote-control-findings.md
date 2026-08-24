@@ -512,13 +512,11 @@ courier.
 - ~~That `--remote-control <name>` sticks.~~ **Settled — measured, and the
   answer was no.** See "What actually names a relay" below; the code changed as
   a result.
-- **The size limit on a `SendMessage` body.** Frames carry 6KB of payload
-  (~8KB encoded) on the assumption it fits. Nothing here has sent one big
-  enough to find the ceiling. `MirrorProtocol.ChunkBytes` is the single knob.
-- **Whether the relay model reliably relays base64 verbatim, and at what rate.**
-  Mangling is caught by the hashes; refusal shows as a timeout. Neither has been
-  observed in the wild. Worth recording a real frames-per-minute figure and what
-  a mirror costs in quota.
+- ~~The size ceiling on a `SendMessage` body.~~ **Measured — 8KB is fine.**
+- ~~Whether the relay model reliably relays base64 verbatim, and at what rate.~~
+  **Measured — it does, byte for byte.** Both in "Relaying a frame, measured"
+  below, along with what it costs, which was the finding that changed the
+  design.
 - **The residual trust boundary.** Requests are only served to a peer whose name
   wears the relay prefix. Everything on the account shares one namespace, so
   this is a guard against confusion, not against a determined actor with access
@@ -603,3 +601,97 @@ relay if the cwd trick ever stops working.
 name a peer sees in `ListAgents` are **the same name**. `warrenthompson-9b`
 appeared in both, as did `claude-buddy-rc-43`. That is what makes AgentRoster's
 name → sessionId join valid — it is joining across one namespace, not two.
+
+
+## Relaying a frame, measured (24 Aug 2026)
+
+Three things were being carried as assumptions: whether a `SendMessage` body
+would hold an 8KB frame, whether a model would relay base64 verbatim, and what a
+mirror costs. All three are answered, and the third moved the design.
+
+Measured with two Remote Control sessions on this machine — the transport is the
+same whether the peer is on another machine or this one, and a receiver does not
+have to *reply* for fidelity to be checked: the message lands in its transcript
+and can be read off disk.
+
+### Fidelity: yes, byte for byte
+
+A real `CB-MIRROR` frame — 6144 bytes of incompressible payload, 8372 characters
+of frame — was relayed and arrived **byte-identical**:
+
+```
+cross-session-messages found: 1
+--- row type=user body_chars=8372 first_line_chars=8372
+   payload_bytes=6144 hash_matches=True
+   byte_identical_to_sent=True
+```
+
+Note `type=user`. That is the row type `RemoteControlBridge.Deliver` now requires
+before treating anything as an inbound message, confirmed independently here.
+
+### Size: 8KB is not the limit
+
+The 8372-character frame went through as one `SendMessage` with no complaint
+(`inputchars=8572` including the envelope). `MirrorProtocol.ChunkBytes` is not
+near a ceiling.
+
+### The permission classifier blocks it, and silently
+
+**The first attempt failed, and this is the finding most likely to bite
+someone.** A relay inheriting the user's default permission mode — auto — had
+its `SendMessage` refused outright:
+
+```
+Permission for this action was denied by the Claude Code auto mode classifier.
+Reason: Blocked by classifier.
+```
+
+The session's own reading of it is worth quoting, because it is not going to
+stop being true: *"a ~9KB opaque base64 blob being relayed to another agent
+session looks like an exfiltration/injection pattern to the classifier."* It
+does, and that is what the classifier is for.
+
+Nobody is watching a detached relay, so nothing can approve anything: in auto
+mode every frame is denied, and in the default mode it would sit on a prompt
+until the request timed out. The mirror would carry nothing and say nothing.
+
+Fixed by launching the relay with `--permission-mode acceptEdits --allowedTools
+SendMessage ListAgents` — specific rather than permissive, and emphatically not
+`--dangerously-skip-permissions`. With that, the same frame went straight
+through.
+
+### Cost: this is what changed the design
+
+**~9,100 output tokens and roughly a minute and a half, for one 8KB frame.** The
+sender has to *emit* the entire base64 blob as a tool argument, so the cost is
+proportional to the frame and there is no way around it.
+
+That is survivable for one frame. It was not survivable for the payload the
+mirror was actually sending. Raw transcript rows, across eight real transcripts,
+for one panel open:
+
+```
+ rows   rowKB  rowGz rowFr | turns  turnKB turnGz turnFr
+  127   333.5   74.8    13 |    60    25.9    8.6      2
+  185   408.8   99.0    17 |    60    13.4    4.6      1
+   99   248.9   79.1    14 |    57    38.5   11.6      2
+   54   315.8  178.7    30 |    30    10.8    4.1      1
+  268   447.3   94.2    16 |    60    11.9    3.7      1
+```
+
+**13 to 30 frames**, so roughly 120,000 to 270,000 output tokens and twenty
+minutes to an hour to open one panel. Unusable, and the estimate in the original
+design ("typically 1-5 chunks") was simply wrong.
+
+The reason is in the right-hand columns. An assistant row is enormous and almost
+none of it is shown — tool_use blocks, thinking, tool results — while
+`ChatTranscript.Map` renders a tool call as a single summary line and drops
+thinking entirely. The row costs ten to thirty times the turn it produces.
+
+**So the wire now carries turns, not rows: one or two frames, worst case two.**
+The far Buddy reads the file off its own disk and parses it with the *same*
+`ChatTranscript` this app uses locally, then sends the result. Nothing composed
+by a model is in the path, the hash still proves the turns arrive exactly as
+that Buddy produced them, and what is displayed is still what a local panel
+would display — the parse simply happens on the side that has the file, which is
+the side that had to be trusted anyway.

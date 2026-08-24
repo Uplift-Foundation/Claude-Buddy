@@ -53,9 +53,13 @@ public class MirrorRoundTripTests : IDisposable
 
         var delivered = Assert.Single(harness.Windows);
 
-        // Not "looks right" — identical to what ChatTranscript would have been
-        // given had this file been on this machine.
-        Assert.Equal(MirrorProtocol.SelectInterestingRows(rows, MirrorProtocol.CliClaudeCode), delivered.Rows);
+        // Not "looks right" — identical to what this machine's own parser
+        // produces from those same bytes. The far Buddy runs the same
+        // ChatTranscript, so equality here is the whole verbatim claim: the
+        // panel is handed exactly the turns a local panel would have built.
+        Assert.Equal(
+            MirrorProtocol.TurnsFrom(rows, MirrorProtocol.CliClaudeCode),
+            delivered.Turns);
     }
 
     // A conversation big enough to need many frames, which is where chunking,
@@ -63,7 +67,11 @@ public class MirrorRoundTripTests : IDisposable
     [Fact]
     public async Task ALongTranscriptSurvivesBeingCutIntoManyFrames()
     {
-        var rows = Conversation(1200);
+        // Large, because turns are a fraction of the rows they came from and
+        // it now takes a great deal of conversation to need a second frame —
+        // which is the entire point of shipping turns, and is measured in
+        // MirrorProtocol's note.
+        var rows = Conversation(6000);
         var path = WriteTranscript("long.jsonl", rows);
 
         var harness = new Harness(_dir);
@@ -73,7 +81,7 @@ public class MirrorRoundTripTests : IDisposable
         Assert.True(await harness.Client.OpenAsync("job-hunter"));
 
         var delivered = Assert.Single(harness.Windows);
-        var all = MirrorProtocol.SelectInterestingRows(rows, MirrorProtocol.CliClaudeCode);
+        var all = MirrorProtocol.TurnsFrom(rows, MirrorProtocol.CliClaudeCode);
 
         Assert.True(harness.ChunkFrames > 1, "this transcript should have needed more than one frame");
 
@@ -81,9 +89,9 @@ public class MirrorRoundTripTests : IDisposable
         // 512KB window a local panel opens on. What matters is that it is an
         // exact, unbroken suffix: no row dropped at a frame boundary, none
         // duplicated, none reworded.
-        Assert.NotEmpty(delivered.Rows);
-        Assert.True(delivered.Rows.Count < all.Count, "this file should be bigger than one window");
-        Assert.Equal(all.Skip(all.Count - delivered.Rows.Count).ToList(), delivered.Rows);
+        Assert.NotEmpty(delivered.Turns);
+        Assert.True(delivered.Turns.Count < all.Count, "this file should be bigger than one window");
+        Assert.Equal(all.Skip(all.Count - delivered.Turns.Count).ToList(), delivered.Turns);
     }
 
     // The bulk of a transcript is tool results and file-history snapshots that
@@ -110,10 +118,10 @@ public class MirrorRoundTripTests : IDisposable
 
         var delivered = Assert.Single(harness.Windows);
 
-        Assert.Equal(2, delivered.Rows.Count);
-        Assert.DoesNotContain(delivered.Rows, r => r.Contains("file-history-snapshot"));
-        Assert.Contains("a question", delivered.Rows[0]);
-        Assert.Contains("an answer", delivered.Rows[1]);
+        Assert.Equal(2, delivered.Turns.Count);
+        Assert.DoesNotContain(delivered.Turns, t => t.Text.Contains("file-history-snapshot"));
+        Assert.Contains("a question", delivered.Turns[0].Text);
+        Assert.Contains("an answer", delivered.Turns[1].Text);
 
         // And the snapshot's 200KB did not become frames.
         Assert.True(harness.ChunkFrames <= 2, $"the big row was relayed anyway ({harness.ChunkFrames} frames)");
@@ -139,7 +147,7 @@ public class MirrorRoundTripTests : IDisposable
         await harness.Server.TickAsync();
 
         var delta = Assert.Single(harness.Deltas);
-        Assert.Contains("said after the panel opened", Assert.Single(delta.Rows));
+        Assert.Contains("said after the panel opened", Assert.Single(delta.Turns).Text);
     }
 
     // An update that is nothing but tool results moves the offset without
@@ -190,7 +198,7 @@ public class MirrorRoundTripTests : IDisposable
         Assert.Equal(2, harness.Windows.Count);
 
         var second = harness.Windows[^1];
-        Assert.Contains("starting over", Assert.Single(second.Rows));
+        Assert.Contains("starting over", Assert.Single(second.Turns).Text);
         Assert.NotEqual(first.Gen, second.Gen);
     }
 
@@ -212,7 +220,7 @@ public class MirrorRoundTripTests : IDisposable
 
         Assert.True(harness.Client.HasMore("job-hunter"), "a file this size should have a backlog");
 
-        var seen = new List<string>(Assert.Single(harness.Windows).Rows);
+        var seen = new List<MirrorProtocol.MirrorTurn>(Assert.Single(harness.Windows).Turns);
 
         for (var page = 0; page < 10 && harness.Client.HasMore("job-hunter"); page++)
         {
@@ -226,7 +234,7 @@ public class MirrorRoundTripTests : IDisposable
 
         // Every row in the file, in order, with none read twice — which is the
         // thing window alignment exists to guarantee.
-        Assert.Equal(MirrorProtocol.SelectInterestingRows(rows, MirrorProtocol.CliClaudeCode), seen);
+        Assert.Equal(MirrorProtocol.TurnsFrom(rows, MirrorProtocol.CliClaudeCode), seen);
         Assert.Equal(seen.Count, seen.Distinct().Count());
     }
 
@@ -504,8 +512,8 @@ public class MirrorRoundTripTests : IDisposable
 
         Assert.True(harness.Resends >= 1, "the broken piece should have been asked for again");
 
-        var all = MirrorProtocol.SelectInterestingRows(File.ReadAllLines(path), MirrorProtocol.CliClaudeCode);
-        var delivered = Assert.Single(harness.Windows).Rows;
+        var all = MirrorProtocol.TurnsFrom(File.ReadAllLines(path), MirrorProtocol.CliClaudeCode);
+        var delivered = Assert.Single(harness.Windows).Turns;
 
         // Recovered whole: the piece that was mangled is in here, correct, and
         // in the right place.

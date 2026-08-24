@@ -189,10 +189,28 @@ namespace ClaudeBuddy
         {
             if (!rows.Name.Equals(_remoteName, StringComparison.OrdinalIgnoreCase)) return;
 
-            // Parsed off the UI thread would be nicer, but this is already on a
-            // background thread — the relay's pump — and the parse is the same
-            // one a local panel does inline on open.
-            var mapped = _format.Map(rows.Rows);
+            // Already parsed, on the machine that had the file.
+            //
+            // The far Buddy runs the same ChatTranscript this app uses locally
+            // and sends the turns rather than the rows — see MirrorProtocol's
+            // note on why, which is that the rows cost ten to thirty times as
+            // much to relay as the turns they produce. So there is nothing to
+            // parse here, only turns to adopt.
+            var mapped = rows.Turns
+                .Select(t => new
+                {
+                    t.Uuid,
+                    Turn = new ChatTurn
+                    {
+                        Role = MirrorProtocol.RoleOf(t.Role),
+                        Text = t.Text,
+                        IsComplete = true,
+                        At = t.At > 0
+                            ? DateTimeOffset.FromUnixTimeSeconds(t.At).ToLocalTime()
+                            : DateTimeOffset.Now
+                    }
+                })
+                .ToList();
 
             OnUi(() =>
             {
@@ -273,10 +291,25 @@ namespace ClaudeBuddy
             var client = RemoteControlSessions.MirrorClientFor(_account);
             if (client is null) return false;
 
-            var rows = await client.LoadOlderAsync(_remoteName).ConfigureAwait(true);
-            if (rows is null) return false;
+            var turns = await client.LoadOlderAsync(_remoteName).ConfigureAwait(true);
+            if (turns is null) return false;
 
-            var mapped = _format.Map(rows);
+            var mapped = turns
+                .Select(t => new
+                {
+                    t.Uuid,
+                    Turn = new ChatTurn
+                    {
+                        Role = MirrorProtocol.RoleOf(t.Role),
+                        Text = t.Text,
+                        IsComplete = true,
+                        At = t.At > 0
+                            ? DateTimeOffset.FromUnixTimeSeconds(t.At).ToLocalTime()
+                            : DateTimeOffset.Now
+                    }
+                })
+                .ToList();
+
             var older = new List<ChatTurn>();
 
             foreach (var row in mapped)
