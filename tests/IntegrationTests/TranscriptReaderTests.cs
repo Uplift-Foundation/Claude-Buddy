@@ -10,6 +10,11 @@ namespace ClaudeBuddy.Tests;
 // verbatim from tests/TranscriptTests/Program.cs's own already-validated
 // fixtures, per this repo's fixture-provenance rule (write fixtures from
 // real captures, not from memory).
+// In the Settings collection since the multi-profile cases below repoint
+// CLAUDE_BUDDY_SETTINGS_DIR and add a profile directory. Without it they race
+// every other settings test in this assembly — and this branch has fixed that
+// same ordering hazard five times, so adding a sixth would be careless.
+[Collection("Settings")]
 public class TranscriptReaderTests
 {
     private const int TailBytes = 262144;
@@ -248,5 +253,116 @@ public class TranscriptReaderTests
         var path = Path.Combine(Path.GetTempPath(), "cb-integrationtests-transcript-" + Guid.NewGuid() + ".jsonl");
         File.WriteAllText(path, content);
         return path;
+    }
+
+    // ---- rows that look assistant-shaped and are not -----------------------
+
+    // The reader pre-filters on the raw substring "type":"assistant" before
+    // parsing, because parsing every row of a 30MB transcript on every hook call
+    // is not free. So the four shapes below all reach the parser and all have to
+    // be refused there instead — a cheap filter has to be backed by a real check
+    // or the cheapness is just a bug.
+
+    // Contains the marker inside its own text, but is a user row. This is the
+    // case the pre-filter cannot tell apart and the parser must.
+    [Fact]
+    public void ARowQuotingTheAssistantMarkerIsNotAnAssistantRow()
+    {
+        var path = Rows(
+            """{"type":"user","message":{"role":"user","content":"grep for \"type\":\"assistant\" please"}}""");
+
+        Assert.Null(TranscriptReader.LatestAssistantText(path));
+    }
+
+    [Fact]
+    public void AnAssistantRowWithNoMessageIsRefused()
+    {
+        Assert.Null(TranscriptReader.LatestAssistantText(Rows("""{"type":"assistant"}""")));
+    }
+
+    [Fact]
+    public void AnAssistantRowWithNoContentIsRefused()
+    {
+        Assert.Null(TranscriptReader.LatestAssistantText(
+            Rows("""{"type":"assistant","message":{"role":"assistant"}}""")));
+    }
+
+    // Content as a bare string rather than the array of blocks this format uses.
+    [Fact]
+    public void AnAssistantRowWhoseContentIsNotAnArrayIsRefused()
+    {
+        Assert.Null(TranscriptReader.LatestAssistantText(
+            Rows("""{"type":"assistant","message":{"content":"just a string"}}""")));
+    }
+
+    // And a refused row does not stop the reader finding a real one below it.
+    [Fact]
+    public void ARefusedRowDoesNotHideTheRealOneBeforeIt()
+    {
+        var path = Rows(AssistantSaid, """{"type":"assistant","message":{}}""");
+
+        Assert.Equal("Fixed the nested-team case.", TranscriptReader.LatestAssistantText(path));
+    }
+
+    // ---- extra profile directories ----------------------------------------
+
+    // Claude Code can be run against more than one config directory, and the
+    // transcript for a session lives under whichever one it was started with. So
+    // the search covers ~/.claude plus every configured profile — a session
+    // started under a second profile is otherwise invisible to the reader, and
+    // the symptom is an orb that never learns what its session said.
+    [Fact]
+    public void ATranscriptUnderAnExtraProfileDirectoryIsFound()
+    {
+        var home = Path.Combine(Path.GetTempPath(), "cb-multihome-" + Guid.NewGuid());
+        var project = Path.Combine(home, ".claude-work", "projects", "-Users-w-Source-Thing");
+        Directory.CreateDirectory(project);
+
+        const string sessionId = "22222222-3333-4444-5555-666666666666";
+        File.WriteAllText(Path.Combine(project, sessionId + ".jsonl"), AssistantSaid + "\n");
+
+        var dir = Path.Combine(Path.GetTempPath(), "cb-multihome-settings-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+
+        try
+        {
+            Assert.NotNull(TranscriptReader.FindTranscriptFor(sessionId, home));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    // The default directory still wins when both hold something, because it is
+    // searched first and the newest write is what the reader is after.
+    [Fact]
+    public void TheDefaultDirectoryIsSearchedAlongsideTheExtras()
+    {
+        var home = Path.Combine(Path.GetTempPath(), "cb-multihome2-" + Guid.NewGuid());
+        var project = Path.Combine(home, ".claude", "projects", "-Users-w-Source-Thing");
+        Directory.CreateDirectory(project);
+
+        const string sessionId = "33333333-4444-5555-6666-777777777777";
+        var expected = Path.Combine(project, sessionId + ".jsonl");
+        File.WriteAllText(expected, AssistantSaid + "\n");
+
+        var dir = Path.Combine(Path.GetTempPath(), "cb-multihome2-settings-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+
+        try
+        {
+            Assert.Equal(expected, TranscriptReader.FindTranscriptFor(sessionId, home));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
     }
 }
