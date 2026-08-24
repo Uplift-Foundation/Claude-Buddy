@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using Microsoft.Win32;
@@ -21,6 +22,9 @@ namespace ClaudeBuddy
         // uses, so both surfaces agree on what a "distro" is. Called once per
         // Settings-window open; unlike WindowsAppLookup's polled AUMID lookup,
         // this doesn't need a cache.
+        // Excluded from coverage: reads the Lxss registry key, which only exists
+        // on a Windows host with WSL installed.
+        [ExcludeFromCodeCoverage]
         public static IReadOnlyList<string> ListDistros()
         {
             if (!OperatingSystem.IsWindows()) return Array.Empty<string>();
@@ -58,6 +62,10 @@ namespace ClaudeBuddy
         // check status. profileDirName defaults to the standard '.claude';
         // any CLAUDE_CONFIG_DIR-style name (see ClaudeBuddySettings.
         // ClaudeCodeProfileDirs) works the same way.
+        // Excluded from coverage: resolves a path through the registry and reads a
+        // file inside a live distro; what it looks for in that text is
+        // SettingsTextMentionsHook, which is tested.
+        [ExcludeFromCodeCoverage]
         public static bool IsWired(string distro, string profileDirName = ".claude")
         {
             if (!OperatingSystem.IsWindows()) return false;
@@ -67,14 +75,22 @@ namespace ClaudeBuddy
 
             try
             {
-                var text = File.ReadAllText(path);
-                return text.Contains("ClaudeBuddyHook.ps1", StringComparison.OrdinalIgnoreCase);
+                return SettingsTextMentionsHook(File.ReadAllText(path));
             }
             catch
             {
                 return false;
             }
         }
+
+        // "Wired" means the same thing here as it does to the PowerShell side:
+        // the settings file's text mentions ClaudeBuddyHook.ps1. Split out of
+        // IsWired so the definition can be asserted without a WSL distro — the
+        // whole reason it is a text match rather than a JSON structure check is
+        // that the two surfaces must never disagree about it, and a definition
+        // two implementations share is worth a test of its own.
+        internal static bool SettingsTextMentionsHook(string text) =>
+            text.Contains("ClaudeBuddyHook.ps1", StringComparison.OrdinalIgnoreCase);
 
         // Enable or disable hooks for one distro by shelling out to the
         // shipped installer script — same script the installer itself runs,
@@ -84,6 +100,9 @@ namespace ClaudeBuddy
         // (which skips distros where Claude Code wasn't detected, a safer
         // default for an unattended install nobody explicitly asked to touch
         // WSL for at all).
+        // Excluded from coverage: runs the shipped PowerShell installer script
+        // against a real distro.
+        [ExcludeFromCodeCoverage]
         public static bool SetWired(string distro, bool wired)
         {
             if (!OperatingSystem.IsWindows()) return false;
@@ -118,6 +137,9 @@ namespace ClaudeBuddy
         // covers native; each currently-wired WSL distro is re-run through
         // SetWired for the same reason, but only distros already opted in —
         // this never wires a distro nobody asked about.
+        // Excluded from coverage: runs the installer script for every listed
+        // distro.
+        [ExcludeFromCodeCoverage]
         public static void ReapplyProfiles()
         {
             if (!OperatingSystem.IsWindows()) return;
@@ -140,6 +162,8 @@ namespace ClaudeBuddy
         // ClaudeDesktopManager.Run, which do the identical thing — this
         // project's convention is one small copy per feature so each stays
         // independently deletable, not a shared helper.
+        // Excluded from coverage: starts a subprocess and waits on it.
+        [ExcludeFromCodeCoverage]
         private static bool TryRun(string exe, int timeoutMs, string[] args)
         {
             try
@@ -183,6 +207,9 @@ namespace ClaudeBuddy
         // No existing precedent in this codebase for locating tools/* at
         // runtime (the macOS .command wrapper and the Inno shortcuts invoke
         // the script directly; the app itself never has until now).
+        // Excluded from coverage: walks the installed app layout on disk looking
+        // for the shipped script.
+        [ExcludeFromCodeCoverage]
         private static string? ResolveInstallerScriptPath()
         {
             // Installed layout: {app}\tools\install-windows-hooks.ps1,
@@ -207,20 +234,37 @@ namespace ClaudeBuddy
         // <profileDirName>/settings.json from the Windows side over UNC. Only
         // reaches each distro's *default* user, same limitation the script
         // has — a second Linux user account needs the manual README route.
+        // Excluded from coverage: probes UNC paths inside a live distro; the two
+        // spellings it chooses between are SettingsPathCandidates, which is
+        // tested.
+        [ExcludeFromCodeCoverage]
         private static string? ResolveSettingsPath(string distro, string profileDirName = ".claude")
         {
             var home = ResolveLinuxHome(distro);
             if (home is null) return null;
 
-            var rel = home.TrimStart('/').Replace('/', '\\') + $@"\{profileDirName}\settings.json";
-            var viaLocalhost = $@"\\wsl.localhost\{distro}\{rel}";
+            var (viaLocalhost, viaDollar) = SettingsPathCandidates(distro, home, profileDirName);
+
             if (Directory.Exists(Path.GetDirectoryName(viaLocalhost)) || File.Exists(viaLocalhost))
             {
                 return viaLocalhost;
             }
 
             // Older-build alias, same fallback the PowerShell script uses.
-            return $@"\\wsl$\{distro}\{rel}";
+            return viaDollar;
+        }
+
+        // The two UNC spellings of one distro's settings file, in preference
+        // order. Pure, and split out because getting this wrong is not a crash:
+        // a path with a doubled or missing separator simply never exists, so the
+        // distro reads as un-wired and the Settings window shows a toggle that
+        // does nothing.
+        internal static (string ViaLocalhost, string ViaDollar) SettingsPathCandidates(
+            string distro, string home, string profileDirName = ".claude")
+        {
+            var rel = home.TrimStart('/').Replace('/', '\\') + $@"\{profileDirName}\settings.json";
+
+            return ($@"\\wsl.localhost\{distro}\{rel}", $@"\\wsl$\{distro}\{rel}");
         }
 
         // UNC home-directory paths for every listed distro, e.g.
@@ -230,6 +274,9 @@ namespace ClaudeBuddy
         // same way it validates a native one: by requiring the picked folder
         // to be a direct child of *some* recognized home directory, not just
         // the Windows one.
+        // Excluded from coverage: enumerates distros from the registry and
+        // resolves each home over UNC.
+        [ExcludeFromCodeCoverage]
         public static IReadOnlyList<string> GetWslHomeUncPaths()
         {
             if (!OperatingSystem.IsWindows()) return Array.Empty<string>();
@@ -247,6 +294,8 @@ namespace ClaudeBuddy
             return result;
         }
 
+        // Excluded from coverage: reads the distro's DefaultUid from the registry.
+        [ExcludeFromCodeCoverage]
         private static string? ResolveLinuxHome(string distro)
         {
             uint defaultUid;
@@ -284,6 +333,9 @@ namespace ClaudeBuddy
             return ReadHomeFromPasswd(distro, defaultUid);
         }
 
+        // Excluded from coverage: reads /etc/passwd inside a live distro over UNC;
+        // the walk itself is HomeFromPasswdLines, which is tested.
+        [ExcludeFromCodeCoverage]
         private static string? ReadHomeFromPasswd(string distro, uint uid)
         {
             try
@@ -292,18 +344,31 @@ namespace ClaudeBuddy
                 if (!File.Exists(passwdPath)) passwdPath = $@"\\wsl$\{distro}\etc\passwd";
                 if (!File.Exists(passwdPath)) return null;
 
-                foreach (var line in File.ReadLines(passwdPath))
-                {
-                    var fields = line.Split(':');
-                    if (fields.Length >= 6 && uint.TryParse(fields[2], out var lineUid) && lineUid == uid)
-                    {
-                        return fields[5];
-                    }
-                }
+                return HomeFromPasswdLines(File.ReadLines(passwdPath), uid);
             }
             catch
             {
                 // Falls through to null.
+            }
+
+            return null;
+        }
+
+        // The home directory of one uid, out of /etc/passwd.
+        //
+        // Split from the file read because passwd is a format nobody here owns:
+        // seven colon-separated fields, home in the sixth. A walk that mis-counts
+        // them returns somebody else's directory, and the app would then look for
+        // Claude Code's settings in a place that plausibly exists.
+        internal static string? HomeFromPasswdLines(IEnumerable<string> lines, uint uid)
+        {
+            foreach (var line in lines)
+            {
+                var fields = line.Split(':');
+                if (fields.Length >= 6 && uint.TryParse(fields[2], out var lineUid) && lineUid == uid)
+                {
+                    return fields[5];
+                }
             }
 
             return null;
