@@ -357,6 +357,78 @@ public class GatewayScanTests
         }
     }
 
+    // A room whose newest member is idle still reads as working when an
+    // *older* member is genuinely mid-run — the case ARoomIsWorkingWhileAnyMemberIs
+    // next door can only state as a baseline, because state.State=="generating"
+    // needs a real event to have been seen and that is normally the poll
+    // loop's job, excluded with it. OpenClawSessions.OnEvent is the one
+    // production entry point for recording that a session is running, and it
+    // is not excluded — it is a JSON-in-JSON-out function, not a live socket
+    // — so a real event through it is the honest way to reach this rather
+    // than inventing a "generating" state Parse would never actually produce.
+    [AvaloniaFact]
+    public void ARoomWhoseOnlyGeneratingMemberIsOlderThanTheNewestStillReadsAsWorking()
+    {
+        // A channel id this test alone uses, so a leftover Running entry from
+        // another case naming the same room can never be the reason this
+        // passes — OpenClawSessions.SetSnapshotForTests resets the snapshot
+        // between cases but Running is never cleared, so sharing a key with
+        // ARoomIsWorkingWhileAnyMemberIs next door would make the two cases
+        // interfere with each other in a way that could pass for the wrong
+        // reason.
+        //
+        // "Older" has to mean older than OpenClawSessions.Activity actually
+        // computes, not older than the JSON row claims: Activity takes the
+        // *later* of the reported lastActivityAt and LastSeen[key], and
+        // OnEvent — the only way a session ever becomes "generating" here —
+        // stamps LastSeen with the real wall clock at the moment it fires.
+        // Giving the generating session a past lastActivityAt in JSON does
+        // nothing, because LastSeen from the OnEvent call below always wins
+        // over it; the row that has to be older is the *quiet* one, and it is
+        // only older if it is given a lastActivityAt far enough in the future
+        // of "now" to still be after LastSeen once the event fires. This is
+        // what a real generating session with a real recent event and a real
+        // quieter roommate whose own last message was more recent still would
+        // look like — the gateway's own list, not the poll loop's clock.
+        using var scratch = new Scratch();
+        const string busyKey = "agent:busy:discord:channel:99184";
+        try
+        {
+            OpenClawSessions.OnEvent("message",
+                JsonDocument.Parse($$"""{"sessionKey":"{{busyKey}}"}""").RootElement);
+
+            var quietIsNewer = new DateTimeOffset(Now.AddMinutes(2)).ToUnixTimeMilliseconds();
+
+            // The newer (by reported activity) session is listed first so it
+            // claims the room entry; the busy one arrives second and, despite
+            // being marked generating, has an Activity no later than the
+            // room's own — so it must not overwrite the title or activity,
+            // only the Working flag.
+            Publish($$"""
+                {"sessions":[
+                  {"key":"agent:quiet:discord:channel:99184","chatType":"channel",
+                   "groupChannel":"#general","lastActivityAt":{{quietIsNewer}}},
+                  {"key":"{{busyKey}}","chatType":"channel",
+                   "groupChannel":"#general","lastActivityAt":{{JustNow}}}
+                ]}
+                """);
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var status = manager.StatusFor(SessionManager.RoomId("discord:99184"));
+
+            Assert.NotNull(status);
+            Assert.Equal("generating", status!.State);
+        }
+        finally
+        {
+            OpenClawSessions.OnEvent("cron",
+                JsonDocument.Parse($$"""{"sessionKey":"{{busyKey}}","action":"finished"}""").RootElement);
+            PublishNothing();
+        }
+    }
+
     // With the gateway switched off the snapshot is empty whatever was last
     // published, so no gateway orb survives a user turning it off — the point
     // being that it happens on the next scan rather than at the next launch.
@@ -528,6 +600,65 @@ public class GatewayScanTests
             manager.ScanAndUpdate();
 
             Assert.Contains("openclaw:agent:main:discord:direct:3", Orbs(manager).Keys);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // --- opening a gateway conversation ---
+
+    // A room's conversation is its members' transcripts merged — assembled
+    // from OpenClawSessions.MembersOfRoom and OpenClawSessions.RoomChatFor,
+    // both reached only through this call in production.
+    [AvaloniaFact]
+    public void RemoteChatForARoomAsksTheGatewayToMergeItsMembers()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish($$"""
+                {"sessions":[
+                  {"key":"agent:lilibeth:discord:channel:20250","chatType":"channel",
+                   "groupChannel":"#general","lastActivityAt":{{JustNow}}},
+                  {"key":"agent:zara:discord:channel:20250","chatType":"channel",
+                   "groupChannel":"#general","lastActivityAt":{{JustNow}}}
+                ]}
+                """);
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var chat = manager.RemoteChatFor(SessionManager.RoomId("discord:20250"));
+
+            Assert.NotNull(chat);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // A plain agent session — not a room — asks OpenClawSessions.ChatFor
+    // directly for it.
+    [AvaloniaFact]
+    public void RemoteChatForAPlainGatewaySessionAsksTheGatewayForIt()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish($$"""
+                {"sessions":[{"key":"agent:main:discord:direct:20251","chatType":"direct",
+                              "lastActivityAt":{{JustNow}}}]}
+                """);
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var chat = manager.RemoteChatFor("openclaw:agent:main:discord:direct:20251");
+
+            Assert.NotNull(chat);
         }
         finally
         {
