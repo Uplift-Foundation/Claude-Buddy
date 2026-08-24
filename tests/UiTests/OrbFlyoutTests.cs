@@ -4,6 +4,7 @@ using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.VisualTree;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Xunit;
@@ -282,5 +283,226 @@ public class OrbFlyoutTests
         Flush();
 
         Assert.Equal(1, fired);
+    }
+
+    // --- the speak button's three looks ----------------------------------
+    //
+    // Three, because the button means three different things, and the source's
+    // own reasoning is that the glyph and the words have to agree or the words
+    // are worse than none: pressing it cancels in two of the three states, so
+    // both of those have to read as "press again to stop". Amber-and-hourglass
+    // rather than the speaking blue for Preparing is the part most likely to be
+    // "simplified" away by someone who has not watched the neural engine take
+    // several seconds to reach its first sound — a stop button sitting over
+    // silence reads as a hang.
+
+    private static string SpeakGlyphOf(OrbFlyout flyout) =>
+        flyout.FindControl<Avalonia.Controls.TextBlock>("SpeakGlyph")!.Text ?? "";
+
+    private static Color SpeakColorOf(OrbFlyout flyout) =>
+        ((ISolidColorBrush)flyout.FindControl<Ellipse>("SpeakFill")!.Fill!).Color;
+
+    // The tooltip is a ThoughtBubble control, not a string — App.axaml strips
+    // the ToolTip template to a bare ContentPresenter so an orb's bubble can
+    // *be* its tooltip, which leaves a plain string as unstyled text floating
+    // on the desktop. Reading the caption back out means walking into that
+    // control rather than casting the tip to a string.
+    private static string SpeakTipTextOf(OrbFlyout flyout)
+    {
+        var tip = ToolTip.GetTip(flyout.FindControl<Control>("SpeakButton")!);
+        var text = (tip as Control)?.GetVisualDescendants()
+            .OfType<Avalonia.Controls.TextBlock>()
+            .Select(block => block.Text)
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+        return text ?? "";
+    }
+
+    [AvaloniaFact]
+    public void SpeakingIsBlueWithAStopSquareAndSaysStop()
+    {
+        var flyout = new OrbFlyout();
+
+        flyout.SetSpeakState(TextToSpeech.SpeakState.Speaking);
+
+        Assert.Equal(Color.Parse("#E04A90D9"), SpeakColorOf(flyout));
+        Assert.Equal("⏹", SpeakGlyphOf(flyout));
+        Assert.Equal("Stop", SpeakTipTextOf(flyout));
+    }
+
+    [AvaloniaFact]
+    public void PreparingIsAmberWithAnHourglassAndSaysSo()
+    {
+        var flyout = new OrbFlyout();
+
+        flyout.SetSpeakState(TextToSpeech.SpeakState.Preparing);
+
+        // Amber, and specifically *not* the speaking blue: "working on it" and
+        // "playing" have to be told apart at a glance, not only by the glyph.
+        Assert.Equal(Color.Parse("#E0B8860B"), SpeakColorOf(flyout));
+        Assert.NotEqual(Color.Parse("#E04A90D9"), SpeakColorOf(flyout));
+        Assert.Equal("⏳", SpeakGlyphOf(flyout));
+        Assert.Equal("Preparing…", SpeakTipTextOf(flyout));
+    }
+
+    [AvaloniaFact]
+    public void GoingIdleRestoresThePlainSpeakerAndItsOriginalCaption()
+    {
+        var flyout = new OrbFlyout();
+
+        flyout.SetSpeakState(TextToSpeech.SpeakState.Speaking);
+        flyout.SetSpeakState(TextToSpeech.SpeakState.Idle);
+
+        Assert.Equal(Color.Parse("#E0202024"), SpeakColorOf(flyout));
+        Assert.Equal("\U0001F508", SpeakGlyphOf(flyout));
+        Assert.Equal("Read aloud", SpeakTipTextOf(flyout));
+    }
+
+    // Every arc button gets a caption, placed *below* it — above would cover
+    // the orb the pointer is on — and every caption is a word or two rather
+    // than a help topic, which is what the first version of these was: the
+    // bubble came out wider than the arc it was labelling.
+    [AvaloniaFact]
+    public void EveryArcButtonCarriesAShortCaptionPlacedBelowIt()
+    {
+        var flyout = new OrbFlyout();
+
+        foreach (var (name, caption) in new[]
+                 {
+                     ("ArrangeButton", "Arrange"),
+                     ("SettingsButton", "Settings"),
+                     ("SpeakButton", "Read aloud"),
+                     ("MicButton", "Dictate"),
+                     ("ChatButton", "Chat")
+                 })
+        {
+            var button = flyout.FindControl<Control>(name)!;
+
+            Assert.NotNull(ToolTip.GetTip(button));
+            Assert.Equal(PlacementMode.Bottom, ToolTip.GetPlacement(button));
+            Assert.Equal(250, ToolTip.GetShowDelay(button));
+
+            var text = (ToolTip.GetTip(button) as Control)?.GetVisualDescendants()
+                .OfType<Avalonia.Controls.TextBlock>()
+                .Select(block => block.Text)
+                .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+            Assert.Equal(caption, text);
+            Assert.True(caption.Split(' ').Length <= 2, $"{name}'s caption is a sentence");
+        }
+    }
+
+    // --- showing, moving and hiding ---------------------------------------
+
+    // The dispatcher has to be given real time here, unlike everywhere else in
+    // this file: the fly-out is a DispatcherTimer at 60 Hz over 160 ms, and
+    // ForceRenderTimerTick does not advance dispatcher timers — only the render
+    // clock. So this pumps jobs against the wall clock until the predicate
+    // holds, and fails loudly rather than hanging if it never does.
+    private static async Task PumpUntil(Func<bool> done, string what)
+    {
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            if (done()) return;
+
+            // await, not Thread.Sleep: the dispatcher timer driving the
+            // animation only gets to run when this test yields the dispatcher
+            // back, and a sleeping test holds it. Same reason ChatPanelTests'
+            // FlushAsync is written this way.
+            await Task.Delay(5);
+        }
+
+        Assert.Fail($"timed out waiting for {what}");
+    }
+
+    [AvaloniaFact]
+    public async Task ShowNearAnimatesFromTheOrbAndLandsExactlyOnTheTarget()
+    {
+        var owner = new Window();
+        var flyout = new OrbFlyout();
+
+        var from = new PixelPoint(400, 300);
+        var to = new PixelPoint(600, 500);
+
+        flyout.ShowNear(from, to, owner);
+
+        // Starts *at the orb*, fully transparent: the whole point of the
+        // animation is that the buttons appear to slide out from under it, and
+        // starting anywhere else is the "mic drew on top of the orb" bug the
+        // window-order comment describes from the other end.
+        Assert.Equal(from, flyout.Position);
+        Assert.Equal(0, flyout.Opacity);
+
+        await PumpUntil(() => flyout.Position == to && flyout.Opacity >= 1,
+            "the fly-out to reach its target");
+
+        // Exactly the target, not merely close to it: the eased interpolation
+        // rounds, so the final tick assigns _flyTo outright rather than
+        // trusting the arithmetic to land on it.
+        Assert.Equal(to, flyout.Position);
+        Assert.Equal(1, flyout.Opacity);
+    }
+
+    // A second ShowNear while it is already up is a move, not a re-entry: the
+    // orb has been dragged, or the panel has moved it. Re-running the animation
+    // would make the flyout swim back to the orb and out again on every drag
+    // tick.
+    [AvaloniaFact]
+    public async Task ShowNearOnAnAlreadyVisibleFlyoutJumpsStraightToTheTarget()
+    {
+        var owner = new Window();
+        var flyout = new OrbFlyout();
+
+        flyout.ShowNear(new PixelPoint(100, 100), new PixelPoint(200, 200), owner);
+        await PumpUntil(() => flyout.Position == new PixelPoint(200, 200) && flyout.Opacity >= 1,
+            "the first fly-out");
+
+        flyout.ShowNear(new PixelPoint(0, 0), new PixelPoint(900, 700), owner);
+
+        Assert.Equal(new PixelPoint(900, 700), flyout.Position);
+        Assert.Equal(1, flyout.Opacity);
+    }
+
+    // Hide stops the timer as well as hiding the window. Without that, a
+    // flyout dismissed mid-flight keeps ticking against a hidden window and
+    // reassigns its position and opacity for the rest of the 160 ms — and the
+    // last thing that tick does is call PlaceInFront, which would pull a
+    // hidden window back to the top of the topmost band.
+    [AvaloniaFact]
+    public async Task HidingMidFlightStopsTheAnimationRatherThanLettingItFinish()
+    {
+        var owner = new Window();
+        var flyout = new OrbFlyout();
+
+        var to = new PixelPoint(800, 600);
+        flyout.ShowNear(new PixelPoint(0, 0), to, owner);
+        flyout.Hide();
+
+        var frozen = flyout.Position;
+
+        // Well past the 160 ms the animation would have taken.
+        for (var attempt = 0; attempt < 60; attempt++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            await Task.Delay(10);
+        }
+
+        Assert.False(flyout.IsVisible);
+        Assert.Equal(frozen, flyout.Position);
+        Assert.NotEqual(to, flyout.Position);
+    }
+
+    // What OrbWindow reads to decide whether the pointer has really left the
+    // orb-plus-flyout region, or has only crossed the gap between them. It has
+    // to answer for the Canvas the buttons live on rather than for the window,
+    // which is bigger than the arc's bounding box on no platform but is the
+    // thing Avalonia would report about by default.
+    [AvaloniaFact]
+    public void IsPointerOverFlyoutIsFalseWhileNothingIsPointingAtIt()
+    {
+        var flyout = ShownFlyout();
+
+        Assert.False(flyout.IsPointerOverFlyout);
     }
 }

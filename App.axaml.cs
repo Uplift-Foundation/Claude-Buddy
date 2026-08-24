@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -25,6 +26,18 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: every line below the guard is unreachable
+        // under test, and by design rather than by omission. Avalonia's headless
+        // lifetime is not an IClassicDesktopStyleApplicationLifetime — it is
+        // null outright — so the guard never opens, which is precisely what lets
+        // tests/UiTests host the *real* App class instead of a stand-in (see
+        // that suite's TestAppBuilder, whose own comment records the same
+        // finding from a spike). Nothing here could be made to run without
+        // giving the test host a desktop lifetime, and then it would take a
+        // machine-wide single-instance mutex, start a real SessionManager
+        // polling the temp directory, and put a tray icon in the menu bar of the
+        // machine running the suite.
+        [ExcludeFromCodeCoverage]
         public override void OnFrameworkInitializationCompleted()
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
