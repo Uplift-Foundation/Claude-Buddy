@@ -973,19 +973,9 @@ namespace ClaudeBuddy
             if (_flyout is null)
             {
                 _flyout = new OrbFlyout();
-                _flyout.MicClicked += () =>
-                {
-                    if (_recording) StopRecording();
-                    else StartRecording();
-                };
-                _flyout.ArrangeClicked += () =>
-                {
-                    SessionManager.Instance?.ArrangeOrbsInPattern();
-                };
-                _flyout.SettingsClicked += () =>
-                {
-                    SettingsWindow.Toggle();
-                };
+                _flyout.MicClicked += ToggleRecording;
+                _flyout.ArrangeClicked += ArrangeAllOrbs;
+                _flyout.SettingsClicked += OpenSettings;
                 _flyout.SpeakClicked += OnSpeakClicked;
                 _flyout.ChatClicked += OpenChat;
 
@@ -1082,6 +1072,18 @@ namespace ClaudeBuddy
 
             SpeakNow(text);
         }
+
+        // Safe to call: SessionManager.Instance is null outside the running app, so
+        // this is a no-op there — which is what an arrange should be when there
+        // are no orbs to arrange.
+        internal static void ArrangeAllOrbs() => SessionManager.Instance?.ArrangeOrbsInPattern();
+
+        // Excluded from coverage: SettingsWindow.Toggle puts the app in the Dock,
+        // shows a window and takes it key, then starts a status ticker. Its own
+        // exclusion says the same; this is the call site, and calling it would do
+        // all of that for real.
+        [ExcludeFromCodeCoverage]
+        private static void OpenSettings() => SettingsWindow.Toggle();
 
         // Excluded from coverage: makes the machine make a noise. TextToSpeech.Speak
         // is itself already excluded for that, and scoping the exclusion to this one
@@ -1772,17 +1774,7 @@ namespace ClaudeBuddy
         // anywhere to go to.
         internal void GoToSession()
         {
-            if (!(_lastStatus?.IsLocalCli ?? false))
-            {
-                var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
-                if (chat is not null)
-                {
-                    _chatOpen = true;
-                    HideFlyoutNow();
-                    ChatPanel.OpenFor(this, chat);
-                    return;
-                }
-            }
+            if (!(_lastStatus?.IsLocalCli ?? false) && TryOpenRemoteChat()) return;
 
             TerminalFocuser.Focus(
                 _lastStatus,
@@ -1817,12 +1809,37 @@ namespace ClaudeBuddy
             SessionManager.Instance?.ReturnOrbToStack(SessionId);
         }
 
+        // Excluded from coverage: needs SessionManager.Instance to hand back a
+        // session, and this suite never sets it — making one current starts the
+        // status-directory watcher, the scan timer and a tray icon. Same reason
+        // OpenChat above carries the attribute, and the panel it would open is
+        // covered directly in the ChatPanel suites against a FakeChatSession.
+        [ExcludeFromCodeCoverage]
+        private bool TryOpenRemoteChat()
+        {
+            var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
+            if (chat is null) return false;
+
+            _chatOpen = true;
+            HideFlyoutNow();
+            ChatPanel.OpenFor(this, chat);
+            return true;
+        }
+
         internal void Exit_Click(object? sender, RoutedEventArgs e)
         {
             if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
-                desktop.Shutdown();
+                Shutdown(desktop);
             }
         }
+
+        // Excluded from coverage: ends the process. Scoped to this one call so the
+        // guard stays measured — under the headless lifetime it is false, which is
+        // what keeps this harmless, and that is worth asserting rather than
+        // excluding along with it.
+        [ExcludeFromCodeCoverage]
+        private static void Shutdown(IClassicDesktopStyleApplicationLifetime desktop) =>
+            desktop.Shutdown();
     }
 }
