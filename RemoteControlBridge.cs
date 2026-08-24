@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -208,6 +209,9 @@ namespace ClaudeBuddy
 
         // --- starting ---
 
+        // Excluded from coverage: starts a real Claude Code session in a tmux
+        // session and spends quota.
+        [ExcludeFromCodeCoverage]
         public async Task<bool> StartAsync()
         {
             if (!IsSupported) return false;
@@ -278,6 +282,9 @@ namespace ClaudeBuddy
 
         // The hook announces the session here, which is both the readiness
         // signal and where the session id, pane and transcript path come from.
+        // Excluded from coverage: polls the filesystem for a hook-written status
+        // file from a live session.
+        [ExcludeFromCodeCoverage]
         private async Task<bool> WaitForStatusFileAsync()
         {
             var dir = Path.Combine(_privateTmp!, "claude_buddy");
@@ -342,6 +349,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: captures a live tmux pane until the Remote
+        // Control banner appears.
+        [ExcludeFromCodeCoverage]
         private async Task WaitForRemoteControlAsync()
         {
             var deadline = Environment.TickCount64 + ReadyTimeoutMs;
@@ -359,6 +369,9 @@ namespace ClaudeBuddy
         // --- asking it things ---
 
         // The peers the bridge can see, or null if it could not be asked.
+        // Excluded from coverage: types a prompt into a live session and waits for
+        // its answer.
+        [ExcludeFromCodeCoverage]
         public async Task<IReadOnlyList<BridgeProtocol.RemoteAgent>?> ListAgentsAsync()
         {
             var raw = await AskAsync(
@@ -373,6 +386,8 @@ namespace ClaudeBuddy
         // Hands a message to a session on another machine. The returned id is the
         // relay's own receipt; the *reply* comes back later through
         // MessageReceived, because there is no turn in which both happen.
+        // Excluded from coverage: types a prompt into a live session.
+        [ExcludeFromCodeCoverage]
         public async Task<string?> SendToAsync(string peerName, string text)
         {
             var raw = await AskAsync(
@@ -386,6 +401,8 @@ namespace ClaudeBuddy
         // Asks a session what it is and what it can do. Fire-and-forget by
         // nature: the answer arrives later as an ordinary inbound message, which
         // RemoteControlSessions recognises by its marker and swallows.
+        // Excluded from coverage: types a prompt into a live session.
+        [ExcludeFromCodeCoverage]
         public async Task<bool> AskCapabilitiesAsync(string peerName)
         {
             var raw = await AskAsync(
@@ -399,6 +416,9 @@ namespace ClaudeBuddy
         // One prompt in, the matching tool result out. Serialized: this is a
         // single interactive session with a single input line, and two prompts
         // pasted at once interleave into nonsense.
+        // Excluded from coverage: types a prompt into a live tmux pane and waits
+        // on the transcript for a reply.
+        [ExcludeFromCodeCoverage]
         private async Task<string?> AskAsync(string prompt, Func<string, bool> matches)
         {
             if (!IsRunning) return null;
@@ -436,6 +456,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: polls a live transcript file until a request
+        // settles.
+        [ExcludeFromCodeCoverage]
         private async Task PumpUntilAsync(Task settled, CancellationToken token)
         {
             try
@@ -638,6 +661,9 @@ namespace ClaudeBuddy
 
         // --- stopping ---
 
+        // Excluded from coverage: kills the relay tmux session and deletes its
+        // scratch directory.
+        [ExcludeFromCodeCoverage]
         public void Stop()
         {
             var tmux = _tmux;
@@ -670,6 +696,9 @@ namespace ClaudeBuddy
         // taking focus: buffer the text, paste it as a bracketed paste so a
         // multi-line prompt arrives as one paste rather than a series of
         // newlines, then send the Return separately.
+        // Excluded from coverage: sends a bracketed paste and a Return into a live
+        // tmux pane.
+        [ExcludeFromCodeCoverage]
         private bool Paste(string text)
         {
             var tmux = _tmux;

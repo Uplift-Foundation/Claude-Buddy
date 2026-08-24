@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia.Threading;
 
 namespace ClaudeBuddy
@@ -224,6 +225,9 @@ namespace ClaudeBuddy
         // marks them all as wanted either way. Every entry point that means "a
         // person is looking at remote sessions" calls this — the tray item,
         // opening a remote chat, sending to one.
+        // Excluded from coverage: starts a relay, which launches a real Claude
+        // Code session in tmux.
+        [ExcludeFromCodeCoverage]
         public static void EnsureStarted()
         {
             if (!ClaudeBuddySettings.RemoteControlEnabled) return;
@@ -269,6 +273,8 @@ namespace ClaudeBuddy
         // The one case this can catch mid-flight is an account un-ticked while
         // its relay is still winding down, which the next poll was about to
         // retire anyway.
+        // Excluded from coverage: deletes real scratch directories from disk.
+        [ExcludeFromCodeCoverage]
         private static void SweepStaleScratch(IReadOnlyList<string> wanted)
         {
             try
@@ -300,6 +306,9 @@ namespace ClaudeBuddy
             lock (Gate) _lastUse = DateTime.UtcNow;
         }
 
+        // Excluded from coverage: starts a relay bridge, which spends quota on a
+        // real session.
+        [ExcludeFromCodeCoverage]
         private static async Task StartAsync(string account)
         {
             var bridge = new RemoteControlBridge(account);
@@ -368,6 +377,9 @@ namespace ClaudeBuddy
             await PollAsync(account).ConfigureAwait(false);
         }
 
+        // Excluded from coverage: creates the Avalonia poll timer the relay runs
+        // on.
+        [ExcludeFromCodeCoverage]
         private static void EnsureTimer()
         {
             if (_poll is not null) return;
@@ -378,6 +390,8 @@ namespace ClaudeBuddy
         }
 
         // One round: retire the relays nobody wants, then re-ask the rest.
+        // Excluded from coverage: the poll loop, driving live relays.
+        [ExcludeFromCodeCoverage]
         private static async Task TickAsync()
         {
             // Idle check first, so relays nobody wants aren't kept alive by the
@@ -413,6 +427,8 @@ namespace ClaudeBuddy
         }
 
         // Re-asks one account's relay for its peers and republishes.
+        // Excluded from coverage: asks a live relay for its agent list.
+        [ExcludeFromCodeCoverage]
         private static async Task PollAsync(string account)
         {
             RemoteControlBridge? bridge;
@@ -496,6 +512,8 @@ namespace ClaudeBuddy
         // Sequential rather than fanned out: the relay serializes requests
         // anyway, and firing five at once would just queue five deep behind one
         // input line.
+        // Excluded from coverage: sends prompts into a live relay session.
+        [ExcludeFromCodeCoverage]
         private static async Task AskForMissingInfoAsync(
             string account, IReadOnlyList<Remote> remotes, RemoteControlBridge bridge)
         {
@@ -524,6 +542,8 @@ namespace ClaudeBuddy
         // Picks the cadence from what is actually happening. Called after every
         // poll rather than on a schedule of its own, because the thing it reacts
         // to — a session going busy — is exactly what a poll discovers.
+        // Excluded from coverage: changes the interval of the Avalonia poll timer.
+        [ExcludeFromCodeCoverage]
         private static void RetuneTimer()
         {
             var wanted = ShouldPollFast() ? PollEveryBusy : PollEvery;
@@ -586,6 +606,8 @@ namespace ClaudeBuddy
         // account that session belongs to. Null when there is no relay to send
         // it through, which the caller shows as a system line rather than
         // swallowing.
+        // Excluded from coverage: sends a message through a live relay.
+        [ExcludeFromCodeCoverage]
         public static async Task<string?> SendToAsync(string account, string remoteName, string text)
         {
             EnsureStarted();
@@ -611,6 +633,8 @@ namespace ClaudeBuddy
             return id;
         }
 
+        // Excluded from coverage: kills a relay tmux session.
+        [ExcludeFromCodeCoverage]
         public static void Stop(string account, string why = "off")
         {
             RemoteControlBridge? bridge = null;
@@ -636,6 +660,8 @@ namespace ClaudeBuddy
             StopTimerIfIdle();
         }
 
+        // Excluded from coverage: kills every relay tmux session.
+        [ExcludeFromCodeCoverage]
         public static void StopAll(string why = "off")
         {
             List<string> accounts;
@@ -646,6 +672,8 @@ namespace ClaudeBuddy
             lock (Gate) WorkingNow.Clear();
         }
 
+        // Excluded from coverage: stops the Avalonia poll timer.
+        [ExcludeFromCodeCoverage]
         private static void StopTimerIfIdle()
         {
             bool any;
@@ -658,6 +686,8 @@ namespace ClaudeBuddy
             else Dispatcher.UIThread.Post(StopTimer);
         }
 
+        // Excluded from coverage: stops the Avalonia poll timer.
+        [ExcludeFromCodeCoverage]
         private static void StopTimer()
         {
             _poll?.Stop();
@@ -667,6 +697,8 @@ namespace ClaudeBuddy
         // Settings changed under us. Unlike OpenClawSessions.Restart this only
         // ever tears down: bringing a relay back has to be asked for, because
         // starting one costs the user something.
+        // Excluded from coverage: stops every relay and starts them again.
+        [ExcludeFromCodeCoverage]
         public static void Restart()
         {
             if (!ClaudeBuddySettings.RemoteControlEnabled || !RemoteControlBridge.IsSupported)
