@@ -100,6 +100,43 @@ public class OrbWindowUpdateFromTests
     }
 
     [AvaloniaFact]
+    public void RemoteKindShowsTheTwoWayArrowBadge()
+    {
+        // BadgeFor(SessionKind.Remote) => ("\u21C4", "another machine").
+        //
+        // This badge carries more weight than the gateway ones beside it: a
+        // remote orb is the only orb whose click opens a chat instead of jumping
+        // to a terminal, on a screen where almost everything else is local. The
+        // mark is how that is knowable before clicking rather than after.
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = SessionKind.Remote;
+
+        orb.UpdateFrom(status);
+
+        Assert.Equal("another machine", orb.KindLabel);
+        Assert.Equal("\u21C4", orb.KindGlyphText);
+    }
+
+    // A remote session has no terminal on this machine, so the orb must not
+    // present one. Focus() already returns early for anything that isn't a
+    // local CLI, and IsLocalCli being false is what makes that fire — asserted
+    // here as well as in the unit suite because this is the orb's own contract:
+    // this status must never be treated as clickable-through to a pane.
+    [AvaloniaFact]
+    public void ARemoteStatusIsNeverTreatedAsHavingATerminal()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Source = SessionSource.RemoteControl;
+        status.Kind = SessionKind.Remote;
+
+        orb.UpdateFrom(status);
+
+        Assert.False(status.IsLocalCli);
+    }
+
+    [AvaloniaFact]
     public void DirectKindShowsTheAtBadge()
     {
         var orb = new OrbWindow(Guid.NewGuid().ToString());

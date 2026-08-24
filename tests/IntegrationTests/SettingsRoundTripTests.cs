@@ -142,6 +142,33 @@ public class SettingsRoundTripTests
         Assert.True(rewritten["twoLetterGlyphs"]!.GetValue<bool>());
     }
 
+    // ArrangeAnchor is the shape's saved on-screen centre (see
+    // SessionManager.ArrangementAnchor) — it must survive a restart or the
+    // next "arrange" click after a relaunch silently falls back to the
+    // screen-centre default, which reads to a user as "it forgot where I put
+    // it". Written manually into Save()'s JsonObject and parsed back out of
+    // Load()'s, the same way OrbPositions is a few lines above each — this
+    // test exists because the first cut of this feature added the property
+    // to Model without wiring either side, so it worked for the life of one
+    // process and silently reset on every restart.
+    [Fact]
+    public void ArrangeAnchor_SurvivesARestart()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(640, 360);
+
+        // Simulate a relaunch: force the next access to re-read settings.json
+        // from disk rather than serve the in-memory model.
+        PointSettingsAt(dir);
+
+        var restored = ClaudeBuddySettings.ArrangeAnchor;
+        Assert.NotNull(restored);
+        Assert.Equal(640, restored!.X);
+        Assert.Equal(360, restored.Y);
+    }
+
     // IdleColor/GeneratingColor/WaitingColor are the only three setters that
     // go through SaveSoon() instead of Save() directly (grep confirms — see
     // ClaudeBuddySettings.cs ~line 630-646), because the colour pickers raise
@@ -192,5 +219,89 @@ public class SettingsRoundTripTests
         var orbColors = root!["orbColors"] as JsonObject;
         Assert.NotNull(orbColors);
         Assert.Equal("green", orbColors!["idle"]!.GetValue<string>());
+    }
+
+    // The three Remote Control settings, round-tripped together.
+    //
+    // The specific hazard this guards is the one KnownKeys exists for: a key
+    // written by Save() but missing from KnownKeys is *also* replayed out of
+    // _unknownKeys, and JsonObject throws on the duplicate — so a forgotten
+    // KnownKeys entry doesn't degrade, it breaks every Save from then on.
+    // Reading the values back through a reload is what proves all five steps
+    // (model field, accessor, Load parse, Save write, KnownKeys) were done.
+    [Fact]
+    public void RemoteControlSettings_RoundTripThroughDiskAndReload()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.RemoteControlEnabled = true;
+        ClaudeBuddySettings.RemoteControlProfileDir = ".claude-board";
+        ClaudeBuddySettings.RemoteControlIdleMinutes = 25;
+
+        // Back from disk, not from the in-memory model the setters just wrote.
+        PointSettingsAt(dir);
+
+        Assert.True(ClaudeBuddySettings.RemoteControlEnabled);
+        Assert.Equal(".claude-board", ClaudeBuddySettings.RemoteControlProfileDir);
+        Assert.Equal(25, ClaudeBuddySettings.RemoteControlIdleMinutes);
+    }
+
+    [Fact]
+    public void RemoteControlSettings_HaveSafeDefaultsBeforeAnyoneChoosesThem()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        // Off by default: enabling it is what permits Buddy to start a real
+        // Claude Code session on the user's account, which costs them quota.
+        Assert.False(ClaudeBuddySettings.RemoteControlEnabled);
+
+        // Never empty — the bridge has to launch under some config directory.
+        Assert.Equal(
+            ClaudeBuddySettings.DefaultRemoteControlProfileDir,
+            ClaudeBuddySettings.RemoteControlProfileDir);
+
+        Assert.Equal(
+            ClaudeBuddySettings.DefaultRemoteControlIdle,
+            ClaudeBuddySettings.RemoteControlIdleMinutes);
+    }
+
+    // A negative idle would read as "already expired" to every comparison
+    // downstream, stopping the bridge the instant it started — which would look
+    // like the feature being broken rather than a bad setting.
+    // RemoteControlIdleNever is the deliberate way to say "never stop".
+    [Fact]
+    public void RemoteControlIdleMinutes_ClampsANegativeToNever()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.RemoteControlIdleMinutes = -5;
+
+        Assert.Equal(ClaudeBuddySettings.RemoteControlIdleNever, ClaudeBuddySettings.RemoteControlIdleMinutes);
+    }
+
+    // An unchosen profile stays null on disk rather than being written as a copy
+    // of today's default, so changing the shipped default still reaches users
+    // who never picked one.
+    [Fact]
+    public void RemoteControlProfileDir_IsNotWrittenToDiskUntilChosen()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+        var settingsPath = Path.Combine(dir, "settings.json");
+
+        ClaudeBuddySettings.RemoteControlEnabled = true;
+
+        var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
+        Assert.NotNull(root);
+        Assert.True(root!.ContainsKey("remoteControlProfileDir"));
+        Assert.Null(root["remoteControlProfileDir"]);
+
+        // The accessor still answers with the default, so callers never see null.
+        Assert.Equal(
+            ClaudeBuddySettings.DefaultRemoteControlProfileDir,
+            ClaudeBuddySettings.RemoteControlProfileDir);
     }
 }

@@ -31,6 +31,17 @@ namespace ClaudeBuddy
         public const int DefaultOpenClawActiveWithin = 60;
         public const int OpenClawActiveWithinAll = 0;
 
+        // Ten minutes of idle before the Remote Control bridge is shut down.
+        // Long enough to read a reply and type another message without paying
+        // to start over, short enough that walking away doesn't leave a live
+        // session on the user's account all afternoon.
+        public const int DefaultRemoteControlIdle = 10;
+        public const int RemoteControlIdleNever = 0;
+
+        // The account whose sessions the bridge can see, when the user hasn't
+        // said otherwise — the same default config directory the CLI itself uses.
+        public const string DefaultRemoteControlProfileDir = ".claude";
+
         private static readonly object Gate = new();
         private static Model _model = new();
         private static bool _loaded;
@@ -68,12 +79,15 @@ namespace ClaudeBuddy
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions",
+            "arrangeAnchor",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
             "openclawShowHeartbeats",
             "codexChatEnabled", "codexReplyEnabled", "autoColorSessions",
             "claudeCodeEnabled", "codexEnabled",
-            "clickAction", "doubleClickAction", "tripleClickAction"
+            "clickAction", "doubleClickAction", "tripleClickAction",
+            "remoteControlEnabled", "remoteControlProfileDir", "remoteControlProfileDirs",
+            "remoteControlIdleMinutes"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -275,6 +289,43 @@ namespace ClaudeBuddy
             // heart badge is what makes the noise explainable, and this is the
             // switch for anyone who, having had it explained, wants it gone.
             public bool OpenClawShowHeartbeats { get; set; } = true;
+
+            // Whether to show Claude Code sessions running on *other* machines,
+            // reached through a hidden local bridge session that has Remote
+            // Control on. Off by default, and deliberately more than a display
+            // switch: turning it on is what permits Buddy to start a real
+            // Claude Code session of its own, which costs the user's quota.
+            // See RemoteControlBridge for why a bridge is the only way in.
+            public bool RemoteControlEnabled { get; set; }
+
+            // Which CLI config directory — and therefore which Anthropic
+            // account — the bridge runs under. A home-relative name, the same
+            // vocabulary ClaudeCodeProfileDirs already uses (".claude",
+            // ".claude-work").
+            //
+            // It matters because Remote Control is account-scoped: the bridge
+            // can only see sessions belonging to whichever account it logs in
+            // as, so a user whose remote machines are on a second account has to
+            // be able to say so.
+            public string? RemoteControlProfileDir { get; set; }
+
+            // Every account to run a relay for.
+            //
+            // Replaces the single RemoteControlProfileDir above, which is kept
+            // only so an existing setting isn't silently dropped — see the
+            // RemoteControlProfileDirs accessor, which reads the old key when
+            // this list is empty. Remote Control is account-scoped, so two
+            // accounts genuinely need two relays; nothing about one relay can be
+            // stretched to see both.
+            public List<string> RemoteControlProfileDirs { get; init; } = new();
+
+            // How long the bridge may sit unused before it is shut down.
+            //
+            // The bridge is not free — it is a live Claude Code session on the
+            // user's own account — so it is started on demand and does not
+            // linger. Zero means never idle-stop, which is honest but expensive
+            // and is not the default.
+            public int RemoteControlIdleMinutes { get; set; } = DefaultRemoteControlIdle;
 
             // A command of the user's own to speak with, replacing every built-in
             // engine. Null means "use the built-in ones".
@@ -538,6 +589,91 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.OpenClawShowHeartbeats; }
             set { Load(); lock (Gate) _model.OpenClawShowHeartbeats = value; Save(); }
+        }
+
+        public static bool RemoteControlEnabled
+        {
+            get { Load(); lock (Gate) return _model.RemoteControlEnabled; }
+            set { Load(); lock (Gate) _model.RemoteControlEnabled = value; Save(); }
+        }
+
+        // Never empty: a blank stored value means "never chosen", and the
+        // bridge has to launch under *some* config directory.
+        public static string RemoteControlProfileDir
+        {
+            get
+            {
+                Load();
+                lock (Gate)
+                {
+                    var dir = _model.RemoteControlProfileDir;
+                    return string.IsNullOrWhiteSpace(dir) ? DefaultRemoteControlProfileDir : dir!;
+                }
+            }
+            set { Load(); lock (Gate) _model.RemoteControlProfileDir = value; Save(); }
+        }
+
+        // The accounts to run relays for, never empty when the feature is on.
+        //
+        // Falls back through the old single-account key before the default, so
+        // turning this into a list does not quietly reset someone who had
+        // already chosen an account.
+        public static IReadOnlyList<string> RemoteControlProfileDirs
+        {
+            get
+            {
+                Load();
+                lock (Gate)
+                {
+                    if (_model.RemoteControlProfileDirs.Count > 0)
+                        return _model.RemoteControlProfileDirs.ToList();
+
+                    var single = _model.RemoteControlProfileDir;
+                    return new List<string>
+                    {
+                        string.IsNullOrWhiteSpace(single) ? DefaultRemoteControlProfileDir : single!
+                    };
+                }
+            }
+        }
+
+        public static void SetRemoteControlProfileDirs(IEnumerable<string> dirs)
+        {
+            Load();
+            lock (Gate)
+            {
+                _model.RemoteControlProfileDirs.Clear();
+                foreach (var dir in dirs)
+                {
+                    if (string.IsNullOrWhiteSpace(dir)) continue;
+                    if (_model.RemoteControlProfileDirs.Contains(dir, StringComparer.Ordinal)) continue;
+                    _model.RemoteControlProfileDirs.Add(dir);
+                }
+
+                // Cleared so the two keys cannot disagree: once a list exists it
+                // is the only answer, and a leftover single value would be a
+                // second source of truth that only surfaces if the list is
+                // emptied again.
+                _model.RemoteControlProfileDir = null;
+            }
+
+            Save();
+        }
+
+        public static int RemoteControlIdleMinutes
+        {
+            get { Load(); lock (Gate) return _model.RemoteControlIdleMinutes; }
+
+            // Clamped rather than trusted. A negative value would mean "already
+            // expired" to every comparison downstream, which would stop the
+            // bridge the instant it started and read as the feature being
+            // broken; RemoteControlIdleNever is the deliberate way to say that.
+            set
+            {
+                Load();
+                lock (Gate) _model.RemoteControlIdleMinutes = Math.Max(RemoteControlIdleNever, value);
+                Save();
+            }
         }
 
         public static bool OpenClawReplyEnabled
@@ -852,6 +988,10 @@ namespace ClaudeBuddy
                             root["openclawActiveWithinMinutes"]?.GetValue<int>() ?? DefaultOpenClawActiveWithin,
                         OpenClawShowHeartbeats =
                             root["openclawShowHeartbeats"]?.GetValue<bool>() ?? true,
+                        RemoteControlEnabled = root["remoteControlEnabled"]?.GetValue<bool>() ?? false,
+                        RemoteControlProfileDir = Text(root["remoteControlProfileDir"]),
+                        RemoteControlIdleMinutes =
+                            root["remoteControlIdleMinutes"]?.GetValue<int>() ?? DefaultRemoteControlIdle,
                         ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
@@ -922,6 +1062,17 @@ namespace ClaudeBuddy
                         }
                     }
 
+                    if (root["remoteControlProfileDirs"] is JsonArray remoteDirs)
+                    {
+                        foreach (var node in remoteDirs)
+                        {
+                            if (node?.GetValue<string>() is { Length: > 0 } dirName)
+                            {
+                                model.RemoteControlProfileDirs.Add(dirName);
+                            }
+                        }
+                    }
+
                     if (root["codexHomes"] is JsonArray codexHomes)
                     {
                         foreach (var node in codexHomes)
@@ -962,6 +1113,14 @@ namespace ClaudeBuddy
 
                             model.OrbPositions[key] = new OrbPlacement(x.Value, y.Value);
                         }
+                    }
+
+                    if (root["arrangeAnchor"] is JsonObject anchor)
+                    {
+                        var ax = anchor["x"]?.GetValue<int>();
+                        var ay = anchor["y"]?.GetValue<int>();
+                        if (ax is not null && ay is not null)
+                            model.ArrangeAnchor = new OrbPlacement(ax.Value, ay.Value);
                     }
 
                     // Anything above this line is a key this build understands.
@@ -1063,6 +1222,10 @@ namespace ClaudeBuddy
                         };
                     }
 
+                    var arrangeAnchor = _model.ArrangeAnchor is { } anchor
+                        ? new JsonObject { ["x"] = anchor.X, ["y"] = anchor.Y }
+                        : null;
+
                     var profileDirs = new JsonArray();
                     foreach (var dirName in _model.ClaudeCodeProfileDirs) profileDirs.Add(dirName);
 
@@ -1071,6 +1234,9 @@ namespace ClaudeBuddy
 
                     var speakArgs = new JsonArray();
                     foreach (var argument in _model.SpeakCommandArgs) speakArgs.Add(argument);
+
+                    var remoteProfileDirs = new JsonArray();
+                    foreach (var dir in _model.RemoteControlProfileDirs) remoteProfileDirs.Add(dir);
 
                     var voicesArgs = new JsonArray();
                     foreach (var argument in _model.SpeakVoicesCommandArgs) voicesArgs.Add(argument);
@@ -1089,6 +1255,14 @@ namespace ClaudeBuddy
                         ["openclawReplyEnabled"] = _model.OpenClawReplyEnabled,
                         ["openclawActiveWithinMinutes"] = _model.OpenClawActiveWithinMinutes,
                         ["openclawShowHeartbeats"] = _model.OpenClawShowHeartbeats,
+                        ["remoteControlEnabled"] = _model.RemoteControlEnabled,
+                        // Null when never chosen rather than a copy of the
+                        // current default, the same as speakVoice below — so
+                        // changing which profile ships as the default still
+                        // reaches everyone who never picked one.
+                        ["remoteControlProfileDir"] = _model.RemoteControlProfileDir,
+                        ["remoteControlProfileDirs"] = remoteProfileDirs,
+                        ["remoteControlIdleMinutes"] = _model.RemoteControlIdleMinutes,
                         ["claudeCodeChatEnabled"] = _model.ClaudeCodeChatEnabled,
                         ["claudeCodeReplyEnabled"] = _model.ClaudeCodeReplyEnabled,
                         ["codexChatEnabled"] = _model.CodexChatEnabled,
@@ -1129,7 +1303,8 @@ namespace ClaudeBuddy
                         ["claudeCodeProfileDirs"] = profileDirs,
                         ["codexHomes"] = codexHomeDirs,
                         ["profiles"] = profiles,
-                        ["orbPositions"] = positions
+                        ["orbPositions"] = positions,
+                        ["arrangeAnchor"] = arrangeAnchor
                     };
 
                     // Keys this build doesn't understand, put back exactly as they

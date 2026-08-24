@@ -235,6 +235,25 @@ namespace ClaudeBuddy
             resetItem.Click += (_, _) => SessionManager.Instance?.ResetAllSessionsToIdle();
             menu.Add(resetItem);
 
+            // The on-demand trigger for sessions on other machines.
+            //
+            // In the tray rather than as a new window or an orb affordance
+            // because it is a verb the app performs once, not a thing to look
+            // at — and because there is nowhere else for it to live: the orbs
+            // it produces do not exist until it runs, so it cannot hang off one
+            // of them. Reaching for the relay is exactly the kind of
+            // occasionally-needed action this menu is already full of.
+            //
+            // Hidden entirely unless the feature is on, so the menu does not
+            // grow a line about machines for the majority who have not asked
+            // for any.
+            if (ClaudeBuddySettings.RemoteControlEnabled && RemoteControlBridge.IsSupported)
+            {
+                var remoteItem = new NativeMenuItem("Connect to other machines");
+                remoteItem.Click += (_, _) => RemoteControlSessions.EnsureStarted();
+                menu.Add(remoteItem);
+            }
+
             menu.Add(new NativeMenuItemSeparator());
 
             var settingsItem = new NativeMenuItem("Settings…");
