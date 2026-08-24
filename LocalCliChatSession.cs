@@ -426,7 +426,10 @@ namespace ClaudeBuddy
 
         // Appends `buffer` to whatever partial line was left over, and returns
         // the complete lines that make. The remainder goes back into the carry.
-        private List<string> TakeWholeLines(byte[] buffer)
+        // internal: the carry buffer is the thing standing between a write that
+        // lands mid-codepoint and a permanent replacement character in the panel,
+        // and it needs no dispatcher, no watcher and no CLI to exercise.
+        internal List<string> TakeWholeLines(byte[] buffer)
         {
             _carry.AddRange(buffer);
 
@@ -445,7 +448,10 @@ namespace ClaudeBuddy
         // line is dropped and the offset it was dropped to is returned — that
         // aligned offset is where the next page back has to stop, and using the
         // unaligned one would read the same row twice.
-        private static (List<string> Lines, long From) ReadWindow(FileStream fs, long from, long to)
+        // internal for the same reason: the alignment rule below decides whether
+        // scrolling to the top of a long transcript makes progress or re-reads
+        // the same megabyte forever.
+        internal static (List<string> Lines, long From) ReadWindow(FileStream fs, long from, long to)
         {
             if (to <= from) return (new List<string>(), from);
 
@@ -474,7 +480,7 @@ namespace ClaudeBuddy
             return (Split(text), from + start);
         }
 
-        private static List<string> Split(string text) =>
+        internal static List<string> Split(string text) =>
             text.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
 
         // --- mapping rows onto turns ---
