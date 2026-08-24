@@ -453,12 +453,28 @@ public class OpenClawSocketTests
     // answers a 1.2 hello with alert 70. Stated here so a future "let's be
     // tolerant" change has to argue with a test rather than slip through as a
     // silent downgrade.
+    //
+    // Read off the ClientHello this client actually produces rather than off the
+    // property that produces it. BouncyCastle's non-blocking mode is what makes
+    // that possible with no network at all: the handshake is started into an
+    // output buffer and talks to nobody, which is the same call
+    // TlsDuplexStream.HandshakeAsync opens with.
     [Fact]
-    public void OnlyTls13IsOffered()
+    public void TheClientHelloOffersTls13AndNothingElse()
     {
-        Assert.Equal(
-            new[] { ProtocolVersion.TLSv13 },
-            OpenClawSocket.PinnedTlsClient.SupportedVersions);
+        var tls = new TlsClientProtocol();
+        tls.Connect(new OpenClawSocket.PinnedTlsClient(null));
+
+        var hello = new byte[tls.GetAvailableOutputBytes()];
+        tls.ReadOutput(hello, 0, hello.Length);
+
+        Assert.NotEmpty(hello);
+
+        // extension 43 (supported_versions), 3 bytes, one 2-byte version: 0304.
+        // Asserted as the exact bytes because a hello offering 0303 as well
+        // would still connect to plenty of servers and would silently undo the
+        // decision this test exists to hold.
+        Assert.Contains("002b0003020304", Convert.ToHexStringLower(hello));
     }
 
     // The gateway authenticates us with a signed device identity inside the
