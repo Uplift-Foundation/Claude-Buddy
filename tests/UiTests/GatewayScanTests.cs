@@ -445,4 +445,92 @@ public class GatewayScanTests
             ClaudeBuddySettings.AutoColorSessions = false;
         }
     }
+
+    // --- a status file that cannot be read ---
+
+    // One unreadable file must not cost every orb in the directory. The scan
+    // wraps each file's read in its own catch for exactly this, and the failure it
+    // guards against is the worst kind: a single bad file taking every session off
+    // the screen at once.
+    //
+    // A directory named like a status file is the cheapest way to make the read
+    // throw for real, rather than mocking a filesystem that would then be the
+    // thing under test.
+    [AvaloniaFact]
+    public void OneUnreadableStatusFileDoesNotCostTheOthers()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish($$"""
+                {"sessions":[{"key":"agent:main:discord:direct:1","chatType":"direct",
+                              "lastActivityAt":{{JustNow}}}]}
+                """);
+
+            // Not a file at all: opening it as one throws.
+            Directory.CreateDirectory(Path.Combine(scratch.Dir, "not-really-a-session.txt"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            // The gateway session still got its orb, which is the point: the bad
+            // entry was stepped over rather than ending the scan.
+            Assert.Contains("openclaw:agent:main:discord:direct:1", Orbs(manager).Keys);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // Malformed JSON in a real file is the other half of the same guard, and the
+    // likelier one: a hook interrupted mid-write leaves exactly this.
+    [AvaloniaFact]
+    public void AHalfWrittenStatusFileIsSteppedOver()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish($$"""
+                {"sessions":[{"key":"agent:main:discord:direct:2","chatType":"direct",
+                              "lastActivityAt":{{JustNow}}}]}
+                """);
+
+            File.WriteAllText(Path.Combine(scratch.Dir, "half-written.txt"), "{\"state\":\"id");
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            Assert.Contains("openclaw:agent:main:discord:direct:2", Orbs(manager).Keys);
+            Assert.DoesNotContain("half-written", Orbs(manager).Keys);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // A directory that does not exist at all is not an error either: the scan
+    // treats it as "no local sessions" and carries on with whatever the gateway
+    // reported. This is the state on a machine where no hook has ever fired.
+    [AvaloniaFact]
+    public void AMissingStatusDirectoryIsNotAnError()
+    {
+        try
+        {
+            Publish($$"""
+                {"sessions":[{"key":"agent:main:discord:direct:3","chatType":"direct",
+                              "lastActivityAt":{{JustNow}}}]}
+                """);
+
+            var manager = Manager(Path.Combine(Path.GetTempPath(), "cb-never-made-" + Guid.NewGuid()));
+            manager.ScanAndUpdate();
+
+            Assert.Contains("openclaw:agent:main:discord:direct:3", Orbs(manager).Keys);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
 }
