@@ -353,7 +353,10 @@ namespace ClaudeBuddy
         // there is no terminal anywhere and the panel is the only place it
         // exists. One label covering both beats a label that is wrong for half
         // the orbs on screen.
-        private Control ClickPicker(Func<string> get, Action<string> set)
+        // internal, like the toggle handlers: these three return the control they
+        // build, so a test can drive the control itself rather than hunting it in
+        // a visual tree whose shape depends on which theme templates loaded.
+        internal Control ClickPicker(Func<string> get, Action<string> set)
         {
             var current = get();
             var choices = ClickChoices.ToList();
@@ -401,7 +404,7 @@ namespace ClaudeBuddy
             ("Line", "line")
         };
 
-        private Control ShapePicker()
+        internal Control ShapePicker()
         {
             var current = ClaudeBuddySettings.ArrangeShape;
             var choices = ShapeChoices.ToList();
@@ -437,7 +440,7 @@ namespace ClaudeBuddy
             };
         }
 
-        private Control SpacingSlider()
+        internal Control SpacingSlider()
         {
             var slider = new Slider
             {
