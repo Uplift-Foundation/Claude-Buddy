@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -18,6 +19,19 @@ namespace ClaudeBuddy
     // otherwise the terminal window whose PID the hook recorded, or any
     // window of the app named by term_program (the WSL case, where the
     // Windows-side parent chain dead-ends in an interop bridge).
+    // Excluded from coverage: this is the OS boundary itself. Every method here
+    // runs tmux, ps, osascript or PowerShell as a real subprocess, sends
+    // synthetic keystrokes through SendInput, or drives UI Automation against a
+    // live Windows Terminal window. CLAUDE.md already records why a headless
+    // runner must not reach it: a synthesized orb click lands here, and these
+    // calls have no OS guard at their own entry point, so on a CI runner they
+    // would be real, unpredictable side effects rather than a test.
+    //
+    // What used to be testable-by-association is now in TerminalScripts, which
+    // is not excluded: the AppleScript builders, the tmux socket-pinning rule,
+    // the path-leaf rule and the AppleScript escaping. Those are the parts that
+    // decide anything.
+    [ExcludeFromCodeCoverage]
     internal static class TerminalFocuser
     {
         // teamLead is where the click goes when this session has nowhere of its
@@ -290,13 +304,13 @@ namespace ClaudeBuddy
             string? script;
             if (!string.IsNullOrEmpty(status.TermId))
             {
-                script = ITermSelectScript("id", status.TermId);
+                script = TerminalScripts.ITermSelectScript("id", status.TermId);
             }
             else
             {
                 script = status.TermProgram switch
                 {
-                    "Apple_Terminal" when !string.IsNullOrEmpty(status.Tty) => TerminalSelectScript(status.Tty),
+                    "Apple_Terminal" when !string.IsNullOrEmpty(status.Tty) => TerminalScripts.TerminalSelectScript(status.Tty),
                     "Apple_Terminal" => "tell application \"Terminal\" to activate",
                     "iTerm.app" => "tell application \"iTerm\" to activate",
                     "vscode" => "tell application \"Visual Studio Code\" to activate",
@@ -332,8 +346,8 @@ namespace ClaudeBuddy
 
             var script = Path.GetFileName(app) switch
             {
-                "iTerm.app" => ITermSelectScript("tty", device),
-                "Terminal.app" => TerminalSelectScript(device),
+                "iTerm.app" => TerminalScripts.ITermSelectScript("tty", device),
+                "Terminal.app" => TerminalScripts.TerminalSelectScript(device),
                 _ => null
             };
 
@@ -401,8 +415,8 @@ namespace ClaudeBuddy
             // its own, so activating the app is both sufficient and correct.
             var script = controlMode ? null : Path.GetFileName(app) switch
             {
-                "iTerm.app" => ITermSelectScript("tty", clientTty),
-                "Terminal.app" => TerminalSelectScript(clientTty),
+                "iTerm.app" => TerminalScripts.ITermSelectScript("tty", clientTty),
+                "Terminal.app" => TerminalScripts.TerminalSelectScript(clientTty),
                 _ => null
             };
 
@@ -440,18 +454,11 @@ namespace ClaudeBuddy
             catch { }
         }
 
-        private static string[] TmuxArgs(SessionStatus status, params string[] args)
-        {
-            // -S pins the server: several can coexist (plain tmux, tmuxinator,
-            // a -L named socket), and the pane id is only unique within one.
-            if (string.IsNullOrEmpty(status.TmuxSocket)) return args;
-
-            var full = new string[args.Length + 2];
-            full[0] = "-S";
-            full[1] = status.TmuxSocket;
-            args.CopyTo(full, 2);
-            return full;
-        }
+        // Kept as a wrapper over TerminalScripts.TmuxArgs so its twelve call
+        // sites read the same as before; the socket-pinning rule itself is tested
+        // there.
+        private static string[] TmuxArgs(SessionStatus status, params string[] args) =>
+            TerminalScripts.TmuxArgs(status.TmuxSocket, args);
 
         // The app can't count on PATH: launched from Finder or Login Items it
         // gets the bare system PATH, with no Homebrew or MacPorts in it. The
@@ -699,7 +706,7 @@ namespace ClaudeBuddy
         {
             var script = $$"""
                 tell application "System Events"
-                    keystroke "{{EscapeForAppleScript(text)}}"
+                    keystroke "{{TerminalScripts.EscapeForAppleScript(text)}}"
                 end tell
                 """;
 
@@ -710,8 +717,7 @@ namespace ClaudeBuddy
         // escaped — unlike the tab-selection scripts elsewhere in this file,
         // this text is never a hook-recorded value (a tty, a UUID); it's
         // whatever the user said, so it can contain anything a string can.
-        private static string EscapeForAppleScript(string text) =>
-            text.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
 
         // Mirrors RunOsaScript's fire-and-forget shape (a click, or here a
         // dictation, must not block on an external process) but reports
@@ -1029,19 +1035,7 @@ namespace ClaudeBuddy
         // "C:\src\fmn\" and "C:\src\fmn" give the same answer; a path that is
         // nothing but a root has no leaf and returns empty, which the caller
         // treats as "don't attempt tab selection".
-        private static string LeafOf(string cwd)
-        {
-            if (string.IsNullOrEmpty(cwd)) return "";
 
-            var trimmed = cwd.TrimEnd('\\', '/');
-            if (trimmed.Length == 0) return "";
-
-            var cut = trimmed.LastIndexOfAny(new[] { '\\', '/' });
-            var leaf = cut < 0 ? trimmed : trimmed[(cut + 1)..];
-
-            // "C:" is a drive, not a directory anyone named.
-            return leaf.EndsWith(':') ? "" : leaf;
-        }
 
         // WT puts every window of one launch context in a single process, so
         // Process.MainWindowHandle can't tell tabs apart — but UI Automation
@@ -1143,7 +1137,7 @@ namespace ClaudeBuddy
             // right directory rather than the right session, and it is why this
             // is a leaf match and not a substring one.
             var target = status.Source == SessionSource.Codex
-                ? LeafOf(status.Cwd)
+                ? TerminalScripts.LeafOf(status.Cwd)
                 : status.Title;
 
             if (string.IsNullOrEmpty(target)) return false;
@@ -1276,141 +1270,5 @@ namespace ClaudeBuddy
             }
             """;
 
-        // property is "id" (a session UUID recorded by the hook) or "tty" (the
-        // live tty of an attached tmux client). Both are iTerm2 session
-        // properties; a no-match still activates, which is better than nothing.
-        //
-        // Activate, *wait*, then select. The order and the wait are both
-        // load-bearing, and this supersedes an earlier reading of the same
-        // behaviour — worth spelling out, because the obvious experiment gives
-        // the wrong answer.
-        //
-        // What macOS actually does: activating an app raises whichever of its
-        // windows are on the Space you're looking at, and only follows the app
-        // to another Space when it has none here. Ordering a specific window
-        // front (`select w`) *does* pull you to its Space — but only if the app
-        // is already active. If an activation is still in flight, it lands
-        // afterwards and raises the local window instead, undoing the select.
-        //
-        // That's why the first reading was "activate must come last": tested
-        // from a desktop with no terminal window on it, where activation alone
-        // switches Spaces and select-then-activate therefore appears to work.
-        // From a desktop that *does* have a terminal window, the same script
-        // needed two clicks — the first activating, the second selecting with
-        // the app already active. Both observations come from the same rule.
-        //
-        // So: activate, wait for the activation to actually land, then select.
-        //
-        // Waited for rather than guessed at. This used to be `delay 0.2`, on the
-        // reasoning that a fifth of a second is unnoticeable and is the gap a
-        // double click was inserting by hand — both true, and it still lost the
-        // race often enough to be reported as "clicking an orb doesn't switch
-        // desktops any more". Measured on an idle machine, `activate` took 145ms,
-        // 167ms and 531ms on three consecutive runs of the same script: the
-        // spread is the problem, not the average. Every run slower than the delay
-        // selects the window while the activation is still in flight, and then
-        // the activation lands and raises the local window instead — the exact
-        // failure described above, except intermittent, which is why it reads as
-        // "sometimes it works".
-        //
-        // Polling `frontmost` costs nothing when activation is quick — measured
-        // at 141ms end to end, faster than the fixed delay it replaces, because
-        // it stops as soon as the app is really there — and keeps waiting when it
-        // isn't. The cap is a backstop, not a timeout anyone should reach: if the
-        // app never comes forward, selecting a window is going to fail anyway,
-        // and hanging the click is worse than trying and missing.
-        //
-        // `frontmost of application "X"` is answered by the app itself, so this
-        // needs no permission beyond the Automation grant the activate already
-        // required. Both `delay` and the repeat sit outside the tell block on
-        // purpose: inside one they are dispatched to the application, which
-        // doesn't understand them, and the whole script fails with "Can't
-        // continue delay".
-        private const int ActivationPollTicks = 40;      // x 50ms = 2s ceiling
-
-        private static string ActivateThenSettle(string app) => $$"""
-            tell application "{{app}}" to activate
-            repeat {{ActivationPollTicks}} times
-                if frontmost of application "{{app}}" then exit repeat
-                delay 0.05
-            end repeat
-            """;
-
-        // How many times to re-assert a selection that has not taken yet.
-        //
-        // Settling on `frontmost of application` is not quite enough, and the
-        // gap is one step past the note above: that property flips true when the
-        // app becomes active, which is *before* macOS has finished raising the
-        // window activation itself brings forward. A select landing in that gap
-        // is overruled a moment later by the app's own most-recently-used
-        // window — and when that window is on another desktop, you are taken to
-        // the wrong desktop as well as the wrong window.
-        //
-        // Reported as orbs going somewhere wrong on the first click and right
-        // on the second, which is the same rule from the other side: by the
-        // second click the app is already frontmost, so activation raises
-        // nothing and there is no raise left to overrule the select.
-        //
-        // Checked against `frontmost of w`, which is the window's own answer and
-        // reflects what is actually in front. `id of current window` was tried
-        // first and is useless here — it is iTerm's internal notion of current
-        // and reads as correct while a different window is on screen, which is
-        // exactly the failure being chased.
-        //
-        // Deliberately *not* `set frontmost of w to true` alongside the select.
-        // That was in the first version of this and measured worse than the code
-        // it replaced — three failures in six against none — so it is out, and
-        // the loop is only a loop.
-        private const int SelectionVerifyTicks = 12;     // x 50ms = 600ms ceiling
-
-        private static string ITermSelectScript(string property, string value) => $$"""
-            {{ActivateThenSettle("iTerm")}}
-            tell application "iTerm"
-                repeat with w in windows
-                    repeat with t in tabs of w
-                        repeat with s in sessions of t
-                            if {{property}} of s is "{{value}}" then
-                                repeat {{SelectionVerifyTicks}} times
-                                    select w
-                                    select t
-                                    select s
-                                    if frontmost of w then return
-                                    delay 0.05
-                                end repeat
-                                return
-                            end if
-                        end repeat
-                    end repeat
-                end repeat
-            end tell
-            """;
-
-        // Accepts either form the two paths produce: a bare "ttys004" from the
-        // hook, or a "/dev/ttys004" client tty from tmux.
-        //
-        // Activate, settle, then select — same Spaces rule as ITermSelectScript,
-        // where it's explained.
-        private static string TerminalSelectScript(string tty) => $$"""
-            {{ActivateThenSettle("Terminal")}}
-            tell application "Terminal"
-                repeat with w in windows
-                    repeat with t in tabs of w
-                        if tty of t is "{{(tty.StartsWith("/dev/") ? tty : "/dev/" + tty)}}" then
-                            -- Re-asserted until it takes, for the reason
-                            -- SelectionVerifyTicks gives. Terminal windows
-                            -- answer `frontmost` too, so the check is the same
-                            -- question asked of the same kind of object.
-                            repeat {{SelectionVerifyTicks}} times
-                                set selected of t to true
-                                set index of w to 1
-                                if frontmost of w then return
-                                delay 0.05
-                            end repeat
-                            return
-                        end if
-                    end repeat
-                end repeat
-            end tell
-            """;
     }
 }
