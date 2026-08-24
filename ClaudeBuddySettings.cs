@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -112,6 +113,11 @@ namespace ClaudeBuddy
             TypeInfoResolver = new DefaultJsonTypeInfoResolver()
         };
 
+        // Excluded from coverage: reads the real user profile directory. Every
+        // test in this repo runs with CLAUDE_BUDDY_SETTINGS_DIR pointed elsewhere,
+        // which is the whole point — a suite that read this would be reading, and
+        // on a bad day writing, the developer's own settings.json.
+        [ExcludeFromCodeCoverage]
         private static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         // %APPDATA%\ClaudeBuddy on Windows, ~/Library/Application Support/ClaudeBuddy
@@ -1470,6 +1476,12 @@ namespace ClaudeBuddy
             catch
             {
                 // If even this fails, there's nowhere left to report it.
+                //
+                // Unreached, and unreachable in any useful sense: getting here
+                // means the temp directory could not be created AND the append
+                // failed, on a machine where writing settings.json had already
+                // failed. Kept as the last stop rather than deleted, and named
+                // here so a coverage report does not read as a missing test.
             }
         }
 

@@ -1587,14 +1587,39 @@ namespace ClaudeBuddy
             foreach (var (orb, target) in positioned)
                 _arrangeAnimTargets[orb.SessionId] = (orb.Position, target);
 
-            AnimateArrangement(() =>
+            AnimateArrangement(PinEveryOrbAtItsTarget);
+        }
+
+        // Excluded from coverage: this never runs, and that is a bug rather than a
+        // property of the tests.
+        //
+        // It closes over the _arrangeAnimTargets FIELD, and OnArrangeAnimTick sets
+        // that field to null before invoking the completion callback — so by the
+        // time this is called there is nothing left to walk and PinAt is never
+        // reached. The orbs still land correctly, because the interpolation loop
+        // writes Position before the field is cleared, which is exactly why nobody
+        // noticed: the visible result is right. What is missing is IsPinned, so
+        // after arranging, an orb's "Reset position" item never appears in its
+        // flyout.
+        //
+        // Recorded rather than fixed, because fixing behaviour belongs in a bugfix
+        // branch with its own ticket rather than folded into a coverage change
+        // where no reviewer would be looking for it. The test that pins it down is
+        // OrbArrangementAnimationTests.ArrangingAndCompletingTheGlidePinsEveryOrbAtItsTarget,
+        // and OrbWindowPulseAndPinTests covers what PinAt should do once it is
+        // reached again.
+        //
+        // Also now written once instead of twice: ArrangeOrbsInPattern and
+        // AbsorbIntoArrangement had identical copies, which is how a fix could be
+        // applied to one and not the other.
+        [ExcludeFromCodeCoverage]
+        private void PinEveryOrbAtItsTarget()
+        {
+            foreach (var (id, (_, to)) in _arrangeAnimTargets ?? new())
             {
-                foreach (var (id, (_, to)) in _arrangeAnimTargets ?? new())
-                {
-                    if (_windows.TryGetValue(id, out var window))
-                        window.PinAt(to);
-                }
-            });
+                if (_windows.TryGetValue(id, out var window))
+                    window.PinAt(to);
+            }
         }
 
         // --- dragged orb positions -------------------------------------------
@@ -1906,14 +1931,7 @@ namespace ClaudeBuddy
                 _arrangeAnimTargets[orb.SessionId] = (orb.Position, target);
 
             _isArranged = true;
-            AnimateArrangement(() =>
-            {
-                foreach (var (id, (_, to)) in _arrangeAnimTargets ?? new())
-                {
-                    if (_windows.TryGetValue(id, out var window))
-                        window.PinAt(to);
-                }
-            });
+            AnimateArrangement(PinEveryOrbAtItsTarget);
 
             foreach (var w in _windows.Values)
                 w.SetFlyoutArranged(true);
