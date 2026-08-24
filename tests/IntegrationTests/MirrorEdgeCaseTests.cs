@@ -8,6 +8,14 @@ namespace ClaudeBuddy.Tests;
 // Split from MirrorRoundTripTests so that file stays a readable statement of
 // what the feature does, and this one carries the accumulated "and what if"
 // list without burying it.
+// In the Settings collection, which by now is really "tests that touch
+// process-global Buddy state" — RemoteControlBridgeLiveTests joined it for the
+// same reason, and this class calls RemoteControlSessions.ResetForTests(), which
+// clears the relay table and the MirrorChanged subscribers out from under
+// anything else using them. IntegrationTests does not disable parallelisation
+// the way UiTests does, so without this these classes really do run at once.
+// Costs nothing in an ordinary run: the live tests skip in milliseconds.
+[Collection("Settings")]
 public class MirrorEdgeCaseTests : IDisposable
 {
     private const string FarRelay = "claude-buddy-rc--claude-mini";
@@ -546,20 +554,26 @@ public class MirrorEdgeCaseTests : IDisposable
         Assert.NotNull(seams.Agents);
         Assert.NotNull(seams.TypeInto);
 
-        // The setting a local panel obeys is the one a remote request obeys.
-        var was = ClaudeBuddySettings.ClaudeCodeReplyEnabled;
-        try
-        {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
-            Assert.False(seams.ReplyEnabled(SessionSource.ClaudeCode));
+        // The setting a local panel obeys is the one a remote request obeys —
+        // asserted by *reading* both, not by flipping one.
+        //
+        // Flipping it is what the first version did, and CI caught it on the
+        // Windows leg: ClaudeBuddySettings is process-global, its setters write
+        // settings.json through a debounced save, and SettingsRoundTripTests
+        // next door asserts a pending write is *not* on disk yet. That whole
+        // class is [Collection("Settings")] precisely so no two settings tests
+        // run at once; this one is not in it, so it raced and the deferred-save
+        // test saw a file it had not written. Reading has no such hazard, and
+        // still says the only thing worth saying here — that this delegate is
+        // wired to the same source CliChatFormat reads rather than to a
+        // constant.
+        Assert.Equal(
+            CliChatFormat.For(SessionSource.ClaudeCode).ReplyEnabled(),
+            seams.ReplyEnabled(SessionSource.ClaudeCode));
 
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
-            Assert.True(seams.ReplyEnabled(SessionSource.ClaudeCode));
-        }
-        finally
-        {
-            ClaudeBuddySettings.ClaudeCodeReplyEnabled = was;
-        }
+        Assert.Equal(
+            CliChatFormat.For(SessionSource.Codex).ReplyEnabled(),
+            seams.ReplyEnabled(SessionSource.Codex));
 
         // A session with no pane cannot be typed into, which is answered without
         // running tmux at all.
