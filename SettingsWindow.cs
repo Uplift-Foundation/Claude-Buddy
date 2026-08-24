@@ -976,7 +976,7 @@ namespace ClaudeBuddy
         // no-op path above, losing focus without having actually changed the
         // address, is what a test can safely drive instead.
         [ExcludeFromCodeCoverage]
-        private void OnGatewayHostChanged(string value)
+        internal void OnGatewayHostChanged(string value)
         {
             ClaudeBuddySettings.OpenClawHost = value;
             ClaudeBuddySettings.OpenClawFingerprint = "";
@@ -1012,7 +1012,7 @@ namespace ClaudeBuddy
         // OnGatewayHostChanged above — a real reconnect over the network. The
         // no-op path in the LostFocus handler is what a test can safely drive.
         [ExcludeFromCodeCoverage]
-        private void OnGatewayTokenChanged(string host, string value)
+        internal void OnGatewayTokenChanged(string host, string value)
         {
             OpenClawIdentity.SetGatewayTokenFor(host, value);
             OpenClawSessions.Restart();
@@ -1429,7 +1429,7 @@ namespace ClaudeBuddy
         // The raw saved voice name, read straight from settings rather than via
         // TextToSpeech.SelectedVoice() — that method calls AllVoiceOptions()
         // itself, which is exactly the scan this placeholder exists to avoid.
-        private static string? SavedVoiceNameForPlaceholder() =>
+        internal static string? SavedVoiceNameForPlaceholder() =>
             ClaudeBuddySettings.SpeakEngine switch
             {
                 "custom" => ClaudeBuddySettings.SpeakCommandVoice,
