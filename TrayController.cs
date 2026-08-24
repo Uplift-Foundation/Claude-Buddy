@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
@@ -224,15 +225,14 @@ namespace ClaudeBuddy
                 ToggleType = MenuItemToggleType.CheckBox,
                 IsChecked = SessionManager.Instance?.OrbsVisible ?? true
             };
-            orbsItem.Click += (_, _) =>
-                SessionManager.Instance?.SetOrbsVisible(!SessionManager.Instance.OrbsVisible);
+            orbsItem.Click += (_, _) => ToggleOrbsVisible();
             menu.Add(orbsItem);
 
             var resetItem = new NativeMenuItem("Reset all sessions to idle")
             {
                 IsEnabled = sessions.Count > 0
             };
-            resetItem.Click += (_, _) => SessionManager.Instance?.ResetAllSessionsToIdle();
+            resetItem.Click += (_, _) => ResetAllSessions();
             menu.Add(resetItem);
 
             // The on-demand trigger for sessions on other machines.
@@ -250,26 +250,62 @@ namespace ClaudeBuddy
             if (ClaudeBuddySettings.RemoteControlEnabled && RemoteControlBridge.IsSupported)
             {
                 var remoteItem = new NativeMenuItem("Connect to other machines");
-                remoteItem.Click += (_, _) => RemoteControlSessions.EnsureStarted();
+                remoteItem.Click += (_, _) => ConnectToOtherMachines();
                 menu.Add(remoteItem);
             }
 
             menu.Add(new NativeMenuItemSeparator());
 
             var settingsItem = new NativeMenuItem("Settings…");
-            settingsItem.Click += (_, _) => SettingsWindow.Toggle();
+            settingsItem.Click += (_, _) => OpenSettings();
             menu.Add(settingsItem);
 
             var quitItem = new NativeMenuItem("Quit Claude Buddy");
-            quitItem.Click += (_, _) =>
-            {
-                if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-                {
-                    desktop.Shutdown();
-                }
-            };
+            quitItem.Click += (_, _) => QuitApp();
             menu.Add(quitItem);
         }
+
+        // The five things the tray menu can do, as named methods rather than the
+        // lambdas they used to be — so each can be judged on its own rather than
+        // the whole menu being written off. TrayMenuTests' own header records the
+        // standing decision not to invoke Click handlers, and it was right about
+        // three of the five.
+
+        // Safe to call: SessionManager.Instance is null outside the running app,
+        // so this is a no-op there — which is exactly what a tray item should be
+        // when there is nothing to show.
+        internal static void ToggleOrbsVisible() =>
+            SessionManager.Instance?.SetOrbsVisible(!SessionManager.Instance.OrbsVisible);
+
+        internal static void ResetAllSessions() =>
+            SessionManager.Instance?.ResetAllSessionsToIdle();
+
+        // Safe to call: under the headless lifetime Application.Current's lifetime
+        // is never IClassicDesktopStyleApplicationLifetime, so the guard is false
+        // and Shutdown is never reached. That guard is the point — it is what
+        // keeps a Quit item from taking down a host that is not a desktop app.
+        internal static void QuitApp()
+        {
+            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            {
+                desktop.Shutdown();
+            }
+        }
+
+        // Excluded from coverage: SettingsWindow.Toggle puts the app in the Dock
+        // via MacOSActivation.SetRegular, shows a window and takes it key, then
+        // starts a one-second status ticker. Its own exclusion says the same; this
+        // is the call site, and calling it would do all of that for real.
+        [ExcludeFromCodeCoverage]
+        internal static void OpenSettings() => SettingsWindow.Toggle();
+
+        // Excluded from coverage: starts a relay, which is a live Claude Code
+        // session in a tmux pane on another machine — and that costs the person
+        // running the tests real money. TrayRemoteItemTests records the same thing
+        // from the other side, which is why it checks the item exists and stops
+        // there.
+        [ExcludeFromCodeCoverage]
+        internal static void ConnectToOtherMachines() => RemoteControlSessions.EnsureStarted();
 
         internal static string Summary(int total, int waiting, int generating)
         {

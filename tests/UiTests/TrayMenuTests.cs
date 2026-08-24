@@ -260,4 +260,44 @@ public class TrayMenuTests
         raise.Invoke(menu, null);
         return true;
     }
+
+    // --- the two actions that ARE safe to perform ---
+
+    // The header above says this suite deliberately never invokes a Click
+    // handler, and it was right about three of the five: Settings puts the app in
+    // the Dock and takes a window key, Connect starts a relay that costs real
+    // money, and the remote item is recorded in TrayRemoteItemTests for that
+    // reason. The other two are safe, and now that each handler is a named method
+    // rather than a lambda they can be judged apart instead of together.
+
+    // Safe because SessionManager.Instance is null outside the running app, so
+    // this is a no-op — which is exactly what a tray item should be when there is
+    // nothing to show. A version that dereferenced instead of using ?. would
+    // throw here, which is the failure worth catching.
+    [AvaloniaFact]
+    public void ShowingOrbsWithNoSessionManagerIsANoOp()
+    {
+        TrayController.ToggleOrbsVisible();
+        TrayController.ToggleOrbsVisible();
+    }
+
+    [AvaloniaFact]
+    public void ResettingSessionsWithNoSessionManagerIsANoOp()
+    {
+        TrayController.ResetAllSessions();
+    }
+
+    // Safe because under the headless lifetime Application.Current's lifetime is
+    // never IClassicDesktopStyleApplicationLifetime, so Shutdown is never reached.
+    // That guard is the point of the method — it is what stops a Quit item taking
+    // down a host that is not a desktop app — and this is the only place it gets
+    // exercised.
+    [AvaloniaFact]
+    public void QuittingUnderTheHeadlessLifetimeDoesNotShutAnythingDown()
+    {
+        TrayController.QuitApp();
+
+        // Still here, which is the assertion: a Shutdown would have ended the run.
+        Assert.NotNull(Avalonia.Application.Current);
+    }
 }
