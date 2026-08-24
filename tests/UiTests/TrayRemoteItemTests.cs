@@ -30,7 +30,33 @@ public class TrayRemoteItemTests
     // gets from SessionManager. Reflection rather than widening the API for a
     // test, the same reasoning ChatPanelTestAccess records for reaching
     // ChatPanel's private singleton field.
+    // Restored afterwards, which is not tidiness — it is the difference between
+    // this suite passing and another one failing for no reason it can see.
+    //
+    // RemoteControlEnabled is a real setter: it writes settings.json, and
+    // TestBootstrap points the whole *assembly* at one temp directory, so a
+    // value left behind here is the value every later test in every other class
+    // reads. Left set, it reached
+    // RemoteControlChatSessionTests.AFailedSendKeepsTheMessageOnScreenAndExplainsItself,
+    // whose whole subject is what a send does with the feature off — so that
+    // test passed or failed on nothing but which class the runner happened to
+    // reach first. Alphabetical order put RemoteControl before Tray and hid it
+    // on macOS; Windows ordered them the other way and it failed there, three
+    // attempts out of three, while the same commit passed on the other runner.
     private static NativeMenu? BuildMenu(bool remoteEnabled)
+    {
+        var before = ClaudeBuddySettings.RemoteControlEnabled;
+        try
+        {
+            return BuildMenuCore(remoteEnabled);
+        }
+        finally
+        {
+            ClaudeBuddySettings.RemoteControlEnabled = before;
+        }
+    }
+
+    private static NativeMenu? BuildMenuCore(bool remoteEnabled)
     {
         ClaudeBuddySettings.RemoteControlEnabled = remoteEnabled;
 
