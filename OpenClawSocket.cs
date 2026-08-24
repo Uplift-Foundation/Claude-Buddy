@@ -33,6 +33,15 @@ namespace ClaudeBuddy
 
         internal sealed record Connection(WebSocket Socket, Stream Transport, string Fingerprint);
 
+        // Excluded: every line below opens a real TCP connection and completes a
+        // real TLS 1.3 handshake against a gateway. There is no seam that keeps
+        // the TcpClient out of it — the handshake is what produces the stream
+        // everything else needs — and a headless CI runner has no gateway to
+        // hand it. What is *not* excluded is everything this method delegates
+        // to: UpgradeAsync, ReadHeadersAsync and ReadResponseAsync all take a
+        // Stream and are driven over an in-memory one by
+        // tests/UnitTests/OpenClawSocketTests.cs.
+        [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
         public static async Task<Connection> ConnectAsync(
             string host, int port, string? pinnedFingerprint, CancellationToken ct)
         {
@@ -77,6 +86,15 @@ namespace ClaudeBuddy
         // One connection per fetch, closed at the end. Images are fetched once
         // and cached by the caller, so pooling would add machinery for a saving
         // nobody would notice.
+        //
+        // Excluded for the same reason as ConnectAsync: the two lines that are
+        // not delegation open a real socket and complete a real TLS 1.3
+        // handshake. The HTTP half — the request line, the 200 check, the
+        // Content-Length rules and the size ceiling — was lifted into
+        // GetRequest and ReadResponseAsync below precisely so it did not have to
+        // be excluded with them, and both are driven over a MemoryStream in
+        // tests/UnitTests/OpenClawSocketTests.cs.
+        [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
         public static async Task<byte[]?> GetAsync(
             string host, int port, string path, string bearer,
             string? pinnedFingerprint, CancellationToken ct)
@@ -91,16 +109,31 @@ namespace ClaudeBuddy
             // semaphore behind, and this runs once per picture.
             using var stream = await TlsDuplexStream.HandshakeAsync(tcp, client, ct);
 
-            var request =
-                $"GET {path} HTTP/1.1\r\n" +
-                $"Host: {host}:{port}\r\n" +
-                $"Authorization: Bearer {bearer}\r\n" +
-                $"Accept: */*\r\n" +
-                $"Connection: close\r\n" +
-                $"\r\n";
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(GetRequest(host, port, path, bearer)), ct);
 
-            await stream.WriteAsync(Encoding.ASCII.GetBytes(request), ct);
+            return await ReadResponseAsync(stream, ct);
+        }
 
+        // `Connection: close` rather than keep-alive, because one connection per
+        // fetch is the whole shape here — see GetAsync's header. Split out from
+        // GetAsync so the exact bytes are assertable without a gateway: the
+        // Authorization header is the one line that decides whether the gateway
+        // serves a picture or a 401, and it is not otherwise visible from
+        // anywhere.
+        internal static string GetRequest(string host, int port, string path, string bearer) =>
+            $"GET {path} HTTP/1.1\r\n" +
+            $"Host: {host}:{port}\r\n" +
+            $"Authorization: Bearer {bearer}\r\n" +
+            $"Accept: */*\r\n" +
+            $"Connection: close\r\n" +
+            $"\r\n";
+
+        // The response, once something else has sent the request. Takes a Stream
+        // rather than reaching for one, which is what makes the rules below
+        // testable: a non-200 is a null and not an exception, and a body is
+        // bounded whatever the headers claimed.
+        internal static async Task<byte[]?> ReadResponseAsync(Stream stream, CancellationToken ct)
+        {
             var headers = await ReadHeadersAsync(stream, ct);
             if (!headers.StartsWith("HTTP/1.1 200", StringComparison.Ordinal)) return null;
 
@@ -128,7 +161,7 @@ namespace ClaudeBuddy
             return body.ToArray();
         }
 
-        private static long ContentLength(string headers)
+        internal static long ContentLength(string headers)
         {
             foreach (var line in headers.Split("\r\n"))
             {
@@ -142,7 +175,7 @@ namespace ClaudeBuddy
         // The HTTP/1.1 Upgrade half of RFC 6455. Hand-rolled because
         // ClientWebSocket owns both the TLS and the upgrade and won't hand over
         // a stream for one without the other.
-        private static async Task UpgradeAsync(Stream stream, string host, int port, CancellationToken ct)
+        internal static async Task UpgradeAsync(Stream stream, string host, int port, CancellationToken ct)
         {
             var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
 
@@ -179,7 +212,7 @@ namespace ClaudeBuddy
         // immediately by WebSocket frames on the same stream, so a buffered read
         // would swallow the first frame — and the frame it would swallow is
         // connect.challenge, without which nothing else can happen.
-        private static async Task<string> ReadHeadersAsync(Stream stream, CancellationToken ct)
+        internal static async Task<string> ReadHeadersAsync(Stream stream, CancellationToken ct)
         {
             var buffer = new byte[1];
             var sb = new StringBuilder();
@@ -217,6 +250,17 @@ namespace ClaudeBuddy
         // and take ciphertext back, and the lock is held only for those
         // in-memory hand-offs. Every actual socket operation happens outside
         // it, so a parked read can't block a write.
+        // Excluded whole, not member by member. Every method on it either
+        // drives BouncyCastle's TLS state machine or reads and writes a
+        // NetworkStream, and the two are not separable here: the class exists
+        // precisely because the protocol hand-offs and the socket I/O have to
+        // interleave in one object under one lock (see the comment above). Its
+        // constructor takes a live NetworkStream and HandshakeAsync needs a peer
+        // that completes a TLS 1.3 handshake, neither of which a headless runner
+        // has. What the class is *for* — that a parked read must not block a
+        // concurrent write — is a property of a real socket under real load and
+        // is what docs/openclaw-findings.md records having measured.
+        [System.Diagnostics.CodeAnalysis.ExcludeFromCodeCoverage]
         private sealed class TlsDuplexStream : Stream
         {
             private readonly NetworkStream _net;
@@ -393,7 +437,7 @@ namespace ClaudeBuddy
         // subjectAltName at all**, so there is no name to check against, for
         // any host or address. The fingerprint is the whole of the identity
         // check, which is why it must not be skipped once known.
-        private sealed class PinnedTlsClient : DefaultTlsClient
+        internal sealed class PinnedTlsClient : DefaultTlsClient
         {
             private readonly string? _pinned;
 
