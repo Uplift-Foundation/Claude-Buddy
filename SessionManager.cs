@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -260,7 +261,11 @@ namespace ClaudeBuddy
         // to clear out; a marker that vanished would turn the feature off with
         // nothing said. Two cheap file operations against a directory already
         // being enumerated.
-        private void SyncAutoColorMarker()
+        // internal: the marker file is how the hook learns about the colour
+        // setting — the hook runs on every tool call and reading a setting there
+        // would be an osascript each time — so what this writes is a contract
+        // with a script, not an implementation detail.
+        internal void SyncAutoColorMarker()
         {
             try
             {
@@ -277,6 +282,11 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: creates the tray icon, subscribes the speech
+        // engine, starts a FileSystemWatcher and a two-second Avalonia timer, and
+        // opens the gateway connection. What it schedules is ScanAndUpdate, which
+        // is tested directly against a scratch status directory.
+        [ExcludeFromCodeCoverage]
         public void Start()
         {
             Instance = this;

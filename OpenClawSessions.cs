@@ -356,6 +356,21 @@ namespace ClaudeBuddy
         public static IReadOnlyList<Session> Snapshot() =>
             ClaudeBuddySettings.OpenClawEnabled ? _snapshot : Array.Empty<Session>();
 
+        // A test seam, in the same spirit as ClaudeBuddySettings.ReloadForTests
+        // and OpenClawIdentity.ResetForTests: the poll loop above is the only
+        // thing that publishes a snapshot, and it is excluded from coverage
+        // because it needs a live gateway. Without this, everything downstream of
+        // the snapshot — the gateway orbs, and the room orbs SessionManager
+        // invents from them — is unreachable for a reason that has nothing to do
+        // with the code being hard to test.
+        //
+        // Takes what Parse returns, so a test publishes exactly what a real poll
+        // would rather than a shape of its own invention.
+        internal static void SetSnapshotForTests(IReadOnlyList<Session> sessions)
+        {
+            _snapshot = sessions;
+        }
+
         // Accept whatever certificate the gateway is now serving.
         //
         // Clearing the pin *and* the rejection together, rather than letting the
