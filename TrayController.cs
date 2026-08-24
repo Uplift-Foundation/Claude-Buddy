@@ -288,9 +288,17 @@ namespace ClaudeBuddy
         {
             if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
-                desktop.Shutdown();
+                Shutdown(desktop);
             }
         }
+
+        // Excluded from coverage: ends the process. Scoped to this one call so the
+        // guard in front of it — the thing that stops a Quit item taking down a
+        // host that is not a desktop app — stays measured, and is the only part a
+        // headless run can reach anyway.
+        [ExcludeFromCodeCoverage]
+        private static void Shutdown(IClassicDesktopStyleApplicationLifetime desktop) =>
+            desktop.Shutdown();
 
         // Excluded from coverage: SettingsWindow.Toggle puts the app in the Dock
         // via MacOSActivation.SetRegular, shows a window and takes it key, then
@@ -398,7 +406,7 @@ namespace ClaudeBuddy
         // something about the re-tint failed, and then the baked PNG is a
         // graceful answer: the icon still says which state we're in, just not in
         // the chosen hue.
-        private static WindowIcon? Tinted(string state)
+        internal static WindowIcon? Tinted(string state)
         {
             if (OrbColors.IsDefault(state)) return null;
 
