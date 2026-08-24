@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
@@ -27,6 +28,10 @@ namespace ClaudeBuddy
     // offer — stranding instances with no route to end them from the app at all.
     // A hidden window still receives messages perfectly well.
     [SupportedOSPlatform("windows")]
+    // Excluded from coverage: posts WM_CLOSE to the real top-level windows of
+    // a real pid, found through EnumWindows. Nothing here decides anything a
+    // test could check without a live window to close.
+    [ExcludeFromCodeCoverage]
     internal static class WindowsAppQuit
     {
         private const uint WM_CLOSE = 0x0010;

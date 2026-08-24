@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Avalonia.Controls;
 using Avalonia.Platform;
@@ -7,6 +8,13 @@ namespace ClaudeBuddy
     // Avalonia doesn't expose NSWindow.collectionBehavior, so set it through
     // the native handle: orbs should follow you across Spaces and still show
     // alongside full-screen apps.
+    // Excluded from coverage: patches AppKit classes at runtime through the
+    // Objective-C runtime — sel_registerName, class_replaceMethod and
+    // objc_msgSend against a real NSWindow. The `if (!OperatingSystem.IsMacOS())
+    // return;` guards at the top of each method are the only lines a non-macOS
+    // test ever reached, and a guard returning early is not the behaviour worth
+    // measuring.
+    [ExcludeFromCodeCoverage]
     internal static class MacOSWindowExtensions
     {
         private const ulong CanJoinAllSpaces = 1UL << 0;    // NSWindowCollectionBehaviorCanJoinAllSpaces

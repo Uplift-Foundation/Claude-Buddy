@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
 namespace ClaudeBuddy
@@ -13,6 +14,11 @@ namespace ClaudeBuddy
     // thread, which has an autorelease pool around each turn of the run loop;
     // +runningApplicationWithProcessIdentifier: returns an autoreleased object,
     // and a bare Task.Run thread has no pool to put it in.
+    // Excluded from coverage: objc_msgSend into NSRunningApplication, looked up
+    // by pid. Activating, terminating and asking whether an app died are all
+    // answers AppKit gives about a real running app, and a headless runner has
+    // no AppKit session to give them.
+    [ExcludeFromCodeCoverage]
     internal static class MacOSAppActivation
     {
         private const string Libobjc = "/usr/lib/libobjc.A.dylib";

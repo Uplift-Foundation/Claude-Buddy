@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Avalonia.Controls;
 
@@ -6,6 +7,10 @@ namespace ClaudeBuddy
     // Relative z-order between two of this app's own windows, which Avalonia
     // has no API for: Topmost is a band, not an ordering, and both the orb and
     // its mic flyout are in it.
+    // Excluded from coverage: SetWindowPos against live HWNDs. Z-order is
+    // state the window manager owns, so there is nothing to assert on a runner
+    // that has no window manager.
+    [ExcludeFromCodeCoverage]
     internal static class WindowsWindowOrder
     {
         private const uint SwpNoSize = 0x0001;
