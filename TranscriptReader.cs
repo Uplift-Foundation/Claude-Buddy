@@ -92,20 +92,18 @@ namespace ClaudeBuddy
         // controller session has no transcript of its own — its
         // background jobs live in sibling project dirs with the same
         // CWD prefix.
-        public static string? LatestTranscriptForCwd(string cwd)
+        // home is a parameter with the real one as its default, so the walk can be
+        // pointed at a temp directory instead of the machine's own transcripts.
+        public static string? LatestTranscriptForCwd(string cwd, string? home = null)
         {
             if (string.IsNullOrEmpty(cwd)) return null;
 
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var dirs = new List<string> { Path.Combine(home, ".claude") };
             foreach (var extra in ClaudeBuddySettings.ClaudeCodeProfileDirs)
                 dirs.Add(Path.Combine(home, extra));
 
-            // Claude Code encodes /Users/foo/Source/Bar as
-            // -Users-foo-Source-Bar inside the projects directory.
-            var encoded = cwd.Replace(Path.DirectorySeparatorChar, '-');
-            if (encoded.Length > 0 && encoded[0] != '-')
-                encoded = "-" + encoded;
+            var encoded = EncodeCwd(cwd);
 
             string? best = null;
             DateTime bestTime = DateTime.MinValue;
@@ -119,12 +117,7 @@ namespace ClaudeBuddy
                 {
                     foreach (var dir in Directory.EnumerateDirectories(projects))
                     {
-                        var dirName = Path.GetFileName(dir);
-                        if (!dirName.StartsWith(encoded, StringComparison.Ordinal))
-                            continue;
-                        // Must be exact match or a sub-path separator
-                        if (dirName.Length > encoded.Length && dirName[encoded.Length] != '-')
-                            continue;
+                        if (!ProjectDirMatches(Path.GetFileName(dir), encoded)) continue;
 
                         foreach (var file in Directory.EnumerateFiles(dir, "*.jsonl"))
                         {
@@ -155,11 +148,12 @@ namespace ClaudeBuddy
         // answer for the same reason, and a session whose status file predates
         // transcript_path is exactly the one whose orb you'd click wondering
         // what it had been doing.
-        public static string? FindTranscriptFor(string sessionId) => FindTranscript(sessionId);
+        public static string? FindTranscriptFor(string sessionId, string? home = null) =>
+            FindTranscript(sessionId, home);
 
-        private static string? FindTranscript(string sessionId)
+        private static string? FindTranscript(string sessionId, string? home = null)
         {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var dirs = new List<string> { Path.Combine(home, ".claude") };
 
             foreach (var extra in ClaudeBuddySettings.ClaudeCodeProfileDirs)
@@ -181,6 +175,32 @@ namespace ClaudeBuddy
             }
 
             return null;
+        }
+
+        // Claude Code encodes /Users/foo/Source/Bar as -Users-foo-Source-Bar
+        // inside its projects directory. Pure, and worth its own name because the
+        // encoding is lossy — a directory whose name contains a dash is
+        // indistinguishable from a path separator once encoded — which is exactly
+        // why the match below cannot be a plain prefix test.
+        internal static string EncodeCwd(string cwd)
+        {
+            var encoded = cwd.Replace(Path.DirectorySeparatorChar, '-');
+
+            return encoded.Length > 0 && encoded[0] != '-' ? "-" + encoded : encoded;
+        }
+
+        // Whether one projects-directory name is this cwd or something under it.
+        //
+        // The second condition is the one that matters: a plain StartsWith would
+        // match -Users-foo-Source-Barn for -Users-foo-Source-Bar and hand back a
+        // transcript from an entirely different project. Requiring the next
+        // character to be the separator is what keeps sibling directories with a
+        // shared prefix apart.
+        internal static bool ProjectDirMatches(string dirName, string encoded)
+        {
+            if (!dirName.StartsWith(encoded, StringComparison.Ordinal)) return false;
+
+            return dirName.Length <= encoded.Length || dirName[encoded.Length] == '-';
         }
 
         private static string[] TailLines(string path)
