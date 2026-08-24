@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -1381,8 +1382,18 @@ namespace ClaudeBuddy
             var last = _turns.LastOrDefault(t => t.Role == ChatRole.Assistant);
             if (last is null || string.IsNullOrWhiteSpace(last.Text)) return;
 
-            TextToSpeech.Speak(last.Text, ClaudeBuddySettings.SpeakVoice);
+            Speak(last.Text);
         }
+
+        // TextToSpeech.Speak is itself excluded from coverage ("starts a speech
+        // engine and makes the machine make a noise" — see its own comment) —
+        // pulled out here so that exclusion covers only this one call and not
+        // the decision above it, which a headless test can and does exercise
+        // (IsSpeaking -> cancel, no eligible reply -> do nothing). This one
+        // line — actually reaching a real utterance — has no headless seam and
+        // is deliberately left uncovered rather than exercised for real.
+        [ExcludeFromCodeCoverage]
+        private static void Speak(string text) => TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
 
         private void ApplySpeakState(TextToSpeech.SpeakState state)
         {
@@ -1841,8 +1852,17 @@ namespace ClaudeBuddy
             {
                 if (_bytes is null) return;
 
-                OpenClawMedia.Open(_bytes, _turn.ImageAlt);
+                OpenInViewer(_bytes, _turn.ImageAlt);
             }
+
+            // OpenClawMedia.Open is itself excluded from coverage — it writes a
+            // real file and hands it to the OS's own viewer (/usr/bin/open on
+            // macOS). Wrapped here so that exclusion covers only this one call
+            // rather than the guard above it; a headless test proves the guard
+            // without ever actually launching a viewer, and this one line is
+            // left uncovered rather than exercised for real.
+            [ExcludeFromCodeCoverage]
+            private static void OpenInViewer(byte[] bytes, string alt) => OpenClawMedia.Open(bytes, alt);
 
             public Bitmap? Image
             {
