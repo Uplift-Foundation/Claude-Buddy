@@ -647,7 +647,12 @@ namespace ClaudeBuddy
 
         // The colour comes from OrbColors so this switch is about *motion* only —
         // one state-to-colour mapping in the app, not two that can drift apart.
-        private void ApplyState(string state)
+        // internal: the state-to-motion mapping is a rule worth asserting, and
+        // UpdateFrom deliberately does not apply it directly — it stores the
+        // state and lets Loaded/Opened apply it, because Avalonia fires Loaded
+        // *after* the first UpdateFrom. A window that is never shown therefore
+        // never applies anything, so a test drives this instead of the lifecycle.
+        internal void ApplyState(string state)
         {
             var color = OrbColors.For(state);
 
