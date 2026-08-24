@@ -37,13 +37,17 @@ namespace ClaudeBuddy
         //
         // AssemblyInformationalVersion carries the "+<commit sha>" suffix that
         // shows up in the version string; the tag does not, so it is cut.
-        private static readonly string EngineVersion = ResolveVersion();
+        private static readonly string EngineVersion = ResolveVersion(
+            typeof(NeuralSpeech).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
 
-        private static string ResolveVersion()
+        // The attribute value is passed in rather than read here, so both arms
+        // are reachable: the assembly this runs in always has an informational
+        // version, so the missing-attribute fallback could never otherwise be
+        // exercised — and that fallback is what decides the URL a build fetches
+        // its engine from.
+        internal static string ResolveVersion(string? informational)
         {
-            var informational = typeof(NeuralSpeech).Assembly
-                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-
             if (string.IsNullOrEmpty(informational)) return "0.0.0";
 
             var plus = informational.IndexOf('+');
@@ -161,7 +165,7 @@ namespace ClaudeBuddy
         // over last month's the first time the minor version reaches double
         // digits — a bug that would lie dormant until 0.10 and then look like
         // anything but a sort order.
-        private static readonly IComparer<string> VersionOrder =
+        internal static readonly IComparer<string> VersionOrder =
             Comparer<string>.Create((left, right) =>
             {
                 static Version Parse(string name)

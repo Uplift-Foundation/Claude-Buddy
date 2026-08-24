@@ -30,7 +30,12 @@ namespace ClaudeBuddy
         private const double ShaftAtMember = 0.7;
         private const double ShaftAtHead = 1.7;
         private const double HeadLength = 9;
-        private const double HeadHalfWidth = 4.5;
+
+        // Aliased rather than duplicated, the same way the gaps below are: Place
+        // sizes the window from this and ArrowGeometry draws the head with it, so
+        // two copies would be two chances to disagree about whether the head fits
+        // inside its own window.
+        private const double HeadHalfWidth = TeamLinkGeometry.HeadHalfWidth;
 
         // The room an arrow needs lives in TeamLinkGeometry, shared with
         // whatever places the orbs — see the note there about the two drifting
@@ -200,51 +205,25 @@ namespace ClaudeBuddy
                     return;
                 }
 
-                var dx = to.X - from.X;
-                var dy = to.Y - from.Y;
-                var distance = Math.Sqrt(dx * dx + dy * dy);
-                if (distance < 1)
+                // Everything from here to the assignments below used to be
+                // inline. It is arithmetic on two measured points and two radii,
+                // and it is the part that decides whether there is an arrow at
+                // all, so it lives in TeamLinkGeometry next to the clearance rule
+                // it has to agree with — see the note there about the two
+                // drifting apart and every arrow silently vanishing.
+                if (TeamLinkGeometry.Place(from, to, member.OrbRadius, lead.OrbRadius, scale)
+                    is not { } placement)
                 {
                     Park();
                     return;
                 }
 
-                var ux = dx / distance;
-                var uy = dy / distance;
-
-                var startGap = (member.OrbRadius + MemberGap) * scale;
-                var endGap = (lead.OrbRadius + LeadGap) * scale;
-
-                var span = distance - startGap - endGap;
-                if (span < MinimumLength * scale)
-                {
-                    // Overlapping, stacked, or dragged on top of each other.
-                    Park();
-                    return;
-                }
-
-                var startX = from.X + ux * startGap;
-                var startY = from.Y + uy * startGap;
-                var endX = to.X - ux * endGap;
-                var endY = to.Y - uy * endGap;
-
-                // Room for the widest part of the shape on either side of the
-                // line, plus a pixel so nothing is clipped by rounding.
-                var pad = (HeadHalfWidth + 1) * scale;
-
-                var left = Math.Min(startX, endX) - pad;
-                var top = Math.Min(startY, endY) - pad;
-                var right = Math.Max(startX, endX) + pad;
-                var bottom = Math.Max(startY, endY) + pad;
-
-                Position = new PixelPoint((int)Math.Floor(left), (int)Math.Floor(top));
-                Width = (right - left) / scale;
-                Height = (bottom - top) / scale;
+                Position = placement.Position;
+                Width = placement.Width;
+                Height = placement.Height;
 
                 _arrow.Data = ArrowGeometry(
-                    new Point((startX - Position.X) / scale, (startY - Position.Y) / scale),
-                    new Point((endX - Position.X) / scale, (endY - Position.Y) / scale),
-                    ux, uy);
+                    placement.Start, placement.End, placement.Ux, placement.Uy);
 
                 // The member's colour, not the lead's: several members pointing
                 // at one lead stay distinguishable, and an arrow is the member's
