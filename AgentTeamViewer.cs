@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 
 namespace ClaudeBuddy
 {
@@ -49,6 +50,8 @@ namespace ClaudeBuddy
         // directory. Returns whether anything was learned; the caller shows the
         // orb either way, since a team that is running is worth seeing even
         // when you can't yet click your way to it.
+        // Excluded from coverage: reaches the ps/lsof/tmux scan below.
+        [ExcludeFromCodeCoverage]
         public static bool TryAdopt(SessionStatus status)
         {
             if (!OperatingSystem.IsMacOS()) return false;
@@ -67,6 +70,9 @@ namespace ClaudeBuddy
             return true;
         }
 
+        // Excluded from coverage: a wall-clock cache around the process scan
+        // below.
+        [ExcludeFromCodeCoverage]
         private static Viewer? For(string cwd)
         {
             var key = cwd.TrimEnd('/');
@@ -90,6 +96,9 @@ namespace ClaudeBuddy
             return viewer;
         }
 
+        // Excluded from coverage: walks live pids and reads each one's cwd and
+        // tty.
+        [ExcludeFromCodeCoverage]
         private static Viewer? Locate(string cwd)
         {
             foreach (var pid in ViewerPids())
@@ -147,6 +156,8 @@ namespace ClaudeBuddy
         // uses for any other pane, rather than this file growing its own copy
         // of client resolution and window raising. Null means it either went
         // into a terminal window of its own or didn't happen.
+        // Excluded from coverage: opens a terminal and runs `claude attach` in it.
+        [ExcludeFromCodeCoverage]
         public static string? AttachSession(string sessionId, string cwd)
         {
             if (!OperatingSystem.IsMacOS()) return null;
@@ -263,6 +274,8 @@ namespace ClaudeBuddy
         // — returning the pane lets the caller reuse the focus path every other
         // pane goes through, which already knows how to find the client, pick
         // the window and bring its app forward.
+        // Excluded from coverage: creates a real tmux window and sends keys to it.
+        [ExcludeFromCodeCoverage]
         private static string? PlaceInTmux(string jobId, string cwd)
         {
             var tmux = ResolveTmux();
@@ -313,6 +326,8 @@ namespace ClaudeBuddy
         // Finder it gets the bare system one — and unlike a session's status
         // file there's no recorded location to start from here, so this is the
         // same candidate list TerminalFocuser falls back to.
+        // Excluded from coverage: probes the filesystem for a tmux binary.
+        [ExcludeFromCodeCoverage]
         private static string? ResolveTmux()
         {
             string[] candidates =
@@ -330,6 +345,9 @@ namespace ClaudeBuddy
         // user's other terminals are rather than waking a second app. Ordered
         // by specificity: Terminal.app is last because it's the fallback that
         // always exists, not a preference.
+        // Excluded from coverage: reads the frontmost terminal application from
+        // the OS.
+        [ExcludeFromCodeCoverage]
         private static string TerminalApp()
         {
             string[] candidates =
@@ -357,7 +375,9 @@ namespace ClaudeBuddy
         // The short form `claude attach` and `claude logs` expect. Split rather
         // than a fixed eight characters so an id that isn't a uuid degrades to
         // itself instead of being sliced into nonsense.
-        private static string JobIdOf(string sessionId)
+        // internal, not private: the short form the daemon uses, and the only
+        // thing in this file that decides anything without asking the OS.
+        internal static string JobIdOf(string sessionId)
         {
             var dash = sessionId.IndexOf('-');
             return dash > 0 ? sessionId[..dash] : sessionId;
@@ -368,6 +388,8 @@ namespace ClaudeBuddy
         // Found through each pane's own process rather than anything this app
         // remembered, so it still works after a restart, and finds a pane the
         // user opened by hand just as well as one opened from an orb.
+        // Excluded from coverage: lists live tmux panes.
+        [ExcludeFromCodeCoverage]
         private static string? ExistingAttachPane(string jobId)
         {
             var tmux = ResolveTmux();
@@ -408,6 +430,9 @@ namespace ClaudeBuddy
         // arguments don't. The id is compared by prefix because attach accepts
         // the short form and echoes it back that way, so a window opened by
         // hand with `claude attach bd7919f8` must still count as this session's.
+        // Excluded from coverage: asks tmux whether a pane is still running the
+        // attach.
+        [ExcludeFromCodeCoverage]
         private static bool AttachedAlready(string sessionId)
         {
             if (!TryRun("/bin/ps", out var listing, "-eo", "args=")) return false;
@@ -438,6 +463,8 @@ namespace ClaudeBuddy
         // `open -a` on a running app just brings it forward — the same trick
         // TerminalFocuser.ActivateApp uses, kept here rather than shared
         // because that one is private to a class this file must not depend on.
+        // Excluded from coverage: activates a real application through osascript.
+        [ExcludeFromCodeCoverage]
         private static void ActivateApp(string appBundlePath)
         {
             try
@@ -453,6 +480,8 @@ namespace ClaudeBuddy
         // Processes running `claude agents`. Matched on the argument rather
         // than the executable path, which is a version-stamped location that
         // changes under you (~/.local/share/claude/versions/<n>).
+        // Excluded from coverage: walks the live process table.
+        [ExcludeFromCodeCoverage]
         private static IEnumerable<int> ViewerPids()
         {
             if (!TryRun("/bin/ps", out var listing, "-eo", "pid=,args=")) yield break;
@@ -481,6 +510,8 @@ namespace ClaudeBuddy
         // No libproc equivalent worth the struct marshalling here: lsof is
         // asked for one descriptor of one process, and only for the handful of
         // viewers found above.
+        // Excluded from coverage: runs lsof against a live pid.
+        [ExcludeFromCodeCoverage]
         private static string CwdOf(int pid)
         {
             if (!TryRun("/usr/sbin/lsof", out var listing,
@@ -497,6 +528,8 @@ namespace ClaudeBuddy
             return "";
         }
 
+        // Excluded from coverage: runs ps against a live pid.
+        [ExcludeFromCodeCoverage]
         private static string TtyOf(int pid)
         {
             if (!TryRun("/bin/ps", out var tty, "-o", "tty=", "-p", pid.ToString())) return "";
@@ -505,6 +538,8 @@ namespace ClaudeBuddy
             return tty is "" or "??" ? "" : tty;
         }
 
+        // Excluded from coverage: starts a subprocess and reads its output.
+        [ExcludeFromCodeCoverage]
         private static bool TryRun(string exe, out string stdout, params string[] args)
         {
             stdout = "";
