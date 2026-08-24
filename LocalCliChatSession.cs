@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using Avalonia.Threading;
 
@@ -596,6 +597,28 @@ namespace ClaudeBuddy
                 return;
             }
 
+            await TypeIntoTerminalAsync(typedText, displayText, imageBytes);
+        }
+
+        // Excluded from coverage: only reachable once CanSendQuietly has said yes,
+        // which needs a real tmux binary and a real pane belonging to a live
+        // session — and it then types into that pane for real. Both of those are
+        // the machine the tests are running on, not a fixture.
+        //
+        // The decisions in front of it are covered: whether there is anywhere to
+        // type at all, and what to say when there is not — a session with no pane
+        // gets a different sentence from a machine with no tmux, because they are
+        // different problems with different answers.
+        //
+        // The ordering inside it is load-bearing and worth keeping written down.
+        // Add() runs every turn through Reconcile, so marking _pending before
+        // adding made the user's own message match itself: it was reconciled away
+        // on the spot, never reached the history, and sending appeared to do
+        // nothing.
+        [ExcludeFromCodeCoverage]
+        private async Task TypeIntoTerminalAsync(
+            string typedText, string displayText, byte[]? imageBytes)
+        {
             var mine = new ChatTurn
             {
                 Role = ChatRole.User,
@@ -604,10 +627,6 @@ namespace ClaudeBuddy
                 ImageBytes = imageBytes
             };
 
-            // Added *before* being marked pending, not after. Add() runs every
-            // turn through Reconcile, so setting _pending first made the user's
-            // own message match itself: it was reconciled away on the spot and
-            // never reached the history at all. Sending appeared to do nothing.
             Add(mine);
 
             _pending = mine;
