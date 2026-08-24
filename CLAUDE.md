@@ -519,6 +519,12 @@ Two things make that survivable:
 - The status directory comes from the temp path, so `TMPDIR=<dir>` plus
   hand-written `<session-id>.txt` files gives a second instance its own fake
   sessions without touching real ones.
+- The cloned-bundle cache honours `CLAUDE_BUDDY_BUNDLE_ROOT`, added by CB-3 for
+  the same reason: without it, the only place a test of `ClaudeDesktopBundles`
+  could write is the real `~/Library/Application Support/ClaudeBuddy/bundles` —
+  the live cache, holding real cloned `.app` bundles whose icons a user is
+  looking at. That the seam did not exist is the whole reason nothing in that
+  file was covered.
 - Settings now honour `CLAUDE_BUDDY_SETTINGS_DIR`, an env-var override
   checked before `SpecialFolder.ApplicationData` — the same pattern as
   `CLAUDE_BUDDY_PROFILE_ROOT` in `ClaudeDesktopManager.cs`. Without it a test
