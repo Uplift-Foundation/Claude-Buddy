@@ -13,6 +13,7 @@ namespace ClaudeBuddy.Tests;
 // tidiness; TrayRemoteItemTests records what it cost to learn that, where a
 // leaked RemoteControlEnabled made an unrelated test pass or fail on nothing
 // but which class the runner reached first.
+[Collection("Settings")]
 public class OrbLifetimeAndAnchorTests
 {
     // --- StaleAfter ----------------------------------------------------------

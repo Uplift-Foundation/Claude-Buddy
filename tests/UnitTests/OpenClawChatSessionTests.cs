@@ -13,6 +13,7 @@ namespace ClaudeBuddy.Tests
     // The rules here are the ones that decide what a user watching an agent work
     // actually sees, and two of them are load-bearing in ways the code does not
     // advertise: the snapshot semantics, and the cap on history.
+    [Collection("Settings")]
     public class OpenClawChatSessionTests
     {
         private static OpenClawChatSession Session() =>

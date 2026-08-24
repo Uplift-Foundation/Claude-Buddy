@@ -16,6 +16,7 @@ namespace ClaudeBuddy.Tests
     // and the rule is that speaking in the wrong voice beats not speaking — so
     // every fallback below is deliberate, and a "fix" that returned null instead
     // would silently stop the app talking.
+    [Collection("Settings")]
     public class TextToSpeechVoiceTests
     {
         // A real `say -v ?` answer. The alignment is genuine: the columns are

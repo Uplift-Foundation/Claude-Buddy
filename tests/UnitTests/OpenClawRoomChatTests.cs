@@ -23,6 +23,7 @@ namespace ClaudeBuddy.Tests
     //     the stretch only some members had paged back to, the missing members'
     //     messages existed solely as echoes with nothing to attribute them
     //     against.
+    [Collection("Settings")]
     public class OpenClawRoomChatTests
     {
         private static OpenClawChatSession Member(string agent) =>

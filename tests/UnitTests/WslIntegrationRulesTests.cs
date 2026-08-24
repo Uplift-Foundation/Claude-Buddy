@@ -16,6 +16,7 @@ namespace ClaudeBuddy.Tests
     // simply never exists, so the distro reads as un-wired and the Settings
     // window shows a toggle that does nothing; a mis-counted passwd field
     // returns somebody else's home directory, which plausibly exists.
+    [Collection("Settings")]
     public class WslIntegrationRulesTests
     {
         // --- SettingsTextMentionsHook: what "wired" means ---
