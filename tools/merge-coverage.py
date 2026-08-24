@@ -19,8 +19,17 @@ Usage:
 With --base, also reports coverage restricted to the lines added since that ref
 — which is usually the number you actually want when reviewing a change, since
 a file-level percentage is dominated by whatever was already there.
+
+It also reports what has been held *out* of the number by
+[ExcludeFromCodeCoverage]. That is not decoration. Both coverage engines honour
+the attribute by omitting the code entirely, so an excluded file and a deleted
+file look identical in a report, and a percentage can be walked to 100% by
+excluding whatever refuses to be covered. The exclusions are read back out of
+the sources and printed next to the number, so the number always ships with the
+size of its own blind spot.
 """
 import glob
+import io
 import os
 import re
 import subprocess
@@ -89,6 +98,40 @@ def load(reports, root):
     return lines, branches
 
 
+def exclusions(root):
+    """path -> number of [ExcludeFromCodeCoverage] sites in it.
+
+    Read out of the sources rather than out of the reports, because a coverage
+    report cannot tell you this: both engines honour the attribute by *omitting*
+    the code entirely, so an excluded member and a member that was deleted look
+    identical from here. Counting the attribute is the only way to say how much
+    of the app the headline number has stopped being about.
+    """
+    found = {}
+    for name in sorted(os.listdir(root)):
+        if not name.endswith(".cs"):
+            continue
+        with io.open(os.path.join(root, name), encoding="utf-8", errors="replace") as f:
+            body = f.read()
+        # Matches whether the attribute stands alone or shares its brackets with
+        # others, and tolerates the fully-qualified spelling.
+        sites = len(re.findall(
+            r"\[(?:[^\]]*[\s,\[])?(?:System\.Diagnostics\.CodeAnalysis\.)?"
+            r"ExcludeFromCodeCoverage(?:Attribute)?\b", body))
+        if sites:
+            found[name] = sites
+    return found
+
+
+def source_lines(root, path):
+    """Physical lines in a file, for saying how big an exclusion is."""
+    try:
+        with io.open(os.path.join(root, path), encoding="utf-8", errors="replace") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
+
+
 def is_app_file(path):
     """The app's own sources only — not the suites, not generated code."""
     if path.startswith("tests/") or path.startswith("obj/") or "/obj/" in path:
@@ -146,12 +189,49 @@ def main():
     print(f"            {len(app)} source files instrumented")
 
     # A file absent from every report is not 0% — it is missing from the
-    # denominator, which inflates every number above it. Say so out loud.
+    # denominator, which inflates every number above it. But there are two very
+    # different reasons a file can be absent, and lumping them together is how a
+    # 100% headline gets to hide an assembly's worth of untested code:
+    #
+    #   * [ExcludeFromCodeCoverage] — a decision somebody made and can defend.
+    #   * anything else — a suite that never loaded the type, a project missing
+    #     from the run, a rename. A bug in the measurement, not a decision.
+    #
+    # Both leave the denominator, so the percentage cannot tell them apart. This
+    # is the only place that can, and it reads the attribute out of the sources
+    # to do it.
     on_disk = {p for p in os.listdir(root) if p.endswith(".cs")}
-    missing = sorted(on_disk - set(app))
-    if missing:
-        print(f"            WARNING: {len(missing)} app file(s) in no report: "
-              f"{', '.join(missing)}")
+    excluded = exclusions(root)
+    absent = on_disk - set(app)
+
+    fully_excluded = sorted(p for p in absent if p in excluded)
+    unexplained = sorted(p for p in absent if p not in excluded)
+    partly_excluded = sorted(p for p in excluded if p in set(app))
+
+    if fully_excluded:
+        cost = sum(source_lines(root, p) for p in fully_excluded)
+        print(f"            EXCLUDED: {len(fully_excluded)} file(s) held out of the "
+              f"number above by [ExcludeFromCodeCoverage] ({cost} source lines)")
+        for path in fully_excluded:
+            print(f"                      {source_lines(root, path):5d} lines  {path}")
+
+    if partly_excluded:
+        sites = sum(excluded[p] for p in partly_excluded)
+        print(f"            EXCLUDED: {sites} more [ExcludeFromCodeCoverage] site(s) "
+              f"inside {len(partly_excluded)} measured file(s)")
+        for path in partly_excluded:
+            print(f"                      {excluded[path]:5d} site(s)  {path}")
+
+    if unexplained:
+        print(f"            WARNING: {len(unexplained)} app file(s) in no report and "
+              f"not excluded: {', '.join(unexplained)}")
+
+    if fully_excluded or partly_excluded:
+        print("            Read the percentage as coverage OF WHAT REMAINS. An "
+              "exclusion is a claim")
+        print("            that a headless runner cannot execute the code, and it "
+              "is only as good as")
+        print("            the reviewer who checked it.")
     print()
 
     print("BY FILE (most-covered first)")
