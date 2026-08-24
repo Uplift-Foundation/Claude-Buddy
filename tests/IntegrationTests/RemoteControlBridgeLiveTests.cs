@@ -166,6 +166,17 @@ public class RemoteControlBridgeLiveTests
         // nothing; what must not happen is no marker coming back at all.
         Assert.NotNull(answer);
         Assert.True(BridgeProtocol.IsInfoReply(answer!));
+
+        // And that the command half was actually *read*, not merely delivered.
+        // The version of this that only checked the marker passed while the
+        // parser read zero of the twenty-seven commands the mini had listed —
+        // the third time in this feature that a weaker assertion hid a real
+        // failure. If the reply names anything, the parse has to find it.
+        if (answer!.Contains("commands=", StringComparison.OrdinalIgnoreCase)
+            && !answer.Contains("commands=none", StringComparison.OrdinalIgnoreCase))
+        {
+            Assert.NotEmpty(BridgeProtocol.ParseCommandsReply(answer));
+        }
     }
 
     // Two accounts, two relays, one merged snapshot.

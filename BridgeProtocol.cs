@@ -140,7 +140,26 @@ namespace ClaudeBuddy
         // are deliberately empty: the far session was asked for names only, and
         // inventing a description for someone else's command would be a guess
         // presented as documentation.
-        private static readonly Regex CommandName = new(@"/[A-Za-z][\w-]*", RegexOptions.Compiled);
+        //
+        // The slash is optional, and that is the whole lesson of this parser.
+        // The first version required it, because the question asks for slash
+        // commands and the answer is a list of them; the mini answered
+        // `commands=apply,apply-ic,cold-intro,…` — twenty-seven of them, not one
+        // wearing a slash — and the parser read zero. Reasonable of it: it was
+        // asked what it can run, and it named them. Asking again more firmly
+        // would still be trusting a model to punctuate a list, so the slash goes
+        // on here instead, where it cannot be forgotten.
+        //
+        // Which cannot mean "any word after commands= is a command", or a
+        // session that answers in a sentence would fill the autocomplete with
+        // /I, /can and /run. So the shape of the answer decides how to read it:
+        // if anything in it wears a slash, only slashed names count, because
+        // that session punctuates and the unslashed words around them are
+        // prose. Otherwise it has to be a list — split on commas and semicolons,
+        // and every piece has to be a bare name on its own. "none available" has
+        // a space in it and is thrown away, which is the correct reading of it.
+        private static readonly Regex SlashedName = new(@"/[A-Za-z][\w-]*", RegexOptions.Compiled);
+        private static readonly Regex BareName = new(@"^[A-Za-z][\w-]*$", RegexOptions.Compiled);
 
         public static IReadOnlyList<SlashCommand> ParseCommandsReply(string body)
         {
@@ -150,11 +169,28 @@ namespace ClaudeBuddy
             var at = body.IndexOf("commands=", StringComparison.OrdinalIgnoreCase);
             if (at < 0) return found;
 
+            var segment = body[(at + "commands=".Length)..];
+
+            // The other half of the reply, if it came second, is not a command.
+            var other = segment.IndexOf("color=", StringComparison.OrdinalIgnoreCase);
+            if (other >= 0) segment = segment[..other];
+
+            var names = segment.Contains('/')
+                ? SlashedName.Matches(segment).Select(m => m.Value)
+                : segment.Split(',', ';').Select(p => p.Trim())
+                    .Where(p => BareName.IsMatch(p))
+                    .Select(p => "/" + p);
+
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Match m in CommandName.Matches(body[(at + "commands=".Length)..]))
+
+            foreach (var name in names)
             {
-                if (!seen.Add(m.Value)) continue;
-                found.Add(new SlashCommand(m.Value, ""));
+                // "none" is how a session with nothing to offer answers, and must
+                // not become a command called /none.
+                if (name.Equals("/none", StringComparison.OrdinalIgnoreCase)) continue;
+
+                if (!seen.Add(name)) continue;
+                found.Add(new SlashCommand(name, ""));
                 if (found.Count == 60) break;
             }
 

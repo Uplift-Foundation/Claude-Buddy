@@ -322,10 +322,10 @@ is on the other machine. The closest honest substitute is the `status` field —
 something is in flight and why the panel says "…is working" rather than
 pretending to show progress.
 
-## Two things only a stronger test found
+## Three things only a stronger test found
 
-Both were found by tightening one live test, and both are worth recording
-because each had *already passed* a weaker version of it.
+All three were found by tightening a live test, and all three are worth
+recording because each had *already passed* a weaker version of it.
 
 **The status line hid its own answer.** It was written `warning ?? count`, so
 anyone with a warning never learned whether the relay had found anything — and
@@ -349,9 +349,37 @@ this was a *testability* failure rather than a user-facing one — but the fix
 poll is a convenience, the first one is the point, and it should not be queued
 behind the UI thread being free.
 
-The lesson worth keeping is the ordering: the weak assertion was chosen because
-it was the only thing observable from outside, and the right move was to add an
-observable rather than to trust the one that existed.
+**And the same mistake again, one section later.** The live test for the
+capabilities question asserted that a `CB-INFO:` marker came back. It did, and
+the test passed — while the parser read **zero** of the twenty-seven commands
+the mini had just listed. The reply was:
+
+```
+CB-INFO: color=none; commands=apply,apply-ic,cold-intro,daily-run,…
+```
+
+Not one slash. The parser required them, because the question asks about slash
+commands and the answer is a list of slash commands — so obviously each item
+would carry a slash. The session was asked what it can run and it named them,
+which is a perfectly good answer to the question actually asked. This is the
+fixture rule in `CLAUDE.md` earning its place for the second time in this
+feature: the parser was written against an invented reply and agreed with
+itself.
+
+The slash is now added on this side, where it cannot be forgotten. Which cannot
+mean "every word after `commands=` is a command", or a session answering in a
+sentence would offer `/I`, `/can` and `/run` — so the shape of the answer picks
+the reading. If anything in it wears a slash, only slashed names count, because
+that session punctuates and the bare words around them are prose. Otherwise it
+must be a list: split on commas and semicolons, and every piece has to be a bare
+name with no spaces in it.
+
+The lesson worth keeping is the ordering, and it is the same one all three
+times: the weak assertion was chosen because it was the only thing observable
+from outside, and the right move was to make the *result* observable rather than
+to trust the nearest available proxy for it. "The marker came back" was a proxy
+for "the answer was understood". So was "the status left `starting`" for "the
+relay polled".
 
 ## One product-shaped warning: the bridge is not actually hidden
 
