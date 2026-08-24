@@ -124,8 +124,12 @@ Consequences:
   "filter the bridge's own session out of the snapshot" step is unnecessary.
 - The name passed to `--remote-control` did **not** become the peer name: the
   session self-named `claude-buddy-52`, which looks derived from the working
-  directory. Not chased further; worth pinning down so the bridge is
-  recognisable in a user's own session list.
+  directory. **Chased down on 24 Aug 2026 and confirmed — see "What actually
+  names a relay" at the bottom of this file.** The guess here was right, it is
+  the working directory, and it turned out to matter far more than "recognisable
+  in a user's own session list": two separate features key on that name's prefix
+  and neither could work until the relay was run from a directory named after
+  itself.
 - Peer rows carry **no machine or hostname**. Asked directly, the bridge
   answered `"machine":"unknown"`. Orb titles will have to use the session name,
   or get the hostname another way.
@@ -397,9 +401,10 @@ Two consequences, and the first is a real design problem:
    session list whenever Buddy starts the bridge. It needs a name that says what
    it is — which makes the unresolved `--remote-control <name>` behaviour (the
    name passed was ignored in favour of a cwd-derived `claude-buddy-52` /
-   `claude-buddy-a8`) worth fixing rather than shrugging at. **Still unresolved,
-   and now load-bearing** — see "Confirmed vs assumed" at the bottom of this
-   file: the verbatim mirror finds a far Buddy by that name's prefix.
+   `claude-buddy-a8`) worth fixing rather than shrugging at. **Resolved on
+   24 Aug 2026 — see "What actually names a relay" at the bottom of this file.**
+   The observation here was right: the name passed is ignored. What names a
+   session is its working directory.
 2. **Injected prompts and a human's typing interleave in the same pty.** Buddy
    can paste a prompt into the same input line a user is mid-sentence in. So the
    bridge must be a session Buddy owns exclusively, and Buddy should tolerate
@@ -504,13 +509,9 @@ courier.
 
 **Assumed, and needing a real two-machine run** — these are the honest gaps:
 
-- **That `--remote-control <name>` sticks.** Discovery finds a far Buddy by the
-  `claude-buddy-rc-` prefix on its relay's peer name. This document says above
-  that the name passed was *ignored* in favour of a cwd-derived one;
-  `BridgeProtocol.IsOwnRelay` says a previous relay was *observed* wearing the
-  prefix. **These disagree, and the mirror's discovery depends on which is
-  true.** If the name does not stick, mirroring simply never engages and every
-  panel stays a messaging channel — degraded, never wrong. Settle this first.
+- ~~That `--remote-control <name>` sticks.~~ **Settled — measured, and the
+  answer was no.** See "What actually names a relay" below; the code changed as
+  a result.
 - **The size limit on a `SendMessage` body.** Frames carry 6KB of payload
   (~8KB encoded) on the assumption it fits. Nothing here has sent one big
   enough to find the ceiling. `MirrorProtocol.ChunkBytes` is the single knob.
@@ -527,3 +528,78 @@ courier.
   `RemoteControlBridge.IsSupported`, and local chat-send already requires a tmux
   pane. The protocol, unit and integration suites still run on the Windows CI
   leg.
+
+
+## What actually names a relay (measured 24 Aug 2026)
+
+The one thing this document had left open turned out to be load-bearing, and the
+answer is not what either the notes above or the code assumed. Probed directly on
+this machine rather than reasoned about.
+
+**Both naming flags are ignored.** The CLI advertises two:
+
+```
+--remote-control [name]                        Start an interactive session with
+                                               Remote Control enabled (optionally named)
+--remote-control-session-name-prefix <prefix>  Prefix for auto-generated Remote Control
+                                               session names (default: hostname)
+```
+
+Neither had any effect. Run from `~`, with each in turn:
+
+```
+claude --remote-control cb-probe-explicit-name
+  → This session is warrenthompson-9b [676a8f] — the name other sessions use to message it
+
+claude --remote-control --remote-control-session-name-prefix claude-buddy-rc--claude-probe
+  → This session is warrenthompson-9b [676a8f]
+```
+
+The hostname is `Warrens-MBP.localdomain`, so the documented hostname default is
+not what happened either.
+
+**The working directory is what names it.** `warrenthompson` is the basename of
+`~`. The pattern holds across every session in the registry — `.../Source/Placement`
+is `placement-41`, `.../GTD/Evidence` is `evidence` — and it explains the spike's
+`claude-buddy-52`, which was the repo directory all along, not a coincidence.
+
+**Confirmed by construction.** Running the relay from a directory named after
+itself produces exactly the name everything is looking for:
+
+```
+cwd .../Library/Caches/ClaudeBuddy/rc-cwd/claude-buddy-rc
+  → This session is claude-buddy-rc-43 [b57bc7]
+```
+
+No folder-trust prompt was raised by a fresh directory under `~/Library/Caches`.
+
+**Two bugs this was silently causing**, both of which the fix cures:
+
+1. `BridgeProtocol.IsOwnRelay` matches the `claude-buddy-rc-` prefix, and until
+   now **it matched nothing**. A relay left registered by a dead process shows up
+   as an offline peer, so it was worth an orb after all — a phantom orb named
+   after Buddy's own plumbing, which is the exact failure that test was written
+   to prevent.
+2. The verbatim mirror finds a far Buddy by the same prefix, so it could never
+   have found one. Every remote panel would have stayed a messaging channel with
+   nothing on screen to say why — degraded, never wrong, and completely silent.
+
+**Also worth recording: the peer-row format has gained fields.** The capture at
+the top of this file shows three; a row now carries up to five:
+
+```
+persist chat window resize [ae1bcf]  ·  bg  ·  busy  ·  started 15h ago
+job-lawyer [34984f]  ·  interactive  ·  idle  ·  tmux testpane:@9.%10  ·  started 4d ago
+```
+
+`BridgeProtocol.ParseAgents` tolerates this without change — its `status` group
+is `.+?` to end of line, so the extra segments land in `status`, and `Working`
+and `IsOffline` both test by substring. Worth knowing before anyone tightens that
+regex: the trailing segments are not stable and `tmux <session>:@<win>.%<pane>`
+exposes the tmux session name, which is a second, independent way to recognise a
+relay if the cwd trick ever stops working.
+
+**And one thing settled for free:** the name in `claude agents --json` and the
+name a peer sees in `ListAgents` are **the same name**. `warrenthompson-9b`
+appeared in both, as did `claude-buddy-rc-43`. That is what makes AgentRoster's
+name → sessionId join valid — it is joining across one namespace, not two.

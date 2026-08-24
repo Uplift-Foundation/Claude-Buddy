@@ -213,6 +213,10 @@ public class MirrorEdgeCaseTests : IDisposable
         AddSession();
         _dropEverything = true;
 
+        // The one test here that waits out a timeout on purpose, so it is the
+        // one that shortens it.
+        _client.TimeoutOverrideForTests = TimeSpan.FromMilliseconds(250);
+
         await _client.DiscoverAsync(Peers, new[] { Name });
 
         Assert.Equal(
@@ -514,6 +518,10 @@ public class MirrorEdgeCaseTests : IDisposable
 
         await Handshake();
 
+        // Failure here arrives as a timeout — the far side simply stops
+        // sending — so this is the other test that shortens it.
+        _client.TimeoutOverrideForTests = TimeSpan.FromMilliseconds(250);
+
         _refuseAfter = 2;
         _windows.Clear();
 
@@ -615,9 +623,15 @@ public class MirrorEdgeCaseTests : IDisposable
         _client = new RemoteMirrorClient(Account, new RemoteMirrorClient.Seams(SendToServerAsync))
         {
             // The real waits are minutes long, which is right for a relay whose
-            // model may be mid-turn and wrong for a test that drops the reply on
-            // purpose.
-            TimeoutOverrideForTests = TimeSpan.FromMilliseconds(250)
+            // model may be mid-turn and far too long for a test.
+            //
+            // Generous rather than tight, and that is a correction: this was
+            // 250ms, which is plenty for a loopback reply until the machine is
+            // busy — and then a test that expected an *answer* saw a timeout
+            // instead and failed once in a run. A timeout is the slowest thing
+            // in this file, so the only test that should ever hit one is the one
+            // deliberately dropping replies, which shortens this for itself.
+            TimeoutOverrideForTests = TimeSpan.FromSeconds(10)
         };
 
         _client.Delivered += rows =>

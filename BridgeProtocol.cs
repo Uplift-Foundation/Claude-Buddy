@@ -269,8 +269,20 @@ namespace ClaudeBuddy
             // would have put a phantom orb on screen named after Buddy's own
             // plumbing.
             //
-            // Matched on the name prefix RemoteControlBridge builds, which is the
-            // only thing about a relay that is recognisable from out here.
+            // Matched on the name prefix, which is the only thing about a relay
+            // that is recognisable from out here — and which, until this was
+            // measured, a relay did not actually wear.
+            //
+            // This test used to be a no-op and nobody knew. The prefix is the
+            // one RemoteControlBridge builds its *tmux session* name from, and
+            // that name was assumed to reach Remote Control because it is passed
+            // to `--remote-control`. It does not: the flag is ignored, and a
+            // relay was really called `warrenthompson-9b`, after the directory it
+            // ran in. So this matched nothing, every stale relay was worth an orb
+            // after all, and the mirror's discovery — which keys on the same
+            // prefix — could never have found anything. RemoteControlBridge.RelayCwd
+            // has the measurement and the fix, which is to run the relay from a
+            // directory named after itself.
             public bool IsOwnRelay =>
                 Name.StartsWith("claude-buddy-rc-", StringComparison.OrdinalIgnoreCase);
 

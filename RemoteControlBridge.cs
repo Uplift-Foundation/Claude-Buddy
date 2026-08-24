@@ -147,6 +147,56 @@ namespace ClaudeBuddy
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             "Library", "Caches", "ClaudeBuddy", "rc-bridge");
 
+        // The directory the relay is *run from*, and the only thing that decides
+        // what other machines call it.
+        //
+        // This is the whole answer to a question this repo had recorded as
+        // unresolved for months, and it is not the answer anyone expected.
+        // `--remote-control <name>` takes a name — the CLI's own help says
+        // "(optionally named)" — and **the name is ignored**. So is
+        // `--remote-control-session-name-prefix`, whose help says it sets the
+        // prefix for auto-generated names and defaults to the hostname. Both
+        // were passed and neither had any effect. Measured 24 Aug 2026 against
+        // Claude Code on this machine:
+        //
+        //     claude --remote-control cb-probe-explicit-name    (cwd ~)
+        //       → "This session is warrenthompson-9b [676a8f]"
+        //
+        //     claude --remote-control --remote-control-session-name-prefix \
+        //            claude-buddy-rc--claude-probe                (cwd ~)
+        //       → "This session is warrenthompson-9b [676a8f]"
+        //
+        // What *does* decide the name is the working directory's own basename,
+        // lowercased, plus a short suffix — `~` gives `warrenthompson-9b`,
+        // `.../Source/Placement` gives `placement-41`, and the spike's
+        // `claude-buddy-52` was the repo directory all along. So the relay is
+        // run from a directory named after itself, and the name follows:
+        //
+        //     cwd .../rc-cwd/claude-buddy-rc--claude-board-warrensmbp
+        //       → "This session is claude-buddy-rc--claude-board-warrensmbp-43"
+        //
+        // That matters far beyond tidiness. **Everything that recognises a relay
+        // matches on this prefix** — BridgeProtocol.IsOwnRelay, which keeps
+        // relays off the board, and the mirror's discovery, which is how a far
+        // Buddy is found at all. Left at the home directory, a relay is called
+        // `warrenthompson-9b`, IsOwnRelay never matches it (so a dead one
+        // becomes a phantom orb) and no Buddy ever finds another (so a mirror
+        // never engages and every remote panel silently stays a messaging
+        // channel). Both failures are quiet, which is why this was worth
+        // measuring rather than reasoning about.
+        //
+        // An empty directory rather than the home directory is also the better
+        // answer on its own merits: a relay is plumbing and has no business
+        // inheriting whatever CLAUDE.md and project settings it happened to
+        // start next to. Kept out of ScratchRoot deliberately — that tree is
+        // swept, and PreparePrivateTmp deletes its own directory on every start.
+        // Confirmed not to raise the folder-trust prompt.
+        public static string CwdRoot => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Library", "Caches", "ClaudeBuddy", "rc-cwd");
+
+        public string RelayCwd => Path.Combine(CwdRoot, _tmuxSessionName);
+
         // How long to wait for the hook's status file to appear, then for the
         // Remote Control banner. Starting Claude Code cold — plugin sync, MCP,
         // auth — was ~12s when measured, so this is generous on purpose; the
@@ -224,8 +274,13 @@ namespace ClaudeBuddy
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var configDir = Path.Combine(home, _profileDir);
 
+            // Run from a directory named after the relay, because that name is
+            // the only thing anything else can recognise it by. See RelayCwd,
+            // which has the measurement.
+            var cwd = PrepareRelayCwd() ?? home;
+
             if (!Run(_tmux, 5000, out _, "new-session", "-d", "-s", _tmuxSessionName,
-                    "-x", "200", "-y", "50", "-c", home))
+                    "-x", "200", "-y", "50", "-c", cwd))
             {
                 return false;
             }
@@ -244,6 +299,12 @@ namespace ClaudeBuddy
                 .Append("CLAUDE_CONFIG_DIR=").Append(Quote(configDir)).Append(' ')
                 .Append("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 ")
                 .Append(Quote(claude))
+
+                // Passed, and measured to have no effect — the name comes from
+                // the working directory above. Kept rather than dropped for two
+                // reasons: it costs nothing, and if a later Claude Code starts
+                // honouring it, the name it would then set is the same one the
+                // cwd is already producing, so the two cannot disagree.
                 .Append(" --remote-control ").Append(Quote(_tmuxSessionName))
                 .ToString();
 
@@ -764,6 +825,30 @@ namespace ClaudeBuddy
                 if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
                 Directory.CreateDirectory(root);
                 return root;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // The directory the relay runs from, made if it isn't there.
+        //
+        // Empty and stays empty — nothing writes here. It exists so the
+        // directory's *name* can be read by Claude Code, which is the only lever
+        // there is on what other machines call this relay.
+        //
+        // Null on failure rather than throwing, and the caller falls back to the
+        // home directory: a relay with an unrecognisable name is a degraded
+        // relay (no mirror, and a stale one can draw a phantom orb), which is
+        // still much better than no relay at all.
+        private string? PrepareRelayCwd()
+        {
+            try
+            {
+                var dir = RelayCwd;
+                Directory.CreateDirectory(dir);
+                return dir;
             }
             catch
             {

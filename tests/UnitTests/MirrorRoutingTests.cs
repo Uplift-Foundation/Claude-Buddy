@@ -113,6 +113,66 @@ public class MirrorRoutingTests
             new RemoteControlBridge(".claude").ScratchName,
             new RemoteControlBridge(".claude-board").ScratchName);
 
+    // --- what other machines will call this relay ------------------------------
+
+    // The single fact the whole mirror rests on, and it took a live probe to
+    // settle because this repo's own notes and its code disagreed about it.
+    //
+    // A relay's Remote Control name is **not** the one passed to
+    // `--remote-control`; that flag is ignored, and so is
+    // `--remote-control-session-name-prefix`. The name comes from the working
+    // directory's basename. So the relay is run from a directory named after
+    // itself, and this is the assertion that keeps it that way — if the cwd ever
+    // stops carrying the prefix, IsOwnRelay silently stops matching (stale
+    // relays become phantom orbs) and mirror discovery silently stops finding
+    // anything.
+    [Fact]
+    public void TheRelayRunsFromADirectoryNamedAfterItself()
+    {
+        var bridge = new RemoteControlBridge(".claude-board");
+        var basename = Path.GetFileName(bridge.RelayCwd);
+
+        Assert.Equal(bridge.ScratchName, basename);
+        Assert.StartsWith("claude-buddy-rc-", basename, StringComparison.Ordinal);
+        Assert.True(RemoteMirrorServer.IsRelayName(basename));
+    }
+
+    // Which means the name Claude Code derives from it is one every recogniser
+    // already matches. The "-43" is Claude Code's own suffix, reproduced here
+    // from the real probe: cwd `.../claude-buddy-rc` gave `claude-buddy-rc-43`.
+    [Fact]
+    public void TheNameClaudeCodeDerivesFromThatDirectoryIsStillRecognisable()
+    {
+        var bridge = new RemoteControlBridge(".claude-board");
+        var derived = Path.GetFileName(bridge.RelayCwd).ToLowerInvariant() + "-43";
+
+        Assert.True(new BridgeProtocol.RemoteAgent(
+            derived, "b57bc7", "Remote Control", "idle").IsOwnRelay);
+
+        Assert.True(RemoteMirrorServer.IsRelayName(derived));
+    }
+
+    // Two accounts on one machine, and the same account on two machines, all
+    // have to stay distinguishable — the name is what SendMessage addresses.
+    [Fact]
+    public void EachRelayGetsItsOwnDirectory() =>
+        Assert.NotEqual(
+            new RemoteControlBridge(".claude").RelayCwd,
+            new RemoteControlBridge(".claude-board").RelayCwd);
+
+    // Kept out of the tree SweepStaleScratch walks. That sweeper deletes any
+    // directory under ScratchRoot no configured account owns, and
+    // PreparePrivateTmp deletes its own on every start — either would take the
+    // relay's working directory out from under a running relay.
+    [Fact]
+    public void TheRelaysWorkingDirectoryIsNotInsideTheSweptTree()
+    {
+        var bridge = new RemoteControlBridge(".claude-board");
+
+        Assert.DoesNotContain(RemoteControlBridge.ScratchRoot, bridge.RelayCwd, StringComparison.Ordinal);
+        Assert.StartsWith(RemoteControlBridge.CwdRoot, bridge.RelayCwd, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ARelayNameCarriesNothingTmuxWouldSplitOn()
     {
