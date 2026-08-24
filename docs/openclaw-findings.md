@@ -507,6 +507,56 @@ So the panel treats cron like any other session, gated only by the same
 because knowing a run was scheduled rather than asked for is worth seeing — but
 that is information, not a wall.
 
+## The gateway does not report heartbeats
+
+Asked while adding the beating-heart badge, which needed to know which sessions
+the heartbeat drives. The short answer is that **nothing in the protocol says**,
+and the badge is derived from where a heartbeat is documented to *land* instead.
+
+What OpenClaw's own docs establish: a heartbeat is a periodic turn the gateway
+sends an agent, it runs in the agent's main session (`agent:<id>:main`) unless a
+job's `session` override retargets it, the gateway keeps one system-owned
+automation job per heartbeat-enabled agent (`openclaw cron list --all` shows it
+as `Heartbeat (<agent-id>)`), and it creates **no** background task record.
+
+What a real gateway said, read with `tools/openclaw-probe` — 84 sessions across
+8 agents:
+
+| candidate signal | what it actually held |
+| --- | --- |
+| the string "heartbeat" anywhere in `sessions.list` | **0 occurrences** |
+| `kind` (a field this app doesn't read) | only `"direct"` (35) and `"group"` (49) |
+| `label` | set on **3** sessions, all of them cron (`"Cron: disney-news-daily"`) |
+| `systemSent` | `true` on 51 — including ordinary Discord chats — and *absent* on 5 of the 8 main sessions |
+| `cron.list` | 3 jobs, all user-created. The system heartbeat job was not among them |
+| `automations.list`, `cron.jobs.list`, `heartbeat.status` | `missing scope: operator.admin` |
+
+So there is no per-session flag, and no way to ask for one without requesting
+`operator.admin` — a scope far beyond "draw a badge", and one this app
+deliberately does not hold.
+
+**Nor can a heartbeat be recognised from its messages.** The docs note that the
+gateway's own Control UI and WebChat "hide heartbeat prompts and OK-only
+acknowledgments", and `sessions.history` hides them too: 60 turns of
+`agent:main:main` contained an assistant turn reading `"No response requested."`
+with **no user message before it**. The prompt that provoked it was filtered out
+on the way. Fifteen mentions of "heartbeat" in that history are all an agent
+*talking about* its heartbeat, none of them a heartbeat itself.
+
+What is left is positional, and it is enough. Seven of the 8 main sessions had
+`lastActivityAt` inside one 32-second window — 21:55:47, 21:55:52, 21:55:57,
+21:56:02, 21:56:07, 21:56:12, 21:56:19, one per agent, staggered a few seconds
+apart. (The eighth had no `lastActivityAt` at all and `status: "failed"`.) That
+is the sweep, and it is the visible symptom the badge exists to
+explain: a screenful of orbs going active together with nobody on the other end.
+
+`OpenClawHeartbeat` therefore answers "where does the heartbeat land" — the
+agent main sessions — rather than "was this turn a heartbeat". Two consequences,
+both **assumed rather than confirmed** and both stated in its own comment: an
+agent with heartbeat disabled still gets a heart, and a heartbeat retargeted at
+a channel does not. Neither can say anything false about who can read a
+conversation, which is the property that made the direction acceptable.
+
 ## How far back a conversation goes — measured
 
 Asked because the room view stopped "suspiciously recent" and it was unclear

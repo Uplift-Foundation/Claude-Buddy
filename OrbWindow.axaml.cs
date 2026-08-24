@@ -95,6 +95,10 @@ namespace ClaudeBuddy
         private readonly ColorTransition _colorTransition;
         private readonly ScaleTransform _orbScale = new();
 
+        // The heart badge's own beat, separate from the orb's breath so the two
+        // can run at different rates without fighting over one transform.
+        private readonly ScaleTransform _heartScale = new();
+
         // Flat red rather than a fourth entry in OrbColors: this isn't a
         // session state Claude Code reports, it's purely local UI feedback
         // for "the mic is listening", so it has no reason to be user
@@ -151,6 +155,11 @@ namespace ClaudeBuddy
 
             Glow.Fill = _glowBrush;
             Orb.RenderTransform = _orbScale;
+
+            // Centred, so the beat grows the heart in place rather than pushing
+            // it towards the orb's rim.
+            HeartGlyph.RenderTransform = _heartScale;
+            HeartGlyph.RenderTransformOrigin = RelativePoint.Center;
 
             Root.PointerEntered += (_, _) =>
             {
@@ -253,6 +262,7 @@ namespace ClaudeBuddy
             // repeat — and without it a room orb is indistinguishable from an
             // ordinary one.
             ApplyKind(status.Kind);
+            ApplyHeartbeat(status.Heartbeat);
 
             // A room orb is named for its channel, like every other orb is named
             // for its session: "#arch" draws "Ar". The hash it used to draw
@@ -389,6 +399,37 @@ namespace ClaudeBuddy
             KindBadge.IsVisible = true;
         }
 
+        // Whether the chat panel should say this conversation is heartbeat-driven.
+        // Read the same way KindLabel is, so the panel asks the orb rather than
+        // re-deriving it from a status it does not hold.
+        public bool IsHeartbeat => _lastStatus?.Heartbeat ?? false;
+
+        private void ApplyHeartbeat(bool heartbeat)
+        {
+            if (HeartBadge.IsVisible == heartbeat) return;
+
+            HeartBadge.IsVisible = heartbeat;
+
+            if (heartbeat)
+            {
+                _heartStartedAt = Environment.TickCount64;
+
+                // Joins the pulse ticker on its own account. Every branch of
+                // ApplyState currently ends in a StartPulse, so an orb is
+                // normally on the roster already and this is redundant — but the
+                // heart's motion is the whole signal, and having it depend on
+                // that staying true of a switch statement elsewhere is the kind
+                // of coupling that breaks quietly.
+                if (!Pulsing.Contains(this)) Pulsing.Add(this);
+                EnsureTicker();
+            }
+            else
+            {
+                _heartScale.ScaleX = _heartScale.ScaleY = 1.0;
+                HeartGlyph.Opacity = 1.0;
+            }
+        }
+
         // --- agent teams ------------------------------------------------------
         // A team member is drawn smaller than the session that leads it, so a
         // team reads as one lead with its agents rather than as several equal
@@ -427,6 +468,14 @@ namespace ClaudeBuddy
 
             var inset = 28 - (18 * scale * 0.7071) - (BadgeSize * scale / 2);
             KindBadge.Margin = new Thickness(0, 0, Math.Max(0, inset), Math.Max(0, inset));
+
+            // The same sum mirrored into the opposite corner: the heart rides the
+            // orb's upper-right rim, so it has to move with the circle for the
+            // same reason the kind badge does.
+            HeartBadge.Width = HeartBadge.Height = BadgeSize * scale;
+            HeartBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
+            HeartGlyph.FontSize = 9 * scale;
+            HeartBadge.Margin = new Thickness(0, Math.Max(0, inset), Math.Max(0, inset), 0);
             Glyph.FontSize = BaseGlyphFontSize * scale;
             OrbRadius = 18 * scale;
         }
@@ -801,6 +850,12 @@ namespace ClaudeBuddy
         private double _pulsePeriodMs = 2200;
         private long _pulseStartedAt;
 
+        // Its own clock rather than the orb's, because the orb's period changes
+        // with the session's state — and a heart that sped up when the agent
+        // started working would be saying something this badge does not know.
+        private const double HeartPeriodMs = OpenClawHeartbeat.PeriodMs;
+        private long _heartStartedAt;
+
         private void StartPulse(double to, TimeSpan duration, Easing easing)
         {
             // Duration is a half-cycle in the old alternating animation, so a full
@@ -852,11 +907,38 @@ namespace ClaudeBuddy
 
             _orbScale.ScaleX = scale;
             _orbScale.ScaleY = scale;
+
+            if (HeartBadge.IsVisible) TickHeart();
+        }
+
+        // The heart badge's beat, on the same ticker as the breath above. Two
+        // thumps close together and then a rest, rather than the orb's cosine:
+        // the orb is already breathing, and a second smooth swell next to it
+        // reads as one thing wobbling rather than as a pulse. Lub-dub is the
+        // shape everyone recognises without being told, which is the only reason
+        // it is worth the extra few lines.
+        //
+        // Opacity moves with the scale because 15px of heart cannot get much
+        // bigger before it leaves its own badge — most of the visible motion is
+        // the fade, and the scale is what stops the fade reading as a blink.
+        private void TickHeart()
+        {
+            var beat = OpenClawHeartbeat.Beat(
+                (Environment.TickCount64 - _heartStartedAt) / HeartPeriodMs);
+
+            _heartScale.ScaleX = _heartScale.ScaleY = 1.0 + (0.28 * beat);
+            HeartGlyph.Opacity = 0.5 + (0.5 * beat);
         }
 
         private void StopPulse()
         {
-            Pulsing.Remove(this);
+            // Stays on the roster while the heart is beating. Every caller
+            // currently follows this immediately with a StartPulse, so leaving
+            // would be momentary — but a momentary stop is exactly what a
+            // heartbeat badge should not do, and the alternative is that this
+            // stays correct only by luck of the call order.
+            if (!HeartBadge.IsVisible) Pulsing.Remove(this);
+
             _orbScale.ScaleX = _orbScale.ScaleY = 1.0;
         }
 

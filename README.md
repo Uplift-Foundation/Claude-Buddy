@@ -833,6 +833,23 @@ that moment — so Claude Buddy also counts anything it has watched happen since
 it started. Conversations from before it connected are the ones that depend on
 the setting.
 
+**A beating heart marks a session the gateway's heartbeat drives.** OpenClaw
+wakes each agent on a timer to do background work, and it does that in the
+agent's *own main session* — so on a gateway with several agents, that many orbs
+go active together every few minutes with nobody on the other end. Without the
+heart they read as somebody waiting for you; with it, the motion says the thing
+on the other end is a clock. **Show heartbeat sessions** turns those orbs off
+entirely if you would rather not have them, and the agents keep their colours in
+any channel they are in either way.
+
+The heart marks **where a heartbeat lands**, not which individual turns were
+one — the gateway does not report heartbeats at all, and its own Control UI
+hides their prompts the same way. Two honest consequences: an agent whose
+heartbeat is switched off still gets a heart (whether it is enabled is config
+behind a scope Claude Buddy does not ask for), and a heartbeat retargeted at a
+channel with a job's `session` override is not marked. See
+`docs/openclaw-findings.md` for what was measured.
+
 **Click one of these orbs and a small chat panel opens under it** — the last
 turns, what the agent is thinking, the tools it reaches for, and a line to type
 in. Escape, Cmd-W, the close button or clicking away all dismiss it, and your
