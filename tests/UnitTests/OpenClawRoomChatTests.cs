@@ -669,5 +669,64 @@ namespace ClaudeBuddy.Tests
             Assert.Contains(kai.History, t => t.Role == ChatRole.User && t.Text == "anyone about?");
             Assert.DoesNotContain(zara.History, t => t.Role == ChatRole.User);
         }
+
+        // --- state and identity ---
+
+        // Raised directly rather than posted, unlike the per-agent session's: a
+        // room's state changes only when something already on the UI thread
+        // rebuilt it, so there is no thread to hop off.
+        [Fact]
+        public void SettingTheStateRaisesStateChanged()
+        {
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
+            RemoteChatState? seen = null;
+            room.StateChanged += s => seen = s;
+
+            room.SetState(RemoteChatState.Error);
+
+            Assert.Equal(RemoteChatState.Error, seen);
+            Assert.Equal(RemoteChatState.Error, room.State);
+        }
+
+        // The same state twice raises nothing. Every scan calls this, so a room
+        // sitting connected would otherwise raise several times a second for the
+        // panel to react to.
+        [Fact]
+        public void SettingTheSameStateAgainRaisesNothing()
+        {
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
+            room.SetState(RemoteChatState.Error);
+
+            var raised = 0;
+            room.StateChanged += _ => raised++;
+            room.SetState(RemoteChatState.Error);
+
+            Assert.Equal(0, raised);
+        }
+
+        // Deliberately nothing: a room is a view, and an agent's own run is
+        // stopped from its own orb. Asserted so that "does nothing" stays a
+        // decision on record rather than an empty method somebody fills in.
+        [Fact]
+        public void CancelDoesNothing()
+        {
+            var zara = Member("zara");
+            zara.HasMore = false;
+            Give(zara, (ChatRole.Assistant, "hello", 1));
+            var room = Room((zara, "Zara", "#ff0000"));
+            var before = room.History.Count;
+
+            room.Cancel();
+
+            Assert.Equal(before, room.History.Count);
+        }
+
+        [Fact]
+        public void TheRoomKeepsTheSessionIdItWasGiven()
+        {
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:7", "#general");
+
+            Assert.Equal("openclaw:room:discord:7", room.SessionId);
+        }
     }
 }
