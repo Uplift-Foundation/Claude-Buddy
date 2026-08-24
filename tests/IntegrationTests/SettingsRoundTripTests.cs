@@ -304,4 +304,149 @@ public class SettingsRoundTripTests
             ClaudeBuddySettings.DefaultRemoteControlProfileDir,
             ClaudeBuddySettings.RemoteControlProfileDir);
     }
+
+    // One panel size per agent, keyed and reloaded independently — the whole
+    // point of the setting, and the part a shared-singleton bug would break
+    // silently: ChatPanel is one window serving every session, so a size
+    // stored under the wrong key looks fine until a second agent is opened.
+    [Fact]
+    public void ChatPanelSizes_RoundTripPerAgentThroughDisk()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500, 600);
+        ClaudeBuddySettings.SetChatPanelSize("agent-b", 300.4, 250.6);
+
+        var root = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
+        var sizes = root!["chatPanelSizes"] as JsonObject;
+        Assert.NotNull(sizes);
+
+        // Rounded on the way in, so a drag that ends on a fraction of a DIP
+        // doesn't leave 250.60000000000002 in a file people hand-edit.
+        Assert.Equal(300, sizes!["agent-b"]!["width"]!.GetValue<double>());
+        Assert.Equal(251, sizes["agent-b"]!["height"]!.GetValue<double>());
+
+        // Read back from disk rather than from the model that just wrote it:
+        // the parse side is its own code path and had to be added by hand to
+        // Load, which is exactly the step speakVoice was once missing.
+        PointSettingsAt(dir);
+
+        var a = ClaudeBuddySettings.ChatPanelSizeFor("agent-a");
+        Assert.NotNull(a);
+        Assert.Equal(500, a!.Width);
+        Assert.Equal(600, a.Height);
+
+        Assert.Equal(300, ClaudeBuddySettings.ChatPanelSizeFor("agent-b")!.Width);
+
+        // Never resized means null, not a copy of the shipped default — that
+        // is what lets ChatPanel keep owning what "default" means.
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-never-opened"));
+
+        // A session with no stable identity (a local CLI orb with no cwd) has
+        // nothing to save under, and saying so must not create a "" entry.
+        ClaudeBuddySettings.SetChatPanelSize("", 400, 400);
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor(""));
+    }
+    // The hazard this file already documents for colours, in the newest block
+    // to read numbers: Load() sits inside one catch that replaces the *whole*
+    // model with defaults, so a wrong-typed value reaching GetValue<double>()
+    // would cost every profile name and dragged orb position in the file over
+    // one bad panel size. Number() is why it doesn't.
+    [Fact]
+    public void AMalformedChatPanelSize_CostsOnlyThatEntry()
+    {
+        var dir = NewSettingsDir();
+        var settingsPath = Path.Combine(dir, "settings.json");
+
+        // Hand-written rather than round-tripped through the setters: these
+        // are shapes the app itself would never produce, and a file people
+        // edit is exactly where they come from.
+        File.WriteAllText(settingsPath, """
+        {
+          "twoLetterGlyphs": true,
+          "orbPositions": { "/some/repo": { "x": 12, "y": 34 } },
+          "chatPanelSizes": {
+            "agent-string-width": { "width": "wide", "height": 400 },
+            "agent-missing-height": { "width": 500 },
+            "agent-not-an-object": 7,
+            "agent-null-width": { "width": null, "height": 400 },
+            "agent-fine": { "width": 480, "height": 500 }
+          }
+        }
+        """);
+
+        PointSettingsAt(dir);
+
+        // The good entry survives...
+        var fine = ClaudeBuddySettings.ChatPanelSizeFor("agent-fine");
+        Assert.NotNull(fine);
+        Assert.Equal(480, fine!.Width);
+
+        // ...each broken one is dropped rather than half-applied...
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-string-width"));
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-missing-height"));
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-not-an-object"));
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-null-width"));
+
+        // ...and — the actual point — nothing else in the file was lost to it.
+        Assert.True(ClaudeBuddySettings.TwoLetterGlyphs);
+        var position = ClaudeBuddySettings.OrbPositionFor("/some/repo");
+        Assert.NotNull(position);
+        Assert.Equal(12, position!.X);
+    }
+
+    // A panel is re-bound every time its orb is clicked, and the drag handler
+    // saves on every pointer release — so the guard against rewriting an
+    // unchanged value is what keeps that from being a file write each time.
+    // Asserted by deleting the file and checking nothing recreates it, which
+    // is deterministic where comparing timestamps would not be.
+    [Fact]
+    public void SettingAChatPanelSizeToTheValueItAlreadyHas_WritesNothing()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+        var settingsPath = Path.Combine(dir, "settings.json");
+
+        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500, 600);
+        Assert.True(File.Exists(settingsPath));
+
+        File.Delete(settingsPath);
+
+        // Same size, including a fraction that rounds to the same whole DIPs
+        // as the stored value — the comparison happens after rounding.
+        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500, 600);
+        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500.2, 599.8);
+
+        Assert.False(
+            File.Exists(settingsPath),
+            "an unchanged size should return before Save(), so nothing recreates the deleted file");
+
+        // A real change still writes, so the guard isn't just refusing to save.
+        ClaudeBuddySettings.SetChatPanelSize("agent-a", 501, 600);
+        Assert.True(File.Exists(settingsPath));
+    }
+
+    // chatPanelSizes is a key an older build has never heard of, which is the
+    // situation _unknownKeys exists for — worth pinning for this key
+    // specifically, since the generic test uses an invented one that no
+    // version of this app will ever write.
+    [Fact]
+    public void ChatPanelSizes_SurviveASaveByABuildThatOnlyKnowsOtherKeys()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500, 600);
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        ClaudeBuddySettings.IdleColor = "green";
+        ClaudeBuddySettings.FlushPendingSave();
+
+        PointSettingsAt(dir);
+
+        var a = ClaudeBuddySettings.ChatPanelSizeFor("agent-a");
+        Assert.NotNull(a);
+        Assert.Equal(500, a!.Width);
+        Assert.Equal(600, a.Height);
+    }
 }

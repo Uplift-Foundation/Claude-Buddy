@@ -857,6 +857,15 @@ half-typed draft survives being dismissed. Enter sends, Shift+Enter starts a new
 line, and with voice input on the mic drops what you said into the box rather
 than sending it, exactly as dictation into a terminal already does.
 
+Drag any edge or corner and the panel resizes — new turns then scroll inside it
+rather than growing it out from under your hands. **The size belongs to the
+agent, not to the window**: each one reopens at whatever you last dragged its
+panel to, across restarts, and an agent you have never resized still opens at
+the shipped 340x420. That lives in `chatPanelSizes` in `settings.json`, keyed
+the same way dragged orb positions are — by the agent rather than by the
+session, since Claude Code mints a new session id every conversation and a size
+saved under one would never be found again.
+
 Replying is a **second switch**, off by default: **Allow replying to agents**.
 Turning it on asks the gateway for write permission as well as read, which it
 treats as a new pairing — so approve the device again there
