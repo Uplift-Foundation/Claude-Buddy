@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
 namespace ClaudeBuddy
@@ -32,6 +33,16 @@ namespace ClaudeBuddy
             return error != ESRCH;   // ESRCH is the only answer that means gone
         }
 
+        // Excluded from coverage: the Windows arm of a platform dispatch. Coverage
+        // is gathered from one platform's run, so on the macOS leg this is
+        // unreachable by construction and on the Windows leg the macOS arm is —
+        // the two can never both be covered by one measurement. The macOS arm,
+        // which asks the kernel with kill(pid, 0), is the one covered here.
+        //
+        // Its two catches are also the caller's privileges rather than this
+        // code's logic: ArgumentException means gone, and anything else means a
+        // process that exists but cannot be opened.
+        [ExcludeFromCodeCoverage]
         private static bool IsRunningWindows(int pid)
         {
             try
