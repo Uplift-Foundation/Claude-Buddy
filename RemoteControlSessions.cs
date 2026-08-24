@@ -137,6 +137,61 @@ namespace ClaudeBuddy
                 ? _snapshot
                 : Array.Empty<Remote>();
 
+        // ---- test seams ----------------------------------------------------
+
+        // StatusText and HasPolled are pure reads of the relay table, but the
+        // only way to fill that table for real is to start a bridge subprocess
+        // and talk to a live account — which is what RemoteControlBridgeLiveTests
+        // does, deliberately, and what a unit test must not.
+        //
+        // Same shape as OpenClawSessions.SetSnapshotForTests: seed the state, ask
+        // the question, put it back. Nothing here is reachable outside the four
+        // test assemblies InternalsVisibleTo names.
+        internal static void SetRelayForTests(
+            string account, string state, string? warning = null, bool polled = false,
+            IReadOnlyList<Remote>? sessions = null)
+        {
+            lock (Gate)
+            {
+                if (!Relays.TryGetValue(account, out var relay))
+                {
+                    relay = new Relay();
+                    Relays[account] = relay;
+                }
+
+                relay.State = state;
+                relay.Warning = warning;
+                relay.Polled = polled;
+                relay.Sessions = sessions ?? Array.Empty<Remote>();
+            }
+        }
+
+        internal static void ClearRelaysForTests()
+        {
+            lock (Gate)
+            {
+                // Bridges are never started by a test, so there is nothing to
+                // stop — but assert that rather than assume it, because a relay
+                // holding a live bridge dropped on the floor here would leak a
+                // subprocess for the rest of the run.
+                foreach (var relay in Relays.Values)
+                {
+                    if (relay.Bridge is not null)
+                    {
+                        throw new InvalidOperationException(
+                            "ClearRelaysForTests found a live bridge; a test started a real relay");
+                    }
+                }
+
+                Relays.Clear();
+            }
+        }
+
+        internal static void SetLastSendForTests(DateTime when)
+        {
+            lock (Gate) _lastSend = when;
+        }
+
         // One line for the settings window, covering however many relays there
         // are. Named per account once there is more than one, because "connected"
         // is not much use when the question is *which* of them.
@@ -166,7 +221,7 @@ namespace ClaudeBuddy
         // login-expiry notice starts three days out. "Your login expires in 3
         // days" is useful; being unable to tell whether it also found anything
         // is not.
-        private static string Compose(string state, string? warning)
+        internal static string Compose(string state, string? warning)
         {
             if (warning is null) return state;
             return state is "off" or "starting" ? warning : $"{state} · {warning}";
@@ -566,7 +621,7 @@ namespace ClaudeBuddy
             });
         }
 
-        private static bool ShouldPollFast()
+        internal static bool ShouldPollFast()
         {
             if (_snapshot.Any(r => r.Working)) return true;
 
