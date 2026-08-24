@@ -561,7 +561,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private static string Describe(OpenClawGateway.ConnectResult result) => result.Outcome switch
+        internal static string Describe(OpenClawGateway.ConnectResult result) => result.Outcome switch
         {
             OpenClawGateway.Outcome.PairingPending =>
                 "waiting to be approved on the gateway — run `openclaw devices approve --latest`",
@@ -650,7 +650,7 @@ namespace ClaudeBuddy
         // real URL, is declined rather than fetched: this app has one connection
         // to one machine the user pointed it at, and quietly reaching out to
         // some other host because a field said so is not a thing it should do.
-        private static byte[]? DecodeDataUri(string? uri)
+        internal static byte[]? DecodeDataUri(string? uri)
         {
             if (string.IsNullOrEmpty(uri)) return null;
             if (!uri.StartsWith("data:", StringComparison.Ordinal)) return null;
@@ -696,7 +696,12 @@ namespace ClaudeBuddy
             }
         }
 
-        private static (IReadOnlyList<Session> Sessions, int Total) Parse(JsonElement payload)
+        // `now` is a parameter with the real clock as its default, so the recency
+        // filter below is decidable. Without it a test could only ever exercise
+        // the "recent enough" arm — and the interesting behaviour is what the
+        // filter lets through anyway: a session mid-run, and a room's membership.
+        internal static (IReadOnlyList<Session> Sessions, int Total) Parse(
+            JsonElement payload, DateTime? now = null)
         {
             var list = payload;
             if (payload.ValueKind == JsonValueKind.Object)
@@ -713,7 +718,7 @@ namespace ClaudeBuddy
 
             if (list.ValueKind != JsonValueKind.Array) return (Array.Empty<Session>(), 0);
 
-            var now = DateTime.UtcNow;
+            var asOf = now ?? DateTime.UtcNow;
             var result = new List<Session>();
 
             var roomMembers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
@@ -765,7 +770,7 @@ namespace ClaudeBuddy
                 // A session mid-run is current whatever its timestamps say —
                 // it is the one thing an orb is most worth showing.
                 var within = ActiveWithin;
-                if (state != "generating" && within is not null && now - activity > within) continue;
+                if (state != "generating" && within is not null && asOf - activity > within) continue;
 
                 // Sessions the heartbeat drives, when the user has said they
                 // don't want them. Deliberately below the two blocks above
@@ -830,7 +835,7 @@ namespace ClaudeBuddy
         // top-level one is preferred: origin describes where a conversation came
         // from and is absent on 12 of the 70 sessions this was measured against,
         // while chatType is the gateway's own answer to the question being asked.
-        private static SessionKind KindFor(JsonElement session, JsonElement origin, string key) =>
+        internal static SessionKind KindFor(JsonElement session, JsonElement origin, string key) =>
             OpenClawSessionKind.From(key, Str(session, "chatType") ?? Str(origin, "chatType"));
 
         // What to call a session. Two halves: who is talking, and where.
@@ -845,7 +850,7 @@ namespace ClaudeBuddy
         // The second half is needed because one agent commonly has a DM with
         // you, a DM with somebody else and two channels at once, and repeating
         // "Lilibeth — discord" four times identifies nothing.
-        private static string TitleFor(JsonElement session, JsonElement origin, string key)
+        internal static string TitleFor(JsonElement session, JsonElement origin, string key)
         {
             var label = Str(session, "label");
             var parts = key.Split(':');
@@ -890,7 +895,7 @@ namespace ClaudeBuddy
         // necessary before anyone looked at what else sessions.list carries.
         // This field needs none of that and cannot be thrown off by a label
         // whose shape changes, so it is asked first and Where is the fallback.
-        private static string? Group(JsonElement session)
+        internal static string? Group(JsonElement session)
         {
             var group = Str(session, "groupChannel");
             return string.IsNullOrWhiteSpace(group) ? null : group!.Trim();
@@ -900,7 +905,7 @@ namespace ClaudeBuddy
         // id:1474991965354463274", "wtvamp user id:246722755112861696",
         // "discord:amber". The useful part is always at the front, so cut at the
         // id and drop the noun that introduces it.
-        private static string? Where(JsonElement origin)
+        internal static string? Where(JsonElement origin)
         {
             if (origin.ValueKind != JsonValueKind.Object) return null;
 
@@ -932,7 +937,7 @@ namespace ClaudeBuddy
         // deliveryContext is the authoritative answer; lastChannel/lastTo are
         // what the gateway itself falls back to, so this falls back the same
         // way rather than inventing its own rule.
-        private static Delivery? DeliveryFor(JsonElement session)
+        internal static Delivery? DeliveryFor(JsonElement session)
         {
             string? channel = null, to = null, account = null;
 
