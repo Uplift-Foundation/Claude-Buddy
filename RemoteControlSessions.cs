@@ -187,6 +187,25 @@ namespace ClaudeBuddy
             }
         }
 
+        internal static void SetLastUseForTests(DateTime when)
+        {
+            lock (Gate) _lastUse = when;
+        }
+
+        // The working-transition memory. Cleared rather than set, because what a
+        // test needs is a known-empty starting point: the first observation of a
+        // session is a transition from false by definition, and leaving another
+        // test's entries behind turns that into a coin flip.
+        internal static void ClearWorkingMemoryForTests()
+        {
+            lock (Gate) WorkingNow.Clear();
+        }
+
+        internal static IReadOnlyList<Remote> SnapshotForTests
+        {
+            get { lock (Gate) return _snapshot; }
+        }
+
         internal static void SetLastSendForTests(DateTime when)
         {
             lock (Gate) _lastSend = when;
@@ -632,7 +651,7 @@ namespace ClaudeBuddy
         }
 
         // Every relay's sessions, flattened into the one list the scan reads.
-        private static void Republish()
+        internal static void Republish()
         {
             lock (Gate)
             {
@@ -640,7 +659,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private static void RaiseWorkingTransitions(IEnumerable<Remote> remotes)
+        internal static void RaiseWorkingTransitions(IEnumerable<Remote> remotes)
         {
             foreach (var remote in remotes)
             {
@@ -657,7 +676,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private static bool IdleExpired()
+        internal static bool IdleExpired()
         {
             var minutes = ClaudeBuddySettings.RemoteControlIdleMinutes;
             if (minutes <= ClaudeBuddySettings.RemoteControlIdleNever) return false;
