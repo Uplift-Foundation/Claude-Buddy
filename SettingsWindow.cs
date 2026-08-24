@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -205,7 +206,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private void Rebuild()
+        internal void Rebuild()
         {
             // Held against System Settings side by side, Apple's content pane is
             // *not* very transparent — the glass in Tahoe lives in sidebars,
@@ -580,13 +581,13 @@ namespace ClaudeBuddy
             return rows.ToArray();
         }
 
-        private void OnClaudeCodeChatToggled(bool enabled)
+        internal void OnClaudeCodeChatToggled(bool enabled)
         {
             ClaudeBuddySettings.ClaudeCodeChatEnabled = enabled;
             Rebuild();
         }
 
-        private void OnClaudeCodeReplyToggled(bool enabled)
+        internal void OnClaudeCodeReplyToggled(bool enabled)
         {
             ClaudeBuddySettings.ClaudeCodeReplyEnabled = enabled;
         }
@@ -596,7 +597,7 @@ namespace ClaudeBuddy
         // seconds — see SessionManager.SyncAutoColorMarker. An earlier version
         // baked a flag into the hook command instead, which meant every toggle
         // rewrote Codex's hooks.json and cost the user their hook trust.
-        private void OnAutoColorToggled(bool enabled)
+        internal void OnAutoColorToggled(bool enabled)
         {
             ClaudeBuddySettings.AutoColorSessions = enabled;
         }
@@ -643,25 +644,25 @@ namespace ClaudeBuddy
         }
 
         // Rebuild, because switching a CLI off removes the rest of its section.
-        private void OnClaudeCodeEnabledToggled(bool enabled)
+        internal void OnClaudeCodeEnabledToggled(bool enabled)
         {
             ClaudeBuddySettings.ClaudeCodeEnabled = enabled;
             Rebuild();
         }
 
-        private void OnCodexEnabledToggled(bool enabled)
+        internal void OnCodexEnabledToggled(bool enabled)
         {
             ClaudeBuddySettings.CodexEnabled = enabled;
             Rebuild();
         }
 
-        private void OnCodexChatToggled(bool enabled)
+        internal void OnCodexChatToggled(bool enabled)
         {
             ClaudeBuddySettings.CodexChatEnabled = enabled;
             Rebuild();
         }
 
-        private void OnCodexReplyToggled(bool enabled)
+        internal void OnCodexReplyToggled(bool enabled)
         {
             ClaudeBuddySettings.CodexReplyEnabled = enabled;
         }
@@ -921,11 +922,15 @@ namespace ClaudeBuddy
         // gateway for, and dropping a working socket to filter a list would take
         // every gateway orb off the screen for as long as the handshake takes.
         // The orbs appear or vanish on the next poll instead.
-        private void OnOpenClawHeartbeatsToggled(bool enabled)
+        internal void OnOpenClawHeartbeatsToggled(bool enabled)
         {
             ClaudeBuddySettings.OpenClawShowHeartbeats = enabled;
         }
 
+        // Excluded from coverage: reconnects to the gateway, because the scopes
+        // are part of the handshake — the setting write either side of that is one
+        // line, and the switch it belongs to is covered by the rows around it.
+        [ExcludeFromCodeCoverage]
         private void OnOpenClawReplyToggled(bool enabled)
         {
             ClaudeBuddySettings.OpenClawReplyEnabled = enabled;
@@ -937,6 +942,10 @@ namespace ClaudeBuddy
             Rebuild();
         }
 
+        // Excluded from coverage: opens or closes the gateway socket immediately —
+        // the setting write either side of that is one line, and the switch it
+        // belongs to is covered by the rows around it.
+        [ExcludeFromCodeCoverage]
         private void OnOpenClawToggled(bool enabled)
         {
             ClaudeBuddySettings.OpenClawEnabled = enabled;
@@ -1151,6 +1160,10 @@ namespace ClaudeBuddy
             return combo;
         }
 
+        // Excluded from coverage: tears down every Remote Control relay — the
+        // setting write either side of that is one line, and the switch it belongs
+        // to is covered by the rows around it.
+        [ExcludeFromCodeCoverage]
         private void OnRemoteControlToggled(bool enabled)
         {
             ClaudeBuddySettings.RemoteControlEnabled = enabled;
@@ -1302,7 +1315,7 @@ namespace ClaudeBuddy
         // process lifetime, and this toggle changes what belongs in it — turning the
         // neural engine on adds its voices, turning it off takes them away — so
         // without it the picker would keep showing the previous answer.
-        private void OnNeuralVoiceToggled(bool enabled)
+        internal void OnNeuralVoiceToggled(bool enabled)
         {
             ClaudeBuddySettings.NeuralVoiceEnabled = enabled;
             TextToSpeech.InvalidateVoiceCache();
@@ -1393,7 +1406,7 @@ namespace ClaudeBuddy
             return link;
         }
 
-        private void OnVoiceInputToggled(bool enabled)
+        internal void OnVoiceInputToggled(bool enabled)
         {
             ClaudeBuddySettings.VoiceInputEnabled = enabled;
 
