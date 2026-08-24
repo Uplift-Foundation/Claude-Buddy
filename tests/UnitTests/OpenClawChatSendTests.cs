@@ -45,6 +45,13 @@ public class OpenClawChatSendTests
 
     // And the typed text is NOT added as a user turn, so nothing on screen
     // claims to have been sent.
+    //
+    // RemoteControlChatSession does the opposite — it adds the user's turn first
+    // and puts the refusal underneath, so the typed text survives — while its
+    // comment says "same reasoning as OpenClawChatSession's". See
+    // RemoteControlChatSessionTurnTests.WithRemoteControlOffTheMessageIsRefusedButKept.
+    // Both behaviours are asserted where they are, rather than one of them being
+    // quietly changed to match the other: which is right is a product call.
     [Fact]
     public async Task WithReplyingOffNothingLooksLikeItWasSent()
     {

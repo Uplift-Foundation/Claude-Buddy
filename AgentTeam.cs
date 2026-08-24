@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.Versioning;
 using System.Text.RegularExpressions;
 
@@ -114,6 +115,17 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: platform dispatch over two OS calls and nothing
+        // else. On macOS this runs `ps` as a real subprocess through
+        // MacOSProcessScan; on Windows it queries WMI for the command line. The
+        // third arm exists only so a platform that is neither returns an empty
+        // map rather than throwing, and it is unreachable from either CI runner
+        // by construction.
+        //
+        // Everything this hands back is decided elsewhere and covered there —
+        // Sanitize below, and the cache above it. What is left here is "which of
+        // the two OS calls do I make", which cannot be asked without making one.
+        [ExcludeFromCodeCoverage]
         private static Dictionary<string, string> Read(int pid)
         {
             if (OperatingSystem.IsMacOS())
@@ -159,6 +171,10 @@ namespace ClaudeBuddy
             return kept.Length > 48 ? kept[..48].TrimEnd() : kept;
         }
 
+        // Excluded from coverage: a WMI query. System.Management reaches COM to
+        // ask Win32_Process for another process's command line, which has no
+        // equivalent on the macOS runner and no seam on the Windows one.
+        [ExcludeFromCodeCoverage]
         [SupportedOSPlatform("windows")]
         private static Dictionary<string, string> WindowsArguments(int pid)
         {
