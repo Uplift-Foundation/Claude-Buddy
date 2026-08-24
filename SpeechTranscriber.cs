@@ -137,7 +137,10 @@ namespace ClaudeBuddy
         // here a caller could want. A clip that was *only* an annotation comes
         // back empty, which is exactly the "nothing was said" signal callers
         // already handle.
-        private static string StripNonSpeechTags(string text) =>
+        // internal, not private: this is a pure string pass and the rule it
+        // applies — that an annotation describing the audio is never a word the
+        // user said — is worth asserting without a microphone or a model file.
+        internal static string StripNonSpeechTags(string text) =>
             Regex.Replace(text, @"\s*[\[\(][A-Za-z0-9 _'’-]{0,40}[\]\)]", " ");
 
         // Whisper is a general speech-recognition model, not a dictation
@@ -180,7 +183,11 @@ namespace ClaudeBuddy
         // or "fix , then" — dropping the leading space and leaving whatever
         // followed untouched is what gets the spacing right on both sides
         // without a separate cleanup pass.
-        private static string ApplySpokenPunctuation(string text)
+        // internal for the same reason as StripNonSpeechTags above. This one
+        // earns it more: the spacing rules below are the kind of thing that
+        // looks right in one example and wrong in the next, and the doubled-mark
+        // collapse exists because a shipped build produced "fix this.. then".
+        internal static string ApplySpokenPunctuation(string text)
         {
             foreach (var (spoken, symbol) in PunctuationWords)
             {
