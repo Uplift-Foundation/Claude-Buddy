@@ -7,6 +7,7 @@ namespace ClaudeBuddy.Tests;
 // NameFor() and HexFor() all read through ClaudeBuddySettings.For(folderName)
 // first, which is safe here only because TestBootstrap has already pointed
 // CLAUDE_BUDDY_SETTINGS_DIR at an isolated temp directory.
+[Collection("Settings")]
 public class ClaudeDesktopColorsTests
 {
     [Fact]

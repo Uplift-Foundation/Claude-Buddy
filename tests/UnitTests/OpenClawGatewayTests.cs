@@ -22,10 +22,10 @@ namespace ClaudeBuddy.Tests;
 //
 // Nothing here opens a socket. OpenClawGateway takes its connector as a
 // constructor argument for exactly this reason — see its comment.
-[Collection(OpenClawIdentityTests.Serial)]
+[Collection("Settings")]
 public class OpenClawGatewayTests
 {
-    // Shares the identity collection because ConnectAsync signs with
+    // Shares the settings collection because ConnectAsync signs with
     // OpenClawIdentity.Current(), which is a process-wide cache over a file in
     // the settings directory. Running alongside a test that moves that directory
     // would sign with one key and assert against another.

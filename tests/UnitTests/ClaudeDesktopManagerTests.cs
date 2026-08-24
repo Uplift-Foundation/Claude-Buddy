@@ -20,6 +20,7 @@ namespace ClaudeBuddy.Tests;
 // subject is static: a published snapshot, a transient table, and an
 // environment variable naming the profile root. Tests inside one class run
 // sequentially, so one class is the isolation.
+[Collection("Settings")]
 public class ClaudeDesktopManagerTests
 {
     // ---- scratch -------------------------------------------------------

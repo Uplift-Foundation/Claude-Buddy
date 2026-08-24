@@ -19,6 +19,7 @@ namespace ClaudeBuddy.Tests
     // Parse takes its clock as an argument, which is what makes the recency
     // filter assertable; everything else it needs comes from settings, and this
     // assembly's TestBootstrap already points those at a temp directory.
+    [Collection("Settings")]
     public class OpenClawSessionsParseTests
     {
         private static JsonElement Json(string text) => JsonDocument.Parse(text).RootElement;
