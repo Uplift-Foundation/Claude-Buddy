@@ -10,6 +10,114 @@ because the two CLIs each look for their own name and neither reads the other's;
 step by hand is cheaper than any mechanism for it, and a symlink would be a
 trap — it looks like one file until someone checks out the repo on Windows.
 
+## How a feature gets built
+
+**Every feature is a ticket, a team, and a round trip through QA — in that
+order.** The backlog is Jira project **CB**, board 70:
+
+<https://uplifttech.atlassian.net/jira/software/projects/CB/boards/70/backlog>
+
+No feature work starts from a chat message alone. A request becomes a CB ticket
+first, and from then on the ticket is what moves, so someone reading the board
+and someone reading the terminal see the same thing.
+
+**Prefer the autonomous path at every step.** The escalations below are for an
+agent that is genuinely not confident, not checkpoints to hit out of habit. An
+agent that can defend its plan, its tests and its screenshots should carry the
+feature to done; one that cannot should ask early rather than after building the
+wrong thing.
+
+### The team
+
+Features are built by an **agent team**, not one session doing everything — the
+same mechanism this app draws orbs for, with each member spawned as its own
+`claude` process carrying `--agent-name`, `--team-name` and
+`--parent-session-id`, the last of which `AgentTeam.cs` reads off the process
+to link a member to its lead. Building Claude Buddy with the thing Claude Buddy visualises is
+deliberate: a team that looks wrong on the board is a free bug report.
+
+- **Product manager** — writes the requirement, owns the ticket's status, calls
+  done.
+- **Architect** / **engineer** — build a refined ticket. As many of each as the
+  work genuinely splits into, one per independent surface.
+- **QA** — tests what they build and hands failures back. A loop, not a final
+  gate: build a piece, test a piece, send it back, until nothing comes back.
+
+### Product manager: requirement first, then plan
+
+The PM agent creates the requirement in CB as a **`Feature`** and moves it to
+**Refining**. CB's issue types are `Epic`, `Feature`, `Story`, `Task`, `Bug`,
+`Subtask` (one word); `Feature` is level with `Story`, not above it, so an
+`Epic` still groups a multi-ticket effort.
+
+**Unverified, and the first real ticket should settle it:** CB is team-managed
+and currently empty, so its statuses can't be read from the API — no issue to
+ask for transitions, and JQL doesn't validate status names per project, so an
+empty result proves nothing. "Refining" is *confirmed* as a status in use on
+this Jira site (69 issues in project FMN) and *unconfirmed* on CB's own board,
+which a team-managed project owns separately. Whoever files the first CB ticket
+should read the board's columns and fix the name here if it differs.
+
+Then it writes a plan, and **plans on a stronger model than the one that
+implements**. Planning is where a wrong call is cheapest to fix and most
+expensive to miss:
+
+| Feature | Plan with | Implement with |
+| --- | --- | --- |
+| Complex — new subsystem, cross-platform surface, anything touching the hook or transcript contracts | `fable` | `opus` or `sonnet` |
+| Simpler — a setting, a bounded UI change, a fix with an obvious shape | `opus` or `sonnet` | `sonnet` |
+
+Those are the `model:` values the Agent and Workflow tools accept; `effort:` is
+the other dial and moves the same way — high while planning, lower for
+mechanical stages.
+
+**If the PM isn't confident the requirement and plan support autonomous
+implementation, it asks a human before spending a team.** Ask on GitHub with a
+link to the CB ticket, and — this repo is public, the Jira site is not — enough
+of the requirement inline that the question stands alone for someone who can't
+open the link. Repo admins are the escalation point (`wtvamp`, `lunarjuice` at
+time of writing; `gh api repos/Uplift-Foundation/Claude-Buddy/collaborators` is
+the live list). If it *is* confident, it hands straight to the architects and
+engineers and no human is in the loop.
+
+### Build and QA, in a loop
+
+Engineers and architects build, QA tests, back and forth until it stops coming
+back. QA's half is **Every feature ships with its tests** below — unit,
+integration and UI covering 100% of the lines the branch adds — so "QA passed"
+means those are green, not that somebody had a look.
+
+**A feature works on Windows and macOS or it is not a feature.** CI enforces the
+shape: `macos-latest`/`osx-arm64` and `windows-latest`/`win-x64`, every suite on
+both legs. Parity is more than a green build, though — a feature no install path
+wires up is equally unfinished, so check `tools/build-macos-dmg.sh`,
+`tools/build-macos-app.sh`'s Resources copy, `tools/ClaudeBuddy.iss`,
+`tools/install-hooks.sh`/`.ps1` and the README install section, and confirm any
+platform gate is real (WSL) rather than accidental.
+
+### PR, screenshots, and the call on done
+
+The feature goes up as a PR against `develop`, per **Pull requests** below.
+
+**Don't attach screenshots by hand — they're already automatic.** `ci.yml`
+captures a PNG per `tests/UiScreenshots` scenario on both runners, and
+`publish-screenshots.yml` picks them up on a `workflow_run` trigger, pushes them
+to the `screenshots` branch and comments on the PR with real
+`raw.githubusercontent.com` URLs labelled per rid. (Two workflows because a
+`pull_request` run from a fork gets a read-only token, and every PR here is one.)
+A feature with a visible surface adds its capture there; that comment is what
+gets reviewed.
+
+The PM agent reviews it — **both** rids, since that is exactly where a
+macOS-only implementation shows itself — and **if it can approve the feature as
+done autonomously, it should**, moving the ticket accordingly.
+
+If it cannot, it asks a human to pull, install and approve by hand: **in the
+terminal** if someone is driving the feature in Claude Code, **on the PR** if
+nobody is watching. Either way name the specific thing the screenshots could not
+settle — "can't tell whether the mic button is enabled on Windows" is actionable
+in a minute; "needs manual approval" is not.
+
 ## Branching: gitflow
 
 Two long-lived branches:
