@@ -392,11 +392,18 @@ projects. Their **cases** do count now: CB-3 moved each matrix into a class that
 `TranscriptSuite`), so `OrbArrangement` no longer reads 0% while being the most
 exhaustively verified file here. Run the exes for the grouped failure report.
 
-And read the headline as coverage **of what remains**: both engines honour
-`[ExcludeFromCodeCoverage]` by omitting code entirely, so an excluded file and a
+And read the headline as coverage **of what remains**: an excluded file and a
 deleted one look identical in a report. `merge-coverage.py` reads the attributes
 back out of the sources and prints what was held out, what is excluded inside
 measured files, and what is absent for no stated reason.
+
+The two engines also disagree about `[ExcludeFromCodeCoverage]` on a *method*.
+coverlet honours it; `Microsoft.CodeCoverage` (both MTP suites) instruments the
+body anyway and reports it unhit. Both honour it on a *class*, which is how the
+gap survived until CB-3 had 157 member-level exclusions for it to show up in. The
+merge is therefore **not** a union: coverlet decides which lines exist, and the
+MTP reports only contribute hits for those. Undo that and an exclusion on a method
+silently stops meaning anything.
 
 ## Extra accounts
 

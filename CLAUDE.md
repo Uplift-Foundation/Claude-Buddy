@@ -484,13 +484,21 @@ Three things the number does not say, worth remembering before quoting it:
   `ArrangementSweep`, `GlyphSuite`, `TranscriptSuite`), so `OrbArrangement` no
   longer reads 0% while being the most exhaustively verified file in the repo.
   Running the exes is still the way to get the grouped failure report.
-- **What has been excluded is printed next to the number.** Both engines honour
-  `[ExcludeFromCodeCoverage]` by omitting the code entirely, so an excluded file
-  and a deleted one look identical in a report — and a percentage can be walked
-  to 100% by excluding whatever refuses to be covered. `merge-coverage.py`
-  therefore reads the attributes back out of the sources and reports files held
-  out entirely, further sites inside measured files, and files absent for no
-  stated reason at all. Read the headline as coverage **of what remains**.
+- **What has been excluded is printed next to the number.** An excluded file and
+  a deleted one look identical in a report, and a percentage can be walked to
+  100% by excluding whatever refuses to be covered. `merge-coverage.py` therefore
+  reads the attributes back out of the sources and reports files held out
+  entirely, further sites inside measured files, and files absent for no stated
+  reason at all. Read the headline as coverage **of what remains**.
+- **The two engines disagree about `[ExcludeFromCodeCoverage]` on a *method*, and
+  the merge compensates.** coverlet honours it — an excluded method's body is not
+  instrumented at all — while `Microsoft.CodeCoverage`, which both MTP suites
+  use, instruments it anyway and reports every line unhit. Both honour it on a
+  *class*, which is how the gap went unnoticed until CB-3 had 157 member-level
+  exclusions for it to show up in. So the merge is not a plain union:
+  **coverlet's view of which lines exist is the authority**, and the MTP reports
+  contribute hits for those lines only. If you ever change that, an exclusion on
+  a method silently stops meaning anything.
 
 Everything else about orb behavior is still verified by running the app.
 Two things make that survivable:
