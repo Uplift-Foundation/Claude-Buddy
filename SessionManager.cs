@@ -164,7 +164,13 @@ namespace ClaudeBuddy
     {
         ClaudeCode,
         Codex,
-        OpenClaw
+        OpenClaw,
+
+        // A Claude Code session on another machine, seen through the bridge (see
+        // RemoteControlBridge). Its own CLI is Claude Code, but it is not local
+        // and there is no terminal here to focus, which is the distinction
+        // IsLocalCli draws and the only one the rest of the app cares about.
+        RemoteControl
     }
 
     // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude
@@ -265,6 +271,18 @@ namespace ClaudeBuddy
             // Connects only if the user has turned it on and given it an
             // address; otherwise this returns having done nothing at all.
             OpenClawSessions.Restart();
+
+            // Subscribed unconditionally, unlike OpenClawSessions.Restart above:
+            // this only wires up an event, and starting the bridge is a separate,
+            // deliberate act because it costs the user's quota. Nothing fires
+            // here until something asks for it.
+            //
+            // Routed centrally rather than each chat session subscribing for
+            // itself, because there is one bridge feeding all of them and a
+            // message names only who it came from — so the fan-out belongs
+            // wherever the sessions are already indexed by name, which is here.
+            RemoteControlSessions.MessageReceived += OnRemoteMessage;
+            RemoteControlSessions.WorkingChanged += OnRemoteWorkingChanged;
 
             _debounce.Tick += (_, _) =>
             {
@@ -653,6 +671,54 @@ namespace ClaudeBuddy
                     room.Activity));
             }
 
+            // Claude Code sessions on the user's other machines, seen through
+            // the bridge. Empty unless the feature is on *and* something has
+            // asked for the bridge — see RemoteControlSessions.EnsureStarted for
+            // why merely enabling it isn't enough.
+            //
+            // Much simpler than the gateway branch above, and for a reason worth
+            // stating: there are no rooms, no leads and no colour pool here. A
+            // remote session is one Claude Code session on one machine, so the
+            // only thing being invented is the namespaced id.
+            foreach (var remote in RemoteControlSessions.Snapshot())
+            {
+                found.Add(new ScanEntry(
+                    remote.Key,
+                    new SessionStatus
+                    {
+                        Source = SessionSource.RemoteControl,
+
+                        // The peer list's own word, translated into the two
+                        // states an orb draws. Anything that isn't recognisably
+                        // work counts as idle: an orb that spins forever because
+                        // a label changed upstream is worse than one that never
+                        // spins.
+                        State = remote.Working ? "generating" : "idle",
+
+                        // Its name on the other machine, which is all the peer
+                        // list gives us — no hostname, no path. That is thin for
+                        // a title, and deliberately not padded out with a guess:
+                        // see docs/remote-control-findings.md.
+                        Title = remote.Name,
+
+                        // What the session itself said, when it has been asked
+                        // and answered — a remote session's colour cannot be
+                        // derived here, because a peer row carries neither the
+                        // transcript /color writes into nor the cwd auto-colour
+                        // hashes. See RemoteControlSessions.AskForMissingColorsAsync.
+                        //
+                        // Falls back to a colour hashed from the name, which is
+                        // stable per session and unrelated to whatever it wears
+                        // at home — better than every remote orb being identical
+                        // while the answer is still in flight, or if it never
+                        // comes.
+                        Color = remote.Color ?? OpenClawSessions.ColourForAgent(remote.Name),
+
+                        Kind = SessionKind.Remote,
+                    },
+                    remote.Seen));
+            }
+
             InheritTerminalInfo(found);
 
             var superseded = Superseded(found, BackgroundJobs.IsLiveJob);
@@ -755,9 +821,26 @@ namespace ClaudeBuddy
                 // thing to find for a Codex session. The cwd-collision hazard
                 // above applies just as much, and here both repositories would
                 // be on this machine.
+                // "pid <= 0" here was standing in for "this is a background
+                // agent", and it stopped being true the moment the hook learned
+                // to record a background agent's own pid instead of whatever
+                // ancestor owned a terminal. The proxy is replaced by the thing
+                // it was approximating rather than kept alongside it: a session
+                // with no pid is either a background job — in which case
+                // IsLiveJob says so — or a leftover that should not be adopting
+                // a viewer window in the first place.
+                //
+                // Getting this wrong is not subtle. With the pid recorded and
+                // this condition unchanged, adoption stopped running for every
+                // background agent, so none of them found the `claude agents`
+                // window they are watched through, and the rule below then
+                // dropped them for having no terminal. One orb vanished on this
+                // machine before the cause was obvious.
                 if (status.Source == SessionSource.ClaudeCode
                     && !KnowsATerminal(status)
-                    && (leadsWithLiveAgents.Contains(sessionId) || status.SessionPid <= 0))
+                    && (leadsWithLiveAgents.Contains(sessionId)
+                        || status.SessionPid <= 0
+                        || BackgroundJobs.IsLiveJob(sessionId)))
                 {
                     AgentTeamViewer.TryAdopt(status);
                 }
@@ -776,12 +859,18 @@ namespace ClaudeBuddy
                 // A gateway session has none of these and never will — it has
                 // no terminal anywhere, which is the point of it. Left ungated
                 // this rule alone drops every OpenClaw orb, every scan.
+                // A live background job is exempt for the same reason a lead
+                // with live agents is: it has no terminal of its own by nature,
+                // not because it is a leftover. That used to be covered for free
+                // by the pid test below — a background agent recorded no pid — and
+                // is now stated, because the hook records its real pid.
                 if (status.IsLocalCli
                     && string.IsNullOrEmpty(status.Tty)
                     && string.IsNullOrEmpty(status.TermProgram)
                     && string.IsNullOrEmpty(status.TmuxPane)
                     && status.TermPid == 0
                     && !leadsWithLiveAgents.Contains(sessionId)
+                    && !(status.Source == SessionSource.ClaudeCode && BackgroundJobs.IsLiveJob(sessionId))
                     && status.SessionPid > 0)
                 {
                     continue;
@@ -1021,6 +1110,40 @@ namespace ClaudeBuddy
             if (status.Source == SessionSource.OpenClaw)
                 return OpenClawSessions.ChatFor(sessionId, status.Title);
 
+            // A session on another machine. Cached like the local ones below,
+            // and for a stronger reason: this conversation exists *only* here.
+            // A local panel rebuilt from scratch re-reads the transcript and
+            // loses nothing but scroll position, whereas rebuilding this one
+            // would throw away the entire exchange — there is no file on this
+            // machine to read it back from.
+            if (status.Source == SessionSource.RemoteControl)
+            {
+                if (_remoteChats.TryGetValue(sessionId, out var existingRemote)) return existingRemote;
+
+                // The peer name, recovered from the id the scan minted. Taken
+                // from the id rather than the title so it survives a title that
+                // gets prettied up later — the name is what SendMessage
+                // addresses, and it has to stay exact.
+                // "rc:<account>:<name>". Split from the right, because a session
+                // name can itself contain a colon and an account directory
+                // cannot — so the *first* separator after the prefix is the one
+                // that divides them.
+                var rest = sessionId.StartsWith("rc:", StringComparison.Ordinal) ? sessionId[3..] : "";
+                var split = rest.IndexOf(':');
+                var account = split > 0 ? rest[..split] : ClaudeBuddySettings.DefaultRemoteControlProfileDir;
+                var remoteName = split > 0 ? rest[(split + 1)..] : status.Title;
+
+                var remote = new RemoteControlChatSession(sessionId, account, remoteName);
+                _remoteChats[sessionId] = remote;
+
+                // Opening the panel counts as asking for the bridge, so the
+                // conversation is usable the moment it appears rather than only
+                // after the first message is typed.
+                RemoteControlSessions.EnsureStarted();
+
+                return remote;
+            }
+
             // Both local CLIs from here down. Which transcript format to read
             // and which pair of settings governs it is the whole of the
             // difference, and it lives in CliChatFormat.
@@ -1047,6 +1170,13 @@ namespace ClaudeBuddy
         // emptied with the orb.
         private readonly Dictionary<string, LocalCliChatSession> _chats = new(StringComparer.Ordinal);
 
+        // Separate from _chats above because these are not disposable and are
+        // not keyed to a status file's lifetime. A remote conversation outlives
+        // the orb: the bridge idling out empties the snapshot and the orb goes,
+        // but what was said should still be there when it comes back.
+        private readonly Dictionary<string, RemoteControlChatSession> _remoteChats =
+            new(StringComparer.Ordinal);
+
         // Namespaced away from both Claude Code's UUIDs and the gateway's own
         // keys, because it is neither: nothing on the gateway answers to it.
         private static string RoomId(string roomKey) => "openclaw:room:" + roomKey;
@@ -1056,6 +1186,34 @@ namespace ClaudeBuddy
         {
             var dash = sessionTitle.IndexOf(" — ", StringComparison.Ordinal);
             return dash > 0 ? sessionTitle[(dash + 3)..].Trim() : sessionTitle;
+        }
+
+        // A message from a session on another machine, handed to the one
+        // conversation it belongs to.
+        //
+        // Delivered only to an already-open conversation, and that is the right
+        // shape rather than a gap: this channel is a reply to something someone
+        // typed here, so an inbound message with no panel behind it would be a
+        // reply to nothing. A remote session cannot start a conversation.
+        private void OnRemoteMessage(BridgeProtocol.InboundMessage message)
+        {
+            // Keyed the way the scan mints ids, so this is a lookup rather than
+            // a walk — and it means a remote session named the same as a local
+            // one cannot be delivered to the local one's panel.
+            // Offered to every open remote conversation and filtered by each.
+            // A direct dictionary hit would need the exact key, and the peer
+            // list's casing is upstream's to change — so the sessions decide,
+            // each checking both the name and the account it belongs to.
+            foreach (var candidate in _remoteChats.Values) candidate.OnInbound(message);
+        }
+
+        // A remote session started or stopped working. The orb learns this from
+        // the snapshot on the next scan; this is for the panel, which has no scan
+        // to wait on and would otherwise show a sent message and nothing else
+        // for however long the other machine takes.
+        private void OnRemoteWorkingChanged(string sessionKey, bool working)
+        {
+            if (_remoteChats.TryGetValue(sessionKey, out var chat)) chat.SetWorking(working);
         }
 
         public SessionStatus? StatusFor(string? sessionId) =>

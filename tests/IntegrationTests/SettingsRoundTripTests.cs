@@ -142,4 +142,88 @@ public class SettingsRoundTripTests
         Assert.NotNull(orbColors);
         Assert.Equal("green", orbColors!["idle"]!.GetValue<string>());
     }
+
+    // The three Remote Control settings, round-tripped together.
+    //
+    // The specific hazard this guards is the one KnownKeys exists for: a key
+    // written by Save() but missing from KnownKeys is *also* replayed out of
+    // _unknownKeys, and JsonObject throws on the duplicate — so a forgotten
+    // KnownKeys entry doesn't degrade, it breaks every Save from then on.
+    // Reading the values back through a reload is what proves all five steps
+    // (model field, accessor, Load parse, Save write, KnownKeys) were done.
+    [Fact]
+    public void RemoteControlSettings_RoundTripThroughDiskAndReload()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.RemoteControlEnabled = true;
+        ClaudeBuddySettings.RemoteControlProfileDir = ".claude-board";
+        ClaudeBuddySettings.RemoteControlIdleMinutes = 25;
+
+        // Back from disk, not from the in-memory model the setters just wrote.
+        PointSettingsAt(dir);
+
+        Assert.True(ClaudeBuddySettings.RemoteControlEnabled);
+        Assert.Equal(".claude-board", ClaudeBuddySettings.RemoteControlProfileDir);
+        Assert.Equal(25, ClaudeBuddySettings.RemoteControlIdleMinutes);
+    }
+
+    [Fact]
+    public void RemoteControlSettings_HaveSafeDefaultsBeforeAnyoneChoosesThem()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        // Off by default: enabling it is what permits Buddy to start a real
+        // Claude Code session on the user's account, which costs them quota.
+        Assert.False(ClaudeBuddySettings.RemoteControlEnabled);
+
+        // Never empty — the bridge has to launch under some config directory.
+        Assert.Equal(
+            ClaudeBuddySettings.DefaultRemoteControlProfileDir,
+            ClaudeBuddySettings.RemoteControlProfileDir);
+
+        Assert.Equal(
+            ClaudeBuddySettings.DefaultRemoteControlIdle,
+            ClaudeBuddySettings.RemoteControlIdleMinutes);
+    }
+
+    // A negative idle would read as "already expired" to every comparison
+    // downstream, stopping the bridge the instant it started — which would look
+    // like the feature being broken rather than a bad setting.
+    // RemoteControlIdleNever is the deliberate way to say "never stop".
+    [Fact]
+    public void RemoteControlIdleMinutes_ClampsANegativeToNever()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.RemoteControlIdleMinutes = -5;
+
+        Assert.Equal(ClaudeBuddySettings.RemoteControlIdleNever, ClaudeBuddySettings.RemoteControlIdleMinutes);
+    }
+
+    // An unchosen profile stays null on disk rather than being written as a copy
+    // of today's default, so changing the shipped default still reaches users
+    // who never picked one.
+    [Fact]
+    public void RemoteControlProfileDir_IsNotWrittenToDiskUntilChosen()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+        var settingsPath = Path.Combine(dir, "settings.json");
+
+        ClaudeBuddySettings.RemoteControlEnabled = true;
+
+        var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
+        Assert.NotNull(root);
+        Assert.True(root!.ContainsKey("remoteControlProfileDir"));
+        Assert.Null(root["remoteControlProfileDir"]);
+
+        // The accessor still answers with the default, so callers never see null.
+        Assert.Equal(
+            ClaudeBuddySettings.DefaultRemoteControlProfileDir,
+            ClaudeBuddySettings.RemoteControlProfileDir);
+    }
 }
