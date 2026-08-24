@@ -23,6 +23,13 @@ namespace ClaudeBuddy.Tests
         // instead of the fixture.
         private static readonly string[] NoSystemInstalls = Array.Empty<string>();
 
+        // The platform's own PATH separator: ':' on Unix, ';' on Windows. Written
+        // once here because using a literal ':' is precisely the bug these cases
+        // caught in the code under test — a Windows PATH entry contains a colon,
+        // so a test that joined with one would be describing a PATH no Windows
+        // machine has.
+        private static readonly char Sep = System.IO.Path.PathSeparator;
+
         private string Touch(params string[] parts)
         {
             var path = Path.Combine(new[] { _root }.Concat(parts).ToArray());
@@ -115,7 +122,7 @@ namespace ClaudeBuddy.Tests
             var second = Touch("b", "claude");
             Touch("c", "claude");
 
-            var search = string.Join(':', new[]
+            var search = string.Join(Sep, new[]
             {
                 Path.Combine(_root, "a"),      // does not exist at all
                 Path.Combine(_root, "b"),
@@ -177,7 +184,7 @@ namespace ClaudeBuddy.Tests
         public void AMalformedPathEntryIsSteppedOver()
         {
             var good = Touch("good", "claude");
-            var search = "\0bad\0entry:" + Path.Combine(_root, "good");
+            var search = "\0bad\0entry" + Sep + Path.Combine(_root, "good");
 
             Assert.Equal(
                 good,
@@ -191,7 +198,7 @@ namespace ClaudeBuddy.Tests
         public void EmptyPathEntriesAreIgnored()
         {
             var good = Touch("good", "claude");
-            var search = "::" + Path.Combine(_root, "good") + "::";
+            var search = $"{Sep}{Sep}" + Path.Combine(_root, "good") + $"{Sep}{Sep}";
 
             Assert.Equal(
                 good,

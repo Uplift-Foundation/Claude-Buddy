@@ -82,7 +82,19 @@ namespace ClaudeBuddy
             var path = searchPath ?? Environment.GetEnvironmentVariable("PATH");
             if (string.IsNullOrEmpty(path)) return null;
 
-            foreach (var dir in path.Split(':', StringSplitOptions.RemoveEmptyEntries))
+            // System.IO.Path.PathSeparator, not a literal ':' — and qualified,
+            // because this class has a Path property of its own, which is why
+            // every other call here is qualified too.
+            //
+            // The separator is ':' on Unix and ';' on Windows, and there the
+            // difference is not cosmetic: a Windows PATH entry *contains* a
+            // colon, so splitting on one turned "C:/Users/x/bin;C:/tools" into
+            // "C", "/Users/x/bin;C" and "/tools" — three strings that are not
+            // directories. The fallback could therefore never find anything on
+            // Windows, silently, which is the class of failure this whole
+            // function exists to avoid. Caught by the Windows CI leg the first
+            // time these paths were tested.
+            foreach (var dir in path.Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             {
                 try
                 {

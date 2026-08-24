@@ -97,15 +97,30 @@ public class ClaudeDesktopColorsTests
         try
         {
             var derived = ClaudeDesktopColors.For(folder, isDefault: false);
-            ClaudeBuddySettings.Update(folder, p => p.Color = "magenta");
 
-            Assert.Equal(Color.Parse("#D787AF"), ClaudeDesktopColors.For(folder, isDefault: false));
+            // Chosen to differ from whatever this folder happens to derive to,
+            // rather than hardcoded — because a derived colour is one of the
+            // named ones, so a fixed choice collides with it for one folder name
+            // in every |Names|. That is not a hypothetical: this test failed on
+            // CI naming "magenta" while the folder derived to magenta, and the
+            // assertion below is precisely the one that cannot hold when they
+            // agree. Reproducing it needed the right random name, which is why it
+            // looked like a race and was not one.
+            var chosen = ClaudeDesktopColors.Names
+                .First(name => ClaudeDesktopColors.ByName(name) != derived);
+            var expected = ClaudeDesktopColors.ByName(chosen);
+
+            ClaudeBuddySettings.Update(folder, p => p.Color = chosen);
+
+            Assert.Equal(expected, ClaudeDesktopColors.For(folder, isDefault: false));
             Assert.NotEqual(derived, ClaudeDesktopColors.For(folder, isDefault: false));
 
             // isDefault: true would otherwise return the slate.
-            Assert.Equal(Color.Parse("#D787AF"), ClaudeDesktopColors.For(folder, isDefault: true));
-            Assert.Equal("magenta", ClaudeDesktopColors.NameFor(folder, isDefault: true));
-            Assert.Equal("D787AF", ClaudeDesktopColors.HexFor(folder, isDefault: true));
+            Assert.Equal(expected, ClaudeDesktopColors.For(folder, isDefault: true));
+            Assert.Equal(chosen, ClaudeDesktopColors.NameFor(folder, isDefault: true));
+            Assert.Equal(
+                ClaudeDesktopColors.HexFor(folder, isDefault: true),
+                ClaudeDesktopColors.HexFor(folder, isDefault: false));
         }
         finally
         {
