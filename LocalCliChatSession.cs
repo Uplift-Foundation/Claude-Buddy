@@ -717,7 +717,12 @@ namespace ClaudeBuddy
             }
         }
 
-        private void SetPrompt(ChatPrompt? prompt)
+        // internal: the transitions around a prompt are what decide whether the
+        // panel is still offering buttons for a dialog that has been answered,
+        // and pressing one of those sends keystrokes into a live session. Reading
+        // the pane to *find* a prompt needs tmux and is excluded; establishing one
+        // does not.
+        internal void SetPrompt(ChatPrompt? prompt)
         {
             Prompt = prompt;
             Dispatcher.UIThread.Post(() => PromptChanged?.Invoke());

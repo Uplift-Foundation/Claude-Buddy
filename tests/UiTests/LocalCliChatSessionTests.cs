@@ -386,4 +386,130 @@ public class LocalCliChatSessionTests : IDisposable
         // watcher, it does not empty the panel.
         Assert.Single(session.History);
     }
+
+    // --- the permission prompt ---
+    //
+    // A prompt is the panel offering buttons that send keystrokes into a live
+    // session, so a stale one is not a cosmetic problem: it is a button that
+    // presses something for a dialog that has already been answered. Finding a
+    // prompt means capturing a tmux pane and is excluded; the transitions around
+    // one are decided here and are not.
+
+    // Leaving "waiting" clears the prompt. Without this the buttons stay on
+    // screen after the dialog is gone.
+    [AvaloniaFact]
+    public void LeavingTheWaitingStateClearsThePrompt()
+    {
+        var path = Transcript(User("u1", "hello"));
+        var session = Started(path, state: "waiting");
+
+        session.SetPrompt(new ChatPrompt("Do you want to proceed?", new[]
+        {
+            new ChatPromptOption("1", "Yes"),
+            new ChatPromptOption("2", "No"),
+        }));
+        Assert.NotNull(session.Prompt);
+
+        session.UpdateStatus(new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, TranscriptPath = path, State = "idle",
+        });
+
+        Assert.Null(session.Prompt);
+    }
+
+    // ...and says so, because the panel has to take the buttons down rather than
+    // wait for something else to happen.
+    [AvaloniaFact]
+    public void ClearingThePromptIsAnnounced()
+    {
+        var path = Transcript(User("u1", "hello"));
+        var session = Started(path, state: "waiting");
+
+        var changes = 0;
+        session.PromptChanged += () => changes++;
+
+        session.SetPrompt(new ChatPrompt("Proceed?", Array.Empty<ChatPromptOption>()));
+        Dispatcher.UIThread.RunJobs();
+        var afterSetting = changes;
+
+        session.UpdateStatus(new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, TranscriptPath = path, State = "idle",
+        });
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(changes > afterSetting, "clearing a prompt has to be announced");
+    }
+
+    // A status update that was not waiting and still is not raises nothing. The
+    // scan runs a couple of times a second, so an update per tick would be an
+    // event per tick for a panel with nothing to change.
+    [AvaloniaFact]
+    public void StayingNotWaitingRaisesNothing()
+    {
+        var path = Transcript(User("u1", "hello"));
+        var session = Started(path);
+
+        Dispatcher.UIThread.RunJobs();
+        var changes = 0;
+        session.PromptChanged += () => changes++;
+
+        for (var i = 0; i < 3; i++)
+        {
+            session.UpdateStatus(new SessionStatus
+            {
+                Source = SessionSource.ClaudeCode, TranscriptPath = path, State = "idle",
+            });
+        }
+
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(0, changes);
+    }
+
+    // A prompt already on screen survives another "waiting" update. Claude Code
+    // commonly asks two or three permissions in a row and the state never leaves
+    // "waiting" between them, so an update that cleared or re-read on every tick
+    // would flicker the buttons under the pointer.
+    [AvaloniaFact]
+    public void APromptSurvivesAnotherWaitingUpdate()
+    {
+        var path = Transcript(User("u1", "hello"));
+        var session = Started(path, state: "waiting");
+
+        var prompt = new ChatPrompt("Do you want to proceed?", new[]
+        {
+            new ChatPromptOption("1", "Yes"),
+        });
+        session.SetPrompt(prompt);
+
+        session.UpdateStatus(new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, TranscriptPath = path, State = "waiting",
+        });
+
+        Assert.Same(prompt, session.Prompt);
+    }
+
+    // Answering is refused when replying is off, and refused *out loud* — the
+    // panel says so in the transcript rather than a button doing nothing. A send
+    // that silently fails is the worst outcome a chat window can produce.
+    [AvaloniaFact]
+    public async Task AnsweringWithReplyingOffSaysSoInsteadOfDoingNothing()
+    {
+        var path = Transcript(User("u1", "hello"));
+        var session = Started(path, state: "waiting");
+
+        ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
+
+        var before = session.History.Count;
+        await session.AnswerAsync(new ChatPromptOption("1", "Yes"));
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(session.History.Count > before, "a refusal has to be visible");
+        Assert.Contains(
+            session.History,
+            turn => turn.Text.Contains("Replying is off", StringComparison.OrdinalIgnoreCase));
+    }
 }
