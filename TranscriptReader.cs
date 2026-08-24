@@ -24,14 +24,30 @@ namespace ClaudeBuddy
         // an unrelated session's last turn out of a Codex orb. There is no
         // equivalent fallback here and there should not be one — a rollout that
         // cannot be read is silence, which is the honest answer.
+        //
+        // Excluded from coverage: the try/catch only. Everything it wraps is in
+        // NewestCodexText below and stays measured.
+        //
+        // The catch has never been reached and reasoning says it cannot be:
+        // TailLines already swallows a read that fails, and CodexTranscript.Map
+        // returns nothing for a row it cannot parse rather than throwing — which
+        // CodexTranscriptItemTests asserts directly. It stays because this runs
+        // inside a hook call, where a throw is not free, and because the format it
+        // reads belongs to somebody else.
+        [ExcludeFromCodeCoverage]
         public static string? LatestCodexAgentText(string? transcriptPath)
         {
             if (string.IsNullOrEmpty(transcriptPath) || !File.Exists(transcriptPath))
                 return null;
 
-            try
+            try { return NewestCodexText(transcriptPath); }
+            catch { return null; }
+        }
+
+        private static string? NewestCodexText(string transcriptPath)
+        {
+            var lines = TailLines(transcriptPath);
             {
-                var lines = TailLines(transcriptPath);
                 for (int i = lines.Length - 1; i >= 0; i--)
                 {
                     // The same pre-filter CodexTranscript uses, for the same
@@ -50,13 +66,13 @@ namespace ClaudeBuddy
                     return text.Length > MaxSpokenChars ? text[..MaxSpokenChars] + "…" : text;
                 }
             }
-            catch
-            {
-            }
 
             return null;
         }
 
+        // Excluded from coverage: the try/catch only, for the same reason as
+        // LatestCodexAgentText above.
+        [ExcludeFromCodeCoverage]
         public static string? LatestAssistantText(string? transcriptPath, string? sessionId = null)
         {
             if (string.IsNullOrEmpty(transcriptPath) && !string.IsNullOrEmpty(sessionId))
@@ -65,9 +81,14 @@ namespace ClaudeBuddy
             if (string.IsNullOrEmpty(transcriptPath) || !File.Exists(transcriptPath))
                 return null;
 
-            try
+            try { return NewestAssistantText(transcriptPath); }
+            catch { return null; }
+        }
+
+        private static string? NewestAssistantText(string transcriptPath)
+        {
+            var lines = TailLines(transcriptPath);
             {
-                var lines = TailLines(transcriptPath);
                 for (int i = lines.Length - 1; i >= 0; i--)
                 {
                     var line = lines[i];
@@ -80,9 +101,6 @@ namespace ClaudeBuddy
                             ? text[..MaxSpokenChars] + "…"
                             : text;
                 }
-            }
-            catch
-            {
             }
 
             return null;
@@ -114,28 +132,19 @@ namespace ClaudeBuddy
                 var projects = Path.Combine(configDir, "projects");
                 if (!Directory.Exists(projects)) continue;
 
-                try
+                foreach (var dir in SafeDirectories(projects))
                 {
-                    foreach (var dir in Directory.EnumerateDirectories(projects))
-                    {
-                        if (!ProjectDirMatches(Path.GetFileName(dir), encoded)) continue;
+                    if (!ProjectDirMatches(Path.GetFileName(dir), encoded)) continue;
 
-                        foreach (var file in Directory.EnumerateFiles(dir, "*.jsonl"))
-                        {
-                            try
-                            {
-                                var mod = File.GetLastWriteTimeUtc(file);
-                                if (mod > bestTime)
-                                {
-                                    bestTime = mod;
-                                    best = file;
-                                }
-                            }
-                            catch { }
-                        }
+                    foreach (var file in SafeFiles(dir, "*.jsonl"))
+                    {
+                        var mod = SafeWriteTime(file);
+                        if (mod is null || mod <= bestTime) continue;
+
+                        bestTime = mod.Value;
+                        best = file;
                     }
                 }
-                catch { }
             }
 
             return best;
@@ -166,13 +175,8 @@ namespace ClaudeBuddy
                 var projects = Path.Combine(configDir, "projects");
                 if (!Directory.Exists(projects)) continue;
 
-                try
-                {
-                    var match = Directory.EnumerateFiles(projects, filename, SearchOption.AllDirectories)
-                        .FirstOrDefault();
-                    if (match is not null) return match;
-                }
-                catch { }
+                var match = SafeFindDeep(projects, filename);
+                if (match is not null) return match;
             }
 
             return null;
@@ -202,6 +206,48 @@ namespace ClaudeBuddy
             if (!dirName.StartsWith(encoded, StringComparison.Ordinal)) return false;
 
             return dirName.Length <= encoded.Length || dirName[encoded.Length] == '-';
+        }
+
+        // Four thin wrappers, all excluded, all for the same thing: these walk a
+        // directory tree that live sessions are writing to, so a directory can
+        // stop existing between being listed and being read, and a file between
+        // being listed and being asked its age. None of that is a state a test can
+        // hold still, and none of it is worth failing a lookup over — a transcript
+        // that cannot be read is simply one this search does not return.
+        //
+        // Separated so the walk itself stays measured: which directory names match
+        // an encoded cwd, and which of the files under them is newest, is the part
+        // with a decision in it.
+        [ExcludeFromCodeCoverage]
+        private static IEnumerable<string> SafeDirectories(string root)
+        {
+            try { return Directory.EnumerateDirectories(root).ToList(); }
+            catch { return Array.Empty<string>(); }
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static IEnumerable<string> SafeFiles(string dir, string pattern)
+        {
+            try { return Directory.EnumerateFiles(dir, pattern).ToList(); }
+            catch { return Array.Empty<string>(); }
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static DateTime? SafeWriteTime(string file)
+        {
+            try { return File.GetLastWriteTimeUtc(file); }
+            catch { return null; }
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static string? SafeFindDeep(string root, string filename)
+        {
+            try
+            {
+                return Directory.EnumerateFiles(root, filename, SearchOption.AllDirectories)
+                    .FirstOrDefault();
+            }
+            catch { return null; }
         }
 
         // Excluded from coverage: the try/catch only. The window logic it wraps is
