@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
@@ -113,6 +114,11 @@ namespace ClaudeBuddy
         // most orbs are never hovered in a given run, and none of them should
         // pay for a second window until one actually is.
         private OrbFlyout? _flyout;
+
+        // Test-only window into the lazily-created flyout: a test that drives
+        // EnsureFlyoutShown directly (see that method's own comment) has no other
+        // way to reach the window it just built to click one of its own buttons.
+        internal OrbFlyout? Flyout => _flyout;
 
         // Bridges hover between two separate OS windows (the orb and its
         // flyout): a bare PointerExited on either one would hide the flyout
@@ -896,7 +902,11 @@ namespace ClaudeBuddy
             _ticker.Start();
         }
 
-        private void TickPulse()
+        // internal: the shared ticker's Tick handler calls this on every
+        // pulsing orb once a real frame elapses, which a headless test only
+        // gets by pumping the dispatcher against wall time. Driving it directly
+        // is the same trade ApplyState already makes above.
+        internal void TickPulse()
         {
             // Nothing on screen, nothing to animate — the whole point of the
             // "Show orbs" toggle was to stop this work, and it never did.
@@ -926,7 +936,7 @@ namespace ClaudeBuddy
         // Opacity moves with the scale because 15px of heart cannot get much
         // bigger before it leaves its own badge — most of the visible motion is
         // the fade, and the scale is what stops the fade reading as a blink.
-        private void TickHeart()
+        internal void TickHeart()
         {
             var beat = OpenClawHeartbeat.Beat(
                 (Environment.TickCount64 - _heartStartedAt) / HeartPeriodMs);
@@ -959,7 +969,10 @@ namespace ClaudeBuddy
         // own comment for why. A no-op when the feature is off, so nothing
         // here ever constructs a VoiceRecorder — and triggers macOS's
         // mic-permission prompt — for someone who hasn't opted in.
-        private void EnsureFlyoutShown()
+        // internal: only reachable in production via a real hover (see
+        // ScheduleFlyoutShow/OnFlyoutShowTick), which needs a pointer genuinely
+        // resting on the orb. Driven directly for the same reason ApplyState is.
+        internal void EnsureFlyoutShown()
         {
             if (_flyout is null)
             {
@@ -1050,7 +1063,7 @@ namespace ClaudeBuddy
         // TextToSpeech.StateChanged is the single source now; see SessionManager,
         // which broadcasts it to every orb because speech is global rather than
         // per-orb.
-        private void OnSpeakClicked()
+        internal void OnSpeakClicked()
         {
             if (TextToSpeech.IsSpeaking)
             {
@@ -1074,7 +1087,7 @@ namespace ClaudeBuddy
             TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
         }
 
-        private async Task SpeakRemoteAsync()
+        internal async Task SpeakRemoteAsync()
         {
             var title = _lastStatus?.Title ?? "";
             var text = await OpenClawSessions.LastAssistantTextAsync(SessionId, title);
@@ -1095,7 +1108,7 @@ namespace ClaudeBuddy
         // background jobs it launched write theirs into project dirs named
         // for the same cwd, and the most recent of those is what "read the
         // last turn" means when you click its orb.
-        private string? FindSpeakableText()
+        internal string? FindSpeakableText()
         {
             // Not for a gateway session. It has no transcript on this machine,
             // and the cwd fallback below would match a *local* project directory
@@ -1144,7 +1157,7 @@ namespace ClaudeBuddy
         // The flyout's keyboard button. Same destination a gateway orb's click
         // reaches, arrived at differently because for a local session the click
         // is already spoken for.
-        private void OpenChat()
+        internal void OpenChat()
         {
             var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
             if (chat is null) return;
@@ -1182,15 +1195,15 @@ namespace ClaudeBuddy
             _flyout?.Hide();
         }
 
-        private void CancelFlyoutHide() => _hideFlyoutTimer?.Stop();
+        internal void CancelFlyoutHide() => _hideFlyoutTimer?.Stop();
 
-        private void CancelFlyoutShow() => _showFlyoutTimer?.Stop();
+        internal void CancelFlyoutShow() => _showFlyoutTimer?.Stop();
 
         // The delay is only for *opening* the flyout from nothing. Coming back
         // onto the orb from its own open flyout is the other half of the hover
         // bridge, not a new request, and pausing there would be a stutter in
         // the middle of an interaction the user is already having.
-        private void ScheduleFlyoutShow()
+        internal void ScheduleFlyoutShow()
         {
             // On the method rather than on PointerEntered, the same way
             // ScheduleFlyoutHide carries its own _recording guard: the rule is
@@ -1215,7 +1228,7 @@ namespace ClaudeBuddy
             _showFlyoutTimer.Start();
         }
 
-        private void OnFlyoutShowTick(object? sender, EventArgs e)
+        internal void OnFlyoutShowTick(object? sender, EventArgs e)
         {
             _showFlyoutTimer!.Stop();
 
@@ -1229,7 +1242,7 @@ namespace ClaudeBuddy
 
         // A no-op while recording: the flyout is the only way to stop, so it
         // must stay up regardless of where the pointer wanders.
-        private void ScheduleFlyoutHide()
+        internal void ScheduleFlyoutHide()
         {
             if (_recording) return;
 
@@ -1243,7 +1256,7 @@ namespace ClaudeBuddy
             _hideFlyoutTimer.Start();
         }
 
-        private void OnFlyoutHideTick(object? sender, EventArgs e)
+        internal void OnFlyoutHideTick(object? sender, EventArgs e)
         {
             _hideFlyoutTimer!.Stop();
 
@@ -1255,6 +1268,17 @@ namespace ClaudeBuddy
             _flyout?.Hide();
         }
 
+        // Excluded from coverage: constructs and starts a real VoiceRecorder,
+        // which is itself excluded wholesale for the same reason (it opens an
+        // actual microphone). There is no seam to test the surrounding
+        // dispatch logic without either a working input device (which a CI
+        // runner may or may not have, making the catch-vs-success branch
+        // nondeterministic across machines — the exact kind of platform
+        // dependence this ticket's rules forbid relying on) or a real
+        // recording actually starting and running for up to 30 seconds on a
+        // background capture thread, which is not something a headless suite
+        // should leave running.
+        [ExcludeFromCodeCoverage]
         private void StartRecording()
         {
             if (_recording) return;
@@ -1299,6 +1323,14 @@ namespace ClaudeBuddy
             _recordingCap.Start();
         }
 
+        // Excluded from coverage along with StartRecording: only reachable
+        // after a real recording actually started (a live VoiceRecorder,
+        // itself excluded), and its meaningful body pipes real captured audio
+        // through SpeechTranscriber — a local Whisper.net model load and
+        // inference, not something a headless CI runner should be doing
+        // either. The early-return guard is inseparable from that same
+        // feature rather than a decision worth a seam of its own.
+        [ExcludeFromCodeCoverage]
         private async void StopRecording()
         {
             if (!_recording || _recorder is null) return;
@@ -1381,6 +1413,13 @@ namespace ClaudeBuddy
         // Ends an in-progress recording without transcribing or sending
         // anything — only reachable from Closed, where the orb (and the
         // session it belongs to) is going away regardless.
+        //
+        // Excluded from coverage: its only caller is the Closed event
+        // (rule of this suite: never Close() a headless orb, which corrupts a
+        // process-wide font cache — see OrbWindowStateTests), and its
+        // meaningful body needs the same live VoiceRecorder StartRecording
+        // does.
+        [ExcludeFromCodeCoverage]
         private void CancelRecording()
         {
             _recordingCap?.Stop();
@@ -1586,7 +1625,7 @@ namespace ClaudeBuddy
         private int _pendingClicks;
         private int _clickCount = 1;
 
-        private void OnClicked(int clicks)
+        internal void OnClicked(int clicks)
         {
             // Beyond three there is nothing to bind, and treating a fourth click
             // as a fresh single would fire the single-click action in the middle
@@ -1616,7 +1655,7 @@ namespace ClaudeBuddy
         // Whether a longer gesture is bound to something this one isn't already
         // going to do. Same action on two and three as on one means the wait
         // would change nothing, so there is no reason to pay it.
-        private static bool AwaitsMoreClicks(int clicks)
+        internal static bool AwaitsMoreClicks(int clicks)
         {
             var mine = ActionFor(clicks);
 
@@ -1629,14 +1668,14 @@ namespace ClaudeBuddy
             return false;
         }
 
-        private static string ActionFor(int clicks) => clicks switch
+        internal static string ActionFor(int clicks) => clicks switch
         {
             1 => ClaudeBuddySettings.ClickAction,
             2 => ClaudeBuddySettings.DoubleClickAction,
             _ => ClaudeBuddySettings.TripleClickAction
         };
 
-        private void RunClickAction(int clicks)
+        internal void RunClickAction(int clicks)
         {
             switch (ActionFor(clicks))
             {
@@ -1662,7 +1701,7 @@ namespace ClaudeBuddy
         // second case is not a fallback bolted on for this feature; it is what a
         // click on a gateway orb has always done, because there is no terminal
         // anywhere to go to.
-        private void GoToSession()
+        internal void GoToSession()
         {
             if (!(_lastStatus?.IsLocalCli ?? false))
             {
@@ -1699,17 +1738,17 @@ namespace ClaudeBuddy
             ResetPositionItem.IsVisible = pinned;
         }
 
-        private void ResetIdle_Click(object? sender, RoutedEventArgs e)
+        internal void ResetIdle_Click(object? sender, RoutedEventArgs e)
         {
             SessionManager.Instance?.ResetSessionToIdle(SessionId);
         }
 
-        private void ResetPosition_Click(object? sender, RoutedEventArgs e)
+        internal void ResetPosition_Click(object? sender, RoutedEventArgs e)
         {
             SessionManager.Instance?.ReturnOrbToStack(SessionId);
         }
 
-        private void Exit_Click(object? sender, RoutedEventArgs e)
+        internal void Exit_Click(object? sender, RoutedEventArgs e)
         {
             if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
