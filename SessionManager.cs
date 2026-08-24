@@ -294,6 +294,17 @@ namespace ClaudeBuddy
             RemoteControlSessions.MessageReceived += OnRemoteMessage;
             RemoteControlSessions.WorkingChanged += OnRemoteWorkingChanged;
 
+            // What this machine can show another machine's Buddy.
+            //
+            // Handed over as a delegate rather than read from over there: the
+            // sessions this app knows about live here, behind the scan, and a
+            // static relay class reaching into an orb list would invert the
+            // dependency for no benefit. Snapshotted on call rather than cached,
+            // because a mirror request is exactly when "what is running right
+            // now" has to be right.
+            RemoteControlSessions.ProvideLocalSessions(() =>
+                _statuses.Select(pair => (pair.Key, pair.Value)).ToList());
+
             _debounce.Tick += (_, _) =>
             {
                 _debounce.Stop();
