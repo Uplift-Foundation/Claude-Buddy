@@ -30,7 +30,24 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-OUT="${TMPDIR:-/tmp}/claude-buddy-coverage"
+# Keyed by which checkout this is, because "rm -rf" two lines down is otherwise
+# aimed at somebody else's reports. CLAUDE.md has features built by a team of
+# agents each in its own git worktree, and every one of them is told to measure
+# coverage — same machine, same TMPDIR, one directory. The failure is silent and
+# it lies in both directions: a run that wipes the shared directory mid-flight
+# leaves the merge reading whichever reports happen to exist, so a suite that
+# passed can be missing from the number entirely, and one worktree's hits can be
+# attributed to another's source.
+#
+# Found exactly that way — a local number quoted OrbArrangement at 0% while
+# three engineer worktrees were measuring, because the ui and shots reports had
+# been deleted out from under it between being written and being read.
+#
+# The path is hashed rather than used directly: it can be long, contains
+# slashes, and none of that belongs in a directory name. Sixteen hex characters
+# of it is plenty to keep concurrent checkouts apart.
+CHECKOUT_KEY="$(printf '%s' "$PWD" | shasum | cut -c1-16)"
+OUT="${TMPDIR:-/tmp}/claude-buddy-coverage/$CHECKOUT_KEY"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
