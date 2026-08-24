@@ -54,7 +54,28 @@ namespace ClaudeBuddy
             public string? Warning;
             public bool Polled;
             public IReadOnlyList<Remote> Sessions = Array.Empty<Remote>();
+
+            // The two halves of the verbatim mirror, one pair per relay because
+            // the relay is the wire they both talk over. The server answers the
+            // other machine's Buddy about sessions here; the client asks the
+            // other machine's Buddy about sessions there. Both exist on both
+            // machines — which is the point, since either end can be the one
+            // being looked at.
+            public RemoteMirrorServer? Server;
+            public RemoteMirrorClient? Client;
         }
+
+        // This machine's own sessions, for the mirror server to answer about.
+        //
+        // A delegate set by SessionManager rather than a reach into it: this
+        // class is static and starts long before any window exists, and a
+        // reference the other way would make the orb list a dependency of the
+        // relay rather than the other way round.
+        private static Func<IReadOnlyList<(string SessionId, SessionStatus Status)>>? _localSessions;
+
+        public static void ProvideLocalSessions(
+            Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> provider) =>
+            _localSessions = provider;
 
         // A session on another machine, as the orb scan wants it. Kept separate
         // from BridgeProtocol.RemoteAgent so the parser stays a parser: this one
@@ -207,8 +228,23 @@ namespace ClaudeBuddy
         private static readonly Dictionary<string, IReadOnlyList<SlashCommand>> KnownCommands =
             new(StringComparer.OrdinalIgnoreCase);
 
+        // Raised when a far Buddy has answered about what it can mirror, so an
+        // open panel can upgrade itself from a messaging channel to a live view
+        // without being reopened.
+        public static event Action<string>? MirrorChanged;
+
         public static IReadOnlyList<SlashCommand> CommandsFor(string account, string name)
         {
+            // A roster answer wins over a CB-INFO one, and it is a better answer
+            // in every way: it was read off the far machine's own disk by its
+            // Buddy rather than recited by a model, it carries built-ins as well
+            // as custom commands — which now genuinely run, because a mirrored
+            // send is typed into that session's input line — and it cannot come
+            // back mangled, because it arrived hashed.
+            var mirror = MirrorFor(account, name);
+            if (mirror?.Commands is { Count: > 0 } commands)
+                return commands.Select(c => new SlashCommand(c, "")).ToList();
+
             lock (Gate)
             {
                 return KnownCommands.TryGetValue(account + ":" + name, out var c)
@@ -217,8 +253,117 @@ namespace ClaudeBuddy
             }
         }
 
-        private static readonly HashSet<string> InfoAsked =
+        // What the far Buddy said about one session, or null if none has.
+        internal static MirrorProtocol.MirrorRosterEntry? MirrorFor(string account, string name) =>
+            MirrorStateFor(account, name).Entry;
+
+        internal static RemoteMirrorClient.MirrorState MirrorStateFor(string account, string name)
+        {
+            RemoteMirrorClient? client;
+            lock (Gate) client = Relays.TryGetValue(account, out var relay) ? relay.Client : null;
+
+            return client?.StateFor(name)
+                   ?? new RemoteMirrorClient.MirrorState(
+                       RemoteMirrorClient.MirrorAvailability.Unknown, null);
+        }
+
+        internal static RemoteMirrorClient? MirrorClientFor(string account)
+        {
+            lock (Gate) return Relays.TryGetValue(account, out var relay) ? relay.Client : null;
+        }
+
+        // Installs a mirror client without a relay behind it.
+        //
+        // A test seam, and the same kind as `Now` above: the alternative is a
+        // test that starts a real Claude Code session to prove that a chat panel
+        // renders a transcript, which would cost the person running it money and
+        // still not be deterministic. The client handed in here is the real one,
+        // wired to a fake wire — see MirrorRoundTripTests, which does the same
+        // thing with a real server on the other end of it.
+        //
+        // Never called by the app: a relay always builds its own pair in
+        // StartAsync.
+        internal static void UseMirrorClientForTests(string account, RemoteMirrorClient? client)
+        {
+            lock (Gate)
+            {
+                if (!Relays.TryGetValue(account, out var relay))
+                {
+                    relay = new Relay { State = "test" };
+                    Relays[account] = relay;
+                }
+
+                relay.Client = client;
+            }
+
+            if (client is not null) client.RosterUpdated += () => MirrorChanged?.Invoke(account);
+        }
+
+        // Puts the statics back, so one test cannot leave a mirror installed for
+        // every test after it — the mistake bugfix/rc-tests-leak-remote-setting
+        // already had to fix once for the Remote Control setting itself.
+        internal static void ResetForTests()
+        {
+            lock (Gate)
+            {
+                Relays.Clear();
+                KnownColors.Clear();
+                KnownCommands.Clear();
+                InfoAsked.Clear();
+                WorkingNow.Clear();
+                _snapshot = Array.Empty<Remote>();
+            }
+
+            // Chat sessions subscribe to this in their constructor and are
+            // deliberately never disposed, so without clearing it every session
+            // any earlier test built stays subscribed for the rest of the run.
+            MirrorChanged = null;
+
+            Now = () => DateTime.UtcNow;
+        }
+
+        // When each session was last asked, and how often it has been.
+        //
+        // This was a HashSet, asked-once-ever, and once-ever turned out to mean
+        // never for anyone whose first ask went unanswered. A relay that was
+        // busy, a model that didn't call the tool, a session that started while
+        // the far machine was asleep — any of those, and that session's
+        // autocomplete stayed empty for as long as Buddy ran, with nothing on
+        // screen to suggest a question had been asked at all. The person's
+        // recourse was to restart the app, which is not a recourse.
+        //
+        // So it retries, and is bounded in both directions: not before the
+        // interval, and never more than a few times, because the cost is a real
+        // message into a real session and a session that has ignored three is
+        // telling you something.
+        private static readonly Dictionary<string, (DateTime At, int Count)> InfoAsked =
             new(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly TimeSpan InfoRetryAfter = TimeSpan.FromMinutes(10);
+        private const int InfoMaxAsks = 3;
+
+        // Caller holds Gate. Internal so the retry rule can be tested against an
+        // injected clock rather than by waiting ten minutes.
+        internal static bool ShouldAsk(string key)
+        {
+            var now = Now();
+
+            if (!InfoAsked.TryGetValue(key, out var asked))
+            {
+                InfoAsked[key] = (now, 1);
+                return true;
+            }
+
+            if (asked.Count >= InfoMaxAsks) return false;
+            if (now - asked.At < InfoRetryAfter) return false;
+
+            InfoAsked[key] = (now, asked.Count + 1);
+            return true;
+        }
+
+        // Injectable only so the retry rule above can be tested without a
+        // ten-minute test. Never replaced in the app.
+        internal static Func<DateTime> Now = () => DateTime.UtcNow;
 
         // Brings up a relay for every configured account that hasn't got one, and
         // marks them all as wanted either way. Every entry point that means "a
@@ -341,6 +486,24 @@ namespace ClaudeBuddy
                 return;
             }
 
+            // Both mirror halves are built with the relay and live as long as
+            // it does. Neither costs anything until something asks: the server
+            // answers frames that arrive, the client sends none until there is a
+            // remote orb to ask about.
+            var client = new RemoteMirrorClient(
+                account,
+                new RemoteMirrorClient.Seams(bridge.SendFrameToAsync));
+
+            var server = new RemoteMirrorServer(
+                account,
+                RemoteMirrorServer.RealSeams(
+                    account,
+                    bridge.SendFrameToAsync,
+                    () => _localSessions?.Invoke()
+                          ?? Array.Empty<(string, SessionStatus)>()));
+
+            client.RosterUpdated += () => Dispatcher.UIThread.Post(() => MirrorChanged?.Invoke(account));
+
             lock (Gate)
             {
                 var relay = Relays.TryGetValue(account, out var found) ? found : new Relay();
@@ -350,6 +513,8 @@ namespace ClaudeBuddy
                 relay.Polled = false;
                 relay.State = "connected";
                 relay.Warning = bridge.Warning;
+                relay.Client = client;
+                relay.Server = server;
                 Relays[account] = relay;
             }
 
@@ -375,6 +540,74 @@ namespace ClaudeBuddy
             _poll = new DispatcherTimer { Interval = PollEvery };
             _poll.Tick += (_, _) => _ = TickAsync();
             _poll.Start();
+
+            EnsureMirrorTimer();
+        }
+
+        // The one poll in this class that is free.
+        //
+        // Everything else here costs a model turn, which is why the ordinary
+        // cadence is twenty seconds and drops to five only under duress. This
+        // one calls Pump() — reading bytes off the relay's own transcript file
+        // on this disk — and ticks the two mirror halves, which read local files
+        // and expire subscriptions. No prompt is pasted, so nothing is spent,
+        // and a mirror frame that has landed is noticed in a second and a half
+        // rather than waiting out a poll. Without it a transfer of thirty
+        // pieces, each needing the reply to be seen before the next is asked
+        // for, would take ten minutes of walking-pace polling.
+        //
+        // Only runs while something is actually mirroring: with no panel open
+        // and nobody asking, both halves report not busy and this does nothing
+        // but check a flag.
+        private static DispatcherTimer? _mirrorPump;
+
+        private static readonly TimeSpan MirrorPumpEvery = TimeSpan.FromMilliseconds(1500);
+
+        private static void EnsureMirrorTimer()
+        {
+            if (_mirrorPump is not null) return;
+
+            _mirrorPump = new DispatcherTimer { Interval = MirrorPumpEvery };
+            _mirrorPump.Tick += (_, _) => _ = MirrorTickAsync();
+            _mirrorPump.Start();
+        }
+
+        private static bool _mirrorTicking;
+
+        private static async Task MirrorTickAsync()
+        {
+            // Ticks can overlap when a file read is slow, and two pumps racing
+            // on one relay would read the same bytes twice.
+            if (_mirrorTicking) return;
+            _mirrorTicking = true;
+
+            try
+            {
+                List<Relay> live;
+                lock (Gate) live = Relays.Values.Where(r => r.Bridge is not null).ToList();
+
+                foreach (var relay in live)
+                {
+                    var busy = relay.Server?.Busy == true || relay.Client?.Busy == true;
+                    if (!busy) continue;
+
+                    try { relay.Bridge!.Pump(); } catch { }
+
+                    if (relay.Server is not null)
+                    {
+                        try { await relay.Server.TickAsync().ConfigureAwait(true); } catch { }
+                    }
+
+                    if (relay.Client is not null)
+                    {
+                        try { await relay.Client.TickAsync().ConfigureAwait(true); } catch { }
+                    }
+                }
+            }
+            finally
+            {
+                _mirrorTicking = false;
+            }
         }
 
         // One round: retire the relays nobody wants, then re-ask the rest.
@@ -482,6 +715,31 @@ namespace ClaudeBuddy
             RaiseWorkingTransitions(remotes);
             RetuneTimer();
 
+            // Before the colour question below, because it can answer it for
+            // free. A far Buddy's roster carries the colour and the command list
+            // read off its own disk, so a session it covers never needs the
+            // CB-INFO round trip at all.
+            //
+            // The *unfiltered* peer list goes in on purpose: a far Buddy's relay
+            // is deliberately not worth an orb, so the filtered list is the one
+            // place it has been removed from.
+            RemoteMirrorClient? client;
+            lock (Gate) client = Relays.TryGetValue(account, out var found) ? found.Client : null;
+
+            if (client is not null)
+            {
+                try
+                {
+                    await client.DiscoverAsync(agents, remotes.Select(r => r.Name).ToList())
+                        .ConfigureAwait(false);
+                }
+                catch
+                {
+                    // A handshake that failed leaves every session on the
+                    // messaging channel, which is where they already were.
+                }
+            }
+
             await AskForMissingInfoAsync(account, remotes, bridge).ConfigureAwait(false);
         }
 
@@ -503,10 +761,15 @@ namespace ClaudeBuddy
             {
                 var key = account + ":" + remote.Name;
 
+                // A far Buddy has already said, off its own disk. Asking its
+                // model the same question would cost a turn to get a worse
+                // answer.
+                if (MirrorFor(account, remote.Name) is not null) continue;
+
                 lock (Gate)
                 {
                     if (KnownColors.ContainsKey(key)) continue;
-                    if (!InfoAsked.Add(key)) continue;
+                    if (!ShouldAsk(key)) continue;
                 }
 
                 try
@@ -622,6 +885,14 @@ namespace ClaudeBuddy
                 {
                     bridge = relay.Bridge;
                     handler = relay.Handler;
+
+                    // Both mirror halves go with the wire they talked over.
+                    // Nothing to unsubscribe from the far side: its watches
+                    // carry a TTL precisely so a relay that vanished without
+                    // saying goodbye stops being served.
+                    relay.Client = null;
+                    relay.Server = null;
+
                     Relays.Remove(account);
                 }
             }
@@ -662,6 +933,9 @@ namespace ClaudeBuddy
         {
             _poll?.Stop();
             _poll = null;
+
+            _mirrorPump?.Stop();
+            _mirrorPump = null;
         }
 
         // Settings changed under us. Unlike OpenClawSessions.Restart this only
@@ -680,8 +954,60 @@ namespace ClaudeBuddy
             if (any) StopAll("restarting");
         }
 
-        private static void OnMessage(string account, BridgeProtocol.InboundMessage message)
+        // Internal so the two things this decides — that a frame never reaches a
+        // chat bubble, and that a CB-INFO answer is swallowed — can be tested
+        // without a relay to deliver one.
+        internal static void OnMessage(string account, BridgeProtocol.InboundMessage message)
         {
+            // A mirror frame is plumbing between two Buddies and must never
+            // reach a person.
+            //
+            // Intercepted here, at the same point and for the same reason
+            // CB-INFO is below: this is the last place an inbound message is
+            // still just data, and everything past the Post at the bottom of
+            // this method is on its way to a chat bubble. A frame that got past
+            // would be a screenful of base64 in someone's conversation.
+            //
+            // Swallowed whether or not it parses, again like CB-INFO — a
+            // malformed frame is still not something anyone asked to read.
+            if (MirrorProtocol.IsFrame(message.Body))
+            {
+                var frame = MirrorProtocol.TryParseFrame(message.Body);
+                if (frame is null) return;
+
+                RemoteMirrorServer? server;
+                RemoteMirrorClient? client;
+
+                lock (Gate)
+                {
+                    var relay = Relays.TryGetValue(account, out var found) ? found : null;
+                    server = relay?.Server;
+                    client = relay?.Client;
+                }
+
+                // Which half answers is decided by the frame, not by who sent
+                // it: a request is for the server here, a reply is for the
+                // client here, and one relay carries both directions at once
+                // because both machines are asking each other.
+                switch (frame.Type)
+                {
+                    case MirrorProtocol.Chunk:
+                    case MirrorProtocol.Ok:
+                    case MirrorProtocol.Err:
+                        if (client is not null) _ = client.OnFrameAsync(message.FromName, frame);
+                        break;
+
+                    default:
+                        if (server is not null) _ = server.HandleAsync(message.FromName, frame);
+                        break;
+                }
+
+                // Keeps a relay serving a mirror from being idled out from under
+                // it — the same reason a send calls this.
+                Touch();
+                return;
+            }
+
             // A colour answer is not a message to the person reading the panel —
             // they never asked the question. Swallowed whether or not it parses,
             // because showing someone a fumbled answer to a question they did
