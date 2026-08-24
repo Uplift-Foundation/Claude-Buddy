@@ -81,8 +81,32 @@ public class SessionScanTests
         }
     }
 
-    private static SessionManager Scan(Scratch scratch)
+    private static SessionManager Scan(Scratch scratch, bool enableBothClis = true)
     {
+        // Both CLIs on, said out loud rather than inherited.
+        //
+        // ScanAndUpdate filters every session through ClaudeCodeEnabled or
+        // CodexEnabled depending on its source (SessionManager.cs ~line 378), so a
+        // scan test that does not state this is asserting about whatever the last
+        // test to touch those settings left behind. That is not hypothetical: it
+        // is what turned this suite red on both CI legs. SettingsWindowRowTests'
+        // TheTwoClisDoNotShareTheirSwitches deliberately switches Codex off and
+        // used to leave it off, and in Release — where the class order differs
+        // from Debug — it ran first. Every scan here then found nothing, with no
+        // exception and no hint as to why: StatusFor returned null and the orb
+        // collections came back empty.
+        //
+        // That leak is fixed at its source too. This is the other half, and the
+        // half that keeps working: a test that depends on a setting sets it.
+        // enableBothClis: false for the one test that switches a CLI off ON
+        // PURPOSE, to prove such a session is filtered out — it has to be able to
+        // opt out of the guarantee the rest rely on.
+        if (enableBothClis)
+        {
+            ClaudeBuddySettings.ClaudeCodeEnabled = true;
+            ClaudeBuddySettings.CodexEnabled = true;
+        }
+
         var manager = new SessionManager(scratch.Dir);
         manager.ScanAndUpdate();
         return manager;
@@ -211,7 +235,7 @@ public class SessionScanTests
             scratch.Write("codex-1", cli: "codex");
 
             ClaudeBuddySettings.CodexEnabled = false;
-            var manager = Scan(scratch);
+            var manager = Scan(scratch, enableBothClis: false);
 
             Assert.Equal(new[] { "claude-1" }, OrbIds(manager));
             Assert.True(File.Exists(Path.Combine(scratch.Dir, "codex-1.txt")));

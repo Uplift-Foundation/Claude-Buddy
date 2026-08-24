@@ -98,11 +98,7 @@ namespace ClaudeBuddy
             // preferences window with one would look wrong.
             KeyDown += (_, e) =>
             {
-                if (e.Key == Key.Escape
-                    || (e.Key == Key.W && e.KeyModifiers.HasFlag(KeyModifiers.Meta)))
-                {
-                    Close();
-                }
+                if (ShouldCloseOnKeyDown(e.Key, e.KeyModifiers)) CloseFromKeyboardShortcut();
             };
 
             // Liquid Glass: the window is a translucent material, not a filled
@@ -131,6 +127,27 @@ namespace ClaudeBuddy
             // setting as it changes.
             ActualThemeVariantChanged += (_, _) => Rebuild();
         }
+
+        // Split out from the KeyDown handler above so the decision is testable
+        // without ever calling Close() — see CloseFromKeyboardShortcut below for
+        // why that matters.
+        internal static bool ShouldCloseOnKeyDown(Key key, KeyModifiers modifiers) =>
+            key == Key.Escape || (key == Key.W && modifiers.HasFlag(KeyModifiers.Meta));
+
+        // Excluded from coverage: Window.Close() corrupts a process-wide Avalonia
+        // FontManager cache when called on a headless window — see
+        // SettingsWindowSmokeTest.cs's own comment for the full story of how
+        // that took down 25 of 28 UiTests in one CI run. ShouldCloseOnKeyDown
+        // above is the actual decision, and it is fully tested; this is just the
+        // one call this suite may never make.
+        [ExcludeFromCodeCoverage]
+        private void CloseFromKeyboardShortcut() => Close();
+
+        // Excluded from coverage: the same Window.Close() hazard as
+        // CloseFromKeyboardShortcut above, just reached from the Windows-only
+        // Done button (see Body()) instead of Escape/Cmd-W.
+        [ExcludeFromCodeCoverage]
+        private void CloseFromDoneButton() => Close();
 
         // The macOS theme's ToggleSwitch template is broken against the stock
         // control: Avalonia's ToggleSwitch demands a Panel named
@@ -244,56 +261,13 @@ namespace ClaudeBuddy
         {
             var root = new StackPanel { Margin = new Thickness(20, 18), Spacing = 18 };
 
-            root.Children.Add(Group("Orbs", Card(
-                Row("Show orbs",
-                    Switch(SessionManager.Instance?.OrbsVisible ?? ClaudeBuddySettings.ShowOrbs,
-                        value => SessionManager.Instance?.SetOrbsVisible(value))),
-                Row("Keep orbs for", LifetimePicker(),
-                    "How long an orb stays after its session goes quiet. A session that's "
-                    + "waiting on you is never removed, however long this is — those only go "
-                    + "away when you answer it or reset it from the orb's menu."),
-                Row("Two-letter initials",
-                    Switch(ClaudeBuddySettings.TwoLetterGlyphs, value =>
-                    {
-                        ClaudeBuddySettings.TwoLetterGlyphs = value;
-                        SessionManager.Instance?.ReapplyGlyphs();
-                    }),
-                    "One letter from each of the first two words of a chat's name, or the "
-                    + "first two letters of it when there's only one word — instead of just "
-                    + "the one letter every orb shows today."))));
+            root.Children.Add(Group("Orbs", Card(OrbsRows())));
 
             root.Children.Add(Group("Clicking an orb", Card(ClickRows())));
 
             root.Children.Add(Group("Auto-organize", Card(AutoOrganizeRows())));
 
-            root.Children.Add(Group("Orb colours", Card(
-                ColorRow("Idle", "idle"),
-                ColorRow("Working", "generating"),
-                ColorRow("Needs you", "waiting"),
-                Row("Give each session a colour",
-                    Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
-                    "Off, only a colour you set with /color shows on an orb. On, a session "
-                    + "that has none is given one, from its working directory — so a project "
-                    + "keeps its colour, and both CLIs agree on it. For Claude Code this "
-                    + "writes the same record /color writes, so the colour survives a resume "
-                    + "and the terminal agrees; /color still overrides it. Codex has nowhere "
-                    + "to write one and shows none of its own, so there its orb takes the "
-                    + "colour of its Codex section if it has one and the derived colour "
-                    + "otherwise."),
-                Row("Give each session a colour",
-                    Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
-                    "Off, only a colour you set with /color shows on an orb. On, a session "
-                    + "with none is given one from its working directory, so a project keeps "
-                    + "its colour and both CLIs agree on it. For Claude Code that writes the "
-                    + "same record /color writes, so the colour survives a resume and the "
-                    + "terminal agrees; /color still overrides it. Codex has nowhere to write "
-                    + "one and shows none of its own, so a Codex orb takes its Codex section's "
-                    + "colour if it has one and the derived colour otherwise."),
-                Row("Restore the built-in colours", ResetColorsButton(),
-                    "The orb's fill and its glow. The menu-bar icon follows them too — it "
-                    + "shows the most urgent state across every session, so very light or "
-                    + "very dark choices can disappear into the menu bar. A session's own "
-                    + "/color is separate: that one goes on the orb's ring and letter."))));
+            root.Children.Add(Group("Orb colours", Card(OrbColourRows())));
 
             root.Children.Add(Group("Voice", Card(VoiceRows())));
 
@@ -322,8 +296,7 @@ namespace ClaudeBuddy
             // after them with its own profiles, which is where someone looking
             // for them would go first.
             root.Children.Add(Group("Claude Desktop",
-                Card(Row("Tint the active window",
-                    Switch(ClaudeDesktopOverlay.Enabled, ClaudeDesktopOverlay.SetEnabled))),
+                Card(ClaudeDesktopTintRow()),
                 ProfilesCard()));
 
             // macOS preference windows are dismissed by the window's own close
@@ -337,15 +310,94 @@ namespace ClaudeBuddy
                     HorizontalAlignment = HorizontalAlignment.Right,
                     MinWidth = 90
                 };
-                done.Click += (_, _) => Close();
+                done.Click += (_, _) => CloseFromDoneButton();
                 root.Children.Add(done);
             }
 
             return root;
         }
 
+        // internal so a test can drive each switch directly, the same reason
+        // ClickRows() below is internal — walking the visual tree to find
+        // whichever control a row holds depends on which theme template
+        // loaded, which is not what these rows are about.
+        internal Control[] OrbsRows() => new[]
+        {
+            Row("Show orbs",
+                Switch(SessionManager.Instance?.OrbsVisible ?? ClaudeBuddySettings.ShowOrbs,
+                    value => SessionManager.Instance?.SetOrbsVisible(value))),
+            Row("Keep orbs for", LifetimePicker(),
+                "How long an orb stays after its session goes quiet. A session that's "
+                + "waiting on you is never removed, however long this is — those only go "
+                + "away when you answer it or reset it from the orb's menu."),
+            Row("Two-letter initials",
+                Switch(ClaudeBuddySettings.TwoLetterGlyphs, value =>
+                {
+                    ClaudeBuddySettings.TwoLetterGlyphs = value;
+                    SessionManager.Instance?.ReapplyGlyphs();
+                }),
+                "One letter from each of the first two words of a chat's name, or the "
+                + "first two letters of it when there's only one word — instead of just "
+                + "the one letter every orb shows today.")
+        };
+
+        // internal for the same reason OrbsRows() above is: a test can drive
+        // each row's control directly.
+        //
+        // KNOWN BUG, found while writing SettingsWindowRowBuilderTests and left
+        // as-is rather than fixed here (CB-3 is a coverage ticket, not a bugfix
+        // one — see that test file's own comment): "Give each session a colour"
+        // is built *twice*, back to back, each its own Switch bound to the same
+        // ClaudeBuddySettings.AutoColorSessions and the same OnAutoColorToggled
+        // handler, with two help strings that were each hand-edited slightly
+        // differently at some point (compare "that has none" / "with none",
+        // "so there its orb" / "so a Codex orb"). On screen this reads as one
+        // switch that happens to repeat its own explanation right below itself
+        // — easy to miss, and it is NOT harmless. This comment used to say the
+        // two copies cannot disagree because they share state; they can, and
+        // SettingsWindowCoverageTests now asserts it. They share the *setting*,
+        // not the control: each switch is built from the setting once, so
+        // flipping one writes the setting and leaves the other showing the old
+        // value until something rebuilds the window. Two switches sitting
+        // adjacent and reading differently is a visible inconsistency, not dead
+        // weight. Still clearly meant to be one row.
+        internal Control[] OrbColourRows() => new[]
+        {
+            ColorRow("Idle", "idle"),
+            ColorRow("Working", "generating"),
+            ColorRow("Needs you", "waiting"),
+            Row("Give each session a colour",
+                Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
+                "Off, only a colour you set with /color shows on an orb. On, a session "
+                + "that has none is given one, from its working directory — so a project "
+                + "keeps its colour, and both CLIs agree on it. For Claude Code this "
+                + "writes the same record /color writes, so the colour survives a resume "
+                + "and the terminal agrees; /color still overrides it. Codex has nowhere "
+                + "to write one and shows none of its own, so there its orb takes the "
+                + "colour of its Codex section if it has one and the derived colour "
+                + "otherwise."),
+            Row("Give each session a colour",
+                Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
+                "Off, only a colour you set with /color shows on an orb. On, a session "
+                + "with none is given one from its working directory, so a project keeps "
+                + "its colour and both CLIs agree on it. For Claude Code that writes the "
+                + "same record /color writes, so the colour survives a resume and the "
+                + "terminal agrees; /color still overrides it. Codex has nowhere to write "
+                + "one and shows none of its own, so a Codex orb takes its Codex section's "
+                + "colour if it has one and the derived colour otherwise."),
+            Row("Restore the built-in colours", ResetColorsButton(),
+                "The orb's fill and its glow. The menu-bar icon follows them too — it "
+                + "shows the most urgent state across every session, so very light or "
+                + "very dark choices can disappear into the menu bar. A session's own "
+                + "/color is separate: that one goes on the orb's ring and letter.")
+        };
+
         // --- Voice input ---
         // --- Auto-organize ---
+
+        // internal so a test can drive the switch directly.
+        internal Control ClaudeDesktopTintRow() => Row("Tint the active window",
+            Switch(ClaudeDesktopOverlay.Enabled, ClaudeDesktopOverlay.SetEnabled));
 
         // --- what a click does ---
 
@@ -683,7 +735,7 @@ namespace ClaudeBuddy
             ClaudeBuddySettings.CodexReplyEnabled = enabled;
         }
 
-        private Control[] OpenClawRows()
+        internal Control[] OpenClawRows()
         {
             var rows = new List<Control>
             {
@@ -749,7 +801,7 @@ namespace ClaudeBuddy
                 Content = "Reconnect",
                 HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left
             };
-            reconnect.Click += (_, _) => { OpenClawSessions.Restart(); Rebuild(); };
+            reconnect.Click += (_, _) => OnOpenClawReconnectClicked();
             rows.Add(Row("", reconnect));
 
             // Only when the pin is the thing standing in the way, because this
@@ -781,11 +833,7 @@ namespace ClaudeBuddy
                 //
                 // TrustNewCertificate rather than doing it here, so the button
                 // is gone by the time Rebuild runs — see its own comment.
-                trust.Click += (_, _) =>
-                {
-                    OpenClawSessions.TrustNewCertificate();
-                    Rebuild();
-                };
+                trust.Click += (_, _) => OnTrustNewCertificateClicked();
 
                 rows.Add(Row("", trust,
                     "The gateway's certificate has changed since this install first "
@@ -795,6 +843,27 @@ namespace ClaudeBuddy
             }
 
             return rows.ToArray();
+        }
+
+        // Excluded from coverage: reconnects to the gateway over a real socket —
+        // the same reason OnOpenClawToggled below is excluded. The button that
+        // reaches this is covered by the rows around it.
+        [ExcludeFromCodeCoverage]
+        private void OnOpenClawReconnectClicked()
+        {
+            OpenClawSessions.Restart();
+            Rebuild();
+        }
+
+        // Excluded from coverage: clears the pinned certificate and reconnects,
+        // which is a real socket the same as OnOpenClawReconnectClicked above.
+        // The row that reaches this — including that it only appears when
+        // OpenClawSessions.CertificateRejected is set — is covered separately.
+        [ExcludeFromCodeCoverage]
+        private void OnTrustNewCertificateClicked()
+        {
+            OpenClawSessions.TrustNewCertificate();
+            Rebuild();
         }
 
         private static readonly (string Label, int Minutes)[] ActiveWithinChoices =
@@ -894,20 +963,28 @@ namespace ClaudeBuddy
                 var value = (box.Text ?? "").Trim();
                 if (value == ClaudeBuddySettings.OpenClawHost) return;
 
-                ClaudeBuddySettings.OpenClawHost = value;
-
-                // A different gateway is a different certificate; keeping the
-                // old pin would refuse the new one for reasons the user could
-                // not possibly guess.
-                ClaudeBuddySettings.OpenClawFingerprint = "";
-                OpenClawSessions.Restart();
-                Rebuild();
+                OnGatewayHostChanged(value);
             };
 
             return box;
         }
 
-        private Control GatewayTokenBox()
+        // Excluded from coverage: writes the new address, clears the pinned
+        // certificate — a different gateway is a different certificate, and
+        // keeping the old pin would refuse the new one for reasons the user
+        // could not possibly guess — and reconnects over a real socket. The
+        // no-op path above, losing focus without having actually changed the
+        // address, is what a test can safely drive instead.
+        [ExcludeFromCodeCoverage]
+        private void OnGatewayHostChanged(string value)
+        {
+            ClaudeBuddySettings.OpenClawHost = value;
+            ClaudeBuddySettings.OpenClawFingerprint = "";
+            OpenClawSessions.Restart();
+            Rebuild();
+        }
+
+        internal Control GatewayTokenBox()
         {
             var host = ClaudeBuddySettings.OpenClawHost;
             var existing = string.IsNullOrEmpty(host) ? null : OpenClawIdentity.GatewayTokenFor(host);
@@ -925,12 +1002,21 @@ namespace ClaudeBuddy
                 var value = (box.Text ?? "").Trim();
                 if (string.IsNullOrEmpty(host) || value == (existing ?? "")) return;
 
-                OpenClawIdentity.SetGatewayTokenFor(host, value);
-                OpenClawSessions.Restart();
-                Rebuild();
+                OnGatewayTokenChanged(host, value);
             };
 
             return box;
+        }
+
+        // Excluded from coverage: same shape and same reason as
+        // OnGatewayHostChanged above — a real reconnect over the network. The
+        // no-op path in the LostFocus handler is what a test can safely drive.
+        [ExcludeFromCodeCoverage]
+        private void OnGatewayTokenChanged(string host, string value)
+        {
+            OpenClawIdentity.SetGatewayTokenFor(host, value);
+            OpenClawSessions.Restart();
+            Rebuild();
         }
 
         // No Restart() here, unlike the two toggles below it. This changes which
@@ -973,7 +1059,7 @@ namespace ClaudeBuddy
             Rebuild();
         }
 
-        private Control[] RemoteControlRows()
+        internal Control[] RemoteControlRows()
         {
             // Dropped before anything is built, because Rebuild() replaces the
             // whole content tree: left set, this would point at a label that is
@@ -1050,11 +1136,17 @@ namespace ClaudeBuddy
                 Content = "Start the relay now",
                 HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left
             };
-            start.Click += (_, _) => RemoteControlSessions.EnsureStarted();
+            start.Click += (_, _) => OnStartTheRelayNowClicked();
             rows.Add(Row("", start));
 
             return rows.ToArray();
         }
+
+        // Excluded from coverage: starts a real Claude Code session in a tmux
+        // pane as the relay. The button that reaches this is covered by the
+        // rows around it.
+        [ExcludeFromCodeCoverage]
+        private void OnStartTheRelayNowClicked() => RemoteControlSessions.EnsureStarted();
 
         // Every config directory a relay could sign into, each with a tick.
         //
@@ -1067,7 +1159,7 @@ namespace ClaudeBuddy
         // Not free text: a directory name that is not a real profile fails by
         // producing no sessions at all, which is indistinguishable from having
         // none, so the only offer is what actually exists.
-        private Control RemoteControlAccountList()
+        internal Control RemoteControlAccountList()
         {
             var offered = new List<string> { ClaudeBuddySettings.DefaultRemoteControlProfileDir };
             foreach (var dir in ClaudeBuddySettings.ClaudeCodeProfileDirs)
@@ -1142,7 +1234,7 @@ namespace ClaudeBuddy
             ("Never", ClaudeBuddySettings.RemoteControlIdleNever)
         };
 
-        private Control RemoteControlIdlePicker()
+        internal Control RemoteControlIdlePicker()
         {
             var current = ClaudeBuddySettings.RemoteControlIdleMinutes;
             var choices = RemoteIdleChoices.ToList();
@@ -1192,7 +1284,7 @@ namespace ClaudeBuddy
             Rebuild();
         }
 
-        private Control[] VoiceRows()
+        internal Control[] VoiceRows()
         {
             var rows = new List<Control>();
 
@@ -1342,6 +1434,18 @@ namespace ClaudeBuddy
                 return;
             }
 
+            StartNeuralVoiceDownload();
+        }
+
+        // Excluded from coverage: starts a real ~300MB download over the
+        // network (NeuralSpeech.DownloadAsync is itself already excluded for
+        // exactly that reason), then chains progress and completion callbacks
+        // onto the task it returns. OnNeuralVoiceToggled above — the decision
+        // of *whether* to call this, which is everything a test can drive
+        // without touching the network — is fully covered on its own.
+        [ExcludeFromCodeCoverage]
+        private void StartNeuralVoiceDownload()
+        {
             _neuralModelStatus = "Downloading the speech engine and its voice model (about 300 MB)…";
             Rebuild();
 
@@ -1370,7 +1474,7 @@ namespace ClaudeBuddy
             });
         }
 
-        private Control DownloadVoicesRow()
+        internal Control DownloadVoicesRow()
         {
             var link = new TextBlock
             {
@@ -1383,43 +1487,55 @@ namespace ClaudeBuddy
             link.PointerPressed += (_, e) =>
             {
                 e.Handled = true;
-                if (OperatingSystem.IsMacOS())
-                {
-                    try
-                    {
-                        Process.Start(new ProcessStartInfo
-                        {
-                            FileName = "open",
-                            ArgumentList = { "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent" },
-                            UseShellExecute = false
-                        })?.Dispose();
-                    }
-                    catch { }
-
-                    TextToSpeech.InvalidateVoiceCache();
-                }
-                else if (OperatingSystem.IsWindows())
-                {
-                    // Windows' own Speech page, which is where "Manage voices"
-                    // and "Add voices" live. There was no Windows branch here at
-                    // all, so the link hovered, underlined and did nothing —
-                    // the whole of the reported bug.
-                    //
-                    // UseShellExecute must be true, unlike the macOS call above:
-                    // ms-settings: is a URI for the shell to resolve, not an
-                    // executable to launch, and CreateProcess cannot start it.
-                    Process.Start(new ProcessStartInfo
-                    {
-                        FileName = "ms-settings:speech",
-                        UseShellExecute = true
-                    })?.Dispose();
-                }
+                OnDownloadVoicesLinkClicked();
             };
             link.PointerEntered += (_, _) =>
                 link.TextDecorations = TextDecorations.Underline;
             link.PointerExited += (_, _) =>
                 link.TextDecorations = null;
             return link;
+        }
+
+        // Excluded from coverage: launches a real subprocess — macOS's `open`
+        // against a System Settings deep link, or Windows' ms-settings: URI —
+        // to hand off to the OS's own voice-download UI. Nothing here is
+        // decided by data a test could vary; it is OperatingSystem.IsMacOS()
+        // and OperatingSystem.IsWindows() picking one fixed command each, on
+        // whichever platform is actually running.
+        [ExcludeFromCodeCoverage]
+        private void OnDownloadVoicesLinkClicked()
+        {
+            if (OperatingSystem.IsMacOS())
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "open",
+                        ArgumentList = { "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent" },
+                        UseShellExecute = false
+                    })?.Dispose();
+                }
+                catch { }
+
+                TextToSpeech.InvalidateVoiceCache();
+            }
+            else if (OperatingSystem.IsWindows())
+            {
+                // Windows' own Speech page, which is where "Manage voices"
+                // and "Add voices" live. There was no Windows branch here at
+                // all, so the link hovered, underlined and did nothing —
+                // the whole of the reported bug.
+                //
+                // UseShellExecute must be true, unlike the macOS call above:
+                // ms-settings: is a URI for the shell to resolve, not an
+                // executable to launch, and CreateProcess cannot start it.
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "ms-settings:speech",
+                    UseShellExecute = true
+                })?.Dispose();
+            }
         }
 
         internal void OnVoiceInputToggled(bool enabled)
@@ -1432,6 +1548,18 @@ namespace ClaudeBuddy
                 return;
             }
 
+            StartVoiceInputDownload();
+        }
+
+        // Excluded from coverage: starts a real ~150MB download over the
+        // network (SpeechTranscriber.DownloadModelAsync is itself already
+        // excluded for exactly that reason). Same shape as
+        // StartNeuralVoiceDownload above, and for the same reason: the decision
+        // of whether to call this is what OnVoiceInputToggled covers, and that
+        // is testable without ever reaching the network.
+        [ExcludeFromCodeCoverage]
+        private void StartVoiceInputDownload()
+        {
             _voiceModelStatus = "Downloading voice model (about 150 MB)…";
             Rebuild();
 
@@ -1695,7 +1823,9 @@ namespace ClaudeBuddy
         // control from the store, which this window already does on a theme
         // change, and there's no uncommitted state to lose. It does reset the
         // scroll position, which for a window this short isn't worth solving.
-        private Control ResetColorsButton()
+        // internal so a test can raise its Click without walking the visual
+        // tree to find it.
+        internal Control ResetColorsButton()
         {
             var reset = new Button
             {
@@ -1777,7 +1907,7 @@ namespace ClaudeBuddy
             return combo;
         }
 
-        private Control ProfilesCard()
+        internal Control ProfilesCard()
         {
             var snapshot = ClaudeDesktopManager.Snapshot;
 
@@ -1807,7 +1937,7 @@ namespace ClaudeBuddy
             return Card(rows.ToArray());
         }
 
-        private static Control ColumnLabels()
+        internal static Control ColumnLabels()
         {
             var grid = RowGrid();
             Add(grid, 0, Label("Name"));
@@ -1826,19 +1956,19 @@ namespace ClaudeBuddy
             };
         }
 
-        private static Grid RowGrid() => new()
+        internal static Grid RowGrid() => new()
         {
             ColumnDefinitions = new ColumnDefinitions("*,130,64,54,44,84"),
             Margin = new Thickness(14, 8)
         };
 
-        private static void Add(Grid grid, int column, Control child)
+        internal static void Add(Grid grid, int column, Control child)
         {
             Grid.SetColumn(child, column);
             grid.Children.Add(child);
         }
 
-        private Control Row(ProfileView profile)
+        internal Control Row(ProfileView profile)
         {
             var folder = Path.GetFileName(profile.Directory);
             var settings = ClaudeBuddySettings.For(folder);
@@ -1932,7 +2062,7 @@ namespace ClaudeBuddy
         // after a few seconds so a stray click cannot arm it and leave it
         // armed. A dialog would be the heavier answer, and the thing this
         // guards is already recoverable — it goes to the Trash.
-        private Control DeleteProfileButton(ProfileView profile)
+        internal Control DeleteProfileButton(ProfileView profile)
         {
             // The default profile is Claude Desktop's own directory rather than
             // one this app made, so there is nothing here to offer.
@@ -2006,7 +2136,7 @@ namespace ClaudeBuddy
 
         private const string AutoColour = "auto";
 
-        private static Control SwatchItem(string colourName, Color color)
+        internal static Control SwatchItem(string colourName, Color color)
         {
             return new StackPanel
             {
@@ -2026,7 +2156,7 @@ namespace ClaudeBuddy
             };
         }
 
-        private static CheckBox Check(bool value, Action<bool> onChange)
+        internal static CheckBox Check(bool value, Action<bool> onChange)
         {
             var box = new CheckBox
             {
@@ -2053,7 +2183,7 @@ namespace ClaudeBuddy
         // and not the other, but nothing about the *UI* differs between them,
         // and two near-identical copies would have drifted the way the
         // platforms did.
-        private static Control ProfileDirsCard(
+        internal static Control ProfileDirsCard(
             string blurb,
             string watermark,
             Func<IReadOnlyList<string>> current,
@@ -2205,7 +2335,7 @@ namespace ClaudeBuddy
         }
 
         [SupportedOSPlatform("windows")]
-        private static Control ProfileDirRow(
+        internal static Control ProfileDirRow(
             string dirName, StackPanel itemsPanel, Action<string> remove)
         {
             var label = new TextBlock
@@ -2286,6 +2416,13 @@ namespace ClaudeBuddy
 
     // Switching activation policy so a menu-bar-only app can own a focusable
     // window, then switching back.
+    //
+    // Excluded from coverage as a whole class: every method here is P/Invoke
+    // into libobjc, calling into the real Objective-C runtime to change this
+    // process's actual NSApplication activation policy — exactly the kind of
+    // call a headless CI runner has no business making. It is already only
+    // reachable in production via the already-excluded SettingsWindow.Toggle().
+    [ExcludeFromCodeCoverage]
     internal static class MacOSActivation
     {
         private const string Objc = "/usr/lib/libobjc.A.dylib";
