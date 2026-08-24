@@ -52,6 +52,26 @@ namespace ClaudeBuddy
             }
         }
 
+        // Forgets the keypair and the token table, so the next call reads
+        // whatever is on disk now.
+        //
+        // A test seam, and the only one this file needs: everything else here is
+        // deterministic given a key and a directory, and the directory already
+        // moves with CLAUDE_BUDDY_SETTINGS_DIR. What is not is the process-wide
+        // cache — the first test to ask for an identity would fix it for every
+        // test after it, so "a truncated file falls back to a new key" would
+        // pass or fail on the order the runner happened to pick. Narrow on
+        // purpose: it clears state, it does not inject any.
+        internal static void ResetForTests()
+        {
+            lock (Gate)
+            {
+                _cached = null;
+                Tokens.Clear();
+                _tokensLoaded = false;
+            }
+        }
+
         // Device tokens, keyed by the gateway that issued them. Kept beside the
         // keypair rather than in settings.json for two reasons: settings are
         // ordinary preferences a user might reasonably copy between machines,
