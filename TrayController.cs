@@ -271,7 +271,7 @@ namespace ClaudeBuddy
             menu.Add(quitItem);
         }
 
-        private static string Summary(int total, int waiting, int generating)
+        internal static string Summary(int total, int waiting, int generating)
         {
             if (total == 0) return "Claude Buddy — no sessions";
 
@@ -286,7 +286,7 @@ namespace ClaudeBuddy
         // comes first because a team's members all inherit the team session's
         // title, and four identical rows only differed by the id this menu
         // appends when it can't tell them apart.
-        private static string DisplayName(SessionEntry session)
+        internal static string DisplayName(SessionEntry session)
         {
             if (!string.IsNullOrEmpty(session.Status.Agent)) return session.Status.Agent;
             if (!string.IsNullOrEmpty(session.Status.Title)) return session.Status.Title;
@@ -300,7 +300,7 @@ namespace ClaudeBuddy
 
         private const int MaxLabelLength = 44;
 
-        private static string SessionLabel(SessionEntry session, bool disambiguate)
+        internal static string SessionLabel(SessionEntry session, bool disambiguate)
         {
             var folder = DisplayName(session);
 
