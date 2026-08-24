@@ -1002,8 +1002,12 @@ namespace ClaudeBuddy
                         {
                             if (node is not JsonObject entry) continue;
 
-                            var w = entry["width"]?.GetValue<double>();
-                            var h = entry["height"]?.GetValue<double>();
+                            var w = Number(entry["width"]);
+                            var h = Number(entry["height"]);
+
+                            // Either half missing or unreadable drops the
+                            // entry, rather than half-restoring a panel to a
+                            // width someone chose and a height they didn't.
                             if (w is null || h is null) continue;
 
                             // Not clamped here. ChatPanel clamps what it reads
@@ -1062,6 +1066,27 @@ namespace ClaudeBuddy
             && value.TryGetValue<string>(out var text)
             && !string.IsNullOrWhiteSpace(text)
                 ? text
+                : null;
+
+        // The same defence as Text() above, for a number.
+        //
+        // Written when chatPanelSizes went in, because that block reads two
+        // numbers per entry and GetValue<double>() throws on a type mismatch
+        // exactly the way GetValue<string>() does — so a hand-edited
+        // `"width": "wide"` would have been thrown at the one catch that
+        // replaces the whole model, and cost someone every profile name and
+        // dragged orb position in the file over one bad panel size. A garbage
+        // size should cost that one panel's size and nothing else.
+        //
+        // Not retrofitted onto the orbPositions block above, which still reads
+        // through GetValue<int>(). That is a real hole of the same shape, but
+        // it is pre-existing behaviour the README documents, and quietly
+        // changing how a live settings file is parsed is not this change's
+        // business — it belongs in its own commit that can be reviewed as
+        // such.
+        private static double? Number(JsonNode? node) =>
+            node is JsonValue value && value.TryGetValue<double>(out var number)
+                ? number
                 : null;
 
         // Test seam: this class is static, so it caches _model and _loaded for

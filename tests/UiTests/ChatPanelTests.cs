@@ -490,6 +490,69 @@ public class ChatPanelTests : IDisposable
         Assert.Equal(panel.MaxHeight, panel.Height);
     }
 
+    // The other end of the same clamp. Worth its own case rather than trusting
+    // that one Math.Clamp implies the other: the minimum is what stops a panel
+    // restoring to something too small to hold its own header and input box,
+    // which is just as unusable as one wider than the screen.
+    [AvaloniaFact]
+    public void ASavedSizeBelowTheAllowedRangeIsClampedWhenThePanelOpens()
+    {
+        var orb = NewOrb();
+        orb.PositionKey = "ui-agent-tiny-" + Guid.NewGuid();
+        ClaudeBuddySettings.SetChatPanelSize(orb.PositionKey, 10, 10);
+
+        ChatPanel.OpenFor(orb, NewFake());
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Assert.Equal(panel.MinWidth, panel.Width);
+        Assert.Equal(panel.MinHeight, panel.Height);
+    }
+
+    // "Persists" means across a restart, and every other test here proves only
+    // half of that: the panel reads back a size the in-memory settings model is
+    // still holding from the drag that saved it. ReloadForTests throws that
+    // model away and re-reads the file, which is what a relaunch does — so this
+    // is the one case that fails if either half of the round trip is broken,
+    // rather than passing on a value that never went near a disk.
+    [AvaloniaFact]
+    public void ADraggedSizeSurvivesTheSettingsModelBeingReloadedFromDisk()
+    {
+        var orb = NewOrb();
+        orb.PositionKey = "ui-agent-restart-" + Guid.NewGuid();
+        var chat = NewFake();
+
+        ChatPanel.OpenFor(orb, chat);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var shipped = (panel.Width, panel.Height);
+
+        Drag(panel, "ResizeSE", new Vector(70, 60));
+        var dragged = (panel.Width, panel.Height);
+        Assert.True(dragged.Width > shipped.Width);
+
+        // Nothing in this suite pumps the deferred-save timer, and a colour set
+        // by an earlier test in this process could still be sitting on it —
+        // flush before dropping the model so this test cannot destroy someone
+        // else's pending write as a side effect.
+        ClaudeBuddySettings.FlushPendingSave();
+        ClaudeBuddySettings.ReloadForTests();
+
+        // Wrong size back on screen after a relaunch is the whole bug, so the
+        // panel is put back to the shipped size first: a restore that silently
+        // did nothing would otherwise pass this by leaving the drag in place.
+        panel.Width = shipped.Width;
+        panel.Height = shipped.Height;
+        FlushRender();
+
+        ChatPanel.OpenFor(orb, chat);
+        FlushRender();
+
+        Assert.True(Math.Abs(panel.Width - dragged.Width) < 1.0);
+        Assert.True(Math.Abs(panel.Height - dragged.Height) < 1.0);
+    }
+
     // TurnView.MaxBubbleWidth used to be a fixed 244px; it's now a fraction
     // of Scroll's actual width, kept live by ChatPanel's Scroll.SizeChanged
     // hook so an already-rendered message doesn't stay pinned to whatever
