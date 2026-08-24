@@ -370,6 +370,12 @@ namespace ClaudeBuddy
             SessionKind.Cron => ("\u23F1", "cron"),
             SessionKind.Direct => ("@", "direct message"),
             SessionKind.Channel => ("#", "channel"),
+
+            // Two arrows going opposite ways: the same "this is somewhere else,
+            // and it answers" that every sync icon means, which is as close to
+            // learned-without-explaining as this one gets. The label says the
+            // machine part, since the glyph can't.
+            SessionKind.Remote => ("\u21C4", "another machine"),
             _ => null
         };
 
