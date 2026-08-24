@@ -1,6 +1,7 @@
 using System.Reflection;
 using Avalonia;
 using Avalonia.Headless.XUnit;
+using Avalonia.Threading;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -550,5 +551,327 @@ public class SessionScanTests
         var manager = new SessionManager(scratch.Dir);
 
         Assert.Null(manager.RemoteChatFor("never-existed"));
+    }
+
+    // A local session's conversation is cached — the same object comes back
+    // on a second click — and gated by the same chat-enabled setting the
+    // composer reads, checked before the cache so turning the feature off
+    // does not hand back a session built while it was on.
+    [AvaloniaFact]
+    public void RemoteChatForALocalSessionIsGatedThenCachedOnceCreated()
+    {
+        var before = ClaudeBuddySettings.ClaudeCodeChatEnabled;
+        try
+        {
+            using var scratch = new Scratch();
+            var transcriptPath = Path.Combine(scratch.Dir, "transcript.jsonl");
+            File.WriteAllText(transcriptPath, "");
+
+            File.WriteAllText(Path.Combine(scratch.Dir, "session-a.txt"),
+                System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+                {
+                    State = "idle",
+                    Cwd = "/Users/warren/project",
+                    SessionPid = LivePid,
+                    TermProgram = "iTerm.app",
+                    Tty = "/dev/ttys004",
+                    TranscriptPath = transcriptPath,
+                }));
+
+            var manager = new SessionManager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            ClaudeBuddySettings.ClaudeCodeChatEnabled = false;
+            Assert.Null(manager.RemoteChatFor("session-a"));
+
+            ClaudeBuddySettings.ClaudeCodeChatEnabled = true;
+            var chat = manager.RemoteChatFor("session-a");
+            Assert.IsType<LocalCliChatSession>(chat);
+
+            var again = manager.RemoteChatFor("session-a");
+            Assert.Same(chat, again);
+        }
+        finally
+        {
+            ClaudeBuddySettings.ClaudeCodeChatEnabled = before;
+        }
+    }
+
+    // --- the auto-colour marker's own failure path ---
+
+    [AvaloniaFact]
+    public void TheAutoColourMarkerFailsQuietlyWhenItsDirectoryDoesNotExist()
+    {
+        // "Worst case the colour setting does not take effect, which is not
+        // worth interrupting a scan for" — proved by handing it a directory
+        // that was never created, so the write it attempts has nowhere to
+        // land.
+        var before = ClaudeBuddySettings.AutoColorSessions;
+        try
+        {
+            var missingDir = Path.Combine(Path.GetTempPath(), "cb-scan-missing-" + Guid.NewGuid());
+            var manager = new SessionManager(missingDir);
+
+            ClaudeBuddySettings.AutoColorSessions = true;
+            manager.SyncAutoColorMarker();
+
+            Assert.False(Directory.Exists(missingDir));
+        }
+        finally
+        {
+            ClaudeBuddySettings.AutoColorSessions = before;
+        }
+    }
+
+    // --- ResetSessionToIdle's other two paths ---
+
+    [AvaloniaFact]
+    public void ResettingAGatewaySessionDirectlyIsDeclinedRatherThanWritingAFile()
+    {
+        // There is no status file to rewrite for a gateway session, and
+        // "openclaw:agent:main.txt" is not a path this app should ever write
+        // to. ResetAllReachesEverySessionAndAGatewayOneIsLeftToItsOwner drives
+        // this through ResetAll, but its gateway entry is never in _order —
+        // it is injected straight into _statuses, exactly as this test does —
+        // so ResetAll's loop never actually calls ResetSessionToIdle on it.
+        // This calls it directly.
+        using var scratch = new Scratch();
+        var manager = new SessionManager(scratch.Dir);
+
+        Statuses(manager)["openclaw:agent:main"] = new SessionStatus
+        {
+            Source = SessionSource.OpenClaw, State = "generating",
+        };
+
+        manager.ResetSessionToIdle("openclaw:agent:main");
+
+        Assert.Equal("generating", manager.StatusFor("openclaw:agent:main")!.State);
+        Assert.Empty(Directory.EnumerateFiles(scratch.Dir, "openclaw*"));
+    }
+
+    [AvaloniaFact]
+    public void ResettingASessionWhoseDirectoryIsGoneStillUpdatesStatusInMemory()
+    {
+        // Both the read and the write it attempts fail here — the directory
+        // was never created — and neither failure should stop the in-memory
+        // status from reflecting "idle", which is what the orb itself reads.
+        var missingDir = Path.Combine(Path.GetTempPath(), "cb-scan-missing-" + Guid.NewGuid());
+        var manager = new SessionManager(missingDir);
+
+        manager.ResetSessionToIdle("never-existed");
+
+        Assert.Equal("idle", manager.StatusFor("never-existed")!.State);
+        Assert.False(Directory.Exists(missingDir));
+    }
+
+    // --- keeping an orb reachable ---
+
+    [AvaloniaFact]
+    public void AnOrbLeftOffscreenByAChangedDesktopIsBroughtBackOnTheNextScan()
+    {
+        // Nothing moved the orb; the desktop underneath it changed shape —
+        // simulated here by pushing it somewhere no configured screen could
+        // possibly cover, the same as a monitor being unplugged would.
+        using var scratch = new Scratch();
+        scratch.Write("session-a");
+
+        var manager = Scan(scratch);
+        var window = WindowFor(manager, "session-a");
+        window.Position = new PixelPoint(-999_999, -999_999);
+
+        manager.ScanAndUpdate();
+
+        Assert.NotEqual(new PixelPoint(-999_999, -999_999), window.Position);
+    }
+
+    [AvaloniaFact]
+    public void ASiblingAlreadyPinnedAtASavedPositionStopsASecondOrbStackingOnIt()
+    {
+        // The sibling is injected directly into _windows rather than produced
+        // by a second real session file: two ClaudeCode sessions sharing this
+        // process's one certainly-alive pid would collide in Superseded
+        // before either reached RestoreOrbPosition, which the class comment
+        // above already explains is why every fixture here uses one pid.
+        // What is under test is RestoreOrbPosition's own collision check, and
+        // it only needs a window already sitting in the dictionary it reads.
+        using var scratch = new Scratch();
+        scratch.Write("second", title: "shared name");
+
+        var key = SessionManager.PositionKeyFor(
+            new SessionStatus { Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/project", Title = "shared name" },
+            "first");
+
+        var manager = new SessionManager(scratch.Dir);
+
+        var sibling = new OrbWindow("first");
+        sibling.PinAt(new PixelPoint(400, 250));
+        sibling.PositionKey = key;
+        WindowsDict(manager)["first"] = sibling;
+
+        manager.ScanAndUpdate();
+
+        var second = WindowFor(manager, "second");
+        Assert.Equal(key, second.PositionKey);
+        Assert.False(second.IsPinned);
+    }
+
+    private static Dictionary<string, OrbWindow> WindowsDict(SessionManager manager)
+    {
+        var field = typeof(SessionManager).GetField(
+            "_windows", BindingFlags.NonPublic | BindingFlags.Instance);
+        return (Dictionary<string, OrbWindow>)field!.GetValue(manager)!;
+    }
+
+    // --- reachability ---
+
+    [AvaloniaFact]
+    public void ASessionWithNoTerminalAtAllNeverBecomesAnOrb()
+    {
+        // Codex specifically: a Claude Code session in the same shape would
+        // ask BackgroundJobs for real before answering (see the class comment
+        // on why that is out of bounds here), but Codex has no background-job
+        // concept to ask about and the rule short-circuits before it would.
+        using var scratch = new Scratch();
+        File.WriteAllText(Path.Combine(scratch.Dir, "headless.txt"),
+            System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+            {
+                Cli = "codex",
+                SessionPid = LivePid,
+                // No cwd, no tty, no term_program, no tmux pane, no term_pid.
+            }));
+
+        var manager = new SessionManager(scratch.Dir);
+        manager.ScanAndUpdate();
+
+        Assert.DoesNotContain("headless", OrbIds(manager));
+    }
+
+    // --- broadcasts that touch every orb ---
+
+    [AvaloniaFact]
+    public void ReapplyingStateColorsAndGlyphsReachesEveryOrbWithoutThrowing()
+    {
+        // A colour or glyph setting change is not a session change, so
+        // nothing on the scan path notices one — these are what the settings
+        // window calls instead, and both simply walk every window.
+        using var scratch = new Scratch();
+        scratch.Write("a");
+        scratch.Write("b", cli: "codex");
+        var manager = Scan(scratch);
+
+        manager.ReapplyStateColors();
+        manager.ReapplyGlyphs();
+    }
+
+    // A speech-state change is broadcast to every orb's flyout and to the
+    // chat panel, on the UI thread — private because only TextToSpeech's own
+    // event should ever raise it, so reached here through reflection the same
+    // way OrbIds reaches _windows.
+    [AvaloniaFact]
+    public void ASpeechStateChangeIsPostedToEveryOrbsFlyout()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("a");
+        var manager = Scan(scratch);
+
+        var method = typeof(SessionManager).GetMethod(
+            "OnSpeakStateChanged", BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(method);
+
+        method!.Invoke(manager, new object[] { TextToSpeech.SpeakState.Speaking });
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    // --- the tray, when one is attached ---
+
+    [AvaloniaFact]
+    public void AttachedTrayIsFedTheStackInDisplayOrder()
+    {
+        // SessionScanTests never calls Start(), so _tray is null for every
+        // other case in this file and UpdateTray's own call is a no-op on a
+        // null. Attaching one the same way TrayRemoteItemTests does exercises
+        // the call for real: a NativeMenu built under the headless platform is
+        // not guaranteed, so a TrayController that cannot construct here is
+        // reported as "couldn't check" rather than silently passing.
+        using var scratch = new Scratch();
+        scratch.Write("a");
+        var manager = Scan(scratch);
+
+        TrayController tray;
+        try
+        {
+            tray = new TrayController();
+        }
+        catch
+        {
+            return;
+        }
+
+        typeof(SessionManager).GetField("_tray", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(manager, tray);
+
+        manager.ScanAndUpdate();
+    }
+
+    // --- background leads with no terminal of their own ---
+
+    [AvaloniaFact]
+    public void ALeadWithALiveAgentKeepsItsOrbDespiteHavingNoTerminal()
+    {
+        // Two entries share this process's one certainly-alive pid without
+        // colliding in Superseded because they name different CLIs — the
+        // same trick ATeamsMemberIsGatheredBehindItsLeadAndFollowsItWhenDragged
+        // uses. AgentTeam.Of caches by pid alone, so seeding it once here
+        // answers for both: the Codex entry reads it as "I have a live agent
+        // lead" (populating leadsWithLiveAgents) and the ClaudeCode entry
+        // reads it as "that lead is me" (excluded from being its own member
+        // by the self-check in the source).
+        //
+        // Neither BackgroundJobs.IsLiveJob nor AgentTeamViewer.TryAdopt's real
+        // ps/lsof scan is reached: the member keeps a terminal so
+        // WantsAgentViewer never asks for it, the lead's Cwd is empty so
+        // TryAdopt's own first check declines before any process walk, and
+        // both entries carry a real pid, so JudgeReachability's unconditional
+        // "no pid" branch — which would ask BackgroundJobs for real — never
+        // fires for either.
+        var cache = (Dictionary<int, (AgentTeam.Membership Value, long Stamp)>)typeof(AgentTeam)
+            .GetField("Cache", BindingFlags.NonPublic | BindingFlags.Static)!
+            .GetValue(null)!;
+
+        lock (cache) cache.Clear();
+        try
+        {
+            lock (cache)
+            {
+                cache[LivePid] = (new AgentTeam.Membership("lead-id", "", ""), Environment.TickCount64);
+            }
+
+            using var scratch = new Scratch();
+            scratch.Write("codex-member", cli: "codex"); // has a terminal by default
+            File.WriteAllText(Path.Combine(scratch.Dir, "lead-id.txt"),
+                System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+                {
+                    State = "idle",
+                    SessionPid = LivePid,
+                    // No cwd, no terminal fields at all: a background lead
+                    // running under `claude daemon run`.
+                }));
+
+            var manager = new SessionManager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            // The member keeps its own terminal-based orb as normal...
+            Assert.Contains("codex-member", OrbIds(manager));
+
+            // ...and the lead gets one too, despite naming no terminal at
+            // all, because leadsWithLiveAgents exempts it: "agents on screen
+            // pointing at nothing is a worse lie than an orb you might not be
+            // able to click."
+            Assert.Contains("lead-id", OrbIds(manager));
+        }
+        finally
+        {
+            lock (cache) cache.Clear();
+        }
     }
 }
