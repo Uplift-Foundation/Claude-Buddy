@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
@@ -56,6 +57,9 @@ namespace ClaudeBuddy
 
         public static bool Enabled { get; private set; } = ClaudeBuddySettings.TintActiveWindow;
 
+        // Excluded from coverage: creates real overlay windows and an Avalonia
+        // timer over them.
+        [ExcludeFromCodeCoverage]
         public static void Start()
         {
             if (!OperatingSystem.IsMacOS() || _timer is not null) return;

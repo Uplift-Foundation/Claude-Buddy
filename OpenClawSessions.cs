@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using Avalonia.Threading;
 
@@ -368,6 +369,9 @@ namespace ClaudeBuddy
         // The status line moves too, for the same reason: leaving the old
         // sentence up under a button that has just gone would read as the click
         // having done nothing.
+        // Excluded from coverage: records a pinned fingerprint and reconnects to
+        // the gateway.
+        [ExcludeFromCodeCoverage]
         public static void TrustNewCertificate()
         {
             ClaudeBuddySettings.OpenClawFingerprint = "";
@@ -384,6 +388,9 @@ namespace ClaudeBuddy
         // Called on launch and whenever the settings change. Idempotent: a
         // second call while running is a restart, which is what changing the
         // host or the token means.
+        // Excluded from coverage: tears down the supervisor task and opens a new
+        // gateway connection.
+        [ExcludeFromCodeCoverage]
         public static void Restart()
         {
             lock (Gate)
@@ -421,6 +428,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: the supervisor loop: connects a WebSocket to a
+        // live gateway and reconnects for as long as the app runs.
+        [ExcludeFromCodeCoverage]
         private static async Task RunAsync(string host, int port, CancellationToken ct)
         {
             var backoff = TimeSpan.FromSeconds(2);
@@ -574,6 +584,8 @@ namespace ClaudeBuddy
             _ => result.Detail ?? "not connected"
         };
 
+        // Excluded from coverage: an agents.list request over the live connection.
+        [ExcludeFromCodeCoverage]
         private static async Task LoadAgentNamesAsync(OpenClawGateway gateway, CancellationToken ct)
         {
             try
@@ -665,6 +677,8 @@ namespace ClaudeBuddy
             catch { return null; }
         }
 
+        // Excluded from coverage: subscribes to the gateway event stream.
+        [ExcludeFromCodeCoverage]
         private static async Task SubscribeAsync(OpenClawGateway gateway, CancellationToken ct)
         {
             try
@@ -679,6 +693,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: a sessions.list request over the live
+        // connection; what it does with the reply is Parse, which is tested.
+        [ExcludeFromCodeCoverage]
         private static async Task PollAsync(OpenClawGateway gateway, CancellationToken ct)
         {
             while (!ct.IsCancellationRequested)
@@ -1037,6 +1054,8 @@ namespace ClaudeBuddy
         // panel puts whatever comes back in front of the person who typed it,
         // because a message that didn't arrive and didn't say so is the worst
         // outcome a chat window can produce.
+        // Excluded from coverage: sends a message to a real gateway.
+        [ExcludeFromCodeCoverage]
         public static async Task SendAsync(OpenClawChatSession chat, string text, CancellationToken ct)
         {
             OpenClawGateway? gateway;
@@ -1221,6 +1240,8 @@ namespace ClaudeBuddy
         // The last thing the agent said, for the speak button on the orb's own
         // flyout — which has no panel open and so no transcript to read from.
         // Loads the history if this session has never been opened.
+        // Excluded from coverage: a history request over the live connection.
+        [ExcludeFromCodeCoverage]
         public static async Task<string?> LastAssistantTextAsync(string sessionId, string displayName)
         {
             if (ChatFor(sessionId, displayName) is not OpenClawChatSession chat) return null;
@@ -1323,6 +1344,8 @@ namespace ClaudeBuddy
         // in exactly the moment the user is waiting to see something.
         private static readonly Dictionary<string, byte[]?> Media = new(StringComparer.Ordinal);
 
+        // Excluded from coverage: an HTTP GET against the gateway host.
+        [ExcludeFromCodeCoverage]
         public static async Task<byte[]?> FetchMediaAsync(string url, CancellationToken ct)
         {
             lock (Gate)
@@ -1390,6 +1413,8 @@ namespace ClaudeBuddy
         // chat.history counts its offset back from the newest message, so
         // walking backwards is simply an increasing offset — verified against
         // the gateway: consecutive pages do not overlap.
+        // Excluded from coverage: pages history back over the live connection.
+        [ExcludeFromCodeCoverage]
         public static async Task<bool> LoadOlderAsync(OpenClawChatSession chat, CancellationToken ct)
         {
             if (!chat.HasMore) return false;
@@ -1417,6 +1442,9 @@ namespace ClaudeBuddy
             return turns.Count > 0;
         }
 
+        // Excluded from coverage: a sessions.history request over the live
+        // connection.
+        [ExcludeFromCodeCoverage]
         private static async Task LoadHistoryAsync(OpenClawChatSession chat, CancellationToken ct)
         {
             var first = await FetchPageAsync(chat, 0, ct);

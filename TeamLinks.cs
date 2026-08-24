@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
@@ -65,6 +66,9 @@ namespace ClaudeBuddy
         // Replaces the whole set. Callers rebuild the pair list on every scan
         // rather than diffing it: it's a handful of pairs, and the alternative
         // is tracking membership changes in three places.
+        // Excluded from coverage: creates and shows real transparent arrow windows
+        // over live orb windows.
+        [ExcludeFromCodeCoverage]
         public static void Update(IEnumerable<(OrbWindow Member, OrbWindow Lead)> pairs)
         {
             Pairs.Clear();
@@ -75,6 +79,10 @@ namespace ClaudeBuddy
         // Re-runs the geometry without touching the set — what a drag calls, on
         // every pointer move, so it does no allocation beyond the geometry it
         // has to rebuild.
+        // Excluded from coverage: measures live orb windows and repositions real
+        // arrow windows; the arithmetic between the two is TeamLinkGeometry.Place,
+        // which is tested.
+        [ExcludeFromCodeCoverage]
         public static void Refresh()
         {
             if (!_visible)
@@ -105,6 +113,8 @@ namespace ClaudeBuddy
 
         // Orbs hidden means arrows hidden: an arrow between two invisible orbs
         // is a line from nowhere to nowhere.
+        // Excluded from coverage: shows or hides real arrow windows.
+        [ExcludeFromCodeCoverage]
         public static void SetVisible(bool visible)
         {
             if (_visible == visible) return;
