@@ -9,6 +9,137 @@ files because each CLI looks for its own name and neither reads the other's —
 **if you change one, change both.** A symlink would look like one file until
 someone checks the repo out on Windows.
 
+## How a feature gets built
+
+**Every feature is a ticket, a team, and a round trip through QA — in that
+order.** The backlog is Jira project **CB**, board 70:
+
+<https://uplifttech.atlassian.net/jira/software/projects/CB/boards/70/backlog>
+
+No feature work starts from a chat message alone. A request that arrives in a
+terminal, in an issue, or in conversation becomes a CB ticket first, and from
+then on the ticket is what moves — every agent in the chain leaves the board in
+a state that says where the work actually is, so someone reading the board and
+someone reading the terminal see the same thing.
+
+**Prefer the autonomous path at every step.** The escalations below are for an
+agent that is genuinely not confident, not checkpoints to hit out of habit. An
+agent that can defend its plan, its tests and its screenshots should carry the
+feature through to done and say so; one that cannot should ask early, while the
+answer is still cheap, rather than after building the wrong thing.
+
+### The team
+
+Features are built by an **agent team**, not by one session doing everything.
+That is the same mechanism this app draws orbs for: Claude Code spawns each
+member as its own `claude` process carrying `--agent-name`, `--team-name` and
+`--parent-session-id`, and `AgentTeam.cs` reads the last of those straight off
+the process to link a member to its lead — deliberately not out of the
+transcript, so a team that has gone quiet still draws its arrows. Building Claude Buddy with the thing Claude Buddy visualises is
+deliberate — a team whose shape looks wrong on the board is a bug report about
+the app, and you get it for free.
+
+The roles, and who hands to whom:
+
+- **Product manager** — writes the requirement, owns the ticket's status, and
+  makes the final call on done.
+- **Architect** and **engineer** — take a refined ticket and build it. Spawn as
+  many of each as the work genuinely splits into; one per independent surface
+  beats one agent doing all of them in sequence.
+- **QA** — tests what the engineers build and hands failures back. A loop, not a
+  gate at the end: build a piece, test a piece, send it back, repeat until QA
+  has nothing left to return.
+
+### Product manager: requirement first, then plan
+
+The PM agent creates the requirement in CB as a **`Feature`** and moves it to
+**Refining**. CB's issue types are `Epic`, `Feature`, `Story`, `Task`, `Bug` and
+`Subtask` (one word, no hyphen); `Feature` sits at the same level as `Story`
+rather than above it, so an `Epic` is still what groups a multi-ticket effort.
+
+**One thing here is unverified, and the first real ticket should settle it.** CB
+is a team-managed project and is currently empty, so its workflow statuses
+cannot be read back from the API at all — there is no issue to ask for
+transitions, and JQL does not validate status names against a project, so a
+query returning nothing proves nothing either. "Refining" is *confirmed* as a
+status name in use on this Jira site (project FMN has 69 issues sitting in it)
+and *unconfirmed* on CB's own board, which a team-managed project owns
+separately. Whoever files the first CB ticket should read the board's columns
+and correct the name here if it differs.
+
+Then the PM writes a plan, and **plans on a stronger model than the one that
+will implement it.** Planning is where a wrong decision is cheapest to fix and
+most expensive to miss, so spend the capability there and let implementation run
+cheaper:
+
+| Feature | Plan with | Implement with |
+| --- | --- | --- |
+| Complex — a new subsystem, a cross-platform surface, anything touching the hook or transcript contracts | `fable` | `opus` or `sonnet` |
+| Simpler — a setting, a bounded UI change, a fix with an obvious shape | `opus` or `sonnet` | `sonnet` |
+
+Those are the `model:` values the Agent and Workflow tools accept (`fable`,
+`opus`, `sonnet`, `haiku`). `effort:` is the other dial and moves the same way —
+high while planning, lower for the mechanical stages afterwards.
+
+**If the PM is not confident the requirement and plan are enough to build from
+autonomously, it asks a human before spending a team on it.** Ask on GitHub,
+against the repo, with a link to the CB ticket — and because this repo is public
+while the Jira site is not, put enough of the requirement in the comment that
+the question stands on its own for someone who cannot open the link. Repo admins
+are the escalation point (`wtvamp` and `lunarjuice` at the time of writing;
+`gh api repos/Uplift-Foundation/Claude-Buddy/collaborators` prints the current
+list).
+
+If it *is* confident, it hands straight to the architects and engineers, and the
+feature proceeds without a human in the loop.
+
+### Build and QA, in a loop
+
+Engineers and architects build, QA agents test, and the work goes back and forth
+until it stops coming back. The substance of QA's half is **Every feature ships
+with its tests** below — unit, integration and UI, covering 100% of the lines
+the branch adds — so "QA passed" means those exist and are green, not that
+somebody had a look.
+
+**A feature works on Windows and macOS, or it is not a feature.** CI enforces
+the shape of that already: the matrix is `macos-latest`/`osx-arm64` and
+`windows-latest`/`win-x64`, and every suite runs on both legs. Parity is more
+than a green build, though — a feature no install path wires up is equally
+unfinished. Before calling it done, check `tools/build-macos-dmg.sh`,
+`tools/build-macos-app.sh`'s Resources copy, `tools/ClaudeBuddy.iss`,
+`tools/install-hooks.sh`/`.ps1` and the README's install section, and satisfy
+yourself that any platform-specific gate is real (WSL) rather than accidental.
+
+### PR, screenshots, and the call on done
+
+The feature goes up as a PR against `develop`, per **Pull requests** below.
+
+**Don't attach screenshots by hand — they are already automatic.** `ci.yml`
+captures a PNG per `tests/UiScreenshots` scenario on both runners;
+`publish-screenshots.yml` then picks those artifacts up on a `workflow_run`
+trigger, pushes them to the `screenshots` branch and comments on the PR with
+real `raw.githubusercontent.com` image URLs, labelled per rid. (The two-workflow
+split is not stylistic: a `pull_request` run from a fork gets a read-only token
+and every PR here is one. Both files' header comments have the full story.) A
+feature with a visible surface adds its capture to that suite, and the PR
+comment is what everyone reviews.
+
+The PM agent reviews that comment — **both** rids, since a macOS-only
+implementation shows itself precisely there — and **if it can approve the
+feature as done autonomously, it should**, moving the ticket accordingly.
+
+If it cannot, it asks a human to pull the branch, install it and approve by
+hand:
+
+- **If someone is driving the feature in Claude Code**, ask them in the terminal.
+  They are already there and the round trip costs seconds.
+- **If nobody is watching the terminal**, ask on GitHub, on the PR.
+
+Either way, name the specific thing you could not confirm from the screenshots.
+"The Windows flyout renders, but I can't tell from the capture whether the mic
+button is enabled" is a request someone can settle in a minute. "Needs manual
+approval" is not.
+
 ## Branching: gitflow
 
 Two long-lived branches:
@@ -60,6 +191,11 @@ Say in the PR body what was actually verified and what wasn't. This project
 keeps that distinction deliberately — see `docs/*-findings.md`, which separate
 "confirmed on a real machine" from "assumed to work". A PR that claims more than
 was tested costs more than one that admits a gap.
+
+That includes the tests — see **Every feature ships with its tests** below. A PR
+that adds or changes behaviour without covering it isn't ready to review,
+however well the behaviour itself works, and a line the tests can't reach is
+named in the body rather than left for the next person to discover.
 
 **Don't rename a pushed branch to fix its name.** GitHub closes the open PR
 instead of retargeting it, and reopening is refused once the old head ref is
@@ -114,6 +250,77 @@ has the full story.
 `<Version>` in `ClaudeBuddy.csproj` is the single source of truth for the
 shipped version — the packaging scripts and the release workflow parse it out of
 there.
+
+## Every feature ships with its tests
+
+**A feature request is not finished when the feature works. It is finished when
+the feature works and the code that makes it work is covered.** Tests land in
+the same branch as the behaviour they cover — not a follow-up, not an issue
+filed against `develop` — and the target for the lines that branch adds or
+changes is **100%**: every new method, every arm of every new conditional,
+every error path you wrote a `catch` for.
+
+Cover it at all three levels the suites already separate, rather than only the
+one that is easiest to reach from where the change happens to live:
+
+- **Unit** (`tests/UnitTests`) — the decisions. If the change added a rule about
+  which orb wins, which name is used, or where something is drawn, that rule
+  belongs in a function with no window and no settings behind it, and that
+  function gets a case per outcome. If new logic can't be reached without
+  constructing a window, that is a seam to fix before writing the test, not a
+  reason to skip it — the same argument that keeps `OrbArrangement`, `OrbGlyph`
+  and both transcript parsers pure.
+- **Integration** (`tests/IntegrationTests`) — the seams with what this process
+  does not own: the hook scripts run as real subprocesses, files on disk,
+  settings round-tripped through a real file. Anything touching a format
+  someone else defines is covered here *as well as* by a unit test of the
+  parsing, because the two fail differently — the parser gets a field wrong,
+  the seam gets the whole exchange wrong.
+- **UI** (`tests/UiTests`) — the headless Avalonia path. A new window, panel,
+  control, binding or click handler gets driven with a synthesized click or a
+  real `UpdateFrom`, and asserted on what a user would have seen. `ChatPanel`'s
+  `FakeChatSession` is the pattern for anything that would otherwise need a
+  live session behind it. A new *visible* surface also gets a capture in
+  `tests/UiScreenshots`, which renders through real Skia rather than the null
+  renderer; its cases are hand-written one per scenario, so adding a `UiTests`
+  scenario does not add its screenshot for you.
+
+A change to geometry, transcript parsing or orb initials extends the three
+console suites too — `dotnet test tests/Tests.sln` does not run them, and CI
+failing on `ArrangementTests` after a green `dotnet test` is a bad way to find
+that out. CI runs every suite on both runners, so a test that only passes on
+the machine you wrote it on blocks the build.
+
+**100% means the diff, not the repository.** The app is nowhere near it — as of
+this writing `UnitTests` alone covers about 3% of the assembly, and whole areas
+of it (`TerminalFocuser`, the tray, the installers) make real
+`tmux`/`ps`/`osascript` calls that a headless runner must not execute. Holding
+new work to 100% is how that number climbs without a rewrite; holding the
+existing repository to it would make the rule something everybody quietly
+ignores, which is worse than not having one.
+
+Where a line genuinely cannot be covered — an OS call with no seam, a `catch`
+for something only the other platform throws — **name it in the PR body and say
+why**, in the same voice this project already uses to separate "confirmed on a
+real machine" from "assumed to work". An uncovered line that is named is a known
+gap; an uncovered line that isn't is a claim about the suite that isn't true.
+
+To see the number:
+
+```bash
+dotnet add tests/UnitTests/ClaudeBuddy.UnitTests.csproj package coverlet.collector
+dotnet test tests/UnitTests --collect:"XPlat Code Coverage"
+# tests/UnitTests/TestResults/<guid>/coverage.cobertura.xml
+```
+
+**Nothing in the repository collects coverage today, and the flag fails
+silently without that package.** `--collect:"XPlat Code Coverage"` against a
+project with no `coverlet.collector` reference creates an empty `TestResults/`
+directory, prints no warning and exits 0 — a run that measured nothing, and
+reads exactly like one that measured everything. Add the package to whichever
+suite you are measuring and take it back out before you push, unless you are
+deliberately wiring collection into all three suites and CI, which is its own
+change and needs its own reasoning.
 
 ## Testing UI behavior
 
@@ -177,7 +384,8 @@ One command runs all three: `dotnet test tests/Tests.sln`. They join the three
 suites above rather than replacing them — `Tests.sln` holds only the xUnit
 projects, so it can't accidentally try to `dotnet test` an exe with no test
 SDK reference, and `claudeBuddy.sln` stays app-only. CI (`.github/workflows/ci.yml`)
-runs all six, on both runners, before packaging — a failing test blocks the
+runs every one of them, plus `tests/UiScreenshots`, on both runners, before
+packaging — a failing test blocks the
 build the same way a failed `dotnet publish` already did.
 
 They reference `ClaudeBuddy.csproj` directly with a `<ProjectReference>`

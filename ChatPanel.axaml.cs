@@ -73,7 +73,16 @@ namespace ClaudeBuddy
         // session with no answer for IRemoteChatSlashCommands, which quietly
         // turns the whole feature off for it rather than needing a check at
         // every call site.
-        private IReadOnlyList<SlashCommand> _slashCommands = Array.Empty<SlashCommand>();
+        //
+        // Asked of the session on every keystroke rather than read once when
+        // the panel binds. A local session knows its commands before the panel
+        // opens, so caching looked free; a session on another machine has to be
+        // *asked* what it can run, and the answer lands half a minute later. A
+        // list captured at bind time was therefore permanently empty for the
+        // one kind of session that most needed it — the panel had to be closed
+        // and reopened to see anything, which nobody would guess.
+        private IReadOnlyList<SlashCommand> SlashCommands =>
+            (_session as IRemoteChatSlashCommands)?.SlashCommands ?? Array.Empty<SlashCommand>();
 
         // The suggestions currently shown, and which one Up/Down has landed
         // on. Kept as a plain list rather than something observable: the
@@ -325,6 +334,14 @@ namespace ClaudeBuddy
 
             if (_session is IRemoteChatPrompts prompts) prompts.PromptChanged -= OnPromptChanged;
 
+            // A remote session can take a turn back — its "working…" line comes
+            // off once the answer lands. Subscribed on the concrete type rather
+            // than through an interface: nothing else in this app has ever needed
+            // to remove a turn, and inventing IRemoteChatRemovable for one caller
+            // would be ceremony. See RemoteControlChatSession.Removed.
+            if (_session is RemoteControlChatSession previousRemote)
+                previousRemote.Removed -= OnTurnRemoved;
+
             // The last good name is per session, not per panel. The panel is a
             // singleton and the box outlives a session, so leaving it set meant
             // the *next* conversation inherited it — and because "we already
@@ -356,6 +373,8 @@ namespace ClaudeBuddy
             session.TurnAdded += OnTurnAdded;
             session.TurnUpdated += OnTurnUpdated;
             session.StateChanged += OnStateChanged;
+
+            if (session is RemoteControlChatSession remote) remote.Removed += OnTurnRemoved;
 
             // The backlog usually lands a moment after the panel opens, so the
             // transcript has to be able to be replaced under it rather than only
@@ -390,7 +409,6 @@ namespace ClaudeBuddy
             _turns.Clear();
             foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
 
-            _slashCommands = (session as IRemoteChatSlashCommands)?.SlashCommands ?? Array.Empty<SlashCommand>();
             HideSlashSuggestions();
 
             Input.Text = Drafts.GetValueOrDefault(session.SessionId, "");
@@ -1153,7 +1171,8 @@ namespace ClaudeBuddy
         // isn't a command being completed any more.
         private void UpdateSlashSuggestions()
         {
-            if (_slashCommands.Count == 0) { HideSlashSuggestions(); return; }
+            var commands = SlashCommands;
+            if (commands.Count == 0) { HideSlashSuggestions(); return; }
 
             var text = Input.Text ?? "";
             var caret = Math.Clamp(Input.CaretIndex, 0, text.Length);
@@ -1165,7 +1184,7 @@ namespace ClaudeBuddy
                 return;
             }
 
-            _slashMatches = _slashCommands
+            _slashMatches = commands
                 .Where(c => c.Name.StartsWith(token, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
@@ -1377,6 +1396,20 @@ namespace ClaudeBuddy
             }
         }
 
+        // Drops the row for a turn the session has retracted. Matched by
+        // reference through the view wrapper, because the text is not unique —
+        // two "working…" lines would be identical strings.
+        private void OnTurnRemoved(ChatTurn turn)
+        {
+            for (var i = 0; i < _turns.Count; i++)
+            {
+                if (!ReferenceEquals(_turns[i].Source, turn)) continue;
+
+                _turns.RemoveAt(i);
+                return;
+            }
+        }
+
         private void OnHistoryReplaced()
         {
             if (_session is null) return;
@@ -1552,6 +1585,11 @@ namespace ClaudeBuddy
                 if (!string.IsNullOrEmpty(turn.ImageUrl)) LoadImage();
                 else if (turn.ImageBytes is { Length: > 0 } bytes) LoadImageBytes(bytes);
             }
+
+            // The turn this row was built from, so the panel can find a row
+            // again by identity. Text is not unique enough — two "working…"
+            // lines would be the same string.
+            public ChatTurn Source => _turn;
 
             public ChatRole Role => _turn.Role;
             public string Text => _turn.Text;

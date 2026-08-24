@@ -693,6 +693,53 @@ public class ChatPanelTests : IDisposable
         Assert.Single(suggestions);
     }
 
+    // Commands that arrive after the panel is already open.
+    //
+    // A local session knows its commands before anyone can open a panel on it,
+    // so reading them once at bind time looked free and was how this worked. A
+    // session on another machine has to be *asked* what it can run and answers
+    // half a minute later, so the list captured at bind time was empty forever
+    // — autocomplete was dead for the one kind of session that most needed it,
+    // and the only way to get it back was to close the panel and reopen it,
+    // which nobody would think to try.
+    [AvaloniaFact]
+    public void SuggestionsAppearForCommandsLearnedAfterThePanelOpened()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();   // knows nothing yet, like a relay that has just
+                                // sent the question and not had the answer.
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var input = panel.FindControl<TextBox>("Input")!;
+        var slashBox = panel.FindControl<Border>("SlashBox")!;
+
+        input.Text = "/up";
+        input.CaretIndex = input.Text.Length;
+        Flush();
+
+        Assert.False(slashBox.IsVisible);
+
+        // The far session answers. Nothing rebinds and the panel is not
+        // reopened — exactly what happens in the app.
+        fake.SlashCommands = new[]
+        {
+            new SlashCommand("/update-inbox", ""),
+            new SlashCommand("/update-config", ""),
+            new SlashCommand("/discover", ""),
+        };
+
+        input.Text = "/upd";
+        input.CaretIndex = input.Text.Length;
+        Flush();
+
+        Assert.True(slashBox.IsVisible);
+        var suggestions = panel.FindControl<ItemsControl>("SlashList")!.ItemsSource!.Cast<object>().ToList();
+        Assert.Equal(2, suggestions.Count);
+    }
+
     [AvaloniaFact]
     public void ArrowDownThenEnterAcceptsTheSecondSuggestionRatherThanSending()
     {

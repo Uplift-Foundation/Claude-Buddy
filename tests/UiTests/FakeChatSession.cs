@@ -20,9 +20,12 @@ internal sealed class FakeChatSession : IRemoteChatSession, IRemoteChatImages, I
     public RemoteChatState State { get; set; } = RemoteChatState.Connected;
 
     // Empty by default, the same as a session with nothing to say about
-    // IRemoteChatSlashCommands — a test opts in by setting this before
-    // ChatPanel.OpenFor, which is the only point ChatPanel itself reads it.
-    public IReadOnlyList<SlashCommand> SlashCommands { get; init; } = Array.Empty<SlashCommand>();
+    // IRemoteChatSlashCommands. Settable rather than init-only, and after
+    // OpenFor as well as before: a session on another machine has to be asked
+    // what it can run, so its list arrives well after the panel has bound to
+    // it, and a fake that could only be set up front could not express the
+    // case that mattered.
+    public IReadOnlyList<SlashCommand> SlashCommands { get; set; } = Array.Empty<SlashCommand>();
 
     private readonly List<ChatTurn> _history;
     public IReadOnlyList<ChatTurn> History => _history;
