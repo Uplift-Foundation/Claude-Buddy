@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics;
 
 namespace ClaudeBuddy
@@ -19,6 +20,9 @@ namespace ClaudeBuddy
         private static string Directory_ =>
             Path.Combine(Path.GetTempPath(), "claude_buddy_media");
 
+        // Excluded from coverage: writes the file and hands it to the OS's default
+        // viewer; the filename rule is SafeName, which is tested.
+        [ExcludeFromCodeCoverage]
         public static void Open(byte[] bytes, string name)
         {
             try
@@ -76,6 +80,9 @@ namespace ClaudeBuddy
         // Anything from a previous sitting. Deleting on the way in rather than
         // on the way out, because there is no reliable "on the way out" — the
         // app can be killed, and a viewer may still have the file open.
+        // Excluded from coverage: deletes real files from a real directory by
+        // mtime.
+        [ExcludeFromCodeCoverage]
         private static void Sweep()
         {
             try

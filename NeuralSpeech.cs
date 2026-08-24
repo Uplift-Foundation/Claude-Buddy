@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Reflection;
@@ -216,6 +217,8 @@ namespace ClaudeBuddy
         // write the same paths. Exceptions propagate so the caller can say
         // "couldn't download" — everything on the *speaking* path degrades
         // quietly instead, because failing to speak well should still speak.
+        // Excluded from coverage: downloads the Kokoro engine over the network.
+        [ExcludeFromCodeCoverage]
         public static Task DownloadAsync(IProgress<string>? progress = null)
         {
             if (Installed) return Task.CompletedTask;
@@ -227,6 +230,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: fetches and unpacks an engine archive from a
+        // remote host.
+        [ExcludeFromCodeCoverage]
         private static async Task DownloadCoreAsync(IProgress<string>? progress)
         {
             try
@@ -326,6 +332,8 @@ namespace ClaudeBuddy
         // locked by a speech process that is still exiting, most likely — costs
         // disk, and disk is not worth failing an install that otherwise
         // succeeded. The next update tries again.
+        // Excluded from coverage: deletes real engine directories from disk.
+        [ExcludeFromCodeCoverage]
         private static void RemoveSupersededEngines()
         {
             try
@@ -370,6 +378,8 @@ namespace ClaudeBuddy
         // download does, and the caller uses that only to refresh the voice list.
         // A failure is logged and left — the older engine still speaks, and the
         // next launch tries again.
+        // Excluded from coverage: triggers the network download above.
+        [ExcludeFromCodeCoverage]
         public static Task EnsureCurrentAsync()
         {
             if (!ClaudeBuddySettings.NeuralVoiceEnabled) return Task.CompletedTask;
@@ -398,6 +408,8 @@ namespace ClaudeBuddy
             }, TaskScheduler.Default);
         }
 
+        // Excluded from coverage: an HTTP GET to a remote host.
+        [ExcludeFromCodeCoverage]
         private static async Task DownloadFileAsync(string url, string destination)
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
@@ -418,6 +430,8 @@ namespace ClaudeBuddy
         // The engine's own list, asked of the engine rather than hardcoded here,
         // so the two can't drift. Empty when it isn't installed, which is what
         // makes the settings picker fall back to the system voices.
+        // Excluded from coverage: runs the side-car engine to enumerate itself.
+        [ExcludeFromCodeCoverage]
         public static List<string> Voices()
         {
             var voices = new List<string>();
@@ -472,6 +486,8 @@ namespace ClaudeBuddy
         // model load, then the first segment's synthesis, measured at ~3.3s — so
         // the caller needs to distinguish "preparing" from "speaking" rather than
         // showing a stop button over silence.
+        // Excluded from coverage: starts the side-car engine process.
+        [ExcludeFromCodeCoverage]
         public static Process? Start(string text, string? voice, Action? onSpeaking)
         {
             var engine = UsableEnginePath;
