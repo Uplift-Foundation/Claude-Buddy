@@ -166,6 +166,33 @@ namespace ClaudeBuddy
             }
         }
 
+        // The peer list, as the orb scan wants it: only the sessions worth an orb,
+        // each stamped with the account it was seen through and whatever colour
+        // that session has told us about.
+        //
+        // Pulled out of the poll, which needs a live relay. The filter is the part
+        // that matters — a peer list carries entries that are not sessions anyone
+        // would want an orb for, and showing them would fill the screen with orbs
+        // nobody can click usefully.
+        internal static List<Remote> RemotesFrom(
+            IEnumerable<BridgeProtocol.RemoteAgent> agents, string account, DateTime now)
+        {
+            var remotes = new List<Remote>();
+
+            foreach (var agent in agents)
+            {
+                if (!agent.IsWorthAnOrb) continue;
+
+                var key = account + ":" + agent.Name;
+                string? colour;
+                lock (Gate) KnownColors.TryGetValue(key, out colour);
+
+                remotes.Add(new Remote(agent.Name, agent.Ref, agent.Status, now, account, colour));
+            }
+
+            return remotes;
+        }
+
         internal static void ClearRelaysForTests()
         {
             lock (Gate)
@@ -569,17 +596,7 @@ namespace ClaudeBuddy
                 return;
             }
 
-            var now = DateTime.UtcNow;
-            var remotes = agents
-                .Where(a => a.IsWorthAnOrb)
-                .Select(a =>
-                {
-                    var key = account + ":" + a.Name;
-                    string? colour;
-                    lock (Gate) KnownColors.TryGetValue(key, out colour);
-                    return new Remote(a.Name, a.Ref, a.Status, now, account, colour);
-                })
-                .ToList();
+            var remotes = RemotesFrom(agents, account, DateTime.UtcNow);
 
             lock (Gate)
             {
