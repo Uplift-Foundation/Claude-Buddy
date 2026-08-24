@@ -45,18 +45,29 @@ deliberate: a team that looks wrong on the board is a free bug report.
 
 ### Product manager: requirement first, then plan
 
-The PM agent creates the requirement in CB as a **`Feature`** and moves it to
-**Refining**. CB's issue types are `Epic`, `Feature`, `Story`, `Task`, `Bug`,
-`Subtask` (one word); `Feature` is level with `Story`, not above it, so an
-`Epic` still groups a multi-ticket effort.
+The PM agent creates the requirement in CB as a **`Feature`**, which lands in
+**Refinement** by itself. CB's issue types are `Epic`, `Feature`, `Story`,
+`Task`, `Bug`, `Subtask` (one word); `Feature` is level with `Story`, not above
+it, so an `Epic` still groups a multi-ticket effort.
 
-**Unverified, and the first real ticket should settle it:** CB is team-managed
-and currently empty, so its statuses can't be read from the API — no issue to
-ask for transitions, and JQL doesn't validate status names per project, so an
-empty result proves nothing. "Refining" is *confirmed* as a status in use on
-this Jira site (69 issues in project FMN) and *unconfirmed* on CB's own board,
-which a team-managed project owns separately. Whoever files the first CB ticket
-should read the board's columns and fix the name here if it differs.
+CB's board has four columns, and every transition is global — available from
+every status, so none of these is a one-way door:
+
+| Status | Transition id | Category |
+| --- | --- | --- |
+| `Refinement` | 11 | To Do |
+| `Development` | 21 | In Progress |
+| `Testing` | 31 | In Progress |
+| `Done` | 41 | Done |
+
+**This replaces an earlier guess, and the correction is worth keeping
+visible.** CB was empty when this was first written and a team-managed project
+owns its statuses privately, so there was no issue to ask for transitions and
+JQL doesn't validate status names per project — an empty result proved nothing.
+"Refining" came from project FMN, where it is genuinely in use, and it is
+**not** a CB status. The real name is `Refinement`. CB-3 settled it by being
+filed and read back. Ask the API, not another project's board, if a fifth
+column ever shows up.
 
 Then it writes a plan, and **plans on a stronger model than the one that
 implements**. Planning is where a wrong call is cheapest to fix and most
