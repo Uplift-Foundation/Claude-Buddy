@@ -52,30 +52,19 @@ The roles, and who hands to whom:
 
 ### Product manager: requirement first, then plan
 
-The PM agent creates the requirement in CB as a **`Feature`**, which lands in
-**Refinement** on its own. CB's issue types are `Epic`, `Feature`, `Story`,
-`Task`, `Bug` and `Subtask` (one word, no hyphen); `Feature` sits at the same
-level as `Story` rather than above it, so an `Epic` is still what groups a
-multi-ticket effort.
+The PM agent creates the requirement in CB as a **`Feature`** and leaves it in
+**Refinement**, which is where CB's workflow puts a new issue anyway. CB's issue
+types are `Epic`, `Feature`, `Story`, `Task`, `Bug` and `Subtask` (one word, no
+hyphen); `Feature` sits at the same level as `Story` rather than above it, so an
+`Epic` is still what groups a multi-ticket effort.
 
-CB's board has four columns, and the whole workflow is global — every
-transition is available from every status, so nothing here is a one-way door:
-
-| Status | Transition id | Category |
-| --- | --- | --- |
-| `Refinement` | 11 | To Do |
-| `Development` | 21 | In Progress |
-| `Testing` | 31 | In Progress |
-| `Done` | 41 | Done |
-
-**This replaces an earlier guess in this file, and the correction is worth
-keeping visible.** CB was empty when the workflow above was first written, and a
-team-managed project owns its statuses privately: there was no issue to ask for
-transitions, and JQL does not validate status names against a project, so a
-query returning nothing proved nothing either. "Refining" was carried over from
-project FMN, where it is genuinely in use — and it is **not** a status on CB.
-The real name is `Refinement`. CB-3 settled it by being filed and read back.
-Ask the API rather than another project's board if a fifth column ever appears.
+**CB's board has four columns, and they are now confirmed** — read off CB-1, the
+first ticket filed, which is what this paragraph used to ask for. They are
+**Refinement → Development → Testing → Done**, with transition ids 11, 21, 31 and
+41; every transition is global, so any status can be reached from any other. The
+name this file guessed was "Refining", which is a status on project FMN and not
+one CB has: a team-managed project owns its workflow separately, and the guess
+was wrong. Nothing else here needed correcting.
 
 Then the PM writes a plan, and **plans on a stronger model than the one that
 will implement it.** Planning is where a wrong decision is cheapest to fix and

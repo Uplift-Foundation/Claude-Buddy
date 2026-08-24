@@ -25,6 +25,48 @@ public sealed class WindowsFactAttribute : FactAttribute
     }
 }
 
+// The bash hook, plus a python3 to build the process tree it is judged against.
+//
+// HookPidWalkShTests stages a parent process with a chosen argv[0] and no
+// controlling terminal, and neither of those is available from bash on macOS —
+// there is no setsid(1), and `exec -a` cannot detach a terminal. python3's
+// os.setsid()/os.execv() do both in two lines; that file's header explains why
+// each is load-bearing rather than convenient.
+//
+// Present on both CI runners this suite runs on. Skipped rather than failed if
+// it ever isn't, so a missing interpreter reads as "not exercised here" instead
+// of as a broken hook.
+public sealed class PythonUnixFactAttribute : FactAttribute
+{
+    public PythonUnixFactAttribute()
+    {
+        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
+        {
+            Skip = "bash hook only runs on macOS/Linux";
+            return;
+        }
+
+        if (Python3Path() is null)
+            Skip = "needs python3 to stage a tty-less parent with a chosen argv[0]";
+    }
+
+    // Resolved by hand rather than left to the shell: this suite invokes
+    // interpreters directly (UseShellExecute = false), so a bare "python3"
+    // would depend on the launching environment's PATH being inherited, which
+    // is exactly the assumption BackgroundJobs.Read had to stop making.
+    public static string? Python3Path()
+    {
+        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+        foreach (var dir in path.Split(':', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = Path.Combine(dir, "python3");
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        return null;
+    }
+}
+
 // Opt-in, and it has to stay that way: a test wearing this starts a **real
 // Claude Code session** on the machine's own logged-in account and talks to
 // whatever other sessions that account can see. Left to run by default it would
