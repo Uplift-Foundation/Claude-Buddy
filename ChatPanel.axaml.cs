@@ -73,7 +73,16 @@ namespace ClaudeBuddy
         // session with no answer for IRemoteChatSlashCommands, which quietly
         // turns the whole feature off for it rather than needing a check at
         // every call site.
-        private IReadOnlyList<SlashCommand> _slashCommands = Array.Empty<SlashCommand>();
+        //
+        // Asked of the session on every keystroke rather than read once when
+        // the panel binds. A local session knows its commands before the panel
+        // opens, so caching looked free; a session on another machine has to be
+        // *asked* what it can run, and the answer lands half a minute later. A
+        // list captured at bind time was therefore permanently empty for the
+        // one kind of session that most needed it — the panel had to be closed
+        // and reopened to see anything, which nobody would guess.
+        private IReadOnlyList<SlashCommand> SlashCommands =>
+            (_session as IRemoteChatSlashCommands)?.SlashCommands ?? Array.Empty<SlashCommand>();
 
         // The suggestions currently shown, and which one Up/Down has landed
         // on. Kept as a plain list rather than something observable: the
@@ -384,7 +393,6 @@ namespace ClaudeBuddy
             _turns.Clear();
             foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
 
-            _slashCommands = (session as IRemoteChatSlashCommands)?.SlashCommands ?? Array.Empty<SlashCommand>();
             HideSlashSuggestions();
 
             Input.Text = Drafts.GetValueOrDefault(session.SessionId, "");
@@ -1117,7 +1125,8 @@ namespace ClaudeBuddy
         // isn't a command being completed any more.
         private void UpdateSlashSuggestions()
         {
-            if (_slashCommands.Count == 0) { HideSlashSuggestions(); return; }
+            var commands = SlashCommands;
+            if (commands.Count == 0) { HideSlashSuggestions(); return; }
 
             var text = Input.Text ?? "";
             var caret = Math.Clamp(Input.CaretIndex, 0, text.Length);
@@ -1129,7 +1138,7 @@ namespace ClaudeBuddy
                 return;
             }
 
-            _slashMatches = _slashCommands
+            _slashMatches = commands
                 .Where(c => c.Name.StartsWith(token, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
