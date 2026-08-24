@@ -1303,7 +1303,7 @@ namespace ClaudeBuddy
             return null;
         }
 
-        private static string? LastAssistantText(OpenClawChatSession chat)
+        internal static string? LastAssistantText(OpenClawChatSession chat)
         {
             for (var i = chat.History.Count - 1; i >= 0; i--)
             {
