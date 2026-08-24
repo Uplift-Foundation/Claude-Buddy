@@ -1181,9 +1181,9 @@ namespace ClaudeBuddy
         // metadata. It isn't noise to be dropped though — it is one of your
         // agents talking — so the header is replaced by the thing it was
         // actually saying, attributed to whoever said it.
-        private static string Readable(string text) => Readable(text, out _);
+        internal static string Readable(string text) => Readable(text, out _);
 
-        private static string Readable(string text, out string? speakerId)
+        internal static string Readable(string text, out string? speakerId)
         {
             speakerId = null;
 
