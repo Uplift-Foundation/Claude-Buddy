@@ -22,6 +22,7 @@ namespace ClaudeBuddy.Tests;
 // person running the tests money — see LiveBridgeFactAttribute for where that is
 // allowed to happen. The handler's own path is covered by the opt-in live test
 // in tests/IntegrationTests.
+[Collection("Settings")]
 public class TrayRemoteItemTests
 {
     private const string ItemLabel = "Connect to other machines";

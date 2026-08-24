@@ -22,6 +22,7 @@ namespace ClaudeBuddy.Tests;
 // session per agent per channel, so eight agents in one room are eight orbs with
 // nothing saying they are the same conversation — the room orb is invented here,
 // once, however many agents point at it.
+[Collection("Settings")]
 public class GatewayScanTests
 {
     // The real clock, not a fixed date. Parse takes its clock as an argument but

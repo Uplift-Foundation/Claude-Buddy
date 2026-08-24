@@ -26,6 +26,7 @@ namespace ClaudeBuddy.Tests;
 // afterwards, so each case also builds the whole visual tree again with the new
 // setting in force, which is the only way the rows that only appear when
 // something is switched on get built at all.
+[Collection("Settings")]
 public class SettingsWindowRowTests
 {
     private static SettingsWindow NewWindow()

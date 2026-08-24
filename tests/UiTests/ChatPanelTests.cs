@@ -18,6 +18,7 @@ namespace ClaudeBuddy.Tests;
 // methods — HideFor(sessionId) is the public teardown call (it unbinds the
 // session and hides the window), called from Dispose so a failed assertion
 // still leaves the singleton clean for the next test.
+[Collection("Settings")]
 public class ChatPanelTests : IDisposable
 {
     private readonly List<string> _sessionIdsToClean = new();

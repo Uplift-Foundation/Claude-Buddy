@@ -392,6 +392,13 @@ projects. Their **cases** do count now: CB-3 moved each matrix into a class that
 `TranscriptSuite`), so `OrbArrangement` no longer reads 0% while being the most
 exhaustively verified file here. Run the exes for the grouped failure report.
 
+Any new UI test class that reads or writes `ClaudeBuddySettings` goes in
+`[Collection("Settings")]`. The settings model is a process-wide static that
+almost everything visual reads while being constructed, so parallel classes race
+to a different set of *executed lines* rather than to a failure — three runs of
+an identical binary once reported 1914, 2024 and 1914 covered lines in
+SettingsWindow.cs. See `tests/UiTests/SettingsCollection.cs`.
+
 And read the headline as coverage **of what remains**: an excluded file and a
 deleted one look identical in a report. `merge-coverage.py` reads the attributes
 back out of the sources and prints what was held out, what is excluded inside
