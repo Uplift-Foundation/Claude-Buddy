@@ -67,8 +67,20 @@ public class RemoteControlChatSessionTests
     {
         var session = NewSession();
 
-        // Off is the default and this suite points settings at a temp dir, so
-        // this reaches the guard rather than any bridge.
+        // Said outright rather than left to the default.
+        //
+        // Off *is* the default and this suite does point settings at a temp
+        // dir, but neither fact makes it off by the time this line runs: the
+        // temp dir is one directory for the whole assembly, and any earlier
+        // test that turns the feature on turns it on for this one too. That is
+        // not hypothetical — TrayRemoteItemTests has to enable it to build the
+        // menu it checks, and when the runner reached that class first this
+        // test sent for real, got a bridge failure instead of the guard, and
+        // failed on the wording of a message it was never testing.
+        //
+        // The state this test needs is part of the test, so it is set here.
+        ClaudeBuddySettings.RemoteControlEnabled = false;
+
         await session.SendAsync("run the tests");
 
         var said = Said(session);
