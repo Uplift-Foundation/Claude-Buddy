@@ -597,5 +597,77 @@ namespace ClaudeBuddy.Tests
 
             Assert.False(await room.LoadOlderAsync(CancellationToken.None));
         }
+
+        // --- sending to the room ---
+
+        // Sending here is not addressed to a member. It goes out through one
+        // member's transcript but with delivery on, which posts it to the channel
+        // itself, so every agent there receives it the way they receive anything
+        // else said in the room. Which member carries it is therefore not a
+        // routing decision at all — only a question of whose transcript the send
+        // sits in.
+        [Fact]
+        public async Task WithReplyingOffTheMessageIsRefusedInTheRoom()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+
+            var zara = Member("zara");
+            zara.HasMore = false;
+            var room = Room((zara, "Zara", "#ff0000"));
+            var before = room.History.Count;
+
+            await room.SendAsync("anyone about?");
+
+            var note = Assert.Single(room.History.Skip(before));
+            Assert.Equal(ChatRole.System, note.Role);
+            Assert.Contains("Replying is off", note.Text);
+        }
+
+        // A channel every agent has gone quiet in has nobody to send through.
+        // Said plainly rather than failing silently: from the user's side an
+        // empty channel and a broken one look identical otherwise.
+        [Fact]
+        public async Task ARoomWithNobodyInItSaysSoRatherThanFailingQuietly()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
+
+            await room.SendAsync("anyone about?");
+
+            var note = Assert.Single(room.History);
+            Assert.Equal(ChatRole.System, note.Role);
+            Assert.Contains("Nobody is in this channel", note.Text);
+        }
+
+        // First by gateway key, deliberately — stable rather than depending on
+        // who happened to speak last. Asserted by giving the room its members in
+        // the wrong order and checking the send still lands in the same
+        // transcript, because "stable" is the whole property and member order
+        // does change between scans.
+        [Fact]
+        public async Task TheSendAlwaysGoesThroughTheSameMemberWhateverTheOrder()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var kai = Member("kai");
+            var zara = Member("zara");
+            kai.HasMore = false;
+            zara.HasMore = false;
+
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
+            room.SetMembers([(zara, "Zara", "#ff0000"), (kai, "Kai", "#00ff00")]);
+
+            await room.SendAsync("anyone about?");
+
+            // "agent:kai:…" sorts before "agent:zara:…", so kai carries it even
+            // though zara was listed first. The send itself fails — there is no
+            // gateway — which is what leaves the pair of turns behind.
+            Assert.Contains(kai.History, t => t.Role == ChatRole.User && t.Text == "anyone about?");
+            Assert.DoesNotContain(zara.History, t => t.Role == ChatRole.User);
+        }
     }
 }
