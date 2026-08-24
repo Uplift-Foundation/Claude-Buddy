@@ -920,7 +920,8 @@ session's, and the surprise is *which* commands are missing: Claude Code's
 at all, because a message reaches the other session's *model* and never its
 command handler. Custom commands can, since those are just instructions the
 model reads. Until a session answers, the panel offers nothing rather than
-offering commands that would fail.
+offering commands that would fail — and a session that has none, or that never
+replies, keeps an empty list rather than being given a plausible one.
 
 `docs/remote-control-findings.md` records what was measured against two real
 machines before any of this was built — including what the relay does and does

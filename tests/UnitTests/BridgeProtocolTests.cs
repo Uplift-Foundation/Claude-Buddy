@@ -350,6 +350,67 @@ public class BridgeProtocolTests
         Assert.Contains(cmds, c => c.Name == "/gmail-apply");
     }
 
+    // Verbatim from the Mac mini, 23 Aug 2026 — the reply that showed the first
+    // version of this parser read nothing at all. Twenty-seven commands, not one
+    // of them wearing a slash, because the session was asked what it can run and
+    // answered with their names. The fixture rule in CLAUDE.md is why this is a
+    // real capture and not a tidy invention: a tidy invention is exactly what
+    // the parser was written against, and it agreed with itself.
+    [Fact]
+    public void ParseCommandsReply_ReadsARealReplyThatUsedNoSlashes()
+    {
+        const string real = "CB-INFO: color=none; commands=apply,apply-ic,cold-intro,"
+            + "daily-run,daily-run-ic,discover,discover-deep,discover-ic,gmail-apply,"
+            + "second-chance,update-inbox,design,dataviz,artifact-design,"
+            + "artifact-diagramming,artifact-capabilities,update-config,keybindings-help,"
+            + "code-review,simplify,fewer-permission-prompts,loop,schedule,claude-api,"
+            + "run,init,security-review";
+
+        var cmds = BridgeProtocol.ParseCommandsReply(real);
+
+        Assert.Equal(27, cmds.Count);
+        Assert.Equal("/apply", cmds[0].Name);
+        Assert.Contains(cmds, c => c.Name == "/gmail-apply");
+        Assert.Contains(cmds, c => c.Name == "/security-review");
+        Assert.All(cmds, c => Assert.StartsWith("/", c.Name));
+
+        // The colour half of the same reply still reads as "none set".
+        Assert.Null(BridgeProtocol.ParseColorReply(real));
+    }
+
+    // A session that answers in a sentence must not fill the autocomplete with
+    // /I, /can and /run. Anything with a space in it is not a command name.
+    [Fact]
+    public void ParseCommandsReply_IgnoresProse()
+    {
+        Assert.Empty(BridgeProtocol.ParseCommandsReply("CB-INFO: commands=none available"));
+        Assert.Empty(BridgeProtocol.ParseCommandsReply(
+            "CB-INFO: commands=I can run whatever you like really"));
+    }
+
+    // When the session does punctuate, the words around the slashes are prose
+    // and only the slashed names count.
+    [Fact]
+    public void ParseCommandsReply_TrustsSlashesWhenTheAnswerHasThem()
+    {
+        var cmds = BridgeProtocol.ParseCommandsReply(
+            "CB-INFO: commands=I have /update-inbox and /discover set up here");
+
+        Assert.Equal(2, cmds.Count);
+        Assert.Equal("/update-inbox", cmds[0].Name);
+        Assert.Equal("/discover", cmds[1].Name);
+    }
+
+    // Either order, and the other half never leaks into this one.
+    [Fact]
+    public void ParseCommandsReply_DoesNotSwallowTheColourHalf()
+    {
+        var cmds = BridgeProtocol.ParseCommandsReply("CB-INFO: commands=apply,discover; color=green");
+
+        Assert.Equal(2, cmds.Count);
+        Assert.DoesNotContain(cmds, c => c.Name.Contains("color") || c.Name == "/green");
+    }
+
     // "none" carries no slash, so nothing is invented from it.
     [Fact]
     public void ParseCommandsReply_IsEmptyWhenTheSessionHasNone()
