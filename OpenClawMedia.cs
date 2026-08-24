@@ -54,7 +54,10 @@ namespace ClaudeBuddy
         // The gateway's own filename, which is what makes the viewer's title bar
         // say something useful, minus anything that could point the write
         // somewhere other than here.
-        private static string SafeName(string name)
+        // internal, not private: this decides where a byte array from a remote
+        // gateway is allowed to land on disk, so "does a traversal survive it"
+        // is a question worth answering in a test rather than by reading it.
+        internal static string SafeName(string name)
         {
             var trimmed = string.IsNullOrWhiteSpace(name) ? "image.png" : Path.GetFileName(name);
 

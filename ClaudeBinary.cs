@@ -37,18 +37,39 @@ namespace ClaudeBuddy
             }
         }
 
-        private static string? Locate()
+        // The install locations that don't depend on who is logged in. Named
+        // rather than inlined below so a test can substitute its own — see the
+        // comment on Locate.
+        private static readonly string[] SystemInstalls =
         {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+            "/usr/bin/claude"
+        };
+
+        // Every input is a parameter with the real one as its default, so a test
+        // can hand it a temp directory, a PATH and a candidate list of its own
+        // rather than depending on the machine it runs on.
+        //
+        // All three, not just the home directory, and that is the point rather
+        // than over-engineering: the system locations are absolute, so a test
+        // that only controlled `home` would still find a real `claude` on the
+        // developer's Mac and find nothing on a CI runner — the same test
+        // passing for two different reasons, which CLAUDE.md calls out as the
+        // way to block a build with a test that only works where it was
+        // written. Setting HOME for the whole process was the other option, and
+        // every other test in the assembly would have been sharing it.
+        internal static string? Locate(
+            string? home = null, string? searchPath = null, string[]? systemInstalls = null)
+        {
+            home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
             string[] candidates =
-            {
+            [
                 System.IO.Path.Combine(home, ".local", "bin", "claude"),
                 System.IO.Path.Combine(home, ".claude", "local", "claude"),
-                "/opt/homebrew/bin/claude",
-                "/usr/local/bin/claude",
-                "/usr/bin/claude"
-            };
+                .. systemInstalls ?? SystemInstalls
+            ];
 
             foreach (var candidate in candidates)
             {
@@ -58,7 +79,7 @@ namespace ClaudeBuddy
             // Last resort: whatever PATH this process did inherit. Worth trying
             // because a session started from a terminal has a real one, and it
             // costs nothing when it doesn't.
-            var path = Environment.GetEnvironmentVariable("PATH");
+            var path = searchPath ?? Environment.GetEnvironmentVariable("PATH");
             if (string.IsNullOrEmpty(path)) return null;
 
             foreach (var dir in path.Split(':', StringSplitOptions.RemoveEmptyEntries))
