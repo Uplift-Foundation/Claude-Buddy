@@ -83,9 +83,28 @@ namespace ClaudeBuddy
                 ? ClaudeBuddySettings.DefaultRemoteControlProfileDir
                 : profileDir;
 
+            var names = TmuxNames(
+                _profileDir, Environment.GetEnvironmentVariable("CLAUDE_BUDDY_RC_BRIDGE_TAG"));
+
+            _tmuxSessionName = names.Session;
+            _tmuxTarget = names.Target;
+            _tmuxPaneTarget = names.PaneTarget;
+        }
+
+        // The three tmux names one account's relay uses, as a function of the
+        // account and the test tag.
+        //
+        // Pure, and split out of the constructor because all three encode
+        // *measured* failures rather than preferences — the comments below are
+        // the record of them, and none of them is visible from reading the
+        // strings. Nothing here starts a relay, so the rules can be asserted
+        // without one.
+        internal static (string Session, string Target, string PaneTarget) TmuxNames(
+            string profileDir, string? tag)
+        {
             // tmux session names cannot contain a dot or a colon — it parses
             // them as window/pane separators — and a profile dir starts with one.
-            var safe = _profileDir.Replace('.', '-').Replace(':', '-');
+            var safe = profileDir.Replace('.', '-').Replace(':', '-');
 
             // Test seam, same pattern as CLAUDE_BUDDY_SETTINGS_DIR and
             // CLAUDE_BUDDY_PROFILE_ROOT: without it a live test and the
@@ -101,10 +120,9 @@ namespace ClaudeBuddy
             //
             // Never set in production, so the mutex is unaffected where it
             // matters.
-            var tag = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_RC_BRIDGE_TAG");
             if (!string.IsNullOrWhiteSpace(tag)) safe += "-" + tag.Replace('.', '-').Replace(':', '-');
 
-            _tmuxSessionName = TmuxSessionPrefix + safe;
+            var session = TmuxSessionPrefix + safe;
 
             // "=" forces an exact match. Without it tmux resolves a target by
             // prefix, and one account's name is a prefix of another's the moment
@@ -113,7 +131,7 @@ namespace ClaudeBuddy
             // claude-buddy-rc--claude` killed `claude-buddy-rc--claude-board`,
             // so starting the second relay silently destroyed the first and the
             // survivor then answered nothing. Every target below is exact.
-            _tmuxTarget = "=" + _tmuxSessionName;
+            var target = "=" + session;
 
             // A pane target needs the trailing colon as well as the "=".
             // Measured: `send-keys -t =name` answers "can't find pane", because
@@ -122,7 +140,7 @@ namespace ClaudeBuddy
             // active pane, which is what a freshly created session has exactly
             // one of. Same reason AgentTeamViewer's new-window passes
             // "<session>:" rather than the bare name.
-            _tmuxPaneTarget = _tmuxTarget + ":";
+            return (session, target, target + ":");
         }
 
         public string ProfileDir => _profileDir;
@@ -297,7 +315,10 @@ namespace ClaudeBuddy
             return false;
         }
 
-        private bool Adopt(string statusFile)
+        // internal: reads a status file the hook wrote and nothing else. The
+        // fields it picks out are what every later tmux call is aimed at, so a
+        // wrong one sends keystrokes to the wrong pane.
+        internal bool Adopt(string statusFile)
         {
             try
             {
@@ -491,7 +512,7 @@ namespace ClaudeBuddy
         // complete lines that makes, keeping the remainder. Byte-level, because
         // a write landing mid-codepoint would otherwise leave a permanent
         // replacement character in the middle of a message.
-        private List<string> TakeWholeLines(byte[] buffer)
+        internal List<string> TakeWholeLines(byte[] buffer)
         {
             _carry.AddRange(buffer);
 
@@ -511,7 +532,10 @@ namespace ClaudeBuddy
             return lines;
         }
 
-        private void Route(string line)
+        // internal: one transcript row in, at most one delivered message out.
+        // No tmux, no subprocess — the row is text, and this is the part that
+        // decides whether it becomes a chat bubble.
+        internal void Route(string line)
         {
             if (string.IsNullOrWhiteSpace(line)) return;
 
@@ -572,7 +596,7 @@ namespace ClaudeBuddy
 
         // A tool_result's content is either a string or the usual array of
         // typed blocks. Both shapes appear in one transcript.
-        private static string Flatten(JsonElement block)
+        internal static string Flatten(JsonElement block)
         {
             if (!block.TryGetProperty("content", out var content)) return "";
             if (content.ValueKind == JsonValueKind.String) return content.GetString() ?? "";
