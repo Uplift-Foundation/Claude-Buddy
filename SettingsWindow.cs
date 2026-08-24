@@ -916,6 +916,16 @@ namespace ClaudeBuddy
         private TextBlock? _remoteControlStatus;
         private DispatcherTimer? _openClawStatusTimer;
 
+        // Read by the tests that drive OnStatusTick. Internal rather than
+        // reflected because there is nothing private about what a label says —
+        // the fields are private only so that nothing outside assigns them.
+        internal string? OpenClawStatusText => _openClawStatus?.Text;
+        internal string? RemoteControlStatusText => _remoteControlStatus?.Text;
+
+        // Excluded from coverage: starts a real one-second Avalonia timer. The
+        // work it schedules is OnStatusTick below, which is reachable directly and
+        // is tested that way — this is only the subscription and the Start().
+        [ExcludeFromCodeCoverage]
         private void StartStatusTicker()
         {
             _openClawStatusTimer ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -927,7 +937,7 @@ namespace ClaudeBuddy
         // Ticks both status lines, whichever of them the current window actually
         // built. Each is null unless its own section is expanded, so this is one
         // timer serving at most two labels rather than a timer each.
-        private void OnStatusTick(object? sender, EventArgs e)
+        internal void OnStatusTick(object? sender, EventArgs e)
         {
             if (_openClawStatus is not null)
             {
