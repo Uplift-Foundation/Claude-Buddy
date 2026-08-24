@@ -23,7 +23,8 @@ public class OrbWindowPulseAndPinTests
         orb.UpdateFrom(new SessionStatus
         {
             State = "idle",
-            Cwd = "/Users/w/Source/Thing",
+            Cwd = $"{Path.DirectorySeparatorChar}Users{Path.DirectorySeparatorChar}w"
+                + $"{Path.DirectorySeparatorChar}Source{Path.DirectorySeparatorChar}Thing",
             SessionPid = Environment.ProcessId,
             TermProgram = "iTerm.app",
         });
@@ -117,7 +118,16 @@ public class OrbWindowPulseAndPinTests
     {
         ClaudeBuddySettings.ReloadForTests();
 
-        var cwd = "/Users/w/Source/Thing";
+        // Built from the platform's own separator, not written as a POSIX literal.
+        // EncodeCwd replaces Path.DirectorySeparatorChar with '-', so on Windows a
+        // "/Users/w/Source/Thing" literal keeps every slash — and Path.Combine then
+        // turns the "encoded" name into a nest of directories rather than the one
+        // directory the search looks for. That is what made this test pass on macOS
+        // and fail on Windows, and it is the third time on this branch that
+        // hardcoding what an OS-dependent function produces has asserted the
+        // platform instead of the rule.
+        var sep = Path.DirectorySeparatorChar;
+        var cwd = $"{sep}Users{sep}w{sep}Source{sep}Thing";
         var home = Path.Combine(Path.GetTempPath(), "cb-orbhome-" + Guid.NewGuid());
         var project = Path.Combine(
             home, ".claude", "projects", TranscriptReader.EncodeCwd(cwd));
@@ -161,7 +171,8 @@ public class OrbWindowPulseAndPinTests
         orb.UpdateFrom(new SessionStatus
         {
             State = "idle",
-            Cwd = "/Users/w/Source/Nothing",
+            Cwd = $"{Path.DirectorySeparatorChar}Users{Path.DirectorySeparatorChar}w"
+                + $"{Path.DirectorySeparatorChar}Source{Path.DirectorySeparatorChar}Nothing",
             SessionPid = Environment.ProcessId,
             TermProgram = "iTerm.app",
         });
