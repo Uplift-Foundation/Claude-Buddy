@@ -376,8 +376,7 @@ namespace ClaudeBuddy
         {
             var raw = await AskAsync(
                 BridgeProtocol.ListAgentsPrompt,
-                text => text.Contains("Peer sessions", StringComparison.Ordinal)
-                        || text.Contains("no peer", StringComparison.OrdinalIgnoreCase))
+                BridgeProtocol.LooksLikeAgentList)
                 .ConfigureAwait(false);
 
             return raw is null ? null : BridgeProtocol.ParseAgents(raw);
@@ -392,7 +391,7 @@ namespace ClaudeBuddy
         {
             var raw = await AskAsync(
                 BridgeProtocol.SendMessagePrompt(peerName, text),
-                t => t.Contains("msg_id", StringComparison.Ordinal))
+                BridgeProtocol.LooksLikeSendReceipt)
                 .ConfigureAwait(false);
 
             return raw is null ? null : BridgeProtocol.ParseSentMessageId(raw);
@@ -407,7 +406,7 @@ namespace ClaudeBuddy
         {
             var raw = await AskAsync(
                 BridgeProtocol.CapabilitiesQueryPrompt(peerName),
-                t => t.Contains("msg_id", StringComparison.Ordinal))
+                BridgeProtocol.LooksLikeSendReceipt)
                 .ConfigureAwait(false);
 
             return raw is not null;
