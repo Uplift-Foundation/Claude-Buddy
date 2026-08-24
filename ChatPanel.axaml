@@ -27,8 +27,11 @@
          The window is user-resizable (CanResize, explicit Width/Height rather
          than SizeToContent) and Root stretches to fill it, unlike OrbWindow's
          pinned width — once a person drags an edge, that size is theirs to
-         keep for the rest of the run, and new turns scroll inside it rather
-         than growing the window out from under their hands. WindowDecorations
+         keep, and new turns scroll inside it rather than growing the window
+         out from under their hands. Kept per agent and across runs: the
+         Width/Height here are only the size a panel opens at the first time
+         an agent is clicked, after which ApplySavedSize replaces them with
+         whatever that agent's panel was last dragged to. WindowDecorations
          is still None, so there is no OS-drawn resize border to grab; the
          eight transparent strips after Root exist purely to give
          BeginResizeDrag somewhere to grab.
