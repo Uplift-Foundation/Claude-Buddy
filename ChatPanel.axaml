@@ -94,6 +94,26 @@
                                        FontSize="9.5"
                                        Foreground="#CCFFFFFF"/>
                         </Border>
+                        <!-- A conversation the gateway's heartbeat wakes on a
+                             timer. Its own chip beside the kind rather than a
+                             word inside it, because it answers a different
+                             question — the kind says who can read this, and this
+                             says what keeps making it happen. See
+                             OpenClawHeartbeat.
+
+                             It beats here as well as on the orb, on the same
+                             curve, because the panel is where you end up when
+                             the orb's badge made you curious. -->
+                        <Border x:Name="HeartChip"
+                                IsVisible="False"
+                                CornerRadius="4" Padding="4,1"
+                                VerticalAlignment="Center"
+                                Background="#26FFFFFF">
+                            <TextBlock x:Name="HeartChipText"
+                                       FontSize="9.5"
+                                       Foreground="#FFFF8797"
+                                       Text="&#x2665;  heartbeat"/>
+                        </Border>
                         <TextBlock x:Name="SubtitleText"
                                    FontSize="11"
                                    VerticalAlignment="Center"

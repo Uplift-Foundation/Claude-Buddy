@@ -694,6 +694,14 @@ namespace ClaudeBuddy
                 + "the gateway's own idea of \"recent\" lags badly for Discord chats, so "
                 + "Claude Buddy also counts anything it has watched happen since it started."));
 
+            rows.Add(Row("Show heartbeat sessions",
+                Switch(ClaudeBuddySettings.OpenClawShowHeartbeats, OnOpenClawHeartbeatsToggled),
+                "A gateway wakes each agent on a timer to do background work, and it does "
+                + "that in the agent's own main session — so those orbs go active together "
+                + "every few minutes with nobody on the other end. They wear a beating "
+                + "heart. Off hides them; the agents keep their colours in any channel they "
+                + "are in either way."));
+
             rows.Add(Row("Allow replying to agents",
                 Switch(ClaudeBuddySettings.OpenClawReplyEnabled, OnOpenClawReplyToggled),
                 "Off, this shows what your agents are doing. On, you can also reply to "
@@ -906,6 +914,16 @@ namespace ClaudeBuddy
             };
 
             return box;
+        }
+
+        // No Restart() here, unlike the two toggles below it. This changes which
+        // sessions the *next scan* keeps, not what the connection asked the
+        // gateway for, and dropping a working socket to filter a list would take
+        // every gateway orb off the screen for as long as the handshake takes.
+        // The orbs appear or vanish on the next poll instead.
+        private void OnOpenClawHeartbeatsToggled(bool enabled)
+        {
+            ClaudeBuddySettings.OpenClawShowHeartbeats = enabled;
         }
 
         private void OnOpenClawReplyToggled(bool enabled)

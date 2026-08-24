@@ -24,6 +24,40 @@ public class ChatPanelScreenshots : IDisposable
     // cache for every window built afterward in this run.
     private static OrbWindow NewOrb() => new(Guid.NewGuid().ToString());
 
+    // An orb whose session the gateway's heartbeat drives. The panel reads the
+    // flag off the orb rather than the session (see ChatPanel.Bind), so the
+    // status has to go through UpdateFrom to reach the chip.
+    private static OrbWindow NewHeartbeatOrb()
+    {
+        var orb = NewOrb();
+        orb.UpdateFrom(new SessionStatus
+        {
+            State = "idle",
+            Cwd = "/Users/test/project",
+            Title = "",
+            Color = "",
+            Cli = "",
+            Kind = SessionKind.Channel,
+            Heartbeat = true,
+        });
+
+        return orb;
+    }
+
+    [AvaloniaFact]
+    public void AHeartbeatChatWearsABeatingHeartChipInItsHeader()
+    {
+        var fake = NewFake(new[]
+        {
+            new ChatTurn { Role = ChatRole.Assistant, Text = "No response requested." },
+        });
+
+        ChatPanel.OpenFor(NewHeartbeatOrb(), fake);
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.CaptureAlreadyShown(
+            ChatPanelTestAccess.Instance!, "chat-panel-heartbeat-chip.png");
+    }
+
     public void Dispose()
     {
         foreach (var id in _sessionIdsToClean) ChatPanel.HideFor(id);
