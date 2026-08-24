@@ -330,6 +330,11 @@ namespace ClaudeBuddy
             ScanAndUpdate();
         }
 
+        // Excluded from coverage: creates a FileSystemWatcher on the status
+        // directory. The poll timer covers the same job — the comment in the catch
+        // below says so — and what either of them schedules is ScanAndUpdate,
+        // which is tested directly against a scratch directory.
+        [ExcludeFromCodeCoverage]
         private void StartWatching()
         {
             try
@@ -349,6 +354,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: restarts an Avalonia timer, and is only ever
+        // called from the watcher's own events.
+        [ExcludeFromCodeCoverage]
         private void RestartDebounce()
         {
             _debounce.Stop();
