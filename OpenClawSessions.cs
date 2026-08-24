@@ -1181,6 +1181,86 @@ namespace ClaudeBuddy
         // metadata. It isn't noise to be dropped though — it is one of your
         // agents talking — so the header is replaced by the thing it was
         // actually saying, attributed to whoever said it.
+        // One page of chat.history turned into turns the panel can draw.
+        //
+        // Extracted from the request that fetches it, which needs a live gateway
+        // and is excluded for that. This is the half that reads a format nobody
+        // here controls, so it is the half that has to be tested against
+        // fixtures — the same reasoning that keeps ChatTranscript and
+        // CodexTranscript pure.
+        internal static List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt,
+            DateTimeOffset At, string? Speaker, string? SpeakerColor)> TurnsFromHistory(
+            JsonElement messages)
+        {
+            var turns = new List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)>();
+
+            foreach (var message in messages.EnumerateArray())
+            {
+                var role = Str(message, "role") == "user" ? ChatRole.User : ChatRole.Assistant;
+
+                // content is a list of blocks; only the text ones are worth
+                // showing. Tool calls arrive live as their own turns, and a
+                // replayed tool_use block would be a wall of JSON.
+                if (!message.TryGetProperty("content", out var content)) continue;
+
+                // The two roles are shaped differently, which is easy to miss
+                // and silently drops half the conversation: an assistant turn
+                // carries `content` as a list of blocks, and a user turn
+                // carries it as a plain string. Reading only the block form
+                // showed an agent talking to nobody.
+                // Pictures are their own turns rather than being folded into
+                // the text of one. A message is commonly several images and
+                // nothing else, and a bubble containing four of them stacked
+                // reads worse than four bubbles.
+                if (content.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var block in content.EnumerateArray())
+                    {
+                        if (Str(block, "type") != "image") continue;
+
+                        var url = Str(block, "url");
+                        if (string.IsNullOrWhiteSpace(url)) continue;
+
+                        var ms2 = Num(message, "timestamp");
+                        turns.Add((role, "", url!, Str(block, "alt") ?? "", ms2 <= 0
+                            ? DateTimeOffset.Now
+                            : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
+                            null, null));
+                    }
+                }
+
+                var text = content.ValueKind switch
+                {
+                    JsonValueKind.String => content.GetString() ?? "",
+
+                    JsonValueKind.Array => string.Join("\n", content.EnumerateArray()
+                        .Where(b => Str(b, "type") == "text")
+                        .Select(b => Str(b, "text"))
+                        .Where(t => !string.IsNullOrWhiteSpace(t))),
+
+                    JsonValueKind.Object => Str(content, "text") ?? "",
+
+                    _ => ""
+                };
+
+                if (string.IsNullOrWhiteSpace(text)) continue;
+
+                text = Readable(text, out var speakerId);
+                if (string.IsNullOrWhiteSpace(text)) continue;
+
+                var ms = Num(message, "timestamp");
+                var at = ms > 0
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime()
+                    : DateTimeOffset.Now;
+
+                turns.Add((role, text.Trim(), null, "", at,
+                    speakerId is null ? null : AgentNameOf(speakerId),
+                    speakerId is null ? null : ColourForAgent(speakerId)));
+            }
+
+            return turns;
+        }
+
         internal static string Readable(string text) => Readable(text, out _);
 
         internal static string Readable(string text, out string? speakerId)
@@ -1521,72 +1601,7 @@ namespace ClaudeBuddy
                     return null;
                 }
 
-                var turns = new List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)>();
-
-                foreach (var message in messages.EnumerateArray())
-                {
-                    var role = Str(message, "role") == "user" ? ChatRole.User : ChatRole.Assistant;
-
-                    // content is a list of blocks; only the text ones are worth
-                    // showing. Tool calls arrive live as their own turns, and a
-                    // replayed tool_use block would be a wall of JSON.
-                    if (!message.TryGetProperty("content", out var content)) continue;
-
-                    // The two roles are shaped differently, which is easy to miss
-                    // and silently drops half the conversation: an assistant turn
-                    // carries `content` as a list of blocks, and a user turn
-                    // carries it as a plain string. Reading only the block form
-                    // showed an agent talking to nobody.
-                    // Pictures are their own turns rather than being folded into
-                    // the text of one. A message is commonly several images and
-                    // nothing else, and a bubble containing four of them stacked
-                    // reads worse than four bubbles.
-                    if (content.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var block in content.EnumerateArray())
-                        {
-                            if (Str(block, "type") != "image") continue;
-
-                            var url = Str(block, "url");
-                            if (string.IsNullOrWhiteSpace(url)) continue;
-
-                            var ms2 = Num(message, "timestamp");
-                            turns.Add((role, "", url!, Str(block, "alt") ?? "", ms2 <= 0
-                                ? DateTimeOffset.Now
-                                : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
-                                null, null));
-                        }
-                    }
-
-                    var text = content.ValueKind switch
-                    {
-                        JsonValueKind.String => content.GetString() ?? "",
-
-                        JsonValueKind.Array => string.Join("\n", content.EnumerateArray()
-                            .Where(b => Str(b, "type") == "text")
-                            .Select(b => Str(b, "text"))
-                            .Where(t => !string.IsNullOrWhiteSpace(t))),
-
-                        JsonValueKind.Object => Str(content, "text") ?? "",
-
-                        _ => ""
-                    };
-
-                    if (string.IsNullOrWhiteSpace(text)) continue;
-
-                    text = Readable(text, out var speakerId);
-                    if (string.IsNullOrWhiteSpace(text)) continue;
-
-                    var ms = Num(message, "timestamp");
-                    var at = ms > 0
-                        ? DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime()
-                        : DateTimeOffset.Now;
-
-                    turns.Add((role, text.Trim(), null, "", at,
-                        speakerId is null ? null : AgentNameOf(speakerId),
-                        speakerId is null ? null : ColourForAgent(speakerId)));
-                }
-
+                var turns = TurnsFromHistory(messages);
                 // The message count, not the turn count: it is what the next
                 // page's offset is measured in, and one message can produce
                 // several turns or none.
