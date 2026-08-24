@@ -85,6 +85,20 @@ namespace ClaudeBuddy
         // over a live connection and is excluded. Without this, everything that
         // draws an agent's name or picture — the orb's avatar, the chat header —
         // is unreachable for a reason that has nothing to do with the code.
+        // A test seam for the run tracker. The only thing that fills it is the
+        // live event stream, and the rule worth checking — a session stops
+        // counting as working once its events go quiet, whether or not a terminal
+        // event ever arrived — needs a timestamp in the past to check at all.
+        internal static void SetRunningForTests(string key, DateTime when)
+        {
+            lock (Gate) Running[key] = when;
+        }
+
+        internal static void ForgetRunningForTests()
+        {
+            lock (Gate) Running.Clear();
+        }
+
         internal static void SetIdentitiesForTests(
             IReadOnlyDictionary<string, AgentIdentity> identities,
             IReadOnlyDictionary<string, string>? names = null)
@@ -1022,7 +1036,7 @@ namespace ClaudeBuddy
                 : new Delivery(channel!, to!, account);
         }
 
-        private static string StateFor(string key)
+        internal static string StateFor(string key)
         {
             lock (Gate)
             {
@@ -1527,7 +1541,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private static List<OpenClawChatSession> OpenChats()
+        internal static List<OpenClawChatSession> OpenChats()
         {
             lock (Gate) return Chats.Values.ToList();
         }
@@ -1644,7 +1658,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private static void Report(string state)
+        internal static void Report(string state)
         {
             lock (Gate) _state = state;
         }

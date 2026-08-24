@@ -596,4 +596,43 @@ public class RemoteControlBridgeRoutingTests : IDisposable
 
         return seen;
     }
+
+    // A fresh bridge has nothing to warn about. Warning is the line the settings
+    // window shows beside the relay's state — a login expiring, most often — and
+    // it has to start empty rather than carrying whatever the last bridge said.
+    [Fact]
+    public void AFreshBridgeHasNoWarning()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        Assert.Null(bridge.Warning);
+    }
+
+    // A content block with no "type" is skipped rather than taken as some default
+    // kind. These rows come off another machine's transcript, so a shape this
+    // version has not seen is an ordinary event and not a reason to stop reading
+    // the rest of the message.
+    [Fact]
+    public void AContentBlockWithNoTypeIsSkipped()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        var row = "{\"uuid\":\"u1\",\"type\":\"assistant\",\"message\":{\"role\":\"assistant\","
+                + "\"content\":[{\"text\":\"no type here\"}]}}";
+
+        Assert.Empty(Collect(bridge, row));
+    }
+
+    // And a block whose type is not a string takes the same route rather than
+    // throwing on the cast.
+    [Fact]
+    public void AContentBlockWhoseTypeIsNotAStringIsSkipped()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        var row = "{\"uuid\":\"u1\",\"type\":\"assistant\",\"message\":{\"role\":\"assistant\","
+                + "\"content\":[{\"type\":7}]}}";
+
+        Assert.Empty(Collect(bridge, row));
+    }
 }
