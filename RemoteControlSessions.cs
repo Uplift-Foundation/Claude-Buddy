@@ -293,6 +293,24 @@ namespace ClaudeBuddy
         private static readonly Dictionary<string, IReadOnlyList<SlashCommand>> KnownCommands =
             new(StringComparer.OrdinalIgnoreCase);
 
+        // The colour a remote session answered with, if it has. Reads the same
+        // table CommandsFor does and exists for the same reason: the answer
+        // arrives as an ordinary inbound message and is swallowed, so without a
+        // reader there is no way to tell it landed.
+        internal static string? ColourFor(string account, string name)
+        {
+            lock (Gate) return KnownColors.GetValueOrDefault(account + ":" + name);
+        }
+
+        internal static void ForgetAnswersForTests()
+        {
+            lock (Gate)
+            {
+                KnownColors.Clear();
+                KnownCommands.Clear();
+            }
+        }
+
         public static IReadOnlyList<SlashCommand> CommandsFor(string account, string name)
         {
             lock (Gate)
@@ -797,7 +815,7 @@ namespace ClaudeBuddy
             if (any) StopAll("restarting");
         }
 
-        private static void OnMessage(string account, BridgeProtocol.InboundMessage message)
+        internal static void OnMessage(string account, BridgeProtocol.InboundMessage message)
         {
             // A colour answer is not a message to the person reading the panel —
             // they never asked the question. Swallowed whether or not it parses,
