@@ -358,7 +358,9 @@ All three point `CLAUDE_BUDDY_SETTINGS_DIR` at a fresh temp directory via a
 `[ModuleInitializer]` before anything else runs — even constructing an
 `OrbWindow` reads a colour setting in a field initializer. That env var is
 checked in `ClaudeBuddySettings.Directory` before `SpecialFolder.ApplicationData`,
-the same pattern as `CLAUDE_BUDDY_PROFILE_ROOT` in `ClaudeDesktopManager.cs`;
+the same pattern as `CLAUDE_BUDDY_PROFILE_ROOT` in `ClaudeDesktopManager.cs` and
+`CLAUDE_BUDDY_BUNDLE_ROOT` in `ClaudeDesktopBundles.cs`, which redirects the
+cloned-bundle cache so a test never writes into the live one;
 without it a test reads and writes the real settings.json.
 
 ## Coverage

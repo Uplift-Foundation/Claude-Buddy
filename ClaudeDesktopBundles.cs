@@ -41,8 +41,20 @@ namespace ClaudeBuddy
         // A cache, not configuration: everything here is regenerable from
         // /Applications/Claude.app and the profile list, and deleting it only
         // costs the coloured icons.
-        public static string Root => Path.Combine(
-            Home, "Library", "Application Support", "ClaudeBuddy", "bundles");
+        //
+        // CLAUDE_BUDDY_BUNDLE_ROOT redirects it, the same scratch-override
+        // pattern as CLAUDE_BUDDY_PROFILE_ROOT in ClaudeDesktopManager and
+        // CLAUDE_BUDDY_SETTINGS_DIR in ClaudeBuddySettings. Without it the only
+        // way to test what is in this file is to write into the real
+        // ~/Library/Application Support/ClaudeBuddy/bundles — the actual cache,
+        // on the machine running the tests, holding real cloned .app bundles
+        // whose icons a user is looking at. That the override did not exist is
+        // why nothing here was covered.
+        public static string Root =>
+            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_BUNDLE_ROOT") is { Length: > 0 } scratch
+                ? scratch
+                : Path.Combine(
+                    Home, "Library", "Application Support", "ClaudeBuddy", "bundles");
 
         public static string DirectoryFor(string profileFolder) => Path.Combine(Root, profileFolder);
 
@@ -103,7 +115,7 @@ namespace ClaudeBuddy
             return !string.Equals(cloneVersion, sourceVersion, StringComparison.Ordinal);
         }
 
-        private static bool ColourMatches(string profileFolder, Color tint)
+        internal static bool ColourMatches(string profileFolder, Color tint)
         {
             try
             {
@@ -333,6 +345,13 @@ namespace ClaudeBuddy
     // [[NSWorkspace sharedWorkspace] setIcon:forFile:options:] — the supported
     // way to set a custom Finder icon, and the only part of this that touches
     // the bundle at all.
+    // Excluded from coverage, as a class: every member is either a DllImport of
+    // objc_msgSend or the one method that calls them. Set() allocates an NSImage
+    // from a path and asks NSWorkspace's sharedWorkspace to
+    // setIcon:forFile:options: — there is no NSWorkspace under a headless runner,
+    // and on Windows the whole class is unreachable behind Set()'s own IsMacOS
+    // guard, which is the one line of it a test can observe.
+    [ExcludeFromCodeCoverage]
     internal static class MacOSCustomIcon
     {
         private const string Objc = "/usr/lib/libobjc.A.dylib";
