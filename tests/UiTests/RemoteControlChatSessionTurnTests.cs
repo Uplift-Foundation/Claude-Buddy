@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Headless.XUnit;
@@ -160,6 +161,50 @@ public class RemoteControlChatSessionTurnTests
         Dispatcher.UIThread.RunJobs();
 
         Assert.Equal(RemoteChatState.Error, seen);
+    }
+
+    // The off-thread arm of Add, which is the one the relay's own reader uses: an
+    // inbound message arrives on a background thread and the panel it reaches is a
+    // control, so the turn has to hop before TurnAdded is raised.
+    [AvaloniaFact]
+    public async Task ATurnAddedFromAnotherThreadStillReachesTheSubscriber()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.RemoteControlEnabled = false;
+
+        var session = Session();
+        var seen = new List<ChatTurn>();
+        session.TurnAdded += seen.Add;
+
+        await Task.Run(async () =>
+        {
+            Assert.False(Dispatcher.UIThread.CheckAccess());
+            await session.SendAsync("from the reader thread");
+        });
+
+        // Drained rather than asserted-absent first: awaiting the Task.Run pumps
+        // the dispatcher on its way back, so the posts may already have been
+        // delivered by the time control returns here. What matters is that they
+        // arrive at all — a turn raised straight from the reader thread would
+        // reach a subscriber that is not allowed to touch controls from there.
+        Dispatcher.UIThread.RunJobs();
+
+        // Both of them: the typed message and the refusal underneath it. Collected
+        // rather than kept as "the last one", which is the System note and was my
+        // first mistake here.
+        Assert.Contains(seen, t => t.Role == ChatRole.User && t.Text == "from the reader thread");
+        Assert.Contains(seen, t => t.Role == ChatRole.System);
+    }
+
+    // The composer says where the message is going. "Message…" would be a lie by
+    // omission on this one: it leaves the machine.
+    [AvaloniaFact]
+    public void TheComposerHintNamesTheOtherMachine()
+    {
+        var hint = Session().ComposerHint;
+
+        Assert.Contains("zara", hint);
+        Assert.Contains("other machine", hint);
     }
 
     // Cancel is deliberately empty: SendMessage delivers a message, it does not

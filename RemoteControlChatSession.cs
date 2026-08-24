@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia.Threading;
 
 namespace ClaudeBuddy
@@ -118,6 +119,29 @@ namespace ClaudeBuddy
                 return;
             }
 
+            await SendThroughRelayAsync(text);
+        }
+
+        // Excluded from coverage: SendToAsync starts the relay if it is not up —
+        // a live Claude Code session in a tmux pane on another machine, which
+        // costs the person running the tests real money — and then types into it.
+        // RemoteControlProfileDirs always returns at least the default account, so
+        // there is no configuration that makes this inert.
+        //
+        // The decision in front of it is covered: with remote control switched
+        // off nothing is sent and the transcript says why, keeping the user's
+        // typed turn so the refusal reads as "this did not go" rather than the
+        // message vanishing.
+        //
+        // Its two failure notes are worth reading even though they are not
+        // measured. "Couldn't send" carries the exception; "Couldn't reach" is
+        // deliberately vague about WHICH link failed, because from here they are
+        // indistinguishable — the bridge may not have started, its login may have
+        // expired, or the model may not have called the tool — and naming one
+        // would be a guess presented as a fact.
+        [ExcludeFromCodeCoverage]
+        private async Task SendThroughRelayAsync(string text)
+        {
             string? id;
             try
             {
