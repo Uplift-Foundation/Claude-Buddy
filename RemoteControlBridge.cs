@@ -641,18 +641,7 @@ namespace ClaudeBuddy
         {
             if (string.IsNullOrEmpty(text)) return;
 
-            TaskCompletionSource<string>? waiter = null;
-            lock (_gate)
-            {
-                if (_awaitingToolResult is not null && _toolResultMatches?.Invoke(text) == true)
-                {
-                    waiter = _awaitingToolResult;
-                    _awaitingToolResult = null;
-                    _toolResultMatches = null;
-                }
-            }
-
-            waiter?.TrySetResult(text);
+            CompleteAwaitedToolResult(text);
 
             var inbound = BridgeProtocol.ParseInboundMessage(text);
             if (inbound is not null) MessageReceived?.Invoke(inbound.Value);
@@ -742,6 +731,34 @@ namespace ClaudeBuddy
             return full;
         }
 
+        // Excluded from coverage: only does anything once AskAsync has typed a
+        // prompt into a live session and is waiting on its answer, which is the
+        // one thing this suite may not do. The predicate it consults —
+        // "is this the answer I was waiting for" — is BridgeProtocol's
+        // LooksLikeAgentList and LooksLikeSendReceipt, both pure and covered
+        // directly in BridgeAnswerPredicateTests.
+        [ExcludeFromCodeCoverage]
+        private void CompleteAwaitedToolResult(string text)
+        {
+            TaskCompletionSource<string>? waiter = null;
+            lock (_gate)
+            {
+                if (_awaitingToolResult is not null && _toolResultMatches?.Invoke(text) == true)
+                {
+                    waiter = _awaitingToolResult;
+                    _awaitingToolResult = null;
+                    _toolResultMatches = null;
+                }
+            }
+
+            waiter?.TrySetResult(text);
+        }
+
+        // Excluded from coverage: creates and deletes a real directory tree that
+        // the relay's tmux server uses as its private TMPDIR, and its catch is for
+        // that filesystem work failing. Both are the machine the tests run on
+        // rather than a fixture.
+        [ExcludeFromCodeCoverage]
         private string? PreparePrivateTmp()
         {
             try
@@ -789,6 +806,11 @@ namespace ClaudeBuddy
 
         private static string? ResolveTmux() => TmuxCandidates.FirstOrDefault(File.Exists);
 
+        // Excluded from coverage: starts a real process, waits for it with a
+        // timeout, kills it if it overruns, and drains both its streams. The
+        // comments inside it are about deadlocks with a chatty child — none of
+        // which exists without actually starting one.
+        [ExcludeFromCodeCoverage]
         private static bool Run(string exe, int timeoutMs, out string stdout, params string[] args)
         {
             stdout = "";
