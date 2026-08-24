@@ -1597,6 +1597,23 @@ namespace ClaudeBuddy
 
             if (gateway is null) return null;
 
+            return await FetchHistoryPageAsync(gateway, chat, offset, ct);
+        }
+
+        // Excluded from coverage: a chat.history request over the live socket.
+        // What comes back is turned into turns by TurnsFromHistory, which is pure
+        // and covered against fixtures — this is only the asking, and the catch
+        // for a gateway that will not answer.
+        //
+        // That catch is deliberate rather than defensive: a backlog that cannot be
+        // fetched is not a reason to refuse the conversation, because the panel
+        // still works forward from whatever happens next.
+        [ExcludeFromCodeCoverage]
+        private static async Task<(List<(ChatRole Role, string Text, string? ImageUrl,
+            string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> Turns,
+            int Count)?> FetchHistoryPageAsync(
+            OpenClawGateway gateway, OpenClawChatSession chat, int offset, CancellationToken ct)
+        {
             try
             {
                 var res = await gateway.RequestAsync("chat.history", new Dictionary<string, object>
