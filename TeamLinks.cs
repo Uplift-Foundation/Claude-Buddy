@@ -28,9 +28,14 @@ namespace ClaudeBuddy
         // anything screen-dependent. The shaft is tapered — thin where it
         // leaves the member, full width where it meets the head — which reads
         // as direction even before you register the arrowhead.
-        private const double ShaftAtMember = 0.7;
-        private const double ShaftAtHead = 1.7;
-        private const double HeadLength = 9;
+        // All three live in TeamLinkGeometry, with HeadHalfWidth below. HeadLength
+        // in particular used to be declared here *as well*, with the same value —
+        // so shortening an arrow to leave room for its head and drawing the head
+        // were reading two different constants, and changing one of them would
+        // have moved the head off the end of the shaft.
+        private const double ShaftAtMember = TeamLinkGeometry.ShaftAtMember;
+        private const double ShaftAtHead = TeamLinkGeometry.ShaftAtHead;
+        private const double HeadLength = TeamLinkGeometry.HeadLength;
 
         // Aliased rather than duplicated, the same way the gaps below are: Place
         // sizes the window from this and ArrowGeometry draws the head with it, so
@@ -140,6 +145,19 @@ namespace ClaudeBuddy
             if (Parked.Count < MaxParked) Parked.Push(window);
         }
 
+        // Excluded from coverage, as a class: what is left in here after the
+        // outline maths moved to TeamLinkGeometry is nothing but a native window.
+        // The constructor builds a transparent, undecorated, non-activating one;
+        // Apply() reads PointToScreen off two real orbs and calls Show(); Park()
+        // calls Hide(); MakeClickThrough() sends setIgnoresMouseEvents: to an
+        // NSWindow through objc_msgSend on macOS and rewrites GWL_EXSTYLE through
+        // user32 on Windows. Under the headless platform there is no window for
+        // any of it to act on.
+        //
+        // Apply()'s catch is part of that: PointToScreen throws when an orb has no
+        // platform window yet, which is a real race during startup and not
+        // something a test can arrange without a window either.
+        [ExcludeFromCodeCoverage]
         private sealed class LinkWindow : Window
         {
             private readonly ArrowPath _arrow;
@@ -266,29 +284,19 @@ namespace ClaudeBuddy
                 return new Point(centre.X, centre.Y);
             }
 
-            // Tapered shaft into a triangular head, as one filled outline —
-            // a stroked line plus a separate polygon would show a seam at the
-            // join wherever the two anti-aliased edges met.
+            // Streams TeamLinkGeometry.ArrowOutline into the one Avalonia type
+            // that has to be built here. The shape itself is decided there, so
+            // that it can be asserted on without a window — this method is only
+            // the part that cannot be.
             private static StreamGeometry ArrowGeometry(Point start, Point end, double ux, double uy)
             {
-                // Perpendicular, for offsetting each edge off the centre line.
-                var nx = -uy;
-                var ny = ux;
-
-                var baseX = end.X - ux * HeadLength;
-                var baseY = end.Y - uy * HeadLength;
+                var outline = TeamLinkGeometry.ArrowOutline(start, end, ux, uy);
 
                 var geometry = new StreamGeometry();
                 using (var context = geometry.Open())
                 {
-                    context.BeginFigure(
-                        new Point(start.X + nx * ShaftAtMember, start.Y + ny * ShaftAtMember), true);
-                    context.LineTo(new Point(baseX + nx * ShaftAtHead, baseY + ny * ShaftAtHead));
-                    context.LineTo(new Point(baseX + nx * HeadHalfWidth, baseY + ny * HeadHalfWidth));
-                    context.LineTo(end);
-                    context.LineTo(new Point(baseX - nx * HeadHalfWidth, baseY - ny * HeadHalfWidth));
-                    context.LineTo(new Point(baseX - nx * ShaftAtHead, baseY - ny * ShaftAtHead));
-                    context.LineTo(new Point(start.X - nx * ShaftAtMember, start.Y - ny * ShaftAtMember));
+                    context.BeginFigure(outline[0], true);
+                    for (var i = 1; i < outline.Length; i++) context.LineTo(outline[i]);
                     context.EndFigure(true);
                 }
 

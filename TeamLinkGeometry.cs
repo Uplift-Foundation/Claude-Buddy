@@ -38,6 +38,50 @@ namespace ClaudeBuddy
         // window's size.
         public const double HeadHalfWidth = 4.5;
 
+        // How wide the shaft is, at each end. It tapers: narrow where it leaves
+        // the member, wider where it meets the head, so the whole thing reads as
+        // one arrow rather than a stick with a triangle balanced on it.
+        //
+        // Here rather than in TeamLinks because ArrowOutline below is what uses
+        // them, and ArrowOutline is here so it can be tested without a window
+        // toolkit — the same reason everything else in this file is.
+        public const double ShaftAtMember = 0.7;
+        public const double ShaftAtHead = 1.7;
+
+        // The outline of one arrow, as the seven points of a single closed
+        // figure, walking the member end's near edge up to the head, around the
+        // point, and back down the far edge.
+        //
+        // One filled outline rather than a stroked line plus a separate polygon:
+        // two shapes show a seam wherever their anti-aliased edges meet, and the
+        // join is in the middle of the arrow where it is most visible.
+        //
+        // (ux, uy) is the unit vector from start towards end. It is passed in
+        // rather than derived because the caller has already normalised it to
+        // decide whether the arrow is long enough to draw at all, and computing
+        // it twice invites the two answers differing for a zero-length link.
+        public static Point[] ArrowOutline(Point start, Point end, double ux, double uy)
+        {
+            // Perpendicular, for offsetting each edge off the centre line.
+            var nx = -uy;
+            var ny = ux;
+
+            // Where the head's flat base sits: back along the line from the tip.
+            var baseX = end.X - ux * HeadLength;
+            var baseY = end.Y - uy * HeadLength;
+
+            return
+            [
+                new Point(start.X + nx * ShaftAtMember, start.Y + ny * ShaftAtMember),
+                new Point(baseX + nx * ShaftAtHead, baseY + ny * ShaftAtHead),
+                new Point(baseX + nx * HeadHalfWidth, baseY + ny * HeadHalfWidth),
+                end,
+                new Point(baseX - nx * HeadHalfWidth, baseY - ny * HeadHalfWidth),
+                new Point(baseX - nx * ShaftAtHead, baseY - ny * ShaftAtHead),
+                new Point(start.X - nx * ShaftAtMember, start.Y - ny * ShaftAtMember),
+            ];
+        }
+
         // Where an arrow's own window goes, and where the shaft runs inside it.
         //
         // Position is in the platform's window coordinates; everything else is in
