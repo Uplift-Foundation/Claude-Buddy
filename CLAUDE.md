@@ -52,20 +52,30 @@ The roles, and who hands to whom:
 
 ### Product manager: requirement first, then plan
 
-The PM agent creates the requirement in CB as a **`Feature`** and moves it to
-**Refining**. CB's issue types are `Epic`, `Feature`, `Story`, `Task`, `Bug` and
-`Subtask` (one word, no hyphen); `Feature` sits at the same level as `Story`
-rather than above it, so an `Epic` is still what groups a multi-ticket effort.
+The PM agent creates the requirement in CB as a **`Feature`**, which lands in
+**Refinement** on its own. CB's issue types are `Epic`, `Feature`, `Story`,
+`Task`, `Bug` and `Subtask` (one word, no hyphen); `Feature` sits at the same
+level as `Story` rather than above it, so an `Epic` is still what groups a
+multi-ticket effort.
 
-**One thing here is unverified, and the first real ticket should settle it.** CB
-is a team-managed project and is currently empty, so its workflow statuses
-cannot be read back from the API at all — there is no issue to ask for
+CB's board has four columns, and the whole workflow is global — every
+transition is available from every status, so nothing here is a one-way door:
+
+| Status | Transition id | Category |
+| --- | --- | --- |
+| `Refinement` | 11 | To Do |
+| `Development` | 21 | In Progress |
+| `Testing` | 31 | In Progress |
+| `Done` | 41 | Done |
+
+**This replaces an earlier guess in this file, and the correction is worth
+keeping visible.** CB was empty when the workflow above was first written, and a
+team-managed project owns its statuses privately: there was no issue to ask for
 transitions, and JQL does not validate status names against a project, so a
-query returning nothing proves nothing either. "Refining" is *confirmed* as a
-status name in use on this Jira site (project FMN has 69 issues sitting in it)
-and *unconfirmed* on CB's own board, which a team-managed project owns
-separately. Whoever files the first CB ticket should read the board's columns
-and correct the name here if it differs.
+query returning nothing proved nothing either. "Refining" was carried over from
+project FMN, where it is genuinely in use — and it is **not** a status on CB.
+The real name is `Refinement`. CB-3 settled it by being filed and read back.
+Ask the API rather than another project's board if a fifth column ever appears.
 
 Then the PM writes a plan, and **plans on a stronger model than the one that
 will implement it.** Planning is where a wrong decision is cheapest to fix and
