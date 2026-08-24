@@ -91,6 +91,33 @@ public class SettingsRoundTripTests
         Assert.True(rewritten["twoLetterGlyphs"]!.GetValue<bool>());
     }
 
+    // ArrangeAnchor is the shape's saved on-screen centre (see
+    // SessionManager.ArrangementAnchor) — it must survive a restart or the
+    // next "arrange" click after a relaunch silently falls back to the
+    // screen-centre default, which reads to a user as "it forgot where I put
+    // it". Written manually into Save()'s JsonObject and parsed back out of
+    // Load()'s, the same way OrbPositions is a few lines above each — this
+    // test exists because the first cut of this feature added the property
+    // to Model without wiring either side, so it worked for the life of one
+    // process and silently reset on every restart.
+    [Fact]
+    public void ArrangeAnchor_SurvivesARestart()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(640, 360);
+
+        // Simulate a relaunch: force the next access to re-read settings.json
+        // from disk rather than serve the in-memory model.
+        PointSettingsAt(dir);
+
+        var restored = ClaudeBuddySettings.ArrangeAnchor;
+        Assert.NotNull(restored);
+        Assert.Equal(640, restored!.X);
+        Assert.Equal(360, restored.Y);
+    }
+
     // IdleColor/GeneratingColor/WaitingColor are the only three setters that
     // go through SaveSoon() instead of Save() directly (grep confirms — see
     // ClaudeBuddySettings.cs ~line 630-646), because the colour pickers raise

@@ -79,6 +79,7 @@ namespace ClaudeBuddy
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions",
+            "arrangeAnchor",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
             "codexChatEnabled", "codexReplyEnabled", "autoColorSessions",
@@ -1091,6 +1092,14 @@ namespace ClaudeBuddy
                         }
                     }
 
+                    if (root["arrangeAnchor"] is JsonObject anchor)
+                    {
+                        var ax = anchor["x"]?.GetValue<int>();
+                        var ay = anchor["y"]?.GetValue<int>();
+                        if (ax is not null && ay is not null)
+                            model.ArrangeAnchor = new OrbPlacement(ax.Value, ay.Value);
+                    }
+
                     // Anything above this line is a key this build understands.
                     // Whatever is left belongs to a different version and is kept
                     // aside for Save to write back untouched — see _unknownKeys
@@ -1190,6 +1199,10 @@ namespace ClaudeBuddy
                         };
                     }
 
+                    var arrangeAnchor = _model.ArrangeAnchor is { } anchor
+                        ? new JsonObject { ["x"] = anchor.X, ["y"] = anchor.Y }
+                        : null;
+
                     var profileDirs = new JsonArray();
                     foreach (var dirName in _model.ClaudeCodeProfileDirs) profileDirs.Add(dirName);
 
@@ -1266,7 +1279,8 @@ namespace ClaudeBuddy
                         ["claudeCodeProfileDirs"] = profileDirs,
                         ["codexHomes"] = codexHomeDirs,
                         ["profiles"] = profiles,
-                        ["orbPositions"] = positions
+                        ["orbPositions"] = positions,
+                        ["arrangeAnchor"] = arrangeAnchor
                     };
 
                     // Keys this build doesn't understand, put back exactly as they
