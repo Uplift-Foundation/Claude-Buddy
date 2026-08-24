@@ -521,6 +521,63 @@ public class RemoteControlBridgeRoutingTests : IDisposable
         + JsonSerializer.Serialize(transcriptPath)
         + ",\"tmux_pane\":\"%30\",\"tmux_socket\":\"/tmp/tmux-501/default\"}";
 
+    // --- Args: which tmux server every command is aimed at ---
+
+    // A pane id is only unique within one tmux server, and several can coexist —
+    // the relay runs its own. So every command carries -S <socket> once one is
+    // known, and getting that wrong does not fail: it sends keystrokes to a pane
+    // of the same number on somebody else's server.
+    //
+    // TerminalScripts.TmuxArgs makes the same decision for the local CLI and is
+    // tested separately. This is the bridge's own copy, and two copies of a rule
+    // is exactly when you want both asserted.
+    [Fact]
+    public void WithNoSocketKnownTheArgumentsArePassedThrough()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        Assert.Equal(new[] { "send-keys", "-t", "%30" },
+            bridge.Args("send-keys", "-t", "%30"));
+    }
+
+    [Fact]
+    public void OnceASocketIsKnownEveryCommandNamesIt()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+        var transcript = NewTranscript();
+        Assert.True(bridge.Adopt(StatusFile("s-args", TranscriptStatus(transcript))));
+
+        var args = bridge.Args("send-keys", "-t", "%30");
+
+        Assert.Equal(
+            new[] { "-S", "/tmp/tmux-501/default", "send-keys", "-t", "%30" },
+            args);
+    }
+
+    // The socket goes in front, because tmux only accepts -S before the command.
+    [Fact]
+    public void TheSocketIsPrefixedRatherThanAppended()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+        var transcript = NewTranscript();
+        bridge.Adopt(StatusFile("s-args2", TranscriptStatus(transcript)));
+
+        var args = bridge.Args("kill-session");
+
+        Assert.Equal("-S", args[0]);
+        Assert.Equal("kill-session", args[^1]);
+    }
+
+    [Fact]
+    public void AnEmptyCommandStillGetsItsSocket()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+        var transcript = NewTranscript();
+        bridge.Adopt(StatusFile("s-args3", TranscriptStatus(transcript)));
+
+        Assert.Equal(new[] { "-S", "/tmp/tmux-501/default" }, bridge.Args());
+    }
+
     private static List<BridgeProtocol.InboundMessage> Watched(
         RemoteControlBridge bridge, Action act)
     {
