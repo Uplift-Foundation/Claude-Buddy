@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -203,9 +204,21 @@ namespace ClaudeBuddy
             return dirName.Length <= encoded.Length || dirName[encoded.Length] == '-';
         }
 
+        // Excluded from coverage: the try/catch only. The window logic it wraps is
+        // in ReadTail below and stays covered — what cannot be arranged is the
+        // catch, which is for the file disappearing between the caller's
+        // File.Exists and this open. That is a real race, since the file belongs
+        // to a session that may be ending, but it is a race and not a state a test
+        // can hold still.
+        [ExcludeFromCodeCoverage]
         private static string[] TailLines(string path)
         {
-            try
+            try { return ReadTail(path); }
+            catch { return Array.Empty<string>(); }
+        }
+
+        private static string[] ReadTail(string path)
+        {
             {
                 using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 long start = Math.Max(0, fs.Length - TailBytes);
@@ -224,10 +237,6 @@ namespace ClaudeBuddy
                 }
 
                 return chunk.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-            }
-            catch
-            {
-                return Array.Empty<string>();
             }
         }
 
