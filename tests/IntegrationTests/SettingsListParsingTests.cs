@@ -202,4 +202,31 @@ public class SettingsListParsingTests
 
         Assert.Empty(ClaudeBuddySettings.CodexHomes);
     }
+
+    // ---- the setters nothing else exercises -------------------------------
+
+    // Both write straight through to disk rather than deferring, so a change is
+    // durable the moment the setter returns. Worth one case each: an unwritten
+    // preference is indistinguishable from one that never took.
+    [Fact]
+    public void TheVoicesCommandRoundTripsThroughDisk()
+    {
+        Stage("{}");
+
+        ClaudeBuddySettings.SpeakVoicesCommand = "say";
+
+        ClaudeBuddySettings.ReloadForTests();
+        Assert.Equal("say", ClaudeBuddySettings.SpeakVoicesCommand);
+    }
+
+    [Fact]
+    public void TheGatewayPortRoundTripsThroughDisk()
+    {
+        Stage("{}");
+
+        ClaudeBuddySettings.OpenClawPort = 9999;
+
+        ClaudeBuddySettings.ReloadForTests();
+        Assert.Equal(9999, ClaudeBuddySettings.OpenClawPort);
+    }
 }
