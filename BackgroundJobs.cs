@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 
 namespace ClaudeBuddy
@@ -49,11 +50,17 @@ namespace ClaudeBuddy
         // whether to *hide* an orb, and no orb should vanish because the CLI
         // was briefly unavailable — the failure the user can't see is the one
         // worth being careful about.
-        public static bool IsLiveJob(string sessionId)
+        public static bool IsLiveJob(string sessionId) => IsLiveJobGiven(sessionId, States());
+
+        // The decision, separated from the subprocess that answers it. Every
+        // rule the comment above argues for lives here, and none of it needs a
+        // `claude` binary to be reachable — which is the whole reason to split
+        // it, because the rules are the part that decides whether an orb
+        // vanishes and the subprocess is only where the listing comes from.
+        internal static bool IsLiveJobGiven(string sessionId, Dictionary<string, string>? states)
         {
             if (string.IsNullOrEmpty(sessionId)) return true;
 
-            var states = States();
             if (states is null) return true;
 
             if (!states.TryGetValue(JobIdOf(sessionId), out var state)) return false;
@@ -61,6 +68,12 @@ namespace ClaudeBuddy
             return !string.Equals(state, "done", StringComparison.OrdinalIgnoreCase);
         }
 
+        // Excluded from coverage: shells out to the `claude` CLI, and the cache
+        // it wraps is keyed on Environment.TickCount64. What it decides with the
+        // answer is IsLiveJobGiven above, which is tested; what it decides about
+        // the *listing* is ParseAgents below, which is also tested. This is the
+        // process launch and the clock, and nothing else.
+        [ExcludeFromCodeCoverage]
         private static Dictionary<string, string>? States()
         {
             lock (Gate)
@@ -86,6 +99,11 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: starts the `claude` CLI as a real subprocess.
+        // The JSON it prints is parsed by ParseAgents below, which is tested
+        // against hand-written listings, so what is excluded here is the launch
+        // and nothing that decides anything.
+        [ExcludeFromCodeCoverage]
         private static Dictionary<string, string>? Read()
         {
             try
@@ -122,6 +140,26 @@ namespace ClaudeBuddy
                 process.WaitForExit(5000);
                 if (process.ExitCode != 0) return null;
 
+                return ParseAgents(output);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // The listing, as a function of the text the CLI printed.
+        //
+        // Split out for the same reason as IsLiveJobGiven: this reads a JSON
+        // shape defined by another program, which is the class of thing CLAUDE.md
+        // says to cover at the parsing level *as well as* at the seam, because
+        // the two fail differently — the parser gets a field wrong, the seam
+        // gets the whole exchange wrong. Null means "could not be read", which
+        // callers deliberately treat as "hide nothing".
+        internal static Dictionary<string, string>? ParseAgents(string output)
+        {
+            try
+            {
                 var map = new Dictionary<string, string>(StringComparer.Ordinal);
                 using var document = JsonDocument.Parse(output);
                 if (document.RootElement.ValueKind != JsonValueKind.Array) return null;
@@ -131,6 +169,7 @@ namespace ClaudeBuddy
                     // Interactive sessions carry no id at all — only background
                     // ones are jobs — so they simply don't appear here, and
                     // nothing downstream ever asks about them.
+                    if (entry.ValueKind != JsonValueKind.Object) continue;
                     if (!entry.TryGetProperty("id", out var id)) continue;
                     if (id.ValueKind != JsonValueKind.String) continue;
                     if (id.GetString() is not { Length: > 0 } jobId) continue;
@@ -145,8 +184,11 @@ namespace ClaudeBuddy
 
                 return map;
             }
-            catch
+            catch (JsonException)
             {
+                // Not JSON at all. Same answer as a failed read, for the same
+                // reason: an unreadable listing is not evidence that anything
+                // finished.
                 return null;
             }
         }
@@ -154,7 +196,7 @@ namespace ClaudeBuddy
         // The short form the daemon uses, which is the first segment of the
         // session uuid. Split rather than a fixed width so an id that isn't a
         // uuid degrades to itself.
-        private static string JobIdOf(string sessionId)
+        internal static string JobIdOf(string sessionId)
         {
             var dash = sessionId.IndexOf('-');
             return dash > 0 ? sessionId[..dash] : sessionId;
