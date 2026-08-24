@@ -243,7 +243,17 @@ where the change happens to live:
   automatically.
 
 A change to geometry, transcript parsing or orb initials extends the three
-console suites too — `dotnet test tests/Tests.sln` does not run them. CI runs
+Also run `dotnet test tests/UiTests -c Release` before pushing. `dotnet test`
+defaults to Debug and CI builds Release, and Release is not just faster code — it
+reorders a parallel suite and tightens the gaps between writes to a scratch
+directory. CB-3 landed six SessionScanTests green in Debug and red in Release on
+both CI legs, every attempt. The other suites have been clean in both; it is the
+UI one, with a dispatcher and real timers and process-wide statics, that is worth
+the extra half-minute. A test that passes in one configuration and not the other
+gets made independent of what else is running — never a sleep, never a widened
+tolerance.
+
+Remember the three console suites too — `dotnet test tests/Tests.sln` does not run them. CI runs
 every suite on both runners, so a test that only passes on your machine blocks
 the build.
 

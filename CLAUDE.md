@@ -387,6 +387,29 @@ runs every one of them, plus `tests/UiScreenshots`, on both runners, before
 packaging — a failing test blocks the
 build the same way a failed `dotnet publish` already did.
 
+**Run the UI suite in Release before pushing, because CI does and
+`dotnet test` does not.**
+
+```bash
+dotnet test tests/Tests.sln            # Debug — what everyone runs
+dotnet test tests/UiTests -c Release   # what CI actually runs
+```
+
+`dotnet test` defaults to Debug; `ci.yml` builds Release. That gap is not
+theoretical and it is not about optimisation changing behaviour — Release simply
+runs faster, which reorders a parallel suite and closes the gaps between writes
+to a scratch directory. CB-3 landed six `SessionScanTests` that were green in
+Debug on three separate machines and red in Release on both CI legs, every
+attempt: no exception in the app, just a scan that found no sessions, because a
+timing assumption held at Debug speed and not at Release speed.
+
+The other three suites have been clean in both so far. It is `tests/UiTests` that
+is worth the extra half-minute, being the one with a dispatcher, real timers and
+process-wide statics in it. If a test passes in one configuration and not the
+other, the answer is to make it independent of what else is running — never a
+sleep, never a widened tolerance. This branch has fixed four flakes of that shape
+and each commit says why.
+
 They reference `ClaudeBuddy.csproj` directly with a `<ProjectReference>`
 rather than compiling individual files in with `<Compile Include>` the way
 the three suites above do. That convention holds for a file with a small
