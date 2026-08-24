@@ -1595,7 +1595,10 @@ namespace ClaudeBuddy
         // One row per state, seeded from the stored colour and written on change
         // with no commit step — the same read-seed-then-write shape as
         // LifetimePicker below.
-        private Control ColorRow(string label, string state)
+        // internal: the arming guard below is the fix for a bug that wrote three
+        // colours nobody chose into settings.json, and it is decided entirely in
+        // managed code — no OS call, no window needed.
+        internal Control ColorRow(string label, string state)
         {
             var picker = new ColorPicker
             {
