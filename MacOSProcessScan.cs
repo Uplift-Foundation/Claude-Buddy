@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -64,6 +65,9 @@ namespace ClaudeBuddy
         private static readonly Dictionary<int, (string? Dir, long Stamp)> EnvCache = new();
         private static int _argMax;
 
+        // Excluded from coverage: walks every pid on the machine through
+        // proc_listallpids.
+        [ExcludeFromCodeCoverage]
         public static IReadOnlyList<ClaudeInstance> Scan()
         {
             if (!OperatingSystem.IsMacOS()) return Array.Empty<ClaudeInstance>();
@@ -106,6 +110,8 @@ namespace ClaudeBuddy
             return results;
         }
 
+        // Excluded from coverage: proc_listallpids against the live process table.
+        [ExcludeFromCodeCoverage]
         private static int[] AllPids()
         {
             var count = proc_listallpids(null, 0);
@@ -121,6 +127,8 @@ namespace ClaudeBuddy
             return buffer;
         }
 
+        // Excluded from coverage: proc_pidpath against a live pid.
+        [ExcludeFromCodeCoverage]
         private static bool IsClaudeMainProcess(int pid, byte[] buffer)
         {
             // Fails with EPERM for other users' processes; those are skipped,
@@ -132,6 +140,9 @@ namespace ClaudeBuddy
             return path.EndsWith(MainExecutableSuffix, StringComparison.Ordinal);
         }
 
+        // Excluded from coverage: a cache around the sysctl read below, keyed on
+        // the wall clock.
+        [ExcludeFromCodeCoverage]
         private static string? UserDataDirOf(int pid)
         {
             var now = Environment.TickCount64;
@@ -154,6 +165,9 @@ namespace ClaudeBuddy
             return dir;
         }
 
+        // Excluded from coverage: KERN_PROCARGS2 via sysctl; what it does with the
+        // buffer is ParseUserDataDir, which is tested.
+        [ExcludeFromCodeCoverage]
         private static string? ReadUserDataDir(int pid)
         {
             var size = ArgMax();
@@ -215,6 +229,9 @@ namespace ClaudeBuddy
         // Deliberately stops at the end of argv: the environment block that
         // follows is full of user-controlled strings, and one of them starting
         // with a flag name would otherwise be read as an argument.
+        // Excluded from coverage: KERN_PROCARGS2 via sysctl; the walk itself is
+        // ParseArgumentValues, which is tested.
+        [ExcludeFromCodeCoverage]
         internal static Dictionary<string, string> ArgumentValues(int pid, params string[] flags)
         {
             var found = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -243,6 +260,9 @@ namespace ClaudeBuddy
         // ArgumentValues, the other side of the same buffer — argv is walked
         // past rather than examined. Used to find which tmux pane a team's
         // viewer is sitting in; see AgentTeamViewer.
+        // Excluded from coverage: KERN_PROCARGS2 via sysctl; the walk itself is
+        // ParseEnvironmentValues, which is tested.
+        [ExcludeFromCodeCoverage]
         internal static Dictionary<string, string> EnvironmentValues(int pid, params string[] keys)
         {
             var found = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -337,6 +357,8 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: KERN_ARGMAX via sysctl.
+        [ExcludeFromCodeCoverage]
         private static int ArgMax()
         {
             if (_argMax > 0) return _argMax;

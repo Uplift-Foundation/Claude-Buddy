@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.RegularExpressions;
 using Whisper.net;
@@ -45,6 +46,8 @@ namespace ClaudeBuddy
         // input on — never from the mic click path — so a multi-hundred-MB
         // download is always something the user just asked for, not a
         // surprise the first time they hover an orb.
+        // Excluded from coverage: downloads the Whisper model over the network.
+        [ExcludeFromCodeCoverage]
         public static Task DownloadModelAsync(IProgress<string>? progress = null)
         {
             if (ModelDownloaded) return Task.CompletedTask;
@@ -56,6 +59,8 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: an HTTP GET of a 140MB model file.
+        [ExcludeFromCodeCoverage]
         private static async Task DownloadModelCoreAsync(IProgress<string>? progress)
         {
             try
@@ -90,6 +95,10 @@ namespace ClaudeBuddy
         // rather than typing nothing into someone's terminal. Never throws:
         // this runs off an async-void click handler, where an escaping
         // exception would take the whole app down over a bad audio frame.
+        // Excluded from coverage: runs whisper.cpp inference through native code
+        // against a downloaded model; the two text passes it applies afterwards
+        // are tested.
+        [ExcludeFromCodeCoverage]
         public static async Task<string> TranscribeAsync(float[] samples)
         {
             if (samples.Length == 0 || !ModelDownloaded) return "";
@@ -211,6 +220,9 @@ namespace ClaudeBuddy
             return text.Trim();
         }
 
+        // Excluded from coverage: loads the native whisper library and a model
+        // file from disk.
+        [ExcludeFromCodeCoverage]
         private static WhisperFactory? GetFactory()
         {
             lock (FactoryGate)
