@@ -130,4 +130,41 @@ public class OpenClawChatSendTests
 
         Assert.Equal(before, session.History.Count);
     }
+
+    // The panel's seam onto the backlog. The fetch itself lives on
+    // OpenClawSessions, which owns the connection — this exists so the panel does
+    // not have to know that a page comes from a gateway rather than from a file on
+    // disk, which is the whole reason a remote session and a local one can share a
+    // panel at all.
+    //
+    // With no gateway there is nothing to fetch, and saying so is the answer the
+    // panel needs: it reads it to decide whether it has reached the top.
+    [Fact]
+    public async Task PagingWithNoGatewayReportsNothingFetched()
+    {
+        Replying(true);
+
+        Assert.False(await Session().LoadOlderAsync(System.Threading.CancellationToken.None));
+    }
+
+    // A session starts believing there is more to fetch, because the alternative
+    // is a panel that refuses to scroll back before it has ever asked.
+    [Fact]
+    public void ASessionStartsAssumingThereIsMoreToFetch()
+    {
+        Assert.True(Session().HasMore);
+    }
+
+    // The composer says where a message goes. This one stays on the machine it is
+    // already on, so it gets the plain wording — unlike the room's "Message the
+    // channel…" or the remote session's "on the other machine".
+    [Fact]
+    public void TheComposerHintFollowsTheReplySetting()
+    {
+        Replying(true);
+        Assert.Equal("Message…", Session().ComposerHint);
+
+        Replying(false);
+        Assert.Equal("Replying is off", Session().ComposerHint);
+    }
 }
