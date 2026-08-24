@@ -69,7 +69,7 @@ namespace ClaudeBuddy
             menu.Add(icons);
         }
 
-        private static NativeMenuItem BuildProfileItem(ProfileView profile)
+        internal static NativeMenuItem BuildProfileItem(ProfileView profile)
         {
             var item = new NativeMenuItem(ProfileLabel(profile));
 
@@ -136,7 +136,7 @@ namespace ClaudeBuddy
         // keeps a fixed length whatever the state. Writing while the instance is
         // running would be discarded when it exits, so it's offered only while
         // stopped, and the label says why rather than leaving a dead item.
-        private static NativeMenuItem BuildThemeItem(ProfileView profile)
+        internal static NativeMenuItem BuildThemeItem(ProfileView profile)
         {
             if (profile.IsRunning)
             {
@@ -171,7 +171,7 @@ namespace ClaudeBuddy
         // only ever a handful of (colour, filled) combinations.
         private static readonly Dictionary<(uint Rgb, bool Filled), Bitmap> SwatchCache = new();
 
-        private static Bitmap Swatch(Color color, bool filled)
+        internal static Bitmap Swatch(Color color, bool filled)
         {
             var key = ((uint)((color.R << 16) | (color.G << 8) | color.B), filled);
             if (SwatchCache.TryGetValue(key, out var cached)) return cached;
@@ -201,7 +201,7 @@ namespace ClaudeBuddy
             return bitmap;
         }
 
-        private static string ProfileLabel(ProfileView profile)
+        internal static string ProfileLabel(ProfileView profile)
         {
             // No state glyph in the text: the swatch carries it. A dot as well
             // would just be noise next to the icon.
@@ -231,7 +231,7 @@ namespace ClaudeBuddy
 
         // Profile names are folder names, so they can be arbitrarily long; the
         // session list above already caps its own labels for the same reason.
-        private static string Truncate(string name) =>
+        internal static string Truncate(string name) =>
             name.Length <= MaxNameLength ? name : name[..(MaxNameLength - 1)].TrimEnd() + "…";
     }
 }
