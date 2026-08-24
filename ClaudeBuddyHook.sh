@@ -370,9 +370,35 @@ fi
 # by whoever happens to own a terminal. The claude binary reports its comm as
 # either "claude" or a bare version ("2.1.240") depending on how it was
 # launched — both observed on the same machine, which is why both are matched.
-# Helpers that are also the claude binary are skipped by name: the background
-# pty host, a spare, the daemon, and the agents viewer are none of them the
-# session that fired this hook.
+# Helpers that are also the claude binary are skipped: the background pty host,
+# the daemon, and the agents viewer are none of them the session that fired this
+# hook.
+#
+# A *claimed spare* is, and used to be skipped with them. A daemon-hosted
+# background job has no other ancestors at all —
+#
+#   claude bg-spare      <- the process actually running the session
+#   claude bg-pty-host   <- its pty wrapper
+#   claude daemon run    <- the daemon
+#   launchd
+#
+# — so skipping all three left every background job with no pid. `claude agents
+# --json` names the spare as the job's pid, which settles what it is; and an
+# unclaimed spare fires no hooks, so reaching one by walking up from a hook means
+# it has been claimed and is this session.
+#
+# What separates it from its wrapper is the process **title**, not the command
+# line, and that distinction is the whole reason this reads comm below. macOS
+# reports argv[0] for comm, which for these is the full title ("claude bg-spare",
+# not "claude") — so the old name test never matched them and the skip list was
+# never even reached. It could not have decided it anyway: the pty host passes
+# the spare's own argv after a `--`, so its command line contains `--bg-spare`
+# too, and an args test for the spare matches the host as well.
+#
+# Roles this doesn't recognise fall through to the command line, which is where
+# the layouts with no title live (an ordinary session, an older build). The two
+# spare-ish patterns stay in that list, so an unfamiliar wrapper is skipped
+# rather than guessed at — the same direction of caution as before.
 #
 # TTY is deliberately left to the old rule. What terminal to focus and what pid
 # is alive are two different questions, and conflating them is what caused this;
@@ -388,22 +414,40 @@ for _ in 1 2 3 4 5; do
     T=$(ps -o tty= -p "$PID" 2>/dev/null | tr -d ' ')
     COMM=$(basename "$(ps -o comm= -p "$PID" 2>/dev/null)" 2>/dev/null)
 
+    # The binary's own name, and the role word the title carries after it. A
+    # title without one leaves ROLE empty, which is every shape that predates
+    # the daemon.
+    COMM_NAME="${COMM%% *}"
+    ROLE="${COMM#"$COMM_NAME"}"
+    ROLE="${ROLE# }"
+
     if [ "$AGENT" = "codex" ]; then
-        if [ "$COMM" = "codex" ]; then
+        if [ "$COMM_NAME" = "codex" ]; then
             SESSION_PID="$PID"
             [ -n "$T" ] && [ "$T" != "??" ] && TTY="$T"
             break
         fi
     elif [ -z "$SESSION_PID" ]; then
         # The claude binary, by either of the two names it reports.
-        case "$COMM" in
+        case "$COMM_NAME" in
             claude|[0-9]*.[0-9]*.[0-9]*)
-                ARGS=$(ps -o args= -p "$PID" 2>/dev/null)
-                case "$ARGS" in
-                    # Every one of these is the claude binary and none of them
-                    # is the session that ran this hook.
-                    *--bg-pty-host*|*bg-spare*|*"daemon run"*|*" agents"*) ;;
-                    *) SESSION_PID="$PID" ;;
+                case "$ROLE" in
+                    # A spare that a hook can see has been claimed, and is the
+                    # session that ran this hook.
+                    bg-spare) SESSION_PID="$PID" ;;
+
+                    # Wrappers above the session, never the session.
+                    bg-pty-host|daemon) ;;
+
+                    *)
+                        ARGS=$(ps -o args= -p "$PID" 2>/dev/null)
+                        case "$ARGS" in
+                            # Every one of these is the claude binary and none
+                            # of them is the session that ran this hook.
+                            *--bg-pty-host*|*--bg-spare*|*"daemon run"*|*" agents"*) ;;
+                            *) SESSION_PID="$PID" ;;
+                        esac
+                        ;;
                 esac
                 ;;
         esac
