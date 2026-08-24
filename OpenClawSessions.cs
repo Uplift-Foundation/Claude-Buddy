@@ -1027,7 +1027,11 @@ namespace ClaudeBuddy
         // The key on an event is run-scoped — "…:run:<runId>" appended to the
         // session's own key — so it has to be trimmed back before it means
         // anything to the list.
-        private static void OnEvent(string name, JsonElement payload)
+        // internal: this is the whole of how a gateway orb learns it is working.
+        // The gateway's session list does not carry a running state, so an orb
+        // pulses because an event named its session — and the effect is
+        // observable through Parse, which reads what this records.
+        internal static void OnEvent(string name, JsonElement payload)
         {
             if (name is "tick" or "health" or "presence" or "connect.challenge") return;
             if (payload.ValueKind != JsonValueKind.Object) return;
