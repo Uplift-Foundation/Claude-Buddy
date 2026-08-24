@@ -45,18 +45,19 @@ deliberate: a team that looks wrong on the board is a free bug report.
 
 ### Product manager: requirement first, then plan
 
-The PM agent creates the requirement in CB as a **`Feature`** and moves it to
-**Refining**. CB's issue types are `Epic`, `Feature`, `Story`, `Task`, `Bug`,
-`Subtask` (one word); `Feature` is level with `Story`, not above it, so an
-`Epic` still groups a multi-ticket effort.
+The PM agent creates the requirement in CB as a **`Feature`** and leaves it in
+**Refinement**, which is where CB's workflow puts a new issue anyway. CB's issue
+types are `Epic`, `Feature`, `Story`, `Task`, `Bug`, `Subtask` (one word);
+`Feature` is level with `Story`, not above it, so an `Epic` still groups a
+multi-ticket effort.
 
-**Unverified, and the first real ticket should settle it:** CB is team-managed
-and currently empty, so its statuses can't be read from the API — no issue to
-ask for transitions, and JQL doesn't validate status names per project, so an
-empty result proves nothing. "Refining" is *confirmed* as a status in use on
-this Jira site (69 issues in project FMN) and *unconfirmed* on CB's own board,
-which a team-managed project owns separately. Whoever files the first CB ticket
-should read the board's columns and fix the name here if it differs.
+**CB's board has four columns, and they are now confirmed** — read off CB-1, the
+first ticket filed, which is what this paragraph used to ask for. They are
+**Refinement → Development → Testing → Done**, with transition ids 11, 21, 31 and
+41; every transition is global, so any status can be reached from any other. The
+name this file guessed was "Refining", which is a status on project FMN and not
+one CB has: a team-managed project owns its workflow separately, and the guess
+was wrong. Nothing else here needed correcting.
 
 Then it writes a plan, and **plans on a stronger model than the one that
 implements**. Planning is where a wrong call is cheapest to fix and most
