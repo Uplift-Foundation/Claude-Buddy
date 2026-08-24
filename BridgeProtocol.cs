@@ -69,6 +69,28 @@ namespace ClaudeBuddy
             $"Use SendMessage to send {peerName} exactly this text, and nothing else:\n\n"
             + $"{text}\n\n{FidelityRequest}";
 
+        // The same errand, for a message that is not for a person to read.
+        //
+        // Two differences from SendMessagePrompt above, both deliberate. There
+        // is no FidelityRequest, because that asks the *receiving* model to
+        // answer fully rather than summarise, and nothing on the other end of a
+        // frame is a model — MirrorProtocol frames are read by the far Buddy,
+        // which does not compose anything. Appending it would put an instruction
+        // to a reader inside a line whose only reader is a parser.
+        //
+        // And the instruction is blunter, because the failure it guards against
+        // is different in kind. A relayed sentence that comes back reworded is
+        // still a sentence; a frame that comes back reflowed, re-wrapped or
+        // "tidied" is a hash mismatch and a refused transfer. Saying so is
+        // cheap. It is also not what makes this safe — the digest is, and it
+        // holds whether or not the model reads this line at all.
+        public static string SendFramePrompt(string peerName, string frame) =>
+            $"Use SendMessage to send {peerName} exactly this text, and nothing else:\n\n"
+            + $"{frame}\n\n"
+            + "(This is a single line of machine data being relayed between two copies of an "
+            + "application. Send it exactly as written, on one line. Do not add, remove, "
+            + "reformat, wrap, explain or summarise any part of it.)";
+
         // --- asking a session what colour it is ---
 
         // A remote session's colour cannot be derived, only asked for.
@@ -326,36 +348,53 @@ namespace ClaudeBuddy
             @"(?<key>[a-z\-]+)\s*=\s*""(?<value>[^""]*)""",
             RegexOptions.Compiled);
 
+        // Every message in the row, in the order they appear.
+        //
+        // Plural because Match was wrong and quietly so. One transcript row can
+        // carry two tags — two sessions answering at once land in one turn, and
+        // the mirror makes that ordinary rather than rare, since it sends frames
+        // as fast as the relay will take them. Reading only the first dropped
+        // the rest with nothing to show it had happened: no error, no gap, just
+        // a message that never arrived.
+        public static IReadOnlyList<InboundMessage> ParseInboundMessages(string rowText)
+        {
+            var found = new List<InboundMessage>();
+            if (string.IsNullOrEmpty(rowText)) return found;
+
+            foreach (Match m in CrossSessionTag.Matches(rowText))
+            {
+                string? fromName = null, from = null, mode = null;
+                foreach (Match a in Attr.Matches(m.Groups["attrs"].Value))
+                {
+                    switch (a.Groups["key"].Value)
+                    {
+                        case "from-name": fromName = a.Groups["value"].Value; break;
+                        case "from": from = a.Groups["value"].Value; break;
+                        case "from-mode": mode = a.Groups["value"].Value; break;
+                    }
+                }
+
+                // Without a sender there is nothing to attribute the message to,
+                // and a chat bubble on the wrong machine's panel is worse than a
+                // dropped one.
+                if (string.IsNullOrWhiteSpace(fromName)) continue;
+
+                found.Add(new InboundMessage(
+                    fromName!,
+                    from ?? "",
+                    mode ?? "",
+                    m.Groups["body"].Value.Trim()));
+            }
+
+            return found;
+        }
+
         // Null when the text holds no such tag, which is the common case: most
         // rows in the bridge's transcript are its own turns.
         public static InboundMessage? ParseInboundMessage(string rowText)
         {
-            if (string.IsNullOrEmpty(rowText)) return null;
-
-            var m = CrossSessionTag.Match(rowText);
-            if (!m.Success) return null;
-
-            string? fromName = null, from = null, mode = null;
-            foreach (Match a in Attr.Matches(m.Groups["attrs"].Value))
-            {
-                switch (a.Groups["key"].Value)
-                {
-                    case "from-name": fromName = a.Groups["value"].Value; break;
-                    case "from": from = a.Groups["value"].Value; break;
-                    case "from-mode": mode = a.Groups["value"].Value; break;
-                }
-            }
-
-            // Without a sender there is nothing to attribute the message to, and
-            // a chat bubble on the wrong machine's panel is worse than a dropped
-            // one.
-            if (string.IsNullOrWhiteSpace(fromName)) return null;
-
-            return new InboundMessage(
-                fromName!,
-                from ?? "",
-                mode ?? "",
-                m.Groups["body"].Value.Trim());
+            var all = ParseInboundMessages(rowText);
+            return all.Count == 0 ? null : all[0];
         }
 
         // --- confirmation that a send left the building ---
