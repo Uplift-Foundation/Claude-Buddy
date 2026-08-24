@@ -728,7 +728,7 @@ namespace ClaudeBuddy
 
         // -S pins the server the bridge's pane actually lives on. Several can
         // coexist and a pane id is only unique within one.
-        private string[] Args(params string[] args)
+        internal string[] Args(params string[] args)
         {
             string? socket;
             lock (_gate) socket = _tmuxSocket;
