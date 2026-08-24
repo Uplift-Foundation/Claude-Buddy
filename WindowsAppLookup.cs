@@ -28,6 +28,17 @@ namespace ClaudeBuddy
     //   - The AppId comes from that package's AppxManifest.xml, whose
     //     <Application Id="..."> is what ActivateApplication expects.
     [SupportedOSPlatform("windows")]
+    // Excluded from coverage, as a class. Every member reads the Windows registry
+    // — the AppModel package repository, to find where a Store-installed
+    // application actually lives — and three already carried the attribute
+    // individually. What was left uncovered was the cache fields they share,
+    // which exist only because those members do.
+    //
+    // Marking the class rather than the members is also what makes those fields
+    // countable at all: a field initializer belongs to the type initializer, and
+    // with beforefieldinit the runtime does not run it until a static field is
+    // touched — which nothing outside the excluded members ever does.
+    [ExcludeFromCodeCoverage]
     internal static class WindowsAppLookup
     {
         private const string PackageRepositoryKey =

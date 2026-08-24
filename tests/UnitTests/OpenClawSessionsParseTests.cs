@@ -149,6 +149,41 @@ namespace ClaudeBuddy.Tests
                 """);
 
             Assert.Equal("lilibeth — #general", sessions[0].Title);
+
+        }
+
+        // Session.Channel is NOT the channel name, despite the name — it is the
+        // transport a session arrived over, read from origin.provider and falling
+        // back to lastChannel. The channel name is in the Title, via groupChannel.
+        //
+        // Asserted here because the field reads like it holds "#general" and does
+        // not, which is the sort of thing that gets grouped on by mistake. Nothing
+        // in the app reads it today; this is what it would find if it did.
+        [Fact]
+        public void SessionChannelIsTheTransportRatherThanTheChannelName()
+        {
+            var (sessions, _) = Parse($$"""
+                {"sessions":[{"key":"agent:lilibeth:discord:channel:1474",
+                              "groupChannel":"#general",
+                              "origin":{"provider":"discord"},
+                              "lastActivityAt":{{JustNow}}}]}
+                """);
+
+            Assert.Equal("discord", sessions[0].Channel);
+            Assert.Contains("#general", sessions[0].Title);
+        }
+
+        // With no provider and no lastChannel it is empty rather than null, so a
+        // caller comparing it never has to null-check first.
+        [Fact]
+        public void AnUnknownTransportIsEmptyRatherThanNull()
+        {
+            var (sessions, _) = Parse($$"""
+                {"sessions":[{"key":"agent:lilibeth:discord:channel:1474",
+                              "lastActivityAt":{{JustNow}}}]}
+                """);
+
+            Assert.Equal("", sessions[0].Channel);
         }
 
         // groupChannel is asked before origin.label, because the label is written
