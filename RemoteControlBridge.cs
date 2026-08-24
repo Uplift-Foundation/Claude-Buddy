@@ -660,11 +660,10 @@ namespace ClaudeBuddy
 
             waiter?.TrySetResult(text);
 
-            if (!string.Equals(rowType, "user", StringComparison.Ordinal)) return;
-
             // Every message in the row, not just the first: two peers answering
-            // in one turn is ordinary once frames are in flight.
-            foreach (var inbound in BridgeProtocol.ParseInboundMessages(text))
+            // in one turn is ordinary once frames are in flight. The row's type
+            // decides whether there are any at all — see the rule's own note.
+            foreach (var inbound in BridgeProtocol.ParseInboundMessagesFrom(rowType, text))
                 MessageReceived?.Invoke(inbound);
         }
 
@@ -792,6 +791,24 @@ namespace ClaudeBuddy
             string name;
             try { name = Environment.MachineName; }
             catch { name = ""; }
+
+            return MachineTag(name);
+        }
+
+        // Split from the call to Environment.MachineName so every branch below
+        // can be tested: a headless runner has exactly one machine name, and the
+        // interesting cases are the ones it does not have.
+        internal static string MachineTag(string? name)
+        {
+            name ??= "";
+
+            // ".local" is Bonjour's, not the user's: every Mac's hostname ends
+            // in it, so it carries no information and costs six of the twenty
+            // characters there are. Dropped first, before the length cap, or a
+            // perfectly ordinary "Warrens-MacBook-Pro.local" truncates to
+            // "warrens-macbook-prol".
+            if (name.EndsWith(".local", StringComparison.OrdinalIgnoreCase))
+                name = name[..^".local".Length];
 
             var safe = new string(name
                 .Where(c => char.IsLetterOrDigit(c) || c == '-')
