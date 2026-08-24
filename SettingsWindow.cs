@@ -2409,6 +2409,32 @@ namespace ClaudeBuddy
         }
 
         // Returns the picked folder's bare name (e.g. ".claude-work"), or
+        // Whether a picked folder is a direct child of one of the home directories
+        // a profile may live under.
+        //
+        // The rule matters more than it looks. A profile directory that is not a
+        // direct child of $HOME resolves to the wrong place on native Windows, in
+        // WSL and on macOS alike — the same rule the macOS installers apply when
+        // they refuse a profile name containing a slash. And a profile can be
+        // WSL-only with no Windows-side counterpart at all, so a folder picked
+        // from a \\wsl.localhost\<distro>\home\<user>\ path has to validate the
+        // same way a native one does rather than being rejected for not sitting
+        // under C:\Users\.
+        //
+        // Pure, and separate from the picker that calls it, because the picker
+        // opens an OS dialog and this is the part with a decision in it.
+        internal static bool IsDirectChildOfAHome(
+            string pickedPath, string home, IEnumerable<string> wslHomes)
+        {
+            static string Trim(string path) =>
+                path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            var validHomes = new[] { home }.Concat(wslHomes).Select(Trim).ToList();
+            var parent = Path.GetDirectoryName(Trim(pickedPath));
+
+            return validHomes.Any(h => string.Equals(parent, h, StringComparison.OrdinalIgnoreCase));
+        }
+
         // Excluded from coverage: everything past the first line is the OS folder
         // picker — see BrowseForProfileDir below.
         [ExcludeFromCodeCoverage]
@@ -2476,12 +2502,7 @@ namespace ClaudeBuddy
             // from \\wsl.localhost\<distro>\home\<user>\ must validate the
             // same way a native one does, not be rejected just because it
             // isn't under C:\Users\....
-            var validHomes = new[] { home }.Concat(WslIntegration.GetWslHomeUncPaths())
-                .Select(h => h.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
-                .ToList();
-            var trimmedPicked = pickedPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var parent = Path.GetDirectoryName(trimmedPicked);
-            if (!validHomes.Any(h => string.Equals(parent, h, StringComparison.OrdinalIgnoreCase)))
+            if (!IsDirectChildOfAHome(pickedPath, home, WslIntegration.GetWslHomeUncPaths()))
             {
                 status.Text = "Must be a folder directly inside your home directory (" + home
                     + ") or a WSL distro's home directory, not a nested subfolder.";
@@ -2489,7 +2510,8 @@ namespace ClaudeBuddy
             }
 
             status.Text = "";
-            return Path.GetFileName(trimmedPicked);
+            return Path.GetFileName(
+                pickedPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         }
 
         [SupportedOSPlatform("windows")]
@@ -2549,6 +2571,15 @@ namespace ClaudeBuddy
             return content;
         }
 
+        // Excluded from coverage: Windows-only, and every line of it runs
+        // wsl.exe. IsWired reads a settings file inside the distribution;
+        // SetWired writes one by running a script in there, with its own ~10s
+        // timeout. The re-entrancy guard and the revert-on-failure are real
+        // decisions, but neither can be exercised without that script actually
+        // running — and WslIntegration's own rules, which settings file to write
+        // and how to find a home directory in /etc/passwd, are pure and covered
+        // in tests/UnitTests/WslIntegrationRulesTests.
+        [ExcludeFromCodeCoverage]
         [SupportedOSPlatform("windows")]
         private static Control WslDistroRow(string distro)
         {
