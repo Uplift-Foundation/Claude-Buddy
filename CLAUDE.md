@@ -232,6 +232,42 @@ elsewhere. Each project's `TestBootstrap.cs` sets `CLAUDE_BUDDY_SETTINGS_DIR`
 to a fresh temp directory via a `[ModuleInitializer]`, before any test can
 run and before any settings static constructor can fire.
 
+## Coverage
+
+```bash
+./tools/coverage.sh                            # whole-app line and branch coverage
+./tools/coverage.sh --base upstream/develop    # ...and just the lines you added
+```
+
+**Two collectors, not one, and it has to stay that way.** `tests/UnitTests` and
+`tests/IntegrationTests` run on VSTest and use `coverlet.collector`;
+`tests/UiTests` runs on the Microsoft Testing Platform (it moved to xUnit v3
+for `Avalonia.Headless.XUnit` 12.x — see its csproj) where VSTest data
+collectors do not apply at all, so it uses
+`Microsoft.Testing.Extensions.CodeCoverage`'s own `--coverage` instead. That
+package is **pinned to 17.14.2** for the same reason everything else in that
+csproj is pinned: 18.x depends on `Microsoft.Testing.Platform` 2.x while
+xunit.v3 3.2.2 brings the `mtp-v1` packages, and the mix throws
+`TypeLoadException` for `IDataConsumer` before one test runs. Bump xunit.v3 and
+you have to re-check that pin.
+
+That leaves three cobertura files measuring the *same* assembly, which is what
+`tools/merge-coverage.py` is for: a line counts as covered if **any** suite
+covered it. Adding the reports up instead is wrong in both directions at once —
+it double-counts the denominator while undercounting the numerator, since a
+line only a UI test reaches is reported unhit by the other two.
+
+Two things the number does not say, worth remembering before quoting it:
+
+- **`--base` is the number that matters when reviewing a change.** A file-level
+  percentage is dominated by whatever was already in the file; the added-lines
+  figure is the one that says whether the new code is tested.
+- **The three console suites contribute nothing to it.** `ArrangementTests`,
+  `GlyphTests` and `TranscriptTests` are plain exes, not test-SDK projects, so
+  `OrbArrangement` reads 0% here while actually being the most exhaustively
+  verified file in the repo (3456 cases). Read the number as "coverage from the
+  xUnit suites", never as the sum of what this repo verifies.
+
 Everything else about orb behavior is still verified by running the app.
 Two things make that survivable:
 

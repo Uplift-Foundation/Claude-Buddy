@@ -183,6 +183,28 @@ checked in `ClaudeBuddySettings.Directory` before `SpecialFolder.ApplicationData
 the same pattern as `CLAUDE_BUDDY_PROFILE_ROOT` in `ClaudeDesktopManager.cs`;
 without it a test reads and writes the real settings.json.
 
+## Coverage
+
+`./tools/coverage.sh` for whole-app line and branch coverage;
+`./tools/coverage.sh --base upstream/develop` adds coverage of just the lines
+you added, which is the figure that actually says whether new code is tested —
+a file-level percentage is dominated by whatever was already there.
+
+Two collectors, deliberately: `UnitTests`/`IntegrationTests` are VSTest and use
+`coverlet.collector`, while `UiTests` runs on the Microsoft Testing Platform
+(xUnit v3, forced by `Avalonia.Headless.XUnit` 12.x) where VSTest collectors do
+not apply, so it uses `Microsoft.Testing.Extensions.CodeCoverage` — **pinned to
+17.14.2**, because 18.x wants `Microsoft.Testing.Platform` 2.x while xunit.v3
+3.2.2 brings `mtp-v1`, and the mix throws `TypeLoadException` for
+`IDataConsumer` before a test runs. `tools/merge-coverage.py` then unions the
+three cobertura files, which all measure the same assembly; summing them would
+double-count the denominator and undercount the numerator at the same time.
+
+The number excludes the three console suites — `ArrangementTests`,
+`GlyphTests`, `TranscriptTests` are plain exes, not test-SDK projects — so
+`OrbArrangement` reads 0% while being the most exhaustively verified file here.
+It is "coverage from the xUnit suites", not the sum of what this repo verifies.
+
 ## Extra accounts
 
 Both CLIs support a second account through an environment variable —
