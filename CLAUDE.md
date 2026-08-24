@@ -61,6 +61,11 @@ keeps that distinction deliberately — see `docs/*-findings.md`, which separate
 "confirmed on a real machine" from "assumed to work". A PR that claims more than
 was tested costs more than one that admits a gap.
 
+That includes the tests — see **Every feature ships with its tests** below. A PR
+that adds or changes behaviour without covering it isn't ready to review,
+however well the behaviour itself works, and a line the tests can't reach is
+named in the body rather than left for the next person to discover.
+
 **Don't rename a pushed branch to fix its name.** GitHub closes the open PR
 instead of retargeting it, and reopening is refused once the old head ref is
 gone; you have to open a fresh PR. Get the prefix right before the first push.
@@ -114,6 +119,77 @@ has the full story.
 `<Version>` in `ClaudeBuddy.csproj` is the single source of truth for the
 shipped version — the packaging scripts and the release workflow parse it out of
 there.
+
+## Every feature ships with its tests
+
+**A feature request is not finished when the feature works. It is finished when
+the feature works and the code that makes it work is covered.** Tests land in
+the same branch as the behaviour they cover — not a follow-up, not an issue
+filed against `develop` — and the target for the lines that branch adds or
+changes is **100%**: every new method, every arm of every new conditional,
+every error path you wrote a `catch` for.
+
+Cover it at all three levels the suites already separate, rather than only the
+one that is easiest to reach from where the change happens to live:
+
+- **Unit** (`tests/UnitTests`) — the decisions. If the change added a rule about
+  which orb wins, which name is used, or where something is drawn, that rule
+  belongs in a function with no window and no settings behind it, and that
+  function gets a case per outcome. If new logic can't be reached without
+  constructing a window, that is a seam to fix before writing the test, not a
+  reason to skip it — the same argument that keeps `OrbArrangement`, `OrbGlyph`
+  and both transcript parsers pure.
+- **Integration** (`tests/IntegrationTests`) — the seams with what this process
+  does not own: the hook scripts run as real subprocesses, files on disk,
+  settings round-tripped through a real file. Anything touching a format
+  someone else defines is covered here *as well as* by a unit test of the
+  parsing, because the two fail differently — the parser gets a field wrong,
+  the seam gets the whole exchange wrong.
+- **UI** (`tests/UiTests`) — the headless Avalonia path. A new window, panel,
+  control, binding or click handler gets driven with a synthesized click or a
+  real `UpdateFrom`, and asserted on what a user would have seen. `ChatPanel`'s
+  `FakeChatSession` is the pattern for anything that would otherwise need a
+  live session behind it. A new *visible* surface also gets a capture in
+  `tests/UiScreenshots`, which renders through real Skia rather than the null
+  renderer; its cases are hand-written one per scenario, so adding a `UiTests`
+  scenario does not add its screenshot for you.
+
+A change to geometry, transcript parsing or orb initials extends the three
+console suites too — `dotnet test tests/Tests.sln` does not run them, and CI
+failing on `ArrangementTests` after a green `dotnet test` is a bad way to find
+that out. CI runs every suite on both runners, so a test that only passes on
+the machine you wrote it on blocks the build.
+
+**100% means the diff, not the repository.** The app is nowhere near it — as of
+this writing `UnitTests` alone covers about 3% of the assembly, and whole areas
+of it (`TerminalFocuser`, the tray, the installers) make real
+`tmux`/`ps`/`osascript` calls that a headless runner must not execute. Holding
+new work to 100% is how that number climbs without a rewrite; holding the
+existing repository to it would make the rule something everybody quietly
+ignores, which is worse than not having one.
+
+Where a line genuinely cannot be covered — an OS call with no seam, a `catch`
+for something only the other platform throws — **name it in the PR body and say
+why**, in the same voice this project already uses to separate "confirmed on a
+real machine" from "assumed to work". An uncovered line that is named is a known
+gap; an uncovered line that isn't is a claim about the suite that isn't true.
+
+To see the number:
+
+```bash
+dotnet add tests/UnitTests/ClaudeBuddy.UnitTests.csproj package coverlet.collector
+dotnet test tests/UnitTests --collect:"XPlat Code Coverage"
+# tests/UnitTests/TestResults/<guid>/coverage.cobertura.xml
+```
+
+**Nothing in the repository collects coverage today, and the flag fails
+silently without that package.** `--collect:"XPlat Code Coverage"` against a
+project with no `coverlet.collector` reference creates an empty `TestResults/`
+directory, prints no warning and exits 0 — a run that measured nothing, and
+reads exactly like one that measured everything. Add the package to whichever
+suite you are measuring and take it back out before you push, unless you are
+deliberately wiring collection into all three suites and CI, which is its own
+change and needs its own reasoning.
 
 ## Testing UI behavior
 
@@ -177,7 +253,8 @@ One command runs all three: `dotnet test tests/Tests.sln`. They join the three
 suites above rather than replacing them — `Tests.sln` holds only the xUnit
 projects, so it can't accidentally try to `dotnet test` an exe with no test
 SDK reference, and `claudeBuddy.sln` stays app-only. CI (`.github/workflows/ci.yml`)
-runs all six, on both runners, before packaging — a failing test blocks the
+runs every one of them, plus `tests/UiScreenshots`, on both runners, before
+packaging — a failing test blocks the
 build the same way a failed `dotnet publish` already did.
 
 They reference `ClaudeBuddy.csproj` directly with a `<ProjectReference>`
