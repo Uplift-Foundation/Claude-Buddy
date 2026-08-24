@@ -153,6 +153,10 @@ namespace ClaudeBuddy
             }
         }
 
+        // Read per scan, for the same reason ActiveWithin above is: changing it
+        // in Settings should take effect on the next poll.
+        private static bool ShowHeartbeats => ClaudeBuddySettings.OpenClawShowHeartbeats;
+
         internal sealed record Session(
             string Key,
             string Title,
@@ -160,7 +164,15 @@ namespace ClaudeBuddy
             string State,
             DateTime LastActivity,
             Delivery? Delivery,
-            SessionKind Kind);
+            SessionKind Kind,
+
+            // Whether this is a session the gateway's heartbeat drives. Carried
+            // beside Kind rather than folded into it: a heartbeat is how a
+            // session gets *woken*, not what kind of conversation it is, and the
+            // two are independent — an agent's main session is the heartbeat's
+            // default target and is still the session you talk to it in. See
+            // OpenClawHeartbeat.
+            bool Heartbeat);
 
         // Where a reply in this session is supposed to end up. The gateway
         // resolves this itself when asked to deliver an agent's answer, but a
@@ -755,6 +767,22 @@ namespace ClaudeBuddy
                 var within = ActiveWithin;
                 if (state != "generating" && within is not null && now - activity > within) continue;
 
+                // Sessions the heartbeat drives, when the user has said they
+                // don't want them. Deliberately below the two blocks above
+                // rather than at the top of the loop: a hidden session is still
+                // a member of any room it stands in, and its agent still needs a
+                // colour reserved for the bubbles it posts there. That is the
+                // same distinction the recency filter draws, for the same
+                // reason — "which orbs are worth showing" and "who is in this
+                // conversation" are different questions.
+                //
+                // Not exempted while generating, unlike the recency rule above.
+                // A heartbeat session is *always* about to be mid-run — that is
+                // what a heartbeat is — so exempting it would make the switch
+                // do nothing for exactly the sessions it exists to hide.
+                var heartbeat = OpenClawHeartbeat.Is(key, Str(s, "label"));
+                if (heartbeat && !ShowHeartbeats) continue;
+
                 result.Add(new Session(
                     key,
                     TitleFor(s, origin, key),
@@ -762,7 +790,8 @@ namespace ClaudeBuddy
                     state,
                     activity,
                     DeliveryFor(s),
-                    KindFor(s, origin, key)));
+                    KindFor(s, origin, key),
+                    heartbeat));
             }
 
             AssignColours(everyAgent);

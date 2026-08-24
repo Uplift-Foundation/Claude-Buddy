@@ -700,6 +700,94 @@ Check("an empty key is Unknown", Kind("") == SessionKind.Unknown);
 Check("a non-agent key is Unknown", Kind("something:else:entirely") == SessionKind.Unknown);
 Check("a null key is Unknown", OpenClawSessionKind.From(null, null) == SessionKind.Unknown);
 
+// --- heartbeat sessions ---
+
+// Which sessions the gateway's heartbeat drives. See OpenClawHeartbeat for why
+// this is answered from the key's shape rather than from anything the gateway
+// says about a turn: it says nothing about them at all.
+//
+// The keys below are real, read off a live gateway rather than invented — the
+// same rule the dialog fixtures follow, and for the same reason.
+
+Check("an agent's main session is where its heartbeat lands",
+    OpenClawHeartbeat.Is("agent:main:main"));
+
+Check("every agent's main session, not just the one called main",
+    new[] { "agent:alexis:main", "agent:comfyui:main", "agent:ea-hope:main" }
+        .All(k => OpenClawHeartbeat.Is(k)));
+
+// The distinction the badge exists to draw: these are the orbs that light up
+// because somebody typed something.
+Check("a discord channel is not a heartbeat",
+    !OpenClawHeartbeat.Is("agent:main:discord:channel:1474991965354463274"));
+
+Check("a discord DM is not a heartbeat",
+    !OpenClawHeartbeat.Is("agent:main:discord:direct:246722755112861696"));
+
+// A cron job is scheduled too, and is deliberately *not* a heartbeat: it has its
+// own session, its own label and its own clock badge, and the two would be
+// telling you the same thing twice while hiding which one you had.
+Check("a cron session is not a heartbeat",
+    !OpenClawHeartbeat.Is(
+        "agent:main:cron:2f54203e-6099-4c31-b9f4-d70b04e82ae6",
+        "Cron: stalled-session-watchdog"));
+
+Check("nor are the other surfaces a real gateway had",
+    new[] { "agent:main:avatar", "agent:main:clitest", "agent:comfyui:avatar-build",
+            "agent:main:subagent:b0bcedf4-08ca-468d-9800-cfeed922400e" }
+        .All(k => !OpenClawHeartbeat.Is(k)));
+
+// Untested against a real payload — the gateway's system-owned job is behind a
+// scope this app doesn't hold, so this is the shape its documented name would
+// arrive in rather than one that was observed. Asserted anyway so the intent
+// survives somebody rewriting the label handling.
+Check("a session labelled with the gateway's own job name is a heartbeat",
+    OpenClawHeartbeat.Is("agent:main:cron:1d82", "Heartbeat (main)")
+    && OpenClawHeartbeat.Is("agent:main:cron:1d82", "Cron: heartbeat"));
+
+Check("a heartbeat keyed on the surface is one too",
+    OpenClawHeartbeat.Is("agent:main:heartbeat"));
+
+Check("case doesn't matter to either half",
+    OpenClawHeartbeat.Is("agent:main:MAIN") && OpenClawHeartbeat.Is("x", "HEARTBEAT (main)"));
+
+// Prefix, not substring: a job somebody named after the heartbeat is not it.
+Check("a job that merely mentions the word is not the heartbeat",
+    !OpenClawHeartbeat.Is("agent:main:cron:1d82", "Cron: check-heartbeat-health"));
+
+Check("an empty or null key is not a heartbeat",
+    !OpenClawHeartbeat.Is("") && !OpenClawHeartbeat.Is(null) && !OpenClawHeartbeat.Is(null, null));
+
+// A local Claude Code session never reaches this, but a key that isn't the
+// gateway's shape at all must not be read as one.
+Check("a non-agent key is not a heartbeat",
+    !OpenClawHeartbeat.Is("something:else:main"));
+
+// --- the beat itself ---
+
+// The curve both the orb badge and the panel chip beat on. Asserted because it
+// is the whole of the signal — a heart that came out flat, or that never rested,
+// would look like a rendering bug rather than a wrong number.
+
+Check("the heart rests for most of the cycle",
+    OpenClawHeartbeat.Beat(0.75) == 0 && OpenClawHeartbeat.Beat(0.95) == 0);
+
+Check("it peaks near the start of the cycle",
+    Math.Abs(OpenClawHeartbeat.Beat(0.11) - 1.0) < 0.001);
+
+// Lub-dub: the second contraction is real, and smaller than the first.
+Check("there is a second, smaller beat",
+    OpenClawHeartbeat.Beat(0.37) > 0.5 && OpenClawHeartbeat.Beat(0.37) < OpenClawHeartbeat.Beat(0.11));
+
+Check("it never leaves 0..1",
+    Enumerable.Range(0, 400).Select(i => OpenClawHeartbeat.Beat(i / 100.0))
+        .All(v => v is >= 0 and <= 1));
+
+// The callers hand it elapsed-time-over-period rather than a wrapped phase, so
+// wrapping is part of the contract and not the caller's job.
+Check("the phase wraps, so successive cycles are identical",
+    Math.Abs(OpenClawHeartbeat.Beat(3.11) - OpenClawHeartbeat.Beat(0.11)) < 1e-9);
+
 // --- rooms ---
 
 // Every agent in a channel has to agree on the room key, or a room fragments

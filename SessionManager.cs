@@ -99,6 +99,16 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public SessionKind Kind { get; set; } = SessionKind.Unknown;
 
+        // Whether the gateway's heartbeat is what wakes this session. [JsonIgnore]
+        // for the same reason Kind is — derived during the scan, and
+        // ResetSessionToIdle rewrites a status file from this object.
+        //
+        // Separate from Kind because it is a separate question: a heartbeat is
+        // how a session gets woken, not what kind of conversation it is. See
+        // OpenClawHeartbeat.
+        [JsonIgnore]
+        public bool Heartbeat { get; set; }
+
         // A stand-in orb for a channel, invented by this app rather than
         // reported by anything. It has no conversation of its own — it is the
         // thing the agents in that channel point at, so a room reads as one
@@ -587,6 +597,7 @@ namespace ClaudeBuddy
                     Color = OpenClawSessions.ColourForAgent(
                         OpenClawSessions.AgentIdOf(session.Key) ?? session.Key),
                     Kind = session.Kind,
+                    Heartbeat = session.Heartbeat,
                 };
 
                 // Namespaced because these ids share a dictionary with Claude
