@@ -82,6 +82,11 @@ namespace ClaudeBuddy
             _seams = seams;
         }
 
+        // Injectable only so a subscription lapsing can be tested without
+        // sleeping through its TTL. Never replaced in the app — same pattern,
+        // and same reason, as RemoteControlSessions.Now.
+        internal Func<DateTime> Now { get; set; } = () => DateTime.UtcNow;
+
         // The real wiring. Split out so the constructor above stays free of it
         // and a test never has to opt out of anything.
         public static Seams RealSeams(
@@ -422,7 +427,7 @@ namespace ClaudeBuddy
                     Cli = MirrorProtocol.CliFor(resolved.Value.Status.Source),
                     Offset = from >= 0 ? from : PendingOffset(fromPeer, name),
                     Gen = GenFor(name),
-                    Expires = DateTime.UtcNow.AddSeconds(ttl)
+                        Expires = Now().AddSeconds(ttl)
                 };
             }
 
@@ -468,7 +473,7 @@ namespace ClaudeBuddy
         public async Task TickAsync()
         {
             List<Subscription> due;
-            var now = DateTime.UtcNow;
+            var now = Now();
 
             lock (_gate)
             {

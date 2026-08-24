@@ -486,11 +486,22 @@ namespace ClaudeBuddy
         private readonly Dictionary<string, MirrorProtocol.MirrorAssembly> _unsolicited =
             new(StringComparer.Ordinal);
 
+        // Shortens every wait below, for tests only.
+        //
+        // The real timeouts are minutes, because a request has to survive the
+        // far relay's model being mid-turn on something else. A test that
+        // deliberately drops a reply would otherwise sit out the whole of one —
+        // and "the relay never answered" is a path worth covering, not one worth
+        // two minutes of a CI run.
+        internal TimeSpan? TimeoutOverrideForTests { get; set; }
+
         private async Task<Reply> RequestAsync(
             string relay, string type,
             IReadOnlyDictionary<string, string>? fields, byte[]? payload,
             TimeSpan timeout, string? id = null, bool awaitReply = true)
         {
+            if (TimeoutOverrideForTests is { } shorter) timeout = shorter;
+
             id ??= MirrorProtocol.NewId();
 
             var waiter = new TaskCompletionSource<Reply>(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -318,10 +318,6 @@ namespace ClaudeBuddy
             private int _of = -1;
             private string? _whole;
 
-            public int Received => _pieces.Count;
-
-            public int Expected => _of;
-
             public AssemblyResult Offer(MirrorFrame frame)
             {
                 var seq = (int)frame.Num("seq", -1);

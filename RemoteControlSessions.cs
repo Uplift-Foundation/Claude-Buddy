@@ -342,8 +342,9 @@ namespace ClaudeBuddy
         private static readonly TimeSpan InfoRetryAfter = TimeSpan.FromMinutes(10);
         private const int InfoMaxAsks = 3;
 
-        // Caller holds Gate.
-        private static bool ShouldAsk(string key)
+        // Caller holds Gate. Internal so the retry rule can be tested against an
+        // injected clock rather than by waiting ten minutes.
+        internal static bool ShouldAsk(string key)
         {
             var now = Now();
 
@@ -953,7 +954,10 @@ namespace ClaudeBuddy
             if (any) StopAll("restarting");
         }
 
-        private static void OnMessage(string account, BridgeProtocol.InboundMessage message)
+        // Internal so the two things this decides — that a frame never reaches a
+        // chat bubble, and that a CB-INFO answer is swallowed — can be tested
+        // without a relay to deliver one.
+        internal static void OnMessage(string account, BridgeProtocol.InboundMessage message)
         {
             // A mirror frame is plumbing between two Buddies and must never
             // reach a person.

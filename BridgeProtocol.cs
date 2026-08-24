@@ -389,6 +389,30 @@ namespace ClaudeBuddy
             return found;
         }
 
+        // The messages in a row, given what kind of row it is — and the answer
+        // is "none" for every kind but one.
+        //
+        // Lifted out of RemoteControlBridge.Deliver so the rule can be tested
+        // without a running relay, which is the repo's standing trade: logic
+        // that can only be reached by constructing the thing around it is a seam
+        // to fix, not a reason to leave it uncovered.
+        //
+        // A message from another machine always arrives as a **user** row — the
+        // relay is handed it, the same way a person's typing is handed to a
+        // session (docs/remote-control-findings.md captures one). An assistant
+        // row carrying the same tag is the relay's own model quoting a message
+        // back while it narrates what it just did, and that quote is its own
+        // writing: sometimes abridged, sometimes reworded, always a second
+        // draft. Delivering those put paraphrases in the chat panel beside the
+        // messages they paraphrased.
+        public static IReadOnlyList<InboundMessage> ParseInboundMessagesFrom(string rowType, string rowText)
+        {
+            if (!string.Equals(rowType, "user", StringComparison.Ordinal))
+                return Array.Empty<InboundMessage>();
+
+            return ParseInboundMessages(rowText);
+        }
+
         // Null when the text holds no such tag, which is the common case: most
         // rows in the bridge's transcript are its own turns.
         public static InboundMessage? ParseInboundMessage(string rowText)

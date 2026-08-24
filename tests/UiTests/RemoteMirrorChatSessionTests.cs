@@ -1,5 +1,7 @@
 using System.Text;
+using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.Threading;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -32,6 +34,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
     private bool _replyEnabled = true;
     private bool _canType = true;
     private bool _mangle;
+    private bool _mangleInput;
 
     private readonly bool _remoteWasEnabled;
 
@@ -367,6 +370,274 @@ public class RemoteMirrorChatSessionTests : IDisposable
         Assert.Single(session.History.Where(t => t.Text.Contains("No live view")));
     }
 
+    // --- the rest of what a panel can be told --------------------------------------
+
+    // Every arm of the error switch, because each is a different thing to do
+    // about it and a generic "couldn't send" would tell nobody which.
+    [AvaloniaFact]
+    public async Task ASessionTheFarBuddyHasForgottenSaysSo()
+    {
+        Wire("a", "b");
+        var session = await OpenAsync();
+
+        _agents.Clear();
+        _sessions.Clear();
+
+        await session.SendAsync("hello");
+
+        Assert.Contains("no longer has a session", session.History[^1].Text);
+    }
+
+    [AvaloniaFact]
+    public async Task AMessageThatDidNotSurviveTheTripIsNotTypedAndSaysSo()
+    {
+        Wire("a", "b");
+        var session = await OpenAsync();
+
+        // A courier that alters the message on its way to the terminal. Refused
+        // rather than typed in a form the person did not write.
+        _mangleInput = true;
+
+        await session.SendAsync("hello");
+
+        Assert.Empty(_typed);
+        Assert.Contains("didn't survive the trip", session.History[^1].Text);
+    }
+
+    // The relay going away mid-conversation is invisible from the panel —
+    // nothing on screen changes — so it is said out loud.
+    [AvaloniaFact]
+    public void ARelayStoppingIsSaidOutLoud()
+    {
+        var session = NewSession();
+
+        session.OnBridgeStopped("idle");
+
+        Assert.Contains("relay session stopped (idle)", session.History[^1].Text);
+    }
+
+    // Cancel is a no-op in both modes and must stay a quiet one: a Cancel that
+    // looked like it worked and did nothing would be worse than none.
+    [AvaloniaFact]
+    public async Task CancellingDoesNothingAndSaysNothing()
+    {
+        Wire("a", "b");
+        var session = await OpenAsync();
+        var before = session.History.Count;
+
+        session.Cancel();
+
+        Assert.Equal(before, session.History.Count);
+    }
+
+    // Closing keeps the conversation and drops only the subscription, so a panel
+    // reopened later still has what it had.
+    [AvaloniaFact]
+    public async Task ClosingThePanelKeepsTheConversationAndDropsTheSubscription()
+    {
+        Wire("a", "b");
+        var session = await OpenAsync();
+
+        var before = session.History.Count;
+        session.PanelClosed();
+
+        Assert.Equal(before, session.History.Count);
+        Assert.False(_server.Busy);
+
+        session.PanelOpened();
+        Assert.True(_server.Busy);
+    }
+
+    [AvaloniaFact]
+    public void ClosingAPanelThatNeverBecameALiveViewIsHarmless()
+    {
+        var session = NewSession();
+        var before = session.History.Count;
+
+        session.PanelClosed();
+
+        Assert.Equal(before, session.History.Count);
+    }
+
+    // Disposing is not part of the app's normal path — these sessions outlive
+    // every panel that shows them — but it exists, and it must not throw or take
+    // the conversation with it.
+    [AvaloniaFact]
+    public async Task DisposingUnsubscribesWithoutLosingTheConversation()
+    {
+        Wire("a", "b");
+        var session = await OpenAsync();
+        var before = session.History.Count;
+
+        session.Dispose();
+        session.Dispose();
+
+        Assert.Equal(before, session.History.Count);
+    }
+
+    // Raised once per change, not per set, so a poll that re-asserts the same
+    // state does not redraw anything.
+    [AvaloniaFact]
+    public void StateOnlyChangesWhenItChanges()
+    {
+        var session = NewSession();
+        var changes = 0;
+        session.StateChanged += _ => changes++;
+
+        session.SetState(RemoteChatState.Connected);
+        Assert.Equal(0, changes);
+
+        session.SetState(RemoteChatState.Error);
+        session.SetState(RemoteChatState.Error);
+
+        Assert.Equal(1, changes);
+        Assert.Equal(RemoteChatState.Error, session.State);
+    }
+
+    // A page that parsed to nothing but moved the offset is not the end — the
+    // window can be entirely tool results — so paging must not stop at the first
+    // quiet stretch.
+    [AvaloniaFact]
+    public async Task PagingPastAQuietStretchKeepsGoing()
+    {
+        var rows = new List<string>();
+        var bytes = 0;
+
+        for (var i = 0; bytes < MirrorProtocol.InitialBytes + 200_000; i++)
+        {
+            var row = i % 8 == 0 ? UserRow($"u{i}", $"said {i}") : Snapshot(i);
+
+            rows.Add(row);
+            bytes += row.Length + 1;
+        }
+
+        WireRows(rows);
+
+        var session = await OpenAsync();
+        var backlog = (IRemoteChatBacklog)session;
+
+        var pages = 0;
+        while (backlog.HasMore && pages < 20)
+        {
+            await backlog.LoadOlderAsync(CancellationToken.None);
+            pages++;
+        }
+
+        Assert.False(backlog.HasMore);
+    }
+
+    private static string Snapshot(int i) =>
+        "{\"type\":\"file-history-snapshot\",\"uuid\":\"h" + i + "\",\"blob\":\""
+        + new string('x', 400) + "\"}";
+
+    // --- through the panel itself ----------------------------------------------------
+
+    // The panel is a singleton that outlives every session it shows, so what it
+    // says about *where a message goes* has to follow the session it is bound
+    // to — and follow it when that session changes underneath.
+    [AvaloniaFact]
+    public async Task ThePanelsInputBoxFollowsThePanelItHasBecome()
+    {
+        Wire("a", "b");
+
+        var session = NewSession();
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+
+        // Bound while it is still a messaging channel.
+        ChatPanel.OpenFor(orb, session);
+
+        var input = ChatPanelTestAccess.Instance!.FindControl<TextBox>("Input")!;
+        Assert.Contains("Message", input.Watermark!);
+
+        // ...and upgraded underneath it. Read once at bind, the box would go on
+        // describing the panel it used to be.
+        await _client.DiscoverAsync(Peers, new[] { Name });
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Contains("terminal", input.Watermark!);
+
+        ChatPanel.HideFor(session.SessionId);
+    }
+
+    // Binding away from a live view has to stop the far side serving it: a relay
+    // kept awake by a panel nobody is looking at is somebody's quota. Rebinding
+    // to it starts again.
+    [AvaloniaFact]
+    public async Task BindingAwayFromALiveViewStopsItAndComingBackResumesIt()
+    {
+        Wire("a", "b");
+
+        var session = await OpenAsync();
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+
+        ChatPanel.OpenFor(orb, session);
+        Assert.True(_server.Busy);
+
+        // A different session takes the panel, which unbinds the first.
+        var other = new FakeChatSession { SessionId = "other-" + Guid.NewGuid(), DisplayName = "Other" };
+        ChatPanel.OpenFor(new OrbWindow(Guid.NewGuid().ToString()), other);
+
+        Assert.False(_server.Busy);
+
+        ChatPanel.OpenFor(orb, session);
+        Assert.True(_server.Busy);
+
+        ChatPanel.HideFor(session.SessionId);
+        ChatPanel.HideFor(other.SessionId);
+    }
+
+    // --- the frame door ------------------------------------------------------------
+
+    // The one guarantee that protects a person from the plumbing: a mirror frame
+    // is swallowed before it can reach a chat bubble, whether or not it parses.
+    // A screenful of base64 in somebody's conversation is the failure this
+    // prevents, and it is one line of code away at all times.
+    //
+    // Here rather than in IntegrationTests because a message that is *not*
+    // swallowed goes out through the dispatcher, so proving the difference needs
+    // one running.
+    [AvaloniaFact]
+    public void AFrameNeverReachesAChatPanelButARealMessageStillDoes()
+    {
+        var delivered = new List<BridgeProtocol.InboundMessage>();
+        void Collect(BridgeProtocol.InboundMessage m) => delivered.Add(m);
+
+        RemoteControlSessions.MessageReceived += Collect;
+
+        try
+        {
+            foreach (var body in new[]
+            {
+                MirrorProtocol.BuildFrame(MirrorProtocol.Ok, "abcd1234"),
+                MirrorProtocol.BuildFrame(MirrorProtocol.Chunk, "abcd1234",
+                    new Dictionary<string, string> { ["seq"] = "0", ["of"] = "1" },
+                    System.Text.Encoding.UTF8.GetBytes("payload")),
+                "CB-MIRROR:this one does not even parse",
+                BridgeProtocol.InfoMarker + " color=green; commands=none"
+            })
+            {
+                RemoteControlSessions.OnMessage(Account,
+                    new BridgeProtocol.InboundMessage(FarRelay, "bridge:x", "prompting", body));
+            }
+
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.Empty(delivered);
+
+            // ...and something a person actually said still comes through, so
+            // this is a filter rather than a wall.
+            RemoteControlSessions.OnMessage(Account,
+                new BridgeProtocol.InboundMessage(Name, "bridge:x", "prompting", "the build passed"));
+
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+            Assert.Equal("the build passed", Assert.Single(delivered).Body);
+        }
+        finally
+        {
+            RemoteControlSessions.MessageReceived -= Collect;
+        }
+    }
+
     // --- wiring ----------------------------------------------------------------------
 
     private static RemoteControlChatSession NewSession() =>
@@ -463,6 +734,9 @@ public class RemoteMirrorChatSessionTests : IDisposable
     {
         var frame = MirrorProtocol.TryParseFrame(line);
         if (frame is null) return false;
+
+        // A courier that alters a message on its way to somebody's terminal.
+        if (_mangleInput && frame.Type == MirrorProtocol.Input) frame = Mangle(line) ?? frame;
 
         await _server.HandleAsync(NearRelay, frame);
         return true;
