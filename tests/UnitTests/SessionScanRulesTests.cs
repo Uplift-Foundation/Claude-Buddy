@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using Avalonia;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -338,5 +340,164 @@ public class SessionScanRulesTests
     {
         var status = new SessionStatus { Source = SessionSource.Codex, Cwd = "", Title = "has-a-title" };
         Assert.Equal("", SessionManager.PositionKeyFor(status, "id-1"));
+    }
+
+    // --- GatherTeams ---------------------------------------------------------
+    //
+    // The stacking order the tray menu reads top-to-bottom and the orbs are
+    // laid out in. Its job is to put a team's members straight behind their
+    // lead so the arrows stay short and don't cross the unrelated sessions that
+    // happened to start in between — and, just as much, to emit every tracked
+    // id exactly once. A dropped id is an orb that silently isn't laid out.
+
+    // Null for an id nobody is tracking, "" for one that leads nobody. The two
+    // are different answers and the rule turns on the difference.
+    private static Func<string, string?> Leads(params (string Id, string? Lead)[] rows)
+    {
+        var map = rows.ToDictionary(r => r.Id, r => r.Lead, StringComparer.Ordinal);
+        return id => map.TryGetValue(id, out var lead) ? lead : null;
+    }
+
+    [Fact]
+    public void GatherTeams_PullsMembersUpBehindTheirLead()
+    {
+        // first-seen order interleaves the team with two unrelated sessions;
+        // the arrows have to end up short regardless.
+        var order = new List<string> { "lead", "stranger-1", "member-a", "stranger-2", "member-b" };
+
+        var gathered = SessionManager.GatherTeams(order, Leads(
+            ("lead", ""), ("stranger-1", ""), ("stranger-2", ""),
+            ("member-a", "lead"), ("member-b", "lead")));
+
+        Assert.Equal(
+            new[] { "lead", "member-a", "member-b", "stranger-1", "stranger-2" },
+            gathered);
+    }
+
+    [Fact]
+    public void GatherTeams_LeavesAMemberWhoseLeadIsntOnScreenExactlyWhereItWas()
+    {
+        // "There's nothing to gather it under." A lead can end, or be filtered
+        // out by the lifetime setting, while its member outlives it.
+        var order = new List<string> { "stranger", "orphan" };
+
+        var gathered = SessionManager.GatherTeams(order, Leads(
+            ("stranger", ""), ("orphan", "a-lead-that-ended")));
+
+        Assert.Equal(new[] { "stranger", "orphan" }, gathered);
+    }
+
+    [Fact]
+    public void GatherTeams_IgnoresAnIdThatNamesItselfAsItsOwnLead()
+    {
+        // Would otherwise gather the id under itself and emit it twice — or
+        // never, depending on which loop reached it first.
+        var gathered = SessionManager.GatherTeams(
+            new List<string> { "self" }, Leads(("self", "self")));
+
+        Assert.Equal(new[] { "self" }, gathered);
+    }
+
+    [Fact]
+    public void GatherTeams_SkipsIdsThatAreNoLongerTracked()
+    {
+        // _order outlives _statuses by one scan in the removal pass, so an id
+        // with no status behind it is a real state and not a defensive check.
+        var gathered = SessionManager.GatherTeams(
+            new List<string> { "alive", "removed" }, Leads(("alive", "")));
+
+        Assert.Equal(new[] { "alive" }, gathered);
+    }
+
+    [Fact]
+    public void GatherTeams_EmitsEveryTrackedIdExactlyOnceEvenWhenTeamsNest()
+    {
+        // A lead that is itself somebody's member would leave its own members
+        // unemitted by the main loop; the sweep at the end is what catches
+        // them. Nesting isn't a thing Claude Code does today, but a dropped orb
+        // would be a silent one.
+        var order = new List<string> { "top", "middle", "bottom" };
+
+        var gathered = SessionManager.GatherTeams(order, Leads(
+            ("top", ""), ("middle", "top"), ("bottom", "middle")));
+
+        Assert.Equal(3, gathered.Count);
+        Assert.Equal(gathered.Distinct().Count(), gathered.Count);
+        Assert.Equal(new[] { "top", "middle", "bottom" }, gathered.OrderBy(id => id switch
+        {
+            "top" => 0, "middle" => 1, _ => 2
+        }));
+    }
+
+    // --- ClampIntoWork -------------------------------------------------------
+
+    [Theory]
+    // Inside already, so nothing moves.
+    [InlineData(500, 400, 500, 400)]
+    // Off each edge in turn: an orb is placed by its top-left corner, so the
+    // right/bottom limits are the edge less a whole orb.
+    [InlineData(-90, 400, 0, 400)]
+    [InlineData(500, -90, 500, 0)]
+    [InlineData(5000, 400, 1864, 400)]
+    [InlineData(500, 5000, 500, 1024)]
+    public void ClampIntoWork_PullsAnOrbBackUntilAllOfItIsOnTheScreen(
+        int x, int y, int expectedX, int expectedY)
+    {
+        var work = new PixelRect(0, 0, 1920, 1080);
+
+        var clamped = SessionManager.ClampIntoWork(new PixelPoint(x, y), work, 56);
+
+        Assert.Equal(new PixelPoint(expectedX, expectedY), clamped);
+    }
+
+    [Fact]
+    public void ClampIntoWork_RespectsAWorkAreaThatDoesNotStartAtTheOrigin()
+    {
+        // A second monitor to the left of the primary has negative coordinates,
+        // and a menu bar means the primary's work area starts below zero on Y.
+        var work = new PixelRect(-1920, 25, 1920, 1055);
+
+        Assert.Equal(
+            new PixelPoint(-1920, 25),
+            SessionManager.ClampIntoWork(new PixelPoint(-3000, -100), work, 56));
+    }
+
+    [Fact]
+    public void ClampIntoWork_SurvivesAWorkAreaSmallerThanAnOrb()
+    {
+        // Math.Clamp throws when its bounds are inverted, which is exactly what
+        // `Right - orbSize < X` produces. The Math.Max guards are why this
+        // returns a corner instead of taking the app down.
+        var tiny = new PixelRect(100, 100, 20, 20);
+
+        Assert.Equal(
+            new PixelPoint(100, 100),
+            SessionManager.ClampIntoWork(new PixelPoint(500, 500), tiny, 56));
+    }
+
+    // --- room ids and titles -------------------------------------------------
+
+    [Fact]
+    public void RoomId_NamespacesAwayFromBothClaudeCodeIdsAndGatewayKeys()
+    {
+        // "Nothing on the gateway answers to it" — it is an orb this app
+        // invents, and it shares a dictionary with Claude Code's UUIDs.
+        Assert.Equal("openclaw:room:general", SessionManager.RoomId("general"));
+    }
+
+    [Theory]
+    // A member's title is "<agent> — <channel>"; the room is the channel alone.
+    [InlineData("Lilibeth — general", "general")]
+    [InlineData("Zara — dev ops", "dev ops")]
+    // An em dash with no spaces around it is part of a name, not a separator.
+    [InlineData("Lilibeth—general", "Lilibeth—general")]
+    // No separator at all: the title is already the room's.
+    [InlineData("general", "general")]
+    [InlineData("", "")]
+    // A title that starts with the separator has no agent half to strip.
+    [InlineData(" — general", " — general")]
+    public void RoomTitle_KeepsTheChannelHalfOfAMembersTitle(string title, string expected)
+    {
+        Assert.Equal(expected, SessionManager.RoomTitle(title));
     }
 }
