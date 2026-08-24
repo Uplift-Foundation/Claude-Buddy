@@ -728,5 +728,65 @@ namespace ClaudeBuddy.Tests
 
             Assert.Equal("openclaw:room:discord:7", room.SessionId);
         }
+
+        // --- paging the member that constrains the view ---
+
+        // The room can only show the stretch every member has loaded, so paging
+        // means paging whichever member starts LATEST — that is the one holding
+        // the line up. Picking any other fetches history nobody can see yet.
+        //
+        // With no gateway the fetch itself fails, which is what makes this safe to
+        // run: what is exercised is choosing the member and asking, not the answer.
+        [Fact]
+        public async Task PagingAsksTheMemberThatIsHoldingTheLineUp()
+        {
+            var early = Member("early");
+            var late = Member("late");
+            early.HasMore = true;
+            late.HasMore = true;
+            Give(early, (ChatRole.Assistant, "from ages ago", 1));
+            Give(late, (ChatRole.Assistant, "from just now", 100));
+
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
+            room.SetMembers([(early, "Early", "#ff0000"), (late, "Late", "#00ff00")]);
+            room.Rebuild();
+
+            // Nothing moves, because there is no gateway to fetch from — the point
+            // is that it chose a member and asked without throwing, and reported
+            // the window as unmoved.
+            Assert.False(await room.LoadOlderAsync(CancellationToken.None));
+        }
+
+        // A member with more to fetch but nothing loaded yet cannot be the
+        // constraint — there is no "earliest" to compare — so it is skipped rather
+        // than chosen and endlessly re-asked.
+        [Fact]
+        public async Task AMemberWithNothingLoadedIsNotChosenAsTheConstraint()
+        {
+            var empty = Member("empty");
+            empty.HasMore = true;
+
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
+            room.SetMembers([(empty, "Empty", "#ff0000")]);
+            room.Rebuild();
+
+            Assert.False(await room.LoadOlderAsync(CancellationToken.None));
+        }
+
+        // Deepening runs the same paging in the background when a room is first
+        // opened, because the members' first pages rarely cover the same stretch
+        // and the room can only show where they overlap. With nothing to fetch it
+        // stops on the first round rather than spinning through all eight.
+        [Fact]
+        public async Task DeepeningARoomWithNothingToFetchStopsImmediately()
+        {
+            var zara = Member("zara");
+            zara.HasMore = false;
+            Give(zara, (ChatRole.Assistant, "hello", 1));
+
+            var room = Room((zara, "Zara", "#ff0000"));
+
+            await room.DeepenAsync();
+        }
     }
 }

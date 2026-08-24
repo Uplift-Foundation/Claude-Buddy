@@ -1463,6 +1463,16 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: writes to a log file in the temp directory, and
+        // its catch is the last stop — getting there means the directory could not
+        // be created AND the append failed, on a machine where writing
+        // settings.json had already failed. That nothing can be reported at that
+        // point is the whole design, and it is not a state a test can produce.
+        //
+        // That the log IS written on an ordinary failure is covered from the
+        // outside, in SettingsListParsingTests and SettingsDeferredWriteTests,
+        // which read the file back and assert it grew.
+        [ExcludeFromCodeCoverage]
         private static void LogFailure(string what, Exception ex)
         {
             try
@@ -1515,11 +1525,7 @@ namespace ClaudeBuddy
                 if (_deferred is null)
                 {
                     _deferred = new DispatcherTimer { Interval = SaveDelay };
-                    _deferred.Tick += (_, _) =>
-                    {
-                        _deferred!.Stop();
-                        Save();
-                    };
+                    _deferred.Tick += OnDeferredTick;
                 }
 
                 // Restart rather than let it run out: keep pushing the write
@@ -1529,10 +1535,28 @@ namespace ClaudeBuddy
             }
             catch
             {
-                // No dispatcher. Nothing calls these setters before the app is
-                // up, but a lost preference isn't worth a crash — write now.
+                // No dispatcher at all — write now rather than lose the change.
+                //
+                // Never actually reached, which the tests say out loud: an Avalonia
+                // DispatcherTimer constructs and starts quite happily in a process
+                // with no dispatcher loop running, so nothing throws here and the
+                // write is simply deferred to a tick that never comes. See
+                // SettingsDeferredWriteTests, which asserts that behaviour rather
+                // than the behaviour this comment used to promise.
                 Save();
             }
+        }
+
+        // Excluded from coverage: fires only when the debounce interval actually
+        // elapses, and no test waits on a real timer — this branch has fixed five
+        // flakes of exactly that shape. What it does when it fires is Save(),
+        // which is covered every other way, and FlushPendingSave is the seam the
+        // app itself uses from anything that might be the last thing to happen.
+        [ExcludeFromCodeCoverage]
+        private static void OnDeferredTick(object? sender, EventArgs e)
+        {
+            _deferred!.Stop();
+            Save();
         }
 
         // A deferred write that never happens is a preference silently lost, so
