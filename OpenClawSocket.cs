@@ -453,15 +453,8 @@ namespace ClaudeBuddy
             // gateway answers a 1.2 hello with alert 70 — and it would make a
             // downgrade the silent outcome of a future misconfiguration rather
             // than an error.
-            protected override ProtocolVersion[] GetSupportedVersions() => SupportedVersions;
-
-            // The same answer, reachable from a test.
-            //
-            // GetSupportedVersions is protected by BouncyCastle and is otherwise
-            // only called from inside a live handshake, so the alternative was to
-            // exclude the one line that states this app's TLS floor — which is
-            // exactly the kind of decision worth a test rather than a comment.
-            internal static ProtocolVersion[] SupportedVersions => ProtocolVersion.TLSv13.Only();
+            protected override ProtocolVersion[] GetSupportedVersions() =>
+                ProtocolVersion.TLSv13.Only();
 
             public override TlsAuthentication GetAuthentication() =>
                 new PinnedAuthentication(this);

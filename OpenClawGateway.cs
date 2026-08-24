@@ -122,11 +122,57 @@ namespace ClaudeBuddy
 
         public event Action<string, JsonElement>? EventReceived;
 
+        // How the socket gets opened, and the two waits that would otherwise
+        // make the failure paths untestable.
+        //
+        // OpenClawSocket.ConnectAsync is the only implementation in the app and
+        // this is not a plug-in point — it exists because everything in this
+        // class *except* opening the socket is protocol: the signed handshake,
+        // request/response correlation, frame dispatch, and what happens when a
+        // frame is malformed or the peer hangs up mid-request. All of that runs
+        // over any WebSocket, and none of it can be reached at all while the one
+        // way in is a real TLS 1.3 connection to a gateway that has to exist.
+        // The alternative was excluding two thirds of the file, which would have
+        // hidden the parts most worth checking. See tests/UnitTests/
+        // OpenClawGatewayTests.cs, which drives the whole handshake over an
+        // in-memory socket.
+        //
+        // The two timeouts are here for the same reason and are otherwise
+        // constants: a test for "the gateway never answered" is a test that
+        // waits out the real timeout, which is ten and twenty seconds of a suite
+        // that runs in two.
+        internal delegate Task<OpenClawSocket.Connection> Connector(
+            string host, int port, string? pinnedFingerprint, CancellationToken ct);
+
+        private readonly Connector _connect;
+        private readonly TimeSpan _challengeTimeout;
+        private readonly TimeSpan _requestTimeout;
+
         public OpenClawGateway(string host, int port, string gatewayToken)
+            : this(host, port, gatewayToken, OpenClawSocket.ConnectAsync)
+        {
+        }
+
+        internal OpenClawGateway(
+            string host,
+            int port,
+            string gatewayToken,
+            Connector connect,
+            TimeSpan? challengeTimeout = null,
+            TimeSpan? requestTimeout = null)
         {
             _host = host;
             _port = port;
             _gatewayToken = gatewayToken;
+            _connect = connect;
+
+            // The gateway speaks first and a machine that is up answers in
+            // milliseconds, so ten seconds is a limit rather than an expectation.
+            _challengeTimeout = challengeTimeout ?? TimeSpan.FromSeconds(10);
+
+            // One turn's patience. A remote agent can be mid-tool-call, and the
+            // supervisor treats a lapsed request as a dead socket and reconnects.
+            _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(20);
         }
 
         internal enum Outcome
@@ -151,7 +197,7 @@ namespace ClaudeBuddy
                 // TLS and the upgrade both happen in OpenClawSocket, because
                 // .NET's own TLS cannot reach this gateway on macOS — see the
                 // comment at the top of that file.
-                var connection = await OpenClawSocket.ConnectAsync(
+                var connection = await _connect(
                     _host, _port, pinnedFingerprint, _cts.Token);
 
                 _socket = connection.Socket;
@@ -350,7 +396,7 @@ namespace ClaudeBuddy
             try
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeout.CancelAfter(TimeSpan.FromSeconds(10));
+                timeout.CancelAfter(_challengeTimeout);
                 using (timeout.Token.Register(() => tcs.TrySetResult(null)))
                 {
                     return await tcs.Task;
@@ -404,7 +450,7 @@ namespace ClaudeBuddy
             }
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(20));
+            timeout.CancelAfter(_requestTimeout);
 
             try
             {
