@@ -81,10 +81,12 @@ namespace ClaudeBuddy
                 foreach (var pid in pids)
                 {
                     if (pid <= 0) continue;
-                    if (!IsClaudeMainProcess(pid, pathBuffer)) continue;
+
+                    var bundle = ClaudeBundlePath(pid, pathBuffer);
+                    if (bundle is null) continue;
 
                     live.Add(pid);
-                    results.Add(new ClaudeInstance(pid, UserDataDirOf(pid)));
+                    results.Add(new ClaudeInstance(pid, UserDataDirOf(pid), bundle));
                 }
 
                 lock (Gate)
@@ -121,15 +123,31 @@ namespace ClaudeBuddy
             return buffer;
         }
 
-        private static bool IsClaudeMainProcess(int pid, byte[] buffer)
+        // The .app this pid is running from, or null if it isn't a Claude
+        // Desktop main process. Returning the bundle rather than a bool is what
+        // lets a forwarded URL be addressed to one specific instance's app: the
+        // path differs per profile even though every clone shares Claude
+        // Desktop's bundle id. See ClaudeDesktopUrlRouting.
+        internal static string? ClaudeBundlePath(int pid, byte[] buffer)
         {
             // Fails with EPERM for other users' processes; those are skipped,
             // which is right — a profile belongs to one user's home directory.
             var length = proc_pidpath(pid, buffer, (uint)buffer.Length);
-            if (length <= 0) return false;
+            if (length <= 0) return null;
 
-            var path = Encoding.UTF8.GetString(buffer, 0, length);
-            return path.EndsWith(MainExecutableSuffix, StringComparison.Ordinal);
+            return BundleFromExecutable(Encoding.UTF8.GetString(buffer, 0, length));
+        }
+
+        // Split out so it can be tested without a live pid: the suffix rule is
+        // what excludes the helper processes, and getting it wrong would either
+        // drop every instance or count each one several times.
+        internal static string? BundleFromExecutable(string executablePath)
+        {
+            if (!executablePath.EndsWith(MainExecutableSuffix, StringComparison.Ordinal)) return null;
+
+            // ".../Claude.app/Contents/MacOS/Claude" -> ".../Claude.app"
+            const string inside = "/Contents/MacOS/Claude";
+            return executablePath[..^inside.Length];
         }
 
         private static string? UserDataDirOf(int pid)
