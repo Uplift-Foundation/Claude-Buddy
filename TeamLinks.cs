@@ -124,11 +124,16 @@ namespace ClaudeBuddy
             else HideAll();
         }
 
+        // Excluded from coverage: hides real arrow windows.
+        [ExcludeFromCodeCoverage]
         private static void HideAll()
         {
             foreach (var window in Windows) window.Park();
         }
 
+        // Excluded from coverage: hides a real arrow window and returns it to the
+        // pool.
+        [ExcludeFromCodeCoverage]
         private static void Park(LinkWindow window)
         {
             window.Park();

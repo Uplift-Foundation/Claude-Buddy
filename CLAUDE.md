@@ -459,32 +459,49 @@ run and before any settings static constructor can fire.
 
 **Two collectors, not one, and it has to stay that way.** `tests/UnitTests` and
 `tests/IntegrationTests` run on VSTest and use `coverlet.collector`;
-`tests/UiTests` runs on the Microsoft Testing Platform (it moved to xUnit v3
-for `Avalonia.Headless.XUnit` 12.x — see its csproj) where VSTest data
-collectors do not apply at all, so it uses
-`Microsoft.Testing.Extensions.CodeCoverage`'s own `--coverage` instead. That
-package is **pinned to 17.14.2** for the same reason everything else in that
-csproj is pinned: 18.x depends on `Microsoft.Testing.Platform` 2.x while
+`tests/UiTests` and `tests/UiScreenshots` run on the Microsoft Testing Platform
+(both moved to xUnit v3 for `Avalonia.Headless.XUnit` 12.x — see their csprojs)
+where VSTest data collectors do not apply at all, so they use
+`Microsoft.Testing.Extensions.CodeCoverage`'s own coverage switch instead. That
+package is **pinned to 17.14.2** in both, for the same reason everything else in
+those csprojs is pinned: 18.x depends on `Microsoft.Testing.Platform` 2.x while
 xunit.v3 3.2.2 brings the `mtp-v1` packages, and the mix throws
 `TypeLoadException` for `IDataConsumer` before one test runs. Bump xunit.v3 and
-you have to re-check that pin.
+you have to re-check both pins.
 
-That leaves three cobertura files measuring the *same* assembly, which is what
+That leaves four cobertura files measuring the *same* assembly, which is what
 `tools/merge-coverage.py` is for: a line counts as covered if **any** suite
 covered it. Adding the reports up instead is wrong in both directions at once —
 it double-counts the denominator while undercounting the numerator, since a
-line only a UI test reaches is reported unhit by the other two.
+line only a UI test reaches is reported unhit by the other three.
 
-Two things the number does not say, worth remembering before quoting it:
+`tests/UiScreenshots` counts as of CB-3 and did not before. CI has always run
+it, and it is the only suite that draws through **real Skia** rather than the
+null renderer — so a few things are reachable only there, a bitmap actually
+written to disk most obviously (`ClaudeDesktopBundles.WriteTinted`, whose pixel
+maths is tested there for exactly this reason). Leaving it out meant those lines
+were verified and counted nowhere, which is the same invisible-verification
+problem the console suites had.
+
+Three things the number does not say, worth remembering before quoting it:
 
 - **`--base` is the number that matters when reviewing a change.** A file-level
   percentage is dominated by whatever was already in the file; the added-lines
   figure is the one that says whether the new code is tested.
-- **The three console suites contribute nothing to it.** `ArrangementTests`,
-  `GlyphTests` and `TranscriptTests` are plain exes, not test-SDK projects, so
-  `OrbArrangement` reads 0% here while actually being the most exhaustively
-  verified file in the repo (3456 cases). Read the number as "coverage from the
-  xUnit suites", never as the sum of what this repo verifies.
+- **The three console suites still contribute nothing to it** as suites —
+  `ArrangementTests`, `GlyphTests` and `TranscriptTests` are plain exes, not
+  test-SDK projects. Their *cases* do count now, because CB-3 moved each one's
+  matrix into a class that `tests/UnitTests` compiles in and runs (see
+  `ArrangementSweep`, `GlyphSuite`, `TranscriptSuite`), so `OrbArrangement` no
+  longer reads 0% while being the most exhaustively verified file in the repo.
+  Running the exes is still the way to get the grouped failure report.
+- **What has been excluded is printed next to the number.** Both engines honour
+  `[ExcludeFromCodeCoverage]` by omitting the code entirely, so an excluded file
+  and a deleted one look identical in a report — and a percentage can be walked
+  to 100% by excluding whatever refuses to be covered. `merge-coverage.py`
+  therefore reads the attributes back out of the sources and reports files held
+  out entirely, further sites inside measured files, and files absent for no
+  stated reason at all. Read the headline as coverage **of what remains**.
 
 Everything else about orb behavior is still verified by running the app.
 Two things make that survivable:

@@ -50,6 +50,23 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <!-- This suite's coverage now counts. It runs on the Microsoft Testing
+         Platform like tests/UiTests, so it collects the same way — through that
+         platform's own coverage switch rather than a VSTest data collector,
+         which does not apply here at all.
+
+         Pinned to 17.14.2 for exactly the reason tests/UiTests' copy is: 18.x
+         depends on Microsoft.Testing.Platform 2.x while xunit.v3 3.2.2 brings
+         the mtp-v1 packages, and the mix throws TypeLoadException for
+         IDataConsumer before one test runs. This project is on the same
+         xunit.v3 3.2.2, so bumping either means re-checking both.
+
+         Worth adding rather than leaving out: CI has always run this suite, and
+         it is the only one that draws through real Skia — so the lines it
+         covers were being verified and counted nowhere, which is the same kind
+         of invisible verification CLAUDE.md warns about for the console
+         suites. -->
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="17.14.2" />
     <!-- xUnit v3, not v2 (unlike every other suite in this repo) — forced by
          Avalonia.Headless.XUnit 12.x, which depends on
          xunit.v3.extensibility.core and has no v2-compatible release. The
