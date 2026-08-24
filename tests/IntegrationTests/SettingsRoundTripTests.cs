@@ -50,6 +50,57 @@ public class SettingsRoundTripTests
         Assert.True(root!["twoLetterGlyphs"]!.GetValue<bool>());
     }
 
+    [Fact]
+    public void ShowHeartbeats_DefaultsOnAndRoundTripsBothWays()
+    {
+        // Default-on is load-bearing rather than incidental: these orbs are on
+        // screen today, and an upgrade that removed several of somebody's agents
+        // would read as the gateway having dropped them.
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        Assert.True(ClaudeBuddySettings.OpenClawShowHeartbeats);
+
+        // False in particular, because false is the value a bug would produce by
+        // accident — a missing key reads as default-true and would hide it.
+        ClaudeBuddySettings.OpenClawShowHeartbeats = false;
+
+        var settingsPath = Path.Combine(dir, "settings.json");
+        var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
+        Assert.False(root!["openclawShowHeartbeats"]!.GetValue<bool>());
+
+        // And survives a reload, which is what the setting is for.
+        PointSettingsAt(dir);
+        Assert.False(ClaudeBuddySettings.OpenClawShowHeartbeats);
+    }
+
+    [Fact]
+    public void ShowHeartbeats_IsInKnownKeys_SoItIsWrittenExactlyOnce()
+    {
+        // The trap KnownKeys' own comment describes: a key that Save writes but
+        // that Load didn't recognise round-trips through _unknownKeys *as well
+        // as* being written properly, and JsonObject rejects the duplicate. That
+        // failure is a hard throw on every Save, so it is worth one assertion.
+        //
+        // Written as a real second launch rather than by reading KnownKeys: it is
+        // the interaction between Load and Save that breaks, not the list.
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+        ClaudeBuddySettings.OpenClawShowHeartbeats = false;
+
+        PointSettingsAt(dir);
+        ClaudeBuddySettings.TwoLetterGlyphs = true;   // any Save at all
+
+        var text = File.ReadAllText(Path.Combine(dir, "settings.json"));
+        var root = JsonNode.Parse(text) as JsonObject;
+
+        Assert.False(root!["openclawShowHeartbeats"]!.GetValue<bool>());
+
+        // One occurrence, not two.
+        var occurrences = text.Split("\"openclawShowHeartbeats\"").Length - 1;
+        Assert.Equal(1, occurrences);
+    }
+
     // The single most valuable untested piece of ClaudeBuddySettings.cs, per
     // its own comment on _unknownKeys (~line 38): Save() rebuilds the whole
     // document from the in-memory model, so any key it doesn't know about
