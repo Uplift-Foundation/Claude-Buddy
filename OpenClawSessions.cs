@@ -80,6 +80,27 @@ namespace ClaudeBuddy
 
         internal sealed record AgentIdentity(string Name, string? Emoji, byte[]? Avatar);
 
+        // A test seam, matching SetSnapshotForTests: the only thing that fills the
+        // identity table is LoadAgentNamesAsync, which is an agents.list request
+        // over a live connection and is excluded. Without this, everything that
+        // draws an agent's name or picture — the orb's avatar, the chat header —
+        // is unreachable for a reason that has nothing to do with the code.
+        internal static void SetIdentitiesForTests(
+            IReadOnlyDictionary<string, AgentIdentity> identities,
+            IReadOnlyDictionary<string, string>? names = null)
+        {
+            lock (Gate)
+            {
+                Identities.Clear();
+                foreach (var (id, identity) in identities) Identities[id] = identity;
+
+                if (names is null) return;
+
+                AgentNames.Clear();
+                foreach (var (id, name) in names) AgentNames[id] = name;
+            }
+        }
+
         public static AgentIdentity? IdentityOf(string agentId)
         {
             lock (Gate) return Identities.GetValueOrDefault(agentId);
