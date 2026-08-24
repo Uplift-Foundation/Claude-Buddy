@@ -208,8 +208,25 @@ namespace ClaudeBuddy
             }
         }
 
-        private readonly string _statusDir =
-            Path.Combine(Path.GetTempPath(), "claude_buddy");
+        private readonly string _statusDir;
+
+        public SessionManager()
+            : this(Path.Combine(Path.GetTempPath(), "claude_buddy"))
+        {
+        }
+
+        // The status directory, said out loud.
+        //
+        // It has always come from the temp path, and CLAUDE.md documents
+        // TMPDIR=<dir> as the way to give a second instance its own fake
+        // sessions — which still works, because that is what Path.GetTempPath
+        // reads. This overload only makes the same seam nameable, so a test can
+        // hand over a scratch directory without reaching for an environment
+        // variable that the rest of the process is also reading.
+        internal SessionManager(string statusDir)
+        {
+            _statusDir = statusDir;
+        }
 
         private readonly Dictionary<string, OrbWindow> _windows = new();
         private readonly Dictionary<string, SessionStatus> _statuses = new();
@@ -729,7 +746,17 @@ namespace ClaudeBuddy
             return ScanVerdict.Keep;
         }
 
-        private void ScanAndUpdate()
+        // One pass over the status directory: read everything, decide what
+        // deserves an orb, and reconcile the windows, the arrows and the tray
+        // with the answer.
+        //
+        // Internal rather than private so a test can drive a pass directly
+        // instead of waiting on the two-second timer that normally calls it.
+        // Nothing outside this class should: it is idempotent, but it is also
+        // the whole of the scan, and calling it from anywhere but the timer, the
+        // watcher's debounce or Start would mean two passes racing over the same
+        // dictionaries on the same thread's re-entrancy.
+        internal void ScanAndUpdate()
         {
             SyncAutoColorMarker();
 
@@ -1006,7 +1033,7 @@ namespace ClaudeBuddy
                 // costs a lookup.
                 var membership = status.Source == SessionSource.ClaudeCode
                     ? AgentTeam.Of(status.SessionPid)
-                    : default;
+                    : AgentTeam.None;
 
                 // Guarded, where it used to run for everything. A gateway
                 // session has no process to ask, so `default` came back and this
@@ -1114,31 +1141,38 @@ namespace ClaudeBuddy
         // A member whose lead isn't on screen (ended, or filtered out) is left
         // exactly where it was: there's nothing to gather it under.
         private List<string> DisplayOrder() =>
-            GatherTeams(_order, id => _statuses.TryGetValue(id, out var status) ? status.Lead : null);
+            GatherTeams(_order, _statuses.ContainsKey,
+                        id => _statuses.TryGetValue(id, out var status) ? status.Lead : null);
 
-        // The gathering itself, with the two dictionaries behind it reduced to
-        // one question: what does this id say its lead is?
+        // The gathering itself, with the dictionaries behind it reduced to two
+        // questions: is this id still tracked, and what does it say its lead is?
         //
-        // Null means "not tracked" and empty means "tracked, leads nobody" —
-        // two different answers that a plain string cannot tell apart, and the
-        // distinction is the whole of the rule. A member pointing at a lead
-        // that has ended must stay where it is rather than being gathered under
-        // a session that is not on screen.
+        // Two questions and not one, which is the whole shape of it. "Tracked"
+        // and "names a lead" are separate facts and this rule turns on both: an
+        // id in _order with no status behind it — which happens for one pass
+        // during the removal pass — is not laid out at all, while a member
+        // whose *lead* has ended stays exactly where it was, because there is
+        // nothing to gather it under. Folding them into one nullable answer
+        // reads tidier and drops an orb: SessionStatus.Lead is itself allowed
+        // to be null for a session with no pid to ask about, and a null lead
+        // would then be indistinguishable from a session that is gone.
         //
         // Separated out so the ordering can be checked without windows,
         // statuses or a scan behind it; the shape it produces is what decides
         // which orb sits where in the stack and how far a team's arrows have to
         // reach.
-        internal static List<string> GatherTeams(IReadOnlyList<string> order, Func<string, string?> leadOf)
+        internal static List<string> GatherTeams(
+            IReadOnlyList<string> order, Func<string, bool> tracked, Func<string, string?> leadOf)
         {
             var byLead = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
             foreach (var id in order)
             {
+                if (!tracked(id)) continue;
+
                 var lead = leadOf(id);
-                if (lead is null) continue;                        // not tracked
-                if (lead.Length == 0 || lead == id) continue;      // leads nobody, or itself
-                if (leadOf(lead) is null) continue;                // its lead isn't on screen
+                if (string.IsNullOrEmpty(lead) || lead == id) continue;   // leads nobody, or itself
+                if (!tracked(lead)) continue;                             // its lead isn't on screen
 
                 if (!byLead.TryGetValue(lead, out var members))
                 {
@@ -1152,7 +1186,7 @@ namespace ClaudeBuddy
             var gatheredOrder = new List<string>(order.Count);
             foreach (var id in order)
             {
-                if (leadOf(id) is null) continue;
+                if (!tracked(id)) continue;
                 if (gathered.Contains(id)) continue;   // emitted under its lead below
 
                 gatheredOrder.Add(id);
@@ -1164,7 +1198,7 @@ namespace ClaudeBuddy
             // dropped orb would be a silent one, so sweep up anything missed.
             foreach (var id in order)
             {
-                if (leadOf(id) is not null && !gatheredOrder.Contains(id)) gatheredOrder.Add(id);
+                if (tracked(id) && !gatheredOrder.Contains(id)) gatheredOrder.Add(id);
             }
 
             return gatheredOrder;

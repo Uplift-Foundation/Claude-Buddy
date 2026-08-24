@@ -350,13 +350,20 @@ public class SessionScanRulesTests
     // happened to start in between — and, just as much, to emit every tracked
     // id exactly once. A dropped id is an orb that silently isn't laid out.
 
-    // Null for an id nobody is tracking, "" for one that leads nobody. The two
-    // are different answers and the rule turns on the difference.
-    private static Func<string, string?> Leads(params (string Id, string? Lead)[] rows)
+    // The two questions GatherTeams asks, over one table: an id in the table is
+    // tracked, and its value is the lead it names — empty for none, and
+    // deliberately allowed to be null, which is what SessionStatus.Lead really
+    // is for a session with no pid to ask AgentTeam about.
+    private static (Func<string, bool>, Func<string, string?>) Team(
+        params (string Id, string? Lead)[] rows)
     {
         var map = rows.ToDictionary(r => r.Id, r => r.Lead, StringComparer.Ordinal);
-        return id => map.TryGetValue(id, out var lead) ? lead : null;
+        return (map.ContainsKey, id => map.GetValueOrDefault(id));
     }
+
+    private static List<string> Gather(
+        List<string> order, (Func<string, bool> Tracked, Func<string, string?> LeadOf) team) =>
+        SessionManager.GatherTeams(order, team.Tracked, team.LeadOf);
 
     [Fact]
     public void GatherTeams_PullsMembersUpBehindTheirLead()
@@ -365,7 +372,7 @@ public class SessionScanRulesTests
         // the arrows have to end up short regardless.
         var order = new List<string> { "lead", "stranger-1", "member-a", "stranger-2", "member-b" };
 
-        var gathered = SessionManager.GatherTeams(order, Leads(
+        var gathered = Gather(order, Team(
             ("lead", ""), ("stranger-1", ""), ("stranger-2", ""),
             ("member-a", "lead"), ("member-b", "lead")));
 
@@ -381,8 +388,7 @@ public class SessionScanRulesTests
         // out by the lifetime setting, while its member outlives it.
         var order = new List<string> { "stranger", "orphan" };
 
-        var gathered = SessionManager.GatherTeams(order, Leads(
-            ("stranger", ""), ("orphan", "a-lead-that-ended")));
+        var gathered = Gather(order, Team(("stranger", ""), ("orphan", "a-lead-that-ended")));
 
         Assert.Equal(new[] { "stranger", "orphan" }, gathered);
     }
@@ -392,8 +398,7 @@ public class SessionScanRulesTests
     {
         // Would otherwise gather the id under itself and emit it twice — or
         // never, depending on which loop reached it first.
-        var gathered = SessionManager.GatherTeams(
-            new List<string> { "self" }, Leads(("self", "self")));
+        var gathered = Gather(new List<string> { "self" }, Team(("self", "self")));
 
         Assert.Equal(new[] { "self" }, gathered);
     }
@@ -403,10 +408,24 @@ public class SessionScanRulesTests
     {
         // _order outlives _statuses by one scan in the removal pass, so an id
         // with no status behind it is a real state and not a defensive check.
-        var gathered = SessionManager.GatherTeams(
-            new List<string> { "alive", "removed" }, Leads(("alive", "")));
+        var gathered = Gather(new List<string> { "alive", "removed" }, Team(("alive", "")));
 
         Assert.Equal(new[] { "alive" }, gathered);
+    }
+
+    [Fact]
+    public void GatherTeams_StillLaysOutASessionWhoseLeadFieldIsNull()
+    {
+        // Not hypothetical: SessionStatus.Lead is assigned from AgentTeam's
+        // answer, and a Claude Code session with no pid — a live background job
+        // — has no process to ask, so the field can arrive null rather than
+        // empty. Treating "no lead" and "not tracked" as one nullable answer
+        // silently dropped exactly those orbs out of the stacking order.
+        var gathered = Gather(
+            new List<string> { "no-pid", "ordinary" },
+            Team(("no-pid", null), ("ordinary", "")));
+
+        Assert.Equal(new[] { "no-pid", "ordinary" }, gathered);
     }
 
     [Fact]
@@ -418,15 +437,13 @@ public class SessionScanRulesTests
         // would be a silent one.
         var order = new List<string> { "top", "middle", "bottom" };
 
-        var gathered = SessionManager.GatherTeams(order, Leads(
-            ("top", ""), ("middle", "top"), ("bottom", "middle")));
+        var gathered = Gather(order, Team(("top", ""), ("middle", "top"), ("bottom", "middle")));
 
         Assert.Equal(3, gathered.Count);
         Assert.Equal(gathered.Distinct().Count(), gathered.Count);
-        Assert.Equal(new[] { "top", "middle", "bottom" }, gathered.OrderBy(id => id switch
-        {
-            "top" => 0, "middle" => 1, _ => 2
-        }));
+        Assert.Contains("top", gathered);
+        Assert.Contains("middle", gathered);
+        Assert.Contains("bottom", gathered);
     }
 
     // --- ClampIntoWork -------------------------------------------------------
