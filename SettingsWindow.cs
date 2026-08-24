@@ -96,10 +96,7 @@ namespace ClaudeBuddy
             // Escape and Cmd-W close it, the way any Mac window does. That's
             // also what lets the Done button go away on macOS, where a
             // preferences window with one would look wrong.
-            KeyDown += (_, e) =>
-            {
-                if (ShouldCloseOnKeyDown(e.Key, e.KeyModifiers)) CloseFromKeyboardShortcut();
-            };
+            KeyDown += OnWindowKeyDown;
 
             // Liquid Glass: the window is a translucent material, not a filled
             // rectangle. AcrylicBlur is what Avalonia maps to NSVisualEffectView
@@ -134,6 +131,17 @@ namespace ClaudeBuddy
         internal static bool ShouldCloseOnKeyDown(Key key, KeyModifiers modifiers) =>
             key == Key.Escape || (key == Key.W && modifiers.HasFlag(KeyModifiers.Meta));
 
+        // Excluded from coverage: its only job is to call Close() on the two
+        // shortcuts that should close a preferences window. ShouldCloseOnKeyDown
+        // — which key combinations those are — is a static and is covered
+        // directly; this is the half that cannot run, for the FontManager reason
+        // below.
+        [ExcludeFromCodeCoverage]
+        private void OnWindowKeyDown(object? sender, KeyEventArgs e)
+        {
+            if (ShouldCloseOnKeyDown(e.Key, e.KeyModifiers)) CloseFromKeyboardShortcut();
+        }
+
         // Excluded from coverage: Window.Close() corrupts a process-wide Avalonia
         // FontManager cache when called on a headless window — see
         // SettingsWindowSmokeTest.cs's own comment for the full story of how
@@ -161,6 +169,14 @@ namespace ClaudeBuddy
         // hand-write a template for one control, borrow Fluent's ToggleSwitch
         // ControlTheme into this window's resources. Everything else here stays
         // AppKit-styled by the theme. Remove this once upstream fixes it.
+        // Excluded from coverage: reaches into the running application's style
+        // resources to borrow one ControlTheme out of another theme's dictionary,
+        // and its catch exists for a lookup that only fails under a particular
+        // macOS theme. Neither the borrow nor the failure is arrangeable from a
+        // test — and the consequence of the catch is covered where it lands:
+        // Switch() falls back to a CheckBox, which every switch test in this
+        // suite already exercises without knowing which of the two it got.
+        [ExcludeFromCodeCoverage]
         private void BorrowFluentToggleSwitch()
         {
             try
@@ -207,6 +223,12 @@ namespace ClaudeBuddy
         // Fluent.xaml's root element is <Styles>, not <ResourceDictionary> — it
         // wraps its sub-dictionaries in Styles.Resources — so this is a
         // StyleInclude.
+        // Excluded from coverage: loads a XAML style dictionary from an avares://
+        // URI belonging to another assembly, and catches the case where that
+        // assembly's layout has changed. Worst case the pickers come out
+        // unstyled, which is a gap in one card rather than a crash — but neither
+        // the load nor its failure can be arranged headlessly.
+        [ExcludeFromCodeCoverage]
         private void EnsureColorPickerTheme()
         {
             try
@@ -1396,34 +1418,55 @@ namespace ClaudeBuddy
 
             List<TextToSpeech.VoiceOption>? options = null;
 
-            combo.DropDownOpened += (_, _) =>
-            {
-                if (options is not null) return;
-
-                options = TextToSpeech.AllVoiceOptions();
-                if (options.Count == 0)
-                {
-                    combo.ItemsSource = new[] { "No voices found" };
-                    combo.SelectedIndex = 0;
-                    combo.IsEnabled = false;
-                    return;
-                }
-
-                var selected = TextToSpeech.SelectedVoice();
-                combo.ItemsSource = options.Select(o => o.Label).ToList();
-                combo.SelectedIndex = selected is null ? 0 : Math.Max(0, options.IndexOf(selected));
-            };
-
-            combo.SelectionChanged += (_, _) =>
-            {
-                if (options is null) return; // still the unscanned placeholder item
-                var index = combo.SelectedIndex;
-                if (index < 0 || index >= options.Count) return;
-
-                TextToSpeech.SelectVoice(options[index]);
-            };
+            combo.DropDownOpened += (_, _) => options = FillVoiceList(combo, options);
+            combo.SelectionChanged += (_, _) => ChooseVoice(combo, options);
 
             return combo;
+        }
+
+        // Excluded from coverage: AllVoiceOptions() enumerates the machine's
+        // installed voices, which on macOS means running `say -v ?` as a real
+        // subprocess and on the neural side means asking an engine binary that may
+        // not be downloaded yet. That is exactly the scan the placeholder above
+        // exists to defer, and a test that opened this dropdown would perform it.
+        //
+        // Deferring it is also what makes the rest of the voice section testable:
+        // building those rows touches nothing, which SettingsVoiceRowTests relies
+        // on and asserts.
+        [ExcludeFromCodeCoverage]
+        private static List<TextToSpeech.VoiceOption>? FillVoiceList(
+            ComboBox combo, List<TextToSpeech.VoiceOption>? options)
+        {
+            if (options is not null) return options;
+
+            options = TextToSpeech.AllVoiceOptions();
+            if (options.Count == 0)
+            {
+                combo.ItemsSource = new[] { "No voices found" };
+                combo.SelectedIndex = 0;
+                combo.IsEnabled = false;
+                return options;
+            }
+
+            var selected = TextToSpeech.SelectedVoice();
+            combo.ItemsSource = options.Select(o => o.Label).ToList();
+            combo.SelectedIndex = selected is null ? 0 : Math.Max(0, options.IndexOf(selected));
+            return options;
+        }
+
+        // Excluded from coverage: only reachable once FillVoiceList above has run,
+        // since until then `options` is null and this returns immediately — and
+        // running it means having enumerated the machine's voices. SelectVoice
+        // then writes whichever engine's voice setting the choice belongs to.
+        [ExcludeFromCodeCoverage]
+        private static void ChooseVoice(ComboBox combo, List<TextToSpeech.VoiceOption>? options)
+        {
+            if (options is null) return; // still the unscanned placeholder item
+
+            var index = combo.SelectedIndex;
+            if (index < 0 || index >= options.Count) return;
+
+            TextToSpeech.SelectVoice(options[index]);
         }
 
         // The raw saved voice name, read straight from settings rather than via
@@ -1447,12 +1490,27 @@ namespace ClaudeBuddy
         // process lifetime, and this toggle changes what belongs in it — turning the
         // neural engine on adds its voices, turning it off takes them away — so
         // without it the picker would keep showing the previous answer.
+        // Whether flicking this switch should start a download. Pulled out so the
+        // decision stays measured while the handler that acts on it does not —
+        // acting means fetching ~300MB, which no test may do.
+        //
+        // Both halves matter: enabling with the engine already on disk must NOT
+        // re-download it, and disabling must never start one.
+        internal static bool ShouldStartNeuralDownload(bool enabled) =>
+            enabled && !NeuralSpeech.Installed;
+
+        // Excluded from coverage: the one path through here that a test could not
+        // already reach ends in StartNeuralVoiceDownload, which fetches about
+        // 300MB over the network. Everything this method decides is
+        // ShouldStartNeuralDownload above, which is covered directly; what is left
+        // is the setting write, the cache invalidation and the Rebuild.
+        [ExcludeFromCodeCoverage]
         internal void OnNeuralVoiceToggled(bool enabled)
         {
             ClaudeBuddySettings.NeuralVoiceEnabled = enabled;
             TextToSpeech.InvalidateVoiceCache();
 
-            if (!enabled || NeuralSpeech.Installed)
+            if (!ShouldStartNeuralDownload(enabled))
             {
                 Rebuild();
                 return;
@@ -1562,11 +1620,20 @@ namespace ClaudeBuddy
             }
         }
 
+        // The same decision for dictation's own model, and the same reason for
+        // being separate: acting on it fetches ~150MB.
+        internal static bool ShouldStartVoiceInputDownload(bool enabled) =>
+            enabled && !SpeechTranscriber.ModelDownloaded;
+
+        // Excluded from coverage: ends in StartVoiceInputDownload, which fetches
+        // about 150MB over the network. The decision is
+        // ShouldStartVoiceInputDownload above and is covered directly.
+        [ExcludeFromCodeCoverage]
         internal void OnVoiceInputToggled(bool enabled)
         {
             ClaudeBuddySettings.VoiceInputEnabled = enabled;
 
-            if (!enabled || SpeechTranscriber.ModelDownloaded)
+            if (!ShouldStartVoiceInputDownload(enabled))
             {
                 Rebuild();
                 return;
@@ -1992,6 +2059,66 @@ namespace ClaudeBuddy
             grid.Children.Add(child);
         }
 
+        // What a typed profile name becomes on disk. Blank means NULL rather than
+        // an empty string, so clearing the box restores the folder-derived name
+        // instead of leaving the profile with no name at all.
+        internal static string? ChosenProfileName(string? typed)
+        {
+            var trimmed = typed?.Trim();
+            return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+        }
+
+        // Excluded from coverage: KickRefresh rescans every profile directory on a
+        // background task, and does so whether or not this attribute is here.
+        // ChosenProfileName above is the decision and is covered.
+        [ExcludeFromCodeCoverage]
+        private static void ApplyProfileName(string folder, string? typed)
+        {
+            ClaudeBuddySettings.Update(folder, entry => entry.Name = ChosenProfileName(typed));
+            ClaudeDesktopManager.KickRefresh();
+        }
+
+        // Which stored colour a picker index means. Index 0 is "auto", which maps
+        // to a NULL stored colour rather than to a colour named "auto" — that is
+        // what lets a profile go back to its name-derived colour, and without it a
+        // colour is a one-way door, including one set by a stray keystroke.
+        //
+        // Pure and separate from the handler because the handler cannot run here:
+        // see ApplyProfileColour below.
+        internal static string? ChosenProfileColour(IReadOnlyList<string> options, int index) =>
+            index <= 0 ? null : options[index];
+
+        // Excluded from coverage: RecolourDockIcon rebuilds a tinted clone of
+        // Claude.app — scanning live processes first to decide whether it is safe
+        // to delete the bundle out from under a running instance — and KickRefresh
+        // rescans every profile directory on a background task. Both do that work
+        // whether or not this attribute is here, which is precisely why no test may
+        // call this method: an exclusion stops a line being counted, not being run.
+        //
+        // The decision it makes is ChosenProfileColour above, which is covered.
+        [ExcludeFromCodeCoverage]
+        private static void ApplyProfileColour(
+            string folder, IReadOnlyList<string> options, int index)
+        {
+            if (index < 0) return;
+
+            ClaudeBuddySettings.Update(
+                folder, entry => entry.Color = ChosenProfileColour(options, index));
+
+            // The Dock icon was tinted when its clone was built, so it needs
+            // regenerating; the swatch and window tint just re-read the colour.
+            ClaudeDesktopManager.RecolourDockIcon(folder);
+            ClaudeDesktopManager.KickRefresh();
+        }
+
+        // Excluded from coverage: same KickRefresh, same reason.
+        [ExcludeFromCodeCoverage]
+        private static void ApplyProfileSwatch(string folder, bool value)
+        {
+            ClaudeBuddySettings.Update(folder, entry => entry.ShowSwatch = value);
+            ClaudeDesktopManager.KickRefresh();
+        }
+
         internal Control Row(ProfileView profile)
         {
             var folder = Path.GetFileName(profile.Directory);
@@ -2007,13 +2134,7 @@ namespace ClaudeBuddy
             };
             // On every keystroke rather than on commit: there is no OK button to
             // commit at, and the tray picks it up on its next rebuild.
-            name.TextChanged += (_, _) =>
-            {
-                var typed = name.Text?.Trim();
-                ClaudeBuddySettings.Update(folder, entry =>
-                    entry.Name = string.IsNullOrEmpty(typed) ? null : typed);
-                ClaudeDesktopManager.KickRefresh();
-            };
+            name.TextChanged += (_, _) => ApplyProfileName(folder, name.Text);
             Add(grid, 0, name);
 
             // "auto" first, mapping to a null stored colour, so a profile can go
@@ -2043,25 +2164,10 @@ namespace ClaudeBuddy
                 Margin = new Thickness(0, 0, 10, 0)
             };
             colour.SelectionChanged += (_, _) =>
-            {
-                var index = colour.SelectedIndex;
-                if (index < 0) return;
-
-                var chosen = index == 0 ? null : options[index];
-                ClaudeBuddySettings.Update(folder, entry => entry.Color = chosen);
-
-                // The Dock icon was tinted when its clone was built, so it needs
-                // regenerating; the swatch and window tint just re-read the colour.
-                ClaudeDesktopManager.RecolourDockIcon(folder);
-                ClaudeDesktopManager.KickRefresh();
-            };
+                ApplyProfileColour(folder, options, colour.SelectedIndex);
             Add(grid, 1, colour);
 
-            Add(grid, 2, Check(settings.ShowSwatch, value =>
-            {
-                ClaudeBuddySettings.Update(folder, entry => entry.ShowSwatch = value);
-                ClaudeDesktopManager.KickRefresh();
-            }));
+            Add(grid, 2, Check(settings.ShowSwatch, value => ApplyProfileSwatch(folder, value)));
 
             Add(grid, 3, Check(settings.TintDockIcon, value =>
                 ClaudeBuddySettings.Update(folder, entry => entry.TintDockIcon = value)));
@@ -2390,6 +2496,12 @@ namespace ClaudeBuddy
         // Docker Desktop's plumbing ones) — Body() omits the whole group in
         // that case rather than showing an empty card.
         [SupportedOSPlatform("windows")]
+        // Excluded from coverage: begins by running `wsl.exe -l -q` as a real
+        // subprocess to list the installed distributions, and everything it builds
+        // depends on that answer. WslIntegration's own rules — which settings file
+        // to write, how to read a home directory out of /etc/passwd — are pure and
+        // covered in tests/UnitTests/WslIntegrationRulesTests.
+        [ExcludeFromCodeCoverage]
         private static Control? WslCard()
         {
             var distros = WslIntegration.ListDistros();
