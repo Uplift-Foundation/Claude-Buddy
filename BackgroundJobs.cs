@@ -39,6 +39,11 @@ namespace ClaudeBuddy
         // getting one of its own. Both shapes write the same "idle" whether they
         // still have work to do or not, so the daemon's own list is the only
         // place to settle it.
+        public static bool IsLiveJob(string sessionId) => IsLive(States(), sessionId);
+
+        // The answer, separated from fetching the listing so it can be tested
+        // without a daemon to ask. `states` is what Parse returned — null for a
+        // listing that could not be read at all.
         //
         // Absent from a listing that was read successfully means not a job at
         // all: a subagent, or a session that ended. "done" means it was one and
@@ -49,14 +54,19 @@ namespace ClaudeBuddy
         // whether to *hide* an orb, and no orb should vanish because the CLI
         // was briefly unavailable — the failure the user can't see is the one
         // worth being careful about.
-        public static bool IsLiveJob(string sessionId)
+        internal static bool IsLive(Dictionary<string, string>? states, string sessionId)
         {
             if (string.IsNullOrEmpty(sessionId)) return true;
-
-            var states = States();
             if (states is null) return true;
 
-            if (!states.TryGetValue(JobIdOf(sessionId), out var state)) return false;
+            // The session id first, because that is the question being asked and
+            // a listing answers it directly. The short job id is a fallback for a
+            // row that named no session — see Parse.
+            if (!states.TryGetValue(sessionId, out var state)
+                && !states.TryGetValue(JobIdOf(sessionId), out state))
+            {
+                return false;
+            }
 
             return !string.Equals(state, "done", StringComparison.OrdinalIgnoreCase);
         }
@@ -122,28 +132,7 @@ namespace ClaudeBuddy
                 process.WaitForExit(5000);
                 if (process.ExitCode != 0) return null;
 
-                var map = new Dictionary<string, string>(StringComparer.Ordinal);
-                using var document = JsonDocument.Parse(output);
-                if (document.RootElement.ValueKind != JsonValueKind.Array) return null;
-
-                foreach (var entry in document.RootElement.EnumerateArray())
-                {
-                    // Interactive sessions carry no id at all — only background
-                    // ones are jobs — so they simply don't appear here, and
-                    // nothing downstream ever asks about them.
-                    if (!entry.TryGetProperty("id", out var id)) continue;
-                    if (id.ValueKind != JsonValueKind.String) continue;
-                    if (id.GetString() is not { Length: > 0 } jobId) continue;
-
-                    var state = entry.TryGetProperty("state", out var s)
-                                && s.ValueKind == JsonValueKind.String
-                        ? s.GetString() ?? ""
-                        : "";
-
-                    map[jobId] = state;
-                }
-
-                return map;
+                return Parse(output);
             }
             catch
             {
@@ -151,9 +140,66 @@ namespace ClaudeBuddy
             }
         }
 
+        // `claude agents --json` turned into the states IsLive asks about, keyed
+        // by what the caller will name the session as.
+        //
+        // A background row carries both an `id` — the short job id, which is
+        // also the name of the job's directory under ~/.claude/jobs — and a
+        // `sessionId`, the full uuid of the session running it. The first
+        // version of this keyed the map on the short id and derived the same
+        // string from the session id it was asked about, on the assumption that
+        // one is the first segment of the other.
+        //
+        // It usually is, which is what let the assumption survive: a job's id is
+        // the first segment of the session id it *started* with. But a job
+        // outlives that session — resume it, or let it compact, and it keeps its
+        // original id while the work moves on to a session with a new uuid.
+        // Observed on a real machine: job `5f6960b2` running session
+        // `53bd5d2c-…`, working, with the derived lookup asking about `53bd5d2c`
+        // and finding nothing. Absent reads as "not a job at all", so a
+        // background session that was busy working had its orb dropped on every
+        // scan, and the same miss let SessionManager.Superseded call it stale.
+        //
+        // So the map is keyed by the session id the row states, rather than by
+        // anything derived. The short id is stored only for a row that named no
+        // session — an older CLI, or a job the daemon knows about before its
+        // session exists — which is what keeps the fallback in IsLive worth
+        // having. Storing it as well as the session id would undo the fix by the
+        // back door: the *earlier* session of a resumed job would match its own
+        // job's row and keep an orb for a conversation that has moved on.
+        internal static Dictionary<string, string>? Parse(string json)
+        {
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array) return null;
+
+            foreach (var entry in document.RootElement.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.Object) continue;
+
+                // Interactive sessions carry no id at all — only background
+                // ones are jobs — so they simply don't appear here, and
+                // nothing downstream ever asks about them.
+                if (Text(entry, "id") is not { Length: > 0 } jobId) continue;
+
+                var state = Text(entry, "state") ?? "";
+
+                map[Text(entry, "sessionId") is { Length: > 0 } sessionId ? sessionId : jobId] = state;
+            }
+
+            return map;
+        }
+
+        private static string? Text(JsonElement entry, string name) =>
+            entry.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+
         // The short form the daemon uses, which is the first segment of the
-        // session uuid. Split rather than a fixed width so an id that isn't a
-        // uuid degrades to itself.
+        // session id a job started with. Only reached for a row that named no
+        // session of its own; split rather than a fixed width so an id that
+        // isn't a uuid degrades to itself.
         private static string JobIdOf(string sessionId)
         {
             var dash = sessionId.IndexOf('-');
