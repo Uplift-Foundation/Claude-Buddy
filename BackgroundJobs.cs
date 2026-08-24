@@ -40,6 +40,11 @@ namespace ClaudeBuddy
         // getting one of its own. Both shapes write the same "idle" whether they
         // still have work to do or not, so the daemon's own list is the only
         // place to settle it.
+        // Excluded from coverage: States() runs `claude agents --json` as a real
+        // subprocess to ask the daemon for its listing. The answer, which is the
+        // part with a decision in it, is IsLive below — separated for exactly this
+        // reason and covered against hand-written listings in BackgroundJobsTests.
+        [ExcludeFromCodeCoverage]
         public static bool IsLiveJob(string sessionId) => IsLive(States(), sessionId);
 
         // The answer, separated from fetching the listing so it can be tested
