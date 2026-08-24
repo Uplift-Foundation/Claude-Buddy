@@ -46,6 +46,19 @@ namespace ClaudeBuddy
         // the team read as four copies of one thing.
         internal readonly record struct Membership(string Lead, string Color, string Name);
 
+        // "Not in a team", said with empty strings rather than nulls.
+        //
+        // `default(Membership)` would do the same job in every existing caller,
+        // because all three of them guard with string.IsNullOrEmpty — but a
+        // record struct's default leaves every field null, and this value is
+        // assigned straight onto SessionStatus.Lead, where "no team" has been
+        // the empty string since the field existed. A caller that compared
+        // against "" instead, or a rule that asked whether a lead was *known*
+        // rather than whether it was set, would be quietly wrong for exactly
+        // the sessions that have no pid to ask about. Said out loud so the two
+        // cannot drift.
+        internal static readonly Membership None = new("", "", "");
+
         // A live process's arguments never change, so this is a cache with a
         // safety valve rather than a poll: re-read after a minute so a recycled
         // pid can't pin a wrong answer for the life of the app. Same reasoning,
@@ -60,7 +73,7 @@ namespace ClaudeBuddy
         // point is to ask the kernel once per session, not once per scan.
         public static Membership Of(int pid)
         {
-            if (pid <= 0) return default;
+            if (pid <= 0) return None;
 
             var now = Environment.TickCount64;
 
