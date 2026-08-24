@@ -171,7 +171,10 @@ namespace ClaudeBuddy
         // redoing a few hundred rows of objects that are already in memory. The
         // panel is told the transcript was replaced, which it already handles
         // for a backlog landing after it opened.
-        private void Rebuild()
+        // internal: the merge is where three shipped bugs were fixed, and it
+        // needs no dispatcher of its own — only ScheduleRebuild above does, and
+        // that exists to coalesce, not to decide anything.
+        internal void Rebuild()
         {
             // Every agent's own words, and the text of them.
             //
