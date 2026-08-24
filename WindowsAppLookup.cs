@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.Versioning;
 using System.Xml;
 using Microsoft.Win32;
@@ -47,6 +48,8 @@ namespace ClaudeBuddy
         private static string? _cached;
         private static long _cachedAt = long.MinValue;
 
+        // Excluded from coverage: caches the registry lookup below.
+        [ExcludeFromCodeCoverage]
         public static string? ResolveAumid()
         {
             if (!OperatingSystem.IsWindows()) return null;
@@ -69,6 +72,9 @@ namespace ClaudeBuddy
             return resolved;
         }
 
+        // Excluded from coverage: opens HKEY_CLASSES_ROOT and reads an
+        // AppxManifest.xml from under Program Files\WindowsApps.
+        [ExcludeFromCodeCoverage]
         private static string? Resolve()
         {
             try
@@ -109,12 +115,18 @@ namespace ClaudeBuddy
         // Full name is Name_Version_Architecture_ResourceId_PublisherId; the
         // family name drops everything but Name and PublisherId, which are
         // always the first and last underscore-separated segments.
-        private static string? FamilyNameFromFullName(string fullName)
+        // internal, not private: a package family name is what
+        // ActivateApplication is handed, so getting it wrong means launching
+        // nothing with no error to show. Pure string work, and the only part of
+        // this file that is.
+        internal static string? FamilyNameFromFullName(string fullName)
         {
             var parts = fullName.Split('_');
             return parts.Length >= 2 ? $"{parts[0]}_{parts[^1]}" : null;
         }
 
+        // Excluded from coverage: loads a real AppxManifest.xml from disk.
+        [ExcludeFromCodeCoverage]
         private static string? ReadAppId(string manifestPath)
         {
             try
