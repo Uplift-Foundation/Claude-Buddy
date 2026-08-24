@@ -200,4 +200,42 @@ public class SettingsGatewayFieldTests
 
         Assert.Equal("Daniel", SettingsWindow.SavedVoiceNameForPlaceholder());
     }
+
+    // ---- the relay account list --------------------------------------------
+
+    // Every configured Claude Code profile is offered as a relay account, not
+    // just the default one — a session on another machine is only visible through
+    // the account it belongs to, so a second profile that is not offered is a set
+    // of sessions that can never be reached.
+    [AvaloniaFact]
+    public void EveryConfiguredProfileIsOfferedAsARelayAccount()
+    {
+        Offline();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-work");
+
+        var list = NewWindow().RemoteControlAccountList();
+        var labels = list.GetLogicalDescendants().OfType<CheckBox>()
+            .Select(b => b.Content as string)
+            .ToList();
+
+        Assert.Contains(ClaudeBuddySettings.DefaultRemoteControlProfileDir, labels);
+        Assert.Contains(".claude-work", labels);
+    }
+
+    // The default is not offered twice when it is also in the profile list.
+    [AvaloniaFact]
+    public void TheDefaultAccountIsNotOfferedTwice()
+    {
+        Offline();
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(
+            ClaudeBuddySettings.DefaultRemoteControlProfileDir);
+
+        var list = NewWindow().RemoteControlAccountList();
+        var labels = list.GetLogicalDescendants().OfType<CheckBox>()
+            .Select(b => b.Content as string)
+            .ToList();
+
+        Assert.Single(labels,
+            l => l == ClaudeBuddySettings.DefaultRemoteControlProfileDir);
+    }
 }

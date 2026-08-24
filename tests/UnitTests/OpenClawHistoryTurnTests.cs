@@ -311,4 +311,15 @@ public class OpenClawHistoryTurnTests
 
         Assert.Equal("padded", Assert.Single(turns).Text);
     }
+
+    // Content of a shape this parser has never seen — a bare number, which a
+    // malformed row can produce — yields no text and so no turn, rather than
+    // rendering the JSON or throwing. The `_ => ""` arm exists for exactly that.
+    [Fact]
+    public void ContentOfAnUnknownShapeProducesNoTurn()
+    {
+        Assert.Empty(Turns("""[{"role":"user","content":42}]"""));
+        Assert.Empty(Turns("""[{"role":"user","content":true}]"""));
+        Assert.Empty(Turns("""[{"role":"user","content":null}]"""));
+    }
 }

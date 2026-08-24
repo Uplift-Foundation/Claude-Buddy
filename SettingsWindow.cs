@@ -595,11 +595,7 @@ namespace ClaudeBuddy
             // WSL is genuinely Windows-only, unlike the extra accounts above,
             // and belongs here because Claude Code's sessions are what it
             // reaches.
-            if (OperatingSystem.IsWindows())
-            {
-                var wsl = WslCard();
-                if (wsl is not null) cards.Add(Card(wsl));
-            }
+            if (OperatingSystem.IsWindows()) AddWslCard(cards);
 
             return cards.ToArray();
         }
@@ -1205,6 +1201,25 @@ namespace ClaudeBuddy
         // Not free text: a directory name that is not a real profile fails by
         // producing no sessions at all, which is indistinguishable from having
         // none, so the only offer is what actually exists.
+        // Excluded from coverage: WslCard runs `wsl.exe -l -q` as a real subprocess
+        // to list the installed distributions, and everything it builds depends on
+        // that answer.
+        [ExcludeFromCodeCoverage]
+        private void AddWslCard(List<Control> cards)
+        {
+            var wsl = WslCard();
+            if (wsl is not null) cards.Add(Card(wsl));
+        }
+
+        // Excluded from coverage: opens a web page — see
+        // OnDownloadVoicesLinkClicked.
+        [ExcludeFromCodeCoverage]
+        private void OnDownloadVoicesLinkPressed(object? sender, PointerPressedEventArgs e)
+        {
+            e.Handled = true;
+            OnDownloadVoicesLinkClicked();
+        }
+
         internal Control RemoteControlAccountList()
         {
             var offered = new List<string> { ClaudeBuddySettings.DefaultRemoteControlProfileDir };
@@ -1566,11 +1581,7 @@ namespace ClaudeBuddy
                 Cursor = new Cursor(StandardCursorType.Hand),
                 Margin = new Thickness(14, 2, 14, 8)
             };
-            link.PointerPressed += (_, e) =>
-            {
-                e.Handled = true;
-                OnDownloadVoicesLinkClicked();
-            };
+            link.PointerPressed += OnDownloadVoicesLinkPressed;
             link.PointerEntered += (_, _) =>
                 link.TextDecorations = TextDecorations.Underline;
             link.PointerExited += (_, _) =>
@@ -2348,11 +2359,7 @@ namespace ClaudeBuddy
             // directory that doesn't exist yet (the CLI creates it on first use
             // with that alias), which a picker — browsing existing folders only
             // — can't select.
-            browseButton.Click += async (_, _) =>
-            {
-                var picked = await BrowseForProfileDir(browseButton, status);
-                if (picked is not null) input.Text = picked;
-            };
+            browseButton.Click += async (_, _) => await BrowseInto(browseButton, status, input);
 
             addButton.Click += (_, _) =>
             {
@@ -2402,6 +2409,15 @@ namespace ClaudeBuddy
         }
 
         // Returns the picked folder's bare name (e.g. ".claude-work"), or
+        // Excluded from coverage: everything past the first line is the OS folder
+        // picker — see BrowseForProfileDir below.
+        [ExcludeFromCodeCoverage]
+        private static async Task BrowseInto(Control owner, TextBlock status, TextBox input)
+        {
+            var picked = await BrowseForProfileDir(owner, status);
+            if (picked is not null) input.Text = picked;
+        }
+
         // null if the user cancelled or picked something invalid — in which
         // case `status` is set to say why, since a folder outside the home
         // directory would resolve to the wrong place everywhere: native
@@ -2411,6 +2427,18 @@ namespace ClaudeBuddy
         // list off Windows, so the validation below reduces to "a direct child
         // of $HOME", which is exactly the rule the macOS installers enforce
         // when they refuse a profile name containing a slash.
+        // Excluded from coverage: opens the OS's own folder picker and waits for a
+        // human to answer it. There is no headless storage provider to satisfy
+        // OpenFolderPickerAsync, and a test that got one would sit on a modal
+        // dialog until CI timed out.
+        //
+        // The rule it enforces afterwards — a profile directory must be a direct
+        // child of $HOME, because anything else resolves to the wrong place on
+        // native Windows, WSL and macOS alike — is the part worth having, and it
+        // is the same rule the macOS installers apply when they refuse a profile
+        // name containing a slash. WslIntegration's half of it is pure and covered
+        // in tests/UnitTests/WslIntegrationRulesTests.
+        [ExcludeFromCodeCoverage]
         private static async Task<string?> BrowseForProfileDir(Control owner, TextBlock status)
         {
             var storageProvider = TopLevel.GetTopLevel(owner)?.StorageProvider;
