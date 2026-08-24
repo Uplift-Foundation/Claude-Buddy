@@ -58,8 +58,41 @@ def repo_root():
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
-def load(reports, root):
-    """file -> {line: covered}, file -> {line: (taken, total)}"""
+def instrumented_lines(reports, root):
+    """file -> {line numbers} that these reports instrumented at all."""
+    seen = defaultdict(set)
+
+    for report in reports:
+        tree = ET.parse(report).getroot()
+        sources = [s.text for s in tree.findall("./sources/source") if s.text]
+        for cls in tree.iter("class"):
+            filename = cls.get("filename")
+            if not filename:
+                continue
+            path = resolve(filename, sources, root)
+            for line in cls.iter("line"):
+                seen[path].add(int(line.get("number")))
+
+    return seen
+
+
+def resolve(filename, sources, root):
+    path = filename.replace("\\", "/")
+    if not os.path.isabs(path):
+        for src in sources:
+            if os.path.exists(os.path.join(src, path)):
+                path = os.path.join(src, path)
+                break
+    return os.path.relpath(os.path.abspath(path), root)
+
+
+def load(reports, root, keep=None):
+    """file -> {line: covered}, file -> {line: (taken, total)}
+
+    `keep`, when given, is the set of lines each file is allowed to contribute —
+    see the comment in main() about the two engines disagreeing about
+    [ExcludeFromCodeCoverage] on a *method*.
+    """
     lines = defaultdict(dict)
     branches = defaultdict(dict)
 
@@ -70,16 +103,18 @@ def load(reports, root):
             filename = cls.get("filename")
             if not filename:
                 continue
-            path = filename.replace("\\", "/")
-            if not os.path.isabs(path):
-                for src in sources:
-                    if os.path.exists(os.path.join(src, path)):
-                        path = os.path.join(src, path)
-                        break
-            path = os.path.relpath(os.path.abspath(path), root)
+            path = resolve(filename, sources, root)
+            allowed = None if keep is None else keep.get(path)
 
             for line in cls.iter("line"):
                 number = int(line.get("number"))
+
+                # A line this engine instrumented but the authority did not is a
+                # line the authority excluded. Skipping it here is what makes a
+                # member-level exclusion mean the same thing in both reports.
+                if allowed is not None and number not in allowed:
+                    continue
+
                 hits = int(line.get("hits", "0"))
                 lines[path][number] = lines[path].get(number, False) or hits > 0
 
@@ -188,7 +223,42 @@ def main():
         sys.exit("no cobertura reports matched — run tools/coverage.sh first")
 
     root = repo_root()
-    lines, branches = load(reports, root)
+
+    # The two engines do not agree about [ExcludeFromCodeCoverage] on a *method*,
+    # and the disagreement is silent. coverlet honours it — an excluded method's
+    # body is not instrumented at all — while Microsoft.CodeCoverage, which the
+    # two MTP suites use, instruments it anyway and reports every line unhit.
+    # Both honour it on a *class*, which is why this went unnoticed until enough
+    # member-level exclusions existed to matter: 157 sites, every one of which the
+    # MTP reports were quietly putting back into the denominator.
+    #
+    # So coverlet's view of *which lines exist* is the authority, and the MTP
+    # reports contribute hits for those lines only. Not the other way round, and
+    # not a union: a union means the attribute does nothing wherever it is on a
+    # method, which is exactly the kind of claim-that-is-not-true this script was
+    # extended to stop making.
+    #
+    # Only applied to files coverlet reported. It instruments the assembly at
+    # build time rather than on execution, so it reports every app file whether or
+    # not a unit test touched it — but a file it genuinely never saw must not be
+    # silently dropped from the MTP reports, so `keep` is consulted per file.
+    coverlet = [r for r in reports if os.path.basename(r) == "coverage.cobertura.xml"]
+    others = [r for r in reports if r not in coverlet]
+
+    keep = instrumented_lines(coverlet, root) if coverlet and others else None
+
+    lines, branches = load(coverlet, root)
+    if others:
+        more_lines, more_branches = load(others, root, keep)
+        for path, hits in more_lines.items():
+            for number, covered in hits.items():
+                lines[path][number] = lines[path].get(number, False) or covered
+        for path, arcs in more_branches.items():
+            for number, (taken, total) in arcs.items():
+                previous = branches[path].get(number, (0, total))
+                branches[path][number] = (
+                    max(previous[0], taken), max(previous[1], total))
+
     app = sorted(p for p in lines if is_app_file(p))
 
     print(f"merged {len(reports)} report(s)\n")
