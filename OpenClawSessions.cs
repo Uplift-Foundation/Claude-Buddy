@@ -268,6 +268,17 @@ namespace ClaudeBuddy
 
         private static bool _certificateRejected;
 
+        // A test seam, matching SetIdentitiesForTests and SetSnapshotForTests:
+        // the only thing that ever sets _certificateRejected is a real failed TLS
+        // handshake against a gateway, which is exactly the kind of live socket
+        // this suite has no business opening. Without it, the settings window's
+        // "Trust the new certificate" row is unreachable for a reason that has
+        // nothing to do with the row.
+        internal static void SetCertificateRejectedForTests(bool value)
+        {
+            lock (Gate) _certificateRejected = value;
+        }
+
         // The conversation in a channel, as one thing. memberKeys are the
         // gateway keys of the sessions standing in it — see
         // OpenClawSessionKind.RoomOf for what decides that.

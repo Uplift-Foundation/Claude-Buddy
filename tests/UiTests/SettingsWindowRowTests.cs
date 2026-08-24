@@ -182,15 +182,36 @@ public class SettingsWindowRowTests
 
     // ...and across the two CLIs, which have their own pair each rather than one
     // shared "local CLI" setting.
+    // Restores both settings, which this did not, and the omission turned the
+    // whole suite red on both CI legs.
+    //
+    // ScanAndUpdate filters sessions by exactly these two settings, so leaving
+    // Codex switched off meant every later scan test found nothing — no
+    // exception, just empty collections and a null status. It only showed up in
+    // Release, because the class order there put this test first; in Debug it ran
+    // after the tests it was breaking and looked fine on three machines.
+    //
+    // A test that writes a process-wide setting restores it. There is no fixture
+    // enforcing that here, so it has to be said where it matters.
     [AvaloniaFact]
     public void TheTwoClisDoNotShareTheirSwitches()
     {
         var window = NewWindow();
+        var claudeCode = ClaudeBuddySettings.ClaudeCodeEnabled;
+        var codex = ClaudeBuddySettings.CodexEnabled;
 
-        window.OnClaudeCodeEnabledToggled(true);
-        window.OnCodexEnabledToggled(false);
+        try
+        {
+            window.OnClaudeCodeEnabledToggled(true);
+            window.OnCodexEnabledToggled(false);
 
-        Assert.True(ClaudeBuddySettings.ClaudeCodeEnabled);
-        Assert.False(ClaudeBuddySettings.CodexEnabled);
+            Assert.True(ClaudeBuddySettings.ClaudeCodeEnabled);
+            Assert.False(ClaudeBuddySettings.CodexEnabled);
+        }
+        finally
+        {
+            ClaudeBuddySettings.ClaudeCodeEnabled = claudeCode;
+            ClaudeBuddySettings.CodexEnabled = codex;
+        }
     }
 }
