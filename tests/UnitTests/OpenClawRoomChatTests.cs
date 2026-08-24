@@ -387,5 +387,215 @@ namespace ClaudeBuddy.Tests
             ClaudeBuddySettings.OpenClawReplyEnabled = false;
             Assert.Equal("Replying is off", room.ComposerHint);
         }
+
+        // --- who is in the room ---
+
+        // SetMembers runs on every scan, because membership genuinely changes: an
+        // agent that has not spoken lately drops out of the session list, and one
+        // that joins has to start being listened to.
+
+        // The same set of people, with better names and colours. agents.list
+        // lands after the first connection, so the first SetMembers often has
+        // placeholders — and refreshing those must not tear the subscriptions
+        // down, or a streaming reply in flight stops redrawing.
+        [Fact]
+        public void TheSameMembersWithBetterNamesAreRefreshedInPlace()
+        {
+            var zara = Member("zara");
+            zara.HasMore = false;
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
+
+            room.SetMembers([(zara, "agent-1", "#111111")]);
+            room.SetMembers([(zara, "Zara", "#ff0000")]);
+
+            // Still subscribed: a turn arriving still reaches the room. Rebuild
+            // is called directly because the coalescing wrapper needs a
+            // dispatcher this suite does not run.
+            Give(zara, (ChatRole.Assistant, "still here", 1));
+            room.Rebuild();
+
+            var turn = Assert.Single(room.History);
+            Assert.Equal("still here", turn.Text);
+            Assert.Equal("Zara", turn.Speaker);
+            Assert.Equal("#ff0000", turn.SpeakerColor);
+        }
+
+        // A member leaving is a different set, so the room is rebuilt from
+        // scratch and their messages go with them.
+        [Fact]
+        public void AMemberThatLeavesStopsBeingShown()
+        {
+            var zara = Member("zara");
+            var kai = Member("kai");
+            zara.HasMore = false;
+            kai.HasMore = false;
+            Give(zara, (ChatRole.Assistant, "from zara", 1));
+            Give(kai, (ChatRole.Assistant, "from kai", 2));
+
+            var room = Room((zara, "Zara", "#ff0000"), (kai, "Kai", "#00ff00"));
+            Assert.Equal(2, room.History.Count);
+
+            room.SetMembers([(zara, "Zara", "#ff0000")]);
+            room.Rebuild();
+
+            var turn = Assert.Single(room.History);
+            Assert.Equal("from zara", turn.Text);
+        }
+
+        // And a member that leaves is unsubscribed, or its transcript keeps
+        // driving rebuilds of a room it is no longer part of.
+        [Fact]
+        public void AMemberThatLeavesStopsBeingListenedTo()
+        {
+            var zara = Member("zara");
+            var kai = Member("kai");
+            zara.HasMore = false;
+            kai.HasMore = false;
+
+            var room = Room((zara, "Zara", "#ff0000"), (kai, "Kai", "#00ff00"));
+            room.SetMembers([(zara, "Zara", "#ff0000")]);
+
+            // Kai speaks after leaving. Nothing it says belongs in the room.
+            Give(kai, (ChatRole.Assistant, "shouting from outside", 5));
+            room.Rebuild();
+
+            Assert.DoesNotContain(room.History, t => t.Text == "shouting from outside");
+        }
+
+        // A member that joins and whose loaded history reaches back at least as
+        // far as everyone else's contributes its messages, and both are shown.
+        [Fact]
+        public void AMemberThatJoinsBringsItsBacklogWithIt()
+        {
+            var zara = Member("zara");
+            var kai = Member("kai");
+            zara.HasMore = false;
+            kai.HasMore = false;
+            Give(zara, (ChatRole.Assistant, "from zara", 1));
+            Give(kai, (ChatRole.Assistant, "kai was here first", 0),
+                      (ChatRole.Assistant, "from kai", 2));
+
+            var room = Room((zara, "Zara", "#ff0000"));
+            Assert.Single(room.History);
+
+            room.SetMembers([(zara, "Zara", "#ff0000"), (kai, "Kai", "#00ff00")]);
+            room.Rebuild();
+
+            Assert.Contains(room.History, t => t.Text == "from zara");
+            Assert.Contains(room.History, t => t.Text == "from kai");
+        }
+
+        // The other way round, and the case that caught me writing the test
+        // above: a member joining with a SHORTER loaded history narrows the
+        // window rather than widening it, so a message that was on screen a
+        // moment ago is no longer trustworthy and goes away.
+        //
+        // That is correct — the room must not claim to know who said what in a
+        // stretch the new member has not loaded, which is the third of the three
+        // shipped bugs named at the top of this file — but it is surprising
+        // enough to be worth an assertion of its own rather than being left as
+        // an emergent property of two other tests.
+        [Fact]
+        public void AMemberJoiningWithLessHistoryNarrowsTheWindow()
+        {
+            var zara = Member("zara");
+            var kai = Member("kai");
+            zara.HasMore = false;
+            kai.HasMore = false;
+            Give(zara, (ChatRole.Assistant, "from zara", 1));
+            Give(kai, (ChatRole.Assistant, "from kai", 2));
+
+            var room = Room((zara, "Zara", "#ff0000"));
+            Assert.Single(room.History);
+
+            room.SetMembers([(zara, "Zara", "#ff0000"), (kai, "Kai", "#00ff00")]);
+            room.Rebuild();
+
+            // Zara's earlier message is now below the line every member reaches.
+            var turn = Assert.Single(room.History);
+            Assert.Equal("from kai", turn.Text);
+        }
+
+        // An empty room is a real state — every agent in a channel can go quiet
+        // at once — and it must not throw on the way there.
+        [Fact]
+        public void ARoomEmptiedOfEveryoneIsEmptyRatherThanBroken()
+        {
+            var zara = Member("zara");
+            zara.HasMore = false;
+            Give(zara, (ChatRole.Assistant, "from zara", 1));
+
+            var room = Room((zara, "Zara", "#ff0000"));
+
+            room.SetMembers([]);
+            room.Rebuild();
+
+            Assert.Empty(room.History);
+            Assert.False(room.HasMore);
+        }
+
+        // --- HasMore ---
+
+        // Any one member with more to fetch means the room has more, because
+        // paging that member is what moves the trustworthy line back.
+        [Fact]
+        public void TheRoomHasMoreIfAnySingleMemberDoes()
+        {
+            var zara = Member("zara");
+            var kai = Member("kai");
+            zara.HasMore = false;
+            kai.HasMore = true;
+
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
+            room.SetMembers([(zara, "Zara", "#ff0000"), (kai, "Kai", "#00ff00")]);
+
+            Assert.True(room.HasMore);
+        }
+
+        [Fact]
+        public void TheRoomHasNoMoreWhenEveryMemberIsExhausted()
+        {
+            var zara = Member("zara");
+            var kai = Member("kai");
+            zara.HasMore = false;
+            kai.HasMore = false;
+
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
+            room.SetMembers([(zara, "Zara", "#ff0000"), (kai, "Kai", "#00ff00")]);
+
+            Assert.False(room.HasMore);
+        }
+
+        [Fact]
+        public void ARoomWithNoMembersHasNoMore()
+        {
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
+
+            Assert.False(room.HasMore);
+        }
+
+        // --- paging ---
+
+        // Nothing to page and nothing to talk to: LoadOlderAsync must report that
+        // the window did not move rather than throwing, because the panel reads
+        // the answer to decide whether it has hit the top.
+        [Fact]
+        public async Task PagingARoomWithNothingToFetchReportsNoMovement()
+        {
+            var zara = Member("zara");
+            zara.HasMore = false;
+            Give(zara, (ChatRole.Assistant, "from zara", 1));
+            var room = Room((zara, "Zara", "#ff0000"));
+
+            Assert.False(await room.LoadOlderAsync(CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task PagingAnEmptyRoomReportsNoMovement()
+        {
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
+
+            Assert.False(await room.LoadOlderAsync(CancellationToken.None));
+        }
     }
 }
