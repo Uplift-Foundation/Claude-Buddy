@@ -26,17 +26,36 @@ public class ClaudeDesktopBundleIconTests
     }
 
     [Fact]
-    public void HasCustomIcon_IsTrueOnlyForTheCarriageReturnName()
+    public void HasCustomIcon_IsNotSatisfiedByAPlainIconFile()
     {
+        // A plain "Icon" is not what macOS looks for, and treating it as one
+        // would reintroduce the same false positive from a different direction.
+        // Cross-platform: creating this name is legal everywhere.
         var bundle = Path.Combine(Path.GetTempPath(), "cb-icon-" + Guid.NewGuid(), "Claude.app");
         Directory.CreateDirectory(bundle);
 
-        // A plain "Icon" is not what macOS looks for, and treating it as one
-        // would reintroduce the same false positive from a different direction.
         File.WriteAllText(Path.Combine(bundle, "Icon"), "");
+
+        Assert.False(ClaudeDesktopBundles.HasCustomIcon(bundle));
+    }
+
+    [MacOnlyFact]
+    public void HasCustomIcon_IsTrueForTheCarriageReturnName()
+    {
+        // macOS only, and not because the *code* is: NTFS rejects a carriage
+        // return in a filename outright, so this test cannot stage its own
+        // fixture on Windows — File.WriteAllText throws IOException before any
+        // assertion runs. CI caught exactly that. HasCustomIcon itself is
+        // correct on Windows (File.Exists returns false for the invalid path,
+        // and it is wrapped in try/catch besides), and every caller is already
+        // behind an OperatingSystem.IsMacOS() check.
+        var bundle = Path.Combine(Path.GetTempPath(), "cb-icon-" + Guid.NewGuid(), "Claude.app");
+        Directory.CreateDirectory(bundle);
+
         Assert.False(ClaudeDesktopBundles.HasCustomIcon(bundle));
 
         File.WriteAllText(Path.Combine(bundle, "Icon\r"), "");
+
         Assert.True(ClaudeDesktopBundles.HasCustomIcon(bundle));
     }
 
