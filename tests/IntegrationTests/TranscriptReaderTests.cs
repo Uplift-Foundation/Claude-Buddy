@@ -117,6 +117,132 @@ public class TranscriptReaderTests
         Assert.Null(result);
     }
 
+    // ---- the arms nothing reached ---------------------------------------
+
+    // A transcript with turns but no assistant row at all. Distinct from a
+    // missing file: the tail is read and every line walked, and the loop simply
+    // finds nothing — which is also what exercises the `continue` for a
+    // non-assistant row.
+    [Fact]
+    public void LatestAssistantText_NoAssistantRowAtAll_ReturnsNull()
+    {
+        var path = Rows(UserSaid, UserSaid, UserSaid);
+
+        Assert.Null(TranscriptReader.LatestAssistantText(path));
+    }
+
+    // An assistant row whose text is blank is skipped rather than returned, so a
+    // tool-only turn does not make the app speak an empty string — the reader
+    // keeps walking backwards to the last real message.
+    [Fact]
+    public void LatestAssistantText_SkipsABlankAssistantRowAndKeepsLooking()
+    {
+        const string blank =
+            """{"type":"assistant","uuid":"a0","timestamp":"2026-08-16T10:00:05Z","message":{"role":"assistant","content":[{"type":"text","text":"   "}]}}""";
+
+        var path = Rows(AssistantSaid, blank);
+
+        Assert.Equal("Fixed the nested-team case.", TranscriptReader.LatestAssistantText(path));
+    }
+
+    // A row that claims to be an assistant turn but is not valid JSON. The catch
+    // is there because the file is appended to live, so a half-written line is a
+    // real state — and this runs inside a hook call, where a throw is not free.
+    [Fact]
+    public void LatestAssistantText_MalformedAssistantRow_ReturnsNullRatherThanThrowing()
+    {
+        var path = Rows("""{"type":"assistant","message":{"content":[{"type":"text","text":oops}]}}""");
+
+        Assert.Null(TranscriptReader.LatestAssistantText(path));
+    }
+
+    // Neither a path nor a session id: nothing to look up, and no exception.
+    [Fact]
+    public void LatestAssistantText_NothingToGoOn_ReturnsNull()
+    {
+        Assert.Null(TranscriptReader.LatestAssistantText(null));
+        Assert.Null(TranscriptReader.LatestAssistantText(""));
+        Assert.Null(TranscriptReader.LatestAssistantText("", ""));
+    }
+
+    // A session id matching no transcript anywhere: falls through to
+    // FindTranscript and gets nothing back. Worth covering because the
+    // alternative to returning null here is an empty path reaching File.Exists.
+    [Fact]
+    public void LatestAssistantText_UnknownSessionId_ReturnsNull()
+    {
+        Assert.Null(TranscriptReader.LatestAssistantText(null, "no-such-session-" + Guid.NewGuid()));
+    }
+
+    // Discovery by session id, end to end through a fake ~/.claude/projects
+    // tree — the path a hook takes when it knows the session but not where its
+    // transcript landed. `home` is a parameter precisely so this is testable
+    // without touching the real one.
+    [Fact]
+    public void FindTranscriptFor_LocatesATranscriptBySessionIdUnderAFakeHome()
+    {
+        var home = Path.Combine(Path.GetTempPath(), "cb-fakehome-" + Guid.NewGuid());
+        var project = Path.Combine(home, ".claude", "projects", "-Users-w-Source-Thing");
+        Directory.CreateDirectory(project);
+
+        const string sessionId = "11111111-2222-3333-4444-555555555555";
+        var transcript = Path.Combine(project, sessionId + ".jsonl");
+        File.WriteAllText(transcript, AssistantSaid + "\n");
+
+        try
+        {
+            Assert.Equal(transcript, TranscriptReader.FindTranscriptFor(sessionId, home));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FindTranscriptFor_ReturnsNullWhenTheHomeHasNoProjectsAtAll()
+    {
+        var home = Path.Combine(Path.GetTempPath(), "cb-emptyhome-" + Guid.NewGuid());
+        Directory.CreateDirectory(home);
+
+        try
+        {
+            Assert.Null(TranscriptReader.FindTranscriptFor("anything", home));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    // ---- the Codex reader's own empty cases ------------------------------
+
+    [Fact]
+    public void LatestCodexAgentText_NoAgentMessageAtAll_ReturnsNull()
+    {
+        var path = Rows(CxSessionMeta, CxUser);
+
+        Assert.Null(TranscriptReader.LatestCodexAgentText(path));
+    }
+
+    [Fact]
+    public void LatestCodexAgentText_MalformedRow_ReturnsNullRatherThanThrowing()
+    {
+        var path = Rows("""{"type":"event_msg","payload":{"type":"item_completed","item":oops}}""");
+
+        Assert.Null(TranscriptReader.LatestCodexAgentText(path));
+    }
+
+    [Fact]
+    public void LatestCodexAgentText_NoPath_ReturnsNull()
+    {
+        Assert.Null(TranscriptReader.LatestCodexAgentText(null));
+        Assert.Null(TranscriptReader.LatestCodexAgentText(""));
+    }
+
+    private static string Rows(params string[] rows) =>
+        WriteTempFile(string.Join('\n', rows) + "\n");
+
     private static string WriteTempFile(string content)
     {
         var path = Path.Combine(Path.GetTempPath(), "cb-integrationtests-transcript-" + Guid.NewGuid() + ".jsonl");
