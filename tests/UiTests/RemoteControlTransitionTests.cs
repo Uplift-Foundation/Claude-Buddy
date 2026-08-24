@@ -243,4 +243,62 @@ public class RemoteControlTransitionTests : IDisposable
 
         Assert.False(RemoteControlSessions.IdleExpired());
     }
+
+    // ---- a colour learned after the fact -----------------------------------
+
+    // A session answers the colour question on its own schedule, which is often
+    // after its orb is already on screen. Re-stamping the published snapshot is
+    // what gets that colour onto the orb at the next scan rather than at the next
+    // poll — the difference between a couple of seconds and up to a minute.
+    [Fact]
+    public void AColourLearnedLaterReachesAnAlreadyPublishedSession()
+    {
+        RemoteControlSessions.ForgetAnswersForTests();
+        RemoteControlSessions.SetRelayForTests("work@example.com", "1 session",
+            sessions: new[] { Remote("zara", "idle") });
+        RemoteControlSessions.Republish();
+
+        Assert.Null(RemoteControlSessions.SnapshotForTests.Single().Color);
+
+        RemoteControlSessions.OnMessage("work@example.com",
+            new BridgeProtocol.InboundMessage(
+                FromName: "zara", From: "bridge:session_01", Mode: "prompting",
+                Body: BridgeProtocol.InfoMarker + " color=#ff0000"));
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal("#ff0000", RemoteControlSessions.SnapshotForTests.Single().Color);
+    }
+
+    // A session with no answer keeps the colour it already had rather than being
+    // blanked by the re-stamp.
+    [Fact]
+    public void ReStampingLeavesAnUnansweredSessionAlone()
+    {
+        RemoteControlSessions.ForgetAnswersForTests();
+        RemoteControlSessions.SetRelayForTests("work@example.com", "1 session",
+            sessions: new[] { Remote("kai", "idle") });
+        RemoteControlSessions.Republish();
+
+        RemoteControlSessions.RepublishWithColors();
+
+        Assert.Null(RemoteControlSessions.SnapshotForTests.Single().Color);
+    }
+
+    // ---- keeping a relay alive ---------------------------------------------
+
+    // Touch is called on every send, so a relay someone is actively using is not
+    // idled out from under them mid-conversation.
+    [Fact]
+    public void TouchingARelayKeepsItFromExpiring()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.RemoteControlIdleMinutes = 30;
+        RemoteControlSessions.SetLastUseForTests(DateTime.UtcNow - TimeSpan.FromHours(1));
+
+        Assert.True(RemoteControlSessions.IdleExpired());
+
+        RemoteControlSessions.Touch();
+
+        Assert.False(RemoteControlSessions.IdleExpired());
+    }
 }

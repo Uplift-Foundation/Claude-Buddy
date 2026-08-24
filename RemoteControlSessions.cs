@@ -193,6 +193,20 @@ namespace ClaudeBuddy
             return remotes;
         }
 
+        // Excluded from coverage: a guard that must never fire. If it ever does, a
+        // test started a real relay and would otherwise leak a live subprocess for
+        // the rest of the run — which is worth failing loudly over, and is also
+        // why there is nothing here to cover.
+        [ExcludeFromCodeCoverage]
+        private static void AssertNoLiveBridge(RemoteControlBridge? bridge)
+        {
+            if (bridge is not null)
+            {
+                throw new InvalidOperationException(
+                    "ClearRelaysForTests found a live bridge; a test started a real relay");
+            }
+        }
+
         internal static void ClearRelaysForTests()
         {
             lock (Gate)
@@ -201,14 +215,7 @@ namespace ClaudeBuddy
                 // stop — but assert that rather than assume it, because a relay
                 // holding a live bridge dropped on the floor here would leak a
                 // subprocess for the rest of the run.
-                foreach (var relay in Relays.Values)
-                {
-                    if (relay.Bridge is not null)
-                    {
-                        throw new InvalidOperationException(
-                            "ClearRelaysForTests found a live bridge; a test started a real relay");
-                    }
-                }
+                foreach (var relay in Relays.Values) AssertNoLiveBridge(relay.Bridge);
 
                 Relays.Clear();
             }
@@ -862,7 +869,7 @@ namespace ClaudeBuddy
         }
 
         // Re-stamps the published snapshot with whatever colours are now known.
-        private static void RepublishWithColors()
+        internal static void RepublishWithColors()
         {
             lock (Gate)
             {
