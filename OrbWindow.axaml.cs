@@ -894,11 +894,7 @@ namespace ClaudeBuddy
             {
                 Interval = TimeSpan.FromMilliseconds(1000.0 / PulseFps)
             };
-            _ticker.Tick += (_, _) =>
-            {
-                for (var i = Pulsing.Count - 1; i >= 0; i--) Pulsing[i].TickPulse();
-                if (Pulsing.Count == 0) _ticker!.Stop();
-            };
+            _ticker.Tick += (_, _) => TickAllPulses();
             _ticker.Start();
         }
 
@@ -1084,8 +1080,18 @@ namespace ClaudeBuddy
             var text = FindSpeakableText();
             if (text is null) return;
 
-            TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+            SpeakNow(text);
         }
+
+        // Excluded from coverage: makes the machine make a noise. TextToSpeech.Speak
+        // is itself already excluded for that, and scoping the exclusion to this one
+        // call keeps OnSpeakClicked's decisions — already speaking, nothing to say —
+        // measured. An earlier attempt at testing the caller end to end actually
+        // spoke out loud on a developer's machine, which is how narrow this needs
+        // to be.
+        [ExcludeFromCodeCoverage]
+        private static void SpeakNow(string text) =>
+            TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
 
         internal async Task SpeakRemoteAsync()
         {
@@ -1108,7 +1114,26 @@ namespace ClaudeBuddy
         // background jobs it launched write theirs into project dirs named
         // for the same cwd, and the most recent of those is what "read the
         // last turn" means when you click its orb.
-        internal string? FindSpeakableText()
+        // `home` exists so the cwd fallback below is reachable without a
+        // transcript in the developer's real ~/.claude. TranscriptReader's search
+        // already takes one for the same reason; this just passes it through.
+        // One frame of the shared pulse, for every orb currently pulsing.
+        //
+        // A named method rather than the Tick lambda it used to be, because the
+        // ticker is process-wide and accumulates every orb ever shown for the life
+        // of the process — nothing closes a window to remove one. A test that
+        // waited on the real timer passed alone and failed once the rest of the
+        // suite loaded the machine, even with a ten-second budget. Driving it is
+        // the fix, and it also covers the arm that matters: the ticker stops
+        // itself when the last orb finishes, rather than spinning at 30fps
+        // forever.
+        internal static void TickAllPulses()
+        {
+            for (var i = Pulsing.Count - 1; i >= 0; i--) Pulsing[i].TickPulse();
+            if (Pulsing.Count == 0) _ticker?.Stop();
+        }
+
+        internal string? FindSpeakableText(string? home = null)
         {
             // Not for a gateway session. It has no transcript on this machine,
             // and the cwd fallback below would match a *local* project directory
@@ -1135,7 +1160,7 @@ namespace ClaudeBuddy
             var cwd = _lastStatus?.Cwd;
             if (string.IsNullOrEmpty(cwd)) return null;
 
-            var fallback = TranscriptReader.LatestTranscriptForCwd(cwd);
+            var fallback = TranscriptReader.LatestTranscriptForCwd(cwd, home);
             if (fallback is not null)
             {
                 text = TranscriptReader.LatestAssistantText(fallback);
@@ -1157,6 +1182,17 @@ namespace ClaudeBuddy
         // The flyout's keyboard button. Same destination a gateway orb's click
         // reaches, arrived at differently because for a local session the click
         // is already spoken for.
+        // Excluded from coverage: needs SessionManager.Instance to hand back a
+        // session, and this suite deliberately never sets it — making one current
+        // starts the status-directory watcher, the two-second scan timer and a
+        // tray icon, none of which a test should own. RemoteScanTests,
+        // SessionScanTests and GatewayScanTests all make the same choice and say
+        // so.
+        //
+        // What the chat panel does once opened is covered directly in the
+        // ChatPanel suites, which construct one against a FakeChatSession rather
+        // than going through an orb.
+        [ExcludeFromCodeCoverage]
         internal void OpenChat()
         {
             var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
@@ -1174,6 +1210,12 @@ namespace ClaudeBuddy
         // The panel's mic drives this orb's recorder rather than constructing a
         // second one — that keeps one recorder per session, along with the red
         // pulse and the 30-second cap, all working exactly as they already do.
+        // Excluded from coverage: both arms reach a live VoiceRecorder — one to
+        // construct and start it (PvRecorder.Create opens the microphone), the
+        // other to stop it and push captured audio through Whisper.net. There is
+        // no third path, so there is nothing here a headless runner can execute.
+        // The panel's own mirroring of IsRecording is covered where it lives.
+        [ExcludeFromCodeCoverage]
         public void ToggleRecording()
         {
             if (_recording) StopRecording();
@@ -1467,6 +1509,21 @@ namespace ClaudeBuddy
         // not jump.
         private readonly List<(OrbWindow Orb, PixelPoint Start)> _followers = new();
 
+        // Excluded from coverage: a synthesized press on an orb ends in a real
+        // click being resolved, and OnClicked's default action is
+        // TerminalFocuser.Focus — which fires tmux, ps and osascript as real
+        // processes off-thread, with no OS guard at its own entry point. On a CI
+        // runner that is an unpredictable side effect rather than a test, and on
+        // a developer's machine it moves their windows.
+        //
+        // The drag arithmetic these three share is not lost with them: the
+        // 6-pixel threshold, the follower offsets and the arranged-anchor nudge
+        // are all OrbArrangement's, which is pure and swept by
+        // tests/ArrangementTests across 20736 cases. What is excluded here is the
+        // plumbing from a pointer to those answers, and the click resolution
+        // itself is covered directly in OrbWindowClickResolutionTests via
+        // OnClicked/ActionFor rather than through a pointer.
+        [ExcludeFromCodeCoverage]
         protected override void OnPointerPressed(PointerPressedEventArgs e)
         {
             base.OnPointerPressed(e);
@@ -1506,6 +1563,11 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: same reason as OnPointerPressed — this only runs
+        // between a real press and a real release, and it moves live windows via
+        // Position while TeamLinks.Refresh() redraws native arrow windows over
+        // them.
+        [ExcludeFromCodeCoverage]
         protected override void OnPointerMoved(PointerEventArgs e)
         {
             base.OnPointerMoved(e);
@@ -1542,6 +1604,13 @@ namespace ClaudeBuddy
             ChatPanel.RepositionFor(this);
         }
 
+        // Excluded from coverage: the end of the same gesture. Either it commits a
+        // drag — writing every dragged orb's position through SessionManager and
+        // re-anchoring the arrangement — or it resolves a click, which is
+        // TerminalFocuser again. Both halves are covered where they are decided:
+        // OrbArrangement for the geometry, OrbWindowClickResolutionTests for the
+        // click.
+        [ExcludeFromCodeCoverage]
         protected override void OnPointerReleased(PointerReleasedEventArgs e)
         {
             base.OnPointerReleased(e);
