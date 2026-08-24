@@ -176,10 +176,17 @@ namespace ClaudeBuddy.Tests
             if (search == "") Assert.Null(got);
         }
 
-        // A malformed PATH entry is not worth failing the lookup for, per the
-        // catch in the loop. The entry with an illegal character has to be
-        // stepped over rather than ending the search, so the good directory
-        // after it still answers.
+        // A malformed PATH entry is not worth failing the lookup for. The entry
+        // with an illegal character has to be stepped over rather than ending the
+        // search, so the good directory after it still answers.
+        //
+        // Note this does NOT reach the catch in Locate's loop, despite looking
+        // like it should: .NET Core dropped Path.Combine's invalid-character
+        // check, so a NUL-bearing entry now combines happily and just fails
+        // File.Exists. The outcome asserted here is the one that matters and it
+        // holds either way — but the catch is unreached on this runtime, which is
+        // recorded in ClaudeBinary.cs so a coverage report does not read as a
+        // missing test.
         [Fact]
         public void AMalformedPathEntryIsSteppedOver()
         {

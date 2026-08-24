@@ -19,11 +19,24 @@ namespace ClaudeBuddy
             // it's the correct answer there — and restyling AppKit's controls by
             // hand was the alternative, which kept landing close-but-wrong
             // because their metrics and states aren't published anywhere to copy.
-            if (!OperatingSystem.IsMacOS())
-            {
-                Styles.Clear();
-                Styles.Add(new Avalonia.Themes.Fluent.FluentTheme());
-            }
+            if (!OperatingSystem.IsMacOS()) UseFluentTheme();
+        }
+
+        // Excluded from coverage: the non-macOS arm of a platform choice, and
+        // coverage is gathered from one platform's run — so on the macOS leg this
+        // cannot execute, and on the Windows leg the macOS arm cannot. Neither is
+        // untested so much as untestable *together*.
+        //
+        // What it does is swap the whole style set for Fluent, which is
+        // Microsoft's own design language and therefore the right answer on
+        // Windows; the alternative was restyling AppKit's controls by hand, which
+        // kept landing close-but-wrong because their metrics and states are not
+        // published anywhere to copy.
+        [ExcludeFromCodeCoverage]
+        private void UseFluentTheme()
+        {
+            Styles.Clear();
+            Styles.Add(new Avalonia.Themes.Fluent.FluentTheme());
         }
 
         // Excluded from coverage: every line below the guard is unreachable
