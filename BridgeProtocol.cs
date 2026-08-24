@@ -40,6 +40,38 @@ namespace ClaudeBuddy
         public const string ListAgentsPrompt =
             "Call the ListAgents tool now and paste its raw output verbatim. Do not summarise it.";
 
+        // "Is this the answer I was waiting for?" — the two predicates the bridge
+        // hands to AskAsync, which reads a live session's output until one of them
+        // says yes.
+        //
+        // Named here rather than left as lambdas at the call sites, for two
+        // reasons. They belong with the prompts they are the answers to: change
+        // the prompt and this is the other half you have to change. And a lambda
+        // inside a method carrying [ExcludeFromCodeCoverage] is not itself
+        // excluded — the compiler hoists it to its own method and the attribute
+        // does not follow — so as lambdas they were being counted while the
+        // methods around them were not.
+        //
+        // Both are deliberately loose. AskAsync is watching a pane a model is
+        // writing prose into, so the test is "does this look like the tool
+        // answered", not "does this parse" — parsing happens after, and a
+        // predicate strict enough to be a parser would wait forever on output
+        // that is perfectly usable.
+
+        // Either the header of a peer list, or the phrasing a session uses when
+        // it has none. The second matters as much as the first: without it, a
+        // machine that legitimately has no peers times out instead of answering
+        // "none", and the relay reports not-answering rather than empty.
+        public static bool LooksLikeAgentList(string text) =>
+            text.Contains("Peer sessions", StringComparison.Ordinal)
+            || text.Contains("no peer", StringComparison.OrdinalIgnoreCase);
+
+        // A send is acknowledged by a receipt carrying an id. Case-sensitive
+        // because it is a field name in the tool's own output rather than
+        // anything a person wrote.
+        public static bool LooksLikeSendReceipt(string text) =>
+            text.Contains("msg_id", StringComparison.Ordinal);
+
         // Asked for because the alternative was measured and was worse.
         //
         // Left to itself, a session answering a peer writes a *report for a
