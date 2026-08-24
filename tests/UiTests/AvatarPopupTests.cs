@@ -215,16 +215,56 @@ public class AvatarPopupTests
 
         Assert.Same(avatar.Frames[0], PortraitSource());
 
+        // Advanced directly rather than by waiting on the real timer.
+        //
+        // This used to poll for frames[1] while the timer ran, and it was flaky
+        // for a reason worth keeping written down: with three frames, two ticks
+        // delivered in one dispatcher drain step go straight from frames[0] to
+        // frames[2], so the poll never matches and the wait runs out. It only
+        // happened when the rest of the suite was loading the machine enough for
+        // ticks to bunch up, which is the worst kind of flake — it looks like the
+        // code and it is the schedule.
+        //
         // Second frame, not merely "some other frame": the tick advances by one
         // and wraps, so landing on frames[1] first is what says the order is
         // right rather than that something changed.
-        for (var i = 0; i < 200 && !ReferenceEquals(PortraitSource(), avatar.Frames[1]); i++)
-        {
-            Flush();
-            await Task.Delay(5);
-        }
-
+        Instance!.Advance(avatar);
         Assert.Same(avatar.Frames[1], PortraitSource());
+
+        // And on round the wrap, which is the arm the modulo is there for.
+        Instance!.Advance(avatar);
+        Assert.Same(avatar.Frames[2], PortraitSource());
+        Instance!.Advance(avatar);
+        Assert.Same(avatar.Frames[0], PortraitSource());
+
+        Reset();
+        await Task.CompletedTask;
+    }
+
+    // The guard the tick keeps: a tick queued against a portrait that has since
+    // been replaced must do nothing rather than write a stale frame over the new
+    // one. Reachable now that a tick can be delivered on demand — previously
+    // this could only have been hit by winning a race.
+    [AvaloniaFact]
+    public void ATickForAReplacedPortraitDoesNothing()
+    {
+        Reset();
+
+        var first = Avatar(3);
+        var second = Avatar(2);
+
+        AvatarPopup.Show(first, new PixelPoint(960, 640));
+        Flush();
+        AvatarPopup.Show(second, new PixelPoint(960, 640));
+        Flush();
+
+        var showing = PortraitSource();
+
+        // A late tick belonging to the portrait that is gone.
+        Instance!.Advance(first);
+
+        Assert.Same(showing, PortraitSource());
+        Assert.DoesNotContain(PortraitSource(), first.Frames);
 
         Reset();
     }
