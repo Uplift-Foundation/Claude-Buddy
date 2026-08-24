@@ -93,7 +93,17 @@ def load(reports, root):
                     continue
                 taken, total = condition.split("(")[1].rstrip(")").split("/")
                 previous = branches[path].get(number, (0, int(total)))
-                branches[path][number] = (max(previous[0], int(taken)), int(total))
+                # Max on BOTH halves, not just the numerator. The two engines do
+                # not always agree on how many arcs a line has — the same `if`
+                # can be reported as 2 arcs by one and 4 by the other — and
+                # keeping the last-seen total while maxing the taken count can
+                # pair a taken from the wider reading with a total from the
+                # narrower one and print a line as fully covered when neither
+                # suite covered it fully. Taking the widest denominator anyone
+                # reported is the conservative reading, and being wrong in the
+                # pessimistic direction is the only acceptable direction here.
+                branches[path][number] = (
+                    max(previous[0], int(taken)), max(previous[1], int(total)))
 
     return lines, branches
 
