@@ -381,4 +381,162 @@ public class RemoteControlBridgeRoutingTests : IDisposable
         Assert.Equal("{\"t\":\"café\"}", lines[0]);
         Assert.DoesNotContain('�', lines[0]);
     }
+
+    // --- Pump: the tail of a real transcript file on disk ---
+
+    // Pump is the half of this class that owns a file offset, and the offset is
+    // where the interesting mistakes live: read the same bytes twice and every
+    // remote message arrives twice, carry a stale offset and the relay reads
+    // from the middle of an unrelated row forever. All of it is reachable with a
+    // real file, since Adopt takes the transcript path from a status file.
+
+    // A bridge that has adopted nothing has no file to read, and must return
+    // rather than reach for a null path.
+    [Fact]
+    public void PumpingBeforeAnythingIsAdoptedDoesNothing()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        bridge.Pump();   // no throw is the assertion
+    }
+
+    // A transcript that has been deleted under us — or is mid-write — is an
+    // ordinary state, not an error: the next tick tries again.
+    [Fact]
+    public void PumpingAMissingTranscriptIsQuiet()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+        var missing = Path.Combine(_root, "gone-" + Guid.NewGuid() + ".jsonl");
+        Assert.True(bridge.Adopt(StatusFile("s-missing", TranscriptStatus(missing))));
+
+        bridge.Pump();
+    }
+
+    [Fact]
+    public void PumpReadsAWholeLineAndRoutesIt()
+    {
+        var transcript = NewTranscript();
+        using var bridge = new RemoteControlBridge(".claude");
+        Assert.True(bridge.Adopt(StatusFile("s-read", TranscriptStatus(transcript))));
+
+        var seen = Watched(bridge, () =>
+        {
+            File.AppendAllText(transcript,
+                Row("u1", ToolResult(Tagged("Zara", "hello from away"))) + "\n");
+            bridge.Pump();
+        });
+
+        var message = Assert.Single(seen);
+        Assert.Equal("hello from away", message.Body);
+    }
+
+    // The offset is the point: pumping again with nothing new added must produce
+    // nothing. Without it every poll would re-deliver the whole transcript.
+    [Fact]
+    public void PumpingTwiceDoesNotDeliverTheSameMessageTwice()
+    {
+        var transcript = NewTranscript();
+        using var bridge = new RemoteControlBridge(".claude");
+        bridge.Adopt(StatusFile("s-twice", TranscriptStatus(transcript)));
+
+        File.AppendAllText(transcript,
+            Row("u1", ToolResult(Tagged("Zara", "only once"))) + "\n");
+
+        var first = Watched(bridge, bridge.Pump);
+        var second = Watched(bridge, bridge.Pump);
+
+        Assert.Single(first);
+        Assert.Empty(second);
+    }
+
+    // A /clear on the far side starts a new transcript, which is shorter than
+    // where we had got to. Carrying the old offset would read from the middle of
+    // an unrelated row forever, so the offset resets and the new file is read
+    // from the top.
+    [Fact]
+    public void AReplacedTranscriptIsReadFromTheStartAgain()
+    {
+        var transcript = NewTranscript();
+        using var bridge = new RemoteControlBridge(".claude");
+        bridge.Adopt(StatusFile("s-clear", TranscriptStatus(transcript)));
+
+        // Something long, consumed.
+        File.AppendAllText(transcript,
+            Row("u1", ToolResult(Tagged("Zara", new string('x', 400)))) + "\n");
+        Assert.Single(Watched(bridge, bridge.Pump));
+
+        // Replaced by something shorter — a fresh conversation.
+        File.WriteAllText(transcript,
+            Row("u2", ToolResult(Tagged("Kai", "after the clear"))) + "\n");
+
+        var seen = Watched(bridge, bridge.Pump);
+
+        var message = Assert.Single(seen);
+        Assert.Equal("after the clear", message.Body);
+    }
+
+    // A row still being written arrives as a partial line. It has to be held
+    // until its newline shows up, not parsed as-is — the relay is reading a file
+    // another process is appending to.
+    [Fact]
+    public void APartialRowIsHeldUntilItIsComplete()
+    {
+        var transcript = NewTranscript();
+        using var bridge = new RemoteControlBridge(".claude");
+        bridge.Adopt(StatusFile("s-partial", TranscriptStatus(transcript)));
+
+        var row = Row("u1", ToolResult(Tagged("Zara", "half written")));
+        var cut = row.Length / 2;
+
+        File.AppendAllText(transcript, row[..cut]);
+        Assert.Empty(Watched(bridge, bridge.Pump));
+
+        File.AppendAllText(transcript, row[cut..] + "\n");
+        var seen = Watched(bridge, bridge.Pump);
+
+        Assert.Equal("half written", Assert.Single(seen).Body);
+    }
+
+    // An empty transcript is the state right after adoption — the file exists
+    // because the hook made it, and nothing has been written yet.
+    [Fact]
+    public void PumpingAnEmptyTranscriptProducesNothing()
+    {
+        var transcript = NewTranscript();
+        using var bridge = new RemoteControlBridge(".claude");
+        bridge.Adopt(StatusFile("s-empty", TranscriptStatus(transcript)));
+
+        Assert.Empty(Watched(bridge, bridge.Pump));
+    }
+
+    private string NewTranscript()
+    {
+        var path = Path.Combine(_root, "t-" + Guid.NewGuid() + ".jsonl");
+        File.WriteAllText(path, "");
+        return path;
+    }
+
+    private static string TranscriptStatus(string transcriptPath) =>
+        "{\"state\":\"idle\",\"transcript_path\":"
+        + JsonSerializer.Serialize(transcriptPath)
+        + ",\"tmux_pane\":\"%30\",\"tmux_socket\":\"/tmp/tmux-501/default\"}";
+
+    private static List<BridgeProtocol.InboundMessage> Watched(
+        RemoteControlBridge bridge, Action act)
+    {
+        var seen = new List<BridgeProtocol.InboundMessage>();
+        void Watch(BridgeProtocol.InboundMessage m) => seen.Add(m);
+
+        bridge.MessageReceived += Watch;
+        try
+        {
+            act();
+        }
+        finally
+        {
+            bridge.MessageReceived -= Watch;
+        }
+
+        return seen;
+    }
 }
