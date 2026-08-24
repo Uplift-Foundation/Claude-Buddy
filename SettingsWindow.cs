@@ -377,7 +377,11 @@ namespace ClaudeBuddy
             return combo;
         }
 
-        private Control[] ClickRows() => new[]
+        // internal so the three rows can be driven as the window builds them,
+        // which is the only way the production getters and setters below run — a
+        // test supplying its own would be checking ClickPicker rather than the
+        // rows.
+        internal Control[] ClickRows() => new[]
         {
             Row("Click", ClickPicker(
                 () => ClaudeBuddySettings.ClickAction,
@@ -793,7 +797,7 @@ namespace ClaudeBuddy
             ("Everything", ClaudeBuddySettings.OpenClawActiveWithinAll)
         };
 
-        private Control ActiveWithinPicker()
+        internal Control ActiveWithinPicker()
         {
             var current = ClaudeBuddySettings.OpenClawActiveWithinMinutes;
             var choices = ActiveWithinChoices.ToList();
@@ -864,7 +868,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private Control GatewayHostBox()
+        internal Control GatewayHostBox()
         {
             var box = new TextBox
             {
@@ -1732,7 +1736,7 @@ namespace ClaudeBuddy
             ("Forever", ClaudeBuddySettings.OrbLifetimeForever)
         };
 
-        private Control LifetimePicker()
+        internal Control LifetimePicker()
         {
             var current = ClaudeBuddySettings.OrbLifetimeMinutes;
             var choices = LifetimeChoices.ToList();

@@ -24,6 +24,21 @@ namespace ClaudeBuddy.Tests
             try { Directory.Delete(_home, recursive: true); } catch { /* best effort */ }
         }
 
+        // A cwd in the shape this platform actually uses. Claude Code encodes the
+        // *cwd*, and the encoder replaces Path.DirectorySeparatorChar — which is
+        // a backslash on Windows — so a fixture written with forward slashes
+        // encodes to "-/Users-foo-Bar" there and matches nothing. The Windows CI
+        // leg caught exactly that: the app is right and the first draft of this
+        // file was not.
+        private static string Cwd(params string[] parts) =>
+            Path.DirectorySeparatorChar + string.Join(Path.DirectorySeparatorChar, parts);
+
+        // ...and the project directory name is asked of the encoder rather than
+        // written out, for the same reason: one source of truth for the encoding,
+        // on either platform.
+        private static string Project(params string[] parts) =>
+            TranscriptReader.EncodeCwd(Cwd(parts));
+
         // A transcript inside the encoded project directory Claude Code would
         // have created for `cwd`.
         private string Transcript(string project, string sessionId, DateTime? modified = null)
@@ -46,7 +61,7 @@ namespace ClaudeBuddy.Tests
         {
             Assert.Equal(
                 "-Users-foo-Source-Bar",
-                TranscriptReader.EncodeCwd(Path.Combine("/Users", "foo", "Source", "Bar")));
+                TranscriptReader.EncodeCwd(Cwd("Users", "foo", "Source", "Bar")));
         }
 
         // A relative path gains the leading dash it would otherwise lack, because
@@ -100,7 +115,7 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void ASessionsTranscriptIsFoundByItsId()
         {
-            var expected = Transcript("-Users-foo-Bar", "95eddb0e-99a5");
+            var expected = Transcript(Project("Users", "foo", "Bar"), "95eddb0e-99a5");
 
             Assert.Equal(
                 expected, TranscriptReader.FindTranscriptFor("95eddb0e-99a5", _home));
@@ -119,7 +134,7 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void AnUnknownSessionIsNull()
         {
-            Transcript("-Users-foo-Bar", "abc-123");
+            Transcript(Project("Users", "foo", "Bar"), "abc-123");
 
             Assert.Null(TranscriptReader.FindTranscriptFor("no-such-session", _home));
         }
@@ -142,11 +157,11 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void TheMostRecentlyWrittenTranscriptWins()
         {
-            var older = Transcript("-Users-foo-Bar", "older", new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc));
-            var newer = Transcript("-Users-foo-Bar", "newer", new DateTime(2026, 8, 20, 0, 0, 0, DateTimeKind.Utc));
+            var older = Transcript(Project("Users", "foo", "Bar"), "older", new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc));
+            var newer = Transcript(Project("Users", "foo", "Bar"), "newer", new DateTime(2026, 8, 20, 0, 0, 0, DateTimeKind.Utc));
 
             var found = TranscriptReader.LatestTranscriptForCwd(
-                Path.Combine("/Users", "foo", "Bar"), _home);
+                Cwd("Users", "foo", "Bar"), _home);
 
             Assert.Equal(newer, found);
             Assert.NotEqual(older, found);
@@ -157,11 +172,11 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void ATranscriptUnderASubdirectoryOfTheProjectCounts()
         {
-            var expected = Transcript("-Users-foo-Bar-worktrees-x", "s1");
+            var expected = Transcript(Project("Users", "foo", "Bar") + "-worktrees-x", "s1");
 
             Assert.Equal(
                 expected,
-                TranscriptReader.LatestTranscriptForCwd(Path.Combine("/Users", "foo", "Bar"), _home));
+                TranscriptReader.LatestTranscriptForCwd(Cwd("Users", "foo", "Bar"), _home));
         }
 
         // ...and the sibling does not, end to end. This is the same rule as the
@@ -170,10 +185,10 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void ASiblingProjectsTranscriptIsNotReturned()
         {
-            Transcript("-Users-foo-Barn", "s1");
+            Transcript(Project("Users", "foo", "Barn"), "s1");
 
             Assert.Null(
-                TranscriptReader.LatestTranscriptForCwd(Path.Combine("/Users", "foo", "Bar"), _home));
+                TranscriptReader.LatestTranscriptForCwd(Cwd("Users", "foo", "Bar"), _home));
         }
 
         [Theory]
@@ -187,10 +202,10 @@ namespace ClaudeBuddy.Tests
         [Fact]
         public void ACwdWithNoTranscriptsIsNull()
         {
-            Transcript("-Users-foo-Bar", "s1");
+            Transcript(Project("Users", "foo", "Bar"), "s1");
 
             Assert.Null(TranscriptReader.LatestTranscriptForCwd(
-                Path.Combine("/Users", "foo", "Elsewhere"), _home));
+                Cwd("Users", "foo", "Elsewhere"), _home));
         }
     }
 }
