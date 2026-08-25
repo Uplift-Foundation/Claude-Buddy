@@ -120,10 +120,110 @@ the `Claude-3p` sidecar directory the profile scanner already skips comes from.
 - `ClaudeDesktopBundles.IsStale` now compares bundle versions rather than
   testing them for inequality, so a clone that is *ahead* of the installed
   bundle is left alone. See **Clone staleness** below.
+- `ClaudeDesktopManager.LogCandidates` no longer splits Default from a created
+  profile, and orders what is left by which directory was written to most
+  recently. See **The logs did not follow the data** below — this is the part of
+  the original change that was wrong rather than merely incomplete.
 
 The variable is kept alongside the switch rather than replaced: older Claude
 Desktop builds do honour it, both point at the same directory, and it costs
 nothing to send.
+
+## The logs did not follow the data
+
+The first version of this fix moved a profile's **data** and left its **logs**
+behind, and then pointed "Reveal logs" at the place they used to be.
+
+`<profile>/Logs` only ever existed because Claude Desktop's own startup did
+
+```js
+app.setPath(`logs`, path.resolve(e, `Logs`));
+```
+
+**inside the `CLAUDE_USER_DATA_DIR` branch**. The logs followed the userData
+directory because the JavaScript walked them there by hand. `--user-data-dir` is
+Chromium's switch: it sets userData and nothing else. On macOS Electron's `logs`
+path is `~/Library/Logs/<CFBundleName>` and is not derived from userData at all.
+
+Measured: `open -n -a /Applications/Claude.app --args --user-data-dir=<fresh
+scratch>` writes 30 entries into the scratch directory and **no `Logs`
+subdirectory whatsoever**. And on this machine, the split is visible on disk:
+
+```
+~/Library/Application Support/Claude-Board/Logs/main.log   last written 24 Aug
+~/Library/Logs/Claude/main.log                             written that afternoon
+~/Library/Application Support/Claude/Logs                  never existed
+```
+
+The failure is the quiet kind, which is why it survived a green test suite. The
+stale `<profile>/Logs` is still *there*, left over from when the variable
+worked — so the old first candidate matched, `Directory.Exists` passed, and
+Reveal logs opened a directory that looked entirely correct while being weeks
+out of date. Someone debugging a profile reads the wrong logs and is told
+nothing.
+
+Two tests asserted the old rule and passed the whole time, which is worse than
+having had no test: `LastReachableArmsTests.OnMacOsACreatedProfileLooksInsideItself`
+and `ClaudeDesktopManagerTests.DefaultAndCreatedProfilesLookForTheirLogsInDifferentPlaces`.
+Both are replaced.
+
+The Windows arm of that same method had been saying so for a year, unread:
+there is no Default/created split there *because* Electron's paths do not follow
+`--user-data-dir`. macOS is now the same, since it is now the same switch. The
+only thing that ever made macOS different was the JavaScript that no longer
+runs.
+
+**No fixed ordering is right.** Put `<profile>/Logs` first and a stale leftover
+wins on a current build — the bug above. Put `~/Library/Logs/Claude` first and
+Default's logs get offered for Board on an older build that does honour the
+variable, which this app still deliberately sends. So neither is guessed:
+whichever of the two was **written to more recently** goes first. That is the
+question a person opening the directory was asking anyway, and it needs no
+opinion about which Desktop build is installed.
+
+Two details that are easy to get wrong:
+
+- **The directory's own mtime is not the answer.** Appending to `main.log` does
+  not touch the directory holding it — `~/Library/Logs/Claude` is stamped
+  15 August while the log inside it was written twelve minutes before this was
+  measured. Reading the directory stamp would have preferred the stale
+  candidate, i.e. reproduced the bug. `NewestWrite` reads the newest file.
+- **The profile directory stays out of the comparison.** It is still the last
+  resort, but Chromium writes `Cookies` and `Local Storage` into it
+  continuously, so ranking it by mtime would make it win every time and Reveal
+  logs would stop revealing logs.
+
+`isDefault` was removed from the signature rather than left unused: it *was* the
+Default/created split, and keeping it would leave the shape of the deleted rule
+sitting there for the next person to reconstruct.
+
+## Driving open(1) rather than believing it
+
+`RouterArguments_PutTheUrlBeforeDashDashArgs` asserts the order of our own
+array. It passes whether or not `open(1)` treats the distinction as anything at
+all — a test of a belief about someone else's program, written in a file that
+never runs it. CLAUDE.md is specific that a format someone else defines gets an
+integration test *as well as* the unit test, "because the two fail differently",
+and this is exactly that gap: the unit test cannot fail the way the real seam
+can.
+
+`tests/IntegrationTests/OpenArgumentDeliveryTests.cs` now drives it, against a
+throwaway `.app` whose executable is a shell script that logs its own `argv`.
+That is enough to see which channel `open` chose: an argument the script can see
+arrived through argv, one it cannot arrived through LaunchServices as an Apple
+Event, which is what `openURLs` receives. Three cases:
+
+- **The URL before `--args`** — built by calling
+  `ClaudeDesktopUrlRouter.Arguments` itself, so the *shape* under test is the
+  production one — does not appear in argv, and `--user-data-dir=<path with a
+  space>` does, as a single token.
+- **The URL after `--args`** lands in argv, so `openURLs` never fires. This is
+  the mistake, asserted as the failure it is rather than described in a comment;
+  a real Claude Desktop discards the sign-in token here.
+- **`--args` does not imply `-n`.** A second `open` against an already-running
+  bundle activates it rather than launching a second copy — which is what makes
+  the router's deliberate omission of `-n` safe, and it is worth more than being
+  believed, since the failure would be a second Chromium on a live profile.
 
 ## Clone staleness
 
@@ -200,6 +300,19 @@ sitting on Default — a combination no launch this app performs can produce, so
 it is evidence rather than a heuristic. The profile row would then offer to quit
 and relaunch it with both selectors, reusing the Quit and Launch paths that
 already exist. Nothing here implements that.
+
+Three smaller things are noted and left, none of them reachable today:
+
+- **No fixture cuts a `--user-data-dir=` token in half.** `KERN_PROCARGS2` is
+  read into a fixed buffer, and a truncated final token would be parsed as a
+  short path rather than rejected. One fixture would settle it; the buffer is
+  sized well above any real command line.
+- **Both scanners take the *first* repeated `--user-data-dir`; Chromium takes
+  the last.** Unreachable through `open --args`, which is the only way this app
+  launches anything, and unasserted either way.
+- `docs/windows-profile-switcher.md` describes the Windows switcher as
+  unbuilt. It is a historical brief rather than a claim about the code, and is
+  left as one.
 
 ## Windows
 

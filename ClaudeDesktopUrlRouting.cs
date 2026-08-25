@@ -40,10 +40,12 @@ namespace ClaudeBuddy
     internal sealed record UrlRoute(
         string ProfileDirectory,
         string BundlePath,
-        // Null for Default, exactly as LaunchMac does it: setting the variable
-        // suppresses the app's own resolution of its sidecar config directory,
-        // so a forwarded link could re-trigger the deployment-mode chooser on
-        // an already configured profile.
+        // Null for Default, exactly as LaunchMac does it: pointing either
+        // selector at the app's own default directory suppresses its own
+        // resolution of that sidecar config directory, so a forwarded link
+        // could re-trigger the deployment-mode chooser on an already configured
+        // profile. Either, not the variable — ClaudeDesktopUrlRouter.Arguments
+        // sends both when this is set, and neither when it is null.
         string? UserDataDir,
         bool AlreadyRunning,
         int Pid);
