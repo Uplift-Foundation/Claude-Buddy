@@ -557,8 +557,10 @@ by side, each signed into a different Anthropic account. Claude Desktop signs
 into one account at a time and keeps that login in its user-data directory
 (`Cookies` → `sessionKey`, `config.json` → `oauth:tokenCache`) rather than the
 Keychain, so a second account is a second directory — selected with
-`CLAUDE_USER_DATA_DIR`, which the app honors, and it takes no single-instance
-lock, so the instances genuinely coexist.
+Chromium's `--user-data-dir` switch, and it takes no single-instance lock, so
+the instances genuinely coexist. (`CLAUDE_USER_DATA_DIR` is passed alongside it
+and used to be the whole mechanism; Claude Desktop 1.34493.1 ignores it, which
+is why the switch is now what actually decides. See the notes below.)
 
 Profiles are **discovered from disk**, not configured: any directory in
 `~/Library/Application Support` named `Claude` or `Claude-<something>` that
@@ -626,8 +628,24 @@ Details worth knowing:
   launched instance reads and writes — offering it as a profile would point a
   second Chromium at a directory the running app is already using, and
   concurrent access to one user-data directory corrupts leveldb and SQLite.
-- **Default is launched differently, on purpose** — plain `open -n -b`, with no
-  `CLAUDE_USER_DATA_DIR`. Setting the variable suppresses the app's own
+- **A profile is selected by two things, and only one of them still works.**
+  Every created profile is launched with both `--env
+  CLAUDE_USER_DATA_DIR=<dir>` and `--args --user-data-dir=<dir>`. The variable
+  is what Claude Desktop's own JavaScript reads, and **1.34493.1 ignores it**:
+  an instance launched with it pointed at an empty scratch directory left that
+  directory empty and opened 45 files under `~/Library/Application
+  Support/Claude` instead. Measured with `lsof`, against the installed bundle
+  rather than a tinted clone. That is what "it opens the same profile twice"
+  was — every row launched a second Chromium onto Default, which is also the
+  concurrent-leveldb hazard this feature exists to prevent.
+  `--user-data-dir` is Chromium's own switch, handled inside the Electron
+  framework rather than in Claude Desktop's JavaScript, so it still works;
+  Windows has passed it since the port. Both are sent, so a build honouring
+  either lands in the right place, and `--args` goes last because `open(1)`
+  hands everything after it to the application untouched.
+- **Default is launched differently, on purpose** — plain `open -n -a <path>`,
+  with neither selector. Pointing either at the app's own default directory is
+  not the same thing to it as omitting them: it suppresses the app's own
   resolution of that sidecar directory, so a tray launch could re-trigger the
   enterprise deployment-mode chooser on an already-configured profile, and it
   would start a second log history under `Claude/Logs/`. One consequence:
@@ -636,7 +654,9 @@ Details worth knowing:
 - **Running instances are detected by scanning processes, not by tracking the
   ones we launched** — `proc_listallpids` + `proc_pidpath` to find Claude
   Desktop main processes, then `sysctl KERN_PROCARGS2` to read
-  `CLAUDE_USER_DATA_DIR` out of each one's environment. So an instance you
+  `--user-data-dir` off each one's command line, falling back to
+  `CLAUDE_USER_DATA_DIR` in its environment for instances started by a Claude
+  Buddy that predates the switch. So an instance you
   started from the Dock shows up too, and the state survives restarting Claude
   Buddy. (Not `ps eww`: it prints the environment space-separated, and every
   profile path contains a space — `Application Support` — so its output can't

@@ -41,9 +41,11 @@ namespace ClaudeBuddy
     // Claude Desktop signs into one account at a time and keeps that login in
     // its userData directory (Cookies -> sessionKey, config.json ->
     // oauth:tokenCache), not the Keychain — so a second account is a second
-    // userData directory, selected with CLAUDE_USER_DATA_DIR. The app honours
-    // that variable (app.setPath("userData", ...)) and takes no single-instance
-    // lock, so instances genuinely can coexist.
+    // userData directory, selected with Chromium's --user-data-dir switch, and
+    // the app takes no single-instance lock, so instances genuinely can
+    // coexist. CLAUDE_USER_DATA_DIR used to be the whole mechanism and is still
+    // passed alongside; LaunchArguments has the measurement showing why it can
+    // no longer be relied on by itself.
     //
     // Everything here is independent of the session-monitoring side of the app:
     // no SessionStatus, no SessionManager, no OrbWindow. The only seam is
@@ -799,12 +801,45 @@ namespace ClaudeBuddy
                 // and AppInstalled() has to have been true to get here at all.
                 : new[] { "-n", "-b", BundleId };
 
-            // Default is launched without CLAUDE_USER_DATA_DIR whether or
-            // not it runs from a clone, so the app resolves its own
-            // userData and sidecar config exactly as a Dock launch does.
+            // Default is launched without either selector whether or not it
+            // runs from a clone, so the app resolves its own userData and
+            // sidecar config exactly as a Dock launch does.
+            //
+            // Both selectors, on every created profile, because the
+            // environment variable alone has stopped working. Claude Desktop
+            // 1.34493.1 ignores CLAUDE_USER_DATA_DIR: an instance launched
+            // with it set to an empty scratch directory left that directory
+            // empty and opened 45 files under ~/Library/Application
+            // Support/Claude instead — measured with lsof against the
+            // installed bundle, not a clone, so nothing this app does to a
+            // bundle is involved. That is the whole bug users see as "it
+            // opens the same profile twice": every profile row launched a
+            // second Chromium onto Default, which is also the concurrent
+            // leveldb access this feature exists to avoid.
+            //
+            // --user-data-dir is Chromium's own switch, handled in the
+            // Electron framework rather than in Claude Desktop's JavaScript,
+            // which is why it still works — verified the same way, against a
+            // path containing a space, with the profile written where it was
+            // asked for. Windows has passed it since the port; macOS was the
+            // only side still trusting the variable.
+            //
+            // The variable is kept alongside it rather than replaced. Older
+            // Claude Desktop builds do honour it — the app's bundled main
+            // still contains the app.setPath("userData", …) that reads it —
+            // and both point at the same directory, so a build that honours
+            // either lands in the right place. It also stays the thing
+            // MacOSProcessScan can read back for an instance started by a
+            // version that predates this fix.
             return isDefault
                 ? open
-                : open.Concat(new[] { "--env", "CLAUDE_USER_DATA_DIR=" + directory }).ToArray();
+                : open.Concat(new[]
+                {
+                    "--env", "CLAUDE_USER_DATA_DIR=" + directory,
+                    // --args must come last: open(1) passes everything after
+                    // it to the application untouched.
+                    "--args", "--user-data-dir=" + directory
+                }).ToArray();
         }
 
         // Default is launched with no arguments at all — passing

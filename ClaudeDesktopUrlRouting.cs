@@ -12,13 +12,13 @@ namespace ClaudeBuddy
     // one it picks — the installed /Applications/Claude.app — is never the
     // bundle a coloured profile runs from.
     //
-    // Worse, a LaunchServices-initiated launch carries no CLAUDE_USER_DATA_DIR,
-    // because only our own `open --env` ever sets it. So the callback from a
-    // sign-in started in *any* profile lands in a fresh instance on the
-    // *Default* profile: the profile being signed into never receives its
-    // token, the user sees a Default window they didn't ask for, and they try
-    // again. It reads as intermittent only because signing in to Default itself
-    // works correctly.
+    // Worse, a LaunchServices-initiated launch carries neither --user-data-dir
+    // nor CLAUDE_USER_DATA_DIR, because only our own `open` ever passes them.
+    // So the callback from a sign-in started in *any* profile lands in a fresh
+    // instance on the *Default* profile: the profile being signed into never
+    // receives its token, the user sees a Default window they didn't ask for,
+    // and they try again. It reads as intermittent only because signing in to
+    // Default itself works correctly.
     //
     // The fix is to stop letting a bundle id decide. Claude Buddy claims both
     // schemes itself and forwards each URL to one specific instance, addressed
