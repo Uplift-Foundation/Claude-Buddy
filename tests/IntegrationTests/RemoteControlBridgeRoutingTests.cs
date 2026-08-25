@@ -56,10 +56,19 @@ public class RemoteControlBridgeRoutingTests : IDisposable
         Assert.StartsWith("=", claude.Target);
         Assert.StartsWith("=", board.Target);
 
-        // The bug this prevents, stated as the condition that caused it: one
-        // session name really is a prefix of the other, so without the "=" the
-        // shorter target would resolve to the longer session.
-        Assert.StartsWith(claude.Session, board.Session);
+        // The bug this prevents, stated as the condition that caused it: the
+        // two names share a prefix, so a target that is not exact resolves to
+        // whichever tmux finds first.
+        //
+        // Asserted on the shared prefix rather than on one full name being a
+        // prefix of the other, which is what it used to say. Appending the
+        // machine tag ended that — "…-claude-warrens-mbp" is not a prefix of
+        // "…-claude-board-warrens-mbp" — but it did not end the hazard, because
+        // what tmux resolves against is any prefix, and "…-claude" is still one
+        // of both.
+        Assert.StartsWith("claude-buddy-rc--claude", claude.Session);
+        Assert.StartsWith("claude-buddy-rc--claude", board.Session);
+        Assert.NotEqual(claude.Session, board.Session);
         Assert.NotEqual(claude.Target, board.Target);
     }
 
@@ -87,7 +96,14 @@ public class RemoteControlBridgeRoutingTests : IDisposable
         var test = RemoteControlBridge.TmuxNames(".claude", "test");
 
         Assert.NotEqual(app.Session, test.Session);
-        Assert.StartsWith(app.Session, test.Session);
+
+        // The tag lands in the middle now, between the account and the machine
+        // name, so the app's whole name is no longer a prefix of the tagged
+        // one. What has to be true is that the tag is in there and that the two
+        // cannot collide — a tagged relay must not be the app's relay.
+        Assert.Contains("-test-", test.Session);
+        Assert.StartsWith("claude-buddy-rc--claude", app.Session);
+        Assert.StartsWith("claude-buddy-rc--claude", test.Session);
     }
 
     // A tag is sanitised the same way the account is, for the same reason.
@@ -174,9 +190,20 @@ public class RemoteControlBridgeRoutingTests : IDisposable
     // Composed rather than interpolated into a raw string: the JSON is itself
     // full of braces, and the brace-counting rules make the nested form more
     // fragile than it is readable.
+    // A **user** row, and that is the whole point rather than an arbitrary
+    // choice. A message from another machine is handed to the relay the way a
+    // person's typing is handed to a session, so it lands in a user row; an
+    // assistant row carrying the same tag is the relay's own model quoting the
+    // message back while it narrates, which is its own second draft and is
+    // deliberately not delivered (BridgeProtocol.ParseInboundMessagesFrom, and
+    // MirrorRoutingTests, which pins that rule directly).
+    //
+    // These rows used to say "assistant", which made every negative case below
+    // pass for the wrong reason — empty because the row type disqualified it,
+    // not because the content held no message.
     private static string Row(string uuid, string content) =>
-        "{\"uuid\":\"" + uuid + "\",\"type\":\"assistant\","
-        + "\"message\":{\"role\":\"assistant\",\"content\":" + content + "}}";
+        "{\"uuid\":\"" + uuid + "\",\"type\":\"user\","
+        + "\"message\":{\"role\":\"user\",\"content\":" + content + "}}";
 
     private static string ToolResult(string text) =>
         "[{\"type\":\"tool_result\",\"content\":" + JsonSerializer.Serialize(text) + "}]";
@@ -317,7 +344,7 @@ public class RemoteControlBridgeRoutingTests : IDisposable
     {
         using var bridge = new RemoteControlBridge(".claude");
         var tagged = Tagged("mac-mini", "no uuid");
-        var row = "{\"type\":\"assistant\",\"message\":{\"content\":"
+        var row = "{\"type\":\"user\",\"message\":{\"content\":"
                   + ToolResult(tagged) + "}}";
 
         Assert.Single(Collect(bridge, row));
@@ -617,7 +644,7 @@ public class RemoteControlBridgeRoutingTests : IDisposable
     {
         using var bridge = new RemoteControlBridge(".claude");
 
-        var row = "{\"uuid\":\"u1\",\"type\":\"assistant\",\"message\":{\"role\":\"assistant\","
+        var row = "{\"uuid\":\"u1\",\"type\":\"user\",\"message\":{\"role\":\"user\","
                 + "\"content\":[{\"text\":\"no type here\"}]}}";
 
         Assert.Empty(Collect(bridge, row));
@@ -630,7 +657,7 @@ public class RemoteControlBridgeRoutingTests : IDisposable
     {
         using var bridge = new RemoteControlBridge(".claude");
 
-        var row = "{\"uuid\":\"u1\",\"type\":\"assistant\",\"message\":{\"role\":\"assistant\","
+        var row = "{\"uuid\":\"u1\",\"type\":\"user\",\"message\":{\"role\":\"user\","
                 + "\"content\":[{\"type\":7}]}}";
 
         Assert.Empty(Collect(bridge, row));

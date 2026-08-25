@@ -123,7 +123,18 @@ namespace ClaudeBuddy
             // matters.
             if (!string.IsNullOrWhiteSpace(tag)) safe += "-" + tag.Replace('.', '-').Replace(':', '-');
 
-            var session = TmuxSessionPrefix + safe;
+            // The machine's own name goes in, and it is not cosmetic.
+            //
+            // Two machines signed into one account with the same profile
+            // directory — the ordinary case, and the exact case the mirror
+            // exists for — used to build the identical relay name, and that name
+            // is what SendMessage addresses. One relay's own name is excluded
+            // from its peer list, so with exactly two machines it happened to
+            // work; with three, "send this to claude-buddy-rc--claude" names two
+            // different relays and there is nothing to say which answered. The
+            // prefix is untouched, so IsOwnRelay still recognises every relay as
+            // one, which is what keeps them off the board.
+            var session = TmuxSessionPrefix + safe + "-" + MachineTag();
 
             // "=" forces an exact match. Without it tmux resolves a target by
             // prefix, and one account's name is a prefix of another's the moment
@@ -154,6 +165,56 @@ namespace ClaudeBuddy
         public static string ScratchRoot => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             "Library", "Caches", "ClaudeBuddy", "rc-bridge");
+
+        // The directory the relay is *run from*, and the only thing that decides
+        // what other machines call it.
+        //
+        // This is the whole answer to a question this repo had recorded as
+        // unresolved for months, and it is not the answer anyone expected.
+        // `--remote-control <name>` takes a name — the CLI's own help says
+        // "(optionally named)" — and **the name is ignored**. So is
+        // `--remote-control-session-name-prefix`, whose help says it sets the
+        // prefix for auto-generated names and defaults to the hostname. Both
+        // were passed and neither had any effect. Measured 24 Aug 2026 against
+        // Claude Code on this machine:
+        //
+        //     claude --remote-control cb-probe-explicit-name    (cwd ~)
+        //       → "This session is warrenthompson-9b [676a8f]"
+        //
+        //     claude --remote-control --remote-control-session-name-prefix \
+        //            claude-buddy-rc--claude-probe                (cwd ~)
+        //       → "This session is warrenthompson-9b [676a8f]"
+        //
+        // What *does* decide the name is the working directory's own basename,
+        // lowercased, plus a short suffix — `~` gives `warrenthompson-9b`,
+        // `.../Source/Placement` gives `placement-41`, and the spike's
+        // `claude-buddy-52` was the repo directory all along. So the relay is
+        // run from a directory named after itself, and the name follows:
+        //
+        //     cwd .../rc-cwd/claude-buddy-rc--claude-board-warrensmbp
+        //       → "This session is claude-buddy-rc--claude-board-warrensmbp-43"
+        //
+        // That matters far beyond tidiness. **Everything that recognises a relay
+        // matches on this prefix** — BridgeProtocol.IsOwnRelay, which keeps
+        // relays off the board, and the mirror's discovery, which is how a far
+        // Buddy is found at all. Left at the home directory, a relay is called
+        // `warrenthompson-9b`, IsOwnRelay never matches it (so a dead one
+        // becomes a phantom orb) and no Buddy ever finds another (so a mirror
+        // never engages and every remote panel silently stays a messaging
+        // channel). Both failures are quiet, which is why this was worth
+        // measuring rather than reasoning about.
+        //
+        // An empty directory rather than the home directory is also the better
+        // answer on its own merits: a relay is plumbing and has no business
+        // inheriting whatever CLAUDE.md and project settings it happened to
+        // start next to. Kept out of ScratchRoot deliberately — that tree is
+        // swept, and PreparePrivateTmp deletes its own directory on every start.
+        // Confirmed not to raise the folder-trust prompt.
+        public static string CwdRoot => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Library", "Caches", "ClaudeBuddy", "rc-cwd");
+
+        public string RelayCwd => Path.Combine(CwdRoot, _tmuxSessionName);
 
         // How long to wait for the hook's status file to appear, then for the
         // Remote Control banner. Starting Claude Code cold — plugin sync, MCP,
@@ -235,8 +296,13 @@ namespace ClaudeBuddy
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var configDir = Path.Combine(home, _profileDir);
 
+            // Run from a directory named after the relay, because that name is
+            // the only thing anything else can recognise it by. See RelayCwd,
+            // which has the measurement.
+            var cwd = PrepareRelayCwd() ?? home;
+
             if (!Run(_tmux, 5000, out _, "new-session", "-d", "-s", _tmuxSessionName,
-                    "-x", "200", "-y", "50", "-c", home))
+                    "-x", "200", "-y", "50", "-c", cwd))
             {
                 return false;
             }
@@ -255,7 +321,42 @@ namespace ClaudeBuddy
                 .Append("CLAUDE_CONFIG_DIR=").Append(Quote(configDir)).Append(' ')
                 .Append("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 ")
                 .Append(Quote(claude))
+
+                // Passed, and measured to have no effect — the name comes from
+                // the working directory above. Kept rather than dropped for two
+                // reasons: it costs nothing, and if a later Claude Code starts
+                // honouring it, the name it would then set is the same one the
+                // cwd is already producing, so the two cannot disagree.
                 .Append(" --remote-control ").Append(Quote(_tmuxSessionName))
+
+                // Without these the relay is blocked from doing the one thing
+                // it exists for, and blocked silently.
+                //
+                // Measured 24 Aug 2026. A relay inheriting the user's default
+                // permission mode — auto, here — had its very first SendMessage
+                // refused outright: *"Permission for this action was denied by
+                // the Claude Code auto mode classifier. Reason: Blocked by
+                // classifier."* The session's own reading of it was right, and
+                // is worth quoting because it is not going to stop being true:
+                // a large opaque base64 blob relayed to another agent session
+                // looks exactly like an exfiltration attempt, and that is what
+                // the classifier is for.
+                //
+                // Nobody is watching a detached relay, so there is no one to
+                // approve anything: in auto mode every frame is denied, and in
+                // the default mode it would sit on a prompt until the request
+                // timed out. Either way the mirror never carries a byte and
+                // nothing on screen says why.
+                //
+                // The answer is to be specific rather than permissive. These are
+                // the only two tools a relay ever calls, they are named
+                // explicitly, and the mode is one that does not route them past
+                // a classifier looking for a pattern this genuinely matches.
+                // Emphatically *not* --dangerously-skip-permissions: a session
+                // that may do anything is a much worse trade than one that may
+                // do these two things.
+                .Append(" --permission-mode acceptEdits")
+                .Append(" --allowedTools SendMessage ListAgents")
                 .ToString();
 
             if (!Run(_tmux, 5000, out _, "send-keys", "-t", _tmuxPaneTarget, line, "Enter"))
@@ -395,6 +496,24 @@ namespace ClaudeBuddy
                 .ConfigureAwait(false);
 
             return raw is null ? null : BridgeProtocol.ParseSentMessageId(raw);
+        }
+
+        // Hands one MirrorProtocol frame to another machine's Buddy.
+        //
+        // Separate from SendToAsync above rather than a flag on it, because the
+        // two are different errands with different prompts: that one is carrying
+        // a person's sentence to a model, this one is carrying a line of machine
+        // data to a parser. The receipt is all that is waited for — a frame's
+        // *answer* comes back later as its own inbound frame, correlated by the
+        // id inside it, exactly as a reply to a message is.
+        public async Task<bool> SendFrameToAsync(string peerName, string frame)
+        {
+            var raw = await AskAsync(
+                BridgeProtocol.SendFramePrompt(peerName, frame),
+                t => t.Contains("msg_id", StringComparison.Ordinal))
+                .ConfigureAwait(false);
+
+            return raw is not null;
         }
 
         // Asks a session what it is and what it can do. Fire-and-forget by
@@ -583,12 +702,19 @@ namespace ClaudeBuddy
                     }
                 }
 
+                // Which kind of turn this row is, which decides whether anything
+                // in it can be a message from another machine. See Deliver.
+                var rowType = root.TryGetProperty("type", out var rt)
+                              && rt.ValueKind == JsonValueKind.String
+                    ? rt.GetString() ?? ""
+                    : "";
+
                 if (!root.TryGetProperty("message", out var message)) return;
                 if (!message.TryGetProperty("content", out var content)) return;
 
                 if (content.ValueKind == JsonValueKind.String)
                 {
-                    Deliver(content.GetString() ?? "");
+                    Deliver(content.GetString() ?? "", rowType);
                     return;
                 }
 
@@ -602,14 +728,15 @@ namespace ClaudeBuddy
                     switch (type.GetString())
                     {
                         case "tool_result":
-                            Deliver(Flatten(block));
+                            Deliver(Flatten(block), rowType);
                             break;
 
-                        // The bridge narrating a reply rather than the reply row
-                        // itself. Worth reading: a paraphrase still carries the
-                        // tag when the model quotes it back.
+                        // The relay narrating a reply rather than the reply row
+                        // itself. Still read, because it can satisfy the request
+                        // in flight — but no longer treated as a message; see
+                        // Deliver.
                         case "text":
-                            Deliver(block.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "");
+                            Deliver(block.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "", rowType);
                             break;
                     }
                 }
@@ -637,14 +764,32 @@ namespace ClaudeBuddy
         // Two unrelated things can be true of one piece of text, so both are
         // checked: it may satisfy the request in flight *and* carry a message
         // from another machine.
-        private void Deliver(string text)
+        //
+        // The row's own type decides the second of those, and getting that wrong
+        // is what put paraphrases in the chat panel. A message from another
+        // machine always arrives as a **user** row — the relay is handed it, the
+        // same way a person's typing is handed to a session (see
+        // docs/remote-control-findings.md, which captures one). An assistant row
+        // carrying the same tag is the relay's *model* quoting a message back
+        // while it narrates what it just did, and that quote is its own writing:
+        // sometimes abridged, sometimes reworded, always a second draft. It was
+        // being delivered as though the far session had said it, which meant the
+        // panel could show a summary of a message beside the message.
+        //
+        // Tool results keep coming through from whatever row they land in,
+        // because they are how a request is answered rather than something
+        // anyone reads.
+        private void Deliver(string text, string rowType)
         {
             if (string.IsNullOrEmpty(text)) return;
 
             CompleteAwaitedToolResult(text);
 
-            var inbound = BridgeProtocol.ParseInboundMessage(text);
-            if (inbound is not null) MessageReceived?.Invoke(inbound.Value);
+            // Every message in the row, not just the first: two peers answering
+            // in one turn is ordinary once frames are in flight. The row's type
+            // decides whether there are any at all — see the rule's own note.
+            foreach (var inbound in BridgeProtocol.ParseInboundMessagesFrom(rowType, text))
+                MessageReceived?.Invoke(inbound);
         }
 
         // --- stopping ---
@@ -785,6 +930,30 @@ namespace ClaudeBuddy
             }
         }
 
+        // The directory the relay runs from, made if it isn't there.
+        //
+        // Empty and stays empty — nothing writes here. It exists so the
+        // directory's *name* can be read by Claude Code, which is the only lever
+        // there is on what other machines call this relay.
+        //
+        // Null on failure rather than throwing, and the caller falls back to the
+        // home directory: a relay with an unrecognisable name is a degraded
+        // relay (no mirror, and a stale one can draw a phantom orb), which is
+        // still much better than no relay at all.
+        private string? PrepareRelayCwd()
+        {
+            try
+            {
+                var dir = RelayCwd;
+                Directory.CreateDirectory(dir);
+                return dir;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private void TryDeletePrivateTmp()
         {
             var dir = _privateTmp;
@@ -792,6 +961,50 @@ namespace ClaudeBuddy
             if (dir is null) return;
 
             try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+
+        // A short, stable, tmux-safe stand-in for this machine.
+        //
+        // Truncated because the whole name is pasted around as a peer address
+        // and some machine names are a sentence; sanitised because tmux parses a
+        // dot or a colon as a window/pane separator, and a Mac's hostname
+        // routinely contains both ("Warrens-MacBook-Pro.local").
+        internal static string MachineTag()
+        {
+            string name;
+            try { name = Environment.MachineName; }
+            catch { name = ""; }
+
+            return MachineTag(name);
+        }
+
+        // Split from the call to Environment.MachineName so every branch below
+        // can be tested: a headless runner has exactly one machine name, and the
+        // interesting cases are the ones it does not have.
+        internal static string MachineTag(string? name)
+        {
+            name ??= "";
+
+            // ".local" is Bonjour's, not the user's: every Mac's hostname ends
+            // in it, so it carries no information and costs six of the twenty
+            // characters there are. Dropped first, before the length cap, or a
+            // perfectly ordinary "Warrens-MacBook-Pro.local" truncates to
+            // "warrens-macbook-prol".
+            if (name.EndsWith(".local", StringComparison.OrdinalIgnoreCase))
+                name = name[..^".local".Length];
+
+            var safe = new string(name
+                .Where(c => char.IsLetterOrDigit(c) || c == '-')
+                .ToArray())
+                .Trim('-')
+                .ToLowerInvariant();
+
+            if (safe.Length > 20) safe = safe[..20];
+
+            // Never empty: an empty tag would put a trailing dash on the name
+            // and, worse, would make two machines that both failed to report a
+            // name collide again.
+            return safe.Length == 0 ? "machine" : safe;
         }
 
         private static string Quote(string value) => "'" + value.Replace("'", "'\\''") + "'";

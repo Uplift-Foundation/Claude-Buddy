@@ -927,13 +927,34 @@ session's chat — any of those brings the relay up, and orbs for the sessions i
 can see appear a few seconds later, badged `⇄`.
 
 Clicking one opens a chat panel, since there is no terminal on this machine to
-jump to. That panel is a **messaging channel rather than a mirror**: it shows
-what you sent and what came back, like a text thread, and does not show what
-that session is doing the rest of the time. Its transcript lives on the other
-machine, and this is a way to talk to it, not a window onto it. The orb pulses
-and the panel says "…is working" while it is busy, which is as close to watching
-it work as this can get — there is no stream to subscribe to, only a message
-when it has something to say.
+jump to. What that panel *is* depends on one thing: **whether the other machine
+is also running Claude Buddy.**
+
+**If it is, you get a live view.** The panel shows that session's own
+conversation — the same words the person sitting in front of it sees — because
+the Buddy over there reads its transcript off its own disk and sends it across
+verbatim. You can scroll back through it. What you type is typed into that
+session's terminal, so **every slash command works**, `/color` and `/rename`
+included, exactly as it would locally. Updates arrive as the session works
+rather than only when it finishes.
+
+**If it is not, you get a messaging channel**, which is what this used to be
+always, and the panel says so in as many words. Without a Buddy on the other
+side there is no way to read a file there: the only channel is peer messaging,
+which reaches the far session's *model* rather than its terminal. So what comes
+back is a reply that model composed for you — its own account of its
+conversation rather than the conversation. That is a real limitation of the
+transport and not something politeness fixes; it was measured being asked
+nicely and it paraphrased anyway. The panel labels it instead of letting a
+summary pass for a transcript, the orb pulses, and it says "…is working" while
+the far session is busy.
+
+The live view is **verify-or-refuse**. Every piece of transcript that crosses
+the wire carries a SHA-256 of what it is supposed to be, because the thing
+relaying it is a language model pasting text it cannot read. A piece that
+arrives altered is asked for again and then refused — the panel shows an error
+and nothing else. It never quietly falls back to the model-written version,
+which would substitute a summary at the exact moment something was going wrong.
 
 One thing a remote orb cannot know: **which computer it is on**. A peer is
 reported as a name, a kind and a status, with no hostname anywhere, so the title
@@ -944,17 +965,26 @@ machine, so Buddy asks each remote session once what colour it is and uses the
 answer; until it replies, or if it has none set, the orb takes a colour derived
 from its name so several remote orbs are still telling apart. That costs one
 message per remote session each time Buddy starts, which is the only route
-available — `docs/remote-control-findings.md` explains why nothing cheaper works.
+available when there is no Buddy on the other side —
+`docs/remote-control-findings.md` explains why nothing cheaper works. When there
+is one, it comes across with the rest of what that Buddy reports and costs
+nothing extra.
 
-The same question asks **which slash commands that session can run**, and those
-are what the panel offers when you type `/`. It is a shorter list than a local
-session's, and the surprise is *which* commands are missing: Claude Code's
-**built-ins** — `/compact`, `/color`, `/agents` — cannot work over this channel
-at all, because a message reaches the other session's *model* and never its
-command handler. Custom commands can, since those are just instructions the
-model reads. Until a session answers, the panel offers nothing rather than
-offering commands that would fail — and a session that has none, or that never
-replies, keeps an empty list rather than being given a plausible one.
+**Which slash commands the panel offers** depends on the same thing, and the
+difference is the clearest illustration of what a live view buys.
+
+With one, the list is everything that session can run — built-ins included —
+read off the far machine's own disk by the Buddy beside it, and they genuinely
+run, because your message goes into that CLI's input line.
+
+Without one, Claude Code's **built-ins** — `/compact`, `/color`, `/agents` —
+cannot work at all, because a message reaches the other session's *model* and
+never its command handler. Custom commands can, since those are just
+instructions the model reads, so the panel asks each session which ones it has
+and offers only those. Until it answers, the panel offers nothing rather than
+offering commands that would fail; it re-asks a few times before giving up, and
+a session that has none keeps an empty list rather than being given a plausible
+one.
 
 `docs/remote-control-findings.md` records what was measured against two real
 machines before any of this was built — including what the relay does and does

@@ -124,8 +124,12 @@ Consequences:
   "filter the bridge's own session out of the snapshot" step is unnecessary.
 - The name passed to `--remote-control` did **not** become the peer name: the
   session self-named `claude-buddy-52`, which looks derived from the working
-  directory. Not chased further; worth pinning down so the bridge is
-  recognisable in a user's own session list.
+  directory. **Chased down on 24 Aug 2026 and confirmed — see "What actually
+  names a relay" at the bottom of this file.** The guess here was right, it is
+  the working directory, and it turned out to matter far more than "recognisable
+  in a user's own session list": two separate features key on that name's prefix
+  and neither could work until the relay was run from a directory named after
+  itself.
 - Peer rows carry **no machine or hostname**. Asked directly, the bridge
   answered `"machine":"unknown"`. Orb titles will have to use the session name,
   or get the hostname another way.
@@ -397,10 +401,297 @@ Two consequences, and the first is a real design problem:
    session list whenever Buddy starts the bridge. It needs a name that says what
    it is — which makes the unresolved `--remote-control <name>` behaviour (the
    name passed was ignored in favour of a cwd-derived `claude-buddy-52` /
-   `claude-buddy-a8`) worth fixing rather than shrugging at.
+   `claude-buddy-a8`) worth fixing rather than shrugging at. **Resolved on
+   24 Aug 2026 — see "What actually names a relay" at the bottom of this file.**
+   The observation here was right: the name passed is ignored. What names a
+   session is its working directory.
 2. **Injected prompts and a human's typing interleave in the same pty.** Buddy
    can paste a prompt into the same input line a user is mid-sentence in. So the
    bridge must be a session Buddy owns exclusively, and Buddy should tolerate
    unexpected turns in the transcript rather than assuming every row is a reply
    to something it sent — which the `from-name`/`msg_id` correlation already
    handles, and is another reason not to rely on turn ordering.
+
+---
+
+# The verbatim mirror (bugfix/remote-chat-verbatim-mirror)
+
+Everything above describes a **messaging channel**, and everything above is
+still true of one. What follows is what was added when that channel turned out
+not to be enough, and — importantly — what about it has and has not been
+confirmed on real machines.
+
+## The bug, stated precisely
+
+A remote session's panel showed **a model's second draft of a conversation, in a
+window that looked exactly like the one showing a real conversation.** That is
+worse than showing less, because nothing about it reads as a summary.
+
+The cause is in the transport and was already written down, at the top of
+`BridgeProtocol.SendMessagePrompt`: a peer message reaches the far session's
+*model*, which then composes a reply *for a peer*. Watched side by side, the
+remote session's own chat said "Summary for you: 6 messages scanned…" while the
+reply it relayed said something different in different words. Both were its own
+writing; neither was wrong; the person reading the relayed one could not tell
+they were seeing a second draft.
+
+`FidelityRequest` — a parenthetical asking it to give its complete result rather
+than a summary — was the mitigation, and it is a request to a model, not a
+guarantee. The same mechanism is why `/color` came back *"I can't run /color …
+only the harness's own command handler can set"* it: nothing typed into that
+panel ever reached the far CLI's input line.
+
+## What was added
+
+When the far machine is **also running Claude Buddy**, the two Buddies talk to
+each other through the relays they already run, using framed `CB-MIRROR:`
+messages that ride inside the same `<cross-session-message>` bodies. The far
+Buddy reads its session's transcript **off its own disk** and types input into
+its **own tmux pane**. The relay model in the middle is demoted from author to
+courier.
+
+- **Identity is exact, not guessed.** `claude agents --json` (captured live —
+  see `AgentRosterTests`) reports `name`, `pid` **and `sessionId`** per
+  registration, and the session id is what Buddy's own status files are named
+  after. So peer name → registration → status file is a join, not a
+  resemblance. An ambiguous name (two sessions, one name) refuses rather than
+  picking; the panel then says "no live view", which is visible and honest,
+  where a wrong pick would silently show someone's other conversation.
+- **Verify or refuse.** Every frame carries a SHA-256 of its payload and the
+  last carries one of the whole. An unverified payload is *nulled at the parse
+  boundary* so no later code can reach it by forgetting to check. One bad piece
+  is re-requested twice; after that the transfer fails and the panel shows an
+  error and nothing else. It deliberately does **not** fall back to the
+  messaging-channel version on failure — that would substitute a summary at
+  precisely the moment integrity failed.
+- **Base64, standard alphabet, not url-safe.** Two reasons, both load-bearing:
+  standard base64 cannot contain `<` or `>`, so a payload can never close the
+  `</cross-session-message>` tag it is travelling inside; and it cannot contain
+  `_`, so a payload can never spell `msg_id`, which is the string
+  `RemoteControlBridge.AskAsync` waits for to decide a send has been receipted.
+  Both are covered by tests.
+
+## Two bugs found on the way, worth recording
+
+1. **`ParseInboundMessage` used `Match`, not `Matches`.** A transcript row
+   carrying two `<cross-session-message>` tags — two sessions answering in one
+   turn — silently dropped all but the first. No error, no gap, just a message
+   that never arrived. Rare with hand-typed messages; ordinary once frames are
+   in flight.
+2. **The relay's own narration was being delivered as a chat message.**
+   `Route` fed *every* `text` block to `ParseInboundMessage`, and the relay
+   model quotes the tag back while narrating what it just did. That quote is its
+   own writing — sometimes abridged, sometimes reworded — so the panel could
+   show a summary of a message beside the message. Fixed by delivering only from
+   `user`-type rows, which is where a genuine inbound message lands (captured
+   above: *"Replies … arrive on a later turn, as a `role=user` transcript
+   row"*). Tool results still come through from any row, since they answer
+   requests rather than being read.
+
+## Confirmed vs assumed
+
+**Confirmed**, by the automated suites (`MirrorProtocolTests`,
+`AgentRosterTests`, `MirrorRoundTripTests`, `RemoteMirrorChatSessionTests`,
+`RemoteMirrorPanelScreenshots`):
+
+- A transcript on disk arrives at the panel byte-identical to the rows a local
+  panel would have been given, through chunking, gzip, base64, framing,
+  reassembly and window alignment — including a file large enough to need many
+  frames.
+- A payload altered in flight is refused, not shown, at every level: the parser,
+  the assembler, the client, and the panel.
+- Window alignment matches `LocalCliChatSession`'s, including the step-over rule
+  for a window that lands entirely inside one enormous row.
+- Typing is refused when the *far* machine has replying switched off, or that
+  session has no pane. The far machine's setting is what decides.
+- `/clear` on the far side bumps a generation counter and the client re-anchors
+  instead of appending to a file that no longer exists.
+
+**Assumed, and needing a real two-machine run** — these are the honest gaps:
+
+- ~~That `--remote-control <name>` sticks.~~ **Settled — measured, and the
+  answer was no.** See "What actually names a relay" below; the code changed as
+  a result.
+- ~~The size ceiling on a `SendMessage` body.~~ **Measured — 8KB is fine.**
+- ~~Whether the relay model reliably relays base64 verbatim, and at what rate.~~
+  **Measured — it does, byte for byte.** Both in "Relaying a frame, measured"
+  below, along with what it costs, which was the finding that changed the
+  design.
+- **The residual trust boundary.** Requests are only served to a peer whose name
+  wears the relay prefix. Everything on the account shares one namespace, so
+  this is a guard against confusion, not against a determined actor with access
+  to the account. Typing into a session remains gated by the far machine's own
+  reply setting.
+- **Windows.** No new surface: Remote Control is gated off entirely by
+  `RemoteControlBridge.IsSupported`, and local chat-send already requires a tmux
+  pane. The protocol, unit and integration suites still run on the Windows CI
+  leg.
+
+
+## What actually names a relay (measured 24 Aug 2026)
+
+The one thing this document had left open turned out to be load-bearing, and the
+answer is not what either the notes above or the code assumed. Probed directly on
+this machine rather than reasoned about.
+
+**Both naming flags are ignored.** The CLI advertises two:
+
+```
+--remote-control [name]                        Start an interactive session with
+                                               Remote Control enabled (optionally named)
+--remote-control-session-name-prefix <prefix>  Prefix for auto-generated Remote Control
+                                               session names (default: hostname)
+```
+
+Neither had any effect. Run from `~`, with each in turn:
+
+```
+claude --remote-control cb-probe-explicit-name
+  → This session is warrenthompson-9b [676a8f] — the name other sessions use to message it
+
+claude --remote-control --remote-control-session-name-prefix claude-buddy-rc--claude-probe
+  → This session is warrenthompson-9b [676a8f]
+```
+
+The hostname is `Warrens-MBP.localdomain`, so the documented hostname default is
+not what happened either.
+
+**The working directory is what names it.** `warrenthompson` is the basename of
+`~`. The pattern holds across every session in the registry — `.../Source/Placement`
+is `placement-41`, `.../GTD/Evidence` is `evidence` — and it explains the spike's
+`claude-buddy-52`, which was the repo directory all along, not a coincidence.
+
+**Confirmed by construction.** Running the relay from a directory named after
+itself produces exactly the name everything is looking for:
+
+```
+cwd .../Library/Caches/ClaudeBuddy/rc-cwd/claude-buddy-rc
+  → This session is claude-buddy-rc-43 [b57bc7]
+```
+
+No folder-trust prompt was raised by a fresh directory under `~/Library/Caches`.
+
+**Two bugs this was silently causing**, both of which the fix cures:
+
+1. `BridgeProtocol.IsOwnRelay` matches the `claude-buddy-rc-` prefix, and until
+   now **it matched nothing**. A relay left registered by a dead process shows up
+   as an offline peer, so it was worth an orb after all — a phantom orb named
+   after Buddy's own plumbing, which is the exact failure that test was written
+   to prevent.
+2. The verbatim mirror finds a far Buddy by the same prefix, so it could never
+   have found one. Every remote panel would have stayed a messaging channel with
+   nothing on screen to say why — degraded, never wrong, and completely silent.
+
+**Also worth recording: the peer-row format has gained fields.** The capture at
+the top of this file shows three; a row now carries up to five:
+
+```
+persist chat window resize [ae1bcf]  ·  bg  ·  busy  ·  started 15h ago
+job-lawyer [34984f]  ·  interactive  ·  idle  ·  tmux testpane:@9.%10  ·  started 4d ago
+```
+
+`BridgeProtocol.ParseAgents` tolerates this without change — its `status` group
+is `.+?` to end of line, so the extra segments land in `status`, and `Working`
+and `IsOffline` both test by substring. Worth knowing before anyone tightens that
+regex: the trailing segments are not stable and `tmux <session>:@<win>.%<pane>`
+exposes the tmux session name, which is a second, independent way to recognise a
+relay if the cwd trick ever stops working.
+
+**And one thing settled for free:** the name in `claude agents --json` and the
+name a peer sees in `ListAgents` are **the same name**. `warrenthompson-9b`
+appeared in both, as did `claude-buddy-rc-43`. That is what makes AgentRoster's
+name → sessionId join valid — it is joining across one namespace, not two.
+
+
+## Relaying a frame, measured (24 Aug 2026)
+
+Three things were being carried as assumptions: whether a `SendMessage` body
+would hold an 8KB frame, whether a model would relay base64 verbatim, and what a
+mirror costs. All three are answered, and the third moved the design.
+
+Measured with two Remote Control sessions on this machine — the transport is the
+same whether the peer is on another machine or this one, and a receiver does not
+have to *reply* for fidelity to be checked: the message lands in its transcript
+and can be read off disk.
+
+### Fidelity: yes, byte for byte
+
+A real `CB-MIRROR` frame — 6144 bytes of incompressible payload, 8372 characters
+of frame — was relayed and arrived **byte-identical**:
+
+```
+cross-session-messages found: 1
+--- row type=user body_chars=8372 first_line_chars=8372
+   payload_bytes=6144 hash_matches=True
+   byte_identical_to_sent=True
+```
+
+Note `type=user`. That is the row type `RemoteControlBridge.Deliver` now requires
+before treating anything as an inbound message, confirmed independently here.
+
+### Size: 8KB is not the limit
+
+The 8372-character frame went through as one `SendMessage` with no complaint
+(`inputchars=8572` including the envelope). `MirrorProtocol.ChunkBytes` is not
+near a ceiling.
+
+### The permission classifier blocks it, and silently
+
+**The first attempt failed, and this is the finding most likely to bite
+someone.** A relay inheriting the user's default permission mode — auto — had
+its `SendMessage` refused outright:
+
+```
+Permission for this action was denied by the Claude Code auto mode classifier.
+Reason: Blocked by classifier.
+```
+
+The session's own reading of it is worth quoting, because it is not going to
+stop being true: *"a ~9KB opaque base64 blob being relayed to another agent
+session looks like an exfiltration/injection pattern to the classifier."* It
+does, and that is what the classifier is for.
+
+Nobody is watching a detached relay, so nothing can approve anything: in auto
+mode every frame is denied, and in the default mode it would sit on a prompt
+until the request timed out. The mirror would carry nothing and say nothing.
+
+Fixed by launching the relay with `--permission-mode acceptEdits --allowedTools
+SendMessage ListAgents` — specific rather than permissive, and emphatically not
+`--dangerously-skip-permissions`. With that, the same frame went straight
+through.
+
+### Cost: this is what changed the design
+
+**~9,100 output tokens and roughly a minute and a half, for one 8KB frame.** The
+sender has to *emit* the entire base64 blob as a tool argument, so the cost is
+proportional to the frame and there is no way around it.
+
+That is survivable for one frame. It was not survivable for the payload the
+mirror was actually sending. Raw transcript rows, across eight real transcripts,
+for one panel open:
+
+```
+ rows   rowKB  rowGz rowFr | turns  turnKB turnGz turnFr
+  127   333.5   74.8    13 |    60    25.9    8.6      2
+  185   408.8   99.0    17 |    60    13.4    4.6      1
+   99   248.9   79.1    14 |    57    38.5   11.6      2
+   54   315.8  178.7    30 |    30    10.8    4.1      1
+  268   447.3   94.2    16 |    60    11.9    3.7      1
+```
+
+**13 to 30 frames**, so roughly 120,000 to 270,000 output tokens and twenty
+minutes to an hour to open one panel. Unusable, and the estimate in the original
+design ("typically 1-5 chunks") was simply wrong.
+
+The reason is in the right-hand columns. An assistant row is enormous and almost
+none of it is shown — tool_use blocks, thinking, tool results — while
+`ChatTranscript.Map` renders a tool call as a single summary line and drops
+thinking entirely. The row costs ten to thirty times the turn it produces.
+
+**So the wire now carries turns, not rows: one or two frames, worst case two.**
+The far Buddy reads the file off its own disk and parses it with the *same*
+`ChatTranscript` this app uses locally, then sends the result. Nothing composed
+by a model is in the path, the hash still proves the turns arrive exactly as
+that Buddy produced them, and what is displayed is still what a local panel
+would display — the parse simply happens on the side that has the file, which is
+the side that had to be trusted anyway.

@@ -341,7 +341,21 @@ namespace ClaudeBuddy
             // to remove a turn, and inventing IRemoteChatRemovable for one caller
             // would be ceremony. See RemoteControlChatSession.Removed.
             if (_session is RemoteControlChatSession previousRemote)
+            {
                 previousRemote.Removed -= OnTurnRemoved;
+
+                // A live view is the one thing here that costs something while
+                // nobody is looking: it holds a subscription on the other
+                // machine's Buddy, which keeps that relay — a real Claude Code
+                // session on the user's own account — from idling out. So the
+                // panel closing says so, rather than leaving it to lapse.
+                //
+                // Told on the panel rather than in Dispose because these
+                // sessions are deliberately never disposed: a remote
+                // conversation outlives its orb, since there is no file on this
+                // machine to rebuild it from. See _remoteChats in SessionManager.
+                previousRemote.PanelClosed();
+            }
 
             // The last good name is per session, not per panel. The panel is a
             // singleton and the box outlives a session, so leaving it set meant
@@ -375,7 +389,14 @@ namespace ClaudeBuddy
             session.TurnUpdated += OnTurnUpdated;
             session.StateChanged += OnStateChanged;
 
-            if (session is RemoteControlChatSession remote) remote.Removed += OnTurnRemoved;
+            if (session is RemoteControlChatSession remote)
+            {
+                remote.Removed += OnTurnRemoved;
+
+                // Re-opens the live view if this panel closed it earlier. Cheap
+                // when it is already open and nothing at all in messaging mode.
+                remote.PanelOpened();
+            }
 
             // The backlog usually lands a moment after the panel opens, so the
             // transcript has to be able to be replaced under it rather than only
@@ -1505,6 +1526,16 @@ namespace ClaudeBuddy
 
             _turns.Clear();
             foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
+
+            // Re-read rather than left at what Bind found.
+            //
+            // A remote panel can change what it *is* while open: it starts as a
+            // messaging channel and upgrades to a live view of the far session
+            // the moment that machine's Buddy answers, and the box's own
+            // description of where a message goes changes with it — from
+            // "message this session" to "type into its terminal". Read once at
+            // bind, the box would go on describing the panel it used to be.
+            Input.Watermark = (_session as IRemoteChatComposer)?.ComposerHint ?? "Message…";
 
             // Straight to the bottom rather than the pinned-only rule: a
             // transcript that has just been replaced wholesale has no scroll
