@@ -559,6 +559,76 @@ namespace ClaudeBuddy
             return running;
         }
 
+        // ---- url routing ---------------------------------------------------
+
+        // The profiles a `claude://` link could be delivered to, each paired
+        // with the bundle it would arrive through. See ClaudeDesktopUrlRouting
+        // for why a bundle *path* is the only usable address here.
+        //
+        // Scans fresh rather than reading Snapshot. A link arrives rarely, so
+        // the cost is irrelevant, and the snapshot can be two seconds stale —
+        // long enough to miss the instance that just asked for a sign-in
+        // callback, which is exactly the instance that must not be missed.
+        internal static IReadOnlyList<UrlRouteCandidate> RouteCandidates()
+        {
+            if (!OperatingSystem.IsMacOS()) return Array.Empty<UrlRouteCandidate>();
+
+            var installed = AppPath();
+            var defaultDirectory = DefaultDirectory();
+            var running = new Dictionary<string, ClaudeInstance>(StringComparer.Ordinal);
+
+            foreach (var instance in MacOSProcessScan.Scan())
+            {
+                var directory = DirectoryOf(instance, defaultDirectory);
+                if (directory is null) continue;
+
+                // First wins, matching MapInstances — that is the pid Focus and
+                // Quit already act on, so routing agrees with the rest of the
+                // menu about which process *is* the profile.
+                if (!running.ContainsKey(directory)) running[directory] = instance;
+            }
+
+            var candidates = new List<UrlRouteCandidate>();
+
+            foreach (var (name, directory) in Discover())
+            {
+                var live = running.TryGetValue(directory, out var instance);
+
+                // A running instance's own bundle is authoritative: the clone
+                // may have been rebuilt or removed since it launched, and
+                // delivering to a path it isn't running from would start a
+                // second process on its profile directory — the concurrent
+                // leveldb hazard this whole feature exists to avoid.
+                var bundle = (live ? instance.BundlePath : null)
+                             ?? (ClaudeDesktopBundles.Exists(name) ? ClaudeDesktopBundles.PathFor(name) : null)
+                             ?? installed;
+
+                if (bundle is null) continue;
+
+                candidates.Add(new UrlRouteCandidate(
+                    directory,
+                    bundle,
+                    string.Equals(directory, defaultDirectory, StringComparison.Ordinal),
+                    live,
+                    live ? instance.Pid : 0));
+            }
+
+            return candidates;
+        }
+
+        // Same rule MapInstances uses: no override in the environment means the
+        // app resolved its own default location.
+        private static string? DirectoryOf(ClaudeInstance instance, string defaultDirectory)
+        {
+            if (instance.UserDataDir is null) return defaultDirectory;
+
+            var directory = Canonicalise(instance.UserDataDir);
+            if (directory is not null) return directory;
+
+            try { return Path.GetFullPath(instance.UserDataDir).TrimEnd('/'); }
+            catch { return null; }
+        }
+
         // ---- actions -------------------------------------------------------
 
         // Excluded from coverage: starts Claude Desktop. Every path out of here
@@ -648,29 +718,18 @@ namespace ClaudeBuddy
                     ClaudeDesktopColors.For(folder, isDefault))
                 : null;
 
-            // -n on every path. Without it, `open` does not start anything
-            // when *any* instance of the bundle is already running —
-            // LaunchServices just activates that one — so launching
-            // Default while a profile was up would bring the profile's
-            // window forward and Default would never start. Safe because
-            // the gate above has just confirmed, from a fresh scan, that
-            // this directory has no live instance; an env-var-less
-            // instance maps to Default there, so a Dock-launched Default
-            // is caught too.
-            //
-            // Clones are addressed by path, not bundle id: several bundles
-            // now share com.anthropic.claudefordesktop, so -b would be
-            // ambiguous.
-            var target = clone is not null
-                ? new[] { "-n", "-a", clone }
-                : new[] { "-n", "-b", BundleId };
-
-            // Default is launched without CLAUDE_USER_DATA_DIR whether or
-            // not it runs from a clone, so the app resolves its own
-            // userData and sidecar config exactly as a Dock launch does.
-            var arguments = isDefault
-                ? target
-                : target.Concat(new[] { "--env", "CLAUDE_USER_DATA_DIR=" + directory }).ToArray();
+            // A clone whose icon macOS refused is still a perfectly good clone
+            // — it just wears Anthropic's colours instead of the one that was
+            // picked. Worth saying out loud: IconApplied existed for exactly
+            // this and was never read anywhere, so the failure it records was
+            // invisible, which is most of why the tinting could stop working
+            // without anyone noticing. Writing into an app bundle needs App
+            // Management, and that grant is tied to this app's code identity —
+            // so an ad-hoc rebuild silently revokes it.
+            if (clone is not null && !ClaudeDesktopBundles.IconApplied)
+            {
+                SetTransient(directory, ProfileActivity.Error, ErrorMs, "allow App Management for colours");
+            }
 
             // open(1) rather than starting Contents/MacOS/Claude
             // directly: a direct child would inherit Claude Buddy's
@@ -678,7 +737,46 @@ namespace ClaudeBuddy
             // during a dotnet run would SIGHUP every instance), and
             // have its privacy prompts attributed to Claude Buddy,
             // whose ad-hoc signature changes on every build.
-            return Run("/usr/bin/open", arguments);
+            return Run("/usr/bin/open", LaunchArguments(clone, AppPath(), isDefault, directory));
+        }
+
+        // The `open` command line for a profile launch. Pure so the rule can be
+        // tested without launching anything — the three decisions it encodes
+        // (which bundle, whether -n, whether the env var) are each a way to open
+        // the wrong profile if they're wrong.
+        internal static string[] LaunchArguments(
+            string? clone, string? installedApp, bool isDefault, string directory)
+        {
+            // -n on every path. Without it, `open` does not start anything
+            // when *any* instance of the bundle is already running —
+            // LaunchServices just activates that one — so launching
+            // Default while a profile was up would bring the profile's
+            // window forward and Default would never start. Safe because
+            // the gate in Launch has just confirmed, from a fresh scan, that
+            // this directory has no live instance; an env-var-less
+            // instance maps to Default there, so a Dock-launched Default
+            // is caught too.
+            //
+            // Always by path, never by bundle id. Several bundles now share
+            // com.anthropic.claudefordesktop — every tinted clone is a
+            // byte-identical copy — so -b is ambiguous and LaunchServices can
+            // answer it with a clone. That was a real way to open Default
+            // wearing another profile's colour, and the comment here used to
+            // say so while the Default branch still passed -b anyway.
+            var target = clone ?? installedApp;
+            var open = target is not null
+                ? new[] { "-n", "-a", target }
+                // Nothing resolvable on disk. -b is a poor answer for the
+                // reason above, but it is strictly better than not launching,
+                // and AppInstalled() has to have been true to get here at all.
+                : new[] { "-n", "-b", BundleId };
+
+            // Default is launched without CLAUDE_USER_DATA_DIR whether or
+            // not it runs from a clone, so the app resolves its own
+            // userData and sidecar config exactly as a Dock launch does.
+            return isDefault
+                ? open
+                : open.Concat(new[] { "--env", "CLAUDE_USER_DATA_DIR=" + directory }).ToArray();
         }
 
         // Default is launched with no arguments at all — passing

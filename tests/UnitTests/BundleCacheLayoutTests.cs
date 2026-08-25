@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Avalonia.Media;
+using ClaudeBuddy.Tests;
 using Xunit;
 
 namespace ClaudeBuddy.UnitTests;
@@ -146,18 +147,42 @@ public class BundleCacheLayoutTests : IDisposable
         Assert.False(ClaudeDesktopBundles.ColourMatches("alpha", Colors.Red));
     }
 
+    // A matching marker is necessary and no longer sufficient. The marker says
+    // which colour was *intended*; the Icon\r file is whether one actually went
+    // on, and a clone left by the older ordering bug has the first without the
+    // second — it recorded a refusal as a success, so Ensure() never rebuilt it
+    // and the tint never retried even once App Management was granted.
+    //
+    // Cross-platform, because it is the absence of a file that is being
+    // asserted and no fixture with an awkward name has to be created.
     [Fact]
-    public void AMarkerHoldingTheSameColourMatches()
+    public void AMatchingMarkerWithNoIconOnDiskDoesNotMatch()
     {
         WriteMarker("alpha", Colors.Red.ToString());
+
+        Assert.False(ClaudeDesktopBundles.ColourMatches("alpha", Colors.Red));
+    }
+
+    // macOS only, and not because the rule is: NTFS rejects a carriage return in
+    // a filename outright, so this test cannot stage its own fixture on Windows
+    // — the same reason ClaudeDesktopBundleIconTests splits its case in two, and
+    // the same skip-rather-than-omit pattern.
+    [MacOnlyFact]
+    public void AMarkerHoldingTheSameColourMatchesOnceTheIconIsThere()
+    {
+        WriteMarker("alpha", Colors.Red.ToString());
+        WriteIcon("alpha");
 
         Assert.True(ClaudeDesktopBundles.ColourMatches("alpha", Colors.Red));
     }
 
-    [Fact]
+    // The icon is present here, so this is the colour check failing rather than
+    // the icon check — which is the point of writing one.
+    [MacOnlyFact]
     public void AMarkerHoldingADifferentColourDoesNotMatch()
     {
         WriteMarker("alpha", Colors.Red.ToString());
+        WriteIcon("alpha");
 
         Assert.False(ClaudeDesktopBundles.ColourMatches("alpha", Colors.Blue));
     }
@@ -165,10 +190,11 @@ public class BundleCacheLayoutTests : IDisposable
     // Trimmed, so a marker written with a trailing newline — which any text
     // editor or shell redirect will do — is not read as a different colour and
     // does not trigger a 753MB re-clone.
-    [Fact]
+    [MacOnlyFact]
     public void SurroundingWhitespaceInTheMarkerIsIgnored()
     {
         WriteMarker("alpha", "\n  " + Colors.Red + "  \n");
+        WriteIcon("alpha");
 
         Assert.True(ClaudeDesktopBundles.ColourMatches("alpha", Colors.Red));
     }
@@ -230,6 +256,16 @@ public class BundleCacheLayoutTests : IDisposable
     public void IconAppliedStartsOutTrue()
     {
         Assert.True(ClaudeDesktopBundles.IconApplied);
+    }
+
+    // The file macOS actually looks at for a custom Finder icon: "Icon"
+    // followed by a carriage return, at the bundle root rather than inside
+    // Contents/, which is what keeps the code signature intact.
+    private static void WriteIcon(string profileFolder)
+    {
+        var bundle = ClaudeDesktopBundles.PathFor(profileFolder);
+        Directory.CreateDirectory(bundle);
+        File.WriteAllText(Path.Combine(bundle, "Icon\r"), "");
     }
 
     private void WriteMarker(string profileFolder, string contents)

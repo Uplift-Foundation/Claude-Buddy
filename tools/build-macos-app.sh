@@ -160,6 +160,41 @@ cat > "$CONTENTS/Info.plist" <<PLIST
          own, but it's tied to this bundle's code identity exactly like the
          Automation grant is, so the same "a rebuild can invalidate it"
          caveat above applies to it too. -->
+    <!-- Claude Desktop's own schemes, declared here so Claude Buddy is
+         *eligible* to handle them. Being eligible is not the same as being
+         chosen: Claude Desktop declares them too, so the default is claimed
+         explicitly at runtime (MacOSUrlScheme), and only once there is more
+         than one profile to route between.
+
+         Why claim them at all: LaunchServices resolves a scheme to a bundle
+         id, and every tinted clone Claude Buddy makes is a byte-identical copy
+         of Claude.app — same id, same claimed schemes. So the id cannot say
+         which profile a link belongs to, and a LaunchServices launch carries no
+         CLAUDE_USER_DATA_DIR, which means every sign-in callback lands in the
+         Default profile no matter which profile started it. See
+         ClaudeDesktopUrlRouting for the full story. The msauth scheme is the
+         Microsoft sign-in callback, and is why this shows up as "I can't log
+         in" rather than only as a stray window.
+
+         No backticks anywhere in this block: the heredoc below is unquoted so
+         that $APP_NAME and friends expand, which means backticks in a comment
+         are run as a command substitution. One here cost a build. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>Claude</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>claude</string>
+                <string>msauth.com.anthropic.claudefordesktop</string>
+            </array>
+            <!-- Viewer, not Editor: these schemes are Anthropic's, and this app
+                 forwards them rather than owning them. -->
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+        </dict>
+    </array>
     <key>NSMicrophoneUsageDescription</key>
     <string>Claude Buddy uses the microphone to transcribe what you say, entirely on this machine, when you click the mic that appears on hovering an orb — only after you turn voice input on in Settings.</string>
 </dict>
