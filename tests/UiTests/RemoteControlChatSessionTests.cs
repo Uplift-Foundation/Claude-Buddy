@@ -47,17 +47,39 @@ public class RemoteControlChatSessionTests
         Assert.Contains("other machine", session.ComposerHint);
     }
 
-    // There is no transcript on this machine to page back into, so claiming
-    // IRemoteChatBacklog would put a "loading older messages" spinner on a
-    // conversation with no history to load. The panel type-tests for the
-    // interface, so not implementing it is how that stays true.
+    // The backlog is claimed now and answered honestly, which is a change from
+    // not claiming it at all.
+    //
+    // A live view really can page back — it is a real transcript on the other
+    // machine and the far Buddy will read any byte range of it — so the
+    // interface has to be there. What kept the spinner off a conversation with
+    // no history was never the missing interface itself but the promise behind
+    // it, and HasMore keeps that promise directly: the panel asks before every
+    // fetch, and in messaging mode the answer is false forever.
     [AvaloniaFact]
-    public void DoesNotClaimABacklogItCannotProvide()
+    public void ClaimsABacklogButOffersNoneWithoutALiveView()
     {
         var session = NewSession();
 
-        Assert.IsNotAssignableFrom<IRemoteChatBacklog>(session);
+        var backlog = Assert.IsAssignableFrom<IRemoteChatBacklog>(session);
+        Assert.False(backlog.HasMore);
         Assert.IsAssignableFrom<IRemoteChatComposer>(session);
+    }
+
+    // Nothing to page means nothing prepended, and specifically not a spinner
+    // that never resolves. The panel measures a scroll correction off the return
+    // value, so false has to mean "that was the end" rather than "not yet".
+    [AvaloniaFact]
+    public async Task LoadingOlderWithoutALiveViewIsANoOp()
+    {
+        var session = NewSession();
+        var backlog = (IRemoteChatBacklog)session;
+
+        var prepended = 0;
+        backlog.HistoryPrepended += n => prepended += n;
+
+        Assert.False(await backlog.LoadOlderAsync(CancellationToken.None));
+        Assert.Equal(0, prepended);
     }
 
     // The user's own turn is added by the session, not the panel, so a send that
@@ -94,12 +116,15 @@ public class RemoteControlChatSessionTests
         Assert.Contains("switched off", said[1].Text);
     }
 
-    // A reply from the other machine arrives as an assistant turn, the same as
-    // any other answer in any other panel.
     // The panel opens with one line explaining what it is, so an empty remote
     // conversation reads as "nothing said yet" rather than "failed to load" —
-    // every other panel in this app fills itself from a transcript on this disk,
-    // and this one cannot.
+    // every other panel in this app fills itself from a transcript on this disk.
+    //
+    // It no longer says the far conversation *stays* on the other machine,
+    // because that is now only true when there is no Buddy over there to read
+    // it. Until the handshake answers, the honest line is that the question is
+    // still open — promising a live view and falling back would be worse than
+    // saying "checking" and then succeeding.
     [AvaloniaFact]
     public void OpensWithALineExplainingWhatThePanelIs()
     {
@@ -108,7 +133,7 @@ public class RemoteControlChatSessionTests
         var opening = Assert.Single(session.History);
         Assert.Equal(ChatRole.System, opening.Role);
         Assert.Contains("job-hunter", opening.Text);
-        Assert.Contains("stays on the machine", opening.Text);
+        Assert.Contains("live view", opening.Text, StringComparison.OrdinalIgnoreCase);
     }
 
     [AvaloniaFact]
