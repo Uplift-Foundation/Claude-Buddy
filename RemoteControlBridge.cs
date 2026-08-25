@@ -506,6 +506,10 @@ namespace ClaudeBuddy
         // data to a parser. The receipt is all that is waited for — a frame's
         // *answer* comes back later as its own inbound frame, correlated by the
         // id inside it, exactly as a reply to a message is.
+        // Excluded from coverage: types a frame into a live relay on another
+        // machine and waits for its receipt. What the prompt says is
+        // BridgeProtocol.SendFramePrompt, which is pure and covered.
+        [ExcludeFromCodeCoverage]
         public async Task<bool> SendFrameToAsync(string peerName, string frame)
         {
             var raw = await AskAsync(
@@ -940,6 +944,12 @@ namespace ClaudeBuddy
         // home directory: a relay with an unrecognisable name is a degraded
         // relay (no mirror, and a stale one can draw a phantom orb), which is
         // still much better than no relay at all.
+        // Excluded from coverage: exists to be the try/catch around a real
+        // mkdir. Null on failure rather than throwing, and the caller falls back
+        // to the home directory — a relay with an unrecognisable name is a
+        // degraded relay, which is still much better than no relay at all. What
+        // the directory is called is RelayCwd, which is covered.
+        [ExcludeFromCodeCoverage]
         private string? PrepareRelayCwd()
         {
             try
@@ -969,6 +979,12 @@ namespace ClaudeBuddy
         // and some machine names are a sentence; sanitised because tmux parses a
         // dot or a colon as a window/pane separator, and a Mac's hostname
         // routinely contains both ("Warrens-MacBook-Pro.local").
+        // Excluded from coverage: exists to read Environment.MachineName and to
+        // catch it failing, which would make the answer whatever machine the
+        // tests are running on. The rule — truncate, sanitise, fall back — is
+        // the overload below, which takes the name and is covered including the
+        // empty case this hands it when the read throws.
+        [ExcludeFromCodeCoverage]
         internal static string MachineTag()
         {
             string name;

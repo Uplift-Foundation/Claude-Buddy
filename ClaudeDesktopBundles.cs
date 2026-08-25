@@ -147,6 +147,18 @@ namespace ClaudeBuddy
         // evidence that setIcon: did not take: the FinderInfo xattr can be left
         // set with no icon resource behind it, which is exactly the state a
         // refused write leaves.
+        // Excluded from coverage for its catch, which is not reachable: on both
+        // platforms File.Exists answers false for a path it cannot evaluate
+        // rather than throwing — including, on Windows, one containing the
+        // carriage return this looks for.
+        //
+        // Kept because the path is built from a profile folder name, which is a
+        // directory on disk rather than anything this app validates, and because
+        // the cost of being wrong is an exception on the scan path rather than a
+        // missing icon. What it answers is covered both ways —
+        // ClaudeDesktopBundleIconTests for the name, BundleCacheLayoutTests for
+        // what ColourMatches does with it.
+        [ExcludeFromCodeCoverage]
         internal static bool HasCustomIcon(string bundlePath)
         {
             try { return File.Exists(Path.Combine(bundlePath, "Icon\r")); }

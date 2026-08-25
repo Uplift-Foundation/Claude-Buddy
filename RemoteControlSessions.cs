@@ -78,6 +78,19 @@ namespace ClaudeBuddy
             Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> provider) =>
             _localSessions = provider;
 
+        // Named rather than written as a lambda at the one place a relay is
+        // built, because the empty fallback is a real answer with a real
+        // consequence: it is what a far machine's roster request is answered
+        // with before SessionManager has started, and "no sessions" has to be
+        // that rather than a null reference on a background task.
+        //
+        // A relay is only built with a live bridge behind it, so this is also
+        // the only way to ask what the provider currently says.
+        internal static IReadOnlyList<(string SessionId, SessionStatus Status)> LocalSessions() =>
+            _localSessions?.Invoke() ?? Array.Empty<(string, SessionStatus)>();
+
+        internal static void ForgetLocalSessionsForTests() => _localSessions = null;
+
         // A session on another machine, as the orb scan wants it. Kept separate
         // from BridgeProtocol.RemoteAgent so the parser stays a parser: this one
         // carries which account it was seen through and when, neither of which
@@ -644,8 +657,7 @@ namespace ClaudeBuddy
                 RemoteMirrorServer.RealSeams(
                     account,
                     bridge.SendFrameToAsync,
-                    () => _localSessions?.Invoke()
-                          ?? Array.Empty<(string, SessionStatus)>()));
+                    LocalSessions));
 
             client.RosterUpdated += () => Dispatcher.UIThread.Post(() => MirrorChanged?.Invoke(account));
 
@@ -711,6 +723,12 @@ namespace ClaudeBuddy
 
         private static readonly TimeSpan MirrorPumpEvery = TimeSpan.FromMilliseconds(1500);
 
+        // Excluded from coverage: starts a real DispatcherTimer whose every tick
+        // pumps live relays. Same reasoning as the poll loop below it, and the
+        // same reason ClaudeBuddySettings' deferred write is excluded — a test
+        // that waited for a real timer is the shape that has cost this branch
+        // five flakes.
+        [ExcludeFromCodeCoverage]
         private static void EnsureMirrorTimer()
         {
             if (_mirrorPump is not null) return;
@@ -722,6 +740,10 @@ namespace ClaudeBuddy
 
         private static bool _mirrorTicking;
 
+        // Excluded from coverage: one round of the pump above, reading files
+        // belonging to live relays and ticking a mirror server and client that
+        // only exist when one is running.
+        [ExcludeFromCodeCoverage]
         private static async Task MirrorTickAsync()
         {
             // Ticks can overlap when a file read is slow, and two pumps racing

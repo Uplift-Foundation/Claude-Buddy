@@ -569,6 +569,16 @@ namespace ClaudeBuddy
         // the cost is irrelevant, and the snapshot can be two seconds stale —
         // long enough to miss the instance that just asked for a sign-in
         // callback, which is exactly the instance that must not be missed.
+        // Excluded from coverage: scans this machine's real processes, on
+        // purpose and freshly rather than off the snapshot — a link arrives
+        // rarely, so the cost is irrelevant, and a two-second-stale snapshot can
+        // miss the instance that just asked for a sign-in callback, which is
+        // exactly the instance that must not be missed.
+        //
+        // The two rules it applies are measured elsewhere: DirectoryOf below,
+        // and ClaudeDesktopUrlRouting.Choose, which is what actually picks a
+        // profile out of the candidates this builds.
+        [ExcludeFromCodeCoverage]
         internal static IReadOnlyList<UrlRouteCandidate> RouteCandidates()
         {
             if (!OperatingSystem.IsMacOS()) return Array.Empty<UrlRouteCandidate>();
@@ -618,14 +628,32 @@ namespace ClaudeBuddy
 
         // Same rule MapInstances uses: no override in the environment means the
         // app resolved its own default location.
-        private static string? DirectoryOf(ClaudeInstance instance, string defaultDirectory)
+        // internal so the three answers can be asked for directly. Which one a
+        // running instance gets decides which profile a sign-in callback lands
+        // in, and the only other way to reach it is to scan real processes.
+        internal static string? DirectoryOf(ClaudeInstance instance, string defaultDirectory)
         {
             if (instance.UserDataDir is null) return defaultDirectory;
 
             var directory = Canonicalise(instance.UserDataDir);
             if (directory is not null) return directory;
 
-            try { return Path.GetFullPath(instance.UserDataDir).TrimEnd('/'); }
+            return SafeFullPath(instance.UserDataDir);
+        }
+
+        // Excluded from coverage: exists to be the try/catch. Path.GetFullPath
+        // throws only for a path the platform rejects outright, and the string
+        // here came out of a running process's own environment — so reaching the
+        // catch means that process was launched with something no filesystem
+        // would accept.
+        //
+        // Kept because it is exactly the sort of thing another app's launcher
+        // can do, and an exception here would take down a scan that every orb
+        // depends on rather than losing one candidate.
+        [ExcludeFromCodeCoverage]
+        private static string? SafeFullPath(string path)
+        {
+            try { return Path.GetFullPath(path).TrimEnd('/'); }
             catch { return null; }
         }
 
