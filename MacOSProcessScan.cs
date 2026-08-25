@@ -213,10 +213,25 @@ namespace ClaudeBuddy
         // by both --user-data-dir and CLAUDE_USER_DATA_DIR — see
         // ClaudeDesktopManager.LaunchArguments for why the variable stopped
         // being enough. argv wins because it is the one Chromium actually acts
-        // on: an instance started by a Claude Buddy that predates this fix
-        // carries only the variable and still maps correctly, and one started
-        // by a build that honours neither is indistinguishable from a Dock
-        // launch, which is what it has in fact become.
+        // on.
+        //
+        // The environment fallback is kept, and it is worth being exact about
+        // what it buys, because the obvious reason for it is wrong. It is *not*
+        // that an instance started by a Claude Buddy predating this fix "still
+        // maps correctly": on a Claude Desktop build that ignores the variable —
+        // which is the build that made this change necessary — such an instance
+        // is on Default, and reading it as the profile's is a misreport in the
+        // worst available direction. It makes a second Chromium on Default look
+        // like a lone instance on Board, which is exactly the invisibility
+        // MapInstances' duplicate counter was added to end.
+        //
+        // What the fallback is right for is a Desktop build that *does* honour
+        // the variable, which older ones do and which is why this app keeps
+        // sending it. Nothing in argv or the environment distinguishes the two
+        // builds from here, so the fallback cannot be made conditional and this
+        // is a known cost rather than an oversight. An instance carrying
+        // neither is indistinguishable from a Dock launch, which is what it has
+        // in fact become.
         internal static string? ParseUserDataDir(byte[] buffer, int length)
         {
             if (length < sizeof(int)) return null;

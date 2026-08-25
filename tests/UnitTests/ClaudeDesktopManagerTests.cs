@@ -1071,36 +1071,34 @@ public class ClaudeDesktopManagerTests
 
     // ---- LogCandidates ------------------------------------------------
 
-    // Which directory Electron writes logs to depends on whether the instance
-    // was launched with an environment override, and this app deliberately
-    // launches Default without one — so Default's logs are in Electron's own
-    // location and a created profile's are inside the profile.
+    // The public arm, which asks the machine rather than being told. Both
+    // platform shapes are pinned in LastReachableArmsTests, where the platform
+    // and the clock are both arguments; this is the one seam where they are
+    // not, so all it can honestly assert is that the answer is about this
+    // profile and ends where a person can still find something.
+    //
+    // It used to assert the Default/created split, and the split was the bug —
+    // see OnMacOsTheLiveLogDirectoryComesFirstWhereverItIs for what replaced it
+    // and why <profile>/Logs stopped being the right first answer.
     [Fact]
-    public void DefaultAndCreatedProfilesLookForTheirLogsInDifferentPlaces()
+    public void LogCandidatesEndAtTheProfileDirectoryItself()
     {
         var directory = Path.Combine(Path.GetTempPath(), "Claude-work");
 
-        var created = ClaudeDesktopManager.LogCandidates(directory, isDefault: false).ToArray();
-        var forDefault = ClaudeDesktopManager.LogCandidates(directory, isDefault: true).ToArray();
+        var candidates = ClaudeDesktopManager.LogCandidates(directory).ToArray();
 
         if (OperatingSystem.IsWindows())
         {
-            // No split on Windows: Electron's userData is %APPDATA%\Claude
-            // whether or not --user-data-dir was passed.
-            Assert.Equal(new[] { Path.Combine(directory, "logs") }, created);
-            Assert.Equal(created, forDefault);
+            // No split on Windows, and never was: Electron's userData is
+            // %APPDATA%\Claude whether or not --user-data-dir was passed.
+            Assert.Equal(new[] { Path.Combine(directory, "logs") }, candidates);
             return;
         }
 
-        Assert.Equal(new[] { Path.Combine(directory, "Logs"), directory }, created);
-        Assert.Equal(
-            new[]
-            {
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    "Library", "Logs", "Claude"),
-                directory
-            },
-            forDefault);
+        Assert.Equal(3, candidates.Length);
+        Assert.Equal(directory, candidates[^1]);
+        Assert.Contains(Path.Combine(directory, "Logs"), candidates);
+        Assert.Contains(candidates, path => path.Contains(Path.Combine("Library", "Logs")));
     }
 
     // ---- NextProfileName ---------------------------------------------
