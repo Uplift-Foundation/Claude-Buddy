@@ -303,6 +303,34 @@ public class LastReachableArmsTests
         }
     }
 
+    // Two files stamped identically, which is a log rotation writing both
+    // halves inside the same second and is the only way to reach the "not
+    // newer" arm on purpose. NewestWriteTakesTheNewestOfSeveralFiles reaches it
+    // too, but only when the filesystem happens to enumerate the newest file
+    // first — a coin toss, and a coin toss is not coverage.
+    [Fact]
+    public void FilesWrittenAtTheSameInstantSettleOnThatInstant()
+    {
+        var dir = TempDirectory();
+        try
+        {
+            var when = DateTime.UtcNow.AddHours(1);
+            foreach (var name in new[] { "a.log", "b.log" })
+            {
+                var file = Path.Combine(dir, name);
+                File.WriteAllText(file, "x");
+                File.SetLastWriteTimeUtc(file, when);
+            }
+
+            Assert.Equal(when, ClaudeDesktopManager.NewestWrite(dir)!.Value,
+                TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     // An empty directory still beats one that is not there: it is evidence the
     // app created it, which a missing path is not.
     [Fact]
