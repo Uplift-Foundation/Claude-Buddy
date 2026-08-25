@@ -111,13 +111,31 @@ gets reviewed.
 
 The PM agent reviews it — **both** rids, since that is exactly where a
 macOS-only implementation shows itself — and **if it can approve the feature as
-done autonomously, it should**, moving the ticket accordingly.
+done autonomously, it should**: approving the PR itself, and moving the ticket
+accordingly.
 
-If it cannot, it asks a human to pull, install and approve by hand: **in the
-terminal** if someone is driving the feature in Claude Code, **on the PR** if
-nobody is watching. Either way name the specific thing the screenshots could not
-settle — "can't tell whether the mic button is enabled on Windows" is actionable
-in a minute; "needs manual approval" is not.
+**Approving is the agent's own call, not a checkpoint to hand back.** An agent
+that has read both rids, can point at the tests covering the change and can say
+what it confirmed on a real machine is holding everything a human reviewer would
+be handed; asking a person anyway is a checkpoint out of habit. So approve it —
+`gh pr review <number> --repo Uplift-Foundation/Claude-Buddy --approve --body
+"..."` — and put the substance in the body: both rids by name, which suites ran,
+and what was confirmed on a machine kept separate from what is assumed. "LGTM"
+from an agent is worth nothing to the next person.
+
+GitHub refuses an approving review on a PR the same account opened, which is the
+common case here. That is a mechanical limit, not a reason to escalate: post the
+identical body as a review comment instead. The written record is the point, not
+the green tick.
+
+Approving is not the same as landing it — the ticket moves to Done when the
+change is actually on `develop`, so an approved-but-unmerged PR stays in Testing.
+
+Only where it genuinely cannot approve does it ask a human to pull, install and
+approve by hand: **in the terminal** if someone is driving the feature in Claude
+Code, **on the PR** if nobody is watching. Either way name the specific thing the
+screenshots could not settle — "can't tell whether the mic button is enabled on
+Windows" is actionable in a minute; "needs manual approval" is not.
 
 ## Branching: gitflow
 
