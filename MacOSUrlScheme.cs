@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -23,6 +24,19 @@ namespace ClaudeBuddy
     // is 11.0). If a future macOS removes it, the failure is visible and
     // recoverable — the setting below goes back to reporting "not claimed",
     // and links behave exactly as they did before this router existed.
+    // Excluded from coverage in full, the same way every other P/Invoke wrapper
+    // in this repo is (MacOSAppActivation, MacOSWindowList, WindowsAppLookup and
+    // the rest). Every member either calls into CoreFoundation and
+    // LaunchServices or launches plutil, and the two that matter *write the
+    // machine's URL-handler database* — a test that reached SetHandler would
+    // take `claude:` off Claude Desktop on the machine running it and leave it
+    // that way.
+    //
+    // What can be decided without any of that is decided in
+    // ClaudeDesktopUrlRouter and ClaudeDesktopUrlRouting, which are measured:
+    // whether claiming is worth doing, what to put back afterwards, what the
+    // settings window is told, and which profile a link belongs to.
+    [ExcludeFromCodeCoverage]
     [System.Runtime.Versioning.SupportedOSPlatform("macos")]
     internal static class MacOSUrlScheme
     {

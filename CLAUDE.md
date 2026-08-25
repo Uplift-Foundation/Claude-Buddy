@@ -387,6 +387,29 @@ runs every one of them, plus `tests/UiScreenshots`, on both runners, before
 packaging — a failing test blocks the
 build the same way a failed `dotnet publish` already did.
 
+**Run the UI suite in Release before pushing, because CI does and
+`dotnet test` does not.**
+
+```bash
+dotnet test tests/Tests.sln            # Debug — what everyone runs
+dotnet test tests/UiTests -c Release   # what CI actually runs
+```
+
+`dotnet test` defaults to Debug; `ci.yml` builds Release. That gap is not
+theoretical and it is not about optimisation changing behaviour — Release simply
+runs faster, which reorders a parallel suite and closes the gaps between writes
+to a scratch directory. CB-3 landed six `SessionScanTests` that were green in
+Debug on three separate machines and red in Release on both CI legs, every
+attempt: no exception in the app, just a scan that found no sessions, because a
+timing assumption held at Debug speed and not at Release speed.
+
+The other three suites have been clean in both so far. It is `tests/UiTests` that
+is worth the extra half-minute, being the one with a dispatcher, real timers and
+process-wide statics in it. If a test passes in one configuration and not the
+other, the answer is to make it independent of what else is running — never a
+sleep, never a widened tolerance. This branch has fixed four flakes of that shape
+and each commit says why.
+
 They reference `ClaudeBuddy.csproj` directly with a `<ProjectReference>`
 rather than compiling individual files in with `<Compile Include>` the way
 the three suites above do. That convention holds for a file with a small
@@ -448,32 +471,70 @@ run and before any settings static constructor can fire.
 
 **Two collectors, not one, and it has to stay that way.** `tests/UnitTests` and
 `tests/IntegrationTests` run on VSTest and use `coverlet.collector`;
-`tests/UiTests` runs on the Microsoft Testing Platform (it moved to xUnit v3
-for `Avalonia.Headless.XUnit` 12.x — see its csproj) where VSTest data
-collectors do not apply at all, so it uses
-`Microsoft.Testing.Extensions.CodeCoverage`'s own `--coverage` instead. That
-package is **pinned to 17.14.2** for the same reason everything else in that
-csproj is pinned: 18.x depends on `Microsoft.Testing.Platform` 2.x while
+`tests/UiTests` and `tests/UiScreenshots` run on the Microsoft Testing Platform
+(both moved to xUnit v3 for `Avalonia.Headless.XUnit` 12.x — see their csprojs)
+where VSTest data collectors do not apply at all, so they use
+`Microsoft.Testing.Extensions.CodeCoverage`'s own coverage switch instead. That
+package is **pinned to 17.14.2** in both, for the same reason everything else in
+those csprojs is pinned: 18.x depends on `Microsoft.Testing.Platform` 2.x while
 xunit.v3 3.2.2 brings the `mtp-v1` packages, and the mix throws
 `TypeLoadException` for `IDataConsumer` before one test runs. Bump xunit.v3 and
-you have to re-check that pin.
+you have to re-check both pins.
 
-That leaves three cobertura files measuring the *same* assembly, which is what
+That leaves four cobertura files measuring the *same* assembly, which is what
 `tools/merge-coverage.py` is for: a line counts as covered if **any** suite
 covered it. Adding the reports up instead is wrong in both directions at once —
 it double-counts the denominator while undercounting the numerator, since a
-line only a UI test reaches is reported unhit by the other two.
+line only a UI test reaches is reported unhit by the other three.
 
-Two things the number does not say, worth remembering before quoting it:
+`tests/UiScreenshots` counts as of CB-3 and did not before. CI has always run
+it, and it is the only suite that draws through **real Skia** rather than the
+null renderer — so a few things are reachable only there, a bitmap actually
+written to disk most obviously (`ClaudeDesktopBundles.WriteTinted`, whose pixel
+maths is tested there for exactly this reason). Leaving it out meant those lines
+were verified and counted nowhere, which is the same invisible-verification
+problem the console suites had.
+
+Four things the number does not say, worth remembering before quoting it:
+
+- **The number is only reproducible because the settings-touching UI classes are
+  serialised — keep them that way.** `ClaudeBuddySettings` is a process-wide
+  static and nearly every visual class reads it while being constructed, so two
+  test classes running in parallel with one of them flipping a setting do not
+  race to a failure, they race to a *different set of executed lines*. Before
+  CB-3 serialised them, three consecutive runs of `tests/UiTests` over an
+  identical binary reported 1914, 2024 and 1914 covered lines in
+  `SettingsWindow.cs`. That swing is bigger than most real changes, so it reads
+  as one — and it cost this ticket an hour of chasing a 145-line "regression"
+  that was scheduling. Anything new that reads or writes settings joins
+  `[Collection("Settings")]` in `tests/UiTests/SettingsCollection.cs`, whose
+  comment has the rest of the story.
 
 - **`--base` is the number that matters when reviewing a change.** A file-level
   percentage is dominated by whatever was already in the file; the added-lines
   figure is the one that says whether the new code is tested.
-- **The three console suites contribute nothing to it.** `ArrangementTests`,
-  `GlyphTests` and `TranscriptTests` are plain exes, not test-SDK projects, so
-  `OrbArrangement` reads 0% here while actually being the most exhaustively
-  verified file in the repo (3456 cases). Read the number as "coverage from the
-  xUnit suites", never as the sum of what this repo verifies.
+- **The three console suites still contribute nothing to it** as suites —
+  `ArrangementTests`, `GlyphTests` and `TranscriptTests` are plain exes, not
+  test-SDK projects. Their *cases* do count now, because CB-3 moved each one's
+  matrix into a class that `tests/UnitTests` compiles in and runs (see
+  `ArrangementSweep`, `GlyphSuite`, `TranscriptSuite`), so `OrbArrangement` no
+  longer reads 0% while being the most exhaustively verified file in the repo.
+  Running the exes is still the way to get the grouped failure report.
+- **What has been excluded is printed next to the number.** An excluded file and
+  a deleted one look identical in a report, and a percentage can be walked to
+  100% by excluding whatever refuses to be covered. `merge-coverage.py` therefore
+  reads the attributes back out of the sources and reports files held out
+  entirely, further sites inside measured files, and files absent for no stated
+  reason at all. Read the headline as coverage **of what remains**.
+- **The two engines disagree about `[ExcludeFromCodeCoverage]` on a *method*, and
+  the merge compensates.** coverlet honours it — an excluded method's body is not
+  instrumented at all — while `Microsoft.CodeCoverage`, which both MTP suites
+  use, instruments it anyway and reports every line unhit. Both honour it on a
+  *class*, which is how the gap went unnoticed until CB-3 had 157 member-level
+  exclusions for it to show up in. So the merge is not a plain union:
+  **coverlet's view of which lines exist is the authority**, and the MTP reports
+  contribute hits for those lines only. If you ever change that, an exclusion on
+  a method silently stops meaning anything.
 
 Everything else about orb behavior is still verified by running the app.
 Two things make that survivable:
@@ -481,6 +542,12 @@ Two things make that survivable:
 - The status directory comes from the temp path, so `TMPDIR=<dir>` plus
   hand-written `<session-id>.txt` files gives a second instance its own fake
   sessions without touching real ones.
+- The cloned-bundle cache honours `CLAUDE_BUDDY_BUNDLE_ROOT`, added by CB-3 for
+  the same reason: without it, the only place a test of `ClaudeDesktopBundles`
+  could write is the real `~/Library/Application Support/ClaudeBuddy/bundles` —
+  the live cache, holding real cloned `.app` bundles whose icons a user is
+  looking at. That the seam did not exist is the whole reason nothing in that
+  file was covered.
 - Settings now honour `CLAUDE_BUDDY_SETTINGS_DIR`, an env-var override
   checked before `SpecialFolder.ApplicationData` — the same pattern as
   `CLAUDE_BUDDY_PROFILE_ROOT` in `ClaudeDesktopManager.cs`. Without it a test

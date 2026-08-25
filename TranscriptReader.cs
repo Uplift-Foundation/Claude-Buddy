@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -23,14 +24,30 @@ namespace ClaudeBuddy
         // an unrelated session's last turn out of a Codex orb. There is no
         // equivalent fallback here and there should not be one — a rollout that
         // cannot be read is silence, which is the honest answer.
+        //
+        // Excluded from coverage: the try/catch only. Everything it wraps is in
+        // NewestCodexText below and stays measured.
+        //
+        // The catch has never been reached and reasoning says it cannot be:
+        // TailLines already swallows a read that fails, and CodexTranscript.Map
+        // returns nothing for a row it cannot parse rather than throwing — which
+        // CodexTranscriptItemTests asserts directly. It stays because this runs
+        // inside a hook call, where a throw is not free, and because the format it
+        // reads belongs to somebody else.
+        [ExcludeFromCodeCoverage]
         public static string? LatestCodexAgentText(string? transcriptPath)
         {
             if (string.IsNullOrEmpty(transcriptPath) || !File.Exists(transcriptPath))
                 return null;
 
-            try
+            try { return NewestCodexText(transcriptPath); }
+            catch { return null; }
+        }
+
+        private static string? NewestCodexText(string transcriptPath)
+        {
+            var lines = TailLines(transcriptPath);
             {
-                var lines = TailLines(transcriptPath);
                 for (int i = lines.Length - 1; i >= 0; i--)
                 {
                     // The same pre-filter CodexTranscript uses, for the same
@@ -49,13 +66,13 @@ namespace ClaudeBuddy
                     return text.Length > MaxSpokenChars ? text[..MaxSpokenChars] + "…" : text;
                 }
             }
-            catch
-            {
-            }
 
             return null;
         }
 
+        // Excluded from coverage: the try/catch only, for the same reason as
+        // LatestCodexAgentText above.
+        [ExcludeFromCodeCoverage]
         public static string? LatestAssistantText(string? transcriptPath, string? sessionId = null)
         {
             if (string.IsNullOrEmpty(transcriptPath) && !string.IsNullOrEmpty(sessionId))
@@ -64,9 +81,14 @@ namespace ClaudeBuddy
             if (string.IsNullOrEmpty(transcriptPath) || !File.Exists(transcriptPath))
                 return null;
 
-            try
+            try { return NewestAssistantText(transcriptPath); }
+            catch { return null; }
+        }
+
+        private static string? NewestAssistantText(string transcriptPath)
+        {
+            var lines = TailLines(transcriptPath);
             {
-                var lines = TailLines(transcriptPath);
                 for (int i = lines.Length - 1; i >= 0; i--)
                 {
                     var line = lines[i];
@@ -80,9 +102,6 @@ namespace ClaudeBuddy
                             : text;
                 }
             }
-            catch
-            {
-            }
 
             return null;
         }
@@ -92,20 +111,18 @@ namespace ClaudeBuddy
         // controller session has no transcript of its own — its
         // background jobs live in sibling project dirs with the same
         // CWD prefix.
-        public static string? LatestTranscriptForCwd(string cwd)
+        // home is a parameter with the real one as its default, so the walk can be
+        // pointed at a temp directory instead of the machine's own transcripts.
+        public static string? LatestTranscriptForCwd(string cwd, string? home = null)
         {
             if (string.IsNullOrEmpty(cwd)) return null;
 
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var dirs = new List<string> { Path.Combine(home, ".claude") };
             foreach (var extra in ClaudeBuddySettings.ClaudeCodeProfileDirs)
                 dirs.Add(Path.Combine(home, extra));
 
-            // Claude Code encodes /Users/foo/Source/Bar as
-            // -Users-foo-Source-Bar inside the projects directory.
-            var encoded = cwd.Replace(Path.DirectorySeparatorChar, '-');
-            if (encoded.Length > 0 && encoded[0] != '-')
-                encoded = "-" + encoded;
+            var encoded = EncodeCwd(cwd);
 
             string? best = null;
             DateTime bestTime = DateTime.MinValue;
@@ -115,33 +132,19 @@ namespace ClaudeBuddy
                 var projects = Path.Combine(configDir, "projects");
                 if (!Directory.Exists(projects)) continue;
 
-                try
+                foreach (var dir in SafeDirectories(projects))
                 {
-                    foreach (var dir in Directory.EnumerateDirectories(projects))
-                    {
-                        var dirName = Path.GetFileName(dir);
-                        if (!dirName.StartsWith(encoded, StringComparison.Ordinal))
-                            continue;
-                        // Must be exact match or a sub-path separator
-                        if (dirName.Length > encoded.Length && dirName[encoded.Length] != '-')
-                            continue;
+                    if (!ProjectDirMatches(Path.GetFileName(dir), encoded)) continue;
 
-                        foreach (var file in Directory.EnumerateFiles(dir, "*.jsonl"))
-                        {
-                            try
-                            {
-                                var mod = File.GetLastWriteTimeUtc(file);
-                                if (mod > bestTime)
-                                {
-                                    bestTime = mod;
-                                    best = file;
-                                }
-                            }
-                            catch { }
-                        }
+                    foreach (var file in SafeFiles(dir, "*.jsonl"))
+                    {
+                        var mod = SafeWriteTime(file);
+                        if (mod is null || mod <= bestTime) continue;
+
+                        bestTime = mod.Value;
+                        best = file;
                     }
                 }
-                catch { }
             }
 
             return best;
@@ -155,11 +158,12 @@ namespace ClaudeBuddy
         // answer for the same reason, and a session whose status file predates
         // transcript_path is exactly the one whose orb you'd click wondering
         // what it had been doing.
-        public static string? FindTranscriptFor(string sessionId) => FindTranscript(sessionId);
+        public static string? FindTranscriptFor(string sessionId, string? home = null) =>
+            FindTranscript(sessionId, home);
 
-        private static string? FindTranscript(string sessionId)
+        private static string? FindTranscript(string sessionId, string? home = null)
         {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var dirs = new List<string> { Path.Combine(home, ".claude") };
 
             foreach (var extra in ClaudeBuddySettings.ClaudeCodeProfileDirs)
@@ -171,21 +175,96 @@ namespace ClaudeBuddy
                 var projects = Path.Combine(configDir, "projects");
                 if (!Directory.Exists(projects)) continue;
 
-                try
-                {
-                    var match = Directory.EnumerateFiles(projects, filename, SearchOption.AllDirectories)
-                        .FirstOrDefault();
-                    if (match is not null) return match;
-                }
-                catch { }
+                var match = SafeFindDeep(projects, filename);
+                if (match is not null) return match;
             }
 
             return null;
         }
 
-        private static string[] TailLines(string path)
+        // Claude Code encodes /Users/foo/Source/Bar as -Users-foo-Source-Bar
+        // inside its projects directory. Pure, and worth its own name because the
+        // encoding is lossy — a directory whose name contains a dash is
+        // indistinguishable from a path separator once encoded — which is exactly
+        // why the match below cannot be a plain prefix test.
+        internal static string EncodeCwd(string cwd)
+        {
+            var encoded = cwd.Replace(Path.DirectorySeparatorChar, '-');
+
+            return encoded.Length > 0 && encoded[0] != '-' ? "-" + encoded : encoded;
+        }
+
+        // Whether one projects-directory name is this cwd or something under it.
+        //
+        // The second condition is the one that matters: a plain StartsWith would
+        // match -Users-foo-Source-Barn for -Users-foo-Source-Bar and hand back a
+        // transcript from an entirely different project. Requiring the next
+        // character to be the separator is what keeps sibling directories with a
+        // shared prefix apart.
+        internal static bool ProjectDirMatches(string dirName, string encoded)
+        {
+            if (!dirName.StartsWith(encoded, StringComparison.Ordinal)) return false;
+
+            return dirName.Length <= encoded.Length || dirName[encoded.Length] == '-';
+        }
+
+        // Four thin wrappers, all excluded, all for the same thing: these walk a
+        // directory tree that live sessions are writing to, so a directory can
+        // stop existing between being listed and being read, and a file between
+        // being listed and being asked its age. None of that is a state a test can
+        // hold still, and none of it is worth failing a lookup over — a transcript
+        // that cannot be read is simply one this search does not return.
+        //
+        // Separated so the walk itself stays measured: which directory names match
+        // an encoded cwd, and which of the files under them is newest, is the part
+        // with a decision in it.
+        [ExcludeFromCodeCoverage]
+        private static IEnumerable<string> SafeDirectories(string root)
+        {
+            try { return Directory.EnumerateDirectories(root).ToList(); }
+            catch { return Array.Empty<string>(); }
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static IEnumerable<string> SafeFiles(string dir, string pattern)
+        {
+            try { return Directory.EnumerateFiles(dir, pattern).ToList(); }
+            catch { return Array.Empty<string>(); }
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static DateTime? SafeWriteTime(string file)
+        {
+            try { return File.GetLastWriteTimeUtc(file); }
+            catch { return null; }
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static string? SafeFindDeep(string root, string filename)
         {
             try
+            {
+                return Directory.EnumerateFiles(root, filename, SearchOption.AllDirectories)
+                    .FirstOrDefault();
+            }
+            catch { return null; }
+        }
+
+        // Excluded from coverage: the try/catch only. The window logic it wraps is
+        // in ReadTail below and stays covered — what cannot be arranged is the
+        // catch, which is for the file disappearing between the caller's
+        // File.Exists and this open. That is a real race, since the file belongs
+        // to a session that may be ending, but it is a race and not a state a test
+        // can hold still.
+        [ExcludeFromCodeCoverage]
+        private static string[] TailLines(string path)
+        {
+            try { return ReadTail(path); }
+            catch { return Array.Empty<string>(); }
+        }
+
+        private static string[] ReadTail(string path)
+        {
             {
                 using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 long start = Math.Max(0, fs.Length - TailBytes);
@@ -204,10 +283,6 @@ namespace ClaudeBuddy
                 }
 
                 return chunk.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-            }
-            catch
-            {
-                return Array.Empty<string>();
             }
         }
 

@@ -617,16 +617,297 @@ public class MirrorRoundTripTests : IDisposable
         return rows;
     }
 
+    // Every row carries a timestamp, and that is not decoration.
+    //
+    // ChatTranscript stamps a row that has none with *now*, so a fixture without
+    // one produces turns whose At depends on the moment it was mapped. These
+    // tests compare turns that came over the mirror — mapped when the far side
+    // read the file — against turns mapped again inside the assertion, and when
+    // a second boundary fell between the two the whole comparison failed on a
+    // one-second difference in a field nothing here is about.
+    //
+    // Measured, not theorised: ScrollingBackReadsTheOlderBytesAndStopsAtTheStart
+    // and ALongTranscriptSurvivesBeingCutIntoManyFrames failed this way roughly
+    // twice in twelve full runs, and the captured diff was two identical turns
+    // whose At differed by exactly one.
+    private const string RowAt = "2026-08-16T10:00:00Z";
+
     private static string Row(string type, string uuid, string text) =>
         type == "user"
-            ? $"{{\"type\":\"user\",\"uuid\":\"{uuid}\",\"message\":{{\"role\":\"user\",\"content\":\"{text}\"}}}}"
-            : $"{{\"type\":\"assistant\",\"uuid\":\"{uuid}\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{text}\"}}]}}}}";
+            ? $"{{\"type\":\"user\",\"uuid\":\"{uuid}\",\"timestamp\":\"{RowAt}\",\"message\":{{\"role\":\"user\",\"content\":\"{text}\"}}}}"
+            : $"{{\"type\":\"assistant\",\"uuid\":\"{uuid}\",\"timestamp\":\"{RowAt}\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{text}\"}}]}}}}";
 
     // --- the loopback ------------------------------------------------------------------
 
     // Two Buddies wired directly to each other. Everything is real except the
     // pair of delegates that would otherwise paste a line into a tmux pane and
     // wait for a model to carry it.
+    // --- the transfer table's bound -----------------------------------------
+
+    // The far side keeps the last few transfers so a client can ask for a piece
+    // again, and the table is bounded so a client that starts transfers and
+    // never finishes them cannot accumulate. Eight is the bound; paging back
+    // further than that is ordinary on a long conversation.
+    //
+    // What is asserted is that paging past the bound still works — an eviction
+    // that dropped a transfer still in flight would show up as a page that
+    // never arrives.
+    [Fact]
+    public async Task PagingBackFurtherThanTheTransferTableKeepsStillWorks()
+    {
+        var rows = Rows(MirrorProtocol.InitialBytes * 24);
+        var path = WriteTranscript("verydeep.jsonl", rows);
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        Assert.True(await harness.Client.OpenAsync("job-hunter"));
+
+        var seen = new List<MirrorProtocol.MirrorTurn>(Assert.Single(harness.Windows).Turns);
+
+        var pages = 0;
+        for (; pages < 40 && harness.Client.HasMore("job-hunter"); pages++)
+        {
+            var older = await harness.Client.LoadOlderAsync("job-hunter");
+            if (older is null) break;
+
+            seen.InsertRange(0, older);
+        }
+
+        // More pages than the table keeps, so eviction genuinely happened rather
+        // than the bound being wide enough to never apply.
+        Assert.True(pages > 8, $"expected to page past the bound, managed {pages}");
+
+        // Every page carried something, which is what an eviction dropping a
+        // transfer still in flight would break — that is this test's subject.
+        //
+        // Deliberately NOT asserting the whole conversation came back in order:
+        // that is ScrollingBackReadsTheOlderBytesAndStopsAtTheStart's claim, and
+        // it is intermittently red on this branch's merge base for reasons that
+        // have nothing to do with the transfer table (see the PR body). Copying
+        // the assertion here would copy the flake with it.
+        Assert.True(seen.Count > 0);
+        Assert.Equal(seen.Count, seen.Distinct().Count());
+    }
+
+    // --- a far side that starts transfers and never finishes them ------------
+
+    // Pushed updates are assembled as they arrive, so a far side that starts one
+    // and stops halfway leaves an assembly with nothing to complete it. The
+    // table holding those is bounded at sixteen, because otherwise a far machine
+    // — buggy, or malicious, or simply restarted mid-push — could grow it
+    // without limit in a process the user leaves running for weeks.
+    //
+    // Driven by handing the client chunk frames directly: each one opens an
+    // assembly and none of them ever completes, which is precisely the shape
+    // being bounded.
+    [Fact]
+    public async Task AFarSideThatNeverFinishesAPushCannotGrowTheTableForEver()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", WriteTranscript("session.jsonl", Conversation(4)));
+
+        Assert.True(await harness.HandshakeAsync("job-hunter"));
+
+        // Twenty unfinished pushes, each claiming two pieces and sending one.
+        for (var i = 0; i < 20; i++)
+        {
+            var frame = MirrorProtocol.TryParseFrame(MirrorProtocol.BuildFrame(
+                MirrorProtocol.Chunk, "push-" + i,
+                new Dictionary<string, string>
+                {
+                    ["sub"] = "watch-1",
+                    ["seq"] = "0",
+                    ["of"] = "2"
+                },
+                Encoding.UTF8.GetBytes("half of something")));
+
+            await harness.Client.OnFrameAsync(Harness.FarRelay, frame!);
+        }
+
+        // Nothing was delivered, because none of them completed — and, the point
+        // of the case, nothing threw and the client is still usable.
+        Assert.Empty(harness.Deltas);
+        Assert.True(await harness.Client.OpenAsync("job-hunter"));
+    }
+
+    // --- a transfer that arrives whole and still is not what was sent --------
+
+    // Every piece verified on arrival and the reassembled whole did not match.
+    // Unlike a single bad piece, there is nothing to ask for again — asking for
+    // any one of them would get the same bytes back — so the transfer is fatal
+    // and the panel has to be told rather than left looking healthy.
+    //
+    // Produced by a courier that re-signs what it alters, which is a realistic
+    // relay rather than a contrived one: anything that reformats a line and
+    // re-frames it lands here.
+    [Fact]
+    public async Task ATransferWhoseWholeDigestFailsIsReportedRatherThanRetriedForEver()
+    {
+        var harness = new Harness(_dir) { ResignChunks = true };
+        harness.AddSession("job-hunter", WriteTranscript("session.jsonl", Conversation(20)));
+
+        Assert.True(await harness.HandshakeAsync("job-hunter"));
+
+        Assert.False(await harness.Client.OpenAsync("job-hunter"));
+
+        // Reported, and reported as the *whole* payload failing rather than as a
+        // piece — which is what says there is nothing to ask for again.
+        var failure = Assert.Single(harness.Failures);
+        Assert.Equal("job-hunter", failure.Name);
+        Assert.Contains("reassembled payload failed its hash", failure.Why);
+
+        // And not re-requested: a resend would return the same bytes, so asking
+        // again is a loop rather than a recovery.
+        Assert.Equal(0, harness.Resends);
+    }
+
+    // --- a pushed update that did not survive --------------------------------
+
+    // A delta cannot be re-requested usefully — the far side has already moved
+    // its offset past it — so the honest answer is to say the live view is
+    // broken rather than skip a message and carry on looking healthy. Skipping
+    // is the tempting alternative and the wrong one: a panel that has quietly
+    // lost a message is worse than one that says it stopped.
+    [Fact]
+    public async Task AnUpdateThatDidNotSurviveTheTripBreaksTheViewRatherThanSkippingAMessage()
+    {
+        var rows = Conversation(10);
+        var path = WriteTranscript("live.jsonl", rows);
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        await harness.Client.OpenAsync("job-hunter");
+        Assert.Single(harness.Windows);
+
+        // Only from here, so the window that opened the view arrived intact and
+        // this is genuinely about the push path.
+        harness.MangleDeltas = true;
+
+        File.AppendAllText(path, Row("assistant", "later", "said after the panel opened") + "\n");
+        await harness.Server.TickAsync();
+
+        Assert.Empty(harness.Deltas);
+
+        var failure = Assert.Single(harness.Failures);
+        Assert.Equal("job-hunter", failure.Name);
+
+        // Says a hash failed rather than naming a message: from here the two are
+        // indistinguishable, and the panel's job is to stop claiming to be live
+        // rather than to explain the wire.
+        Assert.Contains("hash", failure.Why);
+    }
+
+    // --- what each side calls itself ----------------------------------------
+
+    // Both sides carry the account they belong to, and both are asked for it by
+    // RemoteControlSessions when it routes a frame — a machine signed into two
+    // accounts has a client and a server per account, and a frame answered by
+    // the wrong one is a live view of somebody else's session.
+    [Fact]
+    public void EachSideKnowsWhichAccountItBelongsTo()
+    {
+        var harness = new Harness(_dir);
+
+        Assert.Equal("acct", harness.Client.Account);
+        Assert.Equal("acct", harness.Server.Account);
+    }
+
+    // --- a courier that dies mid-conversation ---------------------------------
+
+    // The relay is a tmux pane on another machine and it can go away between one
+    // frame and the next. Both sides swallow that rather than letting it out:
+    // the client turns it into "couldn't reach the relay" in the panel, and the
+    // server simply stops talking to a peer it cannot reach.
+    //
+    // Asserted because the alternative is an exception on a background task —
+    // which is not a live view that says it is broken, it is a live view that
+    // silently stops updating while still looking healthy.
+    [Fact]
+    public async Task ARelayThatGoesAwayMidHandshakeIsReportedRatherThanThrown()
+    {
+        var harness = new Harness(_dir) { CourierThrows = true };
+        harness.AddSession("job-hunter", WriteTranscript("session.jsonl", Conversation(4)));
+
+        // Does not throw, and does not report the session as available.
+        await harness.Client.DiscoverAsync(harness.Peers, new[] { "job-hunter" });
+
+        Assert.NotEqual(
+            RemoteMirrorClient.MirrorAvailability.Available,
+            harness.Client.StateFor("job-hunter").Availability);
+    }
+
+    // And once a feed is open, a courier that starts throwing does not take the
+    // panel down either — the open call answers false rather than propagating.
+    [Fact]
+    public async Task ARelayThatGoesAwayAfterTheHandshakeStillDoesNotThrow()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", WriteTranscript("session.jsonl", Conversation(4)));
+
+        Assert.True(await harness.HandshakeAsync("job-hunter"));
+
+        harness.CourierThrows = true;
+
+        Assert.False(await harness.Client.OpenAsync("job-hunter"));
+    }
+
+    // The server's own send is wrapped for the same reason, and reaching it
+    // needs the throw to start *after* the request has arrived — otherwise the
+    // client's send fails first and the server is never asked anything.
+    [Fact]
+    public async Task TheServerSwallowsACourierThatDiesWhileItIsAnswering()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", WriteTranscript("session.jsonl", Conversation(4)));
+
+        Assert.True(await harness.HandshakeAsync("job-hunter"));
+
+        // Handed straight to the server, so the failing send is the reply.
+        harness.CourierThrows = true;
+
+        var frame = MirrorProtocol.TryParseFrame(
+            MirrorProtocol.BuildFrame(MirrorProtocol.Roster, "r-1", new Dictionary<string, string>()));
+
+        // Does not throw out of HandleAsync, which is what RemoteControlSessions
+        // fires and forgets.
+        await harness.Server.HandleAsync(Harness.NearRelay, frame!);
+    }
+
+    // --- a name that resolves to nothing ---------------------------------------
+
+    // The registry knows a name and this machine has no session for it, which is
+    // ordinary: `claude agents` lists what is registered, and Buddy only knows
+    // what has fired a hook. The answer is "no live view", not an exception and
+    // not somebody else's session.
+    [Fact]
+    public async Task ANameTheRegistryKnowsButNoSessionMatchesOffersNoLiveView()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", WriteTranscript("session.jsonl", Conversation(4)));
+
+        // Registered, then its session taken away — the pid and the session id
+        // both stop matching, which is the shape Resolve has to fall through.
+        //
+        // A second session is left in place on a different pid, so the pid
+        // fallback genuinely iterates and finds nothing rather than skipping an
+        // empty list. Those are different failures: one is "Buddy knows no
+        // sessions", the other is "Buddy knows sessions, none of them this one",
+        // and only the second is what a registry entry outliving its session
+        // looks like.
+        harness.AddSession("someone-else", WriteTranscript("other.jsonl", Conversation(2)));
+        harness.ForgetSessionKeepingAgent("job-hunter");
+
+        await harness.Client.DiscoverAsync(harness.Peers, new[] { "job-hunter" });
+
+        Assert.Equal(
+            RemoteMirrorClient.MirrorAvailability.Unavailable,
+            harness.Client.StateFor("job-hunter").Availability);
+    }
+
     private sealed class Harness
     {
         public const string FarRelay = "claude-buddy-rc--claude-mini";
@@ -649,6 +930,20 @@ public class MirrorRoundTripTests : IDisposable
 
         // A courier that rewrites every payload it carries.
         public bool MangleChunks { get; set; }
+
+        // A courier that rewrites a payload *and recomputes that piece's own
+        // digest*, leaving the transfer's whole-payload digest alone.
+        //
+        // Every piece then verifies on arrival and the reassembled whole does
+        // not, which is the one failure the resend machinery cannot fix — there
+        // is no single bad piece to ask for again. Nothing about it is exotic: a
+        // relay that reformats one line and re-frames it looks exactly like
+        // this.
+        public bool ResignChunks { get; set; }
+
+        // ...and one that only rewrites *pushed* updates, which take a different
+        // path through the client from a requested window.
+        public bool MangleDeltas { get; set; }
 
         // ...or just the one, once.
         public bool MangleOnce { get; set; }
@@ -711,6 +1006,17 @@ public class MirrorRoundTripTests : IDisposable
             }));
         }
 
+        // Leaves the registry entry and takes the session away, which is what a
+        // session that has exited without Buddy noticing looks like — and the
+        // one shape where Resolve finds an agent and then matches nothing.
+        public void ForgetSessionKeepingAgent(string name)
+        {
+            var at = _agents.FindIndex(a => a.Name == name);
+            if (at < 0) return;
+
+            _sessions.RemoveAll(s => s.SessionId == _agents[at].SessionId);
+        }
+
         public void RemoveSession(string name)
         {
             var at = _agents.FindIndex(a => a.Name == name);
@@ -728,10 +1034,17 @@ public class MirrorRoundTripTests : IDisposable
 
         private string NameOf(SessionStatus status) => status.Title;
 
+        // A courier that throws rather than answering, which is what a relay
+        // that has died mid-conversation looks like from either side: the tmux
+        // pane is gone, and the send does not fail politely.
+        public bool CourierThrows { get; set; }
+
         // The near Buddy's frame reaching the far one.
         private async Task<bool> SendToServerAsync(string peer, string line)
         {
             Assert.Equal(FarRelay, peer);
+
+            if (CourierThrows) throw new IOException("the relay went away");
 
             var frame = MirrorProtocol.TryParseFrame(line);
             if (frame is null) return false;
@@ -749,6 +1062,8 @@ public class MirrorRoundTripTests : IDisposable
 
             ToClient.Add(line);
 
+            if (CourierThrows) throw new IOException("the relay went away");
+
             var frame = MirrorProtocol.TryParseFrame(line);
             if (frame is null) return false;
 
@@ -761,10 +1076,29 @@ public class MirrorRoundTripTests : IDisposable
                     _mangledAlready = true;
                     frame = Mangle(line) ?? frame;
                 }
+                else if (ResignChunks && frame.Get("wfrom") is not null)
+                {
+                    frame = Resign(frame) ?? frame;
+                }
+                else if (MangleDeltas && frame.Get("sub") is not null)
+                {
+                    frame = Mangle(line) ?? frame;
+                }
             }
 
             await Client.OnFrameAsync(FarRelay, frame);
             return true;
+        }
+
+        // Rebuilds the frame around different bytes, which recomputes that
+        // piece's digest — BuildFrame appends it — while carrying the original
+        // fields, and with them the transfer's whole-payload digest.
+        private static MirrorProtocol.MirrorFrame? Resign(MirrorProtocol.MirrorFrame frame)
+        {
+            var swapped = Encoding.UTF8.GetBytes("a tidier version, correctly re-signed");
+
+            return MirrorProtocol.TryParseFrame(
+                MirrorProtocol.BuildFrame(frame.Type, frame.Id, frame.Fields, swapped));
         }
 
         // Swaps the payload for different bytes while leaving the digest alone,

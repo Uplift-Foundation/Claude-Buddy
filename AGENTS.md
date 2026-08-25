@@ -243,7 +243,17 @@ where the change happens to live:
   automatically.
 
 A change to geometry, transcript parsing or orb initials extends the three
-console suites too — `dotnet test tests/Tests.sln` does not run them. CI runs
+Also run `dotnet test tests/UiTests -c Release` before pushing. `dotnet test`
+defaults to Debug and CI builds Release, and Release is not just faster code — it
+reorders a parallel suite and tightens the gaps between writes to a scratch
+directory. CB-3 landed six SessionScanTests green in Debug and red in Release on
+both CI legs, every attempt. The other suites have been clean in both; it is the
+UI one, with a dispatcher and real timers and process-wide statics, that is worth
+the extra half-minute. A test that passes in one configuration and not the other
+gets made independent of what else is running — never a sleep, never a widened
+tolerance.
+
+Remember the three console suites too — `dotnet test tests/Tests.sln` does not run them. CI runs
 every suite on both runners, so a test that only passes on your machine blocks
 the build.
 
@@ -358,7 +368,9 @@ All three point `CLAUDE_BUDDY_SETTINGS_DIR` at a fresh temp directory via a
 `[ModuleInitializer]` before anything else runs — even constructing an
 `OrbWindow` reads a colour setting in a field initializer. That env var is
 checked in `ClaudeBuddySettings.Directory` before `SpecialFolder.ApplicationData`,
-the same pattern as `CLAUDE_BUDDY_PROFILE_ROOT` in `ClaudeDesktopManager.cs`;
+the same pattern as `CLAUDE_BUDDY_PROFILE_ROOT` in `ClaudeDesktopManager.cs` and
+`CLAUDE_BUDDY_BUNDLE_ROOT` in `ClaudeDesktopBundles.cs`, which redirects the
+cloned-bundle cache so a test never writes into the live one;
 without it a test reads and writes the real settings.json.
 
 ## Coverage
@@ -369,19 +381,48 @@ you added, which is the figure that actually says whether new code is tested —
 a file-level percentage is dominated by whatever was already there.
 
 Two collectors, deliberately: `UnitTests`/`IntegrationTests` are VSTest and use
-`coverlet.collector`, while `UiTests` runs on the Microsoft Testing Platform
-(xUnit v3, forced by `Avalonia.Headless.XUnit` 12.x) where VSTest collectors do
-not apply, so it uses `Microsoft.Testing.Extensions.CodeCoverage` — **pinned to
-17.14.2**, because 18.x wants `Microsoft.Testing.Platform` 2.x while xunit.v3
-3.2.2 brings `mtp-v1`, and the mix throws `TypeLoadException` for
-`IDataConsumer` before a test runs. `tools/merge-coverage.py` then unions the
-three cobertura files, which all measure the same assembly; summing them would
-double-count the denominator and undercount the numerator at the same time.
+`coverlet.collector`, while `UiTests` and `UiScreenshots` run on the Microsoft
+Testing Platform (xUnit v3, forced by `Avalonia.Headless.XUnit` 12.x) where
+VSTest collectors do not apply, so they use
+`Microsoft.Testing.Extensions.CodeCoverage` — **pinned to 17.14.2** in both,
+because 18.x wants `Microsoft.Testing.Platform` 2.x while xunit.v3 3.2.2 brings
+`mtp-v1`, and the mix throws `TypeLoadException` for `IDataConsumer` before a
+test runs. `tools/merge-coverage.py` then unions the four cobertura files, which
+all measure the same assembly; summing them would double-count the denominator
+and undercount the numerator at the same time.
 
-The number excludes the three console suites — `ArrangementTests`,
-`GlyphTests`, `TranscriptTests` are plain exes, not test-SDK projects — so
-`OrbArrangement` reads 0% while being the most exhaustively verified file here.
-It is "coverage from the xUnit suites", not the sum of what this repo verifies.
+`UiScreenshots` counts as of CB-3 and did not before. CI always ran it, and it
+is the only suite drawing through **real Skia** rather than the null renderer, so
+a few things are reachable only there — a bitmap actually written to disk most
+obviously (`ClaudeDesktopBundles.WriteTinted`). Leaving it out meant those lines
+were verified and counted nowhere.
+
+The three console suites still contribute nothing *as suites* —
+`ArrangementTests`, `GlyphTests`, `TranscriptTests` are plain exes, not test-SDK
+projects. Their **cases** do count now: CB-3 moved each matrix into a class that
+`UnitTests` compiles in and runs (`ArrangementSweep`, `GlyphSuite`,
+`TranscriptSuite`), so `OrbArrangement` no longer reads 0% while being the most
+exhaustively verified file here. Run the exes for the grouped failure report.
+
+Any new UI test class that reads or writes `ClaudeBuddySettings` goes in
+`[Collection("Settings")]`. The settings model is a process-wide static that
+almost everything visual reads while being constructed, so parallel classes race
+to a different set of *executed lines* rather than to a failure — three runs of
+an identical binary once reported 1914, 2024 and 1914 covered lines in
+SettingsWindow.cs. See `tests/UiTests/SettingsCollection.cs`.
+
+And read the headline as coverage **of what remains**: an excluded file and a
+deleted one look identical in a report. `merge-coverage.py` reads the attributes
+back out of the sources and prints what was held out, what is excluded inside
+measured files, and what is absent for no stated reason.
+
+The two engines also disagree about `[ExcludeFromCodeCoverage]` on a *method*.
+coverlet honours it; `Microsoft.CodeCoverage` (both MTP suites) instruments the
+body anyway and reports it unhit. Both honour it on a *class*, which is how the
+gap survived until CB-3 had 157 member-level exclusions for it to show up in. The
+merge is therefore **not** a union: coverlet decides which lines exist, and the
+MTP reports only contribute hits for those. Undo that and an exclusion on a method
+silently stops meaning anything.
 
 ## Extra accounts
 

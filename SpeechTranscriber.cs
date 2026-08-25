@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.RegularExpressions;
 using Whisper.net;
@@ -45,6 +46,8 @@ namespace ClaudeBuddy
         // input on — never from the mic click path — so a multi-hundred-MB
         // download is always something the user just asked for, not a
         // surprise the first time they hover an orb.
+        // Excluded from coverage: downloads the Whisper model over the network.
+        [ExcludeFromCodeCoverage]
         public static Task DownloadModelAsync(IProgress<string>? progress = null)
         {
             if (ModelDownloaded) return Task.CompletedTask;
@@ -56,6 +59,8 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: an HTTP GET of a 140MB model file.
+        [ExcludeFromCodeCoverage]
         private static async Task DownloadModelCoreAsync(IProgress<string>? progress)
         {
             try
@@ -90,6 +95,10 @@ namespace ClaudeBuddy
         // rather than typing nothing into someone's terminal. Never throws:
         // this runs off an async-void click handler, where an escaping
         // exception would take the whole app down over a bad audio frame.
+        // Excluded from coverage: runs whisper.cpp inference through native code
+        // against a downloaded model; the two text passes it applies afterwards
+        // are tested.
+        [ExcludeFromCodeCoverage]
         public static async Task<string> TranscribeAsync(float[] samples)
         {
             if (samples.Length == 0 || !ModelDownloaded) return "";
@@ -137,7 +146,10 @@ namespace ClaudeBuddy
         // here a caller could want. A clip that was *only* an annotation comes
         // back empty, which is exactly the "nothing was said" signal callers
         // already handle.
-        private static string StripNonSpeechTags(string text) =>
+        // internal, not private: this is a pure string pass and the rule it
+        // applies — that an annotation describing the audio is never a word the
+        // user said — is worth asserting without a microphone or a model file.
+        internal static string StripNonSpeechTags(string text) =>
             Regex.Replace(text, @"\s*[\[\(][A-Za-z0-9 _'’-]{0,40}[\]\)]", " ");
 
         // Whisper is a general speech-recognition model, not a dictation
@@ -180,7 +192,11 @@ namespace ClaudeBuddy
         // or "fix , then" — dropping the leading space and leaving whatever
         // followed untouched is what gets the spacing right on both sides
         // without a separate cleanup pass.
-        private static string ApplySpokenPunctuation(string text)
+        // internal for the same reason as StripNonSpeechTags above. This one
+        // earns it more: the spacing rules below are the kind of thing that
+        // looks right in one example and wrong in the next, and the doubled-mark
+        // collapse exists because a shipped build produced "fix this.. then".
+        internal static string ApplySpokenPunctuation(string text)
         {
             foreach (var (spoken, symbol) in PunctuationWords)
             {
@@ -204,6 +220,9 @@ namespace ClaudeBuddy
             return text.Trim();
         }
 
+        // Excluded from coverage: loads the native whisper library and a model
+        // file from disk.
+        [ExcludeFromCodeCoverage]
         private static WhisperFactory? GetFactory()
         {
             lock (FactoryGate)

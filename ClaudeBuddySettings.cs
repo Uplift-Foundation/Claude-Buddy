@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -112,6 +113,11 @@ namespace ClaudeBuddy
             TypeInfoResolver = new DefaultJsonTypeInfoResolver()
         };
 
+        // Excluded from coverage: reads the real user profile directory. Every
+        // test in this repo runs with CLAUDE_BUDDY_SETTINGS_DIR pointed elsewhere,
+        // which is the whole point — a suite that read this would be reading, and
+        // on a bad day writing, the developer's own settings.json.
+        [ExcludeFromCodeCoverage]
         private static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         // %APPDATA%\ClaudeBuddy on Windows, ~/Library/Application Support/ClaudeBuddy
@@ -1017,6 +1023,21 @@ namespace ClaudeBuddy
             Save();
         }
 
+        // Named setters for the two per-profile fields the settings window writes
+        // from code that cannot itself be run by a test.
+        //
+        // They exist so those callers hold no lambda: a lambda inside a method
+        // carrying [ExcludeFromCodeCoverage] is hoisted to its own method and does
+        // NOT inherit the attribute, so `entry => entry.Color = …` was being
+        // counted while the method around it was not. Written as ordinary setters
+        // rather than as a trick — and they are covered directly, which the
+        // one-line Update calls never were.
+        public static void SetProfileColor(string folder, string? color) =>
+            Update(folder, entry => entry.Color = color);
+
+        public static void SetProfileShowSwatch(string folder, bool show) =>
+            Update(folder, entry => entry.ShowSwatch = show);
+
         public static void Update(string folder, Action<ProfileSettings> change)
         {
             Load();
@@ -1485,6 +1506,16 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: writes to a log file in the temp directory, and
+        // its catch is the last stop — getting there means the directory could not
+        // be created AND the append failed, on a machine where writing
+        // settings.json had already failed. That nothing can be reported at that
+        // point is the whole design, and it is not a state a test can produce.
+        //
+        // That the log IS written on an ordinary failure is covered from the
+        // outside, in SettingsListParsingTests and SettingsDeferredWriteTests,
+        // which read the file back and assert it grew.
+        [ExcludeFromCodeCoverage]
         private static void LogFailure(string what, Exception ex)
         {
             try
@@ -1498,6 +1529,12 @@ namespace ClaudeBuddy
             catch
             {
                 // If even this fails, there's nowhere left to report it.
+                //
+                // Unreached, and unreachable in any useful sense: getting here
+                // means the temp directory could not be created AND the append
+                // failed, on a machine where writing settings.json had already
+                // failed. Kept as the last stop rather than deleted, and named
+                // here so a coverage report does not read as a missing test.
             }
         }
 
@@ -1524,31 +1561,48 @@ namespace ClaudeBuddy
         private static readonly TimeSpan SaveDelay = TimeSpan.FromMilliseconds(250);
         private static DispatcherTimer? _deferred;
 
+        // Excluded from coverage: exists to be the try/catch, and the catch is
+        // not reachable — which the tests say out loud rather than leaving as a
+        // mystery in a report. An Avalonia DispatcherTimer constructs and starts
+        // quite happily in a process with no dispatcher loop running, so nothing
+        // throws here and the write is simply deferred to a tick that never
+        // comes. See SettingsDeferredWriteTests, which asserts that behaviour
+        // rather than the behaviour the comment here used to promise.
+        //
+        // Kept because "no dispatcher at all" is a real shape for this class —
+        // it is a process-wide static that a console tool could load — and
+        // losing a preference is a worse outcome than an unreachable line.
+        [ExcludeFromCodeCoverage]
         private static void SaveSoon()
         {
-            try
-            {
-                if (_deferred is null)
-                {
-                    _deferred = new DispatcherTimer { Interval = SaveDelay };
-                    _deferred.Tick += (_, _) =>
-                    {
-                        _deferred!.Stop();
-                        Save();
-                    };
-                }
+            try { RestartTheDeferredWrite(); }
+            catch { Save(); }
+        }
 
-                // Restart rather than let it run out: keep pushing the write
-                // further off for as long as changes keep arriving.
-                _deferred.Stop();
-                _deferred.Start();
-            }
-            catch
+        private static void RestartTheDeferredWrite()
+        {
+            if (_deferred is null)
             {
-                // No dispatcher. Nothing calls these setters before the app is
-                // up, but a lost preference isn't worth a crash — write now.
-                Save();
+                _deferred = new DispatcherTimer { Interval = SaveDelay };
+                _deferred.Tick += OnDeferredTick;
             }
+
+            // Restart rather than let it run out: keep pushing the write
+            // further off for as long as changes keep arriving.
+            _deferred.Stop();
+            _deferred.Start();
+        }
+
+        // Excluded from coverage: fires only when the debounce interval actually
+        // elapses, and no test waits on a real timer — this branch has fixed five
+        // flakes of exactly that shape. What it does when it fires is Save(),
+        // which is covered every other way, and FlushPendingSave is the seam the
+        // app itself uses from anything that might be the last thing to happen.
+        [ExcludeFromCodeCoverage]
+        private static void OnDeferredTick(object? sender, EventArgs e)
+        {
+            _deferred!.Stop();
+            Save();
         }
 
         // A deferred write that never happens is a preference silently lost, so

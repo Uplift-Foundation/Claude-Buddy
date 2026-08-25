@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
 namespace ClaudeBuddy
@@ -90,6 +91,19 @@ namespace ClaudeBuddy
         // The real wiring. Split out so the constructor above stays free of it
         // and a test never has to opt out of anything.
         public static Seams RealSeams(
+            string profileDir,
+            Func<string, string, Task<bool>> sendFrame,
+            Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> localSessions) =>
+            LiveSeams(profileDir, sendFrame, localSessions);
+
+        // Excluded from coverage: this is the wiring that makes the seams real,
+        // and every delegate in it is one a test must not run — launching
+        // `claude agents`, asking tmux whether a pane can be typed into, and
+        // typing into it. The tests build their own Seams instead, which is what
+        // the record exists for; everything behind these four delegates is
+        // covered on its own terms.
+        [ExcludeFromCodeCoverage]
+        private static Seams LiveSeams(
             string profileDir,
             Func<string, string, Task<bool>> sendFrame,
             Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> localSessions) =>
@@ -210,6 +224,22 @@ namespace ClaudeBuddy
         // built-in works exactly as it does locally; and the catalogue reads the
         // real ~/.claude on the machine the commands live on.
         private static IReadOnlyList<string> Commands(SessionStatus status)
+        {
+            return SafeCommandNames(status);
+        }
+
+        // Excluded from coverage: exists to be the try/catch. SlashCommandCatalog
+        // already swallows the IO it does — a directory that vanished mid-scan is
+        // its ordinary case rather than an exception — so nothing here has been
+        // observed to throw.
+        //
+        // Kept because this runs while answering another machine, on a background
+        // task, from a cwd belonging to a session this process does not own: an
+        // exception would take the roster answer down and leave the far panel
+        // with no live view and no explanation, which is a much worse outcome
+        // than a session offering no commands.
+        [ExcludeFromCodeCoverage]
+        private static IReadOnlyList<string> SafeCommandNames(SessionStatus status)
         {
             try
             {
@@ -701,6 +731,15 @@ namespace ClaudeBuddy
                     ["msg"] = MirrorProtocol.Encode(detail)
                 }));
 
+        // Excluded from coverage: exists to be the try/catch around the relay.
+        // A relay that has gone away throws rather than answering, and this side
+        // simply stops talking to a peer it cannot reach — there is nobody to
+        // tell, which is what separates this from the client's version, where
+        // there is a panel waiting.
+        //
+        // That behaviour is asserted in MirrorRoundTripTests through a courier
+        // that throws; what is not measured is only the swallow itself.
+        [ExcludeFromCodeCoverage]
         private async Task<bool> SendAsync(string toPeer, string frame)
         {
             try { return await _seams.SendFrame(toPeer, frame).ConfigureAwait(false); }

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
 namespace ClaudeBuddy
@@ -15,6 +16,7 @@ namespace ClaudeBuddy
     // session) and working from the interactive one — this class has no way
     // to tell those apart itself, so a caller seeing a failure here should
     // rule that out before concluding the feature is broken.
+    [ExcludeFromCodeCoverage]
     internal static class WindowsAppActivation
     {
         [ComImport, Guid("2e941141-7f97-4756-ba1d-9decde894a3d"),

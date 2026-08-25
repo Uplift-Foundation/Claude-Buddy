@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia.Threading;
 
 namespace ClaudeBuddy
@@ -77,6 +78,19 @@ namespace ClaudeBuddy
             Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> provider) =>
             _localSessions = provider;
 
+        // Named rather than written as a lambda at the one place a relay is
+        // built, because the empty fallback is a real answer with a real
+        // consequence: it is what a far machine's roster request is answered
+        // with before SessionManager has started, and "no sessions" has to be
+        // that rather than a null reference on a background task.
+        //
+        // A relay is only built with a live bridge behind it, so this is also
+        // the only way to ask what the provider currently says.
+        internal static IReadOnlyList<(string SessionId, SessionStatus Status)> LocalSessions() =>
+            _localSessions?.Invoke() ?? Array.Empty<(string, SessionStatus)>();
+
+        internal static void ForgetLocalSessionsForTests() => _localSessions = null;
+
         // A session on another machine, as the orb scan wants it. Kept separate
         // from BridgeProtocol.RemoteAgent so the parser stays a parser: this one
         // carries which account it was seen through and when, neither of which
@@ -141,10 +155,129 @@ namespace ClaudeBuddy
 
         // Empty whenever the feature is off, which is what makes the scan's job
         // trivial — it never has to know why.
+        //
+        // A test seam, matching OpenClawSessions.SetSnapshotForTests and there for
+        // the same reason: the only thing that publishes a snapshot in production
+        // is the poll loop, which drives a live relay and is excluded. Without
+        // this, the scan entries built from a remote session are unreachable for
+        // a reason that has nothing to do with the code being hard to test.
+        internal static void SetSnapshotForTests(IReadOnlyList<Remote> remotes)
+        {
+            _snapshot = remotes;
+        }
+
         public static IReadOnlyList<Remote> Snapshot() =>
             ClaudeBuddySettings.RemoteControlEnabled && RemoteControlBridge.IsSupported
                 ? _snapshot
                 : Array.Empty<Remote>();
+
+        // ---- test seams ----------------------------------------------------
+
+        // StatusText and HasPolled are pure reads of the relay table, but the
+        // only way to fill that table for real is to start a bridge subprocess
+        // and talk to a live account — which is what RemoteControlBridgeLiveTests
+        // does, deliberately, and what a unit test must not.
+        //
+        // Same shape as OpenClawSessions.SetSnapshotForTests: seed the state, ask
+        // the question, put it back. Nothing here is reachable outside the four
+        // test assemblies InternalsVisibleTo names.
+        internal static void SetRelayForTests(
+            string account, string state, string? warning = null, bool polled = false,
+            IReadOnlyList<Remote>? sessions = null)
+        {
+            lock (Gate)
+            {
+                if (!Relays.TryGetValue(account, out var relay))
+                {
+                    relay = new Relay();
+                    Relays[account] = relay;
+                }
+
+                relay.State = state;
+                relay.Warning = warning;
+                relay.Polled = polled;
+                relay.Sessions = sessions ?? Array.Empty<Remote>();
+            }
+        }
+
+        // The peer list, as the orb scan wants it: only the sessions worth an orb,
+        // each stamped with the account it was seen through and whatever colour
+        // that session has told us about.
+        //
+        // Pulled out of the poll, which needs a live relay. The filter is the part
+        // that matters — a peer list carries entries that are not sessions anyone
+        // would want an orb for, and showing them would fill the screen with orbs
+        // nobody can click usefully.
+        internal static List<Remote> RemotesFrom(
+            IEnumerable<BridgeProtocol.RemoteAgent> agents, string account, DateTime now)
+        {
+            var remotes = new List<Remote>();
+
+            foreach (var agent in agents)
+            {
+                if (!agent.IsWorthAnOrb) continue;
+
+                var key = account + ":" + agent.Name;
+                string? colour;
+                lock (Gate) KnownColors.TryGetValue(key, out colour);
+
+                remotes.Add(new Remote(agent.Name, agent.Ref, agent.Status, now, account, colour));
+            }
+
+            return remotes;
+        }
+
+        // Excluded from coverage: a guard that must never fire. If it ever does, a
+        // test started a real relay and would otherwise leak a live subprocess for
+        // the rest of the run — which is worth failing loudly over, and is also
+        // why there is nothing here to cover.
+        [ExcludeFromCodeCoverage]
+        private static void AssertNoLiveBridge(RemoteControlBridge? bridge)
+        {
+            if (bridge is not null)
+            {
+                throw new InvalidOperationException(
+                    "ClearRelaysForTests found a live bridge; a test started a real relay");
+            }
+        }
+
+        internal static void ClearRelaysForTests()
+        {
+            lock (Gate)
+            {
+                // Bridges are never started by a test, so there is nothing to
+                // stop — but assert that rather than assume it, because a relay
+                // holding a live bridge dropped on the floor here would leak a
+                // subprocess for the rest of the run.
+                foreach (var relay in Relays.Values) AssertNoLiveBridge(relay.Bridge);
+
+                Relays.Clear();
+            }
+        }
+
+        internal static void SetLastUseForTests(DateTime when)
+        {
+            lock (Gate) _lastUse = when;
+        }
+
+        // The working-transition memory. Cleared rather than set, because what a
+        // test needs is a known-empty starting point: the first observation of a
+        // session is a transition from false by definition, and leaving another
+        // test's entries behind turns that into a coin flip.
+        internal static void ClearWorkingMemoryForTests()
+        {
+            lock (Gate) WorkingNow.Clear();
+        }
+
+        internal static IReadOnlyList<Remote> SnapshotForTests
+        {
+            get { lock (Gate) return _snapshot; }
+        }
+
+        internal static void SetLastSendForTests(DateTime when)
+        {
+            lock (Gate) _lastSend = when;
+        }
 
         // One line for the settings window, covering however many relays there
         // are. Named per account once there is more than one, because "connected"
@@ -175,7 +308,7 @@ namespace ClaudeBuddy
         // login-expiry notice starts three days out. "Your login expires in 3
         // days" is useful; being unable to tell whether it also found anything
         // is not.
-        private static string Compose(string state, string? warning)
+        internal static string Compose(string state, string? warning)
         {
             if (warning is null) return state;
             return state is "off" or "starting" ? warning : $"{state} · {warning}";
@@ -228,6 +361,23 @@ namespace ClaudeBuddy
         private static readonly Dictionary<string, IReadOnlyList<SlashCommand>> KnownCommands =
             new(StringComparer.OrdinalIgnoreCase);
 
+        // The colour a remote session answered with, if it has. Reads the same
+        // table CommandsFor does and exists for the same reason: the answer
+        // arrives as an ordinary inbound message and is swallowed, so without a
+        // reader there is no way to tell it landed.
+        internal static string? ColourFor(string account, string name)
+        {
+            lock (Gate) return KnownColors.GetValueOrDefault(account + ":" + name);
+        }
+
+        internal static void ForgetAnswersForTests()
+        {
+            lock (Gate)
+            {
+                KnownColors.Clear();
+                KnownCommands.Clear();
+            }
+        }
         // Raised when a far Buddy has answered about what it can mirror, so an
         // open panel can upgrade itself from a messaging channel to a live view
         // without being reopened.
@@ -369,6 +519,9 @@ namespace ClaudeBuddy
         // marks them all as wanted either way. Every entry point that means "a
         // person is looking at remote sessions" calls this — the tray item,
         // opening a remote chat, sending to one.
+        // Excluded from coverage: starts a relay, which launches a real Claude
+        // Code session in tmux.
+        [ExcludeFromCodeCoverage]
         public static void EnsureStarted()
         {
             if (!ClaudeBuddySettings.RemoteControlEnabled) return;
@@ -414,6 +567,8 @@ namespace ClaudeBuddy
         // The one case this can catch mid-flight is an account un-ticked while
         // its relay is still winding down, which the next poll was about to
         // retire anyway.
+        // Excluded from coverage: deletes real scratch directories from disk.
+        [ExcludeFromCodeCoverage]
         private static void SweepStaleScratch(IReadOnlyList<string> wanted)
         {
             try
@@ -445,6 +600,9 @@ namespace ClaudeBuddy
             lock (Gate) _lastUse = DateTime.UtcNow;
         }
 
+        // Excluded from coverage: starts a relay bridge, which spends quota on a
+        // real session.
+        [ExcludeFromCodeCoverage]
         private static async Task StartAsync(string account)
         {
             var bridge = new RemoteControlBridge(account);
@@ -499,8 +657,7 @@ namespace ClaudeBuddy
                 RemoteMirrorServer.RealSeams(
                     account,
                     bridge.SendFrameToAsync,
-                    () => _localSessions?.Invoke()
-                          ?? Array.Empty<(string, SessionStatus)>()));
+                    LocalSessions));
 
             client.RosterUpdated += () => Dispatcher.UIThread.Post(() => MirrorChanged?.Invoke(account));
 
@@ -533,6 +690,9 @@ namespace ClaudeBuddy
             await PollAsync(account).ConfigureAwait(false);
         }
 
+        // Excluded from coverage: creates the Avalonia poll timer the relay runs
+        // on.
+        [ExcludeFromCodeCoverage]
         private static void EnsureTimer()
         {
             if (_poll is not null) return;
@@ -563,6 +723,12 @@ namespace ClaudeBuddy
 
         private static readonly TimeSpan MirrorPumpEvery = TimeSpan.FromMilliseconds(1500);
 
+        // Excluded from coverage: starts a real DispatcherTimer whose every tick
+        // pumps live relays. Same reasoning as the poll loop below it, and the
+        // same reason ClaudeBuddySettings' deferred write is excluded — a test
+        // that waited for a real timer is the shape that has cost this branch
+        // five flakes.
+        [ExcludeFromCodeCoverage]
         private static void EnsureMirrorTimer()
         {
             if (_mirrorPump is not null) return;
@@ -574,6 +740,10 @@ namespace ClaudeBuddy
 
         private static bool _mirrorTicking;
 
+        // Excluded from coverage: one round of the pump above, reading files
+        // belonging to live relays and ticking a mirror server and client that
+        // only exist when one is running.
+        [ExcludeFromCodeCoverage]
         private static async Task MirrorTickAsync()
         {
             // Ticks can overlap when a file read is slow, and two pumps racing
@@ -611,6 +781,8 @@ namespace ClaudeBuddy
         }
 
         // One round: retire the relays nobody wants, then re-ask the rest.
+        // Excluded from coverage: the poll loop, driving live relays.
+        [ExcludeFromCodeCoverage]
         private static async Task TickAsync()
         {
             // Idle check first, so relays nobody wants aren't kept alive by the
@@ -646,6 +818,8 @@ namespace ClaudeBuddy
         }
 
         // Re-asks one account's relay for its peers and republishes.
+        // Excluded from coverage: asks a live relay for its agent list.
+        [ExcludeFromCodeCoverage]
         private static async Task PollAsync(string account)
         {
             RemoteControlBridge? bridge;
@@ -683,17 +857,7 @@ namespace ClaudeBuddy
                 return;
             }
 
-            var now = DateTime.UtcNow;
-            var remotes = agents
-                .Where(a => a.IsWorthAnOrb)
-                .Select(a =>
-                {
-                    var key = account + ":" + a.Name;
-                    string? colour;
-                    lock (Gate) KnownColors.TryGetValue(key, out colour);
-                    return new Remote(a.Name, a.Ref, a.Status, now, account, colour);
-                })
-                .ToList();
+            var remotes = RemotesFrom(agents, account, DateTime.UtcNow);
 
             lock (Gate)
             {
@@ -754,6 +918,8 @@ namespace ClaudeBuddy
         // Sequential rather than fanned out: the relay serializes requests
         // anyway, and firing five at once would just queue five deep behind one
         // input line.
+        // Excluded from coverage: sends prompts into a live relay session.
+        [ExcludeFromCodeCoverage]
         private static async Task AskForMissingInfoAsync(
             string account, IReadOnlyList<Remote> remotes, RemoteControlBridge bridge)
         {
@@ -787,6 +953,8 @@ namespace ClaudeBuddy
         // Picks the cadence from what is actually happening. Called after every
         // poll rather than on a schedule of its own, because the thing it reacts
         // to — a session going busy — is exactly what a poll discovers.
+        // Excluded from coverage: changes the interval of the Avalonia poll timer.
+        [ExcludeFromCodeCoverage]
         private static void RetuneTimer()
         {
             var wanted = ShouldPollFast() ? PollEveryBusy : PollEvery;
@@ -798,7 +966,7 @@ namespace ClaudeBuddy
             });
         }
 
-        private static bool ShouldPollFast()
+        internal static bool ShouldPollFast()
         {
             if (_snapshot.Any(r => r.Working)) return true;
 
@@ -809,7 +977,7 @@ namespace ClaudeBuddy
         }
 
         // Every relay's sessions, flattened into the one list the scan reads.
-        private static void Republish()
+        internal static void Republish()
         {
             lock (Gate)
             {
@@ -817,7 +985,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private static void RaiseWorkingTransitions(IEnumerable<Remote> remotes)
+        internal static void RaiseWorkingTransitions(IEnumerable<Remote> remotes)
         {
             foreach (var remote in remotes)
             {
@@ -834,7 +1002,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private static bool IdleExpired()
+        internal static bool IdleExpired()
         {
             var minutes = ClaudeBuddySettings.RemoteControlIdleMinutes;
             if (minutes <= ClaudeBuddySettings.RemoteControlIdleNever) return false;
@@ -849,6 +1017,8 @@ namespace ClaudeBuddy
         // account that session belongs to. Null when there is no relay to send
         // it through, which the caller shows as a system line rather than
         // swallowing.
+        // Excluded from coverage: sends a message through a live relay.
+        [ExcludeFromCodeCoverage]
         public static async Task<string?> SendToAsync(string account, string remoteName, string text)
         {
             EnsureStarted();
@@ -874,6 +1044,8 @@ namespace ClaudeBuddy
             return id;
         }
 
+        // Excluded from coverage: kills a relay tmux session.
+        [ExcludeFromCodeCoverage]
         public static void Stop(string account, string why = "off")
         {
             RemoteControlBridge? bridge = null;
@@ -907,6 +1079,8 @@ namespace ClaudeBuddy
             StopTimerIfIdle();
         }
 
+        // Excluded from coverage: kills every relay tmux session.
+        [ExcludeFromCodeCoverage]
         public static void StopAll(string why = "off")
         {
             List<string> accounts;
@@ -917,6 +1091,8 @@ namespace ClaudeBuddy
             lock (Gate) WorkingNow.Clear();
         }
 
+        // Excluded from coverage: stops the Avalonia poll timer.
+        [ExcludeFromCodeCoverage]
         private static void StopTimerIfIdle()
         {
             bool any;
@@ -929,6 +1105,8 @@ namespace ClaudeBuddy
             else Dispatcher.UIThread.Post(StopTimer);
         }
 
+        // Excluded from coverage: stops the Avalonia poll timer.
+        [ExcludeFromCodeCoverage]
         private static void StopTimer()
         {
             _poll?.Stop();
@@ -941,6 +1119,8 @@ namespace ClaudeBuddy
         // Settings changed under us. Unlike OpenClawSessions.Restart this only
         // ever tears down: bringing a relay back has to be asked for, because
         // starting one costs the user something.
+        // Excluded from coverage: stops every relay and starts them again.
+        [ExcludeFromCodeCoverage]
         public static void Restart()
         {
             if (!ClaudeBuddySettings.RemoteControlEnabled || !RemoteControlBridge.IsSupported)
@@ -1036,7 +1216,7 @@ namespace ClaudeBuddy
         }
 
         // Re-stamps the published snapshot with whatever colours are now known.
-        private static void RepublishWithColors()
+        internal static void RepublishWithColors()
         {
             lock (Gate)
             {

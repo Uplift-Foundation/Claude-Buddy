@@ -18,6 +18,7 @@ namespace ClaudeBuddy.Tests;
 // test passes without spawning anything: `say` is not on PATH in most CI
 // sandboxes, so an eager scan would have thrown or hung rather than quietly
 // succeeded.
+[Collection("Settings")]
 public class SettingsWindowSmokeTest
 {
     [AvaloniaFact]

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 
 namespace ClaudeBuddy
@@ -108,7 +109,13 @@ namespace ClaudeBuddy
 
         // --- Codex ---
 
-        private static IReadOnlyList<SlashCommand> ForCodex()
+        private static IReadOnlyList<SlashCommand> ForCodex() => ForCodex(HomeDir);
+
+        // internal, and taking its home rather than reading it, so the prompts
+        // directory can be a fixture. The alternative is a test that passes or
+        // fails depending on whether the person running it happens to keep
+        // prompts in ~/.codex — which is not a test of this code at all.
+        internal static IReadOnlyList<SlashCommand> ForCodex(string home)
         {
             var byName = new Dictionary<string, SlashCommand>(StringComparer.OrdinalIgnoreCase);
 
@@ -118,7 +125,7 @@ namespace ClaudeBuddy
             // docs are explicit that "Codex scans only the top-level Markdown
             // files" under ~/.codex/prompts, and that a prompt is always
             // invoked as "/prompts:<name>" rather than a bare "/<name>".
-            foreach (var file in SafeFiles(Path.Combine(HomeDir, ".codex", "prompts"), "*.md", SearchOption.TopDirectoryOnly))
+            foreach (var file in SafeFiles(Path.Combine(home, ".codex", "prompts"), "*.md", SearchOption.TopDirectoryOnly))
             {
                 var name = "/prompts:" + Path.GetFileNameWithoutExtension(file);
                 byName[name] = new SlashCommand(name, DescriptionOf(file));
@@ -135,6 +142,11 @@ namespace ClaudeBuddy
         // Materialized eagerly rather than left lazy: a lazy EnumerateFiles
         // can still throw partway through the first MoveNext, which would
         // have to be caught at every call site instead of once here.
+        // Excluded from coverage: exists to be the try/catch. The Exists guard
+        // above means both arms only fire on a real IO fault partway through an
+        // enumeration — the case the comment above this pair describes, and not
+        // something a test can stage.
+        [ExcludeFromCodeCoverage]
         private static List<string> SafeFiles(string root, string pattern, SearchOption option)
         {
             if (!Directory.Exists(root)) return new List<string>();
@@ -144,6 +156,11 @@ namespace ClaudeBuddy
             catch (UnauthorizedAccessException) { return new List<string>(); }
         }
 
+        // Excluded from coverage: exists to be the try/catch. The Exists guard
+        // above means both arms only fire on a real IO fault partway through an
+        // enumeration — the case the comment above this pair describes, and not
+        // something a test can stage.
+        [ExcludeFromCodeCoverage]
         private static List<string> SafeDirectories(string root)
         {
             if (!Directory.Exists(root)) return new List<string>();
@@ -159,13 +176,25 @@ namespace ClaudeBuddy
         private static readonly Regex FrontmatterDescription =
             new(@"^description:\s*(.+)$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
 
-        private static string DescriptionOf(string path)
+        private static string DescriptionOf(string path) => DescriptionIn(SafeRead(path));
+
+        // Excluded from coverage: exists to be the try/catch. Both arms are for a
+        // file that passed Exists and then failed mid-read — a disk error, or a
+        // path that turned out to be a directory — neither of which is arrangeable
+        // from a test in a way that is the same on both platforms.
+        [ExcludeFromCodeCoverage]
+        private static string SafeRead(string path)
         {
-            string text;
-            try { text = File.ReadAllText(path); }
+            try { return File.ReadAllText(path); }
             catch (IOException) { return ""; }
             catch (UnauthorizedAccessException) { return ""; }
+        }
 
+        // The parse, separated from the read so it can be exercised with strings
+        // rather than fixture files — which is the whole of what is interesting
+        // here, since both CLIs let a command describe itself two different ways.
+        internal static string DescriptionIn(string text)
+        {
             if (text.StartsWith("---", StringComparison.Ordinal))
             {
                 var end = text.IndexOf("\n---", 3, StringComparison.Ordinal);
