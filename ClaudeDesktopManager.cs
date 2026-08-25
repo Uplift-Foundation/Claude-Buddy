@@ -831,7 +831,16 @@ namespace ClaudeBuddy
             // either lands in the right place. It also stays the thing
             // MacOSProcessScan can read back for an instance started by a
             // version that predates this fix.
-            return isDefault
+            // An empty directory is guarded rather than interpolated. A bare
+            // `--user-data-dir=` is not "no switch" to Chromium — it is the
+            // switch carrying an empty value, which resolves back to the default
+            // directory, i.e. exactly the silent wrong-profile launch this whole
+            // change exists to stop, with nothing on screen to say so. Nothing
+            // produces one today: every directory here comes from a scanned path.
+            // The guard is here because ClaudeDesktopUrlRouter.Arguments already
+            // has it, and two functions that build the same command line drifting
+            // apart is how one of them quietly stops meaning what the other does.
+            return isDefault || directory is not { Length: > 0 }
                 ? open
                 : open.Concat(new[]
                 {
