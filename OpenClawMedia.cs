@@ -17,6 +17,10 @@ namespace ClaudeBuddy
         // are copies of something the gateway already holds, they are only
         // meaningful while the viewer is open, and the temp directory is where
         // the operating system expects to clean up after us.
+        // Excluded from coverage along with Open, its only caller: nothing else
+        // in this class touches the filesystem, so measuring the path this one
+        // builds would mean writing a file to prove a Path.Combine.
+        [ExcludeFromCodeCoverage]
         private static string Directory_ =>
             Path.Combine(Path.GetTempPath(), "claude_buddy_media");
 

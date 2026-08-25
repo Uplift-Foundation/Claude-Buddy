@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace ClaudeBuddy
 {
     // Where the `claude` CLI is, for the parts of this app that shell out to it.
@@ -96,30 +98,30 @@ namespace ClaudeBuddy
             // time these paths were tested.
             foreach (var dir in path.Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             {
-                try
-                {
-                    var candidate = System.IO.Path.Combine(dir, "claude");
-                    if (File.Exists(candidate)) return candidate;
-                }
-                catch
-                {
-                    // A malformed PATH entry is not worth failing the lookup for.
-                    //
-                    // Not reached on .NET 10, and worth saying so rather than
-                    // leaving it as a mystery in a coverage report: .NET Core
-                    // dropped Path.Combine's invalid-character check, so an entry
-                    // containing a NUL now combines happily and simply fails
-                    // File.Exists. AMalformedPathEntryIsSteppedOver asserts the
-                    // outcome — the good directory after it still answers — but it
-                    // reaches that outcome without this catch.
-                    //
-                    // Kept anyway: the runtime's behaviour here has changed once
-                    // already, and a PATH entry is the user's shell config rather
-                    // than anything this app controls.
-                }
+                var candidate = SafeCombine(dir, "claude");
+                if (candidate is not null && File.Exists(candidate)) return candidate;
             }
 
             return null;
+        }
+
+        // Excluded from coverage: exists to be the try/catch, and the catch is
+        // not reachable on .NET 10 — which is worth saying rather than leaving as
+        // a mystery in a report. .NET Core dropped Path.Combine's
+        // invalid-character check, so a PATH entry containing a NUL now combines
+        // happily and simply fails File.Exists.
+        // AMalformedPathEntryIsSteppedOver asserts the outcome — the good
+        // directory after it still answers — but it reaches that outcome without
+        // this catch.
+        //
+        // Kept anyway: the runtime's behaviour here has changed once already, and
+        // a PATH entry is the user's shell config rather than anything this app
+        // controls.
+        [ExcludeFromCodeCoverage]
+        private static string? SafeCombine(string dir, string name)
+        {
+            try { return System.IO.Path.Combine(dir, name); }
+            catch { return null; }
         }
     }
 }

@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
@@ -331,4 +334,91 @@ public class AvatarPopupTests
         Key.Enter => PhysicalKey.Enter,
         _ => PhysicalKey.A
     };
+
+    // ---- the tick that drives an animated portrait -------------------------
+
+    // Advance is what the popup's timer calls, and it carries that timer so each
+    // frame can set the interval for the NEXT one. A GIF whose frames have
+    // different delays is drawn at the wrong speed otherwise — one interval for
+    // the whole animation, taken from whichever frame happened to be first.
+    [AvaloniaFact]
+    public void EachFrameSetsTheIntervalForTheOneAfterIt()
+    {
+        Reset();
+
+        var frames = new List<Bitmap>
+        {
+            new WriteableBitmap(new PixelSize(2, 2), new Vector(96, 96)),
+            new WriteableBitmap(new PixelSize(2, 2), new Vector(96, 96))
+        };
+        var avatar = new OpenClawAvatars.Avatar(frames, new List<int> { 40, 250 });
+
+        AvatarPopup.Show(avatar, new PixelPoint(960, 640));
+        Flush();
+
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
+
+        Instance!.Advance(avatar, timer);
+
+        // Advanced onto frame 1, so the interval is frame 1's delay — the wait
+        // before frame 0 comes back round.
+        Assert.Equal(TimeSpan.FromMilliseconds(250), timer.Interval);
+        Assert.Same(frames[1], PortraitSource());
+
+        Instance!.Advance(avatar, timer);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(40), timer.Interval);
+        Assert.Same(frames[0], PortraitSource());
+
+        Reset();
+    }
+
+    // Called without one, nothing tries to set an interval on nothing. The
+    // timer is optional because a still portrait has no timer at all, and a
+    // queued tick can outlive the timer that queued it.
+    [AvaloniaFact]
+    public void AdvancingWithNoTimerStillMovesTheFrame()
+    {
+        Reset();
+
+        var avatar = Avatar(2);
+        AvatarPopup.Show(avatar, new PixelPoint(960, 640));
+        Flush();
+
+        var first = PortraitSource();
+
+        Instance!.Advance(avatar);
+
+        Assert.NotSame(first, PortraitSource());
+
+        Reset();
+    }
+
+    // A tick that arrives after the portrait has been replaced does nothing to
+    // the new one. Queued ticks outliving their portrait is the ordinary case —
+    // the popup is reused rather than recreated — and without this guard a
+    // second agent's portrait would flicker with the first agent's frames.
+    [AvaloniaFact]
+    public void ATickForAPortraitThatHasBeenReplacedIsIgnored()
+    {
+        Reset();
+
+        var stale = Avatar(2);
+        var current = Avatar(2);
+
+        AvatarPopup.Show(stale, new PixelPoint(960, 640));
+        Flush();
+        AvatarPopup.Show(current, new PixelPoint(960, 640));
+        Flush();
+
+        var before = PortraitSource();
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(99) };
+
+        Instance!.Advance(stale, timer);
+
+        Assert.Same(before, PortraitSource());
+        Assert.Equal(TimeSpan.FromMilliseconds(99), timer.Interval);
+
+        Reset();
+    }
 }

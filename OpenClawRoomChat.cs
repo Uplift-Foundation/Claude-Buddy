@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia.Threading;
 
 namespace ClaudeBuddy
@@ -67,17 +68,30 @@ namespace ClaudeBuddy
         {
             var before = TrustworthyFrom();
 
-            // A few rounds per scroll, not one. Paging the constraining member
-            // once often just makes a different member the constraint, and a
-            // scroll that fetched a page and moved the window by nothing would
-            // read as the top of the conversation.
+            await PageUntilTheWindowMovesAsync(before, ct);
+
+            return TrustworthyFrom() != before;
+        }
+
+        // A few rounds per scroll, not one. Paging the constraining member once
+        // often just makes a different member the constraint, and a scroll that
+        // fetched a page and moved the window by nothing would read as the top of
+        // the conversation.
+        //
+        // Excluded from coverage: the loop only goes round a second time when a
+        // page actually came back, which needs a gateway answering a chat.history
+        // request. With none, the first round breaks — which is the behaviour
+        // LoadOlderAsync's tests assert, through the answer it returns rather
+        // than through this.
+        [ExcludeFromCodeCoverage]
+        private async Task PageUntilTheWindowMovesAsync(
+            DateTimeOffset? before, CancellationToken ct)
+        {
             for (var round = 0; round < 3; round++)
             {
                 if (!await PageBindingMemberAsync(ct)) break;
                 if (TrustworthyFrom() != before) break;
             }
-
-            return TrustworthyFrom() != before;
         }
 
         public event Action<int>? HistoryPrepended;
@@ -390,6 +404,26 @@ namespace ClaudeBuddy
 
             try
             {
+                await PageBackHardAsync();
+            }
+            finally
+            {
+                _deepening = false;
+            }
+        }
+
+        // Excluded from coverage: eight rounds of a chat.history request, and the
+        // catch for a gateway that stops answering partway through — which is not
+        // worth failing an open conversation over, so the window simply stays
+        // where it is. With no gateway the first round returns and neither the
+        // loop nor the catch has anything to do, which is what DeepenAsync's
+        // tests exercise: that it runs once, releases its flag, and disturbs
+        // nothing.
+        [ExcludeFromCodeCoverage]
+        private async Task PageBackHardAsync()
+        {
+            try
+            {
                 for (var round = 0; round < 8; round++)
                 {
                     if (!await PageBindingMemberAsync(CancellationToken.None)) return;
@@ -397,12 +431,8 @@ namespace ClaudeBuddy
             }
             catch
             {
-                // A gateway that stops answering is not worth failing an open
-                // conversation over; the window simply stays where it is.
-            }
-            finally
-            {
-                _deepening = false;
+                // See above: a gateway that stops answering leaves the window
+                // where it is rather than failing the conversation.
             }
         }
 

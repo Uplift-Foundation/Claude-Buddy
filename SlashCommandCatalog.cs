@@ -109,7 +109,13 @@ namespace ClaudeBuddy
 
         // --- Codex ---
 
-        private static IReadOnlyList<SlashCommand> ForCodex()
+        private static IReadOnlyList<SlashCommand> ForCodex() => ForCodex(HomeDir);
+
+        // internal, and taking its home rather than reading it, so the prompts
+        // directory can be a fixture. The alternative is a test that passes or
+        // fails depending on whether the person running it happens to keep
+        // prompts in ~/.codex — which is not a test of this code at all.
+        internal static IReadOnlyList<SlashCommand> ForCodex(string home)
         {
             var byName = new Dictionary<string, SlashCommand>(StringComparer.OrdinalIgnoreCase);
 
@@ -119,7 +125,7 @@ namespace ClaudeBuddy
             // docs are explicit that "Codex scans only the top-level Markdown
             // files" under ~/.codex/prompts, and that a prompt is always
             // invoked as "/prompts:<name>" rather than a bare "/<name>".
-            foreach (var file in SafeFiles(Path.Combine(HomeDir, ".codex", "prompts"), "*.md", SearchOption.TopDirectoryOnly))
+            foreach (var file in SafeFiles(Path.Combine(home, ".codex", "prompts"), "*.md", SearchOption.TopDirectoryOnly))
             {
                 var name = "/prompts:" + Path.GetFileNameWithoutExtension(file);
                 byName[name] = new SlashCommand(name, DescriptionOf(file));

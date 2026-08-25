@@ -1603,6 +1603,12 @@ namespace ClaudeBuddy
             Dispatcher.UIThread.Post(() => chat.SetHistory(initial));
         }
 
+        // Excluded from coverage for its last line. With no gateway there is
+        // nothing to fetch and it says so, which is the half a test can reach and
+        // the half LoadOlderAsync's tests assert through — reaching the other
+        // half means a chat.history request over a live socket, which is the
+        // reason FetchHistoryPageAsync below is excluded too.
+        [ExcludeFromCodeCoverage]
         private static async Task<(List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> Turns, int Messages)?>
             FetchPageAsync(OpenClawChatSession chat, int offset, CancellationToken ct)
         {
