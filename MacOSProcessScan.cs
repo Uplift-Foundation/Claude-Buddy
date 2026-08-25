@@ -251,6 +251,26 @@ namespace ClaudeBuddy
                 var argStart = i;
                 while (i < length && buffer[i] != 0) i++;
 
+                // The buffer ran out inside this token, so what is here is a
+                // prefix of an argument rather than an argument. Reading it
+                // anyway is worse than reading nothing: "--user-data-dir=" plus
+                // half a path still starts with the switch and still has a
+                // non-empty value, so it would be returned as a directory —
+                // one that exists nowhere. The instance then belongs to no
+                // profile row at all *and* is missing from the duplicate
+                // counter, which is the same invisibility this file's other
+                // comments keep arguing against, arriving from a truncated
+                // read instead of a missing selector.
+                //
+                // Unreachable today, which is why this is a guard rather than a
+                // fix: ReadUserDataDir asks for a KERN_ARGMAX buffer (typically
+                // 1 MB) and sysctl reports the true length back, so nothing gets
+                // cut. It is here because "the caller currently passes a big
+                // enough buffer" is a property of the caller, and this parser is
+                // internal and takes a length precisely so it does not have to
+                // trust one.
+                if (i == length) break;
+
                 if (fromArguments is null)
                 {
                     var entry = Encoding.UTF8.GetString(buffer, argStart, i - argStart);
@@ -275,6 +295,7 @@ namespace ClaudeBuddy
                 var start = i;
                 while (i < length && buffer[i] != 0) i++;
                 if (i == start) break; // empty string terminates the block
+                if (i == length) break; // truncated, for the reason in argv above
 
                 var entry = Encoding.UTF8.GetString(buffer, start, i - start);
                 if (entry.StartsWith(UserDataDirKey, StringComparison.Ordinal))

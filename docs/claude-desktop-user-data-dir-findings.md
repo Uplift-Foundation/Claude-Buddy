@@ -303,10 +303,19 @@ already exist. Nothing here implements that.
 
 Three smaller things are noted and left, none of them reachable today:
 
-- **No fixture cuts a `--user-data-dir=` token in half.** `KERN_PROCARGS2` is
-  read into a fixed buffer, and a truncated final token would be parsed as a
-  short path rather than rejected. One fixture would settle it; the buffer is
-  sized well above any real command line.
+- ~~No fixture cuts a `--user-data-dir=` token in half.~~ **Fixed.** A buffer
+  cut inside the token was parsed as a short path rather than rejected, and the
+  wrong answer was a plausible one: a prefix still starts with the switch and
+  still has a non-empty value, so it mapped the instance to a directory that
+  exists nowhere — vanishing from every profile row *and* from the duplicate
+  counter at once. Both walks in `ParseUserDataDir` now refuse a token the
+  buffer ends inside, which maps the instance to Default instead, i.e. to the
+  "indistinguishable from a Dock launch" it has in fact become. Still
+  unreachable in practice — `ReadUserDataDir` asks for a KERN_ARGMAX buffer and
+  sysctl reports the true length — so this is a guard, not a fix for anything
+  observed. `ParseEnvironmentValues` next door deliberately still reads an
+  unterminated final entry; a truncated tmux pane id is not a wrong answer in
+  the way a truncated profile path is, and that asymmetry is meant.
 - **Both scanners take the *first* repeated `--user-data-dir`; Chromium takes
   the last.** Unreachable through `open --args`, which is the only way this app
   launches anything, and unasserted either way.
