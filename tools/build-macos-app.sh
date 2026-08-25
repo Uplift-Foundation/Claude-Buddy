@@ -169,8 +169,9 @@ cat > "$CONTENTS/Info.plist" <<PLIST
          Why claim them at all: LaunchServices resolves a scheme to a bundle
          id, and every tinted clone Claude Buddy makes is a byte-identical copy
          of Claude.app — same id, same claimed schemes. So the id cannot say
-         which profile a link belongs to, and a LaunchServices launch carries no
-         CLAUDE_USER_DATA_DIR, which means every sign-in callback lands in the
+         which profile a link belongs to, and a LaunchServices launch carries
+         neither --user-data-dir nor CLAUDE_USER_DATA_DIR — only our own `open`
+         ever passes them — which means every sign-in callback lands in the
          Default profile no matter which profile started it. See
          ClaudeDesktopUrlRouting for the full story. The msauth scheme is the
          Microsoft sign-in callback, and is why this shows up as "I can't log

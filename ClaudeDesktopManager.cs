@@ -41,9 +41,11 @@ namespace ClaudeBuddy
     // Claude Desktop signs into one account at a time and keeps that login in
     // its userData directory (Cookies -> sessionKey, config.json ->
     // oauth:tokenCache), not the Keychain — so a second account is a second
-    // userData directory, selected with CLAUDE_USER_DATA_DIR. The app honours
-    // that variable (app.setPath("userData", ...)) and takes no single-instance
-    // lock, so instances genuinely can coexist.
+    // userData directory, selected with Chromium's --user-data-dir switch, and
+    // the app takes no single-instance lock, so instances genuinely can
+    // coexist. CLAUDE_USER_DATA_DIR used to be the whole mechanism and is still
+    // passed alongside; LaunchArguments has the measurement showing why it can
+    // no longer be relied on by itself.
     //
     // Everything here is independent of the session-monitoring side of the app:
     // no SessionStatus, no SessionManager, no OrbWindow. The only seam is
@@ -717,12 +719,21 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static bool LaunchMac(string directory, bool isDefault)
         {
-            // The Default profile is launched *without* the variable.
-            // Setting it suppresses the app's own resolution of its
-            // sidecar config directory, so a tray launch could
-            // re-trigger the deployment-mode chooser on an already
-            // configured profile — and it would start a second log
-            // history under <profile>/Logs.
+            // The Default profile is launched without *either* selector —
+            // see LaunchArguments, which is where that decision actually
+            // lives and where the measurement behind it is written down.
+            // Pointing either one at the app's own default directory
+            // suppresses its own resolution of the sidecar config
+            // directory, so a tray launch could re-trigger the
+            // deployment-mode chooser on an already configured profile.
+            //
+            // This used to add "and it would start a second log history
+            // under <profile>/Logs", which was true when the variable was
+            // the mechanism and is not true now: --user-data-dir sets
+            // Chromium's userData and does not move Electron's log path.
+            // See LogCandidates for what that cost and how Reveal logs
+            // answers it instead.
+
             // A cloned bundle with a tinted icon, so this instance gets
             // its own colour in the Dock. Only for created profiles:
             // Default deliberately stays the bundle you installed, icon
@@ -799,19 +810,64 @@ namespace ClaudeBuddy
                 // and AppInstalled() has to have been true to get here at all.
                 : new[] { "-n", "-b", BundleId };
 
-            // Default is launched without CLAUDE_USER_DATA_DIR whether or
-            // not it runs from a clone, so the app resolves its own
-            // userData and sidecar config exactly as a Dock launch does.
-            return isDefault
+            // Default is launched without either selector whether or not it
+            // runs from a clone, so the app resolves its own userData and
+            // sidecar config exactly as a Dock launch does.
+            //
+            // Both selectors, on every created profile, because the
+            // environment variable alone has stopped working. Claude Desktop
+            // 1.34493.1 ignores CLAUDE_USER_DATA_DIR: an instance launched
+            // with it set to an empty scratch directory left that directory
+            // empty and opened 45 files under ~/Library/Application
+            // Support/Claude instead — measured with lsof against the
+            // installed bundle, not a clone, so nothing this app does to a
+            // bundle is involved. That is the whole bug users see as "it
+            // opens the same profile twice": every profile row launched a
+            // second Chromium onto Default, which is also the concurrent
+            // leveldb access this feature exists to avoid.
+            //
+            // --user-data-dir is Chromium's own switch, handled in the
+            // Electron framework rather than in Claude Desktop's JavaScript,
+            // which is why it still works — verified the same way, against a
+            // path containing a space, with the profile written where it was
+            // asked for. Windows has passed it since the port; macOS was the
+            // only side still trusting the variable.
+            //
+            // The variable is kept alongside it rather than replaced. Older
+            // Claude Desktop builds do honour it — the app's bundled main
+            // still contains the app.setPath("userData", …) that reads it —
+            // and both point at the same directory, so a build that honours
+            // either lands in the right place. MacOSProcessScan also still
+            // reads it back, though not for the reason it looks like — see the
+            // comment on ParseUserDataDir, which is exact about what that
+            // fallback is right for and what it quietly gets wrong.
+
+            // An empty directory is guarded rather than interpolated. A bare
+            // `--user-data-dir=` is not "no switch" to Chromium — it is the
+            // switch carrying an empty value, which resolves back to the default
+            // directory, i.e. exactly the silent wrong-profile launch this whole
+            // change exists to stop, with nothing on screen to say so. Nothing
+            // produces one today: every directory here comes from a scanned path.
+            // The guard is here because ClaudeDesktopUrlRouter.Arguments already
+            // has it, and two functions that build the same command line drifting
+            // apart is how one of them quietly stops meaning what the other does.
+            return isDefault || directory is not { Length: > 0 }
                 ? open
-                : open.Concat(new[] { "--env", "CLAUDE_USER_DATA_DIR=" + directory }).ToArray();
+                : open.Concat(new[]
+                {
+                    "--env", "CLAUDE_USER_DATA_DIR=" + directory,
+                    // --args must come last: open(1) passes everything after
+                    // it to the application untouched.
+                    "--args", "--user-data-dir=" + directory
+                }).ToArray();
         }
 
         // Default is launched with no arguments at all — passing
         // --user-data-dir pointed at the app's own default directory is not
         // the same thing to Chromium as omitting the flag, and risks
-        // re-triggering the deployment-mode chooser the same way an
-        // unnecessary CLAUDE_USER_DATA_DIR does on macOS (see LaunchMac).
+        // re-triggering the deployment-mode chooser the same way either
+        // selector does on macOS (see LaunchMac, which now omits both rather
+        // than just the variable).
         // A created profile gets the flag pointed at its own directory.
         // Excluded from coverage: see Launch. Calls the shell's activation
         // manager against a real installed AppX package.
@@ -1239,39 +1295,172 @@ namespace ClaudeBuddy
             }
         }
 
-        // Where a profile's logs could be, most likely first.
+        // Where a profile's logs could be, best first.
         //
         // Split out of RevealLogs because the *list* is the interesting part and
-        // opening a Finder or Explorer window is not: which directory Electron
-        // writes to depends on whether the instance was launched with an
-        // environment override, and this app deliberately launches Default
-        // without one. Get that wrong and "Reveal logs" opens the wrong
-        // profile's logs, which is worse than opening nothing.
-        internal static IEnumerable<string> LogCandidates(string directory, bool isDefault) =>
-            LogCandidates(directory, isDefault, OperatingSystem.IsWindows());
+        // opening a Finder or Explorer window is not. Get it wrong and "Reveal
+        // logs" opens the wrong profile's logs, which is worse than opening
+        // nothing — and until this branch it did exactly that.
+        //
+        // The rule this replaces said a created profile's logs are at
+        // <profile>/Logs and Default's are at ~/Library/Logs/Claude. That was
+        // true only because the *variable* moved them: Claude Desktop's own
+        // startup did app.setPath("logs", resolve(e, "Logs")) inside the
+        // CLAUDE_USER_DATA_DIR branch, so the logs followed the userData
+        // directory because the JavaScript walked them there by hand.
+        // --user-data-dir does not do that. It is Chromium's switch and it sets
+        // userData only; on macOS Electron's logs path is
+        // ~/Library/Logs/<CFBundleName> and is not derived from userData at
+        // all. Measured: a launch carrying only the switch wrote 30 entries
+        // into a fresh scratch directory and no Logs subdirectory whatsoever.
+        //
+        // So the fix that moved a profile's *data* left its *logs* behind, and
+        // the failure is the quiet kind. A <profile>/Logs directory left over
+        // from when the variable worked still exists, so the old first
+        // candidate still matched, Directory.Exists still passed, and Reveal
+        // logs still opened a directory that looked entirely correct while
+        // being weeks stale. On the machine this was found on:
+        // ~/Library/Application Support/Claude-Board/Logs was last written on
+        // 24 August; ~/Library/Logs/Claude was being written that afternoon.
+        //
+        // Note what the Windows arm already said, which should have given this
+        // away a year ago: there is no Default/created split there *because*
+        // Electron's paths do not follow --user-data-dir. macOS is now the same
+        // — the switch is the same switch — and the only reason it looked
+        // different was the JavaScript that is no longer running.
+        // Held in a field rather than written as a method group at the call
+        // site. A method group there compiles to a lazily-populated delegate
+        // cache — a null check on this line, in code nobody wrote, which no
+        // test can exercise both ways and which would sit in the branch report
+        // for ever needing to be explained. One allocation at type-init costs
+        // nothing and the line then means exactly what it says.
+        private static readonly Func<string, DateTime?> LastWritten = NewestWrite;
+
+        internal static IReadOnlyList<string> LogCandidates(string directory) =>
+            LogCandidates(directory, OperatingSystem.IsWindows(), LastWritten);
 
         // The platform is an argument rather than a question this asks, so both
         // answers are reachable from either machine. The two are genuinely
         // different rules rather than different paths — see the comments below —
         // and a rule that only one CI leg ever executes is a rule nobody reads
-        // until it is wrong.
-        internal static IEnumerable<string> LogCandidates(string directory, bool isDefault, bool windows)
+        // until it is wrong. The clock is an argument for the same reason: the
+        // ordering below is decided by what is on disk, and a test has no
+        // business staging real log files with staged mtimes to ask about it.
+        //
+        // isDefault is gone rather than ignored. It was the whole Default/
+        // created split and there is nothing left for it to select, so keeping
+        // it as an unused parameter would leave the shape of the deleted rule
+        // sitting in the signature for the next person to reconstruct.
+        internal static IReadOnlyList<string> LogCandidates(
+            string directory, bool windows, Func<string, DateTime?> lastWritten)
         {
             if (windows)
             {
                 // Unlike macOS, Electron's userData resolves to the same
                 // directory whether or not --user-data-dir was passed —
                 // Default's userData is just %APPDATA%\Claude — so there's
-                // one candidate rather than a Default/created split.
+                // one candidate rather than a Default/created split. Unchanged
+                // by any of the above; it was already right.
                 return new[] { Path.Combine(directory, "logs") };
             }
 
-            // Only an env-launched instance writes <profile>/Logs; a plain
-            // launch — which is what Default deliberately gets — writes
-            // Electron's default path instead.
-            return isDefault
-                ? new[] { Path.Combine(Home, "Library", "Logs", DefaultProfileFolder), directory }
-                : new[] { Path.Combine(directory, "Logs"), directory };
+            // Both are real answers on some build, and no static ordering is
+            // right on both. Electron's own path is where a current build
+            // writes; <profile>/Logs is where a build that still honours the
+            // variable writes, and this app deliberately keeps sending the
+            // variable for exactly that case. Put the profile first and a
+            // stale leftover wins on a current build — the bug above. Put
+            // Electron's first and Default's logs are offered for Board on an
+            // older one, which is the same mistake pointing the other way.
+            //
+            // So neither is guessed. Whichever was written to more recently is
+            // the one the app is using, which is the question a person opening
+            // the directory was asking in the first place, and it needs no
+            // opinion about which Desktop build is installed.
+            var logs = new[]
+            {
+                Path.Combine(Home, "Library", "Logs", DefaultProfileFolder),
+                Path.Combine(directory, "Logs")
+            };
+
+            // The profile directory is the last resort, and it is kept out of
+            // the recency comparison rather than added to it: Chromium writes
+            // Cookies and Local Storage there constantly, so by mtime it would
+            // win every time and Reveal logs would stop showing logs at all.
+            return ByRecency(logs, lastWritten).Append(directory).ToList();
+        }
+
+        // The candidates that have been written to, most recent first, then the
+        // ones that have not in the order they arrived. Pure, and separate from
+        // the list itself, because "which of these is live" is the part with a
+        // decision in it and it should be answerable without a filesystem.
+        internal static IReadOnlyList<string> ByRecency(
+            IEnumerable<string> candidates, Func<string, DateTime?> lastWritten)
+        {
+            var seen = new List<(string Path, DateTime When, int Order)>();
+            var order = 0;
+            foreach (var candidate in candidates)
+            {
+                seen.Add((candidate, lastWritten(candidate) ?? DateTime.MinValue, order++));
+            }
+
+            // Sorted by hand rather than with OrderByDescending().ThenBy(),
+            // and the incoming index is compared explicitly rather than left to
+            // a stable sort: two directories with no writes at all — the common
+            // state on a machine that has only ever run one profile — must come
+            // back in the order they were built above, because that order is
+            // the tie-break this deliberately still encodes. List.Sort is not
+            // stable, so leaning on stability would have been wrong here even
+            // though LINQ's ordering happens to provide it.
+            seen.Sort(static (left, right) => left.When != right.When
+                ? right.When.CompareTo(left.When)
+                : left.Order.CompareTo(right.Order));
+
+            var ordered = new List<string>(seen.Count);
+            foreach (var entry in seen) ordered.Add(entry.Path);
+            return ordered;
+        }
+
+        // The newest write anywhere in a log directory, or null when it is not
+        // there or cannot be read.
+        //
+        // Not the directory's own timestamp, which is the obvious thing and the
+        // wrong thing: appending to main.log does not touch the directory that
+        // contains it, so a live log directory can carry an mtime from whenever
+        // its files were created. Measured here — ~/Library/Logs/Claude was
+        // stamped 15 August while the log inside it had been written twelve
+        // minutes earlier. Reading the directory's mtime would have preferred
+        // the stale candidate, which is the bug this is fixing.
+        //
+        // Top level only. Log directories are flat, and a recursive walk on a
+        // path the user chose is a stall on a menu click.
+        internal static DateTime? NewestWrite(string directory)
+        {
+            try
+            {
+                if (!Directory.Exists(directory)) return null;
+
+                DateTime? newest = null;
+                foreach (var file in Directory.EnumerateFiles(directory))
+                {
+                    // Compared against MinValue rather than as `newest is null
+                    // || written > newest`. That reads better and generates an
+                    // arm nothing can reach: lifting `>` over a nullable adds a
+                    // HasValue test that the short circuit has already made
+                    // false, so the branch could never be covered and would
+                    // have to be explained away for ever.
+                    var written = File.GetLastWriteTimeUtc(file);
+                    if (written > (newest ?? DateTime.MinValue)) newest = written;
+                }
+
+                // An empty directory still beats one that is not there: it is
+                // evidence the app made it, which a missing path is not.
+                return newest ?? Directory.GetLastWriteTimeUtc(directory);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         // Excluded from coverage: opens a Finder or Explorer window on the
@@ -1283,11 +1472,10 @@ namespace ClaudeBuddy
             if (!SupportedPlatform) return;
 
             var directory = profile.Directory;
-            var isDefault = profile.IsDefault;
 
             Task.Run(() =>
             {
-                foreach (var candidate in LogCandidates(directory, isDefault))
+                foreach (var candidate in LogCandidates(directory))
                 {
                     if (!Directory.Exists(candidate)) continue;
                     OpenFolder(candidate);

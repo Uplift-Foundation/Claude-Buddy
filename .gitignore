@@ -22,3 +22,10 @@ Obj/
 # screenshot proof of concept's PNGs) — always local/CI-run artifacts, never
 # something to commit.
 /TestResults/
+
+# Python bytecode. tools/merge-coverage.py is a script, but anything that
+# imports it — a coverage run poking at its internals, most likely — leaves a
+# __pycache__ beside it, and a `git add -A` after that quietly commits a
+# machine- and version-specific binary. One did land here once.
+__pycache__/
+*.pyc

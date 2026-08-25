@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Media;
@@ -105,14 +106,75 @@ namespace ClaudeBuddy
         // Squirrel updates /Applications/Claude.app only, so clones go stale and
         // would keep running an old version indefinitely. Compare bundle versions
         // rather than mtimes, which cp -Rc preserves.
-        // Excluded from coverage: compares bundle versions read by plutil.
+        // Excluded from coverage: reads both versions through plutil. The rule it
+        // applies to them is IsStaleVersion, which is pure and covered.
         [ExcludeFromCodeCoverage]
-        private static bool IsStale(string clone, string sourceApp)
+        private static bool IsStale(string clone, string sourceApp) =>
+            IsStaleVersion(BundleVersion(clone), BundleVersion(sourceApp));
+
+        // Stale means the clone is *behind* the installed bundle, not merely
+        // different from it, and the distinction is not hypothetical. Squirrel
+        // updates whichever bundle is running, and the bundle that is running is
+        // usually a clone — so on the machine this was found on,
+        // /Applications/Claude.app sat at 1.34493.1 while the Claude-Board clone
+        // had already self-updated itself to 1.37937.0. Under the old inequality
+        // test the next Board launch would have rebuilt that clone from
+        // /Applications and *downgraded* the profile to 1.34493.1, then opened
+        // userData written by a newer Chromium with an older one. Re-cloning
+        // costs 0.3s; that does not undo.
+        //
+        // Either version missing is still stale — a clone whose Info.plist
+        // cannot be read is not one worth keeping. So is a pair neither side can
+        // parse as dotted numbers: with no ordering to appeal to, the old
+        // inequality rule is the honest answer, and it errs towards rebuilding,
+        // which is the recoverable direction.
+        internal static bool IsStaleVersion(string? cloneVersion, string? sourceVersion)
         {
-            var cloneVersion = BundleVersion(clone);
-            var sourceVersion = BundleVersion(sourceApp);
             if (cloneVersion is null || sourceVersion is null) return true;
-            return !string.Equals(cloneVersion, sourceVersion, StringComparison.Ordinal);
+
+            return CompareVersions(cloneVersion, sourceVersion) is { } order
+                ? order < 0
+                : !string.Equals(cloneVersion, sourceVersion, StringComparison.Ordinal);
+        }
+
+        // Negative, zero or positive the way IComparable orders things, or null
+        // when either side is not a dotted run of non-negative integers. Missing
+        // trailing components count as zero, so "1.2" and "1.2.0" are the same
+        // build rather than an upgrade — CFBundleVersion is written by hand often
+        // enough that a dropped ".0" should not cost a 753MB re-clone.
+        private static int? CompareVersions(string left, string right)
+        {
+            if (Numbers(left) is not { } first || Numbers(right) is not { } second) return null;
+
+            for (var i = 0; i < Math.Max(first.Length, second.Length); i++)
+            {
+                var a = i < first.Length ? first[i] : 0;
+                var b = i < second.Length ? second[i] : 0;
+                if (a != b) return a < b ? -1 : 1;
+            }
+
+            return 0;
+        }
+
+        // long rather than int: Claude Desktop's middle component is already five
+        // digits and climbing, and a version that overflows silently would compare
+        // as garbage rather than fail. NumberStyles.None so a signed or
+        // whitespace-padded component is rejected outright instead of being
+        // rounded into an ordering nobody wrote.
+        private static long[]? Numbers(string version)
+        {
+            var parts = version.Split('.');
+            var numbers = new long[parts.Length];
+            for (var i = 0; i < parts.Length; i++)
+            {
+                if (!long.TryParse(
+                        parts[i], NumberStyles.None, CultureInfo.InvariantCulture, out numbers[i]))
+                {
+                    return null;
+                }
+            }
+
+            return numbers;
         }
 
         internal static bool ColourMatches(string profileFolder, Color tint)

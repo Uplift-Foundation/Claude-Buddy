@@ -153,7 +153,13 @@ public class UrlRouterDecisionTests
 
         Assert.Equal("-a", arguments[0]);
         Assert.Equal("/tmp/bundles/Claude-Profile-1/Claude.app", arguments[1]);
-        Assert.Equal("claude://x", arguments[^1]);
+
+        // The URL is the last thing open(1) itself reads: --args and the
+        // Chromium switch that follows are handed to the application, not
+        // interpreted, so the URL has to sit in front of them.
+        Assert.Equal("claude://x", arguments[^3]);
+        Assert.Equal("--args", arguments[^2]);
+        Assert.Equal("--user-data-dir=/tmp/profiles/Claude-Profile-1", arguments[^1]);
     }
 
     // Never -n, on either path. -n is right when *launching* a profile, because
@@ -195,17 +201,23 @@ public class UrlRouterDecisionTests
     }
 
     // And one that has it passes it, unconditionally rather than only when the
-    // instance is down: `open` applies --env at launch, so it is meaningless for
-    // a running instance and harmless, while a link that has to start the
-    // profile starts it on the right userData directory.
+    // instance is down: `open` applies both selectors at launch, so they are
+    // meaningless for a running instance and harmless, while a link that has to
+    // start the profile starts it on the right userData directory.
     [Fact]
-    public void ARouteWithAUserDataDirectoryCarriesItAsAnEnvironmentVariable()
+    public void ARouteWithAUserDataDirectoryCarriesItAsAnEnvironmentVariableAndASwitch()
     {
         var arguments = ClaudeDesktopUrlRouter.ArgumentsFor(
             Route("/tmp/Claude.app", "/tmp/data"), "claude://x");
 
         Assert.Equal(
-            new[] { "-a", "/tmp/Claude.app", "--env", "CLAUDE_USER_DATA_DIR=/tmp/data", "claude://x" },
+            new[]
+            {
+                "-a", "/tmp/Claude.app",
+                "--env", "CLAUDE_USER_DATA_DIR=/tmp/data",
+                "claude://x",
+                "--args", "--user-data-dir=/tmp/data"
+            },
             arguments);
     }
 }

@@ -114,7 +114,7 @@ public class LastReachableArmsTests
     public void OnWindowsThereIsOneLogDirectory()
     {
         var candidates = ClaudeDesktopManager
-            .LogCandidates(@"C:\Users\x\AppData\Roaming\Claude-Work", isDefault: false, windows: true)
+            .LogCandidates(@"C:\Users\x\AppData\Roaming\Claude-Work", windows: true, Never)
             .ToList();
 
         Assert.Single(candidates);
@@ -122,42 +122,272 @@ public class LastReachableArmsTests
     }
 
     // Electron's userData resolves the same way on Windows whether or not
-    // --user-data-dir was passed, so Default is not a special case there — and
-    // asserting that is asserting the comment.
+    // --user-data-dir was passed, so there was never a Default/created split
+    // there — and that arm is the one that turned out to be right about macOS
+    // too. It is asserted here as the invariant it always was: the answer
+    // depends on the profile directory and on nothing else.
     [Fact]
-    public void OnWindowsTheDefaultProfileIsNotASpecialCase()
+    public void OnWindowsTheAnswerDependsOnlyOnTheProfileDirectory()
     {
-        var forDefault = ClaudeDesktopManager
-            .LogCandidates(@"C:\Users\x\AppData\Roaming\Claude", isDefault: true, windows: true);
-        var forCreated = ClaudeDesktopManager
-            .LogCandidates(@"C:\Users\x\AppData\Roaming\Claude", isDefault: false, windows: true);
+        var once = ClaudeDesktopManager
+            .LogCandidates(@"C:\Users\x\AppData\Roaming\Claude", windows: true, Never);
+        var again = ClaudeDesktopManager
+            .LogCandidates(@"C:\Users\x\AppData\Roaming\Claude", windows: true, Recent);
 
-        Assert.Equal(forDefault, forCreated);
+        Assert.Equal(once, again);
     }
 
-    // On macOS it very much is. A plain launch — which is what Default
-    // deliberately gets — writes Electron's own path under ~/Library/Logs,
-    // and looking in the profile directory instead opens the wrong profile's
-    // logs, which is worse than opening nothing.
+    // macOS no longer has a Default/created split either, and this is the test
+    // that used to assert the bug.
+    //
+    // It read: a created profile's logs are at <profile>/Logs, full stop. That
+    // was only ever true because CLAUDE_USER_DATA_DIR made it true — Claude
+    // Desktop's own startup called app.setPath("logs", …) inside the variable's
+    // branch. --user-data-dir sets Chromium's userData and nothing else, so on
+    // a current build the logs stay at ~/Library/Logs/Claude and the
+    // <profile>/Logs left over from when the variable worked is stale. The old
+    // assertion passed the whole time and pinned Reveal logs to the stale
+    // directory, which is worse than having had no test at all.
     [Fact]
-    public void OnMacOsTheDefaultProfileLooksSomewhereElseFirst()
+    public void OnMacOsTheLiveLogDirectoryComesFirstWhereverItIs()
     {
-        var candidates = ClaudeDesktopManager
-            .LogCandidates("/tmp/Claude-Work", isDefault: true, windows: false).ToList();
+        var electron = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Library", "Logs", "Claude");
+        var inside = Path.Combine("/tmp/Claude-Work", "Logs");
 
-        Assert.Equal(2, candidates.Count);
+        // A current build: the switch moved the data, Electron kept the logs.
+        var current = ClaudeDesktopManager.LogCandidates(
+            "/tmp/Claude-Work", windows: false,
+            path => path == electron ? Recent(path) : Stale(path));
+
+        Assert.Equal(new[] { electron, inside, "/tmp/Claude-Work" }, current);
+
+        // An older build that still honours the variable, which is why this app
+        // still sends it. Same list, ordered by the same evidence, no opinion
+        // about which build is installed.
+        var older = ClaudeDesktopManager.LogCandidates(
+            "/tmp/Claude-Work", windows: false,
+            path => path == inside ? Recent(path) : Stale(path));
+
+        Assert.Equal(new[] { inside, electron, "/tmp/Claude-Work" }, older);
+    }
+
+    // The profile directory is last however the clock falls, and deliberately
+    // outside the comparison: Chromium writes Cookies and Local Storage into it
+    // continuously, so ranking it by mtime would make it win every time and
+    // Reveal logs would stop revealing logs.
+    [Fact]
+    public void TheProfileDirectoryIsAlwaysTheLastResort()
+    {
+        var candidates = ClaudeDesktopManager.LogCandidates(
+            "/tmp/Claude-Work", windows: false, _ => DateTime.UtcNow);
+
+        Assert.Equal("/tmp/Claude-Work", candidates[^1]);
+        Assert.Equal(3, candidates.Count);
+    }
+
+    // Neither log directory has ever been written to — a profile that has not
+    // run yet. Nothing to order on, so the static preference stands, and
+    // Electron's path leads because that is where a current build will write.
+    [Fact]
+    public void WithNothingWrittenTheStaticPreferenceStands()
+    {
+        var candidates = ClaudeDesktopManager.LogCandidates(
+            "/tmp/Claude-Work", windows: false, Never);
+
         Assert.Contains("Library", candidates[0]);
         Assert.Contains("Logs", candidates[0]);
+        Assert.Equal(Path.Combine("/tmp/Claude-Work", "Logs"), candidates[1]);
+    }
+
+    // ---- ByRecency ---------------------------------------------------------
+
+    [Fact]
+    public void ByRecencyPutsTheMostRecentlyWrittenFirst()
+    {
+        var when = new Dictionary<string, DateTime>
+        {
+            ["a"] = new(2026, 8, 1),
+            ["b"] = new(2026, 8, 25),
+            ["c"] = new(2026, 8, 14)
+        };
+
+        Assert.Equal(
+            new[] { "b", "c", "a" },
+            ClaudeDesktopManager.ByRecency(new[] { "a", "b", "c" }, path => when[path]));
+    }
+
+    // Unwritten candidates sort behind written ones and keep the order they
+    // came in, which is the tie-break the list itself still encodes.
+    [Fact]
+    public void ByRecencyKeepsTheIncomingOrderForCandidatesWithNoWrites()
+    {
+        Assert.Equal(
+            new[] { "a", "b", "c" },
+            ClaudeDesktopManager.ByRecency(new[] { "a", "b", "c" }, Never));
+
+        Assert.Equal(
+            new[] { "c", "a", "b" },
+            ClaudeDesktopManager.ByRecency(
+                new[] { "a", "b", "c" },
+                path => path == "c" ? new DateTime(2026, 8, 25) : (DateTime?)null));
     }
 
     [Fact]
-    public void OnMacOsACreatedProfileLooksInsideItself()
+    public void ByRecencyHandlesAnEmptyList()
     {
-        var candidates = ClaudeDesktopManager
-            .LogCandidates("/tmp/Claude-Work", isDefault: false, windows: false).ToList();
+        Assert.Empty(ClaudeDesktopManager.ByRecency(Array.Empty<string>(), Never));
+    }
 
-        Assert.Equal(new[] { Path.Combine("/tmp/Claude-Work", "Logs"), "/tmp/Claude-Work" },
-            candidates);
+    // ---- NewestWrite -------------------------------------------------------
+
+    [Fact]
+    public void NewestWriteIsNullForADirectoryThatIsNotThere()
+    {
+        Assert.Null(ClaudeDesktopManager.NewestWrite(
+            Path.Combine(Path.GetTempPath(), "cb-absent-" + Guid.NewGuid().ToString("N"))));
+    }
+
+    // The file inside, not the directory around it. Appending to main.log does
+    // not touch its parent, so a live log directory can carry a much older
+    // mtime than its contents — measured on the machine this was found on, and
+    // reading the directory's own stamp would have preferred the stale
+    // candidate, which is the entire bug.
+    [Fact]
+    public void NewestWriteReadsTheFilesRatherThanTheDirectory()
+    {
+        var dir = TempDirectory();
+        try
+        {
+            var log = Path.Combine(dir, "main.log");
+            File.WriteAllText(log, "x");
+
+            var future = DateTime.UtcNow.AddHours(1);
+            File.SetLastWriteTimeUtc(log, future);
+            Directory.SetLastWriteTimeUtc(dir, DateTime.UtcNow.AddDays(-30));
+
+            var newest = ClaudeDesktopManager.NewestWrite(dir);
+
+            Assert.NotNull(newest);
+            Assert.True(newest > DateTime.UtcNow.AddMinutes(30),
+                "the file's stamp should win, not the directory's");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void NewestWriteTakesTheNewestOfSeveralFiles()
+    {
+        var dir = TempDirectory();
+        try
+        {
+            var old = Path.Combine(dir, "old.log");
+            var recent = Path.Combine(dir, "recent.log");
+            File.WriteAllText(old, "x");
+            File.WriteAllText(recent, "y");
+
+            var newest = DateTime.UtcNow.AddHours(1);
+            File.SetLastWriteTimeUtc(old, DateTime.UtcNow.AddDays(-10));
+            File.SetLastWriteTimeUtc(recent, newest);
+
+            Assert.Equal(newest, ClaudeDesktopManager.NewestWrite(dir)!.Value,
+                TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // Two files stamped identically, which is a log rotation writing both
+    // halves inside the same second and is the only way to reach the "not
+    // newer" arm on purpose. NewestWriteTakesTheNewestOfSeveralFiles reaches it
+    // too, but only when the filesystem happens to enumerate the newest file
+    // first — a coin toss, and a coin toss is not coverage.
+    [Fact]
+    public void FilesWrittenAtTheSameInstantSettleOnThatInstant()
+    {
+        var dir = TempDirectory();
+        try
+        {
+            var when = DateTime.UtcNow.AddHours(1);
+            foreach (var name in new[] { "a.log", "b.log" })
+            {
+                var file = Path.Combine(dir, name);
+                File.WriteAllText(file, "x");
+                File.SetLastWriteTimeUtc(file, when);
+            }
+
+            Assert.Equal(when, ClaudeDesktopManager.NewestWrite(dir)!.Value,
+                TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // An empty directory still beats one that is not there: it is evidence the
+    // app created it, which a missing path is not.
+    [Fact]
+    public void AnEmptyDirectoryFallsBackToItsOwnStamp()
+    {
+        var dir = TempDirectory();
+        try
+        {
+            Assert.NotNull(ClaudeDesktopManager.NewestWrite(dir));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // The catch. A directory that exists and cannot be enumerated would
+    // otherwise throw out of a menu click, on a background thread, with nothing
+    // to catch it.
+    //
+    // Unix only for staging reasons, not because the rule is: mode bits are the
+    // one portable-enough way to make a real directory unreadable, and Windows
+    // needs an ACL edit that a test has no business making. The same
+    // split-by-platform pattern BundleCacheLayoutTests uses for its unreadable
+    // marker.
+    [Fact]
+    public void ADirectoryThatCannotBeReadIsTreatedAsUnwritten()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var dir = TempDirectory();
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "main.log"), "x");
+            File.SetUnixFileMode(dir, UnixFileMode.None);
+
+            Assert.Null(ClaudeDesktopManager.NewestWrite(dir));
+        }
+        finally
+        {
+            File.SetUnixFileMode(dir,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    private static DateTime? Never(string path) => null;
+
+    private static DateTime? Recent(string path) => new(2026, 8, 25);
+
+    private static DateTime? Stale(string path) => new(2026, 7, 1);
+
+    private static string TempDirectory()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cb-logs-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        return dir;
     }
 
     // ---- every colour has a name -------------------------------------------

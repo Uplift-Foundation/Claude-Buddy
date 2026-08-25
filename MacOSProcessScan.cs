@@ -45,6 +45,11 @@ namespace ClaudeBuddy
 
         private const string UserDataDirKey = "CLAUDE_USER_DATA_DIR=";
 
+        // Chromium's own switch, always written as one argv token with an `=`
+        // — that is the form open(1) delivers and the form Windows already
+        // matches in WindowsProcessScan.
+        private const string UserDataDirSwitch = "--user-data-dir=";
+
         [DllImport(LibSystem, SetLastError = true)]
         private static extern int proc_listallpids(int[]? buffer, int buffersize);
 
@@ -203,6 +208,30 @@ namespace ClaudeBuddy
 
         // KERN_PROCARGS2 hands back:
         //   [int32 argc][exec path\0][\0 padding][argv 0..argc-1, each \0][env, each \0]
+        //
+        // Both blocks are read, argv first, because a profile is now selected
+        // by both --user-data-dir and CLAUDE_USER_DATA_DIR — see
+        // ClaudeDesktopManager.LaunchArguments for why the variable stopped
+        // being enough. argv wins because it is the one Chromium actually acts
+        // on.
+        //
+        // The environment fallback is kept, and it is worth being exact about
+        // what it buys, because the obvious reason for it is wrong. It is *not*
+        // that an instance started by a Claude Buddy predating this fix "still
+        // maps correctly": on a Claude Desktop build that ignores the variable —
+        // which is the build that made this change necessary — such an instance
+        // is on Default, and reading it as the profile's is a misreport in the
+        // worst available direction. It makes a second Chromium on Default look
+        // like a lone instance on Board, which is exactly the invisibility
+        // MapInstances' duplicate counter was added to end.
+        //
+        // What the fallback is right for is a Desktop build that *does* honour
+        // the variable, which older ones do and which is why this app keeps
+        // sending it. Nothing in argv or the environment distinguishes the two
+        // builds from here, so the fallback cannot be made conditional and this
+        // is a known cost rather than an oversight. An instance carrying
+        // neither is indistinguishable from a Dock launch, which is what it has
+        // in fact become.
         internal static string? ParseUserDataDir(byte[] buffer, int length)
         {
             if (length < sizeof(int)) return null;
@@ -215,17 +244,58 @@ namespace ClaudeBuddy
             while (i < length && buffer[i] != 0) i++;   // exec path
             while (i < length && buffer[i] == 0) i++;   // its alignment padding
 
+            string? fromArguments = null;
+
             for (var arg = 0; arg < argc && i < length; arg++)
             {
+                var argStart = i;
                 while (i < length && buffer[i] != 0) i++;
+
+                // The buffer ran out inside this token, so what is here is a
+                // prefix of an argument rather than an argument. Reading it
+                // anyway is worse than reading nothing: "--user-data-dir=" plus
+                // half a path still starts with the switch and still has a
+                // non-empty value, so it would be returned as a directory —
+                // one that exists nowhere. The instance then belongs to no
+                // profile row at all *and* is missing from the duplicate
+                // counter, which is the same invisibility this file's other
+                // comments keep arguing against, arriving from a truncated
+                // read instead of a missing selector.
+                //
+                // Unreachable today, which is why this is a guard rather than a
+                // fix: ReadUserDataDir asks for a KERN_ARGMAX buffer (typically
+                // 1 MB) and sysctl reports the true length back, so nothing gets
+                // cut. It is here because "the caller currently passes a big
+                // enough buffer" is a property of the caller, and this parser is
+                // internal and takes a length precisely so it does not have to
+                // trust one.
+                if (i == length) break;
+
+                if (fromArguments is null)
+                {
+                    var entry = Encoding.UTF8.GetString(buffer, argStart, i - argStart);
+                    if (entry.StartsWith(UserDataDirSwitch, StringComparison.Ordinal))
+                    {
+                        var value = entry[UserDataDirSwitch.Length..];
+                        // A switch with an empty value is not a directory, and
+                        // treating it as one would map the instance to "" and
+                        // hide it from every profile row. Fall through to the
+                        // environment instead.
+                        if (value.Length > 0) fromArguments = value;
+                    }
+                }
+
                 i++;
             }
+
+            if (fromArguments is not null) return fromArguments;
 
             while (i < length)
             {
                 var start = i;
                 while (i < length && buffer[i] != 0) i++;
                 if (i == start) break; // empty string terminates the block
+                if (i == length) break; // truncated, for the reason in argv above
 
                 var entry = Encoding.UTF8.GetString(buffer, start, i - start);
                 if (entry.StartsWith(UserDataDirKey, StringComparison.Ordinal))
