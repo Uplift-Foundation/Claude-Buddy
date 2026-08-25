@@ -248,6 +248,44 @@ public class TranscriptReaderTests
     private static string Rows(params string[] rows) =>
         WriteTempFile(string.Join('\n', rows) + "\n");
 
+    // The scan finds candidate rows with a substring check for
+    // "type":"assistant" before parsing anything, because parsing every row of
+    // a 262144-byte window to find the last one is most of the work for none of
+    // the answer. That shortcut can be wrong in exactly one direction: a row
+    // that CONTAINS that text without being an assistant row.
+    //
+    // Which is what the parse behind it is for, and it is the parse that has the
+    // final say — the substring only decides which rows are worth looking at.
+    //
+    // Fixture provenance, stated plainly: the row below is constructed rather
+    // than captured. What it stands for is a shape, not a particular producer —
+    // any row that nests one row's JSON inside another repeats the marker in the
+    // raw line, and both CLIs write rows that carry other rows (a summary, a
+    // subagent's output, a tool result quoting a transcript). Removing the parse
+    // would make every one of those speak as though the assistant had said it.
+    private const string NestsTheMarkerWithoutBeingOne =
+        """{"type":"summary","uuid":"s1","timestamp":"2026-08-16T10:00:20Z","summary":"discussed the parser","echoes":{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"quoted, not said"}]}}}""";
+
+    [Fact]
+    public void ARowThatMerelyContainsTheAssistantMarkerIsNotMistakenForOne()
+    {
+        var path = WriteTempFile(AssistantSaid + "\n" + NestsTheMarkerWithoutBeingOne + "\n");
+
+        // The real assistant row above it is what comes back — the nesting row
+        // is passed over rather than returned as the newest thing said.
+        Assert.Equal("Fixed the nested-team case.",
+            TranscriptReader.LatestAssistantText(path, sessionId: null));
+    }
+
+    // And with nothing but that row, there is no assistant text at all rather
+    // than the text it happens to be quoting.
+    [Fact]
+    public void ANestingRowOnItsOwnYieldsNoAssistantText()
+    {
+        Assert.Null(TranscriptReader.LatestAssistantText(
+            WriteTempFile(NestsTheMarkerWithoutBeingOne + "\n"), sessionId: null));
+    }
+
     private static string WriteTempFile(string content)
     {
         var path = Path.Combine(Path.GetTempPath(), "cb-integrationtests-transcript-" + Guid.NewGuid() + ".jsonl");

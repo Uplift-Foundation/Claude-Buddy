@@ -1533,33 +1533,36 @@ namespace ClaudeBuddy
         private static readonly TimeSpan SaveDelay = TimeSpan.FromMilliseconds(250);
         private static DispatcherTimer? _deferred;
 
+        // Excluded from coverage: exists to be the try/catch, and the catch is
+        // not reachable — which the tests say out loud rather than leaving as a
+        // mystery in a report. An Avalonia DispatcherTimer constructs and starts
+        // quite happily in a process with no dispatcher loop running, so nothing
+        // throws here and the write is simply deferred to a tick that never
+        // comes. See SettingsDeferredWriteTests, which asserts that behaviour
+        // rather than the behaviour the comment here used to promise.
+        //
+        // Kept because "no dispatcher at all" is a real shape for this class —
+        // it is a process-wide static that a console tool could load — and
+        // losing a preference is a worse outcome than an unreachable line.
+        [ExcludeFromCodeCoverage]
         private static void SaveSoon()
         {
-            try
-            {
-                if (_deferred is null)
-                {
-                    _deferred = new DispatcherTimer { Interval = SaveDelay };
-                    _deferred.Tick += OnDeferredTick;
-                }
+            try { RestartTheDeferredWrite(); }
+            catch { Save(); }
+        }
 
-                // Restart rather than let it run out: keep pushing the write
-                // further off for as long as changes keep arriving.
-                _deferred.Stop();
-                _deferred.Start();
-            }
-            catch
+        private static void RestartTheDeferredWrite()
+        {
+            if (_deferred is null)
             {
-                // No dispatcher at all — write now rather than lose the change.
-                //
-                // Never actually reached, which the tests say out loud: an Avalonia
-                // DispatcherTimer constructs and starts quite happily in a process
-                // with no dispatcher loop running, so nothing throws here and the
-                // write is simply deferred to a tick that never comes. See
-                // SettingsDeferredWriteTests, which asserts that behaviour rather
-                // than the behaviour this comment used to promise.
-                Save();
+                _deferred = new DispatcherTimer { Interval = SaveDelay };
+                _deferred.Tick += OnDeferredTick;
             }
+
+            // Restart rather than let it run out: keep pushing the write
+            // further off for as long as changes keep arriving.
+            _deferred.Stop();
+            _deferred.Start();
         }
 
         // Excluded from coverage: fires only when the debounce interval actually

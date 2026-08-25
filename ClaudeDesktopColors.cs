@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia.Media;
 
 namespace ClaudeBuddy
@@ -78,6 +79,16 @@ namespace ClaudeBuddy
         }
 
         // The palette name currently in effect, for showing a selection in the UI.
+        //
+        // Excluded from coverage for its last line only, which cannot run: every
+        // colour For() can return is in Named, so the loop always finds one. The
+        // three sets involved are Palette, DefaultColor and an explicit choice
+        // matched out of Named itself, and EveryColourAProfileCanGetHasAName
+        // asserts the first two — so the fallback is proved dead rather than
+        // assumed to be. Kept because "no name for this colour" is a shape the
+        // compiler insists on having an answer for, and returning the app's own
+        // idle slate is a better one than throwing at a settings window.
+        [ExcludeFromCodeCoverage]
         public static string NameFor(string folderName, bool isDefault)
         {
             var target = For(folderName, isDefault);
@@ -88,6 +99,14 @@ namespace ClaudeBuddy
 
             return "slate";
         }
+
+        // The invariant NameFor's fallback rests on, asserted rather than
+        // assumed — see EveryColourAProfileCanGetHasAName.
+        internal static IReadOnlyList<Color> EveryColourAProfileCanGet =>
+            Palette.Append(DefaultColor).ToArray();
+
+        internal static IReadOnlyList<Color> NamedColours =>
+            Named.Select(entry => entry.Color).ToArray();
 
         public static string HexFor(string folderName, bool isDefault)
         {

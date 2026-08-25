@@ -210,4 +210,71 @@ public class OrbWindowPulseAndPinTests
     {
         OrbWindow.ArrangeAllOrbs();
     }
+
+    // A transcript that exists for the cwd but has nothing the assistant said
+    // in it — a session cleared and then abandoned, which is exactly the shape
+    // the fallback exists for and exactly the shape it cannot help with. The
+    // answer is nothing, not the newest thing anybody said.
+    [AvaloniaFact]
+    public void AFallbackTranscriptWithNothingSaidInItStillSaysNothing()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+
+        var sep = Path.DirectorySeparatorChar;
+        var cwd = $"{sep}Users{sep}w{sep}Source{sep}Quiet";
+        var home = Path.Combine(Path.GetTempPath(), "cb-orbhome-quiet-" + Guid.NewGuid());
+        var project = Path.Combine(
+            home, ".claude", "projects", TranscriptReader.EncodeCwd(cwd));
+        Directory.CreateDirectory(project);
+
+        // A real row, and not an assistant one. The fallback finds this file —
+        // which is the point, and what separates this case from
+        // ACwdWithNoTranscriptAnywhereSaysNothing above — and then finds
+        // nothing in it.
+        File.WriteAllText(Path.Combine(project, "s.jsonl"),
+            """{"type":"user","message":{"role":"user","content":"anyone there?"}}"""
+            + "\n");
+
+        var orb = new OrbWindow("fallback-3");
+        orb.UpdateFrom(new SessionStatus
+        {
+            State = "idle",
+            Cwd = cwd,
+            TranscriptPath = null,
+            SessionPid = Environment.ProcessId,
+            TermProgram = "iTerm.app",
+        });
+
+        try
+        {
+            Assert.Null(orb.FindSpeakableText(home));
+        }
+        finally
+        {
+            Directory.Delete(home, recursive: true);
+        }
+    }
+
+    // ---- the guard in front of Quit ----------------------------------------
+
+    // Both Quit paths in this app — the tray item and the orb's own menu — ask
+    // the same question before ending the process, and under this suite's
+    // headless lifetime the answer is no. That is what makes calling either of
+    // them from a test harmless, so it is asserted rather than relied on.
+    [AvaloniaFact]
+    public void AHeadlessHostIsNotADesktopAppAndIsNotQuit()
+    {
+        Assert.False(OrbWindow.IsDesktopLifetime(Application.Current?.ApplicationLifetime));
+
+        // Which is why these are safe to call at all. Neither should do
+        // anything, and neither should throw.
+        Orb().Exit_Click(null, new Avalonia.Interactivity.RoutedEventArgs());
+        TrayController.QuitApp();
+    }
+
+    [AvaloniaFact]
+    public void NoLifetimeAtAllIsNotADesktopAppEither()
+    {
+        Assert.False(OrbWindow.IsDesktopLifetime(null));
+    }
 }

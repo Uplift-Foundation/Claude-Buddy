@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 
 namespace ClaudeBuddy
@@ -130,12 +131,25 @@ namespace ClaudeBuddy
             // failure it prevents — every orb hidden, nothing drawn at all — is
             // far worse than three uncovered lines. Named here so the next person
             // reading a coverage report knows it is deliberate.
-            if (anchors.Count == 0 && count > 0)
-            {
-                anchors.Add(0);
-                foreach (var team in members.Values) team.Remove(0);
-                members.Remove(0);
-            }
+            if (anchors.Count == 0 && count > 0) MakeTheFirstOrbAnAnchor(anchors, members);
+        }
+
+        // Excluded from coverage: unreachable, for the reason stated above the
+        // call — Resolves always lands on an orb that is its own anchor, so a
+        // non-empty set always has one, and the 20736-case sweep in
+        // tests/ArrangementTests has never produced anchors.Count == 0 either.
+        //
+        // Kept rather than deleted: it is insurance against a lead table that
+        // reasoning does not anticipate, and the failure it prevents — every orb
+        // hidden, nothing drawn at all — is far worse than three lines nothing
+        // executes.
+        [ExcludeFromCodeCoverage]
+        private static void MakeTheFirstOrbAnAnchor(
+            List<int> anchors, Dictionary<int, List<int>> members)
+        {
+            anchors.Add(0);
+            foreach (var team in members.Values) team.Remove(0);
+            members.Remove(0);
         }
 
         // internal so the shapes a full sweep never produces can be asked for

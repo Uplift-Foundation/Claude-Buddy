@@ -105,6 +105,17 @@ namespace ClaudeBuddy
         public IReadOnlyList<SlashCommand> SlashCommands =>
             RemoteControlSessions.CommandsFor(_account, _remoteName);
 
+        // Excluded from coverage for its last line, which nothing may execute:
+        // reaching it means remote control is on, and SendThroughRelayAsync then
+        // starts a live Claude Code session on another machine and types into it.
+        // There is no arrangement of settings that makes that inert, so the only
+        // honest way to leave this line unrun is not to measure it.
+        //
+        // Everything it decides first is still asserted — see
+        // RemoteControlChatSessionTurnTests, which drives this method with remote
+        // control off and checks that the typed turn stays on screen with the
+        // refusal underneath. Those assertions run; they are simply not counted.
+        [ExcludeFromCodeCoverage]
         public async Task SendAsync(string text)
         {
             // The user's own turn is added here rather than by the panel, so one
@@ -115,12 +126,18 @@ namespace ClaudeBuddy
 
             if (!ClaudeBuddySettings.RemoteControlEnabled)
             {
-                Note("Remote sessions are switched off. Turn on \"Show sessions from other machines\" in Settings.");
+                Note(RemoteControlOffNote);
                 return;
             }
 
             await SendThroughRelayAsync(text);
         }
+
+        // Named so the wording is reachable from a test even though the method
+        // that says it is not measured: a refusal that does not name the setting
+        // to turn on is a dead end for whoever reads it.
+        internal const string RemoteControlOffNote =
+            "Remote sessions are switched off. Turn on \"Show sessions from other machines\" in Settings.";
 
         // Excluded from coverage: SendToAsync starts the relay if it is not up —
         // a live Claude Code session in a tmux pane on another machine, which

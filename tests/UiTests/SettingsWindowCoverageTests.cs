@@ -221,6 +221,26 @@ public class SettingsWindowCoverageTests
     private static void ResetOpenClaw()
     {
         ClaudeBuddySettings.OpenClawEnabled = false;
+
+        // The host, too, and this is not tidiness. Several of the cases below
+        // turn OpenClawEnabled on, and the reply switch's handler calls
+        // OpenClawSessions.Restart() — which returns immediately when there is
+        // no host, and starts a real supervisor task when there is one.
+        //
+        // Nothing in this class sets a host. SettingsGatewayFieldTests does,
+        // and it shares the Settings collection and the process-wide settings
+        // model with this one, so whether a supervisor starts here depends on
+        // which class ran first. That supervisor then fails to resolve
+        // gateway.example.com and writes _certificateRejected = false as it
+        // records why — landing, on a fast enough machine, in the middle of
+        // OpenClawRowsAddsTheTrustCertificateRowWhenOneIsRejected. Which is how
+        // it was found: Release only, full run only, one row short.
+        //
+        // Serialising the classes is not enough on its own, because what leaks
+        // is a background task rather than a value. Leaving no host is what
+        // makes Restart() inert, which is the property those cases rely on.
+        ClaudeBuddySettings.OpenClawHost = "";
+
         ClaudeBuddySettings.OpenClawShowHeartbeats = true;
         ClaudeBuddySettings.OpenClawReplyEnabled = false;
         OpenClawSessions.SetCertificateRejectedForTests(false);

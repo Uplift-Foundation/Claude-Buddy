@@ -284,6 +284,12 @@ namespace ClaudeBuddy
         // is never IClassicDesktopStyleApplicationLifetime, so the guard is false
         // and Shutdown is never reached. That guard is the point — it is what
         // keeps a Quit item from taking down a host that is not a desktop app.
+        //
+        // Excluded from coverage for the half a headless run cannot reach, which
+        // is the half that ends the process. The guard itself is
+        // OrbWindow.IsDesktopLifetime, asked there because the two Quit paths in
+        // this app have to agree about it, and asserted there.
+        [ExcludeFromCodeCoverage]
         internal static void QuitApp()
         {
             if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)

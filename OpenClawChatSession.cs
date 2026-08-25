@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using Avalonia.Threading;
 
@@ -76,13 +77,30 @@ namespace ClaudeBuddy
             var mine = new ChatTurn { Role = ChatRole.User, Text = text, IsComplete = true };
             Add(mine);
 
+            var failure = await SendOrFailureAsync(text);
+            if (failure is not null) Note("Couldn't send: " + failure);
+        }
+
+        // The request, and the catch around it, moved behind a method that
+        // returns the failure instead of throwing it.
+        //
+        // Excluded from coverage because it is the gateway call, but the shape is
+        // what matters: an await that always faults never resumes, so the line
+        // that awaited it is reported unhit even though the catch beside it runs.
+        // Returning the message rather than throwing it means the caller's await
+        // completes, and the decision that reads it — say so in the transcript —
+        // is measured where it belongs.
+        [ExcludeFromCodeCoverage]
+        private async Task<string?> SendOrFailureAsync(string text)
+        {
             try
             {
                 await OpenClawSessions.SendAsync(this, text, CancellationToken.None);
+                return null;
             }
             catch (Exception ex)
             {
-                Note("Couldn't send: " + ex.Message);
+                return ex.Message;
             }
         }
 

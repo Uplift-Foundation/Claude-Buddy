@@ -1067,9 +1067,18 @@ namespace ClaudeBuddy
                 return;
             }
 
-            var text = FindSpeakableText();
-            if (text is null) return;
+            SpeakIfThereIsAnything(FindSpeakableText());
+        }
 
+        // Excluded from coverage: both of its lines. Reaching SpeakNow means a
+        // transcript with something in it was found, and what happens next is the
+        // machine running the tests reading it out loud — so a test that covered
+        // this line would be one nobody could run with other people in the room.
+        // Which text is found is FindSpeakableText, which is measured.
+        [ExcludeFromCodeCoverage]
+        private void SpeakIfThereIsAnything(string? text)
+        {
+            if (text is null) return;
             SpeakNow(text);
         }
 
@@ -1826,13 +1835,26 @@ namespace ClaudeBuddy
             return true;
         }
 
-        internal void Exit_Click(object? sender, RoutedEventArgs e)
+        internal void Exit_Click(object? sender, RoutedEventArgs e) =>
+            ShutdownIfDesktop(Application.Current?.ApplicationLifetime);
+
+        // Excluded from coverage: its guard is the only reachable half under a
+        // headless lifetime, and the half behind it ends the process. Splitting
+        // the two so the guard could be measured would leave the more interesting
+        // question — is this lifetime a desktop one? — measured in a method that
+        // does nothing with the answer.
+        //
+        // IsDesktopLifetime is that question asked where a test can ask it, and
+        // ItRefusesToQuitAHostThatIsNotADesktopApp asserts the answer that keeps
+        // this harmless.
+        [ExcludeFromCodeCoverage]
+        private static void ShutdownIfDesktop(IApplicationLifetime? lifetime)
         {
-            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-            {
-                Shutdown(desktop);
-            }
+            if (lifetime is IClassicDesktopStyleApplicationLifetime desktop) Shutdown(desktop);
         }
+
+        internal static bool IsDesktopLifetime(IApplicationLifetime? lifetime) =>
+            lifetime is IClassicDesktopStyleApplicationLifetime;
 
         // Excluded from coverage: ends the process. Scoped to this one call so the
         // guard stays measured — under the headless lifetime it is false, which is

@@ -1121,9 +1121,17 @@ namespace ClaudeBuddy
         // environment override, and this app deliberately launches Default
         // without one. Get that wrong and "Reveal logs" opens the wrong
         // profile's logs, which is worse than opening nothing.
-        internal static IEnumerable<string> LogCandidates(string directory, bool isDefault)
+        internal static IEnumerable<string> LogCandidates(string directory, bool isDefault) =>
+            LogCandidates(directory, isDefault, OperatingSystem.IsWindows());
+
+        // The platform is an argument rather than a question this asks, so both
+        // answers are reachable from either machine. The two are genuinely
+        // different rules rather than different paths — see the comments below —
+        // and a rule that only one CI leg ever executes is a rule nobody reads
+        // until it is wrong.
+        internal static IEnumerable<string> LogCandidates(string directory, bool isDefault, bool windows)
         {
-            if (OperatingSystem.IsWindows())
+            if (windows)
             {
                 // Unlike macOS, Electron's userData resolves to the same
                 // directory whether or not --user-data-dir was passed —

@@ -509,13 +509,18 @@ namespace ClaudeBuddy
 
         // --- sending ---
 
-        public string ComposerHint
+        public string ComposerHint =>
+            ComposerHintFor(TerminalFocuser.CanSendQuietly(_status), _format.ReplyEnabled());
+
+        // Both answers are reachable from a test this way, where they were not
+        // before: whether there is a pane to type into depends on a real tmux and
+        // a real session, so asking it here and deciding somewhere else is what
+        // makes "no pane" something a test can state rather than something the
+        // machine happens to be.
+        internal static string ComposerHintFor(bool canSendQuietly, bool replyEnabled)
         {
-            get
-            {
-                if (!TerminalFocuser.CanSendQuietly(_status)) return "No pane to type into";
-                return _format.ReplyEnabled() ? "Message…" : "Replying is off";
-            }
+            if (!canSendQuietly) return "No pane to type into";
+            return replyEnabled ? "Message…" : "Replying is off";
         }
 
         // A message sent from the panel, waiting for the transcript row it will
@@ -576,29 +581,50 @@ namespace ClaudeBuddy
             await SendCoreAsync(typed, caption, thumbnail);
         }
 
+        // Excluded from coverage for its last line, which no test may execute:
+        // reaching it means CanSendQuietly has said yes, which needs a real tmux
+        // binary and a real pane belonging to a live session — and it then types
+        // into that pane for real, on the machine running the tests.
+        //
+        // The two refusals in front of it are the interesting part and they are
+        // still measured, as the pure functions they now call: ReplyingOffNote
+        // and NoPaneNote. Driving this method with replying off is also still
+        // asserted; those assertions simply are not counted.
+        [ExcludeFromCodeCoverage]
         private async Task SendCoreAsync(string typedText, string displayText, byte[]? imageBytes)
         {
             if (!_format.ReplyEnabled())
             {
-                // A System turn rather than an exception, for the reason
-                // OpenClawChatSession gives at the same point: the person has
-                // just typed a sentence and losing it behind a dialog is a poor
-                // answer to "why didn't that send".
-                Note("Replying is off. Turn on \"Allow replying to sessions\" in Settings.");
+                Note(ReplyingOffNote);
                 return;
             }
 
             if (!TerminalFocuser.CanSendQuietly(_status))
             {
-                Note(string.IsNullOrEmpty(_status.TmuxPane)
-                    ? "This session isn't in a tmux pane, so there is nowhere to type without "
-                    + "bringing its terminal forward. Reply in the terminal instead."
-                    : "Couldn't find tmux to type with.");
+                Note(NoPaneNote(_status.TmuxPane));
                 return;
             }
 
             await TypeIntoTerminalAsync(typedText, displayText, imageBytes);
         }
+
+        // A System turn rather than an exception, for the reason
+        // OpenClawChatSession gives at the same point: the person has just typed
+        // a sentence and losing it behind a dialog is a poor answer to "why
+        // didn't that send".
+        internal const string ReplyingOffNote =
+            "Replying is off. Turn on \"Allow replying to sessions\" in Settings.";
+
+        // Two different problems that both end in "nothing was typed", and the
+        // note has to say which: a session outside tmux can still be replied to
+        // in its own terminal, where a missing tmux binary cannot be worked
+        // around at all. Telling someone to go to a terminal that isn't there is
+        // the failure this distinction exists to avoid.
+        internal static string NoPaneNote(string? tmuxPane) =>
+            string.IsNullOrEmpty(tmuxPane)
+                ? "This session isn't in a tmux pane, so there is nowhere to type without "
+                + "bringing its terminal forward. Reply in the terminal instead."
+                : "Couldn't find tmux to type with.";
 
         // Excluded from coverage: only reachable once CanSendQuietly has said yes,
         // which needs a real tmux binary and a real pane belonging to a live
