@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
 namespace ClaudeBuddy
@@ -6,6 +7,11 @@ namespace ClaudeBuddy
     // ClaudeDesktopManager (click a running profile, focus its window) — both
     // want the same "bring this window to the front" behaviour, so it lives
     // here once rather than twice.
+    // Excluded from coverage: there is no window-independent line in here.
+    // Every entry point either takes a live HWND or walks the desktop's real
+    // top-level windows through EnumWindows, and the window manager's answers
+    // are the whole input. A headless runner has no window station to ask.
+    [ExcludeFromCodeCoverage]
     internal static class WindowsForegroundWindow
     {
         private const int SW_RESTORE = 9;

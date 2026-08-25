@@ -93,7 +93,16 @@ jobs:
             dotnet test tests/UiTests -c Release -- --report-xunit-trx --report-xunit-trx-filename=ui-tests.trx
             if ($LASTEXITCODE -eq 0) { break }
             Write-Host "UI tests failed on attempt $attempt of 3"
-            if ($attempt -eq 3) { exit 1 }
+            if ($attempt -eq 3) {
+              # Copy the report BEFORE giving up. It used to be copied only after
+              # the loop succeeded, which meant a red run uploaded nothing and the
+              # only thing in the log was a count — "Failed: 1, Passed: 596" with
+              # no name. Working out which test that was, on a platform you are not
+              # on, is not a thing anyone should have to guess at.
+              New-Item -ItemType Directory -Force -Path TestResults | Out-Null
+              Copy-Item "tests/UiTests/bin/Release/net10.0/${{ matrix.rid }}/TestResults/ui-tests.trx" "TestResults/ui-tests.trx" -ErrorAction SilentlyContinue
+              exit 1
+            }
           }
           New-Item -ItemType Directory -Force -Path TestResults | Out-Null
           Copy-Item "tests/UiTests/bin/Release/net10.0/${{ matrix.rid }}/TestResults/ui-tests.trx" "TestResults/ui-tests.trx"
@@ -115,7 +124,16 @@ jobs:
             dotnet test tests/UiScreenshots -c Release -- --report-xunit-trx --report-xunit-trx-filename=ui-screenshots.trx
             if ($LASTEXITCODE -eq 0) { break }
             Write-Host "UI screenshots failed on attempt $attempt of 3"
-            if ($attempt -eq 3) { exit 1 }
+            if ($attempt -eq 3) {
+              # Copy the report BEFORE giving up. It used to be copied only after
+              # the loop succeeded, which meant a red run uploaded nothing and the
+              # only thing in the log was a count — "Failed: 1, Passed: 596" with
+              # no name. Working out which test that was, on a platform you are not
+              # on, is not a thing anyone should have to guess at.
+              New-Item -ItemType Directory -Force -Path TestResults | Out-Null
+              Copy-Item "tests/UiScreenshots/bin/Release/net10.0/${{ matrix.rid }}/TestResults/ui-screenshots.trx" "TestResults/ui-screenshots.trx" -ErrorAction SilentlyContinue
+              exit 1
+            }
           }
           New-Item -ItemType Directory -Force -Path TestResults | Out-Null
           Copy-Item "tests/UiScreenshots/bin/Release/net10.0/${{ matrix.rid }}/TestResults/ui-screenshots.trx" "TestResults/ui-screenshots.trx"

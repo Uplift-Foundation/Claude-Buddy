@@ -24,6 +24,40 @@ public class ChatPanelScreenshots : IDisposable
     // cache for every window built afterward in this run.
     private static OrbWindow NewOrb() => new(Guid.NewGuid().ToString());
 
+    // An orb whose session the gateway's heartbeat drives. The panel reads the
+    // flag off the orb rather than the session (see ChatPanel.Bind), so the
+    // status has to go through UpdateFrom to reach the chip.
+    private static OrbWindow NewHeartbeatOrb()
+    {
+        var orb = NewOrb();
+        orb.UpdateFrom(new SessionStatus
+        {
+            State = "idle",
+            Cwd = "/Users/test/project",
+            Title = "",
+            Color = "",
+            Cli = "",
+            Kind = SessionKind.Channel,
+            Heartbeat = true,
+        });
+
+        return orb;
+    }
+
+    [AvaloniaFact]
+    public void AHeartbeatChatWearsABeatingHeartChipInItsHeader()
+    {
+        var fake = NewFake(new[]
+        {
+            new ChatTurn { Role = ChatRole.Assistant, Text = "No response requested." },
+        });
+
+        ChatPanel.OpenFor(NewHeartbeatOrb(), fake);
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.CaptureAlreadyShown(
+            ChatPanelTestAccess.Instance!, "chat-panel-heartbeat-chip.png");
+    }
+
     public void Dispose()
     {
         foreach (var id in _sessionIdsToClean) ChatPanel.HideFor(id);
@@ -109,5 +143,39 @@ public class ChatPanelScreenshots : IDisposable
         // Enter, the box is empty and the panel looks identical to the
         // three-turns capture above plus one more row.
         ScreenshotHelper.CaptureAlreadyShown(panel, "chat-panel-typed-input-before-enter.png");
+    }
+
+    // Bytes that are not a picture, which is the one thing this suite can test
+    // that tests/UiTests cannot: Avalonia's headless render interface answers
+    // DecodeToWidth with a stub of the requested size for any input at all, so
+    // the panel's "not an image" path is unreachable under the null renderer
+    // and reachable here, where Skia is real and throws.
+    //
+    // Worth having because a local CLI's transcript is a file this app does not
+    // write, and a half-flushed image block is a normal thing to read out of
+    // one. The message keeps its text; only the picture is missing.
+    [AvaloniaFact]
+    public void ATurnWhoseImageBytesDoNotDecodeStillShowsItsText()
+    {
+        var fake = NewFake(new[]
+        {
+            new ChatTurn
+            {
+                Role = ChatRole.User,
+                Text = "a screenshot",
+                IsComplete = true,
+                ImageBytes = new byte[] { 0x4E, 0x4F, 0x50, 0x45, 0x21, 0x21, 0x21, 0x21 }
+            }
+        });
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+
+        // The decode runs on a worker and its failure is swallowed on the way
+        // back, so the frames are what prove the panel survived it rather than
+        // stopped drawing partway through.
+        for (var i = 0; i < 40; i++) ScreenshotHelper.Flush();
+
+        ScreenshotHelper.CaptureAlreadyShown(
+            ChatPanelTestAccess.Instance!, "chat-panel-undecodable-image.png");
     }
 }

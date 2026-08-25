@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace ClaudeBuddy
 {
     // Where the `claude` CLI is, for the parts of this app that shell out to it.
@@ -37,18 +39,39 @@ namespace ClaudeBuddy
             }
         }
 
-        private static string? Locate()
+        // The install locations that don't depend on who is logged in. Named
+        // rather than inlined below so a test can substitute its own — see the
+        // comment on Locate.
+        private static readonly string[] SystemInstalls =
         {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+            "/usr/bin/claude"
+        };
+
+        // Every input is a parameter with the real one as its default, so a test
+        // can hand it a temp directory, a PATH and a candidate list of its own
+        // rather than depending on the machine it runs on.
+        //
+        // All three, not just the home directory, and that is the point rather
+        // than over-engineering: the system locations are absolute, so a test
+        // that only controlled `home` would still find a real `claude` on the
+        // developer's Mac and find nothing on a CI runner — the same test
+        // passing for two different reasons, which CLAUDE.md calls out as the
+        // way to block a build with a test that only works where it was
+        // written. Setting HOME for the whole process was the other option, and
+        // every other test in the assembly would have been sharing it.
+        internal static string? Locate(
+            string? home = null, string? searchPath = null, string[]? systemInstalls = null)
+        {
+            home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
             string[] candidates =
-            {
+            [
                 System.IO.Path.Combine(home, ".local", "bin", "claude"),
                 System.IO.Path.Combine(home, ".claude", "local", "claude"),
-                "/opt/homebrew/bin/claude",
-                "/usr/local/bin/claude",
-                "/usr/bin/claude"
-            };
+                .. systemInstalls ?? SystemInstalls
+            ];
 
             foreach (var candidate in candidates)
             {
@@ -58,23 +81,47 @@ namespace ClaudeBuddy
             // Last resort: whatever PATH this process did inherit. Worth trying
             // because a session started from a terminal has a real one, and it
             // costs nothing when it doesn't.
-            var path = Environment.GetEnvironmentVariable("PATH");
+            var path = searchPath ?? Environment.GetEnvironmentVariable("PATH");
             if (string.IsNullOrEmpty(path)) return null;
 
-            foreach (var dir in path.Split(':', StringSplitOptions.RemoveEmptyEntries))
+            // System.IO.Path.PathSeparator, not a literal ':' — and qualified,
+            // because this class has a Path property of its own, which is why
+            // every other call here is qualified too.
+            //
+            // The separator is ':' on Unix and ';' on Windows, and there the
+            // difference is not cosmetic: a Windows PATH entry *contains* a
+            // colon, so splitting on one turned "C:/Users/x/bin;C:/tools" into
+            // "C", "/Users/x/bin;C" and "/tools" — three strings that are not
+            // directories. The fallback could therefore never find anything on
+            // Windows, silently, which is the class of failure this whole
+            // function exists to avoid. Caught by the Windows CI leg the first
+            // time these paths were tested.
+            foreach (var dir in path.Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             {
-                try
-                {
-                    var candidate = System.IO.Path.Combine(dir, "claude");
-                    if (File.Exists(candidate)) return candidate;
-                }
-                catch
-                {
-                    // A malformed PATH entry is not worth failing the lookup for.
-                }
+                var candidate = SafeCombine(dir, "claude");
+                if (candidate is not null && File.Exists(candidate)) return candidate;
             }
 
             return null;
+        }
+
+        // Excluded from coverage: exists to be the try/catch, and the catch is
+        // not reachable on .NET 10 — which is worth saying rather than leaving as
+        // a mystery in a report. .NET Core dropped Path.Combine's
+        // invalid-character check, so a PATH entry containing a NUL now combines
+        // happily and simply fails File.Exists.
+        // AMalformedPathEntryIsSteppedOver asserts the outcome — the good
+        // directory after it still answers — but it reaches that outcome without
+        // this catch.
+        //
+        // Kept anyway: the runtime's behaviour here has changed once already, and
+        // a PATH entry is the user's shell config rather than anything this app
+        // controls.
+        [ExcludeFromCodeCoverage]
+        private static string? SafeCombine(string dir, string name)
+        {
+            try { return System.IO.Path.Combine(dir, name); }
+            catch { return null; }
         }
     }
 }

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IO.Compression;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -36,13 +37,17 @@ namespace ClaudeBuddy
         //
         // AssemblyInformationalVersion carries the "+<commit sha>" suffix that
         // shows up in the version string; the tag does not, so it is cut.
-        private static readonly string EngineVersion = ResolveVersion();
+        internal static readonly string EngineVersion = ResolveVersion(
+            typeof(NeuralSpeech).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
 
-        private static string ResolveVersion()
+        // The attribute value is passed in rather than read here, so both arms
+        // are reachable: the assembly this runs in always has an informational
+        // version, so the missing-attribute fallback could never otherwise be
+        // exercised — and that fallback is what decides the URL a build fetches
+        // its engine from.
+        internal static string ResolveVersion(string? informational)
         {
-            var informational = typeof(NeuralSpeech).Assembly
-                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-
             if (string.IsNullOrEmpty(informational)) return "0.0.0";
 
             var plus = informational.IndexOf('+');
@@ -73,16 +78,16 @@ namespace ClaudeBuddy
         // — it reports what this build actually is, not what the hardware could
         // run — and the release workflow builds the engine in the same
         // rid matrix as the DMGs so both exist for every tag.
-        private static string EngineRid =>
+        internal static string EngineRid =>
             OperatingSystem.IsMacOS()
                 ? (RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "osx-arm64" : "osx-x64")
                 : "win-x64";
 
-        private static string EngineUrl =>
+        internal static string EngineUrl =>
             "https://github.com/Uplift-Foundation/Claude-Buddy/releases/download/"
             + $"v{EngineVersion}/ClaudeBuddySpeech-{EngineVersion}-{EngineRid}.zip";
 
-        private static string Root => Path.Combine(ClaudeBuddySettings.Directory, "speech-engine");
+        internal static string Root => Path.Combine(ClaudeBuddySettings.Directory, "speech-engine");
 
         // Voices the user added themselves, kept deliberately *outside* Root: an
         // engine upgrade deletes and replaces the whole versioned directory, so
@@ -100,11 +105,11 @@ namespace ClaudeBuddy
         // normally.
         public static string UserVoicesDirectory =>
             Path.Combine(ClaudeBuddySettings.Directory, "voices");
-        private static string ModelPath => Path.Combine(Root, "kokoro-fp16.onnx");
-        private static string EngineExeName =>
+        internal static string ModelPath => Path.Combine(Root, "kokoro-fp16.onnx");
+        internal static string EngineExeName =>
             OperatingSystem.IsWindows() ? "ClaudeBuddySpeech.exe" : "ClaudeBuddySpeech";
 
-        private static string EnginePath => Path.Combine(Root, EngineVersion, EngineExeName);
+        internal static string EnginePath => Path.Combine(Root, EngineVersion, EngineExeName);
 
         // The engine actually used to speak: the one this build asks for, or
         // failing that the newest other version still on disk.
@@ -131,10 +136,10 @@ namespace ClaudeBuddy
         // --user-voices — none of which has changed, and if one ever does, the
         // right engine is already downloading by then. So the fallback is the
         // conservative choice, not the risky one: the alternative is silence.
-        private static string? UsableEnginePath =>
+        internal static string? UsableEnginePath =>
             File.Exists(EnginePath) ? EnginePath : NewestOtherEngine();
 
-        private static string? NewestOtherEngine()
+        internal static string? NewestOtherEngine()
         {
             try
             {
@@ -160,7 +165,32 @@ namespace ClaudeBuddy
         // over last month's the first time the minor version reaches double
         // digits — a bug that would lie dormant until 0.10 and then look like
         // anything but a sort order.
-        private static readonly IComparer<string> VersionOrder =
+        // The engine prints "speaking" on stdout the moment audio actually starts,
+        // which is what un-greys the button — so this is the difference between
+        // the UI reacting when sound begins and reacting when a process was
+        // launched, seconds earlier.
+        //
+        // Ordinal and prefix-matched deliberately: the line carries a duration
+        // after the word, and a culture-aware comparison on a machine-readable
+        // marker is the kind of thing that works everywhere except one user's
+        // locale.
+        //
+        // Extracted from a lambda inside StreamSpeech, which is excluded because
+        // it starts a real process. An excluded method does not exclude the
+        // lambdas hoisted out of it — the compiler gives each one its own method
+        // and the attribute does not follow — so this was being counted as
+        // uncovered while the method around it was not counted at all.
+        internal static bool IsSpeakingMarker(string? line) =>
+            line is not null && line.StartsWith("speaking", StringComparison.Ordinal);
+
+        // Anything non-blank on stderr is worth printing. The engine writes one
+        // line there when it fails, and ONNX Runtime's own warnings are already
+        // silenced engine-side, so there is nothing here to filter out — a
+        // silent failure is what "the speak button does nothing" is made of.
+        internal static bool IsWorthReporting(string? line) =>
+            !string.IsNullOrWhiteSpace(line);
+
+        internal static readonly IComparer<string> VersionOrder =
             Comparer<string>.Create((left, right) =>
             {
                 static Version Parse(string name)
@@ -216,6 +246,8 @@ namespace ClaudeBuddy
         // write the same paths. Exceptions propagate so the caller can say
         // "couldn't download" — everything on the *speaking* path degrades
         // quietly instead, because failing to speak well should still speak.
+        // Excluded from coverage: downloads the Kokoro engine over the network.
+        [ExcludeFromCodeCoverage]
         public static Task DownloadAsync(IProgress<string>? progress = null)
         {
             if (Installed) return Task.CompletedTask;
@@ -227,6 +259,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: fetches and unpacks an engine archive from a
+        // remote host.
+        [ExcludeFromCodeCoverage]
         private static async Task DownloadCoreAsync(IProgress<string>? progress)
         {
             try
@@ -326,6 +361,8 @@ namespace ClaudeBuddy
         // locked by a speech process that is still exiting, most likely — costs
         // disk, and disk is not worth failing an install that otherwise
         // succeeded. The next update tries again.
+        // Excluded from coverage: deletes real engine directories from disk.
+        [ExcludeFromCodeCoverage]
         private static void RemoveSupersededEngines()
         {
             try
@@ -370,6 +407,8 @@ namespace ClaudeBuddy
         // download does, and the caller uses that only to refresh the voice list.
         // A failure is logged and left — the older engine still speaks, and the
         // next launch tries again.
+        // Excluded from coverage: triggers the network download above.
+        [ExcludeFromCodeCoverage]
         public static Task EnsureCurrentAsync()
         {
             if (!ClaudeBuddySettings.NeuralVoiceEnabled) return Task.CompletedTask;
@@ -398,6 +437,8 @@ namespace ClaudeBuddy
             }, TaskScheduler.Default);
         }
 
+        // Excluded from coverage: an HTTP GET to a remote host.
+        [ExcludeFromCodeCoverage]
         private static async Task DownloadFileAsync(string url, string destination)
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
@@ -418,6 +459,8 @@ namespace ClaudeBuddy
         // The engine's own list, asked of the engine rather than hardcoded here,
         // so the two can't drift. Empty when it isn't installed, which is what
         // makes the settings picker fall back to the system voices.
+        // Excluded from coverage: runs the side-car engine to enumerate itself.
+        [ExcludeFromCodeCoverage]
         public static List<string> Voices()
         {
             var voices = new List<string>();
@@ -472,6 +515,8 @@ namespace ClaudeBuddy
         // model load, then the first segment's synthesis, measured at ~3.3s — so
         // the caller needs to distinguish "preparing" from "speaking" rather than
         // showing a stop button over silence.
+        // Excluded from coverage: starts the side-car engine process.
+        [ExcludeFromCodeCoverage]
         public static Process? Start(string text, string? voice, Action? onSpeaking)
         {
             var engine = UsableEnginePath;
@@ -499,10 +544,7 @@ namespace ClaudeBuddy
             // for seconds.
             process.OutputDataReceived += (_, e) =>
             {
-                if (e.Data is not null && e.Data.StartsWith("speaking", StringComparison.Ordinal))
-                {
-                    onSpeaking?.Invoke();
-                }
+                if (IsSpeakingMarker(e.Data)) onSpeaking?.Invoke();
             };
 
             // Drained and reported rather than ignored: the engine writes one line
@@ -511,7 +553,7 @@ namespace ClaudeBuddy
             // silenced engine-side, so anything arriving here is worth seeing.
             process.ErrorDataReceived += (_, e) =>
             {
-                if (!string.IsNullOrWhiteSpace(e.Data))
+                if (IsWorthReporting(e.Data))
                 {
                     Console.Error.WriteLine($"Claude Buddy: speech engine: {e.Data}");
                 }

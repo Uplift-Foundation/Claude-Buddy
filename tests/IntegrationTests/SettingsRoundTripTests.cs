@@ -50,6 +50,57 @@ public class SettingsRoundTripTests
         Assert.True(root!["twoLetterGlyphs"]!.GetValue<bool>());
     }
 
+    [Fact]
+    public void ShowHeartbeats_DefaultsOnAndRoundTripsBothWays()
+    {
+        // Default-on is load-bearing rather than incidental: these orbs are on
+        // screen today, and an upgrade that removed several of somebody's agents
+        // would read as the gateway having dropped them.
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        Assert.True(ClaudeBuddySettings.OpenClawShowHeartbeats);
+
+        // False in particular, because false is the value a bug would produce by
+        // accident — a missing key reads as default-true and would hide it.
+        ClaudeBuddySettings.OpenClawShowHeartbeats = false;
+
+        var settingsPath = Path.Combine(dir, "settings.json");
+        var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
+        Assert.False(root!["openclawShowHeartbeats"]!.GetValue<bool>());
+
+        // And survives a reload, which is what the setting is for.
+        PointSettingsAt(dir);
+        Assert.False(ClaudeBuddySettings.OpenClawShowHeartbeats);
+    }
+
+    [Fact]
+    public void ShowHeartbeats_IsInKnownKeys_SoItIsWrittenExactlyOnce()
+    {
+        // The trap KnownKeys' own comment describes: a key that Save writes but
+        // that Load didn't recognise round-trips through _unknownKeys *as well
+        // as* being written properly, and JsonObject rejects the duplicate. That
+        // failure is a hard throw on every Save, so it is worth one assertion.
+        //
+        // Written as a real second launch rather than by reading KnownKeys: it is
+        // the interaction between Load and Save that breaks, not the list.
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+        ClaudeBuddySettings.OpenClawShowHeartbeats = false;
+
+        PointSettingsAt(dir);
+        ClaudeBuddySettings.TwoLetterGlyphs = true;   // any Save at all
+
+        var text = File.ReadAllText(Path.Combine(dir, "settings.json"));
+        var root = JsonNode.Parse(text) as JsonObject;
+
+        Assert.False(root!["openclawShowHeartbeats"]!.GetValue<bool>());
+
+        // One occurrence, not two.
+        var occurrences = text.Split("\"openclawShowHeartbeats\"").Length - 1;
+        Assert.Equal(1, occurrences);
+    }
+
     // The single most valuable untested piece of ClaudeBuddySettings.cs, per
     // its own comment on _unknownKeys (~line 38): Save() rebuilds the whole
     // document from the in-memory model, so any key it doesn't know about
@@ -89,6 +140,33 @@ public class SettingsRoundTripTests
 
         // And the real change this Save() was actually for still landed.
         Assert.True(rewritten["twoLetterGlyphs"]!.GetValue<bool>());
+    }
+
+    // ArrangeAnchor is the shape's saved on-screen centre (see
+    // SessionManager.ArrangementAnchor) — it must survive a restart or the
+    // next "arrange" click after a relaunch silently falls back to the
+    // screen-centre default, which reads to a user as "it forgot where I put
+    // it". Written manually into Save()'s JsonObject and parsed back out of
+    // Load()'s, the same way OrbPositions is a few lines above each — this
+    // test exists because the first cut of this feature added the property
+    // to Model without wiring either side, so it worked for the life of one
+    // process and silently reset on every restart.
+    [Fact]
+    public void ArrangeAnchor_SurvivesARestart()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.ArrangeAnchor = new ClaudeBuddySettings.OrbPlacement(640, 360);
+
+        // Simulate a relaunch: force the next access to re-read settings.json
+        // from disk rather than serve the in-memory model.
+        PointSettingsAt(dir);
+
+        var restored = ClaudeBuddySettings.ArrangeAnchor;
+        Assert.NotNull(restored);
+        Assert.Equal(640, restored!.X);
+        Assert.Equal(360, restored.Y);
     }
 
     // IdleColor/GeneratingColor/WaitingColor are the only three setters that
@@ -141,5 +219,234 @@ public class SettingsRoundTripTests
         var orbColors = root!["orbColors"] as JsonObject;
         Assert.NotNull(orbColors);
         Assert.Equal("green", orbColors!["idle"]!.GetValue<string>());
+    }
+
+    // The three Remote Control settings, round-tripped together.
+    //
+    // The specific hazard this guards is the one KnownKeys exists for: a key
+    // written by Save() but missing from KnownKeys is *also* replayed out of
+    // _unknownKeys, and JsonObject throws on the duplicate — so a forgotten
+    // KnownKeys entry doesn't degrade, it breaks every Save from then on.
+    // Reading the values back through a reload is what proves all five steps
+    // (model field, accessor, Load parse, Save write, KnownKeys) were done.
+    [Fact]
+    public void RemoteControlSettings_RoundTripThroughDiskAndReload()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.RemoteControlEnabled = true;
+        ClaudeBuddySettings.RemoteControlProfileDir = ".claude-board";
+        ClaudeBuddySettings.RemoteControlIdleMinutes = 25;
+
+        // Back from disk, not from the in-memory model the setters just wrote.
+        PointSettingsAt(dir);
+
+        Assert.True(ClaudeBuddySettings.RemoteControlEnabled);
+        Assert.Equal(".claude-board", ClaudeBuddySettings.RemoteControlProfileDir);
+        Assert.Equal(25, ClaudeBuddySettings.RemoteControlIdleMinutes);
+    }
+
+    [Fact]
+    public void RemoteControlSettings_HaveSafeDefaultsBeforeAnyoneChoosesThem()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        // Off by default: enabling it is what permits Buddy to start a real
+        // Claude Code session on the user's account, which costs them quota.
+        Assert.False(ClaudeBuddySettings.RemoteControlEnabled);
+
+        // Never empty — the bridge has to launch under some config directory.
+        Assert.Equal(
+            ClaudeBuddySettings.DefaultRemoteControlProfileDir,
+            ClaudeBuddySettings.RemoteControlProfileDir);
+
+        Assert.Equal(
+            ClaudeBuddySettings.DefaultRemoteControlIdle,
+            ClaudeBuddySettings.RemoteControlIdleMinutes);
+    }
+
+    // A negative idle would read as "already expired" to every comparison
+    // downstream, stopping the bridge the instant it started — which would look
+    // like the feature being broken rather than a bad setting.
+    // RemoteControlIdleNever is the deliberate way to say "never stop".
+    [Fact]
+    public void RemoteControlIdleMinutes_ClampsANegativeToNever()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.RemoteControlIdleMinutes = -5;
+
+        Assert.Equal(ClaudeBuddySettings.RemoteControlIdleNever, ClaudeBuddySettings.RemoteControlIdleMinutes);
+    }
+
+    // An unchosen profile stays null on disk rather than being written as a copy
+    // of today's default, so changing the shipped default still reaches users
+    // who never picked one.
+    [Fact]
+    public void RemoteControlProfileDir_IsNotWrittenToDiskUntilChosen()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+        var settingsPath = Path.Combine(dir, "settings.json");
+
+        ClaudeBuddySettings.RemoteControlEnabled = true;
+
+        var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
+        Assert.NotNull(root);
+        Assert.True(root!.ContainsKey("remoteControlProfileDir"));
+        Assert.Null(root["remoteControlProfileDir"]);
+
+        // The accessor still answers with the default, so callers never see null.
+        Assert.Equal(
+            ClaudeBuddySettings.DefaultRemoteControlProfileDir,
+            ClaudeBuddySettings.RemoteControlProfileDir);
+    }
+
+    // One panel size per agent, keyed and reloaded independently — the whole
+    // point of the setting, and the part a shared-singleton bug would break
+    // silently: ChatPanel is one window serving every session, so a size
+    // stored under the wrong key looks fine until a second agent is opened.
+    [Fact]
+    public void ChatPanelSizes_RoundTripPerAgentThroughDisk()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500, 600);
+        ClaudeBuddySettings.SetChatPanelSize("agent-b", 300.4, 250.6);
+
+        var root = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "settings.json"))) as JsonObject;
+        var sizes = root!["chatPanelSizes"] as JsonObject;
+        Assert.NotNull(sizes);
+
+        // Rounded on the way in, so a drag that ends on a fraction of a DIP
+        // doesn't leave 250.60000000000002 in a file people hand-edit.
+        Assert.Equal(300, sizes!["agent-b"]!["width"]!.GetValue<double>());
+        Assert.Equal(251, sizes["agent-b"]!["height"]!.GetValue<double>());
+
+        // Read back from disk rather than from the model that just wrote it:
+        // the parse side is its own code path and had to be added by hand to
+        // Load, which is exactly the step speakVoice was once missing.
+        PointSettingsAt(dir);
+
+        var a = ClaudeBuddySettings.ChatPanelSizeFor("agent-a");
+        Assert.NotNull(a);
+        Assert.Equal(500, a!.Width);
+        Assert.Equal(600, a.Height);
+
+        Assert.Equal(300, ClaudeBuddySettings.ChatPanelSizeFor("agent-b")!.Width);
+
+        // Never resized means null, not a copy of the shipped default — that
+        // is what lets ChatPanel keep owning what "default" means.
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-never-opened"));
+
+        // A session with no stable identity (a local CLI orb with no cwd) has
+        // nothing to save under, and saying so must not create a "" entry.
+        ClaudeBuddySettings.SetChatPanelSize("", 400, 400);
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor(""));
+    }
+    // The hazard this file already documents for colours, in the newest block
+    // to read numbers: Load() sits inside one catch that replaces the *whole*
+    // model with defaults, so a wrong-typed value reaching GetValue<double>()
+    // would cost every profile name and dragged orb position in the file over
+    // one bad panel size. Number() is why it doesn't.
+    [Fact]
+    public void AMalformedChatPanelSize_CostsOnlyThatEntry()
+    {
+        var dir = NewSettingsDir();
+        var settingsPath = Path.Combine(dir, "settings.json");
+
+        // Hand-written rather than round-tripped through the setters: these
+        // are shapes the app itself would never produce, and a file people
+        // edit is exactly where they come from.
+        File.WriteAllText(settingsPath, """
+        {
+          "twoLetterGlyphs": true,
+          "orbPositions": { "/some/repo": { "x": 12, "y": 34 } },
+          "chatPanelSizes": {
+            "agent-string-width": { "width": "wide", "height": 400 },
+            "agent-missing-height": { "width": 500 },
+            "agent-not-an-object": 7,
+            "agent-null-width": { "width": null, "height": 400 },
+            "agent-fine": { "width": 480, "height": 500 }
+          }
+        }
+        """);
+
+        PointSettingsAt(dir);
+
+        // The good entry survives...
+        var fine = ClaudeBuddySettings.ChatPanelSizeFor("agent-fine");
+        Assert.NotNull(fine);
+        Assert.Equal(480, fine!.Width);
+
+        // ...each broken one is dropped rather than half-applied...
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-string-width"));
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-missing-height"));
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-not-an-object"));
+        Assert.Null(ClaudeBuddySettings.ChatPanelSizeFor("agent-null-width"));
+
+        // ...and — the actual point — nothing else in the file was lost to it.
+        Assert.True(ClaudeBuddySettings.TwoLetterGlyphs);
+        var position = ClaudeBuddySettings.OrbPositionFor("/some/repo");
+        Assert.NotNull(position);
+        Assert.Equal(12, position!.X);
+    }
+
+    // A panel is re-bound every time its orb is clicked, and the drag handler
+    // saves on every pointer release — so the guard against rewriting an
+    // unchanged value is what keeps that from being a file write each time.
+    // Asserted by deleting the file and checking nothing recreates it, which
+    // is deterministic where comparing timestamps would not be.
+    [Fact]
+    public void SettingAChatPanelSizeToTheValueItAlreadyHas_WritesNothing()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+        var settingsPath = Path.Combine(dir, "settings.json");
+
+        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500, 600);
+        Assert.True(File.Exists(settingsPath));
+
+        File.Delete(settingsPath);
+
+        // Same size, including a fraction that rounds to the same whole DIPs
+        // as the stored value — the comparison happens after rounding.
+        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500, 600);
+        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500.2, 599.8);
+
+        Assert.False(
+            File.Exists(settingsPath),
+            "an unchanged size should return before Save(), so nothing recreates the deleted file");
+
+        // A real change still writes, so the guard isn't just refusing to save.
+        ClaudeBuddySettings.SetChatPanelSize("agent-a", 501, 600);
+        Assert.True(File.Exists(settingsPath));
+    }
+
+    // chatPanelSizes is a key an older build has never heard of, which is the
+    // situation _unknownKeys exists for — worth pinning for this key
+    // specifically, since the generic test uses an invented one that no
+    // version of this app will ever write.
+    [Fact]
+    public void ChatPanelSizes_SurviveASaveByABuildThatOnlyKnowsOtherKeys()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        ClaudeBuddySettings.SetChatPanelSize("agent-a", 500, 600);
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        ClaudeBuddySettings.IdleColor = "green";
+        ClaudeBuddySettings.FlushPendingSave();
+
+        PointSettingsAt(dir);
+
+        var a = ClaudeBuddySettings.ChatPanelSizeFor("agent-a");
+        Assert.NotNull(a);
+        Assert.Equal(500, a!.Width);
+        Assert.Equal(600, a.Height);
     }
 }

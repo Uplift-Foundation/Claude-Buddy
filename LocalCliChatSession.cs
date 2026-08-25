@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using Avalonia.Threading;
 
@@ -39,7 +40,8 @@ namespace ClaudeBuddy
     //    produced. The contract's "TurnUpdated carries the whole turn" holds
     //    trivially, since the whole turn is all there ever is.
     internal sealed class LocalCliChatSession :
-        IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer, IRemoteChatPrompts, IDisposable
+        IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer, IRemoteChatPrompts,
+        IRemoteChatImages, IRemoteChatSlashCommands, IDisposable
     {
         // How much of the tail to read when the panel first opens.
         //
@@ -425,7 +427,10 @@ namespace ClaudeBuddy
 
         // Appends `buffer` to whatever partial line was left over, and returns
         // the complete lines that make. The remainder goes back into the carry.
-        private List<string> TakeWholeLines(byte[] buffer)
+        // internal: the carry buffer is the thing standing between a write that
+        // lands mid-codepoint and a permanent replacement character in the panel,
+        // and it needs no dispatcher, no watcher and no CLI to exercise.
+        internal List<string> TakeWholeLines(byte[] buffer)
         {
             _carry.AddRange(buffer);
 
@@ -444,7 +449,10 @@ namespace ClaudeBuddy
         // line is dropped and the offset it was dropped to is returned — that
         // aligned offset is where the next page back has to stop, and using the
         // unaligned one would read the same row twice.
-        private static (List<string> Lines, long From) ReadWindow(FileStream fs, long from, long to)
+        // internal for the same reason: the alignment rule below decides whether
+        // scrolling to the top of a long transcript makes progress or re-reads
+        // the same megabyte forever.
+        internal static (List<string> Lines, long From) ReadWindow(FileStream fs, long from, long to)
         {
             if (to <= from) return (new List<string>(), from);
 
@@ -473,7 +481,7 @@ namespace ClaudeBuddy
             return (Split(text), from + start);
         }
 
-        private static List<string> Split(string text) =>
+        internal static List<string> Split(string text) =>
             text.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
 
         // --- mapping rows onto turns ---
@@ -488,58 +496,171 @@ namespace ClaudeBuddy
         private List<Mapped> MapLines(List<string> lines) =>
             _format.Map(lines).Select(r => new Mapped(r.Uuid, r.Turn)).ToList();
 
+        // --- slash commands ---
+
+        // Scanned once per session rather than per keystroke: the commands a
+        // running CLI understands don't change while it's running, so
+        // rescanning ~/.claude on every character typed in the chat panel
+        // would be disk I/O for something that never differs between reads.
+        private IReadOnlyList<SlashCommand>? _slashCommands;
+
+        public IReadOnlyList<SlashCommand> SlashCommands =>
+            _slashCommands ??= SlashCommandCatalog.For(_status.Source, _status.Cwd);
+
         // --- sending ---
 
-        public string ComposerHint
+        public string ComposerHint =>
+            ComposerHintFor(TerminalFocuser.CanSendQuietly(_status), _format.ReplyEnabled());
+
+        // Both answers are reachable from a test this way, where they were not
+        // before: whether there is a pane to type into depends on a real tmux and
+        // a real session, so asking it here and deciding somewhere else is what
+        // makes "no pane" something a test can state rather than something the
+        // machine happens to be.
+        internal static string ComposerHintFor(bool canSendQuietly, bool replyEnabled)
         {
-            get
-            {
-                if (!TerminalFocuser.CanSendQuietly(_status)) return "No pane to type into";
-                return _format.ReplyEnabled() ? "Message…" : "Replying is off";
-            }
+            if (!canSendQuietly) return "No pane to type into";
+            return replyEnabled ? "Message…" : "Replying is off";
         }
 
         // A message sent from the panel, waiting for the transcript row it will
         // produce. Held so the two can be reconciled instead of the same
         // sentence appearing twice a second apart.
+        //
+        // Two candidate texts rather than one, because an image-bearing send
+        // can come back from the transcript in either of two shapes and
+        // there is no way to know in advance which this CLI does. _pendingRaw
+        // is what was actually typed — caption and path both — which is what
+        // comes back verbatim if the CLI never noticed the path was a
+        // picture. _pendingCaption is the caption alone, which is what comes
+        // back if it did: see ChatTranscript's image handling, confirmed
+        // against a real transcript row, for why the two diverge only then.
+        // For a plain text send the two are identical, so nothing here
+        // changes that path's behaviour.
         private ChatTurn? _pending;
-        private string _pendingText = "";
+        private string _pendingRaw = "";
+        private string _pendingCaption = "";
         private DateTimeOffset _pendingAt;
 
-        public async Task SendAsync(string text)
+        public Task SendAsync(string text) => SendCoreAsync(typedText: text, displayText: text, imageBytes: null);
+
+        // The picture is already a file by the time this is called — the
+        // panel wrote it there before pasting its path in, the same way a
+        // Finder drag-and-drop already puts a path in front of these two
+        // CLIs rather than a picture. So the terminal gets the caption with
+        // the paths appended as their own words, which is what a drop looks
+        // like once it lands in the terminal's own input — but the bubble
+        // shown locally gets the caption alone plus a thumbnail read
+        // straight back from the same file, since there is no reason to make
+        // this app's own echo wait on whether the CLI recognises the path.
+        //
+        // Only the first picture gets a thumbnail before the real transcript
+        // row lands, matching the one-picture-per-turn a received image
+        // already has; every path is still typed, so nothing beyond the
+        // preview is limited to one.
+        public async Task SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths)
+        {
+            if (imagePaths.Count == 0)
+            {
+                await SendAsync(text);
+                return;
+            }
+
+            var caption = text.Trim();
+            var typed = imagePaths.Aggregate(caption, (line, path) => line.Length == 0 ? path : line + " " + path);
+
+            byte[]? thumbnail = null;
+            try { thumbnail = await File.ReadAllBytesAsync(imagePaths[0]); }
+            catch
+            {
+                // No preview before the real row lands is not a reason to
+                // fail the send — the file is still on disk and the
+                // terminal still gets its path.
+            }
+
+            await SendCoreAsync(typed, caption, thumbnail);
+        }
+
+        // Excluded from coverage for its last line, which no test may execute:
+        // reaching it means CanSendQuietly has said yes, which needs a real tmux
+        // binary and a real pane belonging to a live session — and it then types
+        // into that pane for real, on the machine running the tests.
+        //
+        // The two refusals in front of it are the interesting part and they are
+        // still measured, as the pure functions they now call: ReplyingOffNote
+        // and NoPaneNote. Driving this method with replying off is also still
+        // asserted; those assertions simply are not counted.
+        [ExcludeFromCodeCoverage]
+        private async Task SendCoreAsync(string typedText, string displayText, byte[]? imageBytes)
         {
             if (!_format.ReplyEnabled())
             {
-                // A System turn rather than an exception, for the reason
-                // OpenClawChatSession gives at the same point: the person has
-                // just typed a sentence and losing it behind a dialog is a poor
-                // answer to "why didn't that send".
-                Note("Replying is off. Turn on \"Allow replying to sessions\" in Settings.");
+                Note(ReplyingOffNote);
                 return;
             }
 
             if (!TerminalFocuser.CanSendQuietly(_status))
             {
-                Note(string.IsNullOrEmpty(_status.TmuxPane)
-                    ? "This session isn't in a tmux pane, so there is nowhere to type without "
-                    + "bringing its terminal forward. Reply in the terminal instead."
-                    : "Couldn't find tmux to type with.");
+                Note(NoPaneNote(_status.TmuxPane));
                 return;
             }
 
-            var mine = new ChatTurn { Role = ChatRole.User, Text = text, IsComplete = true };
+            await TypeIntoTerminalAsync(typedText, displayText, imageBytes);
+        }
 
-            // Added *before* being marked pending, not after. Add() runs every
-            // turn through Reconcile, so setting _pending first made the user's
-            // own message match itself: it was reconciled away on the spot and
-            // never reached the history at all. Sending appeared to do nothing.
+        // A System turn rather than an exception, for the reason
+        // OpenClawChatSession gives at the same point: the person has just typed
+        // a sentence and losing it behind a dialog is a poor answer to "why
+        // didn't that send".
+        internal const string ReplyingOffNote =
+            "Replying is off. Turn on \"Allow replying to sessions\" in Settings.";
+
+        // Two different problems that both end in "nothing was typed", and the
+        // note has to say which: a session outside tmux can still be replied to
+        // in its own terminal, where a missing tmux binary cannot be worked
+        // around at all. Telling someone to go to a terminal that isn't there is
+        // the failure this distinction exists to avoid.
+        internal static string NoPaneNote(string? tmuxPane) =>
+            string.IsNullOrEmpty(tmuxPane)
+                ? "This session isn't in a tmux pane, so there is nowhere to type without "
+                + "bringing its terminal forward. Reply in the terminal instead."
+                : "Couldn't find tmux to type with.";
+
+        // Excluded from coverage: only reachable once CanSendQuietly has said yes,
+        // which needs a real tmux binary and a real pane belonging to a live
+        // session — and it then types into that pane for real. Both of those are
+        // the machine the tests are running on, not a fixture.
+        //
+        // The decisions in front of it are covered: whether there is anywhere to
+        // type at all, and what to say when there is not — a session with no pane
+        // gets a different sentence from a machine with no tmux, because they are
+        // different problems with different answers.
+        //
+        // The ordering inside it is load-bearing and worth keeping written down.
+        // Add() runs every turn through Reconcile, so marking _pending before
+        // adding made the user's own message match itself: it was reconciled away
+        // on the spot, never reached the history, and sending appeared to do
+        // nothing.
+        [ExcludeFromCodeCoverage]
+        private async Task TypeIntoTerminalAsync(
+            string typedText, string displayText, byte[]? imageBytes)
+        {
+            var mine = new ChatTurn
+            {
+                Role = ChatRole.User,
+                Text = displayText,
+                IsComplete = true,
+                ImageBytes = imageBytes
+            };
+
             Add(mine);
 
             _pending = mine;
-            _pendingText = text.Trim();
+            _pendingRaw = typedText.Trim();
+            _pendingCaption = displayText.Trim();
             _pendingAt = DateTimeOffset.Now;
 
-            var sent = await TerminalFocuser.SendTextAndSubmit(_status, text);
+            var sent = await TerminalFocuser.SendTextAndSubmit(_status, typedText);
             if (sent) return;
 
             _pending = null;
@@ -570,11 +691,26 @@ namespace ClaudeBuddy
             if (ReferenceEquals(incoming, _pending)) return false;
 
             if (incoming.Role != ChatRole.User) return false;
-            if (!string.Equals(incoming.Text.Trim(), _pendingText, StringComparison.Ordinal)) return false;
+
+            var incomingText = incoming.Text.Trim();
+
+            // Either the CLI never noticed the path (the row comes back
+            // exactly as typed) or it did and swapped it for a real picture
+            // plus its own placeholder, which ChatTranscript has already
+            // stripped down to the caption alone. Both are "this is the
+            // message that was just sent" — see the two fields' own comment.
+            if (!string.Equals(incomingText, _pendingRaw, StringComparison.Ordinal)
+                && !string.Equals(incomingText, _pendingCaption, StringComparison.Ordinal))
+            {
+                return false;
+            }
 
             // Keep the transcript's timestamp: it is when the session actually
             // received it, which for a message queued behind a long turn is
-            // minutes after it was typed.
+            // minutes after it was typed. The settled turn's own ImageBytes,
+            // if any, is left alone rather than replaced from incoming — it
+            // was already read straight from the file that was pasted, and
+            // is the same picture either way this matched.
             var settled = _pending;
             _pending = null;
 
@@ -626,7 +762,12 @@ namespace ClaudeBuddy
             }
         }
 
-        private void SetPrompt(ChatPrompt? prompt)
+        // internal: the transitions around a prompt are what decide whether the
+        // panel is still offering buttons for a dialog that has been answered,
+        // and pressing one of those sends keystrokes into a live session. Reading
+        // the pane to *find* a prompt needs tmux and is excluded; establishing one
+        // does not.
+        internal void SetPrompt(ChatPrompt? prompt)
         {
             Prompt = prompt;
             Dispatcher.UIThread.Post(() => PromptChanged?.Invoke());

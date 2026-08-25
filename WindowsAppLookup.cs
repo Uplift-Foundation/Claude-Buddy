@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.Versioning;
 using System.Xml;
 using Microsoft.Win32;
@@ -27,6 +28,17 @@ namespace ClaudeBuddy
     //   - The AppId comes from that package's AppxManifest.xml, whose
     //     <Application Id="..."> is what ActivateApplication expects.
     [SupportedOSPlatform("windows")]
+    // Excluded from coverage, as a class. Every member reads the Windows registry
+    // — the AppModel package repository, to find where a Store-installed
+    // application actually lives — and three already carried the attribute
+    // individually. What was left uncovered was the cache fields they share,
+    // which exist only because those members do.
+    //
+    // Marking the class rather than the members is also what makes those fields
+    // countable at all: a field initializer belongs to the type initializer, and
+    // with beforefieldinit the runtime does not run it until a static field is
+    // touched — which nothing outside the excluded members ever does.
+    [ExcludeFromCodeCoverage]
     internal static class WindowsAppLookup
     {
         private const string PackageRepositoryKey =
@@ -47,6 +59,8 @@ namespace ClaudeBuddy
         private static string? _cached;
         private static long _cachedAt = long.MinValue;
 
+        // Excluded from coverage: caches the registry lookup below.
+        [ExcludeFromCodeCoverage]
         public static string? ResolveAumid()
         {
             if (!OperatingSystem.IsWindows()) return null;
@@ -69,6 +83,9 @@ namespace ClaudeBuddy
             return resolved;
         }
 
+        // Excluded from coverage: opens HKEY_CLASSES_ROOT and reads an
+        // AppxManifest.xml from under Program Files\WindowsApps.
+        [ExcludeFromCodeCoverage]
         private static string? Resolve()
         {
             try
@@ -109,12 +126,18 @@ namespace ClaudeBuddy
         // Full name is Name_Version_Architecture_ResourceId_PublisherId; the
         // family name drops everything but Name and PublisherId, which are
         // always the first and last underscore-separated segments.
-        private static string? FamilyNameFromFullName(string fullName)
+        // internal, not private: a package family name is what
+        // ActivateApplication is handed, so getting it wrong means launching
+        // nothing with no error to show. Pure string work, and the only part of
+        // this file that is.
+        internal static string? FamilyNameFromFullName(string fullName)
         {
             var parts = fullName.Split('_');
             return parts.Length >= 2 ? $"{parts[0]}_{parts[^1]}" : null;
         }
 
+        // Excluded from coverage: loads a real AppxManifest.xml from disk.
+        [ExcludeFromCodeCoverage]
         private static string? ReadAppId(string manifestPath)
         {
             try

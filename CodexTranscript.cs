@@ -359,7 +359,7 @@ namespace ClaudeBuddy
 
         // The first `"name":"…"` in the text, unescaped only as far as a
         // backslash pair, which is all a command line can contain here.
-        private static string? Quoted(string head, string name)
+        internal static string? Quoted(string head, string name)
         {
             var at = head.IndexOf("\"" + name + "\"", StringComparison.Ordinal);
             if (at < 0) return null;

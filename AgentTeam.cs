@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.Versioning;
 using System.Text.RegularExpressions;
 
@@ -46,6 +47,19 @@ namespace ClaudeBuddy
         // the team read as four copies of one thing.
         internal readonly record struct Membership(string Lead, string Color, string Name);
 
+        // "Not in a team", said with empty strings rather than nulls.
+        //
+        // `default(Membership)` would do the same job in every existing caller,
+        // because all three of them guard with string.IsNullOrEmpty — but a
+        // record struct's default leaves every field null, and this value is
+        // assigned straight onto SessionStatus.Lead, where "no team" has been
+        // the empty string since the field existed. A caller that compared
+        // against "" instead, or a rule that asked whether a lead was *known*
+        // rather than whether it was set, would be quietly wrong for exactly
+        // the sessions that have no pid to ask about. Said out loud so the two
+        // cannot drift.
+        internal static readonly Membership None = new("", "", "");
+
         // A live process's arguments never change, so this is a cache with a
         // safety valve rather than a poll: re-read after a minute so a recycled
         // pid can't pin a wrong answer for the life of the app. Same reasoning,
@@ -60,7 +74,7 @@ namespace ClaudeBuddy
         // point is to ask the kernel once per session, not once per scan.
         public static Membership Of(int pid)
         {
-            if (pid <= 0) return default;
+            if (pid <= 0) return None;
 
             var now = Environment.TickCount64;
 
@@ -101,6 +115,17 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: platform dispatch over two OS calls and nothing
+        // else. On macOS this runs `ps` as a real subprocess through
+        // MacOSProcessScan; on Windows it queries WMI for the command line. The
+        // third arm exists only so a platform that is neither returns an empty
+        // map rather than throwing, and it is unreachable from either CI runner
+        // by construction.
+        //
+        // Everything this hands back is decided elsewhere and covered there —
+        // Sanitize below, and the cache above it. What is left here is "which of
+        // the two OS calls do I make", which cannot be asked without making one.
+        [ExcludeFromCodeCoverage]
         private static Dictionary<string, string> Read(int pid)
         {
             if (OperatingSystem.IsMacOS())
@@ -146,6 +171,10 @@ namespace ClaudeBuddy
             return kept.Length > 48 ? kept[..48].TrimEnd() : kept;
         }
 
+        // Excluded from coverage: a WMI query. System.Management reaches COM to
+        // ask Win32_Process for another process's command line, which has no
+        // equivalent on the macOS runner and no seam on the Windows one.
+        [ExcludeFromCodeCoverage]
         [SupportedOSPlatform("windows")]
         private static Dictionary<string, string> WindowsArguments(int pid)
         {

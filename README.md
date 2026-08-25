@@ -682,6 +682,13 @@ Details worth knowing:
   its own `ant-did`.
 - `CLAUDE_BUDDY_PROFILE_ROOT` overrides the directory profiles are discovered
   in, which is how to try this out without touching your real one.
+- `CLAUDE_BUDDY_BUNDLE_ROOT` overrides where the cloned, recoloured `Claude.app`
+  bundles are cached (normally
+  `~/Library/Application Support/ClaudeBuddy/bundles`). Same purpose: the cache
+  holds real 753MB clones whose icons you are looking at, so anything poking at
+  it — a test, or a manual experiment — should be pointed somewhere else first.
+  Deleting either directory costs nothing but the coloured icons, which are
+  rebuilt on next launch.
 
 It works by watching a small folder in the OS temp directory
 (`%TEMP%\claude_buddy\` on Windows, `$TMPDIR/claude_buddy/` on macOS) that
@@ -833,12 +840,38 @@ that moment — so Claude Buddy also counts anything it has watched happen since
 it started. Conversations from before it connected are the ones that depend on
 the setting.
 
+**A beating heart marks a session the gateway's heartbeat drives.** OpenClaw
+wakes each agent on a timer to do background work, and it does that in the
+agent's *own main session* — so on a gateway with several agents, that many orbs
+go active together every few minutes with nobody on the other end. Without the
+heart they read as somebody waiting for you; with it, the motion says the thing
+on the other end is a clock. **Show heartbeat sessions** turns those orbs off
+entirely if you would rather not have them, and the agents keep their colours in
+any channel they are in either way.
+
+The heart marks **where a heartbeat lands**, not which individual turns were
+one — the gateway does not report heartbeats at all, and its own Control UI
+hides their prompts the same way. Two honest consequences: an agent whose
+heartbeat is switched off still gets a heart (whether it is enabled is config
+behind a scope Claude Buddy does not ask for), and a heartbeat retargeted at a
+channel with a job's `session` override is not marked. See
+`docs/openclaw-findings.md` for what was measured.
+
 **Click one of these orbs and a small chat panel opens under it** — the last
 turns, what the agent is thinking, the tools it reaches for, and a line to type
 in. Escape, Cmd-W, the close button or clicking away all dismiss it, and your
 half-typed draft survives being dismissed. Enter sends, Shift+Enter starts a new
 line, and with voice input on the mic drops what you said into the box rather
 than sending it, exactly as dictation into a terminal already does.
+
+Drag any edge or corner and the panel resizes — new turns then scroll inside it
+rather than growing it out from under your hands. **The size belongs to the
+agent, not to the window**: each one reopens at whatever you last dragged its
+panel to, across restarts, and an agent you have never resized still opens at
+the shipped 340x420. That lives in `chatPanelSizes` in `settings.json`, keyed
+the same way dragged orb positions are — by the agent rather than by the
+session, since Claude Code mints a new session id every conversation and a size
+saved under one would never be found again.
 
 Replying is a **second switch**, off by default: **Allow replying to agents**.
 Turning it on asks the gateway for write permission as well as read, which it
@@ -854,6 +887,109 @@ on macOS cannot speak it, and the certificate is trusted by fingerprint on first
 connection rather than through the system trust store. `docs/openclaw-findings.md`
 records what was measured against a real gateway, including several places where
 the published protocol documentation disagrees with the running software.
+
+## Sessions on other machines (macOS, off by default)
+
+If you run Claude Code on more than one machine — a desktop at home, a server,
+a laptop you left on — Claude Buddy can show those sessions as orbs too, and let
+you send them instructions from anywhere. There is no port to open, no tunnel,
+and nothing to install on the other machine: it works from a hotel or a diner
+exactly as it does from your desk.
+
+The requirement is that the session on the other machine has **Remote Control
+on** (`claude --remote-control`, or `/remote-control` in a running session).
+Those are the sessions you could already reach from your phone; this makes them
+reachable from Claude Buddy as well. A session without it stays invisible here,
+which is the right default — it is also how you keep one private.
+
+How it works is worth knowing, because it explains the one cost. Anthropic's
+Remote Control relay has no API for third-party apps, so Claude Buddy cannot ask
+it anything directly. What it can do is start **a hidden Claude Code session of
+its own** with Remote Control on, because such a session is given tools that
+reach the account's other sessions wherever they are. That session is the relay:
+your own account, no server of ours in the path. It also means the feature uses
+your account and counts against your usage while it is running — which is why it
+is off until you turn it on, why it only starts when you ask, and why it shuts
+itself down again when you stop using it.
+
+Turn it on in **Settings → Other machines**, then:
+
+- **Account** — which Claude Code config directory the relay signs in as. Remote
+  Control only shows sessions on the same account, so pick the one your other
+  machines use. If that is a second account, add it under **Claude Code
+  profiles** first.
+- **Stop the relay after** — how long it may sit unused before shutting down. It
+  starts again by itself the next time you open or send to a remote session.
+
+Nothing starts merely because the switch is on. Use **Connect to other
+machines** in the tray menu, or the button in Settings, or just open a remote
+session's chat — any of those brings the relay up, and orbs for the sessions it
+can see appear a few seconds later, badged `⇄`.
+
+Clicking one opens a chat panel, since there is no terminal on this machine to
+jump to. What that panel *is* depends on one thing: **whether the other machine
+is also running Claude Buddy.**
+
+**If it is, you get a live view.** The panel shows that session's own
+conversation — the same words the person sitting in front of it sees — because
+the Buddy over there reads its transcript off its own disk and sends it across
+verbatim. You can scroll back through it. What you type is typed into that
+session's terminal, so **every slash command works**, `/color` and `/rename`
+included, exactly as it would locally. Updates arrive as the session works
+rather than only when it finishes.
+
+**If it is not, you get a messaging channel**, which is what this used to be
+always, and the panel says so in as many words. Without a Buddy on the other
+side there is no way to read a file there: the only channel is peer messaging,
+which reaches the far session's *model* rather than its terminal. So what comes
+back is a reply that model composed for you — its own account of its
+conversation rather than the conversation. That is a real limitation of the
+transport and not something politeness fixes; it was measured being asked
+nicely and it paraphrased anyway. The panel labels it instead of letting a
+summary pass for a transcript, the orb pulses, and it says "…is working" while
+the far session is busy.
+
+The live view is **verify-or-refuse**. Every piece of transcript that crosses
+the wire carries a SHA-256 of what it is supposed to be, because the thing
+relaying it is a language model pasting text it cannot read. A piece that
+arrives altered is asked for again and then refused — the panel shows an error
+and nothing else. It never quietly falls back to the model-written version,
+which would substitute a summary at the exact moment something was going wrong.
+
+One thing a remote orb cannot know: **which computer it is on**. A peer is
+reported as a name, a kind and a status, with no hostname anywhere, so the title
+is that name alone.
+
+Its **colour** it does know, by asking. A session's `/color` lives on its own
+machine, so Buddy asks each remote session once what colour it is and uses the
+answer; until it replies, or if it has none set, the orb takes a colour derived
+from its name so several remote orbs are still telling apart. That costs one
+message per remote session each time Buddy starts, which is the only route
+available when there is no Buddy on the other side —
+`docs/remote-control-findings.md` explains why nothing cheaper works. When there
+is one, it comes across with the rest of what that Buddy reports and costs
+nothing extra.
+
+**Which slash commands the panel offers** depends on the same thing, and the
+difference is the clearest illustration of what a live view buys.
+
+With one, the list is everything that session can run — built-ins included —
+read off the far machine's own disk by the Buddy beside it, and they genuinely
+run, because your message goes into that CLI's input line.
+
+Without one, Claude Code's **built-ins** — `/compact`, `/color`, `/agents` —
+cannot work at all, because a message reaches the other session's *model* and
+never its command handler. Custom commands can, since those are just
+instructions the model reads, so the panel asks each session which ones it has
+and offers only those. Until it answers, the panel offers nothing rather than
+offering commands that would fail; it re-asks a few times before giving up, and
+a session that has none keeps an empty list rather than being given a plausible
+one.
+
+`docs/remote-control-findings.md` records what was measured against two real
+machines before any of this was built — including what the relay does and does
+not expose, and the two things a stronger test caught that a weaker one had
+passed.
 
 ## 1. Install it
 

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -30,6 +31,17 @@ namespace ClaudeBuddy
         // Discord channels doesn't fill the screen.
         public const int DefaultOpenClawActiveWithin = 60;
         public const int OpenClawActiveWithinAll = 0;
+
+        // Ten minutes of idle before the Remote Control bridge is shut down.
+        // Long enough to read a reply and type another message without paying
+        // to start over, short enough that walking away doesn't leave a live
+        // session on the user's account all afternoon.
+        public const int DefaultRemoteControlIdle = 10;
+        public const int RemoteControlIdleNever = 0;
+
+        // The account whose sessions the bridge can see, when the user hasn't
+        // said otherwise — the same default config directory the CLI itself uses.
+        public const string DefaultRemoteControlProfileDir = ".claude";
 
         private static readonly object Gate = new();
         private static Model _model = new();
@@ -68,11 +80,15 @@ namespace ClaudeBuddy
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions",
+            "chatPanelSizes", "arrangeAnchor",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
+            "openclawShowHeartbeats",
             "codexChatEnabled", "codexReplyEnabled", "autoColorSessions",
             "claudeCodeEnabled", "codexEnabled",
-            "clickAction", "doubleClickAction", "tripleClickAction"
+            "clickAction", "doubleClickAction", "tripleClickAction",
+            "remoteControlEnabled", "remoteControlProfileDir", "remoteControlProfileDirs",
+            "remoteControlIdleMinutes"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -97,6 +113,11 @@ namespace ClaudeBuddy
             TypeInfoResolver = new DefaultJsonTypeInfoResolver()
         };
 
+        // Excluded from coverage: reads the real user profile directory. Every
+        // test in this repo runs with CLAUDE_BUDDY_SETTINGS_DIR pointed elsewhere,
+        // which is the whole point — a suite that read this would be reading, and
+        // on a bad day writing, the developer's own settings.json.
+        [ExcludeFromCodeCoverage]
         private static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         // %APPDATA%\ClaudeBuddy on Windows, ~/Library/Application Support/ClaudeBuddy
@@ -126,6 +147,12 @@ namespace ClaudeBuddy
         // SessionManager clamps a restored point back onto a real screen.
         internal sealed record OrbPlacement(int X, int Y);
 
+        // How big one agent's chat panel is, in DIPs. Doubles rather than the
+        // ints above because this is a layout size and not a screen coordinate:
+        // a resize drag lands on fractions, and the panel's own Min/MaxWidth are
+        // doubles it gets clamped against.
+        internal sealed record PanelSize(double Width, double Height);
+
         internal sealed class ProfileSettings
         {
             public string? Name { get; set; }          // display name; null = folder name
@@ -148,6 +175,18 @@ namespace ClaudeBuddy
         {
             public bool ShowOrbs { get; set; } = true;
             public bool TintActiveWindow { get; set; } = true;
+
+            // On by default, because with more than one profile the alternative
+            // is a sign-in that silently lands in the wrong account — see
+            // ClaudeDesktopUrlRouting. Nothing is claimed until there actually
+            // is more than one profile, so a single-profile install is
+            // untouched whatever this says.
+            public bool RouteClaudeUrls { get; set; } = true;
+
+            // The bundle id that owned `claude:` before we claimed it, so
+            // turning routing off can put it back rather than leaving the user
+            // with a scheme pointing at whatever we happened to set.
+            public string PreviousClaudeUrlHandler { get; set; } = "";
             public int OrbLifetimeMinutes { get; set; } = DefaultOrbLifetimeMinutes;
 
             // Off by default: one letter is what every existing orb already
@@ -264,6 +303,54 @@ namespace ClaudeBuddy
             // conversations are candidates at all. Zero means all of them.
             public int OpenClawActiveWithinMinutes { get; set; } = DefaultOpenClawActiveWithin;
 
+            // Whether the sessions the gateway's heartbeat drives get orbs at
+            // all. See OpenClawHeartbeat for which those are.
+            //
+            // On by default, which is deliberately the *noisier* choice: these
+            // orbs are on screen today, and an upgrade that quietly removed
+            // several of somebody's agents would read as the gateway having
+            // dropped them rather than as a new setting having a default. The
+            // heart badge is what makes the noise explainable, and this is the
+            // switch for anyone who, having had it explained, wants it gone.
+            public bool OpenClawShowHeartbeats { get; set; } = true;
+
+            // Whether to show Claude Code sessions running on *other* machines,
+            // reached through a hidden local bridge session that has Remote
+            // Control on. Off by default, and deliberately more than a display
+            // switch: turning it on is what permits Buddy to start a real
+            // Claude Code session of its own, which costs the user's quota.
+            // See RemoteControlBridge for why a bridge is the only way in.
+            public bool RemoteControlEnabled { get; set; }
+
+            // Which CLI config directory — and therefore which Anthropic
+            // account — the bridge runs under. A home-relative name, the same
+            // vocabulary ClaudeCodeProfileDirs already uses (".claude",
+            // ".claude-work").
+            //
+            // It matters because Remote Control is account-scoped: the bridge
+            // can only see sessions belonging to whichever account it logs in
+            // as, so a user whose remote machines are on a second account has to
+            // be able to say so.
+            public string? RemoteControlProfileDir { get; set; }
+
+            // Every account to run a relay for.
+            //
+            // Replaces the single RemoteControlProfileDir above, which is kept
+            // only so an existing setting isn't silently dropped — see the
+            // RemoteControlProfileDirs accessor, which reads the old key when
+            // this list is empty. Remote Control is account-scoped, so two
+            // accounts genuinely need two relays; nothing about one relay can be
+            // stretched to see both.
+            public List<string> RemoteControlProfileDirs { get; init; } = new();
+
+            // How long the bridge may sit unused before it is shut down.
+            //
+            // The bridge is not free — it is a live Claude Code session on the
+            // user's own account — so it is started on demand and does not
+            // linger. Zero means never idle-stop, which is honest but expensive
+            // and is not the default.
+            public int RemoteControlIdleMinutes { get; set; } = DefaultRemoteControlIdle;
+
             // A command of the user's own to speak with, replacing every built-in
             // engine. Null means "use the built-in ones".
             //
@@ -356,6 +443,17 @@ namespace ClaudeBuddy
             public Dictionary<string, OrbPlacement> OrbPositions { get; init; } =
                 new(StringComparer.OrdinalIgnoreCase);
 
+            // Keyed exactly the way OrbPositions above is — by the orb's
+            // position key, which is the closest thing this app has to "which
+            // agent is this" across runs. A session id would have been the
+            // obvious key and is the wrong one: Claude Code mints a new one
+            // every conversation, so a size saved under it would never be found
+            // again. Sharing the key with the orb's own saved place also means
+            // an agent's panel and its orb agree about what counts as the same
+            // agent, rather than drifting apart on a retitle.
+            public Dictionary<string, PanelSize> ChatPanelSizes { get; init; } =
+                new(StringComparer.OrdinalIgnoreCase);
+
             // Distinct from Profiles above (Claude Desktop, the Electron app):
             // these are Claude Code *CLI* config directory names — e.g.
             // ".claude-work" for a CLAUDE_CONFIG_DIR=~/.claude-work alias
@@ -377,6 +475,13 @@ namespace ClaudeBuddy
             // Auto-organize: which shape and how much space between orbs.
             public string ArrangeShape { get; set; } = DefaultArrangeShape;
             public double ArrangeSpacing { get; set; } = DefaultArrangeSpacing;
+
+            // Where the arranged shape is centred on screen — physical pixels,
+            // same space as OrbPlacement above. Null means "never arranged
+            // yet"; SessionManager fills it in with the screen's centre the
+            // first time and keeps reusing it after, which is what stops the
+            // shape recentring every time an orb joins or leaves.
+            public OrbPlacement? ArrangeAnchor { get; set; }
         }
 
         // ---- app-wide -------------------------------------------------------
@@ -391,6 +496,18 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.TintActiveWindow; }
             set { Load(); lock (Gate) _model.TintActiveWindow = value; Save(); }
+        }
+
+        public static bool RouteClaudeUrls
+        {
+            get { Load(); lock (Gate) return _model.RouteClaudeUrls; }
+            set { Load(); lock (Gate) _model.RouteClaudeUrls = value; Save(); }
+        }
+
+        public static string PreviousClaudeUrlHandler
+        {
+            get { Load(); lock (Gate) return _model.PreviousClaudeUrlHandler; }
+            set { Load(); lock (Gate) _model.PreviousClaudeUrlHandler = value ?? ""; Save(); }
         }
 
         // Minutes an orb sticks around after its session stops reporting;
@@ -512,6 +629,100 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.OpenClawActiveWithinMinutes = value; Save(); }
         }
 
+        // Read once per scan by OpenClawSessions, like OpenClawActiveWithinMinutes
+        // above and for the same reason: turning it off should take the orbs off
+        // the screen on the next poll rather than at the next launch.
+        public static bool OpenClawShowHeartbeats
+        {
+            get { Load(); lock (Gate) return _model.OpenClawShowHeartbeats; }
+            set { Load(); lock (Gate) _model.OpenClawShowHeartbeats = value; Save(); }
+        }
+
+        public static bool RemoteControlEnabled
+        {
+            get { Load(); lock (Gate) return _model.RemoteControlEnabled; }
+            set { Load(); lock (Gate) _model.RemoteControlEnabled = value; Save(); }
+        }
+
+        // Never empty: a blank stored value means "never chosen", and the
+        // bridge has to launch under *some* config directory.
+        public static string RemoteControlProfileDir
+        {
+            get
+            {
+                Load();
+                lock (Gate)
+                {
+                    var dir = _model.RemoteControlProfileDir;
+                    return string.IsNullOrWhiteSpace(dir) ? DefaultRemoteControlProfileDir : dir!;
+                }
+            }
+            set { Load(); lock (Gate) _model.RemoteControlProfileDir = value; Save(); }
+        }
+
+        // The accounts to run relays for, never empty when the feature is on.
+        //
+        // Falls back through the old single-account key before the default, so
+        // turning this into a list does not quietly reset someone who had
+        // already chosen an account.
+        public static IReadOnlyList<string> RemoteControlProfileDirs
+        {
+            get
+            {
+                Load();
+                lock (Gate)
+                {
+                    if (_model.RemoteControlProfileDirs.Count > 0)
+                        return _model.RemoteControlProfileDirs.ToList();
+
+                    var single = _model.RemoteControlProfileDir;
+                    return new List<string>
+                    {
+                        string.IsNullOrWhiteSpace(single) ? DefaultRemoteControlProfileDir : single!
+                    };
+                }
+            }
+        }
+
+        public static void SetRemoteControlProfileDirs(IEnumerable<string> dirs)
+        {
+            Load();
+            lock (Gate)
+            {
+                _model.RemoteControlProfileDirs.Clear();
+                foreach (var dir in dirs)
+                {
+                    if (string.IsNullOrWhiteSpace(dir)) continue;
+                    if (_model.RemoteControlProfileDirs.Contains(dir, StringComparer.Ordinal)) continue;
+                    _model.RemoteControlProfileDirs.Add(dir);
+                }
+
+                // Cleared so the two keys cannot disagree: once a list exists it
+                // is the only answer, and a leftover single value would be a
+                // second source of truth that only surfaces if the list is
+                // emptied again.
+                _model.RemoteControlProfileDir = null;
+            }
+
+            Save();
+        }
+
+        public static int RemoteControlIdleMinutes
+        {
+            get { Load(); lock (Gate) return _model.RemoteControlIdleMinutes; }
+
+            // Clamped rather than trusted. A negative value would mean "already
+            // expired" to every comparison downstream, which would stop the
+            // bridge the instant it started and read as the feature being
+            // broken; RemoteControlIdleNever is the deliberate way to say that.
+            set
+            {
+                Load();
+                lock (Gate) _model.RemoteControlIdleMinutes = Math.Max(RemoteControlIdleNever, value);
+                Save();
+            }
+        }
+
         public static bool OpenClawReplyEnabled
         {
             get { Load(); lock (Gate) return _model.OpenClawReplyEnabled; }
@@ -615,6 +826,12 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.ArrangeSpacing = value; Save(); }
         }
 
+        public static OrbPlacement? ArrangeAnchor
+        {
+            get { Load(); lock (Gate) return _model.ArrangeAnchor; }
+            set { Load(); lock (Gate) _model.ArrangeAnchor = value; Save(); }
+        }
+
         // ---- orb state colours ----------------------------------------------
 
         // "#RRGGBB", with null meaning the built-in default. OrbColors owns the
@@ -673,6 +890,44 @@ namespace ClaudeBuddy
             lock (Gate)
             {
                 if (!_model.OrbPositions.Remove(key)) return;
+            }
+
+            Save();
+        }
+
+        // ---- chat panel sizes -----------------------------------------------
+
+        // Null means "never resized", which is what leaves the panel at the
+        // size its XAML ships — the same reason the colours and the voice above
+        // store null rather than a copy of today's default. Storing 340x420 the
+        // first time a panel opened would freeze the shipped default into every
+        // settings.json on disk and a future retune would reach nobody.
+        public static PanelSize? ChatPanelSizeFor(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+
+            Load();
+            lock (Gate) return _model.ChatPanelSizes.GetValueOrDefault(key);
+        }
+
+        public static void SetChatPanelSize(string key, double width, double height)
+        {
+            // No key means no stable identity to save under — a local CLI
+            // session with no cwd. Silently nothing, the same as an orb in that
+            // position gets no saved place.
+            if (string.IsNullOrEmpty(key)) return;
+
+            // Rounded here rather than at the call site so the file stays
+            // readable whoever writes to it: a drag ends on whatever fraction
+            // of a DIP the pointer was at, and nobody wants 341.99998 in their
+            // settings.
+            var size = new PanelSize(Math.Round(width), Math.Round(height));
+
+            Load();
+            lock (Gate)
+            {
+                if (_model.ChatPanelSizes.GetValueOrDefault(key) == size) return;
+                _model.ChatPanelSizes[key] = size;
             }
 
             Save();
@@ -768,6 +1023,21 @@ namespace ClaudeBuddy
             Save();
         }
 
+        // Named setters for the two per-profile fields the settings window writes
+        // from code that cannot itself be run by a test.
+        //
+        // They exist so those callers hold no lambda: a lambda inside a method
+        // carrying [ExcludeFromCodeCoverage] is hoisted to its own method and does
+        // NOT inherit the attribute, so `entry => entry.Color = …` was being
+        // counted while the method around it was not. Written as ordinary setters
+        // rather than as a trick — and they are covered directly, which the
+        // one-line Update calls never were.
+        public static void SetProfileColor(string folder, string? color) =>
+            Update(folder, entry => entry.Color = color);
+
+        public static void SetProfileShowSwatch(string folder, bool show) =>
+            Update(folder, entry => entry.ShowSwatch = show);
+
         public static void Update(string folder, Action<ProfileSettings> change)
         {
             Load();
@@ -806,6 +1076,8 @@ namespace ClaudeBuddy
                     {
                         ShowOrbs = root["showOrbs"]?.GetValue<bool>() ?? true,
                         TintActiveWindow = root["tintActiveWindow"]?.GetValue<bool>() ?? true,
+                        RouteClaudeUrls = root["routeClaudeUrls"]?.GetValue<bool>() ?? true,
+                        PreviousClaudeUrlHandler = Text(root["previousClaudeUrlHandler"]) ?? "",
                         OrbLifetimeMinutes =
                             root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes,
                         VoiceInputEnabled = root["voiceInputEnabled"]?.GetValue<bool>() ?? false,
@@ -816,6 +1088,12 @@ namespace ClaudeBuddy
                         OpenClawReplyEnabled = root["openclawReplyEnabled"]?.GetValue<bool>() ?? false,
                         OpenClawActiveWithinMinutes =
                             root["openclawActiveWithinMinutes"]?.GetValue<int>() ?? DefaultOpenClawActiveWithin,
+                        OpenClawShowHeartbeats =
+                            root["openclawShowHeartbeats"]?.GetValue<bool>() ?? true,
+                        RemoteControlEnabled = root["remoteControlEnabled"]?.GetValue<bool>() ?? false,
+                        RemoteControlProfileDir = Text(root["remoteControlProfileDir"]),
+                        RemoteControlIdleMinutes =
+                            root["remoteControlIdleMinutes"]?.GetValue<int>() ?? DefaultRemoteControlIdle,
                         ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
@@ -886,6 +1164,17 @@ namespace ClaudeBuddy
                         }
                     }
 
+                    if (root["remoteControlProfileDirs"] is JsonArray remoteDirs)
+                    {
+                        foreach (var node in remoteDirs)
+                        {
+                            if (node?.GetValue<string>() is { Length: > 0 } dirName)
+                            {
+                                model.RemoteControlProfileDirs.Add(dirName);
+                            }
+                        }
+                    }
+
                     if (root["codexHomes"] is JsonArray codexHomes)
                     {
                         foreach (var node in codexHomes)
@@ -926,6 +1215,38 @@ namespace ClaudeBuddy
 
                             model.OrbPositions[key] = new OrbPlacement(x.Value, y.Value);
                         }
+                    }
+
+                    if (root["chatPanelSizes"] is JsonObject panelSizes)
+                    {
+                        foreach (var (key, node) in panelSizes)
+                        {
+                            if (node is not JsonObject entry) continue;
+
+                            var w = Number(entry["width"]);
+                            var h = Number(entry["height"]);
+
+                            // Either half missing or unreadable drops the
+                            // entry, rather than half-restoring a panel to a
+                            // width someone chose and a height they didn't.
+                            if (w is null || h is null) continue;
+
+                            // Not clamped here. ChatPanel clamps what it reads
+                            // against its own Min/Max, which is where those
+                            // numbers actually live — and a size saved by a
+                            // build with a wider maximum should come back
+                            // intact if that build is run again, rather than
+                            // being permanently truncated by an older one.
+                            model.ChatPanelSizes[key] = new PanelSize(w.Value, h.Value);
+                        }
+                    }
+
+                    if (root["arrangeAnchor"] is JsonObject anchor)
+                    {
+                        var ax = anchor["x"]?.GetValue<int>();
+                        var ay = anchor["y"]?.GetValue<int>();
+                        if (ax is not null && ay is not null)
+                            model.ArrangeAnchor = new OrbPlacement(ax.Value, ay.Value);
                     }
 
                     // Anything above this line is a key this build understands.
@@ -974,6 +1295,27 @@ namespace ClaudeBuddy
             && value.TryGetValue<string>(out var text)
             && !string.IsNullOrWhiteSpace(text)
                 ? text
+                : null;
+
+        // The same defence as Text() above, for a number.
+        //
+        // Written when chatPanelSizes went in, because that block reads two
+        // numbers per entry and GetValue<double>() throws on a type mismatch
+        // exactly the way GetValue<string>() does — so a hand-edited
+        // `"width": "wide"` would have been thrown at the one catch that
+        // replaces the whole model, and cost someone every profile name and
+        // dragged orb position in the file over one bad panel size. A garbage
+        // size should cost that one panel's size and nothing else.
+        //
+        // Not retrofitted onto the orbPositions block above, which still reads
+        // through GetValue<int>(). That is a real hole of the same shape, but
+        // it is pre-existing behaviour the README documents, and quietly
+        // changing how a live settings file is parsed is not this change's
+        // business — it belongs in its own commit that can be reviewed as
+        // such.
+        private static double? Number(JsonNode? node) =>
+            node is JsonValue value && value.TryGetValue<double>(out var number)
+                ? number
                 : null;
 
         // Test seam: this class is static, so it caches _model and _loaded for
@@ -1027,6 +1369,20 @@ namespace ClaudeBuddy
                         };
                     }
 
+                    var panelSizes = new JsonObject();
+                    foreach (var (key, size) in _model.ChatPanelSizes)
+                    {
+                        panelSizes[key] = new JsonObject
+                        {
+                            ["width"] = size.Width,
+                            ["height"] = size.Height
+                        };
+                    }
+
+                    var arrangeAnchor = _model.ArrangeAnchor is { } anchor
+                        ? new JsonObject { ["x"] = anchor.X, ["y"] = anchor.Y }
+                        : null;
+
                     var profileDirs = new JsonArray();
                     foreach (var dirName in _model.ClaudeCodeProfileDirs) profileDirs.Add(dirName);
 
@@ -1036,6 +1392,9 @@ namespace ClaudeBuddy
                     var speakArgs = new JsonArray();
                     foreach (var argument in _model.SpeakCommandArgs) speakArgs.Add(argument);
 
+                    var remoteProfileDirs = new JsonArray();
+                    foreach (var dir in _model.RemoteControlProfileDirs) remoteProfileDirs.Add(dir);
+
                     var voicesArgs = new JsonArray();
                     foreach (var argument in _model.SpeakVoicesCommandArgs) voicesArgs.Add(argument);
 
@@ -1044,6 +1403,8 @@ namespace ClaudeBuddy
                         ["version"] = CurrentVersion,
                         ["showOrbs"] = _model.ShowOrbs,
                         ["tintActiveWindow"] = _model.TintActiveWindow,
+                        ["routeClaudeUrls"] = _model.RouteClaudeUrls,
+                        ["previousClaudeUrlHandler"] = _model.PreviousClaudeUrlHandler,
                         ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
                         ["voiceInputEnabled"] = _model.VoiceInputEnabled,
                         ["openclawEnabled"] = _model.OpenClawEnabled,
@@ -1052,6 +1413,15 @@ namespace ClaudeBuddy
                         ["openclawFingerprint"] = _model.OpenClawFingerprint,
                         ["openclawReplyEnabled"] = _model.OpenClawReplyEnabled,
                         ["openclawActiveWithinMinutes"] = _model.OpenClawActiveWithinMinutes,
+                        ["openclawShowHeartbeats"] = _model.OpenClawShowHeartbeats,
+                        ["remoteControlEnabled"] = _model.RemoteControlEnabled,
+                        // Null when never chosen rather than a copy of the
+                        // current default, the same as speakVoice below — so
+                        // changing which profile ships as the default still
+                        // reaches everyone who never picked one.
+                        ["remoteControlProfileDir"] = _model.RemoteControlProfileDir,
+                        ["remoteControlProfileDirs"] = remoteProfileDirs,
+                        ["remoteControlIdleMinutes"] = _model.RemoteControlIdleMinutes,
                         ["claudeCodeChatEnabled"] = _model.ClaudeCodeChatEnabled,
                         ["claudeCodeReplyEnabled"] = _model.ClaudeCodeReplyEnabled,
                         ["codexChatEnabled"] = _model.CodexChatEnabled,
@@ -1092,7 +1462,9 @@ namespace ClaudeBuddy
                         ["claudeCodeProfileDirs"] = profileDirs,
                         ["codexHomes"] = codexHomeDirs,
                         ["profiles"] = profiles,
-                        ["orbPositions"] = positions
+                        ["orbPositions"] = positions,
+                        ["chatPanelSizes"] = panelSizes,
+                        ["arrangeAnchor"] = arrangeAnchor
                     };
 
                     // Keys this build doesn't understand, put back exactly as they
@@ -1134,6 +1506,16 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: writes to a log file in the temp directory, and
+        // its catch is the last stop — getting there means the directory could not
+        // be created AND the append failed, on a machine where writing
+        // settings.json had already failed. That nothing can be reported at that
+        // point is the whole design, and it is not a state a test can produce.
+        //
+        // That the log IS written on an ordinary failure is covered from the
+        // outside, in SettingsListParsingTests and SettingsDeferredWriteTests,
+        // which read the file back and assert it grew.
+        [ExcludeFromCodeCoverage]
         private static void LogFailure(string what, Exception ex)
         {
             try
@@ -1147,6 +1529,12 @@ namespace ClaudeBuddy
             catch
             {
                 // If even this fails, there's nowhere left to report it.
+                //
+                // Unreached, and unreachable in any useful sense: getting here
+                // means the temp directory could not be created AND the append
+                // failed, on a machine where writing settings.json had already
+                // failed. Kept as the last stop rather than deleted, and named
+                // here so a coverage report does not read as a missing test.
             }
         }
 
@@ -1173,31 +1561,48 @@ namespace ClaudeBuddy
         private static readonly TimeSpan SaveDelay = TimeSpan.FromMilliseconds(250);
         private static DispatcherTimer? _deferred;
 
+        // Excluded from coverage: exists to be the try/catch, and the catch is
+        // not reachable — which the tests say out loud rather than leaving as a
+        // mystery in a report. An Avalonia DispatcherTimer constructs and starts
+        // quite happily in a process with no dispatcher loop running, so nothing
+        // throws here and the write is simply deferred to a tick that never
+        // comes. See SettingsDeferredWriteTests, which asserts that behaviour
+        // rather than the behaviour the comment here used to promise.
+        //
+        // Kept because "no dispatcher at all" is a real shape for this class —
+        // it is a process-wide static that a console tool could load — and
+        // losing a preference is a worse outcome than an unreachable line.
+        [ExcludeFromCodeCoverage]
         private static void SaveSoon()
         {
-            try
-            {
-                if (_deferred is null)
-                {
-                    _deferred = new DispatcherTimer { Interval = SaveDelay };
-                    _deferred.Tick += (_, _) =>
-                    {
-                        _deferred!.Stop();
-                        Save();
-                    };
-                }
+            try { RestartTheDeferredWrite(); }
+            catch { Save(); }
+        }
 
-                // Restart rather than let it run out: keep pushing the write
-                // further off for as long as changes keep arriving.
-                _deferred.Stop();
-                _deferred.Start();
-            }
-            catch
+        private static void RestartTheDeferredWrite()
+        {
+            if (_deferred is null)
             {
-                // No dispatcher. Nothing calls these setters before the app is
-                // up, but a lost preference isn't worth a crash — write now.
-                Save();
+                _deferred = new DispatcherTimer { Interval = SaveDelay };
+                _deferred.Tick += OnDeferredTick;
             }
+
+            // Restart rather than let it run out: keep pushing the write
+            // further off for as long as changes keep arriving.
+            _deferred.Stop();
+            _deferred.Start();
+        }
+
+        // Excluded from coverage: fires only when the debounce interval actually
+        // elapses, and no test waits on a real timer — this branch has fixed five
+        // flakes of exactly that shape. What it does when it fires is Save(),
+        // which is covered every other way, and FlushPendingSave is the seam the
+        // app itself uses from anything that might be the last thing to happen.
+        [ExcludeFromCodeCoverage]
+        private static void OnDeferredTick(object? sender, EventArgs e)
+        {
+            _deferred!.Stop();
+            Save();
         }
 
         // A deferred write that never happens is a preference silently lost, so

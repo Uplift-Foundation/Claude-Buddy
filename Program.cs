@@ -1,7 +1,15 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 
 namespace ClaudeBuddy
 {
+    // Excluded from coverage: the process entry point. Main waits on the real
+    // screen-lock state and then hands control to
+    // StartWithClassicDesktopLifetime, which owns the process for its lifetime;
+    // BuildAvaloniaApp configures the one AppBuilder a process gets, and the
+    // headless suites build their own (see tests/UiTests' TestAppBuilder). There
+    // is no way to run either without ending the test run.
+    [ExcludeFromCodeCoverage]
     internal static class Program
     {
         // How long to wait for the screen to unlock before starting anyway. Long

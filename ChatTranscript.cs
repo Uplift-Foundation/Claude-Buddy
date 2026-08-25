@@ -127,15 +127,92 @@ namespace ClaudeBuddy
 
             if (content.ValueKind != JsonValueKind.Array) return;
 
+            // A pasted picture arrives as two sibling blocks in one message —
+            // its own "image" block, and a "text" block carrying Claude
+            // Code's own "[Image #1]" placeholder for wherever its own UI
+            // would draw the picture inline. Confirmed against a real
+            // transcript row, not assumed: pasting a picture through this
+            // panel and typing its path (see LocalCliChatSession) produced
+            // exactly this shape. Whether Codex's rollout format matches is
+            // unverified — CodexTranscript's own Map is untouched, so a
+            // picture in a Codex turn still shows as whatever text Codex
+            // wrote, with no thumbnail.
+            //
+            // Only the first image is kept: a turn carries one, the same
+            // limit a received picture already has.
+            byte[]? image = null;
+            var textBlocks = new List<string?>();
+
             foreach (var block in content.EnumerateArray())
             {
+                var kind = Str(block, "type");
+
+                if (kind == "image")
+                {
+                    image ??= DecodeImage(block);
+                    continue;
+                }
+
                 // tool_result blocks are the other half of a tool_use that is
                 // already one line in the panel. Rendering them would put the
                 // contents of every file read into the conversation.
-                if (Str(block, "type") != "text") continue;
+                if (kind != "text") continue;
 
-                AddText(Str(block, "text"), ChatRole.User, uuid, at, into);
+                textBlocks.Add(Str(block, "text"));
             }
+
+            if (textBlocks.Count == 0)
+            {
+                // A picture with nothing typed alongside it is still a turn
+                // worth showing — just with no caption.
+                if (image is not null)
+                {
+                    into.Add(new Row(uuid, new ChatTurn
+                    {
+                        Role = ChatRole.User,
+                        Text = "",
+                        IsComplete = true,
+                        At = at,
+                        ImageBytes = image
+                    }));
+                }
+
+                return;
+            }
+
+            for (var i = 0; i < textBlocks.Count; i++)
+            {
+                // The placeholder for the picture sits in the last text
+                // block found in the real row this was measured against, so
+                // that is where the decoded picture rides too.
+                var carries = image is not null && i == textBlocks.Count - 1;
+                AddText(textBlocks[i], ChatRole.User, uuid, at, into, carries ? image : null);
+            }
+        }
+
+        // Claude Code writes "[Image #1]", "[Image #2]" and so on directly
+        // into the text block beside a pasted picture's own block — a
+        // placeholder for wherever its own UI draws the picture inline. This
+        // app draws the picture itself right there in the bubble, so once one
+        // is actually attached the placeholder is only noise. Leading only:
+        // the real row this was measured against had it at the front, and
+        // there is nothing to say it is always there.
+        private static readonly Regex ImagePlaceholder = new(@"^(\[Image #\d+\]\s*)+", RegexOptions.Compiled);
+
+        // A picture's own bytes, already inline as base64 — unlike
+        // OpenClawSessions.DecodeDataUri, which decodes a single "data:…"
+        // URI string, a transcript's image block already carries "type" and
+        // "data" as separate fields.
+        private static byte[]? DecodeImage(JsonElement block)
+        {
+            if (!block.TryGetProperty("source", out var source)) return null;
+            if (Str(source, "type") != "base64") return null;
+
+            var data = Str(source, "data");
+            if (string.IsNullOrEmpty(data)) return null;
+
+            try { return Convert.FromBase64String(data); }
+            catch { return null; }
         }
 
         private static void MapAssistant(JsonElement root, string? uuid, DateTimeOffset at, List<Row> into)
@@ -173,17 +250,32 @@ namespace ClaudeBuddy
             }
         }
 
-        private static void AddText(string? text, ChatRole role, string? uuid, DateTimeOffset at, List<Row> into)
+        private static void AddText(
+            string? text, ChatRole role, string? uuid, DateTimeOffset at, List<Row> into, byte[]? imageBytes = null)
         {
-            if (string.IsNullOrWhiteSpace(text)) return;
-            if (role == ChatRole.User && IsNoise(text)) return;
+            var shown = imageBytes is null ? text : ImagePlaceholder.Replace(text ?? "", "");
+
+            // A caption-less picture still deserves a turn, so the emptiness
+            // check has to run on the text after the placeholder is
+            // stripped — otherwise a picture whose only text was that
+            // placeholder would vanish along with it.
+            if (imageBytes is null)
+            {
+                if (string.IsNullOrWhiteSpace(shown)) return;
+                if (role == ChatRole.User && IsNoise(shown!)) return;
+            }
+            else if (role == ChatRole.User && !string.IsNullOrWhiteSpace(shown) && IsNoise(shown!))
+            {
+                return;
+            }
 
             into.Add(new Row(uuid, new ChatTurn
             {
                 Role = role,
-                Text = text.Trim(),
+                Text = (shown ?? "").Trim(),
                 IsComplete = true,
-                At = at
+                At = at,
+                ImageBytes = imageBytes
             }));
         }
 

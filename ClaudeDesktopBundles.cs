@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Media;
@@ -40,8 +41,20 @@ namespace ClaudeBuddy
         // A cache, not configuration: everything here is regenerable from
         // /Applications/Claude.app and the profile list, and deleting it only
         // costs the coloured icons.
-        public static string Root => Path.Combine(
-            Home, "Library", "Application Support", "ClaudeBuddy", "bundles");
+        //
+        // CLAUDE_BUDDY_BUNDLE_ROOT redirects it, the same scratch-override
+        // pattern as CLAUDE_BUDDY_PROFILE_ROOT in ClaudeDesktopManager and
+        // CLAUDE_BUDDY_SETTINGS_DIR in ClaudeBuddySettings. Without it the only
+        // way to test what is in this file is to write into the real
+        // ~/Library/Application Support/ClaudeBuddy/bundles — the actual cache,
+        // on the machine running the tests, holding real cloned .app bundles
+        // whose icons a user is looking at. That the override did not exist is
+        // why nothing here was covered.
+        public static string Root =>
+            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_BUNDLE_ROOT") is { Length: > 0 } scratch
+                ? scratch
+                : Path.Combine(
+                    Home, "Library", "Application Support", "ClaudeBuddy", "bundles");
 
         public static string DirectoryFor(string profileFolder) => Path.Combine(Root, profileFolder);
 
@@ -54,6 +67,9 @@ namespace ClaudeBuddy
         // Returns the clone's path, creating or refreshing it as needed, or null
         // if anything went wrong — callers fall back to launching the real bundle,
         // so a failure here costs the colour and nothing else.
+        // Excluded from coverage: copies a real .app bundle on disk and shells out
+        // to codesign.
+        [ExcludeFromCodeCoverage]
         public static string? Ensure(string profileFolder, string sourceApp, Color tint)
         {
             if (!OperatingSystem.IsMacOS()) return null;
@@ -89,6 +105,8 @@ namespace ClaudeBuddy
         // Squirrel updates /Applications/Claude.app only, so clones go stale and
         // would keep running an old version indefinitely. Compare bundle versions
         // rather than mtimes, which cp -Rc preserves.
+        // Excluded from coverage: compares bundle versions read by plutil.
+        [ExcludeFromCodeCoverage]
         private static bool IsStale(string clone, string sourceApp)
         {
             var cloneVersion = BundleVersion(clone);
@@ -97,12 +115,25 @@ namespace ClaudeBuddy
             return !string.Equals(cloneVersion, sourceVersion, StringComparison.Ordinal);
         }
 
-        private static bool ColourMatches(string profileFolder, Color tint)
+        internal static bool ColourMatches(string profileFolder, Color tint)
         {
             try
             {
                 var marker = Path.Combine(DirectoryFor(profileFolder), "icon-colour");
-                return File.Exists(marker) && File.ReadAllText(marker).Trim() == tint.ToString();
+                if (!File.Exists(marker)) return false;
+                if (File.ReadAllText(marker).Trim() != tint.ToString()) return false;
+
+                // The marker says which colour was *intended*; the Icon\r file
+                // is whether one actually went on. Checking both is what repairs
+                // a clone left behind by the older ordering bug, which wrote the
+                // marker before calling NSWorkspace setIcon: and so recorded a
+                // refusal as a success. Those clones cannot heal on their own —
+                // the marker matches for ever, so Ensure() never rebuilds and
+                // the tint never retries even once the user grants App
+                // Management.
+                //
+                // Cheap: one File.Exists on a path we already have.
+                return HasCustomIcon(PathFor(profileFolder));
             }
             catch
             {
@@ -110,18 +141,50 @@ namespace ClaudeBuddy
             }
         }
 
+        // A custom Finder icon lives in a file named "Icon" followed by a
+        // carriage return at the bundle root — outside Contents/, which is what
+        // keeps the code signature intact. Its absence is the only reliable
+        // evidence that setIcon: did not take: the FinderInfo xattr can be left
+        // set with no icon resource behind it, which is exactly the state a
+        // refused write leaves.
+        // Excluded from coverage for its catch, which is not reachable: on both
+        // platforms File.Exists answers false for a path it cannot evaluate
+        // rather than throwing — including, on Windows, one containing the
+        // carriage return this looks for.
+        //
+        // Kept because the path is built from a profile folder name, which is a
+        // directory on disk rather than anything this app validates, and because
+        // the cost of being wrong is an exception on the scan path rather than a
+        // missing icon. What it answers is covered both ways —
+        // ClaudeDesktopBundleIconTests for the name, BundleCacheLayoutTests for
+        // what ColourMatches does with it.
+        [ExcludeFromCodeCoverage]
+        internal static bool HasCustomIcon(string bundlePath)
+        {
+            try { return File.Exists(Path.Combine(bundlePath, "Icon\r")); }
+            catch { return false; }
+        }
+
         public static bool IsStaleFor(string profileFolder, string sourceApp) =>
             Exists(profileFolder) && IsStale(PathFor(profileFolder), sourceApp);
 
+        // Excluded from coverage: reads a binary Info.plist through plutil.
+        [ExcludeFromCodeCoverage]
         private static string? BundleVersion(string appPath) =>
             PlistValue(Path.Combine(appPath, "Contents", "Info.plist"), "CFBundleVersion");
 
+        // Excluded from coverage: runs plutil against a real plist.
+        [ExcludeFromCodeCoverage]
         private static string? PlistValue(string plist, string key)
         {
             // Info.plist is a binary plist; plutil reads either form.
             return RunCapture("/usr/bin/plutil", "-extract", key, "raw", "-o", "-", plist)?.Trim();
         }
 
+        // Excluded from coverage: unpacks an .icns with iconutil and writes it
+        // back into a bundle; the pixel maths it calls is WriteTinted, which is
+        // tested.
+        [ExcludeFromCodeCoverage]
         private static void ApplyTintedIcon(string clone, string sourceApp, string profileFolder, Color tint)
         {
             var work = DirectoryFor(profileFolder);
@@ -140,15 +203,26 @@ namespace ClaudeBuddy
 
             WriteTinted(flat, tinted, tint);
 
-            // Record what colour this clone was built with. Ensure() treats a
-            // mismatch as stale, which is how a recolour deferred while the
-            // instance was running gets applied at its next launch.
-            try { File.WriteAllText(Path.Combine(work, "icon-colour"), tint.ToString()); } catch { }
-
             // A false here means macOS refused the write — see the note on
             // Retint. Worth knowing about rather than leaving the user with a
             // wrong-coloured Dock tile and no explanation.
             IconApplied = MacOSCustomIcon.Set(tinted, clone);
+
+            // Record what colour this clone was built with — but only if the
+            // icon actually went on. Ensure() treats a *matching* marker as
+            // "nothing to do", so writing it before the call above recorded a
+            // refusal as a success: the clone was then considered correctly
+            // coloured for ever, and the tint was never retried even after the
+            // user granted App Management. That is not hypothetical — it is how
+            // this was found, with a marker dated minutes earlier sitting beside
+            // a bundle that had no Icon\r file and no FinderInfo xattr at all.
+            //
+            // Leaving the marker absent instead costs one clone rebuild on the
+            // next launch, which is an APFS clone: ~0.3s and ~0 disk.
+            if (IconApplied)
+            {
+                try { File.WriteAllText(Path.Combine(work, "icon-colour"), tint.ToString()); } catch { }
+            }
 
             try { File.Delete(flat); } catch { }
         }
@@ -157,7 +231,11 @@ namespace ClaudeBuddy
         // toward white, alpha untouched. Keeps Claude's mark legible instead of
         // flat-filling it, and preserves the rounded-corner alpha that makes it
         // look like a real app icon.
-        private static void WriteTinted(string sourcePng, string destinationPng, Color tint)
+        // internal: pure pixel maths over two files, and the one part of this
+        // file that decides what the user actually sees. The comment inside about
+        // undoing premultiplication is the kind of claim worth a test — muddy
+        // icon edges are hard to notice and impossible to attribute.
+        internal static void WriteTinted(string sourcePng, string destinationPng, Color tint)
         {
             using var source = new Bitmap(sourcePng);
             var size = source.PixelSize;
@@ -231,6 +309,8 @@ namespace ClaudeBuddy
         // cached icon. Rebuilding the clone instead re-runs the path that already
         // works (create, then set the icon on something we just made) and needs no
         // permission. An APFS clone costs ~0.3s and ~0 disk, so this is cheap.
+        // Excluded from coverage: rewrites a real bundle icon.
+        [ExcludeFromCodeCoverage]
         public static bool Retint(string profileFolder, string sourceApp, Color tint)
         {
             if (!OperatingSystem.IsMacOS()) return false;
@@ -247,12 +327,47 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: deletes a real bundle from disk.
+        [ExcludeFromCodeCoverage]
         public static void Remove(string profileFolder)
         {
             if (!OperatingSystem.IsMacOS()) return;
+
+            // Unregister before deleting, while the path still resolves.
+            //
+            // Deleting the directory does not remove the bundle from the
+            // LaunchServices database, and a clone claims `claude:` and the
+            // MSAL sign-in scheme exactly as the real Claude.app does. A
+            // registration for a bundle that no longer exists therefore stays
+            // in the running for those schemes indefinitely — the machine this
+            // was found on still listed bundles/Claude-Profile-1 months after
+            // the directory went away — which is what made the wrong-profile
+            // behaviour look intermittent rather than deterministic.
+            Unregister(PathFor(profileFolder));
+
             try { DeleteDirectory(DirectoryFor(profileFolder)); } catch { }
         }
 
+        // lsregister is not API and has no supported equivalent: the public
+        // LaunchServices surface can register a bundle
+        // (LSRegisterURL) but has never been able to remove one. It has lived
+        // at this path since 10.5, and a failure here costs a stale database
+        // entry rather than anything the user can see immediately, so it is
+        // best-effort by design.
+        private static readonly string LsRegister =
+            "/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+            + "LaunchServices.framework/Support/lsregister";
+
+        internal static void Unregister(string bundlePath)
+        {
+            if (!OperatingSystem.IsMacOS()) return;
+            if (!File.Exists(LsRegister)) return;
+
+            try { Run(LsRegister, "-u", bundlePath); } catch { }
+        }
+
+        // Excluded from coverage: deletes a real directory tree.
+        [ExcludeFromCodeCoverage]
         private static void DeleteDirectory(string path)
         {
             if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
@@ -260,9 +375,13 @@ namespace ClaudeBuddy
 
         // ---- process helpers (local, same reasoning as the manager's) --------
 
+        // Excluded from coverage: starts a subprocess.
+        [ExcludeFromCodeCoverage]
         private static bool Run(string executable, params string[] arguments) =>
             RunCapture(executable, arguments) is not null;
 
+        // Excluded from coverage: starts a subprocess and reads its output.
+        [ExcludeFromCodeCoverage]
         private static string? RunCapture(string executable, params string[] arguments)
         {
             try
@@ -305,6 +424,13 @@ namespace ClaudeBuddy
     // [[NSWorkspace sharedWorkspace] setIcon:forFile:options:] — the supported
     // way to set a custom Finder icon, and the only part of this that touches
     // the bundle at all.
+    // Excluded from coverage, as a class: every member is either a DllImport of
+    // objc_msgSend or the one method that calls them. Set() allocates an NSImage
+    // from a path and asks NSWorkspace's sharedWorkspace to
+    // setIcon:forFile:options: — there is no NSWorkspace under a headless runner,
+    // and on Windows the whole class is unreachable behind Set()'s own IsMacOS
+    // guard, which is the one line of it a test can observe.
+    [ExcludeFromCodeCoverage]
     internal static class MacOSCustomIcon
     {
         private const string Objc = "/usr/lib/libobjc.A.dylib";

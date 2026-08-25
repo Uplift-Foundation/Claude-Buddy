@@ -2,14 +2,15 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="ClaudeBuddy.ChatPanel"
         x:CompileBindings="False"
-        Width="340" SizeToContent="Height"
-        MinHeight="140" MaxHeight="520"
+        Width="340" Height="420"
+        MinWidth="280" MaxWidth="640"
+        MinHeight="200" MaxHeight="720"
         WindowDecorations="None"
         TransparencyLevelHint="Transparent"
         Background="Transparent"
         Topmost="True"
         ShowInTaskbar="False"
-        CanResize="False"
+        CanResize="True"
         ShowActivated="True"
         RequestedThemeVariant="Dark"
         WindowStartupLocation="Manual">
@@ -22,16 +23,26 @@
 
          RequestedThemeVariant is pinned because the macOS theme is per-variant:
          left to the OS appearance it would hand a light TextBox to a dark card.
-         Root is anchored top-left and given an explicit width for the same
-         reason OrbWindow.axaml pins its own: on Windows a top-level window can't
-         go below SM_CXMINTRACK, so the window's size is never a layout input.
+
+         The window is user-resizable (CanResize, explicit Width/Height rather
+         than SizeToContent) and Root stretches to fill it, unlike OrbWindow's
+         pinned width — once a person drags an edge, that size is theirs to
+         keep, and new turns scroll inside it rather than growing the window
+         out from under their hands. Kept per agent and across runs: the
+         Width/Height here are only the size a panel opens at the first time
+         an agent is clicked, after which ApplySavedSize replaces them with
+         whatever that agent's panel was last dragged to. WindowDecorations
+         is still None, so there is no OS-drawn resize border to grab; the
+         eight transparent strips after Root exist purely to give
+         BeginResizeDrag somewhere to grab.
 
          Colours are lifted from OrbFlyout.axaml so the two read as one app. -->
-    <Border x:Name="Root" Width="340"
-            HorizontalAlignment="Left" VerticalAlignment="Top"
+    <Grid>
+    <Border x:Name="Root"
+            HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
             CornerRadius="12" Padding="10"
             Background="#E0202024" BorderBrush="#80FFFFFF" BorderThickness="1.5">
-        <Grid RowDefinitions="Auto,*,Auto,Auto" RowSpacing="6">
+        <Grid RowDefinitions="Auto,*,Auto,Auto,Auto" RowSpacing="6">
 
             <!-- A contact card: portrait, then who and where stacked beside
                  it, then the actions. The name and the place used to be one
@@ -83,6 +94,26 @@
                                        FontSize="9.5"
                                        Foreground="#CCFFFFFF"/>
                         </Border>
+                        <!-- A conversation the gateway's heartbeat wakes on a
+                             timer. Its own chip beside the kind rather than a
+                             word inside it, because it answers a different
+                             question — the kind says who can read this, and this
+                             says what keeps making it happen. See
+                             OpenClawHeartbeat.
+
+                             It beats here as well as on the orb, on the same
+                             curve, because the panel is where you end up when
+                             the orb's badge made you curious. -->
+                        <Border x:Name="HeartChip"
+                                IsVisible="False"
+                                CornerRadius="4" Padding="4,1"
+                                VerticalAlignment="Center"
+                                Background="#26FFFFFF">
+                            <TextBlock x:Name="HeartChipText"
+                                       FontSize="9.5"
+                                       Foreground="#FFFF8797"
+                                       Text="&#x2665;  heartbeat"/>
+                        </Border>
                         <TextBlock x:Name="SubtitleText"
                                    FontSize="11"
                                    VerticalAlignment="Center"
@@ -113,7 +144,7 @@
                  also what keeps the focus story a single point rather than a
                  scatter. -->
             <ScrollViewer x:Name="Scroll" Grid.Row="1"
-                          MaxHeight="340" Focusable="False"
+                          Focusable="False"
                           HorizontalScrollBarVisibility="Disabled"
                           VerticalScrollBarVisibility="Auto">
                 <ItemsControl x:Name="Turns" Focusable="False">
@@ -275,33 +306,145 @@
                 </StackPanel>
             </Border>
 
-            <Grid Grid.Row="3" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="5">
-                <!-- AcceptsReturn so the TextBox owns newline insertion, caret
-                     placement and undo; Enter-to-send is intercepted on the
-                     tunnel route instead. Grows to about three lines, then
-                     scrolls inside itself. -->
-                <TextBox x:Name="Input" Grid.Column="0"
-                         AcceptsReturn="True" TextWrapping="Wrap"
-                         MaxHeight="66" MinHeight="26" FontSize="11.5"
-                         Watermark="Message…"
-                         Background="#33FFFFFF" Foreground="#EEFFFFFF"
-                         CaretBrush="#EEFFFFFF"
-                         BorderBrush="#40FFFFFF" BorderThickness="1"
-                         CornerRadius="6" Padding="6,3"/>
-                <Grid x:Name="MicButton" Grid.Column="1" Width="24" Height="24"
-                      IsVisible="False" Cursor="Hand">
-                    <Ellipse x:Name="MicFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
-                    <TextBlock Text="&#127908;" FontSize="11"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                               IsHitTestVisible="False"/>
+            <!-- Slash-command suggestions, shown while the input's first word
+                 is still being typed and starts with "/". Lives in the layout
+                 rather than a floating Popup: Reposition() already flips the
+                 window above or below the orb to stay on screen, so this
+                 borrows machinery that is already there rather than teaching a
+                 second control the same trick. -->
+            <Border x:Name="SlashBox" Grid.Row="3" IsVisible="False"
+                    CornerRadius="8" Padding="4"
+                    Background="#26FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1">
+                <ScrollViewer MaxHeight="150" Focusable="False"
+                              VerticalScrollBarVisibility="Auto">
+                    <ItemsControl x:Name="SlashList" Focusable="False">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{Binding RowFill}"
+                                        CornerRadius="5" Padding="7,4" Cursor="Hand"
+                                        PointerPressed="SlashSuggestion_PointerPressed">
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <TextBlock Text="{Binding Name}" FontSize="11"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="#F2FFFFFF"/>
+                                        <TextBlock Text="{Binding Description}" FontSize="10"
+                                                   Foreground="#99FFFFFF"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+
+            <StackPanel Grid.Row="4" Spacing="6">
+                <!-- Pictures pasted since the last send, waiting to go out
+                     with whatever gets typed next. Hidden rather than
+                     collapsed-to-nothing by an empty items source, so
+                     showing it is one flag rather than a size recompute on
+                     every paste. -->
+                <ItemsControl x:Name="Attachments" IsVisible="False">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="6"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <!-- The remove button sits over the corner of the
+                                 thumbnail rather than beside it: a row of
+                                 several pastes is already tight at 40pt each,
+                                 and a full second control per thumbnail would
+                                 double the row's width for no picture worth
+                                 more of it. -->
+                            <Grid Width="40" Height="40">
+                                <Border CornerRadius="6" ClipToBounds="True">
+                                    <Image Source="{Binding Thumbnail}"
+                                           Width="40" Height="40"
+                                           Stretch="UniformToFill"/>
+                                </Border>
+                                <Grid Width="16" Height="16"
+                                      HorizontalAlignment="Right" VerticalAlignment="Top"
+                                      Margin="0,-4,-4,0" Cursor="Hand"
+                                      PointerPressed="Attachment_Remove_PointerPressed">
+                                    <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1"/>
+                                    <TextBlock Text="&#10005;" FontSize="8" Foreground="#DDFFFFFF"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               IsHitTestVisible="False"/>
+                                </Grid>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="5">
+                    <!-- AcceptsReturn so the TextBox owns newline insertion,
+                         caret placement and undo; Enter-to-send is
+                         intercepted on the tunnel route instead, and so is a
+                         paste that turns out to be a picture — see
+                         OnInputKeyDown. Grows to about three lines, then
+                         scrolls inside itself. -->
+                    <TextBox x:Name="Input" Grid.Column="0"
+                             AcceptsReturn="True" TextWrapping="Wrap"
+                             MaxHeight="66" MinHeight="26" FontSize="11.5"
+                             Watermark="Message…"
+                             Background="#33FFFFFF" Foreground="#EEFFFFFF"
+                             CaretBrush="#EEFFFFFF"
+                             BorderBrush="#40FFFFFF" BorderThickness="1"
+                             CornerRadius="6" Padding="6,3"/>
+                    <Grid x:Name="MicButton" Grid.Column="1" Width="24" Height="24"
+                          IsVisible="False" Cursor="Hand">
+                        <Ellipse x:Name="MicFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+                        <TextBlock Text="&#127908;" FontSize="11"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   IsHitTestVisible="False"/>
+                    </Grid>
+                    <Grid x:Name="SendButton" Grid.Column="2" Width="24" Height="24" Cursor="Hand">
+                        <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+                        <TextBlock Text="&#10148;" FontSize="11" Foreground="#DDFFFFFF"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   IsHitTestVisible="False"/>
+                    </Grid>
                 </Grid>
-                <Grid x:Name="SendButton" Grid.Column="2" Width="24" Height="24" Cursor="Hand">
-                    <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
-                    <TextBlock Text="&#10148;" FontSize="11" Foreground="#DDFFFFFF"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                               IsHitTestVisible="False"/>
-                </Grid>
-            </Grid>
+            </StackPanel>
         </Grid>
     </Border>
+
+        <!-- Edges first, corners last, so the corners win the few pixels of
+             overlap at each end of an edge strip — a diagonal drag should never
+             be swallowed by the straight edge next to it. Margins on the edge
+             strips leave that corner territory to the corner strips rather than
+             fighting them for it. -->
+        <Rectangle x:Name="ResizeN" Height="6" Margin="10,0"
+                   HorizontalAlignment="Stretch" VerticalAlignment="Top"
+                   Fill="Transparent" Cursor="SizeNorthSouth"/>
+        <Rectangle x:Name="ResizeS" Height="6" Margin="10,0"
+                   HorizontalAlignment="Stretch" VerticalAlignment="Bottom"
+                   Fill="Transparent" Cursor="SizeNorthSouth"/>
+        <Rectangle x:Name="ResizeW" Width="6" Margin="0,10"
+                   HorizontalAlignment="Left" VerticalAlignment="Stretch"
+                   Fill="Transparent" Cursor="SizeWestEast"/>
+        <Rectangle x:Name="ResizeE" Width="6" Margin="0,10"
+                   HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                   Fill="Transparent" Cursor="SizeWestEast"/>
+        <!-- No Cursor set here: StandardCursorType has no diagonal resize
+             member that Avalonia.Native's macOS backend actually draws (see
+             the long comment beside NwSeCursor in the code-behind).
+             TopLeftCorner fell through to a plain crosshair there, and Hand
+             didn't read as "resize" either, so these four get a hand-drawn
+             cursor bitmap assigned in the constructor instead. -->
+        <Rectangle x:Name="ResizeNW" Width="10" Height="10"
+                   HorizontalAlignment="Left" VerticalAlignment="Top"
+                   Fill="Transparent"/>
+        <Rectangle x:Name="ResizeNE" Width="10" Height="10"
+                   HorizontalAlignment="Right" VerticalAlignment="Top"
+                   Fill="Transparent"/>
+        <Rectangle x:Name="ResizeSW" Width="10" Height="10"
+                   HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                   Fill="Transparent"/>
+        <Rectangle x:Name="ResizeSE" Width="10" Height="10"
+                   HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                   Fill="Transparent"/>
+    </Grid>
 </Window>

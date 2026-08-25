@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -18,13 +19,38 @@ namespace ClaudeBuddy
             // it's the correct answer there — and restyling AppKit's controls by
             // hand was the alternative, which kept landing close-but-wrong
             // because their metrics and states aren't published anywhere to copy.
-            if (!OperatingSystem.IsMacOS())
-            {
-                Styles.Clear();
-                Styles.Add(new Avalonia.Themes.Fluent.FluentTheme());
-            }
+            if (!OperatingSystem.IsMacOS()) UseFluentTheme();
         }
 
+        // Excluded from coverage: the non-macOS arm of a platform choice, and
+        // coverage is gathered from one platform's run — so on the macOS leg this
+        // cannot execute, and on the Windows leg the macOS arm cannot. Neither is
+        // untested so much as untestable *together*.
+        //
+        // What it does is swap the whole style set for Fluent, which is
+        // Microsoft's own design language and therefore the right answer on
+        // Windows; the alternative was restyling AppKit's controls by hand, which
+        // kept landing close-but-wrong because their metrics and states are not
+        // published anywhere to copy.
+        [ExcludeFromCodeCoverage]
+        private void UseFluentTheme()
+        {
+            Styles.Clear();
+            Styles.Add(new Avalonia.Themes.Fluent.FluentTheme());
+        }
+
+        // Excluded from coverage: every line below the guard is unreachable
+        // under test, and by design rather than by omission. Avalonia's headless
+        // lifetime is not an IClassicDesktopStyleApplicationLifetime — it is
+        // null outright — so the guard never opens, which is precisely what lets
+        // tests/UiTests host the *real* App class instead of a stand-in (see
+        // that suite's TestAppBuilder, whose own comment records the same
+        // finding from a spike). Nothing here could be made to run without
+        // giving the test host a desktop lifetime, and then it would take a
+        // machine-wide single-instance mutex, start a real SessionManager
+        // polling the temp directory, and put a tray icon in the menu bar of the
+        // machine running the suite.
+        [ExcludeFromCodeCoverage]
         public override void OnFrameworkInitializationCompleted()
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -42,6 +68,29 @@ namespace ClaudeBuddy
                 desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
                 new SessionManager().Start();
+
+                // Claude Desktop's URL schemes resolve to a bundle *id*, and
+                // every tinted clone shares Claude Desktop's — so a sign-in
+                // callback cannot say which profile it belongs to and always
+                // lands in Default. Claude Buddy claims the schemes and
+                // forwards each link to the right instance instead; see
+                // ClaudeDesktopUrlRouting. A no-op off macOS, and a no-op with
+                // fewer than two profiles, where there is nothing to route.
+                ClaudeDesktopUrlRouter.Start();
+
+                // The other half of that: the links themselves. Avalonia
+                // surfaces macOS protocol activation here, so no Apple Event
+                // plumbing of our own is needed.
+                if (ApplicationLifetime is IActivatableLifetime activatable)
+                {
+                    activatable.Activated += (_, args) =>
+                    {
+                        if (args is ProtocolActivatedEventArgs protocol)
+                        {
+                            ClaudeDesktopUrlRouter.Handle(protocol.Uri.ToString());
+                        }
+                    };
+                }
 
                 // An upgrade leaves the previous release's speech engine on disk
                 // and this build looking for its own. Speaking still works from

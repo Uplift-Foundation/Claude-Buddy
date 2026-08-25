@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 
 namespace ClaudeBuddy
 {
@@ -29,6 +30,8 @@ namespace ClaudeBuddy
         // shipped broken for Codex: the toggle re-ran Claude Code's installer
         // alone, so Codex kept a hook copy without the flag and without the
         // code the flag turns on.
+        // Excluded from coverage: runs both installer scripts as subprocesses.
+        [ExcludeFromCodeCoverage]
         public static void ReapplyAll()
         {
             ReapplyClaudeCode();
@@ -36,6 +39,9 @@ namespace ClaudeBuddy
         }
 
         // Re-wire every Claude Code account the app knows about.
+        // Excluded from coverage: runs the shipped bash installer, or
+        // WslIntegration's Windows equivalent.
+        [ExcludeFromCodeCoverage]
         public static void ReapplyClaudeCode()
         {
             if (OperatingSystem.IsWindows())
@@ -50,6 +56,9 @@ namespace ClaudeBuddy
         }
 
         // Re-wire every Codex home the app knows about.
+        // Excluded from coverage: runs the shipped Codex installer as a
+        // subprocess.
+        [ExcludeFromCodeCoverage]
         public static void ReapplyCodex()
         {
             if (OperatingSystem.IsWindows())
@@ -61,6 +70,9 @@ namespace ClaudeBuddy
             RunScript("install-codex-hooks.sh", ClaudeBuddySettings.AutoColorSessions);
         }
 
+        // Excluded from coverage: invokes /bin/bash on a real script; which script
+        // it finds is Resolve, which is tested.
+        [ExcludeFromCodeCoverage]
         private static void RunScript(string name, bool autoColor = false)
         {
             var script = Resolve(name);
@@ -74,6 +86,8 @@ namespace ClaudeBuddy
             Run("/bin/bash", autoColor ? new[] { script, "--auto-color" } : new[] { script });
         }
 
+        // Excluded from coverage: invokes Windows PowerShell on a real script.
+        [ExcludeFromCodeCoverage]
         private static void RunPowerShell(string name, bool autoColor = false)
         {
             var script = Resolve(name);
@@ -97,15 +111,24 @@ namespace ClaudeBuddy
         // WslIntegration does for its own script, and the same order: installed
         // wins, because a stale clone next to an installed app should not be
         // what runs.
-        private static string? Resolve(string name)
+        //
+        // baseDirectory is a parameter with the real one as its default, so the
+        // order below can be asserted against a temp directory. The order is the
+        // part worth asserting rather than the file reads: "installed wins" is a
+        // decision, and the failure it prevents — a stale clone next to an
+        // installed app being what actually runs — is silent, because both
+        // scripts exist and both appear to work.
+        internal static string? Resolve(string name, string? baseDirectory = null)
         {
-            var resources = Path.Combine(AppContext.BaseDirectory, "..", "Resources", name);
+            baseDirectory ??= AppContext.BaseDirectory;
+
+            var resources = Path.Combine(baseDirectory, "..", "Resources", name);
             if (File.Exists(resources)) return Path.GetFullPath(resources);
 
-            var alongside = Path.Combine(AppContext.BaseDirectory, "tools", name);
+            var alongside = Path.Combine(baseDirectory, "tools", name);
             if (File.Exists(alongside)) return alongside;
 
-            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            var dir = new DirectoryInfo(baseDirectory);
             for (var i = 0; i < 6 && dir is not null; i++, dir = dir.Parent)
             {
                 var candidate = Path.Combine(dir.FullName, "tools", name);
@@ -121,6 +144,9 @@ namespace ClaudeBuddy
         // matters here is that the wiring happened; if it didn't, the next
         // scan simply produces no orb for that account, which is the same
         // outcome as not having added it.
+        // Excluded from coverage: starts a subprocess, drains its pipes and kills
+        // its tree on timeout.
+        [ExcludeFromCodeCoverage]
         private static void Run(string file, string[] arguments)
         {
             try

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
 namespace ClaudeBuddy
@@ -12,6 +13,12 @@ namespace ClaudeBuddy
     // Frames come back in CoreGraphics global coordinates: points, origin at the
     // top-left of the main display. Avalonia window positions are physical
     // pixels, so callers scale.
+    // Excluded from coverage: CGWindowListCopyWindowInfo. The whole file is a
+    // query against the window server's own list of on-screen windows, which is
+    // exactly what a headless runner does not have — and reading geometry back
+    // out of the window server is the reason it exists (see CLAUDE.md on
+    // checking where an orb actually sat).
+    [ExcludeFromCodeCoverage]
     internal static class MacOSWindowList
     {
         private const string CoreGraphics =

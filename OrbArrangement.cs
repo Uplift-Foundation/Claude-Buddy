@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 
 namespace ClaudeBuddy
@@ -27,11 +28,16 @@ namespace ClaudeBuddy
         internal const double CircleDip = 36;
         internal const double MemberScale = 0.72;
 
+        // Center, when given, is where the shape is drawn instead of the
+        // middle of Work — the saved anchor that keeps a shape from
+        // recentering every time an orb joins or leaves. Work still bounds
+        // where Fit/Slide are allowed to put it.
         internal readonly record struct Layout(
             PixelRect Work,
             double Scale,
             string Shape,
-            double Spacing);
+            double Spacing,
+            PixelPoint? Center = null);
 
         // leadOf[i] is the index of orb i's team lead, or -1 if it leads itself.
         internal static PixelPoint[] Compute(int count, int[] leadOf, Layout layout)
@@ -112,15 +118,46 @@ namespace ClaudeBuddy
             }
 
             // Every orb in a team means no shape at all. One of them leads.
-            if (anchors.Count == 0 && count > 0)
-            {
-                anchors.Add(0);
-                foreach (var team in members.Values) team.Remove(0);
-                members.Remove(0);
-            }
+            //
+            // This has never been observed to run, and reasoning about Resolves
+            // suggests it cannot: an orb is an anchor exactly when Resolves says
+            // no, and Resolves only says yes after hopping to a lead that is out
+            // of range — which makes the orb it landed on an anchor itself. So
+            // any non-empty set has at least one. The 20736-case sweep in
+            // tests/ArrangementTests has never produced anchors.Count == 0 either.
+            //
+            // Left in place rather than deleted: it is three lines of insurance
+            // against a lead table this reasoning does not anticipate, and the
+            // failure it prevents — every orb hidden, nothing drawn at all — is
+            // far worse than three uncovered lines. Named here so the next person
+            // reading a coverage report knows it is deliberate.
+            if (anchors.Count == 0 && count > 0) MakeTheFirstOrbAnAnchor(anchors, members);
         }
 
-        private static bool Resolves(int start, int[] leadOf, int count)
+        // Excluded from coverage: unreachable, for the reason stated above the
+        // call — Resolves always lands on an orb that is its own anchor, so a
+        // non-empty set always has one, and the 20736-case sweep in
+        // tests/ArrangementTests has never produced anchors.Count == 0 either.
+        //
+        // Kept rather than deleted: it is insurance against a lead table that
+        // reasoning does not anticipate, and the failure it prevents — every orb
+        // hidden, nothing drawn at all — is far worse than three lines nothing
+        // executes.
+        [ExcludeFromCodeCoverage]
+        private static void MakeTheFirstOrbAnAnchor(
+            List<int> anchors, Dictionary<int, List<int>> members)
+        {
+            anchors.Add(0);
+            foreach (var team in members.Values) team.Remove(0);
+            members.Remove(0);
+        }
+
+        // internal so the shapes a full sweep never produces can be asked for
+        // directly — see OrbArrangementResolvesTests. A lead chain that runs into
+        // a cycle it is not part of is the case in point: the walk never returns
+        // to where it began and never leaves the range, so only the hop budget
+        // ends it.
+        internal static bool Resolves(int start, int[] leadOf, int count)
         {
             var at = start;
 
@@ -198,19 +235,71 @@ namespace ClaudeBuddy
             if (dist < 1) { dx = 0; dy = -1; dist = 1; }
 
             var baseAngle = Math.Atan2(dy / dist, dx / dist);
+
+            double Offset(int i) => count == 1
+                ? 0
+                : spread * (i - (count - 1) / 2.0) / Math.Max(count - 1, 1);
+
+            PixelPoint At(double from, int i)
+            {
+                var angle = from + Offset(i);
+
+                return new PixelPoint(
+                    (int)Math.Round(lead.X + radius * Math.Cos(angle)),
+                    (int)Math.Round(lead.Y + radius * Math.Sin(angle)));
+            }
+
+            // Which way the fan points, when pointing outward would hang it off
+            // the screen. The radius is not negotiable — it is the distance the
+            // arrow needs and the distance that keeps members off each other —
+            // so direction is the only thing left to choose, and turning the fan
+            // is strictly better than the clamp that used to happen here.
+            //
+            // Clamping each member back inside independently collapses any two
+            // whose positions differed only along the clamped axis onto the same
+            // edge pixel, so a lead against a corner had its whole team drawn as
+            // a single orb. That went unseen because a lead only reaches a
+            // corner once the shape has a saved anchor and the anchor is dragged
+            // there; before that the shape was always centred and no lead ever
+            // got close enough to an edge for the clamp to fire.
+            //
+            // Sixteenths of a turn, tried nearest-first so the fan stays as
+            // close to outward as it can, and the least-bad angle kept if none
+            // is clean — on a screen too small to hold the fan at all there is
+            // no correct answer, only a least wrong one.
+            var best = baseAngle;
+            var fewestOutside = int.MaxValue;
+
+            for (var step = 0; step < 16 && fewestOutside > 0; step++)
+            {
+                // 0, +1, -1, +2, -2 … so a small turn always beats a large one.
+                var turn = (step + 1) / 2 * (step % 2 == 0 ? 1 : -1) * (Math.PI * 2 / 16);
+                var candidate = baseAngle + turn;
+                var outside = 0;
+
+                for (var i = 0; i < count; i++)
+                {
+                    var p = At(candidate, i);
+
+                    if (p.X < work.X || p.Y < work.Y
+                        || p.X > work.Right - window || p.Y > work.Bottom - window)
+                    {
+                        outside++;
+                    }
+                }
+
+                if (outside < fewestOutside) { fewestOutside = outside; best = candidate; }
+            }
+
             var placed = new PixelPoint[count];
 
             for (var i = 0; i < count; i++)
             {
-                var offset = count == 1
-                    ? 0
-                    : spread * (i - (count - 1) / 2.0) / Math.Max(count - 1, 1);
-
-                var angle = baseAngle + offset;
+                var p = At(best, i);
 
                 placed[i] = new PixelPoint(
-                    Clamp((int)Math.Round(lead.X + radius * Math.Cos(angle)), work.X, work.Right - window),
-                    Clamp((int)Math.Round(lead.Y + radius * Math.Sin(angle)), work.Y, work.Bottom - window));
+                    Clamp(p.X, work.X, work.Right - window),
+                    Clamp(p.Y, work.Y, work.Bottom - window));
             }
 
             return placed;
@@ -361,8 +450,11 @@ namespace ClaudeBuddy
             // arithmetic away from both extremes.
             var s = layout.Work.Height / 40.0;
 
-            var cx = layout.Work.X + layout.Work.Width / 2.0 - window / 2.0;
-            var cy = layout.Work.Y + layout.Work.Height / 2.0 - window / 2.0;
+            var centerX = layout.Center is { } c1 ? c1.X : layout.Work.X + layout.Work.Width / 2.0;
+            var centerY = layout.Center is { } c2 ? c2.Y : layout.Work.Y + layout.Work.Height / 2.0;
+
+            var cx = centerX - window / 2.0;
+            var cy = centerY - window / 2.0;
 
             return unit.Select(p => new PixelPoint(
                 (int)Math.Round(cx + p.X * s),
@@ -486,7 +578,17 @@ namespace ClaudeBuddy
             // Fixed iterations, no randomness: the same input has to produce the
             // same arrangement every time or the orbs would wander between one
             // press of the button and the next.
-            for (var pass = 0; pass < 60; pass++)
+            //
+            // Was sixty, which was enough for as long as the shape was always
+            // drawn in the middle of the screen. A shape with a saved anchor can
+            // be dragged into a corner, and thirty orbs in one team pressed into
+            // a corner are the slowest thing this loop has to untangle — every
+            // pass has the pull toward the lead working against the push apart,
+            // and from a standing pile it took just under a hundred. It costs
+            // nothing in the ordinary case: the loop leaves the moment a pass
+            // changes nothing, which is within a handful of passes for a shape
+            // that was never crowded.
+            for (var pass = 0; pass < 150; pass++)
             {
                 var moved = false;
 
@@ -546,17 +648,42 @@ namespace ClaudeBuddy
                     moved = true;
                 }
 
-                for (var i = 0; i < pts.Length; i++)
-                {
-                    x[i] = Math.Clamp(x[i], work.X, Math.Max(work.X, work.Right - window));
-                    y[i] = Math.Clamp(y[i], work.Y, Math.Max(work.Y, work.Bottom - window));
-                }
-
                 if (!moved) break;
             }
 
+            // Back onto the screen once, as one piece — not every orb on every
+            // pass, which is what this used to do and is why overlaps against
+            // an edge were never resolved. Clamping inside the loop made the
+            // clamp the strongest of the three forces in it: a member pushed
+            // off the edge to clear its neighbour was put straight back on top
+            // of it, the next pass pushed it off again, and sixty passes later
+            // the pair was still overlapping with nothing left to try.
+            //
+            // Invisible until the shape got a saved anchor. Centred, the shape
+            // never came near an edge and the clamp never fired; anchored into
+            // a corner, a lead sits in the corner and its whole team is pressed
+            // into it.
+            //
+            // Sliding the cluster keeps every gap the passes just opened, and
+            // does it for the same reason Slide exists for the shape itself.
+            // The per-orb clamp still follows as a last resort, for a cluster
+            // genuinely wider than the screen — there the honest answer is that
+            // there is no arrangement, only the least bad one.
+            var lowX = x.Min();
+            var lowY = y.Min();
+            var shiftX = 0.0;
+            var shiftY = 0.0;
+
+            if (lowX < work.X) shiftX = work.X - lowX;
+            else if (x.Max() + window > work.Right) shiftX = work.Right - (x.Max() + window);
+
+            if (lowY < work.Y) shiftY = work.Y - lowY;
+            else if (y.Max() + window > work.Bottom) shiftY = work.Bottom - (y.Max() + window);
+
             return Enumerable.Range(0, pts.Length)
-                .Select(i => new PixelPoint((int)Math.Round(x[i]), (int)Math.Round(y[i])))
+                .Select(i => new PixelPoint(
+                    (int)Math.Round(Math.Clamp(x[i] + shiftX, work.X, Math.Max(work.X, work.Right - window))),
+                    (int)Math.Round(Math.Clamp(y[i] + shiftY, work.Y, Math.Max(work.Y, work.Bottom - window)))))
                 .ToArray();
         }
 
