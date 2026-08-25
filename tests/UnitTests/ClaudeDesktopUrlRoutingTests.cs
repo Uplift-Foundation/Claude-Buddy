@@ -287,6 +287,23 @@ public class ClaudeDesktopUrlRoutingTests
     }
 
     [Fact]
+    public void LaunchArguments_OmitBothSelectorsRatherThanEmitAnEmptyOne()
+    {
+        // A bare `--user-data-dir=` is not the same as no switch: Chromium reads
+        // the empty value and falls back to the default directory, which is the
+        // silent wrong-profile launch the switch was added to prevent. The
+        // router's Arguments has guarded this since it was written; the launcher
+        // did not, and an asymmetry between two functions that build the same
+        // command line is the kind of thing that becomes a bug later.
+        var arguments = ClaudeDesktopManager.LaunchArguments(
+            BoardBundle, InstalledBundle, isDefault: false, directory: "");
+
+        Assert.Equal(new[] { "-n", "-a", BoardBundle }, arguments);
+        Assert.DoesNotContain("--args", arguments);
+        Assert.DoesNotContain("--env", arguments);
+    }
+
+    [Fact]
     public void LaunchArguments_UseTheInstalledBundleByPathRatherThanAnAmbiguousBundleId()
     {
         // The bug this replaces: Default with no clone was launched with
