@@ -139,6 +139,93 @@ public class BundleCacheLayoutTests : IDisposable
         Assert.False(ClaudeDesktopBundles.IsStaleFor("never-cloned", "/Applications/Claude.app"));
     }
 
+    // ---- IsStaleVersion --------------------------------------------------
+
+    // The rule IsStale applies once plutil has read both Info.plists. Pure, so
+    // it is testable without a bundle on disk — which is the whole reason it was
+    // pulled out of IsStale rather than left inside the excluded half.
+
+    [Fact]
+    public void SameVersionIsNotStale()
+    {
+        Assert.False(ClaudeDesktopBundles.IsStaleVersion("1.34493.1", "1.34493.1"));
+    }
+
+    [Fact]
+    public void AnInstalledBundleThatHasMovedAheadMakesTheCloneStale()
+    {
+        Assert.True(ClaudeDesktopBundles.IsStaleVersion("1.34493.1", "1.37937.0"));
+    }
+
+    // The case that made this a comparison rather than an inequality. Claude
+    // Desktop's Squirrel updater updates whichever bundle is running, and the
+    // one that is running is usually a clone — measured on a real machine with
+    // /Applications at 1.34493.1 and the Claude-Board clone already at
+    // 1.37937.0. Answering "stale" there rebuilds the clone from the older
+    // installed bundle and downgrades that profile, then opens userData written
+    // by a newer Chromium with an older one.
+    [Fact]
+    public void ACloneAheadOfTheInstalledBundleIsLeftAlone()
+    {
+        Assert.False(ClaudeDesktopBundles.IsStaleVersion("1.37937.0", "1.34493.1"));
+    }
+
+    // Ordering is numeric, not lexical. Every one of these reverses under a
+    // string comparison, which is why the old rule could not simply have had a
+    // `<` put in front of it.
+    [Theory]
+    [InlineData("1.9.0", "1.10.0")]
+    [InlineData("1.34493.1", "1.134493.0")]
+    [InlineData("2.0.0", "10.0.0")]
+    public void AHigherComponentBeatsALongerString(string clone, string source)
+    {
+        Assert.True(ClaudeDesktopBundles.IsStaleVersion(clone, source));
+        Assert.False(ClaudeDesktopBundles.IsStaleVersion(source, clone));
+    }
+
+    // A missing trailing component is zero, not a difference — so a dropped
+    // ".0" does not cost a 753MB re-clone, in either direction.
+    [Fact]
+    public void MissingTrailingComponentsCountAsZero()
+    {
+        Assert.False(ClaudeDesktopBundles.IsStaleVersion("1.2", "1.2.0"));
+        Assert.False(ClaudeDesktopBundles.IsStaleVersion("1.2.0", "1.2"));
+        Assert.True(ClaudeDesktopBundles.IsStaleVersion("1.2", "1.2.1"));
+        Assert.False(ClaudeDesktopBundles.IsStaleVersion("1.2.1", "1.2"));
+    }
+
+    // A clone whose Info.plist could not be read is not one worth keeping, and
+    // neither is a clone whose source could not be read — that is a source path
+    // the caller is wrong about, and rebuilding is the recoverable answer.
+    [Theory]
+    [InlineData(null, "1.34493.1")]
+    [InlineData("1.34493.1", null)]
+    [InlineData(null, null)]
+    public void AVersionThatCouldNotBeReadIsStale(string? clone, string? source)
+    {
+        Assert.True(ClaudeDesktopBundles.IsStaleVersion(clone, source));
+    }
+
+    // With no ordering to appeal to, the old inequality rule is the honest
+    // answer: different means stale, identical does not. It errs towards
+    // rebuilding, which is the direction that undoes.
+    [Theory]
+    [InlineData("1.0.0-beta", "1.0.0")]
+    [InlineData("1.0.0", "1.0.0-beta")]
+    [InlineData("", "1.0.0")]
+    [InlineData("1.-2.0", "1.2.0")]
+    [InlineData("1. 2.0", "1.2.0")]
+    public void AnUnparseableVersionFallsBackToPlainInequality(string clone, string source)
+    {
+        Assert.True(ClaudeDesktopBundles.IsStaleVersion(clone, source));
+    }
+
+    [Fact]
+    public void TwoIdenticalUnparseableVersionsAreNotStale()
+    {
+        Assert.False(ClaudeDesktopBundles.IsStaleVersion("1.0.0-beta", "1.0.0-beta"));
+    }
+
     // ---- ColourMatches ---------------------------------------------------
 
     [Fact]

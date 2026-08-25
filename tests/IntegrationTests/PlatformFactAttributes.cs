@@ -103,3 +103,22 @@ public sealed class LiveBridgeFactAttribute : FactAttribute
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_RC_BRIDGE_TAG", "test");
     }
 }
+
+// open(1) is macOS's, and so is every claim made about it. UnixFact would let
+// this run on Linux, where /usr/bin/open is either absent or a completely
+// different program — a green run there would mean nothing, and a red one would
+// be reporting on the wrong binary.
+public sealed class MacOpenFactAttribute : FactAttribute
+{
+    public MacOpenFactAttribute()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            Skip = "drives /usr/bin/open, which is macOS's";
+            return;
+        }
+
+        if (!File.Exists("/usr/bin/open"))
+            Skip = "no /usr/bin/open on this machine";
+    }
+}

@@ -243,20 +243,27 @@ Details worth knowing:
   Items it gets the bare system `PATH`, with no Homebrew in it — so the hook
   records the tmux binary's location, with the usual install paths as
   fallbacks.
-- **The Claude Desktop profile switcher is macOS-only today — but not, as this
-  file previously claimed, impossible on Windows.** There, Claude Desktop installs
-  as an **MSIX package** (`C:\Program Files\WindowsApps\Claude_...`, ACL'd so the
-  payload is readable but not executable). All of the following was measured on a
-  real Windows 11 box:
-  - **The app itself supports profiles.** The Windows build honors
-    `CLAUDE_USER_DATA_DIR` exactly as macOS does — it's the same branch in the
-    same bundle, with no platform guard:
+- **The Claude Desktop profile switcher ships on Windows too.** It was macOS-only
+  when this file first described it, and two revisions of this bullet have since
+  been overtaken — first by the Windows port landing, then by the mechanism
+  changing underneath both platforms. What follows is what is true now; the
+  measurements below were taken on a real Windows 11 box and still stand. There,
+  Claude Desktop installs as an **MSIX package** (`C:\Program
+  Files\WindowsApps\Claude_...`, ACL'd so the payload is readable but not
+  executable).
+  - **The app itself supports profiles**, and the same startup branch is present
+    in the Windows bundle with no platform guard:
     ```js
     if (process.env.CLAUDE_USER_DATA_DIR) {
       const A = process.env.CLAUDE_USER_DATA_DIR;
       app.setPath("userData", A); app.setPath("logs", resolve(A, "Logs"));
     }
     ```
+    Present is not the same as reached: on the builds measured for the section
+    above, setting the variable no longer changes where macOS writes, and this
+    app stopped depending on it on either platform. Note what that branch does
+    with `logs` — moving them was the *variable's* doing, which is why they stay
+    put now.
   - **The environment variable is the wrong lever on Windows.** Package
     activation doesn't inherit the launching process's environment (probe
     directory created, stayed empty), and setting it as a *user* environment
@@ -293,13 +300,14 @@ Details worth knowing:
   - **Icons can't be tinted.** No Dock, and the taskbar icon comes from the signed
     package, so the APFS-clone trick has no analogue.
 
-  What does port cleanly, and what Windows gets today: session orbs, the tray icon
-  and menu, click-to-focus, chat names and colours, the settings window, and
-  persisted settings under `%APPDATA%\ClaudeBuddy`. The profile section simply
-  doesn't appear. One thing that *would* work if the mechanism were ever
-  reachable: profile detection, since Electron's `crashpad-handler` child carries
-  `--user-data-dir=` in its command line and `Win32_Process` exposes `CommandLine`
-  — the equivalent of `KERN_PROCARGS2` on macOS, with no memory reading needed.
+  What Windows gets today: session orbs, the tray icon and menu, click-to-focus,
+  chat names and colours, the settings window, persisted settings under
+  `%APPDATA%\ClaudeBuddy`, **and the profile section** — `LaunchWindows` passes
+  `--user-data-dir` through `ActivateApplication`, and `WindowsProcessScan` reads
+  it back off `Win32_Process.CommandLine`, the equivalent of `KERN_PROCARGS2` on
+  macOS with no memory reading needed. What does *not* port is the tinted Dock
+  icon, for the reason above, and the LaunchServices URL routing, which has no
+  Windows analogue to work around.
 - **WSL + tmux is not covered.** The Windows hook is PowerShell running
   outside the Linux environment, so it never sees `$TMUX`; clicks on those
   orbs behave as they always have (activate the terminal window).
@@ -557,8 +565,10 @@ by side, each signed into a different Anthropic account. Claude Desktop signs
 into one account at a time and keeps that login in its user-data directory
 (`Cookies` → `sessionKey`, `config.json` → `oauth:tokenCache`) rather than the
 Keychain, so a second account is a second directory — selected with
-`CLAUDE_USER_DATA_DIR`, which the app honors, and it takes no single-instance
-lock, so the instances genuinely coexist.
+Chromium's `--user-data-dir` switch, and it takes no single-instance lock, so
+the instances genuinely coexist. (`CLAUDE_USER_DATA_DIR` is passed alongside it
+and used to be the whole mechanism; Claude Desktop 1.34493.1 ignores it, which
+is why the switch is now what actually decides. See the notes below.)
 
 Profiles are **discovered from disk**, not configured: any directory in
 `~/Library/Application Support` named `Claude` or `Claude-<something>` that
@@ -626,17 +636,48 @@ Details worth knowing:
   launched instance reads and writes — offering it as a profile would point a
   second Chromium at a directory the running app is already using, and
   concurrent access to one user-data directory corrupts leveldb and SQLite.
-- **Default is launched differently, on purpose** — plain `open -n -b`, with no
-  `CLAUDE_USER_DATA_DIR`. Setting the variable suppresses the app's own
+- **A profile is selected by two things, and only one of them still works.**
+  Every created profile is launched with both `--env
+  CLAUDE_USER_DATA_DIR=<dir>` and `--args --user-data-dir=<dir>`. The variable
+  is what Claude Desktop's own JavaScript reads, and **1.34493.1 ignores it**:
+  an instance launched with it pointed at an empty scratch directory left that
+  directory empty and opened 45 files under `~/Library/Application
+  Support/Claude` instead. Measured with `lsof`, against the installed bundle
+  rather than a tinted clone. That is what "it opens the same profile twice"
+  was — every row launched a second Chromium onto Default, which is also the
+  concurrent-leveldb hazard this feature exists to prevent.
+  `--user-data-dir` is Chromium's own switch, handled inside the Electron
+  framework rather than in Claude Desktop's JavaScript, so it still works;
+  Windows has passed it since the port. Both are sent, so a build honouring
+  either lands in the right place, and `--args` goes last because `open(1)`
+  hands everything after it to the application untouched.
+- **Default is launched differently, on purpose** — plain `open -n -a <path>`,
+  with neither selector. Pointing either at the app's own default directory is
+  not the same thing to it as omitting them: it suppresses the app's own
   resolution of that sidecar directory, so a tray launch could re-trigger the
-  enterprise deployment-mode chooser on an already-configured profile, and it
-  would start a second log history under `Claude/Logs/`. One consequence:
-  Default's logs are at `~/Library/Logs/Claude`, everyone else's are at
-  `<profile>/Logs`, and Reveal logs knows the difference.
+  enterprise deployment-mode chooser on an already-configured profile. (This
+  used to add "and it would start a second log history under `Claude/Logs/`",
+  which was true while the variable was the mechanism and is not true now —
+  see the next bullet.)
+- **Reveal logs picks by recency, because no fixed answer is right.** Logs used
+  to follow the profile — but only because `CLAUDE_USER_DATA_DIR` moved them by
+  hand, in Claude Desktop's own JavaScript. `--user-data-dir` is Chromium's
+  switch and sets userData only, so on a current build every profile's logs stay
+  at `~/Library/Logs/Claude` while the `<profile>/Logs` directory left over from
+  when the variable worked sits there looking correct and weeks stale. Reveal
+  logs therefore opens whichever of the two was *written to* most recently,
+  which needs no opinion about which Desktop build is installed and is the
+  question you were asking anyway.
 - **Running instances are detected by scanning processes, not by tracking the
   ones we launched** — `proc_listallpids` + `proc_pidpath` to find Claude
   Desktop main processes, then `sysctl KERN_PROCARGS2` to read
-  `CLAUDE_USER_DATA_DIR` out of each one's environment. So an instance you
+  `--user-data-dir` off each one's command line, falling back to
+  `CLAUDE_USER_DATA_DIR` in its environment — which is right on a Claude Desktop
+  build that still honours the variable, and a misreport on one that doesn't:
+  there, an instance carrying only the variable is really on Default, and
+  reading it as the profile's hides a second Chromium on Default rather than
+  counting it. Nothing in argv distinguishes the two cases, so this is a known
+  cost of keeping the fallback, not an oversight. So an instance you
   started from the Dock shows up too, and the state survives restarting Claude
   Buddy. (Not `ps eww`: it prints the environment space-separated, and every
   profile path contains a space — `Application Support` — so its output can't
