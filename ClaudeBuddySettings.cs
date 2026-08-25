@@ -169,6 +169,18 @@ namespace ClaudeBuddy
         {
             public bool ShowOrbs { get; set; } = true;
             public bool TintActiveWindow { get; set; } = true;
+
+            // On by default, because with more than one profile the alternative
+            // is a sign-in that silently lands in the wrong account — see
+            // ClaudeDesktopUrlRouting. Nothing is claimed until there actually
+            // is more than one profile, so a single-profile install is
+            // untouched whatever this says.
+            public bool RouteClaudeUrls { get; set; } = true;
+
+            // The bundle id that owned `claude:` before we claimed it, so
+            // turning routing off can put it back rather than leaving the user
+            // with a scheme pointing at whatever we happened to set.
+            public string PreviousClaudeUrlHandler { get; set; } = "";
             public int OrbLifetimeMinutes { get; set; } = DefaultOrbLifetimeMinutes;
 
             // Off by default: one letter is what every existing orb already
@@ -478,6 +490,18 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.TintActiveWindow; }
             set { Load(); lock (Gate) _model.TintActiveWindow = value; Save(); }
+        }
+
+        public static bool RouteClaudeUrls
+        {
+            get { Load(); lock (Gate) return _model.RouteClaudeUrls; }
+            set { Load(); lock (Gate) _model.RouteClaudeUrls = value; Save(); }
+        }
+
+        public static string PreviousClaudeUrlHandler
+        {
+            get { Load(); lock (Gate) return _model.PreviousClaudeUrlHandler; }
+            set { Load(); lock (Gate) _model.PreviousClaudeUrlHandler = value ?? ""; Save(); }
         }
 
         // Minutes an orb sticks around after its session stops reporting;
@@ -1031,6 +1055,8 @@ namespace ClaudeBuddy
                     {
                         ShowOrbs = root["showOrbs"]?.GetValue<bool>() ?? true,
                         TintActiveWindow = root["tintActiveWindow"]?.GetValue<bool>() ?? true,
+                        RouteClaudeUrls = root["routeClaudeUrls"]?.GetValue<bool>() ?? true,
+                        PreviousClaudeUrlHandler = Text(root["previousClaudeUrlHandler"]) ?? "",
                         OrbLifetimeMinutes =
                             root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes,
                         VoiceInputEnabled = root["voiceInputEnabled"]?.GetValue<bool>() ?? false,
@@ -1356,6 +1382,8 @@ namespace ClaudeBuddy
                         ["version"] = CurrentVersion,
                         ["showOrbs"] = _model.ShowOrbs,
                         ["tintActiveWindow"] = _model.TintActiveWindow,
+                        ["routeClaudeUrls"] = _model.RouteClaudeUrls,
+                        ["previousClaudeUrlHandler"] = _model.PreviousClaudeUrlHandler,
                         ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
                         ["voiceInputEnabled"] = _model.VoiceInputEnabled,
                         ["openclawEnabled"] = _model.OpenClawEnabled,

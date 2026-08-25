@@ -102,12 +102,37 @@ namespace ClaudeBuddy
             try
             {
                 var marker = Path.Combine(DirectoryFor(profileFolder), "icon-colour");
-                return File.Exists(marker) && File.ReadAllText(marker).Trim() == tint.ToString();
+                if (!File.Exists(marker)) return false;
+                if (File.ReadAllText(marker).Trim() != tint.ToString()) return false;
+
+                // The marker says which colour was *intended*; the Icon\r file
+                // is whether one actually went on. Checking both is what repairs
+                // a clone left behind by the older ordering bug, which wrote the
+                // marker before calling NSWorkspace setIcon: and so recorded a
+                // refusal as a success. Those clones cannot heal on their own —
+                // the marker matches for ever, so Ensure() never rebuilds and
+                // the tint never retries even once the user grants App
+                // Management.
+                //
+                // Cheap: one File.Exists on a path we already have.
+                return HasCustomIcon(PathFor(profileFolder));
             }
             catch
             {
                 return false;
             }
+        }
+
+        // A custom Finder icon lives in a file named "Icon" followed by a
+        // carriage return at the bundle root — outside Contents/, which is what
+        // keeps the code signature intact. Its absence is the only reliable
+        // evidence that setIcon: did not take: the FinderInfo xattr can be left
+        // set with no icon resource behind it, which is exactly the state a
+        // refused write leaves.
+        internal static bool HasCustomIcon(string bundlePath)
+        {
+            try { return File.Exists(Path.Combine(bundlePath, "Icon\r")); }
+            catch { return false; }
         }
 
         public static bool IsStaleFor(string profileFolder, string sourceApp) =>
@@ -140,15 +165,26 @@ namespace ClaudeBuddy
 
             WriteTinted(flat, tinted, tint);
 
-            // Record what colour this clone was built with. Ensure() treats a
-            // mismatch as stale, which is how a recolour deferred while the
-            // instance was running gets applied at its next launch.
-            try { File.WriteAllText(Path.Combine(work, "icon-colour"), tint.ToString()); } catch { }
-
             // A false here means macOS refused the write — see the note on
             // Retint. Worth knowing about rather than leaving the user with a
             // wrong-coloured Dock tile and no explanation.
             IconApplied = MacOSCustomIcon.Set(tinted, clone);
+
+            // Record what colour this clone was built with — but only if the
+            // icon actually went on. Ensure() treats a *matching* marker as
+            // "nothing to do", so writing it before the call above recorded a
+            // refusal as a success: the clone was then considered correctly
+            // coloured for ever, and the tint was never retried even after the
+            // user granted App Management. That is not hypothetical — it is how
+            // this was found, with a marker dated minutes earlier sitting beside
+            // a bundle that had no Icon\r file and no FinderInfo xattr at all.
+            //
+            // Leaving the marker absent instead costs one clone rebuild on the
+            // next launch, which is an APFS clone: ~0.3s and ~0 disk.
+            if (IconApplied)
+            {
+                try { File.WriteAllText(Path.Combine(work, "icon-colour"), tint.ToString()); } catch { }
+            }
 
             try { File.Delete(flat); } catch { }
         }
@@ -250,7 +286,38 @@ namespace ClaudeBuddy
         public static void Remove(string profileFolder)
         {
             if (!OperatingSystem.IsMacOS()) return;
+
+            // Unregister before deleting, while the path still resolves.
+            //
+            // Deleting the directory does not remove the bundle from the
+            // LaunchServices database, and a clone claims `claude:` and the
+            // MSAL sign-in scheme exactly as the real Claude.app does. A
+            // registration for a bundle that no longer exists therefore stays
+            // in the running for those schemes indefinitely — the machine this
+            // was found on still listed bundles/Claude-Profile-1 months after
+            // the directory went away — which is what made the wrong-profile
+            // behaviour look intermittent rather than deterministic.
+            Unregister(PathFor(profileFolder));
+
             try { DeleteDirectory(DirectoryFor(profileFolder)); } catch { }
+        }
+
+        // lsregister is not API and has no supported equivalent: the public
+        // LaunchServices surface can register a bundle
+        // (LSRegisterURL) but has never been able to remove one. It has lived
+        // at this path since 10.5, and a failure here costs a stale database
+        // entry rather than anything the user can see immediately, so it is
+        // best-effort by design.
+        private static readonly string LsRegister =
+            "/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+            + "LaunchServices.framework/Support/lsregister";
+
+        internal static void Unregister(string bundlePath)
+        {
+            if (!OperatingSystem.IsMacOS()) return;
+            if (!File.Exists(LsRegister)) return;
+
+            try { Run(LsRegister, "-u", bundlePath); } catch { }
         }
 
         private static void DeleteDirectory(string path)

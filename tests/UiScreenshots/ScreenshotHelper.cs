@@ -52,6 +52,24 @@ internal static class ScreenshotHelper
         Dispatcher.UIThread.RunJobs();
     }
 
+    // One control rather than a whole window, for a surface that sits below
+    // the fold of a scrolling page. Capture(window) renders at the window's own
+    // height, so anything scrolled out of view is simply absent from the image
+    // — which is not a useful screenshot of a settings row near the bottom.
+    //
+    // The control must already be arranged: show its window and Flush() first,
+    // or Bounds is empty and this saves a 1x1 pixel.
+    public static void CaptureControl(Control control, string fileName)
+    {
+        var size = new PixelSize(
+            Math.Max(1, (int)Math.Ceiling(control.Bounds.Width)),
+            Math.Max(1, (int)Math.Ceiling(control.Bounds.Height)));
+
+        using var bitmap = new RenderTargetBitmap(size);
+        bitmap.Render(control);
+        bitmap.Save(Path.Combine(OutputDir, fileName));
+    }
+
     public static void Capture(Window window, string fileName)
     {
         window.Show();
