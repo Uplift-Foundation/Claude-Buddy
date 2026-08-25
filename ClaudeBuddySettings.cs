@@ -999,6 +999,21 @@ namespace ClaudeBuddy
             Save();
         }
 
+        // Named setters for the two per-profile fields the settings window writes
+        // from code that cannot itself be run by a test.
+        //
+        // They exist so those callers hold no lambda: a lambda inside a method
+        // carrying [ExcludeFromCodeCoverage] is hoisted to its own method and does
+        // NOT inherit the attribute, so `entry => entry.Color = …` was being
+        // counted while the method around it was not. Written as ordinary setters
+        // rather than as a trick — and they are covered directly, which the
+        // one-line Update calls never were.
+        public static void SetProfileColor(string folder, string? color) =>
+            Update(folder, entry => entry.Color = color);
+
+        public static void SetProfileShowSwatch(string folder, bool show) =>
+            Update(folder, entry => entry.ShowSwatch = show);
+
         public static void Update(string folder, Action<ProfileSettings> change)
         {
             Load();
