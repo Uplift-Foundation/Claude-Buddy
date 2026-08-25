@@ -640,6 +640,76 @@ public class RemoteMirrorChatSessionTests : IDisposable
 
     // --- wiring ----------------------------------------------------------------------
 
+    // --- a live view whose relay has gone -----------------------------------
+
+    // Typing into a live view goes through the mirror client for the account,
+    // and there is a window where the panel is mirroring and the client has been
+    // torn down — an idle shutdown, or the relay being restarted under it. The
+    // message has to come back with something a person can act on rather than
+    // disappearing.
+    [AvaloniaFact]
+    public async Task TypingWithNoClientLeftSaysTheRelayIsNotRunning()
+    {
+        Wire("what is left?", "one thing");
+        var session = await OpenAsync();
+
+        RemoteControlSessions.UseMirrorClientForTests(Account, null);
+
+        await session.SendAsync("still there?");
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Contains(session.History,
+            t => t.Role == ChatRole.System && t.Text.Contains("relay session isn't running"));
+    }
+
+    // And the typed message stays on screen above that note rather than being
+    // discarded, which is the same contract the messaging mode has.
+    [AvaloniaFact]
+    public async Task AMessageThatCouldNotBeTypedIsStillOnScreen()
+    {
+        Wire("what is left?", "one thing");
+        var session = await OpenAsync();
+
+        RemoteControlSessions.UseMirrorClientForTests(Account, null);
+
+        await session.SendAsync("still there?");
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Contains(session.History,
+            t => t.Role == ChatRole.User && t.Text == "still there?");
+    }
+
+    // --- scrolling back over a stretch nobody sees ---------------------------
+
+    // A page that parsed to nothing but moved the offset is not the end of the
+    // conversation. A window can be entirely file-history snapshots — on a real
+    // transcript most of the bytes are — and treating "no turns in this page" as
+    // "no more conversation" would stop the scroll dead in the middle of one.
+    //
+    // Same rule LocalCliChatSession follows for a local session: the answer is
+    // whether there is more to *ask for*, not whether this page had anything in
+    // it.
+    [AvaloniaFact]
+    public async Task APageOfNothingButSnapshotsIsNotTheTopOfTheConversation()
+    {
+        // A real turn at each end and a long stretch of rows no panel shows in
+        // between, sized so a page back lands entirely inside that stretch.
+        var rows = new List<string> { UserRow("u1", "the first thing said") };
+        for (var i = 0; i < 4000; i++)
+            rows.Add("{\"type\":\"file-history-snapshot\",\"uuid\":\"h" + i + "\",\"blob\":\""
+                     + new string('z', 600) + "\"}");
+        rows.Add(AssistantRow("a1", "the last thing said"));
+
+        WireRows(rows);
+        var session = await OpenAsync();
+
+        // The first page back is all snapshots, so it yields no turns — and the
+        // session must still report that there is more behind it.
+        var more = await session.LoadOlderAsync(default);
+
+        Assert.True(more, "a page of snapshots must not read as the top of the conversation");
+    }
+
     private static RemoteControlChatSession NewSession() =>
         new($"rc:{Account}:{Name}", Account, Name);
 
