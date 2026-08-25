@@ -1319,8 +1319,16 @@ namespace ClaudeBuddy
         // Electron's paths do not follow --user-data-dir. macOS is now the same
         // — the switch is the same switch — and the only reason it looked
         // different was the JavaScript that is no longer running.
+        // Held in a field rather than written as a method group at the call
+        // site. A method group there compiles to a lazily-populated delegate
+        // cache — a null check on this line, in code nobody wrote, which no
+        // test can exercise both ways and which would sit in the branch report
+        // for ever needing to be explained. One allocation at type-init costs
+        // nothing and the line then means exactly what it says.
+        private static readonly Func<string, DateTime?> LastWritten = NewestWrite;
+
         internal static IReadOnlyList<string> LogCandidates(string directory) =>
-            LogCandidates(directory, OperatingSystem.IsWindows(), NewestWrite);
+            LogCandidates(directory, OperatingSystem.IsWindows(), LastWritten);
 
         // The platform is an argument rather than a question this asks, so both
         // answers are reachable from either machine. The two are genuinely
@@ -1387,16 +1395,21 @@ namespace ClaudeBuddy
                 seen.Add((candidate, lastWritten(candidate) ?? DateTime.MinValue, order++));
             }
 
-            // ThenBy on the original index rather than relying on the sort being
-            // stable: two directories with no writes at all — the common state
-            // on a machine that has only ever run one profile — must come back
-            // in the order they were written above, since that order is the
-            // tie-break this deliberately still encodes.
-            return seen
-                .OrderByDescending(entry => entry.When)
-                .ThenBy(entry => entry.Order)
-                .Select(entry => entry.Path)
-                .ToList();
+            // Sorted by hand rather than with OrderByDescending().ThenBy(),
+            // and the incoming index is compared explicitly rather than left to
+            // a stable sort: two directories with no writes at all — the common
+            // state on a machine that has only ever run one profile — must come
+            // back in the order they were built above, because that order is
+            // the tie-break this deliberately still encodes. List.Sort is not
+            // stable, so leaning on stability would have been wrong here even
+            // though LINQ's ordering happens to provide it.
+            seen.Sort(static (left, right) => left.When != right.When
+                ? right.When.CompareTo(left.When)
+                : left.Order.CompareTo(right.Order));
+
+            var ordered = new List<string>(seen.Count);
+            foreach (var entry in seen) ordered.Add(entry.Path);
+            return ordered;
         }
 
         // The newest write anywhere in a log directory, or null when it is not
@@ -1421,8 +1434,14 @@ namespace ClaudeBuddy
                 DateTime? newest = null;
                 foreach (var file in Directory.EnumerateFiles(directory))
                 {
+                    // Compared against MinValue rather than as `newest is null
+                    // || written > newest`. That reads better and generates an
+                    // arm nothing can reach: lifting `>` over a nullable adds a
+                    // HasValue test that the short circuit has already made
+                    // false, so the branch could never be covered and would
+                    // have to be explained away for ever.
                     var written = File.GetLastWriteTimeUtc(file);
-                    if (newest is null || written > newest) newest = written;
+                    if (written > (newest ?? DateTime.MinValue)) newest = written;
                 }
 
                 // An empty directory still beats one that is not there: it is
