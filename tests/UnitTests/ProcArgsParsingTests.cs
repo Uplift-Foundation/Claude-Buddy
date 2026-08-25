@@ -478,6 +478,68 @@ namespace ClaudeBuddy.Tests
             Assert.Empty(into);
         }
 
+        // ---- a buffer cut in the middle of a token -------------------------
+
+        // The kernel filled the buffer only as far as `length`, and `length`
+        // lands inside the --user-data-dir= argument rather than after it.
+        //
+        // The wrong answer here is a *plausible* one, which is what makes it
+        // worth a fixture. A prefix like "--user-data-dir=/Users/x/Library/App"
+        // still starts with the switch and still has a non-empty value, so
+        // returning it hands the scan a directory that exists nowhere: the
+        // instance vanishes from every profile row and from the duplicate
+        // counter at the same time. Null is the honest answer — the parser does
+        // not know which profile this is — and null is also what maps the
+        // instance to Default, i.e. to "indistinguishable from a Dock launch",
+        // which is exactly what it has become.
+        [Fact]
+        public void AnArgumentTheBufferEndsInsideIsNotAPath()
+        {
+            var directory = "/Users/x/Library/Application Support/Claude-Board";
+            var buffer = Buffer(
+                argc: 2, execPath: "/Applications/Claude.app/Contents/MacOS/Claude",
+                argv: new[] { "Claude", "--user-data-dir=" + directory },
+                env: Array.Empty<string>());
+
+            // Land three bytes short of the token's terminating NUL, which is
+            // what a buffer too small to hold the whole command line gives.
+            var truncated = buffer.Length - 4;
+
+            Assert.Null(MacOSProcessScan.ParseUserDataDir(buffer, truncated));
+        }
+
+        // The same cut one byte later, in the environment block. Same shape,
+        // same reasoning, and a separate case because it is a separate walk —
+        // the argv guard being right says nothing about this one.
+        [Fact]
+        public void AnEnvironmentEntryTheBufferEndsInsideIsNotAPathEither()
+        {
+            var directory = "/Users/x/Library/Application Support/Claude-Board";
+            var buffer = Buffer(
+                argc: 1, execPath: "/Applications/Claude.app/Contents/MacOS/Claude",
+                argv: new[] { "Claude" },
+                env: new[] { "CLAUDE_USER_DATA_DIR=" + directory });
+
+            Assert.Null(MacOSProcessScan.ParseUserDataDir(buffer, buffer.Length - 4));
+        }
+
+        // The guard above must not fire on the ordinary case, which is the
+        // off-by-one it invites: a complete token whose terminating NUL is the
+        // very last byte the kernel wrote. That is a full command line, not a
+        // truncated one, and it has to keep parsing.
+        [Fact]
+        public void AnArgumentEndingExactlyAtTheBufferEndIsStillRead()
+        {
+            var directory = "/Users/x/Library/Application Support/Claude-Board";
+            var buffer = Buffer(
+                argc: 2, execPath: "/Applications/Claude.app/Contents/MacOS/Claude",
+                argv: new[] { "Claude", "--user-data-dir=" + directory },
+                env: Array.Empty<string>());
+
+            Assert.Equal(directory,
+                MacOSProcessScan.ParseUserDataDir(buffer, buffer.Length));
+        }
+
         // A buffer the kernel filled only partly, with no terminating empty
         // string. The walk has to stop at `length`; there is nothing else
         // telling it where the block ends.
