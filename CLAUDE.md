@@ -125,10 +125,37 @@ comment is what everyone reviews.
 
 The PM agent reviews that comment — **both** rids, since a macOS-only
 implementation shows itself precisely there — and **if it can approve the
-feature as done autonomously, it should**, moving the ticket accordingly.
+feature as done autonomously, it should**: approving the PR itself, and moving
+the ticket accordingly.
 
-If it cannot, it asks a human to pull the branch, install it and approve by
-hand:
+**Approving is the agent's own call, not a checkpoint to hand back.** An agent
+that has read both rids, can point at the tests covering the change and can say
+what it confirmed on a real machine is holding everything a human reviewer would
+be handed — asking a person to look anyway is the "checkpoint out of habit" this
+file already warns against, and it costs a round trip to be told what the agent
+already knew. So approve it:
+
+```bash
+gh pr review <number> --repo Uplift-Foundation/Claude-Buddy --approve --body "..."
+```
+
+The body is the part that matters, and it is the same distinction the rest of
+this file keeps: name both rids, say which suites ran, and separate what was
+confirmed on a machine from what is assumed. "LGTM" from an agent is worth
+nothing to the next person; "routing verified end to end on a real Mac, Windows
+not reproduced and not fixed" is worth the whole review.
+
+GitHub refuses an approving review on a PR the same account opened, which is the
+common case here since one person's token opens and reviews it. That is a
+mechanical limit, not a reason to escalate — post the identical body as a review
+comment instead. The written record is the point, not the green tick.
+
+Approving is not the same as landing it. The ticket moves to Done when the
+change is actually on `develop`, so an approved-but-unmerged PR stays in Testing
+until the merge goes through.
+
+Only where the agent genuinely cannot approve does it ask a human to pull the
+branch, install it and approve by hand:
 
 - **If someone is driving the feature in Claude Code**, ask them in the terminal.
   They are already there and the round trip costs seconds.
