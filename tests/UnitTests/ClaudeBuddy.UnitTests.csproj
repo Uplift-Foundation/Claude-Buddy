@@ -20,4 +20,29 @@
   <ItemGroup>
     <ProjectReference Include="..\..\ClaudeBuddy.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- The orb-geometry sweep's case matrix and invariants, shared with
+         tests/ArrangementTests rather than copied. That project is a plain
+         console exe with no test SDK, so it contributes nothing to
+         tools/coverage.sh and OrbArrangement.cs read 0.0% while being the most
+         exhaustively verified file in the repo (20736 cases). Compiling the
+         sweep in here runs those same cases against the ClaudeBuddy.dll this
+         suite already references, which puts the lines in the denominator.
+
+         Compiled in rather than referenced because tests/ArrangementTests is an
+         Exe that compiles OrbArrangement.cs in itself; a ProjectReference to it
+         would put a second copy of the type in the process. This way the sweep
+         binds to the app's own OrbArrangement, which is the one worth
+         measuring. -->
+    <Compile Include="..\ArrangementTests\ArrangementSweep.cs" />
+
+    <!-- Same arrangement for the orb-initials and transcript cases: the tables
+         live with their console suite and are compiled in here so one edit
+         changes what both runners check. See each file's header for why the
+         suite exists; the short version is that OrbGlyph was wrong for a year
+         and the transcript parsers read formats nobody here controls. -->
+    <Compile Include="..\GlyphTests\GlyphSuite.cs" />
+    <Compile Include="..\TranscriptTests\TranscriptSuite.cs" />
+  </ItemGroup>
 </Project>

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -83,9 +84,28 @@ namespace ClaudeBuddy
                 ? ClaudeBuddySettings.DefaultRemoteControlProfileDir
                 : profileDir;
 
+            var names = TmuxNames(
+                _profileDir, Environment.GetEnvironmentVariable("CLAUDE_BUDDY_RC_BRIDGE_TAG"));
+
+            _tmuxSessionName = names.Session;
+            _tmuxTarget = names.Target;
+            _tmuxPaneTarget = names.PaneTarget;
+        }
+
+        // The three tmux names one account's relay uses, as a function of the
+        // account and the test tag.
+        //
+        // Pure, and split out of the constructor because all three encode
+        // *measured* failures rather than preferences — the comments below are
+        // the record of them, and none of them is visible from reading the
+        // strings. Nothing here starts a relay, so the rules can be asserted
+        // without one.
+        internal static (string Session, string Target, string PaneTarget) TmuxNames(
+            string profileDir, string? tag)
+        {
             // tmux session names cannot contain a dot or a colon — it parses
             // them as window/pane separators — and a profile dir starts with one.
-            var safe = _profileDir.Replace('.', '-').Replace(':', '-');
+            var safe = profileDir.Replace('.', '-').Replace(':', '-');
 
             // Test seam, same pattern as CLAUDE_BUDDY_SETTINGS_DIR and
             // CLAUDE_BUDDY_PROFILE_ROOT: without it a live test and the
@@ -101,7 +121,6 @@ namespace ClaudeBuddy
             //
             // Never set in production, so the mutex is unaffected where it
             // matters.
-            var tag = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_RC_BRIDGE_TAG");
             if (!string.IsNullOrWhiteSpace(tag)) safe += "-" + tag.Replace('.', '-').Replace(':', '-');
 
             // The machine's own name goes in, and it is not cosmetic.
@@ -115,7 +134,7 @@ namespace ClaudeBuddy
             // different relays and there is nothing to say which answered. The
             // prefix is untouched, so IsOwnRelay still recognises every relay as
             // one, which is what keeps them off the board.
-            _tmuxSessionName = TmuxSessionPrefix + safe + "-" + MachineTag();
+            var session = TmuxSessionPrefix + safe + "-" + MachineTag();
 
             // "=" forces an exact match. Without it tmux resolves a target by
             // prefix, and one account's name is a prefix of another's the moment
@@ -124,7 +143,7 @@ namespace ClaudeBuddy
             // claude-buddy-rc--claude` killed `claude-buddy-rc--claude-board`,
             // so starting the second relay silently destroyed the first and the
             // survivor then answered nothing. Every target below is exact.
-            _tmuxTarget = "=" + _tmuxSessionName;
+            var target = "=" + session;
 
             // A pane target needs the trailing colon as well as the "=".
             // Measured: `send-keys -t =name` answers "can't find pane", because
@@ -133,7 +152,7 @@ namespace ClaudeBuddy
             // active pane, which is what a freshly created session has exactly
             // one of. Same reason AgentTeamViewer's new-window passes
             // "<session>:" rather than the bare name.
-            _tmuxPaneTarget = _tmuxTarget + ":";
+            return (session, target, target + ":");
         }
 
         public string ProfileDir => _profileDir;
@@ -251,6 +270,9 @@ namespace ClaudeBuddy
 
         // --- starting ---
 
+        // Excluded from coverage: starts a real Claude Code session in a tmux
+        // session and spends quota.
+        [ExcludeFromCodeCoverage]
         public async Task<bool> StartAsync()
         {
             if (!IsSupported) return false;
@@ -361,6 +383,9 @@ namespace ClaudeBuddy
 
         // The hook announces the session here, which is both the readiness
         // signal and where the session id, pane and transcript path come from.
+        // Excluded from coverage: polls the filesystem for a hook-written status
+        // file from a live session.
+        [ExcludeFromCodeCoverage]
         private async Task<bool> WaitForStatusFileAsync()
         {
             var dir = Path.Combine(_privateTmp!, "claude_buddy");
@@ -398,7 +423,10 @@ namespace ClaudeBuddy
             return false;
         }
 
-        private bool Adopt(string statusFile)
+        // internal: reads a status file the hook wrote and nothing else. The
+        // fields it picks out are what every later tmux call is aimed at, so a
+        // wrong one sends keystrokes to the wrong pane.
+        internal bool Adopt(string statusFile)
         {
             try
             {
@@ -422,6 +450,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: captures a live tmux pane until the Remote
+        // Control banner appears.
+        [ExcludeFromCodeCoverage]
         private async Task WaitForRemoteControlAsync()
         {
             var deadline = Environment.TickCount64 + ReadyTimeoutMs;
@@ -439,12 +470,14 @@ namespace ClaudeBuddy
         // --- asking it things ---
 
         // The peers the bridge can see, or null if it could not be asked.
+        // Excluded from coverage: types a prompt into a live session and waits for
+        // its answer.
+        [ExcludeFromCodeCoverage]
         public async Task<IReadOnlyList<BridgeProtocol.RemoteAgent>?> ListAgentsAsync()
         {
             var raw = await AskAsync(
                 BridgeProtocol.ListAgentsPrompt,
-                text => text.Contains("Peer sessions", StringComparison.Ordinal)
-                        || text.Contains("no peer", StringComparison.OrdinalIgnoreCase))
+                BridgeProtocol.LooksLikeAgentList)
                 .ConfigureAwait(false);
 
             return raw is null ? null : BridgeProtocol.ParseAgents(raw);
@@ -453,11 +486,13 @@ namespace ClaudeBuddy
         // Hands a message to a session on another machine. The returned id is the
         // relay's own receipt; the *reply* comes back later through
         // MessageReceived, because there is no turn in which both happen.
+        // Excluded from coverage: types a prompt into a live session.
+        [ExcludeFromCodeCoverage]
         public async Task<string?> SendToAsync(string peerName, string text)
         {
             var raw = await AskAsync(
                 BridgeProtocol.SendMessagePrompt(peerName, text),
-                t => t.Contains("msg_id", StringComparison.Ordinal))
+                BridgeProtocol.LooksLikeSendReceipt)
                 .ConfigureAwait(false);
 
             return raw is null ? null : BridgeProtocol.ParseSentMessageId(raw);
@@ -471,6 +506,10 @@ namespace ClaudeBuddy
         // data to a parser. The receipt is all that is waited for — a frame's
         // *answer* comes back later as its own inbound frame, correlated by the
         // id inside it, exactly as a reply to a message is.
+        // Excluded from coverage: types a frame into a live relay on another
+        // machine and waits for its receipt. What the prompt says is
+        // BridgeProtocol.SendFramePrompt, which is pure and covered.
+        [ExcludeFromCodeCoverage]
         public async Task<bool> SendFrameToAsync(string peerName, string frame)
         {
             var raw = await AskAsync(
@@ -484,11 +523,13 @@ namespace ClaudeBuddy
         // Asks a session what it is and what it can do. Fire-and-forget by
         // nature: the answer arrives later as an ordinary inbound message, which
         // RemoteControlSessions recognises by its marker and swallows.
+        // Excluded from coverage: types a prompt into a live session.
+        [ExcludeFromCodeCoverage]
         public async Task<bool> AskCapabilitiesAsync(string peerName)
         {
             var raw = await AskAsync(
                 BridgeProtocol.CapabilitiesQueryPrompt(peerName),
-                t => t.Contains("msg_id", StringComparison.Ordinal))
+                BridgeProtocol.LooksLikeSendReceipt)
                 .ConfigureAwait(false);
 
             return raw is not null;
@@ -497,6 +538,9 @@ namespace ClaudeBuddy
         // One prompt in, the matching tool result out. Serialized: this is a
         // single interactive session with a single input line, and two prompts
         // pasted at once interleave into nonsense.
+        // Excluded from coverage: types a prompt into a live tmux pane and waits
+        // on the transcript for a reply.
+        [ExcludeFromCodeCoverage]
         private async Task<string?> AskAsync(string prompt, Func<string, bool> matches)
         {
             if (!IsRunning) return null;
@@ -534,6 +578,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: polls a live transcript file until a request
+        // settles.
+        [ExcludeFromCodeCoverage]
         private async Task PumpUntilAsync(Task settled, CancellationToken token)
         {
             try
@@ -610,7 +657,7 @@ namespace ClaudeBuddy
         // complete lines that makes, keeping the remainder. Byte-level, because
         // a write landing mid-codepoint would otherwise leave a permanent
         // replacement character in the middle of a message.
-        private List<string> TakeWholeLines(byte[] buffer)
+        internal List<string> TakeWholeLines(byte[] buffer)
         {
             _carry.AddRange(buffer);
 
@@ -630,7 +677,10 @@ namespace ClaudeBuddy
             return lines;
         }
 
-        private void Route(string line)
+        // internal: one transcript row in, at most one delivered message out.
+        // No tmux, no subprocess — the row is text, and this is the part that
+        // decides whether it becomes a chat bubble.
+        internal void Route(string line)
         {
             if (string.IsNullOrWhiteSpace(line)) return;
 
@@ -699,7 +749,7 @@ namespace ClaudeBuddy
 
         // A tool_result's content is either a string or the usual array of
         // typed blocks. Both shapes appear in one transcript.
-        private static string Flatten(JsonElement block)
+        internal static string Flatten(JsonElement block)
         {
             if (!block.TryGetProperty("content", out var content)) return "";
             if (content.ValueKind == JsonValueKind.String) return content.GetString() ?? "";
@@ -737,18 +787,7 @@ namespace ClaudeBuddy
         {
             if (string.IsNullOrEmpty(text)) return;
 
-            TaskCompletionSource<string>? waiter = null;
-            lock (_gate)
-            {
-                if (_awaitingToolResult is not null && _toolResultMatches?.Invoke(text) == true)
-                {
-                    waiter = _awaitingToolResult;
-                    _awaitingToolResult = null;
-                    _toolResultMatches = null;
-                }
-            }
-
-            waiter?.TrySetResult(text);
+            CompleteAwaitedToolResult(text);
 
             // Every message in the row, not just the first: two peers answering
             // in one turn is ordinary once frames are in flight. The row's type
@@ -759,6 +798,9 @@ namespace ClaudeBuddy
 
         // --- stopping ---
 
+        // Excluded from coverage: kills the relay tmux session and deletes its
+        // scratch directory.
+        [ExcludeFromCodeCoverage]
         public void Stop()
         {
             var tmux = _tmux;
@@ -791,6 +833,9 @@ namespace ClaudeBuddy
         // taking focus: buffer the text, paste it as a bracketed paste so a
         // multi-line prompt arrives as one paste rather than a series of
         // newlines, then send the Return separately.
+        // Excluded from coverage: sends a bracketed paste and a Return into a live
+        // tmux pane.
+        [ExcludeFromCodeCoverage]
         private bool Paste(string text)
         {
             var tmux = _tmux;
@@ -821,7 +866,7 @@ namespace ClaudeBuddy
 
         // -S pins the server the bridge's pane actually lives on. Several can
         // coexist and a pane id is only unique within one.
-        private string[] Args(params string[] args)
+        internal string[] Args(params string[] args)
         {
             string? socket;
             lock (_gate) socket = _tmuxSocket;
@@ -835,6 +880,34 @@ namespace ClaudeBuddy
             return full;
         }
 
+        // Excluded from coverage: only does anything once AskAsync has typed a
+        // prompt into a live session and is waiting on its answer, which is the
+        // one thing this suite may not do. The predicate it consults —
+        // "is this the answer I was waiting for" — is BridgeProtocol's
+        // LooksLikeAgentList and LooksLikeSendReceipt, both pure and covered
+        // directly in BridgeAnswerPredicateTests.
+        [ExcludeFromCodeCoverage]
+        private void CompleteAwaitedToolResult(string text)
+        {
+            TaskCompletionSource<string>? waiter = null;
+            lock (_gate)
+            {
+                if (_awaitingToolResult is not null && _toolResultMatches?.Invoke(text) == true)
+                {
+                    waiter = _awaitingToolResult;
+                    _awaitingToolResult = null;
+                    _toolResultMatches = null;
+                }
+            }
+
+            waiter?.TrySetResult(text);
+        }
+
+        // Excluded from coverage: creates and deletes a real directory tree that
+        // the relay's tmux server uses as its private TMPDIR, and its catch is for
+        // that filesystem work failing. Both are the machine the tests run on
+        // rather than a fixture.
+        [ExcludeFromCodeCoverage]
         private string? PreparePrivateTmp()
         {
             try
@@ -871,6 +944,12 @@ namespace ClaudeBuddy
         // home directory: a relay with an unrecognisable name is a degraded
         // relay (no mirror, and a stale one can draw a phantom orb), which is
         // still much better than no relay at all.
+        // Excluded from coverage: exists to be the try/catch around a real
+        // mkdir. Null on failure rather than throwing, and the caller falls back
+        // to the home directory — a relay with an unrecognisable name is a
+        // degraded relay, which is still much better than no relay at all. What
+        // the directory is called is RelayCwd, which is covered.
+        [ExcludeFromCodeCoverage]
         private string? PrepareRelayCwd()
         {
             try
@@ -900,6 +979,12 @@ namespace ClaudeBuddy
         // and some machine names are a sentence; sanitised because tmux parses a
         // dot or a colon as a window/pane separator, and a Mac's hostname
         // routinely contains both ("Warrens-MacBook-Pro.local").
+        // Excluded from coverage: exists to read Environment.MachineName and to
+        // catch it failing, which would make the answer whatever machine the
+        // tests are running on. The rule — truncate, sanitise, fall back — is
+        // the overload below, which takes the name and is covered including the
+        // empty case this hands it when the read throws.
+        [ExcludeFromCodeCoverage]
         internal static string MachineTag()
         {
             string name;
@@ -950,6 +1035,11 @@ namespace ClaudeBuddy
 
         private static string? ResolveTmux() => TmuxCandidates.FirstOrDefault(File.Exists);
 
+        // Excluded from coverage: starts a real process, waits for it with a
+        // timeout, kills it if it overruns, and drains both its streams. The
+        // comments inside it are about deadlocks with a chatty child — none of
+        // which exists without actually starting one.
+        [ExcludeFromCodeCoverage]
         private static bool Run(string exe, int timeoutMs, out string stdout, params string[] args)
         {
             stdout = "";

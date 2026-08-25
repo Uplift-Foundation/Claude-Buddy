@@ -18,6 +18,7 @@ namespace ClaudeBuddy.Tests;
 // methods — HideFor(sessionId) is the public teardown call (it unbinds the
 // session and hides the window), called from Dispose so a failed assertion
 // still leaves the singleton clean for the next test.
+[Collection("Settings")]
 public class ChatPanelTests : IDisposable
 {
     private readonly List<string> _sessionIdsToClean = new();
@@ -956,8 +957,19 @@ public class ChatPanelTests : IDisposable
     {
         var orb = NewOrb();
 
-        // A one-pixel PNG, the same fixture ChatTranscript's own tests use —
-        // the pixels don't matter, only that this decodes as a real image.
+        // A one-pixel PNG, the same fixture ChatTranscript's own tests use.
+        //
+        // The pixels don't matter and, in this suite, neither does the file:
+        // Avalonia's headless render interface answers DecodeToWidth with a
+        // stub of the requested size for ANY bytes, so this test would pass on
+        // eight bytes of nonsense too. What it actually asserts is that the row
+        // builds a picture at the drawn width and shows it — which is worth
+        // asserting, and is not the same as asserting that decoding works.
+        //
+        // The failure half lives in tests/UiScreenshots, which draws through
+        // real Skia and is the only place bytes that are not a picture behave
+        // like bytes that are not a picture. See
+        // ATurnWhoseImageBytesDoNotDecodeStillShowsItsText there.
         var bytes = Convert.FromBase64String(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==");
 

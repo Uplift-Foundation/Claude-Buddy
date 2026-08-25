@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using Avalonia.Threading;
 
@@ -78,6 +79,41 @@ namespace ClaudeBuddy
             new(StringComparer.OrdinalIgnoreCase);
 
         internal sealed record AgentIdentity(string Name, string? Emoji, byte[]? Avatar);
+
+        // A test seam, matching SetSnapshotForTests: the only thing that fills the
+        // identity table is LoadAgentNamesAsync, which is an agents.list request
+        // over a live connection and is excluded. Without this, everything that
+        // draws an agent's name or picture — the orb's avatar, the chat header —
+        // is unreachable for a reason that has nothing to do with the code.
+        // A test seam for the run tracker. The only thing that fills it is the
+        // live event stream, and the rule worth checking — a session stops
+        // counting as working once its events go quiet, whether or not a terminal
+        // event ever arrived — needs a timestamp in the past to check at all.
+        internal static void SetRunningForTests(string key, DateTime when)
+        {
+            lock (Gate) Running[key] = when;
+        }
+
+        internal static void ForgetRunningForTests()
+        {
+            lock (Gate) Running.Clear();
+        }
+
+        internal static void SetIdentitiesForTests(
+            IReadOnlyDictionary<string, AgentIdentity> identities,
+            IReadOnlyDictionary<string, string>? names = null)
+        {
+            lock (Gate)
+            {
+                Identities.Clear();
+                foreach (var (id, identity) in identities) Identities[id] = identity;
+
+                if (names is null) return;
+
+                AgentNames.Clear();
+                foreach (var (id, name) in names) AgentNames[id] = name;
+            }
+        }
 
         public static AgentIdentity? IdentityOf(string agentId)
         {
@@ -246,6 +282,17 @@ namespace ClaudeBuddy
 
         private static bool _certificateRejected;
 
+        // A test seam, matching SetIdentitiesForTests and SetSnapshotForTests:
+        // the only thing that ever sets _certificateRejected is a real failed TLS
+        // handshake against a gateway, which is exactly the kind of live socket
+        // this suite has no business opening. Without it, the settings window's
+        // "Trust the new certificate" row is unreachable for a reason that has
+        // nothing to do with the row.
+        internal static void SetCertificateRejectedForTests(bool value)
+        {
+            lock (Gate) _certificateRejected = value;
+        }
+
         // The conversation in a channel, as one thing. memberKeys are the
         // gateway keys of the sessions standing in it — see
         // OpenClawSessionKind.RoomOf for what decides that.
@@ -355,6 +402,21 @@ namespace ClaudeBuddy
         public static IReadOnlyList<Session> Snapshot() =>
             ClaudeBuddySettings.OpenClawEnabled ? _snapshot : Array.Empty<Session>();
 
+        // A test seam, in the same spirit as ClaudeBuddySettings.ReloadForTests
+        // and OpenClawIdentity.ResetForTests: the poll loop above is the only
+        // thing that publishes a snapshot, and it is excluded from coverage
+        // because it needs a live gateway. Without this, everything downstream of
+        // the snapshot — the gateway orbs, and the room orbs SessionManager
+        // invents from them — is unreachable for a reason that has nothing to do
+        // with the code being hard to test.
+        //
+        // Takes what Parse returns, so a test publishes exactly what a real poll
+        // would rather than a shape of its own invention.
+        internal static void SetSnapshotForTests(IReadOnlyList<Session> sessions)
+        {
+            _snapshot = sessions;
+        }
+
         // Accept whatever certificate the gateway is now serving.
         //
         // Clearing the pin *and* the rejection together, rather than letting the
@@ -368,6 +430,9 @@ namespace ClaudeBuddy
         // The status line moves too, for the same reason: leaving the old
         // sentence up under a button that has just gone would read as the click
         // having done nothing.
+        // Excluded from coverage: records a pinned fingerprint and reconnects to
+        // the gateway.
+        [ExcludeFromCodeCoverage]
         public static void TrustNewCertificate()
         {
             ClaudeBuddySettings.OpenClawFingerprint = "";
@@ -384,6 +449,9 @@ namespace ClaudeBuddy
         // Called on launch and whenever the settings change. Idempotent: a
         // second call while running is a restart, which is what changing the
         // host or the token means.
+        // Excluded from coverage: tears down the supervisor task and opens a new
+        // gateway connection.
+        [ExcludeFromCodeCoverage]
         public static void Restart()
         {
             lock (Gate)
@@ -421,6 +489,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: the supervisor loop: connects a WebSocket to a
+        // live gateway and reconnects for as long as the app runs.
+        [ExcludeFromCodeCoverage]
         private static async Task RunAsync(string host, int port, CancellationToken ct)
         {
             var backoff = TimeSpan.FromSeconds(2);
@@ -561,7 +632,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private static string Describe(OpenClawGateway.ConnectResult result) => result.Outcome switch
+        internal static string Describe(OpenClawGateway.ConnectResult result) => result.Outcome switch
         {
             OpenClawGateway.Outcome.PairingPending =>
                 "waiting to be approved on the gateway — run `openclaw devices approve --latest`",
@@ -574,6 +645,8 @@ namespace ClaudeBuddy
             _ => result.Detail ?? "not connected"
         };
 
+        // Excluded from coverage: an agents.list request over the live connection.
+        [ExcludeFromCodeCoverage]
         private static async Task LoadAgentNamesAsync(OpenClawGateway gateway, CancellationToken ct)
         {
             try
@@ -650,7 +723,7 @@ namespace ClaudeBuddy
         // real URL, is declined rather than fetched: this app has one connection
         // to one machine the user pointed it at, and quietly reaching out to
         // some other host because a field said so is not a thing it should do.
-        private static byte[]? DecodeDataUri(string? uri)
+        internal static byte[]? DecodeDataUri(string? uri)
         {
             if (string.IsNullOrEmpty(uri)) return null;
             if (!uri.StartsWith("data:", StringComparison.Ordinal)) return null;
@@ -665,6 +738,8 @@ namespace ClaudeBuddy
             catch { return null; }
         }
 
+        // Excluded from coverage: subscribes to the gateway event stream.
+        [ExcludeFromCodeCoverage]
         private static async Task SubscribeAsync(OpenClawGateway gateway, CancellationToken ct)
         {
             try
@@ -679,6 +754,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: a sessions.list request over the live
+        // connection; what it does with the reply is Parse, which is tested.
+        [ExcludeFromCodeCoverage]
         private static async Task PollAsync(OpenClawGateway gateway, CancellationToken ct)
         {
             while (!ct.IsCancellationRequested)
@@ -696,7 +774,12 @@ namespace ClaudeBuddy
             }
         }
 
-        private static (IReadOnlyList<Session> Sessions, int Total) Parse(JsonElement payload)
+        // `now` is a parameter with the real clock as its default, so the recency
+        // filter below is decidable. Without it a test could only ever exercise
+        // the "recent enough" arm — and the interesting behaviour is what the
+        // filter lets through anyway: a session mid-run, and a room's membership.
+        internal static (IReadOnlyList<Session> Sessions, int Total) Parse(
+            JsonElement payload, DateTime? now = null)
         {
             var list = payload;
             if (payload.ValueKind == JsonValueKind.Object)
@@ -713,7 +796,7 @@ namespace ClaudeBuddy
 
             if (list.ValueKind != JsonValueKind.Array) return (Array.Empty<Session>(), 0);
 
-            var now = DateTime.UtcNow;
+            var asOf = now ?? DateTime.UtcNow;
             var result = new List<Session>();
 
             var roomMembers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
@@ -765,7 +848,7 @@ namespace ClaudeBuddy
                 // A session mid-run is current whatever its timestamps say —
                 // it is the one thing an orb is most worth showing.
                 var within = ActiveWithin;
-                if (state != "generating" && within is not null && now - activity > within) continue;
+                if (state != "generating" && within is not null && asOf - activity > within) continue;
 
                 // Sessions the heartbeat drives, when the user has said they
                 // don't want them. Deliberately below the two blocks above
@@ -830,7 +913,7 @@ namespace ClaudeBuddy
         // top-level one is preferred: origin describes where a conversation came
         // from and is absent on 12 of the 70 sessions this was measured against,
         // while chatType is the gateway's own answer to the question being asked.
-        private static SessionKind KindFor(JsonElement session, JsonElement origin, string key) =>
+        internal static SessionKind KindFor(JsonElement session, JsonElement origin, string key) =>
             OpenClawSessionKind.From(key, Str(session, "chatType") ?? Str(origin, "chatType"));
 
         // What to call a session. Two halves: who is talking, and where.
@@ -845,7 +928,7 @@ namespace ClaudeBuddy
         // The second half is needed because one agent commonly has a DM with
         // you, a DM with somebody else and two channels at once, and repeating
         // "Lilibeth — discord" four times identifies nothing.
-        private static string TitleFor(JsonElement session, JsonElement origin, string key)
+        internal static string TitleFor(JsonElement session, JsonElement origin, string key)
         {
             var label = Str(session, "label");
             var parts = key.Split(':');
@@ -890,7 +973,7 @@ namespace ClaudeBuddy
         // necessary before anyone looked at what else sessions.list carries.
         // This field needs none of that and cannot be thrown off by a label
         // whose shape changes, so it is asked first and Where is the fallback.
-        private static string? Group(JsonElement session)
+        internal static string? Group(JsonElement session)
         {
             var group = Str(session, "groupChannel");
             return string.IsNullOrWhiteSpace(group) ? null : group!.Trim();
@@ -900,7 +983,7 @@ namespace ClaudeBuddy
         // id:1474991965354463274", "wtvamp user id:246722755112861696",
         // "discord:amber". The useful part is always at the front, so cut at the
         // id and drop the noun that introduces it.
-        private static string? Where(JsonElement origin)
+        internal static string? Where(JsonElement origin)
         {
             if (origin.ValueKind != JsonValueKind.Object) return null;
 
@@ -932,7 +1015,7 @@ namespace ClaudeBuddy
         // deliveryContext is the authoritative answer; lastChannel/lastTo are
         // what the gateway itself falls back to, so this falls back the same
         // way rather than inventing its own rule.
-        private static Delivery? DeliveryFor(JsonElement session)
+        internal static Delivery? DeliveryFor(JsonElement session)
         {
             string? channel = null, to = null, account = null;
 
@@ -953,7 +1036,7 @@ namespace ClaudeBuddy
                 : new Delivery(channel!, to!, account);
         }
 
-        private static string StateFor(string key)
+        internal static string StateFor(string key)
         {
             lock (Gate)
             {
@@ -990,7 +1073,11 @@ namespace ClaudeBuddy
         // The key on an event is run-scoped — "…:run:<runId>" appended to the
         // session's own key — so it has to be trimmed back before it means
         // anything to the list.
-        private static void OnEvent(string name, JsonElement payload)
+        // internal: this is the whole of how a gateway orb learns it is working.
+        // The gateway's session list does not carry a running state, so an orb
+        // pulses because an event named its session — and the effect is
+        // observable through Parse, which reads what this records.
+        internal static void OnEvent(string name, JsonElement payload)
         {
             if (name is "tick" or "health" or "presence" or "connect.challenge") return;
             if (payload.ValueKind != JsonValueKind.Object) return;
@@ -1032,6 +1119,8 @@ namespace ClaudeBuddy
         // panel puts whatever comes back in front of the person who typed it,
         // because a message that didn't arrive and didn't say so is the worst
         // outcome a chat window can produce.
+        // Excluded from coverage: sends a message to a real gateway.
+        [ExcludeFromCodeCoverage]
         public static async Task SendAsync(OpenClawChatSession chat, string text, CancellationToken ct)
         {
             OpenClawGateway? gateway;
@@ -1117,9 +1206,89 @@ namespace ClaudeBuddy
         // metadata. It isn't noise to be dropped though — it is one of your
         // agents talking — so the header is replaced by the thing it was
         // actually saying, attributed to whoever said it.
-        private static string Readable(string text) => Readable(text, out _);
+        // One page of chat.history turned into turns the panel can draw.
+        //
+        // Extracted from the request that fetches it, which needs a live gateway
+        // and is excluded for that. This is the half that reads a format nobody
+        // here controls, so it is the half that has to be tested against
+        // fixtures — the same reasoning that keeps ChatTranscript and
+        // CodexTranscript pure.
+        internal static List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt,
+            DateTimeOffset At, string? Speaker, string? SpeakerColor)> TurnsFromHistory(
+            JsonElement messages)
+        {
+            var turns = new List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)>();
 
-        private static string Readable(string text, out string? speakerId)
+            foreach (var message in messages.EnumerateArray())
+            {
+                var role = Str(message, "role") == "user" ? ChatRole.User : ChatRole.Assistant;
+
+                // content is a list of blocks; only the text ones are worth
+                // showing. Tool calls arrive live as their own turns, and a
+                // replayed tool_use block would be a wall of JSON.
+                if (!message.TryGetProperty("content", out var content)) continue;
+
+                // The two roles are shaped differently, which is easy to miss
+                // and silently drops half the conversation: an assistant turn
+                // carries `content` as a list of blocks, and a user turn
+                // carries it as a plain string. Reading only the block form
+                // showed an agent talking to nobody.
+                // Pictures are their own turns rather than being folded into
+                // the text of one. A message is commonly several images and
+                // nothing else, and a bubble containing four of them stacked
+                // reads worse than four bubbles.
+                if (content.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var block in content.EnumerateArray())
+                    {
+                        if (Str(block, "type") != "image") continue;
+
+                        var url = Str(block, "url");
+                        if (string.IsNullOrWhiteSpace(url)) continue;
+
+                        var ms2 = Num(message, "timestamp");
+                        turns.Add((role, "", url!, Str(block, "alt") ?? "", ms2 <= 0
+                            ? DateTimeOffset.Now
+                            : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
+                            null, null));
+                    }
+                }
+
+                var text = content.ValueKind switch
+                {
+                    JsonValueKind.String => content.GetString() ?? "",
+
+                    JsonValueKind.Array => string.Join("\n", content.EnumerateArray()
+                        .Where(b => Str(b, "type") == "text")
+                        .Select(b => Str(b, "text"))
+                        .Where(t => !string.IsNullOrWhiteSpace(t))),
+
+                    JsonValueKind.Object => Str(content, "text") ?? "",
+
+                    _ => ""
+                };
+
+                if (string.IsNullOrWhiteSpace(text)) continue;
+
+                text = Readable(text, out var speakerId);
+                if (string.IsNullOrWhiteSpace(text)) continue;
+
+                var ms = Num(message, "timestamp");
+                var at = ms > 0
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime()
+                    : DateTimeOffset.Now;
+
+                turns.Add((role, text.Trim(), null, "", at,
+                    speakerId is null ? null : AgentNameOf(speakerId),
+                    speakerId is null ? null : ColourForAgent(speakerId)));
+            }
+
+            return turns;
+        }
+
+        internal static string Readable(string text) => Readable(text, out _);
+
+        internal static string Readable(string text, out string? speakerId)
         {
             speakerId = null;
 
@@ -1216,6 +1385,8 @@ namespace ClaudeBuddy
         // The last thing the agent said, for the speak button on the orb's own
         // flyout — which has no panel open and so no transcript to read from.
         // Loads the history if this session has never been opened.
+        // Excluded from coverage: a history request over the live connection.
+        [ExcludeFromCodeCoverage]
         public static async Task<string?> LastAssistantTextAsync(string sessionId, string displayName)
         {
             if (ChatFor(sessionId, displayName) is not OpenClawChatSession chat) return null;
@@ -1237,7 +1408,7 @@ namespace ClaudeBuddy
             return null;
         }
 
-        private static string? LastAssistantText(OpenClawChatSession chat)
+        internal static string? LastAssistantText(OpenClawChatSession chat)
         {
             for (var i = chat.History.Count - 1; i >= 0; i--)
             {
@@ -1318,6 +1489,8 @@ namespace ClaudeBuddy
         // in exactly the moment the user is waiting to see something.
         private static readonly Dictionary<string, byte[]?> Media = new(StringComparer.Ordinal);
 
+        // Excluded from coverage: an HTTP GET against the gateway host.
+        [ExcludeFromCodeCoverage]
         public static async Task<byte[]?> FetchMediaAsync(string url, CancellationToken ct)
         {
             lock (Gate)
@@ -1368,7 +1541,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private static List<OpenClawChatSession> OpenChats()
+        internal static List<OpenClawChatSession> OpenChats()
         {
             lock (Gate) return Chats.Values.ToList();
         }
@@ -1385,6 +1558,8 @@ namespace ClaudeBuddy
         // chat.history counts its offset back from the newest message, so
         // walking backwards is simply an increasing offset — verified against
         // the gateway: consecutive pages do not overlap.
+        // Excluded from coverage: pages history back over the live connection.
+        [ExcludeFromCodeCoverage]
         public static async Task<bool> LoadOlderAsync(OpenClawChatSession chat, CancellationToken ct)
         {
             if (!chat.HasMore) return false;
@@ -1412,6 +1587,9 @@ namespace ClaudeBuddy
             return turns.Count > 0;
         }
 
+        // Excluded from coverage: a sessions.history request over the live
+        // connection.
+        [ExcludeFromCodeCoverage]
         private static async Task LoadHistoryAsync(OpenClawChatSession chat, CancellationToken ct)
         {
             var first = await FetchPageAsync(chat, 0, ct);
@@ -1425,6 +1603,12 @@ namespace ClaudeBuddy
             Dispatcher.UIThread.Post(() => chat.SetHistory(initial));
         }
 
+        // Excluded from coverage for its last line. With no gateway there is
+        // nothing to fetch and it says so, which is the half a test can reach and
+        // the half LoadOlderAsync's tests assert through — reaching the other
+        // half means a chat.history request over a live socket, which is the
+        // reason FetchHistoryPageAsync below is excluded too.
+        [ExcludeFromCodeCoverage]
         private static async Task<(List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> Turns, int Messages)?>
             FetchPageAsync(OpenClawChatSession chat, int offset, CancellationToken ct)
         {
@@ -1433,6 +1617,23 @@ namespace ClaudeBuddy
 
             if (gateway is null) return null;
 
+            return await FetchHistoryPageAsync(gateway, chat, offset, ct);
+        }
+
+        // Excluded from coverage: a chat.history request over the live socket.
+        // What comes back is turned into turns by TurnsFromHistory, which is pure
+        // and covered against fixtures — this is only the asking, and the catch
+        // for a gateway that will not answer.
+        //
+        // That catch is deliberate rather than defensive: a backlog that cannot be
+        // fetched is not a reason to refuse the conversation, because the panel
+        // still works forward from whatever happens next.
+        [ExcludeFromCodeCoverage]
+        private static async Task<(List<(ChatRole Role, string Text, string? ImageUrl,
+            string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> Turns,
+            int Count)?> FetchHistoryPageAsync(
+            OpenClawGateway gateway, OpenClawChatSession chat, int offset, CancellationToken ct)
+        {
             try
             {
                 var res = await gateway.RequestAsync("chat.history", new Dictionary<string, object>
@@ -1448,72 +1649,7 @@ namespace ClaudeBuddy
                     return null;
                 }
 
-                var turns = new List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)>();
-
-                foreach (var message in messages.EnumerateArray())
-                {
-                    var role = Str(message, "role") == "user" ? ChatRole.User : ChatRole.Assistant;
-
-                    // content is a list of blocks; only the text ones are worth
-                    // showing. Tool calls arrive live as their own turns, and a
-                    // replayed tool_use block would be a wall of JSON.
-                    if (!message.TryGetProperty("content", out var content)) continue;
-
-                    // The two roles are shaped differently, which is easy to miss
-                    // and silently drops half the conversation: an assistant turn
-                    // carries `content` as a list of blocks, and a user turn
-                    // carries it as a plain string. Reading only the block form
-                    // showed an agent talking to nobody.
-                    // Pictures are their own turns rather than being folded into
-                    // the text of one. A message is commonly several images and
-                    // nothing else, and a bubble containing four of them stacked
-                    // reads worse than four bubbles.
-                    if (content.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var block in content.EnumerateArray())
-                        {
-                            if (Str(block, "type") != "image") continue;
-
-                            var url = Str(block, "url");
-                            if (string.IsNullOrWhiteSpace(url)) continue;
-
-                            var ms2 = Num(message, "timestamp");
-                            turns.Add((role, "", url!, Str(block, "alt") ?? "", ms2 <= 0
-                                ? DateTimeOffset.Now
-                                : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
-                                null, null));
-                        }
-                    }
-
-                    var text = content.ValueKind switch
-                    {
-                        JsonValueKind.String => content.GetString() ?? "",
-
-                        JsonValueKind.Array => string.Join("\n", content.EnumerateArray()
-                            .Where(b => Str(b, "type") == "text")
-                            .Select(b => Str(b, "text"))
-                            .Where(t => !string.IsNullOrWhiteSpace(t))),
-
-                        JsonValueKind.Object => Str(content, "text") ?? "",
-
-                        _ => ""
-                    };
-
-                    if (string.IsNullOrWhiteSpace(text)) continue;
-
-                    text = Readable(text, out var speakerId);
-                    if (string.IsNullOrWhiteSpace(text)) continue;
-
-                    var ms = Num(message, "timestamp");
-                    var at = ms > 0
-                        ? DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime()
-                        : DateTimeOffset.Now;
-
-                    turns.Add((role, text.Trim(), null, "", at,
-                        speakerId is null ? null : AgentNameOf(speakerId),
-                        speakerId is null ? null : ColourForAgent(speakerId)));
-                }
-
+                var turns = TurnsFromHistory(messages);
                 // The message count, not the turn count: it is what the next
                 // page's offset is measured in, and one message can produce
                 // several turns or none.
@@ -1528,7 +1664,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private static void Report(string state)
+        internal static void Report(string state)
         {
             lock (Gate) _state = state;
         }

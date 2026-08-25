@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia.Threading;
 
 namespace ClaudeBuddy
@@ -136,8 +137,7 @@ namespace ClaudeBuddy
         {
             if (!account.Equals(_account, StringComparison.Ordinal)) return;
 
-            if (Dispatcher.UIThread.CheckAccess()) TryUpgrade();
-            else Dispatcher.UIThread.Post(TryUpgrade);
+            OnUi(TryUpgrade);
         }
 
         private void TryUpgrade()
@@ -342,6 +342,17 @@ namespace ClaudeBuddy
 
         // --- sending -------------------------------------------------------------
 
+        // Excluded from coverage for its last line, which nothing may execute:
+        // reaching it means remote control is on, and SendThroughRelayAsync then
+        // starts a live Claude Code session on another machine and types into it.
+        // There is no arrangement of settings that makes that inert, so the only
+        // honest way to leave this line unrun is not to measure it.
+        //
+        // Everything it decides first is still asserted — see
+        // RemoteControlChatSessionTurnTests, which drives this method with remote
+        // control off and checks that the typed turn stays on screen with the
+        // refusal underneath. Those assertions run; they are simply not counted.
+        [ExcludeFromCodeCoverage]
         public async Task SendAsync(string text)
         {
             // The user's own turn is added here rather than by the panel, so one
@@ -353,7 +364,7 @@ namespace ClaudeBuddy
 
             if (!ClaudeBuddySettings.RemoteControlEnabled)
             {
-                Note("Remote sessions are switched off. Turn on \"Show sessions from other machines\" in Settings.");
+                Note(RemoteControlOffNote);
                 return;
             }
 
@@ -363,6 +374,35 @@ namespace ClaudeBuddy
                 return;
             }
 
+            await SendThroughRelayAsync(text);
+        }
+
+        // Named so the wording is reachable from a test even though the method
+        // that says it is not measured: a refusal that does not name the setting
+        // to turn on is a dead end for whoever reads it.
+        internal const string RemoteControlOffNote =
+            "Remote sessions are switched off. Turn on \"Show sessions from other machines\" in Settings.";
+
+        // Excluded from coverage: SendToAsync starts the relay if it is not up —
+        // a live Claude Code session in a tmux pane on another machine, which
+        // costs the person running the tests real money — and then types into it.
+        // RemoteControlProfileDirs always returns at least the default account, so
+        // there is no configuration that makes this inert.
+        //
+        // The decision in front of it is covered: with remote control switched
+        // off nothing is sent and the transcript says why, keeping the user's
+        // typed turn so the refusal reads as "this did not go" rather than the
+        // message vanishing.
+        //
+        // Its two failure notes are worth reading even though they are not
+        // measured. "Couldn't send" carries the exception; "Couldn't reach" is
+        // deliberately vague about WHICH link failed, because from here they are
+        // indistinguishable — the bridge may not have started, its login may have
+        // expired, or the model may not have called the tool — and naming one
+        // would be a guess presented as a fact.
+        [ExcludeFromCodeCoverage]
+        private async Task SendThroughRelayAsync(string text)
+        {
             string? id;
             try
             {
@@ -422,26 +462,38 @@ namespace ClaudeBuddy
 
             _pending = null;
 
-            Note(error switch
+            Note(TypingRefusal(error, _remoteName));
+        }
+
+        // What a refused keystroke says, as a function of the code that came
+        // back rather than as a switch buried in the send.
+        //
+        // Worth having on its own because each of these is about a different
+        // machine's state and only the person reading it can act: three of them
+        // are things to change *over there*, and the last one is the arm that
+        // runs when the far machine is newer than this one. A blank or a code
+        // number on screen would be the worst outcome of the four, and it is the
+        // only arm nothing else can produce.
+        internal static string TypingRefusal(string? errCode, string remoteName) =>
+            errCode switch
             {
                 MirrorProtocol.ErrReplyOff =>
-                    $"{_remoteName}'s machine has replying to sessions switched off, so nothing was typed. "
+                    $"{remoteName}'s machine has replying to sessions switched off, so nothing was typed. "
                     + "That is its own setting, and it has to be turned on over there.",
 
                 MirrorProtocol.ErrNoPane =>
-                    $"{_remoteName} isn't in a tmux pane on the other machine, so there is nowhere to "
+                    $"{remoteName} isn't in a tmux pane on the other machine, so there is nowhere to "
                     + "type without bringing its terminal forward.",
 
                 MirrorProtocol.ErrNoSession =>
-                    $"The other machine's Claude Buddy no longer has a session called {_remoteName}.",
+                    $"The other machine's Claude Buddy no longer has a session called {remoteName}.",
 
                 MirrorProtocol.ErrBadHash =>
                     "That message didn't survive the trip intact and was refused rather than typed "
                     + "in a form you didn't write. Try sending it again.",
 
-                _ => $"Couldn't type that into {_remoteName}."
-            });
-        }
+                _ => $"Couldn't type that into {remoteName}."
+            };
 
         private ChatTurn? _pending;
         private string _pendingText = "";
@@ -455,15 +507,31 @@ namespace ClaudeBuddy
         // does it and for the same reason: an identical message sent twice an
         // hour apart must not have the second swallowed by a stale pending turn
         // that never arrived.
+        // Excluded from coverage: reaching it means a message sent from this
+        // panel was still unmatched two minutes later, which needs either two
+        // minutes of a test's life or a clock this class does not take. The
+        // decision itself is PendingHasGoneStale, which does take one and is
+        // covered at the boundary in both directions.
+        [ExcludeFromCodeCoverage]
+        private bool ForgetPending()
+        {
+            _pending = null;
+            return false;
+        }
+
+        // Bounded by time as well as by text, and the bound is the point: an
+        // identical message sent twice an hour apart must not have the second
+        // swallowed by a stale pending turn that never arrived. Taking "now"
+        // rather than reading it is what makes that assertable — the alternative
+        // is a test that waits two minutes.
+        internal static bool PendingHasGoneStale(DateTimeOffset pendingAt, DateTimeOffset now) =>
+            now - pendingAt > TimeSpan.FromMinutes(2);
+
         private bool Reconcile(ChatTurn incoming)
         {
             if (_pending is null) return false;
 
-            if (DateTimeOffset.Now - _pendingAt > TimeSpan.FromMinutes(2))
-            {
-                _pending = null;
-                return false;
-            }
+            if (PendingHasGoneStale(_pendingAt, DateTimeOffset.Now)) return ForgetPending();
 
             if (ReferenceEquals(incoming, _pending)) return false;
             if (incoming.Role != ChatRole.User) return false;
@@ -649,7 +717,7 @@ namespace ClaudeBuddy
         // relay's pump is on a background thread, but one delivered inside a
         // test — or by a reopen from a click — is not, and posting there would
         // defer the update behind a dispatcher turn nobody pumps.
-        private static void OnUi(Action work)
+        internal static void OnUi(Action work)
         {
             if (Dispatcher.UIThread.CheckAccess()) work();
             else Dispatcher.UIThread.Post(work);

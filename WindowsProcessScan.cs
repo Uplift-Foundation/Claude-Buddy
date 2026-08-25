@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Management;
 using System.Runtime.Versioning;
 using System.Text.RegularExpressions;
@@ -43,6 +44,9 @@ namespace ClaudeBuddy
         private static int[] _lastPids = Array.Empty<int>();
         private static IReadOnlyList<ClaudeInstance> _lastResult = Array.Empty<ClaudeInstance>();
 
+        // Excluded from coverage: gates on a live process snapshot and caches
+        // against it; each row it keeps is decided by MapRow, which is tested.
+        [ExcludeFromCodeCoverage]
         public static IReadOnlyList<ClaudeInstance> Scan()
         {
             if (!OperatingSystem.IsWindows()) return Array.Empty<ClaudeInstance>();
@@ -75,6 +79,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: Process.GetProcessesByName against the live
+        // process table.
+        [ExcludeFromCodeCoverage]
         private static int[] CurrentPids()
         {
             var processes = Process.GetProcessesByName("claude");
@@ -91,6 +98,8 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: a WMI query against Win32_Process.
+        [ExcludeFromCodeCoverage]
         private static IReadOnlyList<ClaudeInstance> ScanCore()
         {
             var results = new List<ClaudeInstance>();
@@ -103,26 +112,50 @@ namespace ClaudeBuddy
             {
                 using var process = match;
 
-                var path = process["ExecutablePath"] as string;
-                if (string.IsNullOrEmpty(path)
-                    || path.IndexOf(PackagedPathMarker, StringComparison.OrdinalIgnoreCase) < 0)
+                if (MapRow(
+                        process["ExecutablePath"] as string,
+                        process["CommandLine"] as string ?? "",
+                        Convert.ToInt32(process["ProcessId"])) is { } instance)
                 {
-                    continue;
+                    results.Add(instance);
                 }
-
-                var commandLine = process["CommandLine"] as string ?? "";
-                if (commandLine.Contains("--type=", StringComparison.Ordinal)) continue; // a child process, not the main one
-
-                var pid = Convert.ToInt32(process["ProcessId"]);
-                var argMatch = UserDataDirArg.Match(commandLine);
-                string? userDataDir = argMatch.Success
-                    ? (argMatch.Groups[1].Success ? argMatch.Groups[1].Value : argMatch.Groups[2].Value)
-                    : null;
-
-                results.Add(new ClaudeInstance(pid, userDataDir is { Length: > 0 } ? userDataDir : null));
             }
 
             return results;
+        }
+
+        // One Win32_Process row as an instance, or null for a row that is not
+        // one.
+        //
+        // Split out of the WMI walk above so the rules are reachable, which puts
+        // this file's decisions on the same footing as its macOS twin — the three
+        // buffer walks in MacOSProcessScan were already separated this way and
+        // this one was not. Getting any of the three wrong is quiet: a missed
+        // instance offers Launch for a profile that is already running, and a
+        // spurious one offers Focus for a window that does not exist.
+        internal static ClaudeInstance? MapRow(string? path, string commandLine, int pid)
+        {
+            // Only the packaged (MSIX) install counts. Anything outside
+            // WindowsApps is a different Claude — a dev build, another vendor's
+            // binary that happens to be called claude.exe — and activating it
+            // through the packaged path would fail.
+            if (string.IsNullOrEmpty(path)
+                || path.IndexOf(PackagedPathMarker, StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                return null;
+            }
+
+            // A child process, not the main one. Electron's renderers and GPU
+            // process carry --type= and share the parent's executable path, so
+            // without this one instance reads as five.
+            if (commandLine.Contains("--type=", StringComparison.Ordinal)) return null;
+
+            var argMatch = UserDataDirArg.Match(commandLine);
+            string? userDataDir = argMatch.Success
+                ? (argMatch.Groups[1].Success ? argMatch.Groups[1].Value : argMatch.Groups[2].Value)
+                : null;
+
+            return new ClaudeInstance(pid, userDataDir is { Length: > 0 } ? userDataDir : null);
         }
     }
 }

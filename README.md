@@ -682,6 +682,13 @@ Details worth knowing:
   its own `ant-did`.
 - `CLAUDE_BUDDY_PROFILE_ROOT` overrides the directory profiles are discovered
   in, which is how to try this out without touching your real one.
+- `CLAUDE_BUDDY_BUNDLE_ROOT` overrides where the cloned, recoloured `Claude.app`
+  bundles are cached (normally
+  `~/Library/Application Support/ClaudeBuddy/bundles`). Same purpose: the cache
+  holds real 753MB clones whose icons you are looking at, so anything poking at
+  it — a test, or a manual experiment — should be pointed somewhere else first.
+  Deleting either directory costs nothing but the coloured icons, which are
+  rebuilt on next launch.
 
 It works by watching a small folder in the OS temp directory
 (`%TEMP%\claude_buddy\` on Windows, `$TMPDIR/claude_buddy/` on macOS) that

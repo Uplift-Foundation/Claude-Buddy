@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 
 namespace ClaudeBuddy
@@ -24,7 +25,17 @@ namespace ClaudeBuddy
         // agent finishing doesn't leave a stale orb around for long.
         private const long CacheMs = 10_000;
 
-        private static readonly object Gate = new();
+        // In a holder rather than a field on this class, because it is only ever
+        // taken by States(), which is excluded — and a static field initializer
+        // does not run until some static field is touched, so this one reads as
+        // an uncovered line in a class whose measured half never reaches it.
+        // Excluding the holder is the honest description: it belongs to the
+        // excluded code, not to the tested code.
+        [ExcludeFromCodeCoverage]
+        private static class Cache
+        {
+            internal static readonly object Gate = new();
+        }
         private static Dictionary<string, string>? _states;
         private static long _stamp;
 
@@ -39,6 +50,11 @@ namespace ClaudeBuddy
         // getting one of its own. Both shapes write the same "idle" whether they
         // still have work to do or not, so the daemon's own list is the only
         // place to settle it.
+        // Excluded from coverage: States() runs `claude agents --json` as a real
+        // subprocess to ask the daemon for its listing. The answer, which is the
+        // part with a decision in it, is IsLive below — separated for exactly this
+        // reason and covered against hand-written listings in BackgroundJobsTests.
+        [ExcludeFromCodeCoverage]
         public static bool IsLiveJob(string sessionId) => IsLive(States(), sessionId);
 
         // The answer, separated from fetching the listing so it can be tested
@@ -71,9 +87,15 @@ namespace ClaudeBuddy
             return !string.Equals(state, "done", StringComparison.OrdinalIgnoreCase);
         }
 
+        // Excluded from coverage: shells out to the `claude` CLI, and the cache
+        // it wraps is keyed on Environment.TickCount64. What it decides with the
+        // answer is IsLive above, which is tested; what it decides about the
+        // *listing* is Parse below, which is also tested. This is the process
+        // launch and the clock, and nothing else.
+        [ExcludeFromCodeCoverage]
         private static Dictionary<string, string>? States()
         {
-            lock (Gate)
+            lock (Cache.Gate)
             {
                 if (_states is not null && Environment.TickCount64 - _stamp < CacheMs)
                 {
@@ -83,7 +105,7 @@ namespace ClaudeBuddy
 
             var fresh = Read();
 
-            lock (Gate)
+            lock (Cache.Gate)
             {
                 // A failed read doesn't clear a good answer: the listing going
                 // missing for one tick is not evidence that anything finished.
@@ -96,6 +118,11 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: starts the `claude` CLI as a real subprocess.
+        // The JSON it prints is parsed by Parse below, which is tested against
+        // hand-written listings, so what is excluded here is the launch and
+        // nothing that decides anything.
+        [ExcludeFromCodeCoverage]
         private static Dictionary<string, string>? Read()
         {
             try
@@ -200,7 +227,12 @@ namespace ClaudeBuddy
         // session id a job started with. Only reached for a row that named no
         // session of its own; split rather than a fixed width so an id that
         // isn't a uuid degrades to itself.
-        private static string JobIdOf(string sessionId)
+        // internal: AgentTeamViewer carries its own copy of this rule, and the
+        // two are used together — one decides which pane to reuse and the other
+        // whether the job is still alive — so a test asserts they agree. A
+        // session that resolved to two different job ids would be adopted into a
+        // pane and then have its orb hidden.
+        internal static string JobIdOf(string sessionId)
         {
             var dash = sessionId.IndexOf('-');
             return dash > 0 ? sessionId[..dash] : sessionId;

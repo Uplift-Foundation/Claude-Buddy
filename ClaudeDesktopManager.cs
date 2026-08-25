@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
@@ -81,16 +82,16 @@ namespace ClaudeBuddy
         private static readonly string[] MarkerDirectories =
             { Path.Combine("Local Storage", "leveldb"), "Crashpad" };
 
-        private sealed record Transient(ProfileActivity Kind, long Deadline, string? Message);
+        internal sealed record Transient(ProfileActivity Kind, long Deadline, string? Message);
 
         // First pid seen for a profile directory, and how many processes are on
         // it. Count > 1 is the concurrent-access hazard, not a normal state.
-        private readonly record struct InstanceGroup(int Pid, int Count);
+        internal readonly record struct InstanceGroup(int Pid, int Count);
 
         // DefaultDirectory resolves symlinks, so it touches the filesystem.
         // It's captured here rather than recomputed in Compose, which also runs
         // on the UI thread when a click changes transient state.
-        private sealed record ScanResult(
+        internal sealed record ScanResult(
             bool Installed,
             string DefaultDirectory,
             IReadOnlyList<(string Name, string Directory)> Profiles,
@@ -136,6 +137,17 @@ namespace ClaudeBuddy
         // Cheap to call on every poll tick: at most one scan is ever in flight,
         // and the result is only pushed back to the UI when the digest changes,
         // which is what keeps Refresh() from looping back into another scan.
+        // Excluded from coverage: the whole of it is the machine's own state.
+        // AppInstalled() asks whether Claude Desktop is installed on this
+        // computer — /Applications on macOS, the AppX package repository in the
+        // registry on Windows — and, when it is, ScanProcesses() walks every
+        // live process through sysctl(KERN_PROCARGS2) or WMI to find the running
+        // instances. A test can arrange neither answer, and on a machine where
+        // Claude Desktop *is* installed it would publish that machine's real
+        // profile list over whatever a test had just set up. Adopt() below is
+        // the seam: it is the same "remember this scan and publish it" step this
+        // method reaches, with the scan handed in.
+        [ExcludeFromCodeCoverage]
         public static void KickRefresh()
         {
             if (!SupportedPlatform) return;
@@ -149,6 +161,8 @@ namespace ClaudeBuddy
             });
         }
 
+        // Excluded from coverage: see KickRefresh. This is the body it runs.
+        [ExcludeFromCodeCoverage]
         private static void RefreshCore()
         {
             var installed = AppInstalled();
@@ -158,11 +172,23 @@ namespace ClaudeBuddy
             IReadOnlyDictionary<string, InstanceGroup> running =
                 installed ? MapInstances(ScanProcesses()) : EmptyRunning;
 
-            var scan = new ScanResult(installed, DefaultDirectory(), profiles, running);
+            Adopt(new ScanResult(installed, DefaultDirectory(), profiles, running));
+        }
+
+        // Remember a scan as the current one and publish what it composes to.
+        // Split out of RefreshCore so a caller that already has a scan — a test,
+        // or any future non-polling source of one — does not have to reach the
+        // machine to install it; Recompose then has something to recompose from,
+        // which is the whole reason it can avoid re-scanning on a click.
+        internal static void Adopt(ScanResult scan)
+        {
             _lastScan = scan;
             Publish(Compose(scan));
         }
 
+        // Excluded from coverage: sysctl(KERN_PROCARGS2) on macOS, WMI on
+        // Windows — a walk of every process on the machine running the tests.
+        [ExcludeFromCodeCoverage]
         private static IReadOnlyList<ClaudeInstance> ScanProcesses() =>
             OperatingSystem.IsWindows() ? WindowsProcessScan.Scan() : MacOSProcessScan.Scan();
 
@@ -171,7 +197,7 @@ namespace ClaudeBuddy
 
         // Recompose from the last scan without re-scanning — for when a click
         // has changed transient state and the menu should say so immediately.
-        private static void Recompose()
+        internal static void Recompose()
         {
             var scan = _lastScan;
             if (scan is null)
@@ -190,7 +216,7 @@ namespace ClaudeBuddy
         // own rebuild signature.
         private static readonly object PublishGate = new();
 
-        private static void Publish(DesktopSnapshot next)
+        internal static void Publish(DesktopSnapshot next)
         {
             bool changed;
 
@@ -206,7 +232,7 @@ namespace ClaudeBuddy
             if (changed) Dispatcher.UIThread.Post(() => TrayController.Instance?.Refresh());
         }
 
-        private static string DigestOf(DesktopSnapshot snapshot)
+        internal static string DigestOf(DesktopSnapshot snapshot)
         {
             if (!snapshot.AppInstalled) return "cd=off";
 
@@ -230,7 +256,7 @@ namespace ClaudeBuddy
                 .OrderBy(entry => entry, StringComparer.Ordinal));
         }
 
-        private static DesktopSnapshot Compose(ScanResult scan)
+        internal static DesktopSnapshot Compose(ScanResult scan)
         {
             var now = Environment.TickCount64;
             var defaultDirectory = scan.DefaultDirectory;
@@ -258,7 +284,7 @@ namespace ClaudeBuddy
             return new DesktopSnapshot(scan.Installed, views);
         }
 
-        private static (ProfileActivity, string?) ResolveTransient(string directory, bool isRunning, long now)
+        internal static (ProfileActivity, string?) ResolveTransient(string directory, bool isRunning, long now)
         {
             lock (TransientGate)
             {
@@ -325,7 +351,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private static void SetTransient(string directory, ProfileActivity kind, int lifetimeMs, string? message = null)
+        internal static void SetTransient(string directory, ProfileActivity kind, int lifetimeMs, string? message = null)
         {
             lock (TransientGate)
             {
@@ -335,7 +361,7 @@ namespace ClaudeBuddy
             Recompose();
         }
 
-        private static void ClearTransient(string directory)
+        internal static void ClearTransient(string directory)
         {
             lock (TransientGate)
             {
@@ -347,11 +373,19 @@ namespace ClaudeBuddy
 
         // ---- discovery -----------------------------------------------------
 
+        // Excluded from coverage: answers "is Claude Desktop installed on this
+        // machine", which is exactly the thing no test can arrange — it is true
+        // on a developer's laptop and false on a CI runner, and an assertion
+        // that holds on one is wrong on the other.
+        [ExcludeFromCodeCoverage]
         private static bool AppInstalled() =>
             OperatingSystem.IsWindows() ? WindowsAppLookup.ResolveAumid() is not null : AppPath() is not null;
 
         // macOS only: the bundle path backs cloned, tinted Dock icons, which
         // have no Windows analogue (out of scope — see ClaudeDesktopBundles).
+        // Excluded from coverage: same reason as AppInstalled — it probes
+        // /Applications and ~/Applications for a real installed bundle.
+        [ExcludeFromCodeCoverage]
         private static string? AppPath()
         {
             foreach (var candidate in new[]
@@ -366,11 +400,11 @@ namespace ClaudeBuddy
             return null;
         }
 
-        private static string DefaultDirectory() =>
+        internal static string DefaultDirectory() =>
             Canonicalise(Path.Combine(ProfileRoot, DefaultProfileFolder))
             ?? Path.Combine(ProfileRoot, DefaultProfileFolder);
 
-        private static IReadOnlyList<(string Name, string Directory)> Discover()
+        internal static IReadOnlyList<(string Name, string Directory)> Discover()
         {
             var found = new List<(string Name, string Directory)>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -432,13 +466,13 @@ namespace ClaudeBuddy
             return found;
         }
 
-        private static bool IsSymlink(string path)
+        internal static bool IsSymlink(string path)
         {
             try { return new DirectoryInfo(path).LinkTarget is not null; }
             catch { return false; }
         }
 
-        private static string? Canonicalise(string path)
+        internal static string? Canonicalise(string path)
         {
             try
             {
@@ -458,7 +492,7 @@ namespace ClaudeBuddy
         // Accept a real profile, or an empty directory — New profile creates
         // them empty, so a brand-new one has to be adoptable. Anything else
         // called "Claude-something" is somebody else's folder.
-        private static bool LooksLikeProfile(string directory)
+        internal static bool LooksLikeProfile(string directory)
         {
             try
             {
@@ -476,10 +510,10 @@ namespace ClaudeBuddy
             }
         }
 
-        private static string DisplayNameFor(string folderName) =>
+        internal static string DisplayNameFor(string folderName) =>
             folderName == DefaultProfileFolder ? DefaultDisplayName : folderName["Claude-".Length..];
 
-        private static IReadOnlyDictionary<string, InstanceGroup> MapInstances(
+        internal static IReadOnlyDictionary<string, InstanceGroup> MapInstances(
             IReadOnlyList<ClaudeInstance> instances)
         {
             var defaultDirectory = DefaultDirectory();
@@ -535,6 +569,16 @@ namespace ClaudeBuddy
         // the cost is irrelevant, and the snapshot can be two seconds stale —
         // long enough to miss the instance that just asked for a sign-in
         // callback, which is exactly the instance that must not be missed.
+        // Excluded from coverage: scans this machine's real processes, on
+        // purpose and freshly rather than off the snapshot — a link arrives
+        // rarely, so the cost is irrelevant, and a two-second-stale snapshot can
+        // miss the instance that just asked for a sign-in callback, which is
+        // exactly the instance that must not be missed.
+        //
+        // The two rules it applies are measured elsewhere: DirectoryOf below,
+        // and ClaudeDesktopUrlRouting.Choose, which is what actually picks a
+        // profile out of the candidates this builds.
+        [ExcludeFromCodeCoverage]
         internal static IReadOnlyList<UrlRouteCandidate> RouteCandidates()
         {
             if (!OperatingSystem.IsMacOS()) return Array.Empty<UrlRouteCandidate>();
@@ -584,19 +628,44 @@ namespace ClaudeBuddy
 
         // Same rule MapInstances uses: no override in the environment means the
         // app resolved its own default location.
-        private static string? DirectoryOf(ClaudeInstance instance, string defaultDirectory)
+        // internal so the three answers can be asked for directly. Which one a
+        // running instance gets decides which profile a sign-in callback lands
+        // in, and the only other way to reach it is to scan real processes.
+        internal static string? DirectoryOf(ClaudeInstance instance, string defaultDirectory)
         {
             if (instance.UserDataDir is null) return defaultDirectory;
 
             var directory = Canonicalise(instance.UserDataDir);
             if (directory is not null) return directory;
 
-            try { return Path.GetFullPath(instance.UserDataDir).TrimEnd('/'); }
+            return SafeFullPath(instance.UserDataDir);
+        }
+
+        // Excluded from coverage: exists to be the try/catch. Path.GetFullPath
+        // throws only for a path the platform rejects outright, and the string
+        // here came out of a running process's own environment — so reaching the
+        // catch means that process was launched with something no filesystem
+        // would accept.
+        //
+        // Kept because it is exactly the sort of thing another app's launcher
+        // can do, and an exception here would take down a scan that every orb
+        // depends on rather than losing one candidate.
+        [ExcludeFromCodeCoverage]
+        private static string? SafeFullPath(string path)
+        {
+            try { return Path.GetFullPath(path).TrimEnd('/'); }
             catch { return null; }
         }
 
         // ---- actions -------------------------------------------------------
 
+        // Excluded from coverage: starts Claude Desktop. Every path out of here
+        // ends in `open -n` against a real app bundle or in
+        // WindowsAppActivation's IApplicationActivationManager, and the clone
+        // path first cp -Rc's a 753 MB bundle. Running this in a test would put
+        // a second Chromium on somebody's profile directory, which is precisely
+        // the corruption the LaunchGate below exists to prevent.
+        [ExcludeFromCodeCoverage]
         public static void Launch(ProfileView profile)
         {
             if (!SupportedPlatform) return;
@@ -644,6 +713,8 @@ namespace ClaudeBuddy
             });
         }
 
+        // Excluded from coverage: see Launch. Runs /usr/bin/open.
+        [ExcludeFromCodeCoverage]
         private static bool LaunchMac(string directory, bool isDefault)
         {
             // The Default profile is launched *without* the variable.
@@ -742,6 +813,9 @@ namespace ClaudeBuddy
         // re-triggering the deployment-mode chooser the same way an
         // unnecessary CLAUDE_USER_DATA_DIR does on macOS (see LaunchMac).
         // A created profile gets the flag pointed at its own directory.
+        // Excluded from coverage: see Launch. Calls the shell's activation
+        // manager against a real installed AppX package.
+        [ExcludeFromCodeCoverage]
         [System.Runtime.Versioning.SupportedOSPlatform("windows")]
         private static bool LaunchWindows(string directory, bool isDefault)
         {
@@ -752,6 +826,12 @@ namespace ClaudeBuddy
             return WindowsAppActivation.TryActivate(aumid, arguments, out _);
         }
 
+        // Excluded from coverage: activates another application's window —
+        // NSRunningApplication.activateWithOptions through Apple Events on
+        // macOS, ShowWindow/SetForegroundWindow on Windows. Both act on a live
+        // pid belonging to a process this app does not own, and on macOS the
+        // Apple Event is subject to the machine's Automation consent.
+        [ExcludeFromCodeCoverage]
         public static void Focus(int pid)
         {
             if (!SupportedPlatform || pid <= 0) return;
@@ -770,6 +850,8 @@ namespace ClaudeBuddy
         // profile whose window is hidden in the tray — which is where Claude
         // Desktop goes when you close it — had nothing to focus and the click
         // did nothing at all. ShowAndFocus finds the hidden window and shows it.
+        // Excluded from coverage: see Focus.
+        [ExcludeFromCodeCoverage]
         private static void FocusWindows(int pid)
         {
             try
@@ -783,6 +865,12 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: terminates another application. On macOS that
+        // is an Apple Event asking Claude Desktop to quit; on Windows it posts
+        // WM_CLOSE to its windows and then kills the process tree. Either one
+        // run against a live pid on the machine hosting the tests ends somebody
+        // else's process, and against a stale pid ends whatever now holds it.
+        [ExcludeFromCodeCoverage]
         public static void Quit(ProfileView profile)
         {
             if (!SupportedPlatform || profile.Pid <= 0) return;
@@ -843,6 +931,8 @@ namespace ClaudeBuddy
         // windows: after a first Quit hid the app, it returned false and the
         // row said "couldn't quit" without ever reaching a state that could
         // terminate the tree. Asking a hidden window works fine.
+        // Excluded from coverage: see Quit.
+        [ExcludeFromCodeCoverage]
         [SupportedOSPlatform("windows")]
         private static bool QuitWindows(int pid)
         {
@@ -865,7 +955,7 @@ namespace ClaudeBuddy
             }
         }
 
-        private static bool ProcessAlive(int pid)
+        internal static bool ProcessAlive(int pid)
         {
             try
             {
@@ -878,6 +968,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: see Quit. This is the same thing without the
+        // asking.
+        [ExcludeFromCodeCoverage]
         public static void ForceQuit(ProfileView profile)
         {
             if (!SupportedPlatform || profile.Pid <= 0) return;
@@ -898,6 +991,9 @@ namespace ClaudeBuddy
             });
         }
 
+        // Excluded from coverage: Process.Kill(entireProcessTree) against a pid
+        // this app does not own.
+        [ExcludeFromCodeCoverage]
         private static bool ForceQuitWindows(int pid)
         {
             try
@@ -917,6 +1013,10 @@ namespace ClaudeBuddy
         // stale after a Claude update and would keep running the old version.
         // Rebuilding is a clone plus an icon, so it's cheap enough to just redo
         // for every profile that has one.
+        // Excluded from coverage: rebuilds every clone, which means cp -Rc of the
+        // installed bundle per profile plus NSWorkspace.setIcon on each — see
+        // ClaudeDesktopBundles, where the same boundary is drawn.
+        [ExcludeFromCodeCoverage]
         public static void RebuildDockIcons()
         {
             if (!OperatingSystem.IsMacOS()) return;
@@ -943,6 +1043,10 @@ namespace ClaudeBuddy
         // Called when a profile's colour changes: the clone's Dock icon was baked
         // at creation time and would otherwise keep the old colour until the next
         // rebuild.
+        // Excluded from coverage: same as RebuildDockIcons for one profile, and
+        // it first scans the machine's live processes to decide whether it is
+        // safe to delete the bundle out from under a running instance.
+        [ExcludeFromCodeCoverage]
         public static void RecolourDockIcon(string folder)
         {
             if (!OperatingSystem.IsMacOS()) return;
@@ -981,6 +1085,9 @@ namespace ClaudeBuddy
             });
         }
 
+        // Excluded from coverage: opens a Finder window on the machine running
+        // the tests.
+        [ExcludeFromCodeCoverage]
         public static void RevealDockIconBundles()
         {
             if (!OperatingSystem.IsMacOS()) return;
@@ -1002,7 +1109,7 @@ namespace ClaudeBuddy
         // anywhere in the app).
         public const string SystemTheme = "system";
 
-        private static string ReadThemeMode(string directory)
+        internal static string ReadThemeMode(string directory)
         {
             try
             {
@@ -1021,6 +1128,12 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: the *decision* this makes is whether an
+        // instance is live on the directory, and it makes it by walking the
+        // machine's processes — see ScanProcesses. The rewrite itself, which is
+        // the part with the profile's login at stake, is WriteThemeMode below,
+        // and that is tested.
+        [ExcludeFromCodeCoverage]
         public static void SetTheme(ProfileView profile, string mode)
         {
             if (!SupportedPlatform) return;
@@ -1029,53 +1142,21 @@ namespace ClaudeBuddy
 
             Task.Run(() =>
             {
-                try
+                // A running instance rewrites config.json from memory when it
+                // exits, which would silently discard this — and two writers
+                // on one file can leave it unparseable, which would cost the
+                // profile its stored login. Re-check authoritatively rather
+                // than trusting the menu's snapshot.
+                if (MapInstances(ScanProcesses()).ContainsKey(directory))
                 {
-                    // A running instance rewrites config.json from memory when it
-                    // exits, which would silently discard this — and two writers
-                    // on one file can leave it unparseable, which would cost the
-                    // profile its stored login. Re-check authoritatively rather
-                    // than trusting the menu's snapshot.
-                    if (MapInstances(ScanProcesses()).ContainsKey(directory))
-                    {
-                        SetTransient(directory, ProfileActivity.Error, ErrorMs, "quit it first");
-                        return;
-                    }
-
-                    var path = Path.Combine(directory, "config.json");
-                    var original = File.Exists(path) ? File.ReadAllText(path) : "{}";
-                    var root = JsonNode.Parse(original) as JsonObject;
-
-                    if (root is null)
-                    {
-                        SetTransient(directory, ProfileActivity.Error, ErrorMs, "config unreadable");
-                        return;
-                    }
-
-                    root["userThemeMode"] = mode;
-
-                    // Write beside the target and rename over it: a crash midway
-                    // through an in-place write would leave the profile without a
-                    // parseable config, taking its oauth token cache with it.
-                    // UTF-8 without a BOM, matching what the app itself writes.
-                    var temporary = path + ".claude-buddy.tmp";
-                    File.WriteAllText(temporary, root.ToJsonString(), new UTF8Encoding(false));
-
-                    // This file holds the profile's login. Prove the rewrite kept
-                    // every key before letting it replace the original, and throw
-                    // the candidate away rather than the real thing if it didn't.
-                    if (!PreservesKeys(original, temporary, mode))
-                    {
-                        try { File.Delete(temporary); } catch { }
-                        SetTransient(directory, ProfileActivity.Error, ErrorMs, "config rewrite unsafe");
-                        return;
-                    }
-
-                    File.Move(temporary, path, overwrite: true);
+                    SetTransient(directory, ProfileActivity.Error, ErrorMs, "quit it first");
+                    return;
                 }
-                catch
+
+                var failure = WriteThemeMode(directory, mode);
+                if (failure is not null)
                 {
-                    SetTransient(directory, ProfileActivity.Error, ErrorMs, "couldn't set theme");
+                    SetTransient(directory, ProfileActivity.Error, ErrorMs, failure);
                     return;
                 }
 
@@ -1083,11 +1164,55 @@ namespace ClaudeBuddy
             });
         }
 
+        // Rewrites one profile's config.json to the requested theme, returning
+        // null on success or the message the menu row should show.
+        //
+        // Split out of SetTheme so it can be tested against a real file without
+        // first having to convince a process scan that nothing is running: the
+        // scan is the part no test can arrange, and this is the part that can
+        // lose somebody their stored login.
+        internal static string? WriteThemeMode(string directory, string mode)
+        {
+            try
+            {
+                var path = Path.Combine(directory, "config.json");
+                var original = File.Exists(path) ? File.ReadAllText(path) : "{}";
+                var root = JsonNode.Parse(original) as JsonObject;
+
+                if (root is null) return "config unreadable";
+
+                root["userThemeMode"] = mode;
+
+                // Write beside the target and rename over it: a crash midway
+                // through an in-place write would leave the profile without a
+                // parseable config, taking its oauth token cache with it.
+                // UTF-8 without a BOM, matching what the app itself writes.
+                var temporary = path + ".claude-buddy.tmp";
+                File.WriteAllText(temporary, root.ToJsonString(), new UTF8Encoding(false));
+
+                // This file holds the profile's login. Prove the rewrite kept
+                // every key before letting it replace the original, and throw
+                // the candidate away rather than the real thing if it didn't.
+                if (!PreservesKeys(original, temporary, mode))
+                {
+                    try { File.Delete(temporary); } catch { }
+                    return "config rewrite unsafe";
+                }
+
+                File.Move(temporary, path, overwrite: true);
+                return null;
+            }
+            catch
+            {
+                return "couldn't set theme";
+            }
+        }
+
         // Every top-level key present before must still be present after, with an
         // unchanged serialised value — except userThemeMode, which is the one we
         // meant to change. Cheap insurance against a serialiser quirk silently
         // dropping or rewriting the encrypted token blobs next door.
-        private static bool PreservesKeys(string originalText, string candidatePath, string expectedMode)
+        internal static bool PreservesKeys(string originalText, string candidatePath, string expectedMode)
         {
             try
             {
@@ -1114,6 +1239,45 @@ namespace ClaudeBuddy
             }
         }
 
+        // Where a profile's logs could be, most likely first.
+        //
+        // Split out of RevealLogs because the *list* is the interesting part and
+        // opening a Finder or Explorer window is not: which directory Electron
+        // writes to depends on whether the instance was launched with an
+        // environment override, and this app deliberately launches Default
+        // without one. Get that wrong and "Reveal logs" opens the wrong
+        // profile's logs, which is worse than opening nothing.
+        internal static IEnumerable<string> LogCandidates(string directory, bool isDefault) =>
+            LogCandidates(directory, isDefault, OperatingSystem.IsWindows());
+
+        // The platform is an argument rather than a question this asks, so both
+        // answers are reachable from either machine. The two are genuinely
+        // different rules rather than different paths — see the comments below —
+        // and a rule that only one CI leg ever executes is a rule nobody reads
+        // until it is wrong.
+        internal static IEnumerable<string> LogCandidates(string directory, bool isDefault, bool windows)
+        {
+            if (windows)
+            {
+                // Unlike macOS, Electron's userData resolves to the same
+                // directory whether or not --user-data-dir was passed —
+                // Default's userData is just %APPDATA%\Claude — so there's
+                // one candidate rather than a Default/created split.
+                return new[] { Path.Combine(directory, "logs") };
+            }
+
+            // Only an env-launched instance writes <profile>/Logs; a plain
+            // launch — which is what Default deliberately gets — writes
+            // Electron's default path instead.
+            return isDefault
+                ? new[] { Path.Combine(Home, "Library", "Logs", DefaultProfileFolder), directory }
+                : new[] { Path.Combine(directory, "Logs"), directory };
+        }
+
+        // Excluded from coverage: opens a Finder or Explorer window on the
+        // machine running the tests. LogCandidates above is the part with a
+        // decision in it.
+        [ExcludeFromCodeCoverage]
         public static void RevealLogs(ProfileView profile)
         {
             if (!SupportedPlatform) return;
@@ -1123,27 +1287,7 @@ namespace ClaudeBuddy
 
             Task.Run(() =>
             {
-                IEnumerable<string> candidates;
-
-                if (OperatingSystem.IsWindows())
-                {
-                    // Unlike macOS, Electron's userData resolves to the same
-                    // directory whether or not --user-data-dir was passed —
-                    // Default's userData is just %APPDATA%\Claude — so there's
-                    // one candidate rather than a Default/created split.
-                    candidates = new[] { Path.Combine(directory, "logs") };
-                }
-                else
-                {
-                    // Only an env-launched instance writes <profile>/Logs; a
-                    // plain launch — which is what Default deliberately gets —
-                    // writes Electron's default path instead.
-                    candidates = isDefault
-                        ? new[] { Path.Combine(Home, "Library", "Logs", DefaultProfileFolder), directory }
-                        : new[] { Path.Combine(directory, "Logs"), directory };
-                }
-
-                foreach (var candidate in candidates)
+                foreach (var candidate in LogCandidates(directory, isDefault))
                 {
                     if (!Directory.Exists(candidate)) continue;
                     OpenFolder(candidate);
@@ -1154,6 +1298,8 @@ namespace ClaudeBuddy
             });
         }
 
+        // Excluded from coverage: opens a Finder or Explorer window.
+        [ExcludeFromCodeCoverage]
         public static void RevealProfilesFolder()
         {
             if (!SupportedPlatform) return;
@@ -1165,6 +1311,9 @@ namespace ClaudeBuddy
             });
         }
 
+        // Excluded from coverage: launches explorer.exe or /usr/bin/open, both
+        // of which put a window on the screen of whatever machine is running.
+        [ExcludeFromCodeCoverage]
         private static void OpenFolder(string path)
         {
             if (OperatingSystem.IsWindows())
@@ -1184,6 +1333,26 @@ namespace ClaudeBuddy
             }
         }
 
+        // The name a new profile gets: the first Claude-Profile-N whose
+        // directory does not already exist, so the numbering reuses a gap rather
+        // than climbing forever.
+        //
+        // Split out of NewProfile because reusing a gap is a decision with a
+        // consequence elsewhere — ClaudeBuddySettings.RemoveProfile's own comment
+        // says a name left behind would be inherited by the next profile that
+        // reused it, and this is what makes reuse happen.
+        internal static string NextProfileName(string root)
+        {
+            var n = 1;
+            while (Directory.Exists(Path.Combine(root, $"Claude-Profile-{n}"))) n++;
+
+            return $"Claude-Profile-{n}";
+        }
+
+        // Excluded from coverage: its last act is Launch, so running it starts a
+        // real Claude Desktop instance — see Launch. NextProfileName above is the
+        // part with a rule in it.
+        [ExcludeFromCodeCoverage]
         public static void NewProfile()
         {
             if (!SupportedPlatform) return;
@@ -1198,10 +1367,7 @@ namespace ClaudeBuddy
                     var root = ProfileRoot;
                     Directory.CreateDirectory(root);
 
-                    var n = 1;
-                    while (Directory.Exists(Path.Combine(root, $"Claude-Profile-{n}"))) n++;
-
-                    name = $"Claude-Profile-{n}";
+                    name = NextProfileName(root);
                     directory = Path.Combine(root, name);
                     Directory.CreateDirectory(directory);
                 }
@@ -1240,7 +1406,14 @@ namespace ClaudeBuddy
         // of those it was instead of a shrug.
         internal enum DeleteOutcome { Deleted, RefusedDefault, RefusedRunning, Failed }
 
-        public static DeleteOutcome DeleteProfile(ProfileView profile)
+        // Every reason this is allowed to refuse, in one place and with nothing
+        // destructive behind it. Deleted here means "nothing objects", not
+        // "done" — DeleteProfile is what actually moves the directory.
+        //
+        // Split out for exactly that reason: these are the three rules the long
+        // comment above calls non-optional, and a test can check all of them
+        // without a profile directory ever reaching anybody's Trash.
+        internal static DeleteOutcome CheckDelete(ProfileView profile)
         {
             if (!SupportedPlatform) return DeleteOutcome.Failed;
             if (profile.IsDefault) return DeleteOutcome.RefusedDefault;
@@ -1264,22 +1437,47 @@ namespace ClaudeBuddy
                 return DeleteOutcome.Failed;
             }
 
-            if (!Trash(directory)) return DeleteOutcome.Failed;
+            return DeleteOutcome.Deleted;
+        }
 
+        // What has to go with a profile once its directory has gone: the cloned
+        // bundle that gave it a coloured Dock icon, and the name and colour saved
+        // against it. Left behind, both would be waiting for a profile that no
+        // longer exists — and would be silently inherited by the next profile
+        // that happened to reuse the name, which the numbering makes likely
+        // rather than far-fetched (see NextProfileName).
+        internal static void ForgetProfile(string directory)
+        {
             var folder = Path.GetFileName(directory);
 
-            // The cloned bundle that gave it a coloured Dock icon, and the name
-            // and colour saved against it. Left behind, both would be waiting
-            // for a profile that no longer exists — and would be silently
-            // inherited by the next profile that happened to reuse the name.
             try { ClaudeDesktopBundles.Remove(folder); } catch { }
             ClaudeBuddySettings.RemoveProfile(folder);
+        }
+
+        // Excluded from coverage: moves a real directory to the Trash or the
+        // Recycle Bin — someone's Claude Desktop login, chat history and local
+        // databases. Both halves that can be checked without doing that are
+        // CheckDelete and ForgetProfile above, and both are tested; what is left
+        // here is the Trash call itself and the order of the three steps.
+        [ExcludeFromCodeCoverage]
+        public static DeleteOutcome DeleteProfile(ProfileView profile)
+        {
+            var refusal = CheckDelete(profile);
+            if (refusal != DeleteOutcome.Deleted) return refusal;
+
+            if (!Trash(profile.Directory)) return DeleteOutcome.Failed;
+
+            ForgetProfile(profile.Directory);
 
             KickRefresh();
             return DeleteOutcome.Deleted;
         }
 
         // To the Trash, using whichever facility the platform calls that.
+        // Excluded from coverage: see DeleteProfile. On macOS this is an Apple
+        // Event telling Finder to delete a path; on Windows a shell file
+        // operation into the Recycle Bin.
+        [ExcludeFromCodeCoverage]
         private static bool Trash(string directory)
         {
             if (OperatingSystem.IsMacOS())
@@ -1306,6 +1504,9 @@ namespace ClaudeBuddy
         //
         // Not run on a real Windows machine. See docs/windows-*-findings.md for
         // what that phrase is worth in this repo.
+        // Excluded from coverage: see DeleteProfile. SHFileOperation with
+        // FOF_ALLOWUNDO against a real path.
+        [ExcludeFromCodeCoverage]
         [SupportedOSPlatform("windows")]
         private static bool RecycleOnWindows(string directory)
         {
@@ -1359,6 +1560,11 @@ namespace ClaudeBuddy
         // or the timeout is unreachable (a blocking read returns when the pipe
         // closes, which a wedged child never does) and an undrained stderr can
         // deadlock a chatty one once its pipe buffer fills.
+        // Excluded from coverage: every caller left in this file is excluded for
+        // reaching the OS, and this is how they reach it — open(1), osascript(1).
+        // Covering it would mean starting one of those processes for no reason
+        // other than the number.
+        [ExcludeFromCodeCoverage]
         private static bool Run(string executable, params string[] arguments)
         {
             try

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -122,6 +123,12 @@ namespace ClaudeBuddy
         // it when launching a relay: the registry is per-account, and reading
         // the wrong account's would answer confidently about sessions this relay
         // cannot see.
+        // Excluded from coverage: launches `claude agents --json` as a real
+        // subprocess against a real account's config directory. What comes back
+        // is turned into entries by ParseAgentsJson, which is pure and covered
+        // against fixtures — this is only the asking, its timeout, and the kill
+        // for a CLI that never answers.
+        [ExcludeFromCodeCoverage]
         public static IReadOnlyList<Entry> Read(string profileDir, int timeoutMs = 5000)
         {
             var claude = ClaudeBinary.Path;

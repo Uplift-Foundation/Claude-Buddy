@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 
 namespace ClaudeBuddy
@@ -117,15 +118,46 @@ namespace ClaudeBuddy
             }
 
             // Every orb in a team means no shape at all. One of them leads.
-            if (anchors.Count == 0 && count > 0)
-            {
-                anchors.Add(0);
-                foreach (var team in members.Values) team.Remove(0);
-                members.Remove(0);
-            }
+            //
+            // This has never been observed to run, and reasoning about Resolves
+            // suggests it cannot: an orb is an anchor exactly when Resolves says
+            // no, and Resolves only says yes after hopping to a lead that is out
+            // of range — which makes the orb it landed on an anchor itself. So
+            // any non-empty set has at least one. The 20736-case sweep in
+            // tests/ArrangementTests has never produced anchors.Count == 0 either.
+            //
+            // Left in place rather than deleted: it is three lines of insurance
+            // against a lead table this reasoning does not anticipate, and the
+            // failure it prevents — every orb hidden, nothing drawn at all — is
+            // far worse than three uncovered lines. Named here so the next person
+            // reading a coverage report knows it is deliberate.
+            if (anchors.Count == 0 && count > 0) MakeTheFirstOrbAnAnchor(anchors, members);
         }
 
-        private static bool Resolves(int start, int[] leadOf, int count)
+        // Excluded from coverage: unreachable, for the reason stated above the
+        // call — Resolves always lands on an orb that is its own anchor, so a
+        // non-empty set always has one, and the 20736-case sweep in
+        // tests/ArrangementTests has never produced anchors.Count == 0 either.
+        //
+        // Kept rather than deleted: it is insurance against a lead table that
+        // reasoning does not anticipate, and the failure it prevents — every orb
+        // hidden, nothing drawn at all — is far worse than three lines nothing
+        // executes.
+        [ExcludeFromCodeCoverage]
+        private static void MakeTheFirstOrbAnAnchor(
+            List<int> anchors, Dictionary<int, List<int>> members)
+        {
+            anchors.Add(0);
+            foreach (var team in members.Values) team.Remove(0);
+            members.Remove(0);
+        }
+
+        // internal so the shapes a full sweep never produces can be asked for
+        // directly — see OrbArrangementResolvesTests. A lead chain that runs into
+        // a cycle it is not part of is the case in point: the walk never returns
+        // to where it began and never leaves the range, so only the hop budget
+        // ends it.
+        internal static bool Resolves(int start, int[] leadOf, int count)
         {
             var at = start;
 

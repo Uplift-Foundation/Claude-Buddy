@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -197,7 +198,7 @@ namespace ClaudeBuddy
         // settings window, and null means never — an orb then lasts until its
         // status file is deleted (SessionEnd) or you reset it by hand. Read per
         // scan rather than cached, so a change applies on the next tick.
-        private static TimeSpan? StaleAfter
+        internal static TimeSpan? StaleAfter
         {
             get
             {
@@ -208,8 +209,25 @@ namespace ClaudeBuddy
             }
         }
 
-        private readonly string _statusDir =
-            Path.Combine(Path.GetTempPath(), "claude_buddy");
+        private readonly string _statusDir;
+
+        public SessionManager()
+            : this(Path.Combine(Path.GetTempPath(), "claude_buddy"))
+        {
+        }
+
+        // The status directory, said out loud.
+        //
+        // It has always come from the temp path, and CLAUDE.md documents
+        // TMPDIR=<dir> as the way to give a second instance its own fake
+        // sessions — which still works, because that is what Path.GetTempPath
+        // reads. This overload only makes the same seam nameable, so a test can
+        // hand over a scratch directory without reaching for an environment
+        // variable that the rest of the process is also reading.
+        internal SessionManager(string statusDir)
+        {
+            _statusDir = statusDir;
+        }
 
         private readonly Dictionary<string, OrbWindow> _windows = new();
         private readonly Dictionary<string, SessionStatus> _statuses = new();
@@ -243,7 +261,11 @@ namespace ClaudeBuddy
         // to clear out; a marker that vanished would turn the feature off with
         // nothing said. Two cheap file operations against a directory already
         // being enumerated.
-        private void SyncAutoColorMarker()
+        // internal: the marker file is how the hook learns about the colour
+        // setting — the hook runs on every tool call and reading a setting there
+        // would be an osascript each time — so what this writes is a contract
+        // with a script, not an implementation detail.
+        internal void SyncAutoColorMarker()
         {
             try
             {
@@ -260,6 +282,11 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: creates the tray icon, subscribes the speech
+        // engine, starts a FileSystemWatcher and a two-second Avalonia timer, and
+        // opens the gateway connection. What it schedules is ScanAndUpdate, which
+        // is tested directly against a scratch status directory.
+        [ExcludeFromCodeCoverage]
         public void Start()
         {
             Instance = this;
@@ -314,6 +341,11 @@ namespace ClaudeBuddy
             ScanAndUpdate();
         }
 
+        // Excluded from coverage: creates a FileSystemWatcher on the status
+        // directory. The poll timer covers the same job — the comment in the catch
+        // below says so — and what either of them schedules is ScanAndUpdate,
+        // which is tested directly against a scratch directory.
+        [ExcludeFromCodeCoverage]
         private void StartWatching()
         {
             try
@@ -333,6 +365,9 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: restarts an Avalonia timer, and is only ever
+        // called from the watcher's own events.
+        [ExcludeFromCodeCoverage]
         private void RestartDebounce()
         {
             _debounce.Stop();
@@ -349,7 +384,7 @@ namespace ClaudeBuddy
         // it is off the app opens no socket and generates no key — so it is
         // consulted where the gateway is asked, not here. These two are display
         // switches over files that are being written regardless.
-        private static bool EnabledFor(SessionSource source) => source switch
+        internal static bool EnabledFor(SessionSource source) => source switch
         {
             SessionSource.Codex => ClaudeBuddySettings.CodexEnabled,
             SessionSource.ClaudeCode => ClaudeBuddySettings.ClaudeCodeEnabled,
@@ -474,7 +509,7 @@ namespace ClaudeBuddy
         // seen. A tty alone doesn't count here: it's the one field the walk
         // always fills in, and on its own it can name a tmux pane's pty, which
         // belongs to a detached server rather than to any window.
-        private static bool KnowsATerminal(SessionStatus status) =>
+        internal static bool KnowsATerminal(SessionStatus status) =>
             !string.IsNullOrEmpty(status.TmuxPane)
             || !string.IsNullOrEmpty(status.TermProgram)
             || !string.IsNullOrEmpty(status.TermId)
@@ -532,7 +567,225 @@ namespace ClaudeBuddy
             }
         }
 
-        private void ScanAndUpdate()
+        // Why a status file gets no orb this scan, or Keep when it does.
+        //
+        // Named answers rather than a bool, because every one of these five
+        // reasons has been wrong in a build somebody shipped — a Ctrl+C'd
+        // session whose orb never went away, an orb per subagent, a Codex file
+        // nothing on any path could remove. "Should this orb exist" is only
+        // half a rule; which rule dropped it is the half that can be checked,
+        // and the half a regression shows up in.
+        internal enum ScanVerdict
+        {
+            Keep,
+
+            // An id this process has already moved on from — see Superseded.
+            Superseded,
+
+            // The CLI process that wrote the file has exited.
+            ProcessGone,
+
+            // Quiet for longer than the user's "Keep orbs for" allows.
+            Expired,
+
+            // Nothing recorded that a click could be sent to.
+            NoTerminal,
+
+            // No process named, and the daemon does not know it as a job.
+            NotALiveJob,
+        }
+
+        // The rules that need nothing but the file, its mtime, and whether its
+        // process is alive.
+        //
+        // isRunning is passed in for the reason Superseded's isLiveJob is: the
+        // real one is a kill(2) against a pid this machine may or may not have,
+        // which is not a thing a unit test should be deciding.
+        internal static ScanVerdict JudgeLiveness(
+            string sessionId, SessionStatus status, DateTime written, DateTime now,
+            TimeSpan? staleAfter, ISet<string> superseded, Func<int, bool> isRunning)
+        {
+            // Dropped here rather than left to the lifetime timer, which is the
+            // only other thing that would ever catch it.
+            if (superseded.Contains(sessionId)) return ScanVerdict.Superseded;
+
+            // Gone is gone: if the claude process that wrote this file has
+            // exited, no lifetime setting should keep its orb — that's the
+            // Ctrl+C case, which fires no SessionEnd and so leaves the file
+            // behind. This applies to `waiting` as well, which the timer
+            // below deliberately never touches; an unanswered prompt whose
+            // session was killed used to sit on screen indefinitely.
+            if (status.SessionPid > 0 && !isRunning(status.SessionPid)) return ScanVerdict.ProcessGone;
+
+            // A session waiting on you (permission prompt / question) never
+            // goes stale on its own — no further hook fires until you
+            // respond, so the file's mtime is frozen for as long as you're
+            // away. Pruning it would hide the orb exactly when it matters
+            // most. Use "Reset this session to idle" to clear a genuinely
+            // abandoned one manually.
+            // "generating" is exempt for gateway sessions for the same
+            // reason "waiting" is exempt for local ones: it is the state
+            // where hiding the orb is worst. A local session can't be caught
+            // by this because its file is being rewritten as it works, which
+            // a gateway session has no equivalent of.
+            if (staleAfter is not null
+                && status.State != "waiting"
+                && !(status.Source == SessionSource.OpenClaw && status.State == "generating")
+                && now - written > staleAfter)
+            {
+                return ScanVerdict.Expired;
+            }
+
+            return ScanVerdict.Keep;
+        }
+
+        // Whether this session is one of the shapes that is watched through a
+        // `claude agents` window rather than through a terminal of its own, and
+        // so worth hunting for one. See AgentTeamViewer, which finds it by
+        // directory.
+        //
+        // A team lead can be a background session with no terminal of its own —
+        // run inside `claude daemon run`, which has none, and reparented to
+        // launchd once the session that started it went away. You watch it
+        // through `claude agents`, a separate process in a real window that
+        // nothing in the lead's own process tree points at, so the hook could
+        // never have recorded it. A session with no pid of its own is in the
+        // same bind and for the same reason, and the machinery is identical —
+        // TryAdopt no-ops off macOS, without a cwd, and when no viewer for that
+        // directory is running.
+        //
+        // Not for a gateway session: TryAdopt matches on cwd string equality
+        // alone, and the machine running the gateway usually has the same
+        // repositories checked out at the same paths. It would hand a remote
+        // session the tmux pane of unrelated local work, and clicking that orb
+        // would jump to it — worse than a dead click, because it looks like it
+        // worked.
+        //
+        // Not for Codex either, for a plainer reason: the viewer this adopts is
+        // a `claude agents` window, and there is no such thing to find for a
+        // Codex session. The cwd-collision hazard above applies just as much,
+        // and here both repositories would be on this machine.
+        //
+        // "pid <= 0" here was standing in for "this is a background agent", and
+        // it stopped being true the moment the hook learned to record a
+        // background agent's own pid instead of whatever ancestor owned a
+        // terminal. The proxy is replaced by the thing it was approximating
+        // rather than kept alongside it: a session with no pid is either a
+        // background job — in which case isLiveJob says so — or a leftover that
+        // should not be adopting a viewer window in the first place.
+        //
+        // Getting this wrong is not subtle. With the pid recorded and this
+        // condition unchanged, adoption stopped running for every background
+        // agent, so none of them found the `claude agents` window they are
+        // watched through, and JudgeReachability below then dropped them for
+        // having no terminal. One orb vanished on this machine before the cause
+        // was obvious.
+        internal static bool WantsAgentViewer(
+            string sessionId, SessionStatus status,
+            ISet<string> leadsWithLiveAgents, Func<string, bool> isLiveJob) =>
+            status.Source == SessionSource.ClaudeCode
+            && !KnowsATerminal(status)
+            && (leadsWithLiveAgents.Contains(sessionId)
+                || status.SessionPid <= 0
+                || isLiveJob(sessionId));
+
+        // Whether an orb for this session would go anywhere when it was
+        // clicked. Asked after adoption above, which is what can give a
+        // background lead a terminal it had none of a moment earlier.
+        internal static ScanVerdict JudgeReachability(
+            string sessionId, SessionStatus status,
+            ISet<string> leadsWithLiveAgents, Func<string, bool> isLiveJob)
+        {
+            // A session with no terminal recorded at all can't be jumped
+            // to, so an orb for it is a dead click. This is what headless and
+            // bridged invocations look like: no tty, no terminal program, no
+            // tmux pane, no Windows terminal pid. An interactive session
+            // always has at least one of those.
+            //
+            // Except a lead with live agents, which is exempt whether or not
+            // the viewer above was found: agents on screen pointing at
+            // nothing is a worse lie than an orb you might not be able to
+            // click. It's also a session you can see is running, which is
+            // what an orb is for.
+            // A gateway session has none of these and never will — it has
+            // no terminal anywhere, which is the point of it. Left ungated
+            // this rule alone drops every OpenClaw orb, every scan.
+            // A live background job is exempt for the same reason a lead
+            // with live agents is: it has no terminal of its own by nature,
+            // not because it is a leftover. That used to be covered for free
+            // by the pid test below — a background agent recorded no pid — and
+            // is now stated, because the hook records its real pid.
+            if (status.IsLocalCli
+                && string.IsNullOrEmpty(status.Tty)
+                && string.IsNullOrEmpty(status.TermProgram)
+                && string.IsNullOrEmpty(status.TmuxPane)
+                && status.TermPid == 0
+                && !leadsWithLiveAgents.Contains(sessionId)
+                && !(status.Source == SessionSource.ClaudeCode && isLiveJob(sessionId))
+                && status.SessionPid > 0)
+            {
+                return ScanVerdict.NoTerminal;
+            }
+
+            // A session recording no pid is only worth an orb if it's a
+            // background job that is still running.
+            //
+            // "No pid" is a wider net than it first appears. A background
+            // agent has none — which is what the exemption above is for —
+            // but neither does a subagent, and neither does a status file
+            // whose session ended without clearing it. All three write the
+            // same "idle" state, so on disk they're identical; only the
+            // daemon knows which is which. Taking pid-less to mean
+            // "background agent" put a permanent orb on screen for every
+            // subagent anyone spawned, and with the lifetime set to forever
+            // they only accumulated.
+            //
+            // Asked of nothing else, so an ordinary session never pays for
+            // the lookup, and a listing that can't be read keeps every orb
+            // — see BackgroundJobs.
+            // Likewise: a gateway session records no pid, so this would ask
+            // the local daemon about a session it has never heard of — once
+            // per scan, per session — and drop the orb when the answer came
+            // back "not a job", which it always would.
+            if (status.Source == SessionSource.ClaudeCode
+                && status.SessionPid <= 0
+                && !isLiveJob(sessionId))
+            {
+                return ScanVerdict.NotALiveJob;
+            }
+
+            // The same rule for Codex, with the exemption removed rather
+            // than reused. `claude agents` is what makes a pid-less Claude
+            // Code session worth an orb, and Codex has no equivalent — no
+            // background job to attach to, nothing to ask. So a Codex file
+            // naming no process is a session that ended without clearing
+            // up, and an orb for it is a permanent dead click.
+            //
+            // Written out rather than folded into the rule above because
+            // leaving Codex to fall through it was a real hole: the
+            // no-terminal rule two blocks up requires a pid to fire, and
+            // the liveness check treats pid 0 as alive, so nothing else
+            // would ever have removed it. With the orb lifetime set to
+            // "forever", nothing would have removed it at all.
+            if (status.Source == SessionSource.Codex && status.SessionPid <= 0)
+            {
+                return ScanVerdict.NotALiveJob;
+            }
+
+            return ScanVerdict.Keep;
+        }
+
+        // One pass over the status directory: read everything, decide what
+        // deserves an orb, and reconcile the windows, the arrows and the tray
+        // with the answer.
+        //
+        // Internal rather than private so a test can drive a pass directly
+        // instead of waiting on the two-second timer that normally calls it.
+        // Nothing outside this class should: it is idempotent, but it is also
+        // the whole of the scan, and calling it from anywhere but the timer, the
+        // watcher's debounce or Start would mean two passes racing over the same
+        // dictionaries on the same thread's re-entrancy.
+        internal void ScanAndUpdate()
         {
             SyncAutoColorMarker();
 
@@ -778,169 +1031,27 @@ namespace ClaudeBuddy
 
             foreach (var (sessionId, status, written) in found)
             {
-                // An id this process has already moved on from. Dropped here
-                // rather than left to the lifetime timer, which is the only other
-                // thing that would ever catch it.
-                if (superseded.Contains(sessionId))
+                // Two verdicts rather than one, with the viewer hunt sitting
+                // between them, because the order is load-bearing in both
+                // directions: adoption can hand a background lead the very
+                // terminal JudgeReachability is about to ask for, and it walks
+                // the process table to do it, which is far too expensive to
+                // spend on a session JudgeLiveness has already dropped.
+                if (JudgeLiveness(sessionId, status, written, now, StaleAfter,
+                                  superseded, ProcessLiveness.IsRunning) != ScanVerdict.Keep)
                 {
                     continue;   // removed in the pass below
                 }
 
-                // Gone is gone: if the claude process that wrote this file has
-                // exited, no lifetime setting should keep its orb — that's the
-                // Ctrl+C case, which fires no SessionEnd and so leaves the file
-                // behind. This applies to `waiting` as well, which the timer
-                // below deliberately never touches; an unanswered prompt whose
-                // session was killed used to sit on screen indefinitely.
-                if (status.SessionPid > 0 && !ProcessLiveness.IsRunning(status.SessionPid))
-                {
-                    continue;   // removed in the pass below
-                }
-
-                // A session waiting on you (permission prompt / question) never
-                // goes stale on its own — no further hook fires until you
-                // respond, so the file's mtime is frozen for as long as you're
-                // away. Pruning it would hide the orb exactly when it matters
-                // most. Use "Reset this session to idle" to clear a genuinely
-                // abandoned one manually.
-                // "generating" is exempt for gateway sessions for the same
-                // reason "waiting" is exempt for local ones: it is the state
-                // where hiding the orb is worst. A local session can't be caught
-                // by this because its file is being rewritten as it works, which
-                // a gateway session has no equivalent of.
-                var staleAfter = StaleAfter;
-                if (staleAfter is not null
-                    && status.State != "waiting"
-                    && !(status.Source == SessionSource.OpenClaw && status.State == "generating")
-                    && now - written > staleAfter)
-                {
-                    continue; // treat as gone; cleaned up in the removal pass below
-                }
-
-                // A team lead can be a background session with no terminal of
-                // its own — run inside `claude daemon run`, which has none, and
-                // reparented to launchd once the session that started it went
-                // away. You watch it through `claude agents`, a separate
-                // process in a real window that nothing in the lead's own
-                // process tree points at, so the hook could never have recorded
-                // it. See AgentTeamViewer, which finds it by directory.
-                // A session with no pid of its own is in the same bind and
-                // for the same reason: nothing in a process tree points at
-                // the window you actually watch it in, so the directory is
-                // the only link back to its `claude agents` viewer. Widened
-                // to cover it because the machinery is identical — TryAdopt
-                // no-ops off macOS, without a cwd, and when no viewer for
-                // that directory is running.
-                // Not for a gateway session: TryAdopt matches on cwd string
-                // equality alone, and the machine running the gateway usually
-                // has the same repositories checked out at the same paths. It
-                // would hand a remote session the tmux pane of unrelated local
-                // work, and clicking that orb would jump to it — worse than a
-                // dead click, because it looks like it worked.
-                //
-                // Not for Codex either, for a plainer reason: the viewer this
-                // adopts is a `claude agents` window, and there is no such
-                // thing to find for a Codex session. The cwd-collision hazard
-                // above applies just as much, and here both repositories would
-                // be on this machine.
-                // "pid <= 0" here was standing in for "this is a background
-                // agent", and it stopped being true the moment the hook learned
-                // to record a background agent's own pid instead of whatever
-                // ancestor owned a terminal. The proxy is replaced by the thing
-                // it was approximating rather than kept alongside it: a session
-                // with no pid is either a background job — in which case
-                // IsLiveJob says so — or a leftover that should not be adopting
-                // a viewer window in the first place.
-                //
-                // Getting this wrong is not subtle. With the pid recorded and
-                // this condition unchanged, adoption stopped running for every
-                // background agent, so none of them found the `claude agents`
-                // window they are watched through, and the rule below then
-                // dropped them for having no terminal. One orb vanished on this
-                // machine before the cause was obvious.
-                if (status.Source == SessionSource.ClaudeCode
-                    && !KnowsATerminal(status)
-                    && (leadsWithLiveAgents.Contains(sessionId)
-                        || status.SessionPid <= 0
-                        || BackgroundJobs.IsLiveJob(sessionId)))
+                if (WantsAgentViewer(sessionId, status, leadsWithLiveAgents, BackgroundJobs.IsLiveJob))
                 {
                     AgentTeamViewer.TryAdopt(status);
                 }
 
-                // A session with no terminal recorded at all can't be jumped
-                // to, so an orb for it is a dead click. This is what headless and
-                // bridged invocations look like: no tty, no terminal program, no
-                // tmux pane, no Windows terminal pid. An interactive session
-                // always has at least one of those.
-                //
-                // Except a lead with live agents, which is exempt whether or not
-                // the viewer above was found: agents on screen pointing at
-                // nothing is a worse lie than an orb you might not be able to
-                // click. It's also a session you can see is running, which is
-                // what an orb is for.
-                // A gateway session has none of these and never will — it has
-                // no terminal anywhere, which is the point of it. Left ungated
-                // this rule alone drops every OpenClaw orb, every scan.
-                // A live background job is exempt for the same reason a lead
-                // with live agents is: it has no terminal of its own by nature,
-                // not because it is a leftover. That used to be covered for free
-                // by the pid test below — a background agent recorded no pid — and
-                // is now stated, because the hook records its real pid.
-                if (status.IsLocalCli
-                    && string.IsNullOrEmpty(status.Tty)
-                    && string.IsNullOrEmpty(status.TermProgram)
-                    && string.IsNullOrEmpty(status.TmuxPane)
-                    && status.TermPid == 0
-                    && !leadsWithLiveAgents.Contains(sessionId)
-                    && !(status.Source == SessionSource.ClaudeCode && BackgroundJobs.IsLiveJob(sessionId))
-                    && status.SessionPid > 0)
+                if (JudgeReachability(sessionId, status, leadsWithLiveAgents,
+                                      BackgroundJobs.IsLiveJob) != ScanVerdict.Keep)
                 {
-                    continue;
-                }
-
-                // A session recording no pid is only worth an orb if it's a
-                // background job that is still running.
-                //
-                // "No pid" is a wider net than it first appears. A background
-                // agent has none — which is what the exemption above is for —
-                // but neither does a subagent, and neither does a status file
-                // whose session ended without clearing it. All three write the
-                // same "idle" state, so on disk they're identical; only the
-                // daemon knows which is which. Taking pid-less to mean
-                // "background agent" put a permanent orb on screen for every
-                // subagent anyone spawned, and with the lifetime set to forever
-                // they only accumulated.
-                //
-                // Asked of nothing else, so an ordinary session never pays for
-                // the lookup, and a listing that can't be read keeps every orb
-                // — see BackgroundJobs.
-                // Likewise: a gateway session records no pid, so this would ask
-                // the local daemon about a session it has never heard of — once
-                // per scan, per session — and drop the orb when the answer came
-                // back "not a job", which it always would.
-                if (status.Source == SessionSource.ClaudeCode
-                    && status.SessionPid <= 0
-                    && !BackgroundJobs.IsLiveJob(sessionId))
-                {
-                    continue;
-                }
-
-                // The same rule for Codex, with the exemption removed rather
-                // than reused. `claude agents` is what makes a pid-less Claude
-                // Code session worth an orb, and Codex has no equivalent — no
-                // background job to attach to, nothing to ask. So a Codex file
-                // naming no process is a session that ended without clearing
-                // up, and an orb for it is a permanent dead click.
-                //
-                // Written out rather than folded into the rule above because
-                // leaving Codex to fall through it was a real hole: the
-                // no-terminal rule two blocks up requires a pid to fire, and
-                // the liveness check treats pid 0 as alive, so nothing else
-                // would ever have removed it. With the orb lifetime set to
-                // "forever", nothing would have removed it at all.
-                if (status.Source == SessionSource.Codex && status.SessionPid <= 0)
-                {
-                    continue;
+                    continue;   // removed in the pass below
                 }
 
                 seen.Add(sessionId);
@@ -951,7 +1062,7 @@ namespace ClaudeBuddy
                 // costs a lookup.
                 var membership = status.Source == SessionSource.ClaudeCode
                     ? AgentTeam.Of(status.SessionPid)
-                    : default;
+                    : AgentTeam.None;
 
                 // Guarded, where it used to run for everything. A gateway
                 // session has no process to ask, so `default` came back and this
@@ -1058,17 +1169,39 @@ namespace ClaudeBuddy
         //
         // A member whose lead isn't on screen (ended, or filtered out) is left
         // exactly where it was: there's nothing to gather it under.
-        private List<string> DisplayOrder()
+        private List<string> DisplayOrder() =>
+            GatherTeams(_order, _statuses.ContainsKey,
+                        id => _statuses.TryGetValue(id, out var status) ? status.Lead : null);
+
+        // The gathering itself, with the dictionaries behind it reduced to two
+        // questions: is this id still tracked, and what does it say its lead is?
+        //
+        // Two questions and not one, which is the whole shape of it. "Tracked"
+        // and "names a lead" are separate facts and this rule turns on both: an
+        // id in _order with no status behind it — which happens for one pass
+        // during the removal pass — is not laid out at all, while a member
+        // whose *lead* has ended stays exactly where it was, because there is
+        // nothing to gather it under. Folding them into one nullable answer
+        // reads tidier and drops an orb: SessionStatus.Lead is itself allowed
+        // to be null for a session with no pid to ask about, and a null lead
+        // would then be indistinguishable from a session that is gone.
+        //
+        // Separated out so the ordering can be checked without windows,
+        // statuses or a scan behind it; the shape it produces is what decides
+        // which orb sits where in the stack and how far a team's arrows have to
+        // reach.
+        internal static List<string> GatherTeams(
+            IReadOnlyList<string> order, Func<string, bool> tracked, Func<string, string?> leadOf)
         {
             var byLead = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
-            foreach (var id in _order)
+            foreach (var id in order)
             {
-                if (!_statuses.TryGetValue(id, out var status)) continue;
+                if (!tracked(id)) continue;
 
-                var lead = status.Lead;
-                if (string.IsNullOrEmpty(lead) || lead == id) continue;
-                if (!_statuses.ContainsKey(lead)) continue;
+                var lead = leadOf(id);
+                if (string.IsNullOrEmpty(lead) || lead == id) continue;   // leads nobody, or itself
+                if (!tracked(lead)) continue;                             // its lead isn't on screen
 
                 if (!byLead.TryGetValue(lead, out var members))
                 {
@@ -1079,25 +1212,25 @@ namespace ClaudeBuddy
 
             var gathered = new HashSet<string>(byLead.Values.SelectMany(m => m), StringComparer.Ordinal);
 
-            var order = new List<string>(_order.Count);
-            foreach (var id in _order)
+            var gatheredOrder = new List<string>(order.Count);
+            foreach (var id in order)
             {
-                if (!_statuses.ContainsKey(id)) continue;
+                if (!tracked(id)) continue;
                 if (gathered.Contains(id)) continue;   // emitted under its lead below
 
-                order.Add(id);
-                if (byLead.TryGetValue(id, out var members)) order.AddRange(members);
+                gatheredOrder.Add(id);
+                if (byLead.TryGetValue(id, out var members)) gatheredOrder.AddRange(members);
             }
 
             // A team whose lead is itself a member of another team would leave
             // its members unemitted above; nesting isn't a thing today, but a
             // dropped orb would be a silent one, so sweep up anything missed.
-            foreach (var id in _order)
+            foreach (var id in order)
             {
-                if (_statuses.ContainsKey(id) && !order.Contains(id)) order.Add(id);
+                if (tracked(id) && !gatheredOrder.Contains(id)) gatheredOrder.Add(id);
             }
 
-            return order;
+            return gatheredOrder;
         }
 
         // The last known state of another session — what an orb needs to hand
@@ -1201,10 +1334,10 @@ namespace ClaudeBuddy
 
         // Namespaced away from both Claude Code's UUIDs and the gateway's own
         // keys, because it is neither: nothing on the gateway answers to it.
-        private static string RoomId(string roomKey) => "openclaw:room:" + roomKey;
+        internal static string RoomId(string roomKey) => "openclaw:room:" + roomKey;
 
         // A member's title is "Lilibeth — general"; the room is just "general".
-        private static string RoomTitle(string sessionTitle)
+        internal static string RoomTitle(string sessionTitle)
         {
             var dash = sessionTitle.IndexOf(" — ", StringComparison.Ordinal);
             return dash > 0 ? sessionTitle[(dash + 3)..].Trim() : sessionTitle;
@@ -1465,14 +1598,39 @@ namespace ClaudeBuddy
             foreach (var (orb, target) in positioned)
                 _arrangeAnimTargets[orb.SessionId] = (orb.Position, target);
 
-            AnimateArrangement(() =>
+            AnimateArrangement(PinEveryOrbAtItsTarget);
+        }
+
+        // Excluded from coverage: this never runs, and that is a bug rather than a
+        // property of the tests.
+        //
+        // It closes over the _arrangeAnimTargets FIELD, and OnArrangeAnimTick sets
+        // that field to null before invoking the completion callback — so by the
+        // time this is called there is nothing left to walk and PinAt is never
+        // reached. The orbs still land correctly, because the interpolation loop
+        // writes Position before the field is cleared, which is exactly why nobody
+        // noticed: the visible result is right. What is missing is IsPinned, so
+        // after arranging, an orb's "Reset position" item never appears in its
+        // flyout.
+        //
+        // Recorded rather than fixed, because fixing behaviour belongs in a bugfix
+        // branch with its own ticket rather than folded into a coverage change
+        // where no reviewer would be looking for it. The test that pins it down is
+        // OrbArrangementAnimationTests.ArrangingAndCompletingTheGlidePinsEveryOrbAtItsTarget,
+        // and OrbWindowPulseAndPinTests covers what PinAt should do once it is
+        // reached again.
+        //
+        // Also now written once instead of twice: ArrangeOrbsInPattern and
+        // AbsorbIntoArrangement had identical copies, which is how a fix could be
+        // applied to one and not the other.
+        [ExcludeFromCodeCoverage]
+        private void PinEveryOrbAtItsTarget()
+        {
+            foreach (var (id, (_, to)) in _arrangeAnimTargets ?? new())
             {
-                foreach (var (id, (_, to)) in _arrangeAnimTargets ?? new())
-                {
-                    if (_windows.TryGetValue(id, out var window))
-                        window.PinAt(to);
-                }
-            });
+                if (_windows.TryGetValue(id, out var window))
+                    window.PinAt(to);
+            }
         }
 
         // --- dragged orb positions -------------------------------------------
@@ -1587,14 +1745,22 @@ namespace ClaudeBuddy
             var screen = window.Screens.ScreenFromPoint(point);
             if (screen is null) return;
 
-            var work = screen.WorkingArea;
-            int size = (int)(56 * screen.Scaling);
-            point = new PixelPoint(
-                Math.Clamp(point.X, work.X, Math.Max(work.X, work.Right - size)),
-                Math.Clamp(point.Y, work.Y, Math.Max(work.Y, work.Bottom - size)));
-
-            window.PinAt(point);
+            window.PinAt(ClampIntoWork(point, screen.WorkingArea, (int)(56 * screen.Scaling)));
         }
+
+        // An orb's top-left corner, pulled back until the whole orb is inside
+        // the working area.
+        //
+        // The Math.Max guards are not belt-and-braces: a work area narrower than
+        // an orb makes `Right - orbSize` smaller than `X`, and Math.Clamp throws
+        // rather than picking a side when its bounds are inverted. Shared by the
+        // two callers — a position restored from settings and one rescued from a
+        // display that has changed shape — because they clamp for the same
+        // reason and drifting apart would mean one of them stranding an orb the
+        // other would have saved.
+        internal static PixelPoint ClampIntoWork(PixelPoint point, PixelRect work, int orbSize) =>
+            new(Math.Clamp(point.X, work.X, Math.Max(work.X, work.Right - orbSize)),
+                Math.Clamp(point.Y, work.Y, Math.Max(work.Y, work.Bottom - orbSize)));
 
         // Bring back any orb that is no longer on a screen.
         //
@@ -1637,12 +1803,8 @@ namespace ClaudeBuddy
                 var screen = window.Screens.Primary ?? window.Screens.All.FirstOrDefault();
                 if (screen is null) continue;
 
-                var work = screen.WorkingArea;
-                var orb = (int)(56 * screen.Scaling);
-
-                window.PinAt(new PixelPoint(
-                    Math.Clamp(window.Position.X, work.X, Math.Max(work.X, work.Right - orb)),
-                    Math.Clamp(window.Position.Y, work.Y, Math.Max(work.Y, work.Bottom - orb))));
+                window.PinAt(ClampIntoWork(
+                    window.Position, screen.WorkingArea, (int)(56 * screen.Scaling)));
             }
         }
 
@@ -1780,14 +1942,7 @@ namespace ClaudeBuddy
                 _arrangeAnimTargets[orb.SessionId] = (orb.Position, target);
 
             _isArranged = true;
-            AnimateArrangement(() =>
-            {
-                foreach (var (id, (_, to)) in _arrangeAnimTargets ?? new())
-                {
-                    if (_windows.TryGetValue(id, out var window))
-                        window.PinAt(to);
-                }
-            });
+            AnimateArrangement(PinEveryOrbAtItsTarget);
 
             foreach (var w in _windows.Values)
                 w.SetFlyoutArranged(true);
@@ -1839,7 +1994,7 @@ namespace ClaudeBuddy
         // re-fits around where the shape already is rather than the screen's
         // middle. ShiftArrangementAnchor below is the other way this moves:
         // the user dragging the whole shape somewhere else.
-        private static PixelPoint ArrangementAnchor(PixelRect work)
+        internal static PixelPoint ArrangementAnchor(PixelRect work)
         {
             if (ClaudeBuddySettings.ArrangeAnchor is { } saved) return new PixelPoint(saved.X, saved.Y);
 
@@ -1984,341 +2139,6 @@ namespace ClaudeBuddy
                 orb.Position = target;
 
             TeamLinks.Refresh();
-        }
-
-        // ---- shape generators ---------------------------------------------------
-
-        private static List<PixelPoint> ShapePositions(List<OrbWindow> orbs)
-        {
-            var shape = ClaudeBuddySettings.ArrangeShape;
-            var pts = shape switch
-            {
-                "circle"  => CirclePositions(orbs),
-                "diamond" => DiamondPositions(orbs),
-                "star"    => StarPositions(orbs),
-                "grid"    => GridPositions(orbs),
-                _         => HeartPositions(orbs),
-            };
-            return EnsureMinSpacing(pts, orbs);
-        }
-
-        // After a shape generator runs, scale the whole pattern so its orbs
-        // clear each other — and no further than the screen can hold.
-        //
-        // This used to scale by minGap/minDist with nothing bounding it. That is
-        // fine for five orbs on a circle and disastrous for twenty on a heart:
-        // a parametric curve bunches points near its cusps, so the closest pair
-        // is almost touching, the factor needed to separate *them* is enormous,
-        // and applying it to the whole pattern threw the outer orbs off the
-        // screen. Observed exactly that way — a heart that went from a huddle to
-        // scattered past the edges with nothing in between.
-        //
-        // So the same factor is computed and then capped by what fits, and the
-        // result is moved back inside the working area. An arrangement that
-        // still overlaps a little is a worse drawing; one that is off screen is
-        // a lost orb.
-        private static List<PixelPoint> EnsureMinSpacing(List<PixelPoint> pts, List<OrbWindow> orbs)
-        {
-            if (pts.Count < 2) return pts;
-
-            var screen = orbs[0].Screens.Primary ?? orbs[0].Screens.All.FirstOrDefault();
-            var work = screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080);
-            double scale = screen?.Scaling ?? 1.0;
-            int orbSize = (int)(56 * scale);
-            // Measured against the circle that is drawn, not the window it is
-            // drawn in. An orb's window is 56pt but its ellipse is 36 — using
-            // the window meant every gap was set more than half an orb wider
-            // than it needed to be, and since the gap is what ends up sizing the
-            // whole pattern, that inflated everything.
-            double drawn = orbSize * 36.0 / 56.0;
-
-            // 0.35 rather than 1.0, so the bottom of the slider is a genuinely
-            // tight cluster — about half the pattern it used to make — instead
-            // of a large shape with a smaller one beside it. The circles start
-            // to overlap slightly down there, which is what "smallest" ought to
-            // buy; the middle of the slider still clears them comfortably.
-            double minGap = drawn * (0.35 + ClaudeBuddySettings.ArrangeSpacing);
-
-            // Two neighbouring leads can each fan a team into the space between
-            // them, so the room reserved is for both.
-            return FitPattern(pts, work, orbSize, minGap);
-        }
-
-        // Pure, so it can be reasoned about and tested without a screen.
-        internal static List<PixelPoint> FitPattern(
-            List<PixelPoint> pts, PixelRect work, int orbSize, double minGap)
-        {
-            if (pts.Count < 2) return pts;
-
-            double cx = pts.Average(p => (double)p.X);
-            double cy = pts.Average(p => (double)p.Y);
-
-            // Neighbours along the outline, not every pair.
-            //
-            // A heart's two lobes nearly touch at the notch, so somewhere in any
-            // dense arrangement there is a pair that is far apart *along* the
-            // shape and close *in space*. Separating that pair means inflating
-            // the entire pattern, which is how the smallest spacing setting
-            // still filled the screen. Neighbours are what a person reads as
-            // spacing; the notch is allowed to be tight, because that is what a
-            // heart looks like.
-            double minDist = double.MaxValue;
-            for (int i = 0; i < pts.Count; i++)
-            {
-                var next = pts[(i + 1) % pts.Count];
-                double dx = pts[i].X - next.X;
-                double dy = pts[i].Y - next.Y;
-                double dist = Math.Sqrt(dx * dx + dy * dy);
-                if (dist < minDist) minDist = dist;
-            }
-
-            double wanted = minDist > 0.5 && minDist < minGap ? minGap / minDist : 1.0;
-
-            // What the screen can take. The orb is drawn centred on its point,
-            // so half of one has to fit past the pattern's edge on each side.
-            double halfW = pts.Max(p => Math.Abs(p.X - cx));
-            double halfH = pts.Max(p => Math.Abs(p.Y - cy));
-
-            double roomW = Math.Max(1, (work.Width - orbSize * 1.6) / 2.0);
-            double roomH = Math.Max(1, (work.Height - orbSize * 1.6) / 2.0);
-
-            double fits = Math.Min(
-                halfW > 1 ? roomW / halfW : double.MaxValue,
-                halfH > 1 ? roomH / halfH : double.MaxValue);
-
-            // Shrinks as well as grows: a pattern that already overflowed the
-            // screen before any spacing was applied gets pulled in too.
-            double factor = Math.Min(wanted, fits);
-
-            var scaled = pts.Select(p => new PixelPoint(
-                (int)Math.Round(cx + (p.X - cx) * factor),
-                (int)Math.Round(cy + (p.Y - cy) * factor))).ToList();
-
-            return Nudge(scaled, work, orbSize);
-        }
-
-        // Slides the whole pattern back inside the working area. The shapes are
-        // anchored near the top right, where they were free to grow off two
-        // edges; scaling now happens first and this puts the result somewhere it
-        // can be seen.
-        private static List<PixelPoint> Nudge(List<PixelPoint> pts, PixelRect work, int orbSize)
-        {
-            // A point is a window's top-left corner, not its centre — that is
-            // what PinAt and Position take. Bounding them as centres pushed the
-            // right and bottom edges half an orb off the screen while inserting
-            // the same half at the left and top.
-            int left = pts.Min(p => p.X);
-            int right = pts.Max(p => p.X) + orbSize;
-            int top = pts.Min(p => p.Y);
-            int bottom = pts.Max(p => p.Y) + orbSize;
-
-            int dx = 0, dy = 0;
-
-            if (left < work.X) dx = work.X - left;
-            else if (right > work.Right) dx = work.Right - right;
-
-            if (top < work.Y) dy = work.Y - top;
-            else if (bottom > work.Bottom) dy = work.Bottom - bottom;
-
-            if (dx == 0 && dy == 0) return pts;
-
-            return pts.Select(p => new PixelPoint(p.X + dx, p.Y + dy)).ToList();
-        }
-
-        private static (PixelRect Work, double Scale, int OrbSize, int Margin, double Cx, double Cy) ShapeAnchor(List<OrbWindow> orbs)
-        {
-            var screen = orbs[0].Screens.Primary ?? orbs[0].Screens.All.FirstOrDefault();
-            var work = screen?.WorkingArea ?? new PixelRect(0, 0, 1920, 1080);
-            double scale = screen?.Scaling ?? 1.0;
-            int orbSize = (int)(56 * scale);
-            int margin = (int)(24 * scale);
-
-            double cx = work.Right - margin - orbSize * 1.5;
-            double cy = work.Y + margin + orbSize * 2.5;
-
-            return (work, scale, orbSize, margin, cx, cy);
-        }
-
-        private static double SpacingScale(int orbSize)
-        {
-            return orbSize * ClaudeBuddySettings.ArrangeSpacing / 16.0;
-        }
-
-        // The heart curve, sampled at even *distance* rather than even t.
-        //
-        // Stepping t uniformly is the obvious thing and looks fine for five
-        // orbs. The curve does not move at a constant rate though — it crawls
-        // around the two lobes and races through the point at the bottom — so by
-        // twenty orbs they arrive in visible clumps with gaps between them. That
-        // also made the closest pair absurdly close, which is what the old
-        // spacing pass then tried to fix by inflating the entire pattern.
-        //
-        // So the curve is walked finely, its length accumulated, and the orbs
-        // placed at equal fractions of that length.
-        internal static (double X, double Y)[] HeartUnit(int n)
-        {
-            const int Samples = 2000;
-
-            var curve = new (double X, double Y)[Samples + 1];
-            for (int i = 0; i <= Samples; i++)
-            {
-                double t = 2 * Math.PI * i / Samples;
-                double sinT = Math.Sin(t);
-                curve[i] = (
-                    16 * sinT * sinT * sinT,
-                    -(13 * Math.Cos(t) - 5 * Math.Cos(2 * t)
-                      - 2 * Math.Cos(3 * t) - Math.Cos(4 * t))
-                );
-            }
-
-            var along = new double[Samples + 1];
-            for (int i = 1; i <= Samples; i++)
-            {
-                double dx = curve[i].X - curve[i - 1].X;
-                double dy = curve[i].Y - curve[i - 1].Y;
-                along[i] = along[i - 1] + Math.Sqrt(dx * dx + dy * dy);
-            }
-
-            double total = along[Samples];
-            var pts = new (double X, double Y)[n];
-
-            int cursor = 0;
-            for (int i = 0; i < n; i++)
-            {
-                double want = total * i / n;
-                while (cursor < Samples && along[cursor + 1] < want) cursor++;
-
-                pts[i] = curve[cursor];
-            }
-
-            return pts;
-        }
-
-        // Heart: x = 16sin³t, y = 13cos(t) - 5cos(2t) - 2cos(3t) - cos(4t)
-        private static List<PixelPoint> HeartPositions(List<OrbWindow> orbs)
-        {
-            int n = orbs.Count;
-            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
-
-            if (n == 1)
-                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
-
-            var pts = HeartUnit(n);
-
-            double s = SpacingScale(orbSize);
-
-            return pts.Select(p => new PixelPoint(
-                (int)Math.Round(cx + p.X * s),
-                (int)Math.Round(cy + p.Y * s)
-            )).ToList();
-        }
-
-        private static List<PixelPoint> CirclePositions(List<OrbWindow> orbs)
-        {
-            int n = orbs.Count;
-            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
-
-            if (n == 1)
-                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
-
-            double radius = SpacingScale(orbSize) * 10;
-
-            return Enumerable.Range(0, n).Select(i =>
-            {
-                double t = 2 * Math.PI * i / n - Math.PI / 2;
-                return new PixelPoint(
-                    (int)Math.Round(cx + radius * Math.Cos(t)),
-                    (int)Math.Round(cy + radius * Math.Sin(t)));
-            }).ToList();
-        }
-
-        private static List<PixelPoint> DiamondPositions(List<OrbWindow> orbs)
-        {
-            int n = orbs.Count;
-            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
-
-            if (n == 1)
-                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
-
-            double s = SpacingScale(orbSize) * 10;
-            var pts = new List<PixelPoint>();
-            for (int i = 0; i < n; i++)
-            {
-                double t = 2 * Math.PI * i / n - Math.PI / 2;
-                double cos = Math.Cos(t), sin = Math.Sin(t);
-                double r = s / Math.Max(Math.Abs(cos) + Math.Abs(sin), 0.01);
-                pts.Add(new PixelPoint(
-                    (int)Math.Round(cx + r * cos),
-                    (int)Math.Round(cy + r * sin)));
-            }
-            return pts;
-        }
-
-        // Five-pointed star: 10 vertices (5 outer tips, 5 inner valleys)
-        // with N orbs distributed evenly along the perimeter, interpolating
-        // between vertices so any count traces the star shape.
-        private static List<PixelPoint> StarPositions(List<OrbWindow> orbs)
-        {
-            int n = orbs.Count;
-            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
-
-            if (n == 1)
-                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
-
-            double outer = SpacingScale(orbSize) * 12;
-            double inner = outer * 0.4;
-            const int verts = 10;
-
-            var starX = new double[verts];
-            var starY = new double[verts];
-            for (int v = 0; v < verts; v++)
-            {
-                double angle = 2 * Math.PI * v / verts - Math.PI / 2;
-                double r = (v % 2 == 0) ? outer : inner;
-                starX[v] = r * Math.Cos(angle);
-                starY[v] = r * Math.Sin(angle);
-            }
-
-            return Enumerable.Range(0, n).Select(i =>
-            {
-                double pos = (double)i * verts / n;
-                int idx = (int)pos;
-                double frac = pos - idx;
-                int a = idx % verts;
-                int b = (idx + 1) % verts;
-
-                double x = starX[a] * (1 - frac) + starX[b] * frac;
-                double y = starY[a] * (1 - frac) + starY[b] * frac;
-
-                return new PixelPoint(
-                    (int)Math.Round(cx + x),
-                    (int)Math.Round(cy + y));
-            }).ToList();
-        }
-
-        private static List<PixelPoint> GridPositions(List<OrbWindow> orbs)
-        {
-            int n = orbs.Count;
-            var (_, _, orbSize, _, cx, cy) = ShapeAnchor(orbs);
-
-            if (n == 1)
-                return new List<PixelPoint> { new((int)Math.Round(cx), (int)Math.Round(cy)) };
-
-            int cols = (int)Math.Ceiling(Math.Sqrt(n));
-            int rows = (int)Math.Ceiling((double)n / cols);
-            double gap = orbSize * (0.5 + ClaudeBuddySettings.ArrangeSpacing);
-
-            double startX = cx - (cols - 1) * gap / 2;
-            double startY = cy - (rows - 1) * gap / 2;
-
-            return Enumerable.Range(0, n).Select(i =>
-            {
-                int col = i % cols;
-                int row = i / cols;
-                return new PixelPoint(
-                    (int)Math.Round(startX + col * gap),
-                    (int)Math.Round(startY + row * gap));
-            }).ToList();
         }
     }
 }

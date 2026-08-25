@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -69,7 +70,7 @@ namespace ClaudeBuddy
             menu.Add(icons);
         }
 
-        private static NativeMenuItem BuildProfileItem(ProfileView profile)
+        internal static NativeMenuItem BuildProfileItem(ProfileView profile)
         {
             var item = new NativeMenuItem(ProfileLabel(profile));
 
@@ -99,11 +100,7 @@ namespace ClaudeBuddy
             {
                 IsEnabled = !busy
             };
-            primary.Click += (_, _) =>
-            {
-                if (profile.IsRunning) ClaudeDesktopManager.Focus(profile.Pid);
-                else ClaudeDesktopManager.Launch(profile);
-            };
+            primary.Click += (_, _) => FocusOrLaunch(profile);
             submenu.Add(primary);
 
             var offerForce = profile.Activity == ProfileActivity.ForceQuitOffered;
@@ -111,11 +108,7 @@ namespace ClaudeBuddy
             {
                 IsEnabled = profile.IsRunning && profile.Activity != ProfileActivity.Quitting
             };
-            quit.Click += (_, _) =>
-            {
-                if (offerForce) ClaudeDesktopManager.ForceQuit(profile);
-                else ClaudeDesktopManager.Quit(profile);
-            };
+            quit.Click += (_, _) => QuitOrForceQuit(profile, offerForce);
             submenu.Add(quit);
 
             submenu.Add(BuildThemeItem(profile));
@@ -136,7 +129,30 @@ namespace ClaudeBuddy
         // keeps a fixed length whatever the state. Writing while the instance is
         // running would be discarded when it exits, so it's offered only while
         // stopped, and the label says why rather than leaving a dead item.
-        private static NativeMenuItem BuildThemeItem(ProfileView profile)
+        // Excluded from coverage: both act on a real application. Focus sends an
+        // Apple Event to bring a running instance forward; Launch starts one, and
+        // starts it from a tinted clone it may have to build first. Quit and
+        // ForceQuit send the corresponding signals.
+        //
+        // The decisions in front of them — which verb a row offers, whether it is
+        // enabled, and when "Quit" becomes "Force quit" — are all in the item's
+        // shape and are covered in ClaudeDesktopSectionTests, which builds the menu
+        // and reads it without clicking anything.
+        [ExcludeFromCodeCoverage]
+        private static void FocusOrLaunch(ProfileView profile)
+        {
+            if (profile.IsRunning) ClaudeDesktopManager.Focus(profile.Pid);
+            else ClaudeDesktopManager.Launch(profile);
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static void QuitOrForceQuit(ProfileView profile, bool offerForce)
+        {
+            if (offerForce) ClaudeDesktopManager.ForceQuit(profile);
+            else ClaudeDesktopManager.Quit(profile);
+        }
+
+        internal static NativeMenuItem BuildThemeItem(ProfileView profile)
         {
             if (profile.IsRunning)
             {
@@ -171,7 +187,7 @@ namespace ClaudeBuddy
         // only ever a handful of (colour, filled) combinations.
         private static readonly Dictionary<(uint Rgb, bool Filled), Bitmap> SwatchCache = new();
 
-        private static Bitmap Swatch(Color color, bool filled)
+        internal static Bitmap Swatch(Color color, bool filled)
         {
             var key = ((uint)((color.R << 16) | (color.G << 8) | color.B), filled);
             if (SwatchCache.TryGetValue(key, out var cached)) return cached;
@@ -201,7 +217,7 @@ namespace ClaudeBuddy
             return bitmap;
         }
 
-        private static string ProfileLabel(ProfileView profile)
+        internal static string ProfileLabel(ProfileView profile)
         {
             // No state glyph in the text: the swatch carries it. A dot as well
             // would just be noise next to the icon.
@@ -231,7 +247,7 @@ namespace ClaudeBuddy
 
         // Profile names are folder names, so they can be arbitrarily long; the
         // session list above already caps its own labels for the same reason.
-        private static string Truncate(string name) =>
+        internal static string Truncate(string name) =>
             name.Length <= MaxNameLength ? name : name[..(MaxNameLength - 1)].TrimEnd() + "…";
     }
 }

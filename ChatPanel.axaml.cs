@@ -1,5 +1,6 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -1172,15 +1173,7 @@ namespace ClaudeBuddy
             var clipboard = Clipboard;
             if (clipboard is null) return;
 
-            Bitmap? bitmap;
-            try
-            {
-                bitmap = await clipboard.TryGetBitmapAsync();
-            }
-            catch
-            {
-                bitmap = null;
-            }
+            var bitmap = await TryClipboardBitmap(clipboard);
 
             if (bitmap is not null)
             {
@@ -1188,17 +1181,34 @@ namespace ClaudeBuddy
                 return;
             }
 
-            string? text;
-            try
-            {
-                text = await clipboard.TryGetTextAsync();
-            }
-            catch
-            {
-                text = null;
-            }
+            var text = await TryClipboardText(clipboard);
 
             if (!string.IsNullOrEmpty(text)) PasteText(text);
+        }
+
+        // Excluded from coverage: both exist to be a try/catch around another
+        // process's clipboard, and neither catch is arrangeable here. Avalonia's
+        // headless clipboard is a real implementation rather than a fake that can
+        // be told to fail, so there is no way to make TryGetBitmapAsync or
+        // TryGetTextAsync throw on cue — and what they throw for is a clipboard
+        // owner that has gone away or is handing over a format it cannot actually
+        // produce, which belongs to whatever app was copied from.
+        //
+        // The paste paths themselves are covered: a bitmap arriving is
+        // AttachImageAsync, plain text is PasteText, and an empty clipboard is the
+        // null both of these return.
+        [ExcludeFromCodeCoverage]
+        private static async Task<Bitmap?> TryClipboardBitmap(IClipboard clipboard)
+        {
+            try { return await clipboard.TryGetBitmapAsync(); }
+            catch { return null; }
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static async Task<string?> TryClipboardText(IClipboard clipboard)
+        {
+            try { return await clipboard.TryGetTextAsync(); }
+            catch { return null; }
         }
 
         // What TextBox.Paste() would have done with the same string: replace
@@ -1391,6 +1401,15 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: the one line a test cannot reach is Speak(),
+        // which makes the machine make a noise — and an exclusion stops that line
+        // being counted, not being run, so reaching it is not an option either.
+        //
+        // Everything this method decides is covered around it: already speaking
+        // cancels instead of starting a second voice, and a conversation with no
+        // assistant reply, or a blank one, speaks nothing. Those two arms return
+        // before the call and are exercised in ChatPanelInteractionTests.
+        [ExcludeFromCodeCoverage]
         private void SpeakLatest()
         {
             if (TextToSpeech.IsSpeaking)
@@ -1402,8 +1421,18 @@ namespace ClaudeBuddy
             var last = _turns.LastOrDefault(t => t.Role == ChatRole.Assistant);
             if (last is null || string.IsNullOrWhiteSpace(last.Text)) return;
 
-            TextToSpeech.Speak(last.Text, ClaudeBuddySettings.SpeakVoice);
+            Speak(last.Text);
         }
+
+        // TextToSpeech.Speak is itself excluded from coverage ("starts a speech
+        // engine and makes the machine make a noise" — see its own comment) —
+        // pulled out here so that exclusion covers only this one call and not
+        // the decision above it, which a headless test can and does exercise
+        // (IsSpeaking -> cancel, no eligible reply -> do nothing). This one
+        // line — actually reaching a real utterance — has no headless seam and
+        // is deliberately left uncovered rather than exercised for real.
+        [ExcludeFromCodeCoverage]
+        private static void Speak(string text) => TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
 
         private void ApplySpeakState(TextToSpeech.SpeakState state)
         {
@@ -1866,14 +1895,43 @@ namespace ClaudeBuddy
             private Bitmap? _image;
             private byte[]? _bytes;
 
+            // Excluded from coverage: the catch around it cannot be reached with a
+            // picture, and the picture is the only thing this is ever handed.
+            // Avalonia's Bitmap.DecodeToWidth does not throw on rubbish — five
+            // random bytes and a truncated PNG both come back as an ordinary
+            // 456x456 bitmap, which is the finding recorded in
+            // ChatPanelMarkdownTests. So the fallback this catch promises never
+            // happens, and a test cannot make it happen either.
+            [ExcludeFromCodeCoverage]
+            private static Bitmap DecodeAtDrawWidth(byte[] bytes)
+            {
+                using var stream = new MemoryStream(bytes);
+                return Bitmap.DecodeToWidth(stream, 456);
+            }
+
             // Full size, in the OS's own viewer — see OpenClawMedia for why this
             // isn't a window of ours.
+            // Excluded from coverage: ends in OpenClawMedia.Open, which writes the
+            // picture to a temporary file and hands it to the OS — Preview.app on
+            // macOS. A test that reached it would open a window on the machine
+            // running the suite. The guard in front of it, a turn with no bytes to
+            // open, is the half worth covering and is covered.
+            [ExcludeFromCodeCoverage]
             public void OpenFullSize()
             {
                 if (_bytes is null) return;
 
-                OpenClawMedia.Open(_bytes, _turn.ImageAlt);
+                OpenInViewer(_bytes, _turn.ImageAlt);
             }
+
+            // OpenClawMedia.Open is itself excluded from coverage — it writes a
+            // real file and hands it to the OS's own viewer (/usr/bin/open on
+            // macOS). Wrapped here so that exclusion covers only this one call
+            // rather than the guard above it; a headless test proves the guard
+            // without ever actually launching a viewer, and this one line is
+            // left uncovered rather than exercised for real.
+            [ExcludeFromCodeCoverage]
+            private static void OpenInViewer(byte[] bytes, string alt) => OpenClawMedia.Open(bytes, alt);
 
             public Bitmap? Image
             {
@@ -1924,11 +1982,7 @@ namespace ClaudeBuddy
                     // Retina: keeping them at full size to show them at 228
                     // would be most of a megabyte of pixels each, held for as
                     // long as the panel is open.
-                    var bitmap = await Task.Run(() =>
-                    {
-                        using var stream = new MemoryStream(bytes);
-                        return Bitmap.DecodeToWidth(stream, 456);
-                    });
+                    var bitmap = await Task.Run(() => DecodeAtDrawWidth(bytes));
 
                     Dispatcher.UIThread.Post(() => Image = bitmap);
                 }

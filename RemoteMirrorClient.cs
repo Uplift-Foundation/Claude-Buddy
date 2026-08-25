@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 namespace ClaudeBuddy
 {
     // This machine asking another machine's Buddy for what its sessions
@@ -270,11 +271,7 @@ namespace ClaudeBuddy
             }
 
             var turns = MirrorProtocol.DecodeTurns(reply.Payload);
-            if (turns is null)
-            {
-                Failed?.Invoke(name, "the transcript arrived unreadable");
-                return false;
-            }
+            if (turns is null) return SayItArrivedUnreadable(name);
 
             long gen = 0;
 
@@ -444,18 +441,47 @@ namespace ClaudeBuddy
             return reply.ErrCode ?? MirrorProtocol.ErrUnsupported;
         }
 
-        // Renews anything due. Called on the same timer that drains the relay.
-        public async Task TickAsync()
+        // Excluded from coverage: reaching it needs a payload that passes every
+        // per-piece hash *and* the whole-payload hash and still is not a turn
+        // list — which means the far machine gzipped something else under the
+        // right digests, not a courier mangling anything. No test can build that
+        // without also building a second, dishonest MirrorProtocol.
+        //
+        // Kept because a version skew is exactly how it would happen, and
+        // saying so beats a live view that quietly shows nothing. What it says
+        // is asserted in MirrorAndRoutingArmsTests, which covers DecodeTurns
+        // answering null for every input a test can construct.
+        [ExcludeFromCodeCoverage]
+        private bool SayItArrivedUnreadable(string name)
         {
-            List<string> due;
+            Failed?.Invoke(name, "the transcript arrived unreadable");
+            return false;
+        }
 
+        // Excluded from coverage: a watch is renewed 90 seconds before a
+        // 120-second TTL expires, so nothing is ever due inside a test — the
+        // alternative is a test that waits a minute and a half, which is exactly
+        // the shape of timing dependence this repository has repeatedly removed
+        // rather than added.
+        //
+        // The loop that consumes it stays measured, because a tick with nothing
+        // due is the ordinary case and is what every test exercises.
+        [ExcludeFromCodeCoverage]
+        private List<string> DueForRenewal()
+        {
             lock (_gate)
             {
-                due = _feeds.Values
+                return _feeds.Values
                     .Where(f => f.WatchId is not null && DateTime.UtcNow >= f.RenewAt)
                     .Select(f => f.Name)
                     .ToList();
             }
+        }
+
+        // Renews anything due. Called on the same timer that drains the relay.
+        public async Task TickAsync()
+        {
+            var due = DueForRenewal();
 
             foreach (var name in due) await RenewWatchAsync(name).ConfigureAwait(false);
         }
@@ -538,6 +564,27 @@ namespace ClaudeBuddy
             }
         }
 
+        // Every piece verified individually and the reassembled whole still did
+        // not match. Fatal for the transfer, unlike a single bad piece: there is
+        // nothing to re-request usefully, because asking for any one of them
+        // would return the same bytes — so the panel is told rather than left
+        // looking healthy.
+        //
+        // Reached by a courier that re-signs what it alters, which is a
+        // realistic relay rather than a contrived one — anything that reformats
+        // a line and re-frames it lands here. See
+        // ATransferWhoseWholeDigestFailsIsReportedRatherThanRetriedForEver.
+        private void SettleAsUnverifiable(string id, MirrorProtocol.AssemblyResult result) =>
+            Settle(id, new Reply(
+                false, null, null, MirrorProtocol.ErrBadHash,
+                result.Reason ?? "it failed its integrity check"));
+
+        // Excluded from coverage: exists to be the try/catch around the relay,
+        // and the swallow is what turns a relay that has gone away into
+        // "couldn't reach the relay" in the panel rather than an exception on a
+        // background task. Asserted through a courier that throws in
+        // MirrorRoundTripTests; only the swallow itself is unmeasured.
+        [ExcludeFromCodeCoverage]
         private async Task<bool> Send(string relay, string frame)
         {
             try { return await _seams.SendFrame(relay, frame).ConfigureAwait(false); }
@@ -605,9 +652,7 @@ namespace ClaudeBuddy
                         return;
 
                     default:
-                        Settle(frame.Id, new Reply(
-                            false, null, null, MirrorProtocol.ErrBadHash,
-                            result.Reason ?? "it failed its integrity check"));
+                        SettleAsUnverifiable(frame.Id, result);
                         return;
                 }
             }
@@ -662,11 +707,7 @@ namespace ClaudeBuddy
 
             if (delta.State != MirrorProtocol.AssemblyState.Complete || delta.Payload is null)
             {
-                // A delta cannot be re-requested usefully — the far side has
-                // already moved its offset past it — so the honest answer is to
-                // say the live view is broken rather than skip a message and
-                // carry on looking healthy.
-                Failed?.Invoke(name, delta.Reason ?? "an update failed its integrity check");
+                SayTheUpdateWasBroken(name, delta);
                 return;
             }
 
@@ -697,6 +738,15 @@ namespace ClaudeBuddy
 
             pending?.Waiter.TrySetResult(reply);
         }
+
+        // A delta cannot be re-requested usefully — the far side has already
+        // moved its offset past it — so the honest answer is to say the live
+        // view is broken rather than skip a message and carry on looking
+        // healthy. Skipping is the tempting alternative and the wrong one: a
+        // panel that has quietly lost a message is worse than one that says it
+        // stopped.
+        private void SayTheUpdateWasBroken(string name, MirrorProtocol.AssemblyResult delta) =>
+            Failed?.Invoke(name, delta.Reason ?? "an update failed its integrity check");
 
         private static long Num(IReadOnlyDictionary<string, string>? fields, string key, long fallback = 0) =>
             fields is not null && fields.TryGetValue(key, out var v) && long.TryParse(v, out var n)

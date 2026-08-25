@@ -227,4 +227,56 @@ public class BackgroundJobsTests
         Assert.True(BackgroundJobs.IsLive(states, "dddddddd-0000-0000-0000-000000000000"));
         Assert.True(BackgroundJobs.IsLive(states, "eeeeeeee-0000-0000-0000-000000000000"));
     }
+
+    // --- two cases carried over from CB-3's coverage work ---
+    //
+    // The rest of this file arrived with the resumed-job fix and tests that
+    // behaviour, which is the important half. These two are about tolerance
+    // rather than correctness, and both were written before that fix landed —
+    // they still hold against the session-id keying and are worth keeping.
+
+    // Any state that is not "done" counts as live, including one this app has
+    // never heard of. A daemon that grows a new state must not make orbs vanish,
+    // and "done" is the only word that takes one away.
+    [Theory]
+    [InlineData("running")]
+    [InlineData("queued")]
+    [InlineData("paused")]
+    [InlineData("some-state-from-a-later-cli")]
+    public void AnyStateThatIsNotDoneIsLive(string state)
+    {
+        var listing = """
+            [{"id":"5f6960b2","sessionId":"53bd5d2c-0000-0000-0000-000000000000",
+              "state":"STATE"}]
+            """.Replace("STATE", state);
+
+        var states = BackgroundJobs.Parse(listing);
+
+        Assert.NotNull(states);
+        Assert.True(BackgroundJobs.IsLive(states, "53bd5d2c-0000-0000-0000-000000000000"));
+    }
+
+    // Ids are compared ordinally, and the two halves of that combine in an
+    // unobvious direction: a case difference means the lookup misses, a miss
+    // means "absent from a listing that was read", and absent means *not live* —
+    // so an id differing only in case would take an orb away rather than leave
+    // it.
+    //
+    // That is the opposite of the safe direction the rest of this file picks (an
+    // unreadable listing hides nothing), so it is worth knowing it is here. It
+    // does not bite today: the daemon writes lowercase uuids and the session id
+    // is the same string from the same source, so the two never disagree.
+    // Asserted as it behaves rather than as it arguably should, because a test
+    // claiming otherwise would be describing a comparer nobody chose.
+    [Fact]
+    public void AnIdDifferingOnlyInCaseReadsAsAbsent()
+    {
+        var states = BackgroundJobs.Parse("""
+            [{"id":"5F6960B2","sessionId":"53BD5D2C-0000-0000-0000-000000000000",
+              "state":"running"}]
+            """);
+
+        Assert.NotNull(states);
+        Assert.False(BackgroundJobs.IsLive(states, "53bd5d2c-0000-0000-0000-000000000000"));
+    }
 }

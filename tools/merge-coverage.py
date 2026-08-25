@@ -19,8 +19,17 @@ Usage:
 With --base, also reports coverage restricted to the lines added since that ref
 — which is usually the number you actually want when reviewing a change, since
 a file-level percentage is dominated by whatever was already there.
+
+It also reports what has been held *out* of the number by
+[ExcludeFromCodeCoverage]. That is not decoration. Both coverage engines honour
+the attribute by omitting the code entirely, so an excluded file and a deleted
+file look identical in a report, and a percentage can be walked to 100% by
+excluding whatever refuses to be covered. The exclusions are read back out of
+the sources and printed next to the number, so the number always ships with the
+size of its own blind spot.
 """
 import glob
+import io
 import os
 import re
 import subprocess
@@ -49,8 +58,41 @@ def repo_root():
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
-def load(reports, root):
-    """file -> {line: covered}, file -> {line: (taken, total)}"""
+def instrumented_lines(reports, root):
+    """file -> {line numbers} that these reports instrumented at all."""
+    seen = defaultdict(set)
+
+    for report in reports:
+        tree = ET.parse(report).getroot()
+        sources = [s.text for s in tree.findall("./sources/source") if s.text]
+        for cls in tree.iter("class"):
+            filename = cls.get("filename")
+            if not filename:
+                continue
+            path = resolve(filename, sources, root)
+            for line in cls.iter("line"):
+                seen[path].add(int(line.get("number")))
+
+    return seen
+
+
+def resolve(filename, sources, root):
+    path = filename.replace("\\", "/")
+    if not os.path.isabs(path):
+        for src in sources:
+            if os.path.exists(os.path.join(src, path)):
+                path = os.path.join(src, path)
+                break
+    return os.path.relpath(os.path.abspath(path), root)
+
+
+def load(reports, root, keep=None):
+    """file -> {line: covered}, file -> {line: (taken, total)}
+
+    `keep`, when given, is the set of lines each file is allowed to contribute —
+    see the comment in main() about the two engines disagreeing about
+    [ExcludeFromCodeCoverage] on a *method*.
+    """
     lines = defaultdict(dict)
     branches = defaultdict(dict)
 
@@ -61,16 +103,18 @@ def load(reports, root):
             filename = cls.get("filename")
             if not filename:
                 continue
-            path = filename.replace("\\", "/")
-            if not os.path.isabs(path):
-                for src in sources:
-                    if os.path.exists(os.path.join(src, path)):
-                        path = os.path.join(src, path)
-                        break
-            path = os.path.relpath(os.path.abspath(path), root)
+            path = resolve(filename, sources, root)
+            allowed = None if keep is None else keep.get(path)
 
             for line in cls.iter("line"):
                 number = int(line.get("number"))
+
+                # A line this engine instrumented but the authority did not is a
+                # line the authority excluded. Skipping it here is what makes a
+                # member-level exclusion mean the same thing in both reports.
+                if allowed is not None and number not in allowed:
+                    continue
+
                 hits = int(line.get("hits", "0"))
                 lines[path][number] = lines[path].get(number, False) or hits > 0
 
@@ -84,9 +128,53 @@ def load(reports, root):
                     continue
                 taken, total = condition.split("(")[1].rstrip(")").split("/")
                 previous = branches[path].get(number, (0, int(total)))
-                branches[path][number] = (max(previous[0], int(taken)), int(total))
+                # Max on BOTH halves, not just the numerator. The two engines do
+                # not always agree on how many arcs a line has — the same `if`
+                # can be reported as 2 arcs by one and 4 by the other — and
+                # keeping the last-seen total while maxing the taken count can
+                # pair a taken from the wider reading with a total from the
+                # narrower one and print a line as fully covered when neither
+                # suite covered it fully. Taking the widest denominator anyone
+                # reported is the conservative reading, and being wrong in the
+                # pessimistic direction is the only acceptable direction here.
+                branches[path][number] = (
+                    max(previous[0], int(taken)), max(previous[1], int(total)))
 
     return lines, branches
+
+
+def exclusions(root):
+    """path -> number of [ExcludeFromCodeCoverage] sites in it.
+
+    Read out of the sources rather than out of the reports, because a coverage
+    report cannot tell you this: both engines honour the attribute by *omitting*
+    the code entirely, so an excluded member and a member that was deleted look
+    identical from here. Counting the attribute is the only way to say how much
+    of the app the headline number has stopped being about.
+    """
+    found = {}
+    for name in sorted(os.listdir(root)):
+        if not name.endswith(".cs"):
+            continue
+        with io.open(os.path.join(root, name), encoding="utf-8", errors="replace") as f:
+            body = f.read()
+        # Matches whether the attribute stands alone or shares its brackets with
+        # others, and tolerates the fully-qualified spelling.
+        sites = len(re.findall(
+            r"\[(?:[^\]]*[\s,\[])?(?:System\.Diagnostics\.CodeAnalysis\.)?"
+            r"ExcludeFromCodeCoverage(?:Attribute)?\b", body))
+        if sites:
+            found[name] = sites
+    return found
+
+
+def source_lines(root, path):
+    """Physical lines in a file, for saying how big an exclusion is."""
+    try:
+        with io.open(os.path.join(root, path), encoding="utf-8", errors="replace") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
 
 
 def is_app_file(path):
@@ -135,7 +223,42 @@ def main():
         sys.exit("no cobertura reports matched — run tools/coverage.sh first")
 
     root = repo_root()
-    lines, branches = load(reports, root)
+
+    # The two engines do not agree about [ExcludeFromCodeCoverage] on a *method*,
+    # and the disagreement is silent. coverlet honours it — an excluded method's
+    # body is not instrumented at all — while Microsoft.CodeCoverage, which the
+    # two MTP suites use, instruments it anyway and reports every line unhit.
+    # Both honour it on a *class*, which is why this went unnoticed until enough
+    # member-level exclusions existed to matter: 157 sites, every one of which the
+    # MTP reports were quietly putting back into the denominator.
+    #
+    # So coverlet's view of *which lines exist* is the authority, and the MTP
+    # reports contribute hits for those lines only. Not the other way round, and
+    # not a union: a union means the attribute does nothing wherever it is on a
+    # method, which is exactly the kind of claim-that-is-not-true this script was
+    # extended to stop making.
+    #
+    # Only applied to files coverlet reported. It instruments the assembly at
+    # build time rather than on execution, so it reports every app file whether or
+    # not a unit test touched it — but a file it genuinely never saw must not be
+    # silently dropped from the MTP reports, so `keep` is consulted per file.
+    coverlet = [r for r in reports if os.path.basename(r) == "coverage.cobertura.xml"]
+    others = [r for r in reports if r not in coverlet]
+
+    keep = instrumented_lines(coverlet, root) if coverlet and others else None
+
+    lines, branches = load(coverlet, root)
+    if others:
+        more_lines, more_branches = load(others, root, keep)
+        for path, hits in more_lines.items():
+            for number, covered in hits.items():
+                lines[path][number] = lines[path].get(number, False) or covered
+        for path, arcs in more_branches.items():
+            for number, (taken, total) in arcs.items():
+                previous = branches[path].get(number, (0, total))
+                branches[path][number] = (
+                    max(previous[0], taken), max(previous[1], total))
+
     app = sorted(p for p in lines if is_app_file(p))
 
     print(f"merged {len(reports)} report(s)\n")
@@ -146,12 +269,49 @@ def main():
     print(f"            {len(app)} source files instrumented")
 
     # A file absent from every report is not 0% — it is missing from the
-    # denominator, which inflates every number above it. Say so out loud.
+    # denominator, which inflates every number above it. But there are two very
+    # different reasons a file can be absent, and lumping them together is how a
+    # 100% headline gets to hide an assembly's worth of untested code:
+    #
+    #   * [ExcludeFromCodeCoverage] — a decision somebody made and can defend.
+    #   * anything else — a suite that never loaded the type, a project missing
+    #     from the run, a rename. A bug in the measurement, not a decision.
+    #
+    # Both leave the denominator, so the percentage cannot tell them apart. This
+    # is the only place that can, and it reads the attribute out of the sources
+    # to do it.
     on_disk = {p for p in os.listdir(root) if p.endswith(".cs")}
-    missing = sorted(on_disk - set(app))
-    if missing:
-        print(f"            WARNING: {len(missing)} app file(s) in no report: "
-              f"{', '.join(missing)}")
+    excluded = exclusions(root)
+    absent = on_disk - set(app)
+
+    fully_excluded = sorted(p for p in absent if p in excluded)
+    unexplained = sorted(p for p in absent if p not in excluded)
+    partly_excluded = sorted(p for p in excluded if p in set(app))
+
+    if fully_excluded:
+        cost = sum(source_lines(root, p) for p in fully_excluded)
+        print(f"            EXCLUDED: {len(fully_excluded)} file(s) held out of the "
+              f"number above by [ExcludeFromCodeCoverage] ({cost} source lines)")
+        for path in fully_excluded:
+            print(f"                      {source_lines(root, path):5d} lines  {path}")
+
+    if partly_excluded:
+        sites = sum(excluded[p] for p in partly_excluded)
+        print(f"            EXCLUDED: {sites} more [ExcludeFromCodeCoverage] site(s) "
+              f"inside {len(partly_excluded)} measured file(s)")
+        for path in partly_excluded:
+            print(f"                      {excluded[path]:5d} site(s)  {path}")
+
+    if unexplained:
+        print(f"            WARNING: {len(unexplained)} app file(s) in no report and "
+              f"not excluded: {', '.join(unexplained)}")
+
+    if fully_excluded or partly_excluded:
+        print("            Read the percentage as coverage OF WHAT REMAINS. An "
+              "exclusion is a claim")
+        print("            that a headless runner cannot execute the code, and it "
+              "is only as good as")
+        print("            the reviewer who checked it.")
     print()
 
     print("BY FILE (most-covered first)")

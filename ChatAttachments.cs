@@ -24,7 +24,7 @@ namespace ClaudeBuddy
         public static string Save(Bitmap bitmap)
         {
             System.IO.Directory.CreateDirectory(Directory_);
-            Sweep();
+            Sweep(Directory_);
 
             var path = Path.Combine(Directory_, $"paste-{Guid.NewGuid():N}.png");
             bitmap.Save(path, PngBitmapEncoderOptions.Default);
@@ -34,13 +34,19 @@ namespace ClaudeBuddy
         // Anything from a previous sitting. Swept on the way in rather than
         // the way out, the same reasoning as OpenClawMedia: there is no
         // reliable "on the way out" once the app can simply be killed.
-        private static void Sweep()
+        //
+        // Takes the directory rather than reading Directory_ so a test can point
+        // it somewhere it owns. The alternative was a test that backdates files
+        // in the one shared temp directory every *other* paste in the process
+        // also writes to — which is a test that deletes another test's fixture
+        // the moment the two run in either order.
+        internal static void Sweep(string directory)
         {
             try
             {
                 var cutoff = DateTime.UtcNow - TimeSpan.FromHours(6);
 
-                foreach (var file in System.IO.Directory.EnumerateFiles(Directory_))
+                foreach (var file in System.IO.Directory.EnumerateFiles(directory))
                 {
                     if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file);
                 }

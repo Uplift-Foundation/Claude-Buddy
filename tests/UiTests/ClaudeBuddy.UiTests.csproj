@@ -52,4 +52,16 @@
   <ItemGroup>
     <ProjectReference Include="..\..\ClaudeBuddy.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- The orb-geometry sweep's case matrix, shared with tests/ArrangementTests
+         and tests/UnitTests. Compiled in here for its *tables* rather than its
+         sweep: the settings window's shape picker and spacing slider have to
+         offer exactly the shapes and the range the geometry was verified across,
+         and asserting that against the same list the sweep walks is the only way
+         those two cannot drift apart. Hardcoding the shapes in a UI test would
+         be a second source of truth for the thing this file exists to keep
+         single. -->
+    <Compile Include="..\ArrangementTests\ArrangementSweep.cs" />
+  </ItemGroup>
 </Project>

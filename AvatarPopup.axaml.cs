@@ -85,19 +85,42 @@ namespace ClaudeBuddy
             // replaced, or a timer that has since been nulled.
             var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(avatar.DelaysMs[0]) };
             var frames = avatar;
-            var frame = 0;
 
-            timer.Tick += (_, _) =>
-            {
-                if (!ReferenceEquals(_avatar, frames) || _brush is null) return;
-
-                frame = (frame + 1) % frames.Frames.Count;
-                _brush.Source = frames.Frames[frame];
-                timer.Interval = TimeSpan.FromMilliseconds(frames.DelaysMs[frame]);
-            };
+            timer.Tick += (_, _) => Advance(frames, timer);
 
             _timer = timer;
             _timer.Start();
+        }
+
+        // One frame on, as a named method rather than the body of the closure it
+        // used to be — so a test can advance the animation itself instead of
+        // waiting on a real timer.
+        //
+        // That is not a cosmetic preference. The test that covers this polled for
+        // the second frame while the timer ran, and with a three-frame portrait
+        // two ticks delivered in one dispatcher drain step straight past it from
+        // the first frame to the third: the poll then never matched and the test
+        // failed, but only when the rest of the suite was loading the machine
+        // enough for ticks to bunch up. Same shape as the pulse ticker's flake
+        // and the settings-collection one — a result that depends on what else is
+        // running.
+        //
+        // The frame counter moved to the field that was already declared for it
+        // and only ever reset; the closure had been shadowing it with a local.
+        // The avatar and timer stay parameters, because the guard below is the
+        // point: a queued tick must not fire against a portrait that has since
+        // been replaced, or a timer that has since been nulled.
+        internal void Advance(OpenClawAvatars.Avatar frames, DispatcherTimer? timer = null)
+        {
+            if (!ReferenceEquals(_avatar, frames) || _brush is null) return;
+
+            _frame = (_frame + 1) % frames.Frames.Count;
+            _brush.Source = frames.Frames[_frame];
+
+            if (timer is not null)
+            {
+                timer.Interval = TimeSpan.FromMilliseconds(frames.DelaysMs[_frame]);
+            }
         }
 
         // Centred on the click, then pulled back inside the screen it landed on

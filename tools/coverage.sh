@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Line and branch coverage for the three xUnit suites, as one number.
+# Line and branch coverage for the four xUnit suites, as one number.
 #
 #   tools/coverage.sh                     # whole-app coverage
 #   tools/coverage.sh --base upstream/develop   # ...plus coverage of new lines
@@ -9,10 +9,11 @@
 #
 #   * tests/UnitTests and tests/IntegrationTests run on VSTest, so they use
 #     coverlet.collector via `--collect:"XPlat Code Coverage"`.
-#   * tests/UiTests runs on the Microsoft Testing Platform (it had to move to
-#     xUnit v3 for Avalonia.Headless.XUnit 12.x — see its csproj), and VSTest
-#     data collectors do not apply there at all. It uses
-#     Microsoft.Testing.Extensions.CodeCoverage's own `--coverage` instead.
+#   * tests/UiTests and tests/UiScreenshots run on the Microsoft Testing
+#     Platform (both had to move to xUnit v3 for Avalonia.Headless.XUnit 12.x —
+#     see their csprojs), and VSTest data collectors do not apply there at all.
+#     They use Microsoft.Testing.Extensions.CodeCoverage's own `--coverage`
+#     instead.
 #
 # That package is version-pinned for the same class of reason as everything else
 # in that csproj: 18.x depends on Microsoft.Testing.Platform 2.x, while
@@ -29,7 +30,24 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-OUT="${TMPDIR:-/tmp}/claude-buddy-coverage"
+# Keyed by which checkout this is, because "rm -rf" two lines down is otherwise
+# aimed at somebody else's reports. CLAUDE.md has features built by a team of
+# agents each in its own git worktree, and every one of them is told to measure
+# coverage — same machine, same TMPDIR, one directory. The failure is silent and
+# it lies in both directions: a run that wipes the shared directory mid-flight
+# leaves the merge reading whichever reports happen to exist, so a suite that
+# passed can be missing from the number entirely, and one worktree's hits can be
+# attributed to another's source.
+#
+# Found exactly that way — a local number quoted OrbArrangement at 0% while
+# three engineer worktrees were measuring, because the ui and shots reports had
+# been deleted out from under it between being written and being read.
+#
+# The path is hashed rather than used directly: it can be long, contains
+# slashes, and none of that belongs in a directory name. Sixteen hex characters
+# of it is plenty to keep concurrent checkouts apart.
+CHECKOUT_KEY="$(printf '%s' "$PWD" | shasum | cut -c1-16)"
+OUT="${TMPDIR:-/tmp}/claude-buddy-coverage/$CHECKOUT_KEY"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
@@ -60,6 +78,23 @@ if [[ -z "$UI_REPORT" ]]; then
 fi
 cp "$UI_REPORT" "$OUT/ui.cobertura.xml"
 
+# tests/UiScreenshots, which CI has always run and this number never counted.
+# It is the only suite that draws through real Skia rather than the null
+# renderer, so a handful of things are only reachable there — a bitmap actually
+# written to disk, most obviously. Same platform as tests/UiTests, so it
+# collects the same way.
+echo "==> tests/UiScreenshots"
+dotnet test tests/UiScreenshots -- \
+  --coverage --coverage-output-format cobertura --coverage-output shots.cobertura.xml \
+  | tail -2
+
+SHOTS_REPORT="$(find tests/UiScreenshots/bin -name shots.cobertura.xml -print -quit)"
+if [[ -z "$SHOTS_REPORT" ]]; then
+  echo "tests/UiScreenshots produced no cobertura report" >&2
+  exit 1
+fi
+cp "$SHOTS_REPORT" "$OUT/shots.cobertura.xml"
+
 echo
 python3 tools/merge-coverage.py \
-  "$OUT/**/coverage.cobertura.xml" "$OUT/ui.cobertura.xml" "$@"
+  "$OUT/**/coverage.cobertura.xml" "$OUT/ui.cobertura.xml" "$OUT/shots.cobertura.xml" "$@"
