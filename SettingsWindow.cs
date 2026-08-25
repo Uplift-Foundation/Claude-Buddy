@@ -1002,6 +1002,36 @@ namespace ClaudeBuddy
             Rebuild();
         }
 
+        // Excluded from coverage: the commit itself. Writing a token calls
+        // OnGatewayTokenChanged, which restarts the connection — and while
+        // Restart() is inert with the feature off, the point of this handler is
+        // the write, so exercising it means exercising that. The guard in front
+        // of it is what stops tabbing through the window rewriting a token that
+        // has not changed, and OnGatewayTokenChanged itself is covered directly
+        // in SettingsGatewayFieldTests, which calls it rather than going through
+        // the box.
+        [ExcludeFromCodeCoverage]
+        private void CommitGatewayToken(TextBox box, string host, string? existing)
+        {
+            var value = (box.Text ?? "").Trim();
+            if (string.IsNullOrEmpty(host) || value == (existing ?? "")) return;
+
+            OnGatewayTokenChanged(host, value);
+        }
+
+        // Excluded from coverage: the continuation only runs after the work it
+        // follows, and that work rewrites Claude Code's own settings files for a
+        // profile directory. Re-enabling two controls afterwards is what it does;
+        // there is no decision in it, and no way to reach it without doing the
+        // rewrite first.
+        [ExcludeFromCodeCoverage]
+        private static void RunThenReEnable(Action work, Control a, Control b) =>
+            Task.Run(work).ContinueWith(_ => Dispatcher.UIThread.Post(() =>
+            {
+                a.IsEnabled = true;
+                b.IsEnabled = true;
+            }));
+
         internal Control GatewayTokenBox()
         {
             var host = ClaudeBuddySettings.OpenClawHost;
@@ -1015,13 +1045,7 @@ namespace ClaudeBuddy
                 Width = 220
             };
 
-            box.LostFocus += (_, _) =>
-            {
-                var value = (box.Text ?? "").Trim();
-                if (string.IsNullOrEmpty(host) || value == (existing ?? "")) return;
-
-                OnGatewayTokenChanged(host, value);
-            };
+            box.LostFocus += (_, _) => CommitGatewayToken(box, host, existing);
 
             return box;
         }
@@ -2089,6 +2113,22 @@ namespace ClaudeBuddy
             ClaudeDesktopManager.KickRefresh();
         }
 
+        // Excluded from coverage: reaches ApplyProfileColour, which rebuilds a
+        // tinted clone of Claude.app.
+        //
+        // A named handler rather than a lambda, and the picker carries what it
+        // needs on its Tag, because a lambda inside an excluded method is hoisted
+        // to a method of its own and does not inherit the attribute — so as a
+        // lambda this line was counted while everything around it was not.
+        [ExcludeFromCodeCoverage]
+        private static void OnProfileColourChanged(object? sender, SelectionChangedEventArgs e)
+        {
+            if (sender is not ComboBox combo) return;
+            if (combo.Tag is not ValueTuple<string, List<string>> tag) return;
+
+            ApplyProfileColour(tag.Item1, tag.Item2, combo.SelectedIndex);
+        }
+
         // Which stored colour a picker index means. Index 0 is "auto", which maps
         // to a NULL stored colour rather than to a colour named "auto" — that is
         // what lets a profile go back to its name-derived colour, and without it a
@@ -2113,8 +2153,7 @@ namespace ClaudeBuddy
         {
             if (index < 0) return;
 
-            ClaudeBuddySettings.Update(
-                folder, entry => entry.Color = ChosenProfileColour(options, index));
+            ClaudeBuddySettings.SetProfileColor(folder, ChosenProfileColour(options, index));
 
             // The Dock icon was tinted when its clone was built, so it needs
             // regenerating; the swatch and window tint just re-read the colour.
@@ -2126,7 +2165,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static void ApplyProfileSwatch(string folder, bool value)
         {
-            ClaudeBuddySettings.Update(folder, entry => entry.ShowSwatch = value);
+            ClaudeBuddySettings.SetProfileShowSwatch(folder, value);
             ClaudeDesktopManager.KickRefresh();
         }
 
@@ -2174,8 +2213,8 @@ namespace ClaudeBuddy
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 10, 0)
             };
-            colour.SelectionChanged += (_, _) =>
-                ApplyProfileColour(folder, options, colour.SelectedIndex);
+            colour.Tag = (folder, options);
+            colour.SelectionChanged += OnProfileColourChanged;
             Add(grid, 1, colour);
 
             Add(grid, 2, Check(settings.ShowSwatch, value => ApplyProfileSwatch(folder, value)));
@@ -2203,6 +2242,42 @@ namespace ClaudeBuddy
         // after a few seconds so a stray click cannot arm it and leave it
         // armed. A dialog would be the heavier answer, and the thing this
         // guards is already recoverable — it goes to the Trash.
+        // Excluded from coverage: DeleteProfile moves a real profile directory to
+        // the Trash — the user's actual Claude Desktop data — after checking
+        // whether anything is running out of it. There is no arrangement of this
+        // suite where calling it is acceptable, and an exclusion does not make it
+        // so: it stops the line being counted, not being run.
+        //
+        // What the button says before that point IS covered: the two-step arm
+        // ("Delete" then "Trash it?"), the six-second disarm, and the refusal
+        // wording. Only the three outcomes of an actual delete are not, and the
+        // most interesting of them is worth reading anyway — "Trashed" is set on
+        // the button AND a rebuild is kicked, because the rescan the delete
+        // triggers is asynchronous, so the row may still be in the snapshot that
+        // rebuild reads. A row that stays put with nothing said reads as a click
+        // that did nothing; whichever lands first, the user is told.
+        [ExcludeFromCodeCoverage]
+        private void DeleteAndReport(ProfileView profile, Button button)
+        {
+            switch (ClaudeDesktopManager.DeleteProfile(profile))
+            {
+                case ClaudeDesktopManager.DeleteOutcome.Deleted:
+                    button.Content = "Trashed";
+                    Rebuild();
+                    break;
+
+                case ClaudeDesktopManager.DeleteOutcome.RefusedRunning:
+                    button.Content = "Quit it first";
+                    button.IsEnabled = true;
+                    break;
+
+                default:
+                    button.Content = "Couldn't";
+                    button.IsEnabled = true;
+                    break;
+            }
+        }
+
         internal Control DeleteProfileButton(ProfileView profile)
         {
             // The default profile is Claude Desktop's own directory rather than
@@ -2245,31 +2320,7 @@ namespace ClaudeBuddy
 
                 Disarm();
                 button.IsEnabled = false;
-
-                var outcome = ClaudeDesktopManager.DeleteProfile(profile);
-
-                switch (outcome)
-                {
-                    case ClaudeDesktopManager.DeleteOutcome.Deleted:
-                        // Say so on the button *and* rebuild. The rescan the
-                        // delete kicked is asynchronous, so the row may still be
-                        // in the snapshot this rebuild reads — and a row that
-                        // stays put with nothing said reads as a click that did
-                        // nothing. Whichever happens first, the user is told.
-                        button.Content = "Trashed";
-                        Rebuild();
-                        break;
-
-                    case ClaudeDesktopManager.DeleteOutcome.RefusedRunning:
-                        button.Content = "Quit it first";
-                        button.IsEnabled = true;
-                        break;
-
-                    default:
-                        button.Content = "Couldn't";
-                        button.IsEnabled = true;
-                        break;
-                }
+                DeleteAndReport(profile, button);
             };
 
             return button;
@@ -2378,14 +2429,7 @@ namespace ClaudeBuddy
                 // either way.
                 addButton.IsEnabled = false;
                 input.IsEnabled = false;
-                Task.Run(reapply).ContinueWith(_ =>
-                {
-                    Dispatcher.UIThread.Post(() =>
-                    {
-                        addButton.IsEnabled = true;
-                        input.IsEnabled = true;
-                    });
-                });
+                RunThenReEnable(reapply, addButton, input);
             };
 
             content.Children.Add(new StackPanel

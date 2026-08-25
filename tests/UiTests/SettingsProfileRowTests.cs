@@ -174,4 +174,44 @@ public class SettingsProfileRowTests
 
         Assert.Equal(0, combo.SelectedIndex);
     }
+
+    // ---- the named setters ---------------------------------------------------
+
+    // These exist so the excluded handlers hold no lambda, and they are covered
+    // here rather than through those handlers — which is the point: the write is
+    // testable even though the thing that triggers it is not.
+    [AvaloniaFact]
+    public void SettingAProfileColourWritesIt()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+
+        ClaudeBuddySettings.SetProfileColor("Claude-Profile-9", "red");
+
+        Assert.Equal("red", ClaudeBuddySettings.For("Claude-Profile-9").Color);
+    }
+
+    // Null is how a profile goes back to its name-derived colour, so it has to
+    // round-trip as null rather than as "".
+    [AvaloniaFact]
+    public void ClearingAProfileColourStoresNothing()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.SetProfileColor("Claude-Profile-9", "red");
+
+        ClaudeBuddySettings.SetProfileColor("Claude-Profile-9", null);
+
+        Assert.Null(ClaudeBuddySettings.For("Claude-Profile-9").Color);
+    }
+
+    [AvaloniaFact]
+    public void SettingAProfileSwatchWritesIt()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+
+        ClaudeBuddySettings.SetProfileShowSwatch("Claude-Profile-9", false);
+        Assert.False(ClaudeBuddySettings.For("Claude-Profile-9").ShowSwatch);
+
+        ClaudeBuddySettings.SetProfileShowSwatch("Claude-Profile-9", true);
+        Assert.True(ClaudeBuddySettings.For("Claude-Profile-9").ShowSwatch);
+    }
 }
