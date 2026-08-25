@@ -141,7 +141,7 @@ public sealed class OpenArgumentDeliveryTests : IDisposable
         var second = WaitForLines(2, TimeSpan.FromSeconds(5));
 
         Assert.False(second, "a second `open` without -n started a second instance");
-        Assert.Single(File.ReadAllLines(ArgvLog));
+        Assert.Single(Lines());
     }
 
     // ---- the probe ---------------------------------------------------------
@@ -174,13 +174,24 @@ public sealed class OpenArgumentDeliveryTests : IDisposable
              </dict></plist>
              """);
 
-        // One line per launch, one bracketed token per argument, so a split
-        // argument is visible as two tokens rather than having to be inferred.
+        // One tab-separated line per launch, so a split argument shows up as two
+        // tokens rather than having to be inferred.
+        //
+        // Assembled in a variable and appended **once**, which is not a style
+        // choice. Writing "ARGV" and then each argument as separate appends
+        // means the file briefly holds a line that is complete as far as any
+        // reader can tell and carries no arguments at all — and the poll on the
+        // other side read exactly that, once, under a loaded full-suite run:
+        // argv came back empty and the assertion failed on a launch that had
+        // been perfectly correct. One append plus the newline-terminated count
+        // in WaitForLines makes the test independent of the interleaving rather
+        // than merely less likely to lose the race.
         var script = $"""
                       #!/bin/sh
-                      printf 'ARGV' >> '{ArgvLog}'
-                      for a in "$@"; do printf '\t%s' "$a" >> '{ArgvLog}'; done
-                      printf '\n' >> '{ArgvLog}'
+                      tab=$(printf '\t')
+                      line='ARGV'
+                      for a in "$@"; do line="$line$tab$a"; done
+                      printf '%s\n' "$line" >> '{ArgvLog}'
                       """;
 
         // Long enough for the second launch above to find it running, short
@@ -215,8 +226,7 @@ public sealed class OpenArgumentDeliveryTests : IDisposable
         Assert.True(WaitForLines(1, TimeSpan.FromSeconds(20)),
             "the probe never ran, or never wrote its argv");
 
-        var line = File.ReadAllLines(ArgvLog)[0];
-        return line.Split('\t').Skip(1).ToArray();
+        return Lines()[0].Split('\t').Skip(1).ToArray();
     }
 
     // Polls rather than sleeps. A fixed sleep is either a flake or a tax, and
@@ -226,19 +236,29 @@ public sealed class OpenArgumentDeliveryTests : IDisposable
         var deadline = DateTime.UtcNow + within;
         while (DateTime.UtcNow < deadline)
         {
-            try
-            {
-                if (File.ReadAllLines(ArgvLog).Length >= count) return true;
-            }
-            catch (IOException)
-            {
-                // Mid-append. Try again.
-            }
-
+            if (Lines().Length >= count) return true;
             Thread.Sleep(25);
         }
 
         return false;
+    }
+
+    // Only newline-terminated lines count. A line still being written is not a
+    // line yet, and treating one as finished is what made this flake: the
+    // probe's append is a single write, but nothing guarantees the read lands
+    // after it rather than during.
+    private string[] Lines()
+    {
+        try
+        {
+            return File.ReadAllText(ArgvLog)
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        }
+        catch (IOException)
+        {
+            // Mid-append. The caller polls again.
+            return Array.Empty<string>();
+        }
     }
 
     private static bool Run(string executable, params string[] arguments)
