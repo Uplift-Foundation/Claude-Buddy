@@ -32,8 +32,14 @@ public class MirrorAndRoutingArmsTests
     }
 
     // A real directory is canonicalised, so two spellings of one path — a
-    // symlink, a trailing slash, /tmp against /private/tmp — do not read as two
-    // different profiles and split one instance into two candidates.
+    // symlink, /tmp against /private/tmp — do not read as two different profiles
+    // and split one instance into two candidates.
+    //
+    // No trailing separator on the input, deliberately. DirectoryOf's fallback
+    // trims '/' and only '/', which is a macOS rule: on Windows GetFullPath
+    // hands back a backslash and the trim is inert, so a fixture with a trailing
+    // separator asserts the platform rather than the rule. That is the mistake
+    // this branch has now made four times, and CLAUDE.md names it.
     [Fact]
     public void ARealDirectoryComesBackCanonicalised()
     {
@@ -42,7 +48,7 @@ public class MirrorAndRoutingArmsTests
 
         try
         {
-            var instance = new ClaudeInstance(Pid: 42, UserDataDir: directory + "/");
+            var instance = new ClaudeInstance(Pid: 42, UserDataDir: directory);
 
             Assert.Equal(ClaudeDesktopManager.Canonicalise(directory),
                 ClaudeDesktopManager.DirectoryOf(instance, "/default"));
@@ -60,13 +66,17 @@ public class MirrorAndRoutingArmsTests
     [Fact]
     public void ADirectoryThatIsNotThereIsStillNormalised()
     {
-        var missing = Path.Combine(Path.GetTempPath(), "cb-gone-" + Guid.NewGuid().ToString("n")[..8]);
+        var root = Path.Combine(Path.GetTempPath(), "cb-gone-" + Guid.NewGuid().ToString("n")[..8]);
+
+        // A redundant segment rather than a trailing separator, so what is
+        // asserted is normalisation itself on both platforms.
+        var awkward = Path.Combine(root, ".", "profile");
 
         var answer = ClaudeDesktopManager.DirectoryOf(
-            new ClaudeInstance(Pid: 42, UserDataDir: missing + "/"), "/default");
+            new ClaudeInstance(Pid: 42, UserDataDir: awkward), "/default");
 
-        Assert.Equal(Path.GetFullPath(missing).TrimEnd('/'), answer);
-        Assert.DoesNotContain("//", answer!);
+        Assert.Equal(Path.GetFullPath(awkward), answer);
+        Assert.DoesNotContain($"{Path.DirectorySeparatorChar}.{Path.DirectorySeparatorChar}", answer!);
     }
 
     // ---- the transcript a mirror sends -------------------------------------
