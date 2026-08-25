@@ -719,12 +719,21 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static bool LaunchMac(string directory, bool isDefault)
         {
-            // The Default profile is launched *without* the variable.
-            // Setting it suppresses the app's own resolution of its
-            // sidecar config directory, so a tray launch could
-            // re-trigger the deployment-mode chooser on an already
-            // configured profile — and it would start a second log
-            // history under <profile>/Logs.
+            // The Default profile is launched without *either* selector —
+            // see LaunchArguments, which is where that decision actually
+            // lives and where the measurement behind it is written down.
+            // Pointing either one at the app's own default directory
+            // suppresses its own resolution of the sidecar config
+            // directory, so a tray launch could re-trigger the
+            // deployment-mode chooser on an already configured profile.
+            //
+            // This used to add "and it would start a second log history
+            // under <profile>/Logs", which was true when the variable was
+            // the mechanism and is not true now: --user-data-dir sets
+            // Chromium's userData and does not move Electron's log path.
+            // See LogCandidates for what that cost and how Reveal logs
+            // answers it instead.
+
             // A cloned bundle with a tinted icon, so this instance gets
             // its own colour in the Dock. Only for created profiles:
             // Default deliberately stays the bundle you installed, icon
