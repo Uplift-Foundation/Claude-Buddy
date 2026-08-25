@@ -655,8 +655,10 @@ Details worth knowing:
   with neither selector. Pointing either at the app's own default directory is
   not the same thing to it as omitting them: it suppresses the app's own
   resolution of that sidecar directory, so a tray launch could re-trigger the
-  enterprise deployment-mode chooser on an already-configured profile, and it
-  would start a second log history under `Claude/Logs/`.
+  enterprise deployment-mode chooser on an already-configured profile. (This
+  used to add "and it would start a second log history under `Claude/Logs/`",
+  which was true while the variable was the mechanism and is not true now —
+  see the next bullet.)
 - **Reveal logs picks by recency, because no fixed answer is right.** Logs used
   to follow the profile — but only because `CLAUDE_USER_DATA_DIR` moved them by
   hand, in Claude Desktop's own JavaScript. `--user-data-dir` is Chromium's
