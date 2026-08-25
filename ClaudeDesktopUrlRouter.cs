@@ -327,13 +327,27 @@ namespace ClaudeBuddy
             var arguments = new List<string> { "-a", route.BundlePath };
 
             // Only meaningful when the instance is not already running — `open`
-            // applies --env at launch — but harmless when it is, and passing it
-            // unconditionally means a link that has to start the profile starts
-            // it on the right userData directory.
+            // applies these at launch — but harmless when it is, and passing
+            // them unconditionally means a link that has to start the profile
+            // starts it on the right userData directory.
+            //
+            // Both selectors, for the reason in
+            // ClaudeDesktopManager.LaunchArguments: Claude Desktop no longer
+            // honours the environment variable, so a callback that started the
+            // profile used to start it on Default — which is precisely the
+            // failure this whole routing feature was built to stop, arriving
+            // again by a different route.
             if (route.UserDataDir is { Length: > 0 } directory)
             {
                 arguments.Add("--env");
                 arguments.Add("CLAUDE_USER_DATA_DIR=" + directory);
+
+                // The URL is an operand and has to precede --args, after which
+                // open(1) hands everything to the application untouched.
+                arguments.Add(url);
+                arguments.Add("--args");
+                arguments.Add("--user-data-dir=" + directory);
+                return arguments.ToArray();
             }
 
             arguments.Add(url);

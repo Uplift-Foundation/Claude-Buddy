@@ -187,8 +187,46 @@ public class ClaudeDesktopUrlRoutingTests
         var arguments = ClaudeDesktopUrlRouter.Arguments(route, "claude://x");
 
         Assert.DoesNotContain("-n", arguments);
-        Assert.Equal(new[] { "-a", BoardBundle, "--env", "CLAUDE_USER_DATA_DIR=" + BoardDirectory, "claude://x" },
+        Assert.Equal(
+            new[]
+            {
+                "-a", BoardBundle,
+                "--env", "CLAUDE_USER_DATA_DIR=" + BoardDirectory,
+                "claude://x",
+                "--args", "--user-data-dir=" + BoardDirectory
+            },
             arguments);
+    }
+
+    [Fact]
+    public void RouterArguments_PutTheUrlBeforeDashDashArgs()
+    {
+        // open(1) hands everything after --args to the application untouched,
+        // so a URL written after it stops being an operand and is never
+        // delivered — the link silently does nothing. The order is the whole
+        // reason this assertion exists separately from the one above.
+        var route = new UrlRoute(BoardDirectory, BoardBundle, BoardDirectory, AlreadyRunning: false, Pid: 0);
+
+        var arguments = ClaudeDesktopUrlRouter.Arguments(route, "claude://x");
+
+        Assert.True(
+            Array.IndexOf(arguments, "claude://x") < Array.IndexOf(arguments, "--args"),
+            "the URL must precede --args or open(1) will not deliver it");
+    }
+
+    [Fact]
+    public void RouterArguments_CarryTheSwitchAsWellAsTheVariable()
+    {
+        // Claude Desktop 1.34493.1 ignores CLAUDE_USER_DATA_DIR, so a callback
+        // that has to start the profile would start it on Default — the exact
+        // failure this routing feature exists to stop, arriving by a different
+        // road.
+        var route = new UrlRoute(BoardDirectory, BoardBundle, BoardDirectory, AlreadyRunning: false, Pid: 0);
+
+        var arguments = ClaudeDesktopUrlRouter.Arguments(route, "claude://x");
+
+        Assert.Contains("--user-data-dir=" + BoardDirectory, arguments);
+        Assert.Contains("CLAUDE_USER_DATA_DIR=" + BoardDirectory, arguments);
     }
 
     [Fact]
@@ -199,6 +237,7 @@ public class ClaudeDesktopUrlRoutingTests
         var arguments = ClaudeDesktopUrlRouter.Arguments(route, "claude://y");
 
         Assert.Equal(new[] { "-a", InstalledBundle, "claude://y" }, arguments);
+        Assert.DoesNotContain("--args", arguments);
     }
 
     [Fact]
@@ -208,8 +247,43 @@ public class ClaudeDesktopUrlRoutingTests
             BoardBundle, InstalledBundle, isDefault: false, BoardDirectory);
 
         Assert.Equal(
-            new[] { "-n", "-a", BoardBundle, "--env", "CLAUDE_USER_DATA_DIR=" + BoardDirectory },
+            new[]
+            {
+                "-n", "-a", BoardBundle,
+                "--env", "CLAUDE_USER_DATA_DIR=" + BoardDirectory,
+                "--args", "--user-data-dir=" + BoardDirectory
+            },
             arguments);
+    }
+
+    [Fact]
+    public void LaunchArguments_SelectTheProfileWithChromiumsSwitchAsWellAsTheVariable()
+    {
+        // The variable stopped working: Claude Desktop 1.34493.1 sets its
+        // userData from --user-data-dir and ignores CLAUDE_USER_DATA_DIR, so a
+        // launch carrying only the variable opened a second window on Default.
+        // Both are passed, so a build honouring either lands in the right
+        // place; --args is last because open(1) gives everything after it to
+        // the application.
+        var arguments = ClaudeDesktopManager.LaunchArguments(
+            BoardBundle, InstalledBundle, isDefault: false, BoardDirectory);
+
+        Assert.Equal("--args", arguments[^2]);
+        Assert.Equal("--user-data-dir=" + BoardDirectory, arguments[^1]);
+    }
+
+    [Fact]
+    public void LaunchArguments_LeaveDefaultWithNeitherSelector()
+    {
+        // Pointing either selector at the app's own default directory is not
+        // the same thing to Chromium as omitting it, and can re-trigger the
+        // deployment-mode chooser on an already configured profile.
+        var arguments = ClaudeDesktopManager.LaunchArguments(
+            BoardBundle, InstalledBundle, isDefault: true, DefaultDirectory);
+
+        Assert.DoesNotContain("--args", arguments);
+        Assert.DoesNotContain("--user-data-dir=" + DefaultDirectory, arguments);
+        Assert.DoesNotContain("--env", arguments);
     }
 
     [Fact]
@@ -244,7 +318,12 @@ public class ClaudeDesktopUrlRoutingTests
             clone: null, installedApp: null, isDefault: false, BoardDirectory);
 
         Assert.Equal(
-            new[] { "-n", "-b", "com.anthropic.claudefordesktop", "--env", "CLAUDE_USER_DATA_DIR=" + BoardDirectory },
+            new[]
+            {
+                "-n", "-b", "com.anthropic.claudefordesktop",
+                "--env", "CLAUDE_USER_DATA_DIR=" + BoardDirectory,
+                "--args", "--user-data-dir=" + BoardDirectory
+            },
             arguments);
     }
 

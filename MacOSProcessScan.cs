@@ -45,6 +45,11 @@ namespace ClaudeBuddy
 
         private const string UserDataDirKey = "CLAUDE_USER_DATA_DIR=";
 
+        // Chromium's own switch, always written as one argv token with an `=`
+        // — that is the form open(1) delivers and the form Windows already
+        // matches in WindowsProcessScan.
+        private const string UserDataDirSwitch = "--user-data-dir=";
+
         [DllImport(LibSystem, SetLastError = true)]
         private static extern int proc_listallpids(int[]? buffer, int buffersize);
 
@@ -203,6 +208,15 @@ namespace ClaudeBuddy
 
         // KERN_PROCARGS2 hands back:
         //   [int32 argc][exec path\0][\0 padding][argv 0..argc-1, each \0][env, each \0]
+        //
+        // Both blocks are read, argv first, because a profile is now selected
+        // by both --user-data-dir and CLAUDE_USER_DATA_DIR — see
+        // ClaudeDesktopManager.LaunchArguments for why the variable stopped
+        // being enough. argv wins because it is the one Chromium actually acts
+        // on: an instance started by a Claude Buddy that predates this fix
+        // carries only the variable and still maps correctly, and one started
+        // by a build that honours neither is indistinguishable from a Dock
+        // launch, which is what it has in fact become.
         internal static string? ParseUserDataDir(byte[] buffer, int length)
         {
             if (length < sizeof(int)) return null;
@@ -215,11 +229,31 @@ namespace ClaudeBuddy
             while (i < length && buffer[i] != 0) i++;   // exec path
             while (i < length && buffer[i] == 0) i++;   // its alignment padding
 
+            string? fromArguments = null;
+
             for (var arg = 0; arg < argc && i < length; arg++)
             {
+                var argStart = i;
                 while (i < length && buffer[i] != 0) i++;
+
+                if (fromArguments is null)
+                {
+                    var entry = Encoding.UTF8.GetString(buffer, argStart, i - argStart);
+                    if (entry.StartsWith(UserDataDirSwitch, StringComparison.Ordinal))
+                    {
+                        var value = entry[UserDataDirSwitch.Length..];
+                        // A switch with an empty value is not a directory, and
+                        // treating it as one would map the instance to "" and
+                        // hide it from every profile row. Fall through to the
+                        // environment instead.
+                        if (value.Length > 0) fromArguments = value;
+                    }
+                }
+
                 i++;
             }
+
+            if (fromArguments is not null) return fromArguments;
 
             while (i < length)
             {
