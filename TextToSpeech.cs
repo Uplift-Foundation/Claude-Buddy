@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -53,7 +54,10 @@ namespace ClaudeBuddy
         // rather than start a second utterance.
         public static bool IsSpeaking => State != SpeakState.Idle;
 
-        private static void Enter(SpeakState state)
+        // internal, not private: the rule below — no event when the state has not
+        // actually changed — is what stops a speak button flickering between
+        // "speak" and "stop", and it is decided here rather than by any process.
+        internal static void Enter(SpeakState state)
         {
             lock (Gate)
             {
@@ -106,6 +110,9 @@ namespace ClaudeBuddy
         // Verified after the change: a log of the descendants either side of the
         // kill showed "conhost.exe, powershell.exe" before and "(none)" after,
         // across repeated cycles, with no survivors left running.
+        // Excluded from coverage: runs taskkill and Process.Kill against a real
+        // speech process tree.
+        [ExcludeFromCodeCoverage]
         private static void KillTree(Process victim)
         {
             int pid;
@@ -182,6 +189,10 @@ namespace ClaudeBuddy
         // actually available, in the order they are worth trying: the system voices
         // always exist, Kokoro only once downloaded, a user command only once
         // configured.
+        // Excluded from coverage: asks the neural engine to enumerate itself and
+        // runs the listing command — two process launches; choosing from the
+        // result is SelectedFrom, which is tested.
+        [ExcludeFromCodeCoverage]
         public static List<VoiceOption> AllVoiceOptions()
         {
             // Cached with the same lifetime as the system list, and for a sharper
@@ -228,9 +239,16 @@ namespace ClaudeBuddy
         // available. Falls back rather than failing: a saved selection can name an
         // engine that has since been uninstalled or a voice that no longer exists,
         // and speaking in the wrong voice beats not speaking.
-        public static VoiceOption? SelectedVoice()
+        public static VoiceOption? SelectedVoice() => SelectedFrom(AllVoiceOptions());
+
+        // The resolution, separated from the enumeration that feeds it. Building
+        // the option list asks the neural engine to enumerate itself and runs the
+        // user's listing command — two process launches — while *choosing* from a
+        // list is settings arithmetic, and it is the half with the interesting
+        // rules: fall back within the engine, then fall back off it, and never
+        // return nothing when there is something to speak with.
+        internal static VoiceOption? SelectedFrom(List<VoiceOption> options)
         {
-            var options = AllVoiceOptions();
             if (options.Count == 0) return null;
 
             var engine = ClaudeBuddySettings.SpeakEngine switch
@@ -279,6 +297,9 @@ namespace ClaudeBuddy
         // The voices a user's own command says it has, one name per line on its
         // stdout. Empty when no listing command is configured, which is the normal
         // case — most wrappers speak with one fixed voice and have nothing to list.
+        // Excluded from coverage: runs the user's own listing command as a
+        // subprocess.
+        [ExcludeFromCodeCoverage]
         public static List<string> CustomCommandVoices()
         {
             var found = new List<string>();
@@ -339,6 +360,9 @@ namespace ClaudeBuddy
         // those. Kept separate from the neural and custom lists because all three
         // are now offered side by side rather than one shadowing the others; see
         // AllVoiceOptions.
+        // Excluded from coverage: runs /usr/bin/say -v ? or PowerShell; the
+        // parsing is ParseSayVoices and the ordering is OrderVoices, both tested.
+        [ExcludeFromCodeCoverage]
         public static List<string> SystemVoices()
         {
             if (_cachedVoices is not null) return _cachedVoices;
@@ -361,27 +385,7 @@ namespace ClaudeBuddy
                     var output = proc.StandardOutput.ReadToEnd();
                     proc.WaitForExit(5000);
 
-                    foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-                    {
-                        // Lines: "Ava (Premium)       en_US    # Hello! My name is Ava."
-                        // Strip the sample text after '#' first, then the
-                        // locale is the last whitespace-delimited token in
-                        // what remains.
-                        var hashIdx = line.IndexOf('#');
-                        var meta = hashIdx >= 0 ? line[..hashIdx] : line;
-
-                        var parts = meta.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                        if (parts.Length < 2) continue;
-
-                        var locale = parts[^1];
-                        if (!locale.StartsWith("en_")) continue;
-
-                        var localeStart = meta.LastIndexOf(locale, StringComparison.Ordinal);
-                        if (localeStart < 1) continue;
-                        var name = meta[..localeStart].TrimEnd();
-
-                        voices.Add(name);
-                    }
+                    voices.AddRange(ParseSayVoices(output));
                 }
                 else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 {
@@ -392,18 +396,61 @@ namespace ClaudeBuddy
 
             if (voices.Count == 0) voices.Add(DefaultVoice);
 
-            // Premium and Enhanced voices first — they're what people want.
+            OrderVoices(voices);
+
+            _cachedVoices = voices;
+            return voices;
+        }
+
+        // `say -v ?` output, one voice per line, as the names to offer.
+        //
+        // Split out of SystemVoices because this reads a format another program
+        // defines, which CLAUDE.md says to cover at the parsing level as well as
+        // at the seam — the two fail differently, and a parser that drops a voice
+        // means a voice the user cannot pick with nothing on screen saying why.
+        // The seam itself (launching /usr/bin/say) stays excluded.
+        internal static List<string> ParseSayVoices(string output)
+        {
+            var voices = new List<string>();
+
+            foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                // Lines: "Ava (Premium)       en_US    # Hello! My name is Ava."
+                // Strip the sample text after '#' first, then the locale is the
+                // last whitespace-delimited token in what remains.
+                var hashIdx = line.IndexOf('#');
+                var meta = hashIdx >= 0 ? line[..hashIdx] : line;
+
+                var parts = meta.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 2) continue;
+
+                var locale = parts[^1];
+                if (!locale.StartsWith("en_")) continue;
+
+                var localeStart = meta.LastIndexOf(locale, StringComparison.Ordinal);
+                if (localeStart < 1) continue;
+                var name = meta[..localeStart].TrimEnd();
+
+                voices.Add(name);
+            }
+
+            return voices;
+        }
+
+        // Premium and Enhanced voices first — they're what people want. In place,
+        // and internal, because the order is what the settings window shows and
+        // "the good ones are at the top" is a claim worth asserting.
+        internal static void OrderVoices(List<string> voices)
+        {
             int Tier(string n) =>
                 n.Contains("(Premium)") ? 0 :
                 n.Contains("(Enhanced)") ? 1 : 2;
+
             voices.Sort((a, b) =>
             {
                 var cmp = Tier(a).CompareTo(Tier(b));
                 return cmp != 0 ? cmp : string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
             });
-
-            _cachedVoices = voices;
-            return voices;
         }
 
         // Asked of the same host that does the speaking — `powershell`, i.e.
@@ -420,6 +467,9 @@ namespace ClaudeBuddy
         // what it says: voices added through Windows' own Speech settings land
         // in Speech_OneCore, so they will not appear here until this speaks
         // through something that reads that hive.
+        // Excluded from coverage: runs Windows PowerShell 5.1 to enumerate SAPI
+        // voices.
+        [ExcludeFromCodeCoverage]
         private static List<string> WindowsVoices()
         {
             var found = new List<string>();
@@ -454,6 +504,9 @@ namespace ClaudeBuddy
             return found;
         }
 
+        // Excluded from coverage: starts a speech engine and makes the machine
+        // make a noise.
+        [ExcludeFromCodeCoverage]
         public static void Speak(string text, string? voice = null)
         {
             Cancel();
@@ -579,6 +632,8 @@ namespace ClaudeBuddy
         // killed to cancel. Nothing else is required of it — printing "speaking"
         // on stdout when audio starts is optional and only sharpens the button's
         // state, never a condition of working.
+        // Excluded from coverage: starts the user's command as a subprocess.
+        [ExcludeFromCodeCoverage]
         private static bool StartCustomCommand(string text)
         {
             var command = ClaudeBuddySettings.SpeakCommand;
@@ -672,6 +727,8 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: starts the Kokoro side-car process.
+        [ExcludeFromCodeCoverage]
         private static bool StartNeural(string text)
         {
             // Announced before the process exists, because starting it is itself
@@ -704,6 +761,8 @@ namespace ClaudeBuddy
         // a cancel replaces _speaking immediately, so the *previous* process's
         // Exited arriving late must not report Idle over speech that has already
         // started.
+        // Excluded from coverage: an Exited handler for a real process.
+        [ExcludeFromCodeCoverage]
         private static void Finished(Process proc)
         {
             bool current;

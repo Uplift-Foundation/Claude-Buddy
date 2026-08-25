@@ -1,8 +1,10 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Controls.Documents;
@@ -61,15 +63,80 @@ namespace ClaudeBuddy
 
         private readonly ObservableCollection<TurnView> _turns = new();
 
+        // Pictures pasted since the last send, waiting to go out with
+        // whatever gets typed next. Not part of a session's own draft store
+        // below — a paste is only ever meant for the message being composed
+        // right now, so switching sessions clears it rather than saving it.
+        private readonly ObservableCollection<PendingImage> _pendingImages = new();
+
+        // What the bound session's CLI understands, so "/" in the box can
+        // offer the same autocomplete the terminal itself would. Empty for a
+        // session with no answer for IRemoteChatSlashCommands, which quietly
+        // turns the whole feature off for it rather than needing a check at
+        // every call site.
+        //
+        // Asked of the session on every keystroke rather than read once when
+        // the panel binds. A local session knows its commands before the panel
+        // opens, so caching looked free; a session on another machine has to be
+        // *asked* what it can run, and the answer lands half a minute later. A
+        // list captured at bind time was therefore permanently empty for the
+        // one kind of session that most needed it — the panel had to be closed
+        // and reopened to see anything, which nobody would guess.
+        private IReadOnlyList<SlashCommand> SlashCommands =>
+            (_session as IRemoteChatSlashCommands)?.SlashCommands ?? Array.Empty<SlashCommand>();
+
+        // The suggestions currently shown, and which one Up/Down has landed
+        // on. Kept as a plain list rather than something observable: the
+        // popup is small and rebuilt wholesale on every keystroke or arrow
+        // press anyway, so there is nothing an incremental update would save.
+        private List<SlashCommand> _slashMatches = new();
+        private int _slashSelected;
+
         // Distance from the orb's centre to the panel's near edge. Clears the
         // 56pt orb with a small gap, the same way OrbFlyout's ArcRadius does.
         private const int Gap = 34;
+
+        // The size the XAML ships, captured before anything has been restored
+        // over it. An agent with no saved size has to go *back* to this, not
+        // keep whatever the previously bound agent was dragged to — one window
+        // serves every session, so without this the first resize would silently
+        // become the size of every panel opened after it.
+        private readonly double _defaultWidth;
+        private readonly double _defaultHeight;
 
         public ChatPanel()
         {
             InitializeComponent();
 
+            _defaultWidth = Width;
+            _defaultHeight = Height;
+
             Turns.ItemsSource = _turns;
+            Attachments.ItemsSource = _pendingImages;
+
+            // Bubbles size themselves off Scroll's actual width (see
+            // TurnView.MaxBubbleWidth) rather than a fixed pixel cap, since
+            // the panel is user-resizable now. Two hooks cover the two ways a
+            // turn's width can go stale: the collection hook catches a turn
+            // that didn't exist yet at the last resize, and SizeChanged
+            // catches turns that were already on screen when the resize
+            // happened.
+            _turns.CollectionChanged += (_, e) =>
+            {
+                if (e.NewItems is null) return;
+
+                var width = Scroll.Bounds.Width;
+                if (width <= 0) return;
+
+                foreach (TurnView turn in e.NewItems) turn.AvailableWidth = width;
+            };
+            Scroll.SizeChanged += (_, _) =>
+            {
+                var width = Scroll.Bounds.Width;
+                if (width <= 0) return;
+
+                foreach (var turn in _turns) turn.AvailableWidth = width;
+            };
 
             CloseButton.PointerPressed += (_, e) => { e.Handled = true; HideNow(); };
 
@@ -95,6 +162,7 @@ namespace ClaudeBuddy
             // KeyDown += would fire after the newline had already been inserted.
             // Getting there first is the whole point.
             Input.AddHandler(KeyDownEvent, OnInputKeyDown, RoutingStrategies.Tunnel);
+            Input.TextChanged += (_, _) => UpdateSlashSuggestions();
 
             KeyDown += OnPanelKeyDown;
 
@@ -127,10 +195,31 @@ namespace ClaudeBuddy
                 HideNow();
             }, DispatcherPriority.Background);
 
-            // SizeToContent means the height isn't known until after layout, so
-            // the first open of a tall transcript would otherwise be positioned
-            // as though it were a short one.
-            SizeChanged += (_, _) => Reposition();
+            // The window's Width/Height are the resize target now (see the
+            // XAML comment), so they're known synchronously and Reposition()
+            // is called explicitly wherever the size or the orb changes —
+            // Bind and RepositionFor — rather than off SizeChanged. Doing it
+            // off SizeChanged too would refire Reposition() on every pixel of
+            // a user's own resize drag and recentre the window on the orb out
+            // from under their cursor.
+            ResizeN.PointerPressed += (_, e) => BeginResize(WindowEdge.North, e);
+            ResizeS.PointerPressed += (_, e) => BeginResize(WindowEdge.South, e);
+            ResizeE.PointerPressed += (_, e) => BeginResize(WindowEdge.East, e);
+            ResizeW.PointerPressed += (_, e) => BeginResize(WindowEdge.West, e);
+            ResizeNE.PointerPressed += (_, e) => BeginResize(WindowEdge.NorthEast, e);
+            ResizeNW.PointerPressed += (_, e) => BeginResize(WindowEdge.NorthWest, e);
+            ResizeSE.PointerPressed += (_, e) => BeginResize(WindowEdge.SouthEast, e);
+            ResizeSW.PointerPressed += (_, e) => BeginResize(WindowEdge.SouthWest, e);
+            PointerMoved += OnResizePointerMoved;
+            PointerReleased += OnResizePointerReleased;
+
+            // See NwSeCursor/NeSwCursor: no StandardCursorType member draws
+            // as an actual diagonal on this platform, so these two corner
+            // pairs get a cursor bitmap built by hand instead.
+            ResizeNW.Cursor = NwSeCursor;
+            ResizeSE.Cursor = NwSeCursor;
+            ResizeNE.Cursor = NeSwCursor;
+            ResizeSW.Cursor = NeSwCursor;
 
             // Reaching the top asks for the page before. A threshold rather than
             // exactly zero, because a trackpad flick lands a few pixels short of
@@ -228,6 +317,12 @@ namespace ClaudeBuddy
 
             Drafts[_session.SessionId] = Input.Text ?? "";
 
+            // Not carried to Drafts with the text: a picture pasted for one
+            // conversation attached to whichever session happens to be open
+            // next would be a silent misdirection rather than a convenience.
+            _pendingImages.Clear();
+            Attachments.IsVisible = false;
+
             _session.TurnAdded -= OnTurnAdded;
             _session.TurnUpdated -= OnTurnUpdated;
             _session.StateChanged -= OnStateChanged;
@@ -239,6 +334,28 @@ namespace ClaudeBuddy
             }
 
             if (_session is IRemoteChatPrompts prompts) prompts.PromptChanged -= OnPromptChanged;
+
+            // A remote session can take a turn back — its "working…" line comes
+            // off once the answer lands. Subscribed on the concrete type rather
+            // than through an interface: nothing else in this app has ever needed
+            // to remove a turn, and inventing IRemoteChatRemovable for one caller
+            // would be ceremony. See RemoteControlChatSession.Removed.
+            if (_session is RemoteControlChatSession previousRemote)
+            {
+                previousRemote.Removed -= OnTurnRemoved;
+
+                // A live view is the one thing here that costs something while
+                // nobody is looking: it holds a subscription on the other
+                // machine's Buddy, which keeps that relay — a real Claude Code
+                // session on the user's own account — from idling out. So the
+                // panel closing says so, rather than leaving it to lapse.
+                //
+                // Told on the panel rather than in Dispose because these
+                // sessions are deliberately never disposed: a remote
+                // conversation outlives its orb, since there is no file on this
+                // machine to rebuild it from. See _remoteChats in SessionManager.
+                previousRemote.PanelClosed();
+            }
 
             // The last good name is per session, not per panel. The panel is a
             // singleton and the box outlives a session, so leaving it set meant
@@ -263,9 +380,23 @@ namespace ClaudeBuddy
             _owner = orb;
             _session = session;
 
+            // Whatever this agent's panel was last dragged to. Before the
+            // transcript is built and before Reposition(), because the height
+            // decides whether the panel goes above or below the orb.
+            ApplySavedSize(orb);
+
             session.TurnAdded += OnTurnAdded;
             session.TurnUpdated += OnTurnUpdated;
             session.StateChanged += OnStateChanged;
+
+            if (session is RemoteControlChatSession remote)
+            {
+                remote.Removed += OnTurnRemoved;
+
+                // Re-opens the live view if this panel closed it earlier. Cheap
+                // when it is already open and nothing at all in messaging mode.
+                remote.PanelOpened();
+            }
 
             // The backlog usually lands a moment after the panel opens, so the
             // transcript has to be able to be replaced under it rather than only
@@ -292,6 +423,8 @@ namespace ClaudeBuddy
             KindChip.IsVisible = kind is not null;
             KindChipText.Text = kind is null ? "" : $"{orb.KindGlyphText}  {kind}";
 
+            ApplyHeartbeat(orb.IsHeartbeat);
+
             _defaultBubble = orb.AccentColor;
 
             ApplyAvatar(session.SessionId);
@@ -299,6 +432,8 @@ namespace ClaudeBuddy
 
             _turns.Clear();
             foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
+
+            HideSlashSuggestions();
 
             Input.Text = Drafts.GetValueOrDefault(session.SessionId, "");
             MicButton.IsVisible = ClaudeBuddySettings.VoiceInputEnabled;
@@ -675,6 +810,64 @@ namespace ClaudeBuddy
             _avatarTimer = null;
         }
 
+        // --- the heartbeat chip's beat ---------------------------------------
+        // Same curve as the orb badge's (OpenClawHeartbeat.Beat), driven by a
+        // timer of this panel's own.
+        //
+        // A timer rather than an Avalonia animation for the reason the orb's
+        // pulse gives, and rather than *sharing* the orb's ticker because that
+        // one's roster is orb windows: there is at most one chat panel, so a
+        // second 20Hz timer that only runs while a heartbeat chat is open costs
+        // nothing worth pooling. It stops the moment the chip goes away, which
+        // is what keeps that true.
+
+        private DispatcherTimer? _heartTimer;
+        private long _heartStartedAt;
+        private readonly ScaleTransform _heartScale = new();
+
+        private void ApplyHeartbeat(bool heartbeat)
+        {
+            HeartChip.IsVisible = heartbeat;
+
+            if (!heartbeat)
+            {
+                StopHeartAnimation();
+                return;
+            }
+
+            HeartChipText.RenderTransform = _heartScale;
+            HeartChipText.RenderTransformOrigin = RelativePoint.Center;
+            _heartStartedAt = Environment.TickCount64;
+
+            if (_heartTimer is not null) return;
+
+            _heartTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(1000.0 / 20)
+            };
+            _heartTimer.Tick += (_, _) =>
+            {
+                var beat = OpenClawHeartbeat.Beat(
+                    (Environment.TickCount64 - _heartStartedAt) / OpenClawHeartbeat.PeriodMs);
+
+                // Smaller swell than the orb's: this heart sits on a line of
+                // text, and one that grew by a third would shift the chip's
+                // neighbours every beat.
+                _heartScale.ScaleX = _heartScale.ScaleY = 1.0 + (0.14 * beat);
+                HeartChipText.Opacity = 0.55 + (0.45 * beat);
+            };
+            _heartTimer.Start();
+        }
+
+        private void StopHeartAnimation()
+        {
+            _heartTimer?.Stop();
+            _heartTimer = null;
+
+            _heartScale.ScaleX = _heartScale.ScaleY = 1.0;
+            HeartChipText.Opacity = 1.0;
+        }
+
         // Clicking a picture opens it full size in whatever this machine views
         // pictures with. Handled so the click doesn't travel on to the panel
         // behind it, and so it can't be mistaken for a click-away dismiss.
@@ -683,6 +876,182 @@ namespace ClaudeBuddy
             e.Handled = true;
 
             if ((sender as Control)?.DataContext is TurnView turn) turn.OpenFullSize();
+        }
+
+        // Avalonia.Native's macOS cursor factory (libAvaloniaNative.dylib)
+        // only ever asks AppKit for arrow, crosshair, hand, I-beam, and the
+        // two straight resize cursors (up/down, left/right) — nothing in it
+        // answers to a diagonal, because AppKit itself has no public diagonal
+        // resize NSCursor to hand back. TopLeftCorner and friends fall
+        // through to plain crosshairCursor there, and Hand doesn't read as
+        // "resize" at all. So the corners get a real double-headed arrow,
+        // drawn once here and shared by both ends of each diagonal — NwSeCursor
+        // for the ↖↘ corners, NeSwCursor (the same arrow mirrored) for ↗↙.
+        private static readonly Cursor NwSeCursor = BuildDiagonalCursor(mirrored: false);
+        private static readonly Cursor NeSwCursor = BuildDiagonalCursor(mirrored: true);
+
+        private static Cursor BuildDiagonalCursor(bool mirrored)
+        {
+            // Avalonia's macOS cursor images came out at the bitmap's raw
+            // pixel count, not that divided by dpiScale — so the first version
+            // of this, drawn on a 22-unit canvas at 2x for retina crispness,
+            // rendered as a 44px cursor and looked about double the size it
+            // should have. Sizes below are fractions of `size` rather than
+            // the original design's absolute numbers, so this can be tuned
+            // again without redoing the arithmetic by hand.
+            const double size = 11;
+            const double dpiScale = 2;
+
+            double margin = size / 11; // corner inset for a head's right-angle vertex
+            double headEnd = size * 9 / 22; // how far a head's short legs reach
+            double shaftA = size * 3 / 11; // shaft's near end
+            double shaftB = size * 8 / 11; // shaft's far end
+            double farHeadStart = size - headEnd;
+            double far = size - margin;
+
+            double X(double x) => mirrored ? size - x : x;
+
+            var target = new RenderTargetBitmap(
+                new PixelSize((int)(size * dpiScale), (int)(size * dpiScale)),
+                new Vector(96 * dpiScale, 96 * dpiScale));
+
+            using (var ctx = target.CreateDrawingContext())
+            {
+                // The shaft, drawn as a black line with a white one on top of
+                // it rather than a single stroke, so it reads against either
+                // a light or a dark background — the same reason this panel's
+                // own bubbles carry an outline color at all.
+                var outline = new Pen(Brushes.Black, size * 4.5 / 22, lineCap: PenLineCap.Round);
+                ctx.DrawLine(outline, new Point(X(shaftA), shaftA), new Point(X(shaftB), shaftB));
+                var inner = new Pen(Brushes.White, size * 2 / 22, lineCap: PenLineCap.Round);
+                ctx.DrawLine(inner, new Point(X(shaftA), shaftA), new Point(X(shaftB), shaftB));
+
+                // Two right-triangle heads, one at each end of the shaft, each
+                // with its right angle at the corner it points into — the
+                // same shape Windows' own SIZENWSE/SIZENESW cursors use.
+                var heads = new StreamGeometry();
+                using (var g = heads.Open())
+                {
+                    g.BeginFigure(new Point(X(margin), margin), true);
+                    g.LineTo(new Point(X(headEnd), margin), true);
+                    g.LineTo(new Point(X(margin), headEnd), true);
+                    g.EndFigure(true);
+
+                    g.BeginFigure(new Point(X(far), far), true);
+                    g.LineTo(new Point(X(farHeadStart), far), true);
+                    g.LineTo(new Point(X(far), farHeadStart), true);
+                    g.EndFigure(true);
+                }
+
+                ctx.DrawGeometry(Brushes.White, new Pen(Brushes.Black, size * 1.25 / 22), heads);
+            }
+
+            return new Cursor(target, new PixelPoint(target.PixelSize.Width / 2, target.PixelSize.Height / 2));
+        }
+
+        // BeginResizeDrag hands the drag to the platform's window manager, which
+        // is where Win32 and X11 implement it — but Avalonia.Native carries no
+        // such hook on macOS (nothing in libAvaloniaNative.dylib answers to it),
+        // so the call is a silent no-op there: the cursor still swaps, because
+        // that part is pure managed code, but nothing ever moves. Tracked by
+        // hand instead, uniformly on every platform, rather than branching on
+        // OS to use the native call where it happens to exist.
+        private WindowEdge? _resizeEdge;
+        private PixelPoint _resizeStartPos;
+        private double _resizeStartWidth;
+        private double _resizeStartHeight;
+        private PixelPoint _resizeStartScreen;
+
+        private void BeginResize(WindowEdge edge, PointerPressedEventArgs e)
+        {
+            if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+
+            e.Handled = true;
+            _resizeEdge = edge;
+            _resizeStartPos = Position;
+            _resizeStartWidth = Width;
+            _resizeStartHeight = Height;
+            _resizeStartScreen = this.PointToScreen(e.GetPosition(this));
+
+            // Captured on the window rather than the strip under the pointer:
+            // the drag routinely carries the pointer off a 6px strip, and
+            // capture is what keeps the events coming anyway.
+            e.Pointer.Capture(this);
+        }
+
+        private void OnResizePointerMoved(object? sender, PointerEventArgs e)
+        {
+            if (_resizeEdge is not { } edge) return;
+
+            var nowScreen = this.PointToScreen(e.GetPosition(this));
+            var scale = RenderScaling;
+            var dx = (nowScreen.X - _resizeStartScreen.X) / scale;
+            var dy = (nowScreen.Y - _resizeStartScreen.Y) / scale;
+
+            var west = edge is WindowEdge.West or WindowEdge.NorthWest or WindowEdge.SouthWest;
+            var east = edge is WindowEdge.East or WindowEdge.NorthEast or WindowEdge.SouthEast;
+            var north = edge is WindowEdge.North or WindowEdge.NorthWest or WindowEdge.NorthEast;
+            var south = edge is WindowEdge.South or WindowEdge.SouthWest or WindowEdge.SouthEast;
+
+            var pos = _resizeStartPos;
+            var width = _resizeStartWidth;
+            var height = _resizeStartHeight;
+
+            if (east) width = Math.Clamp(_resizeStartWidth + dx, MinWidth, MaxWidth);
+            if (west)
+            {
+                width = Math.Clamp(_resizeStartWidth - dx, MinWidth, MaxWidth);
+                pos = pos.WithX(_resizeStartPos.X - (int)Math.Round((width - _resizeStartWidth) * scale));
+            }
+
+            if (south) height = Math.Clamp(_resizeStartHeight + dy, MinHeight, MaxHeight);
+            if (north)
+            {
+                height = Math.Clamp(_resizeStartHeight - dy, MinHeight, MaxHeight);
+                pos = pos.WithY(_resizeStartPos.Y - (int)Math.Round((height - _resizeStartHeight) * scale));
+            }
+
+            Width = width;
+            Height = height;
+            Position = pos;
+        }
+
+        private void OnResizePointerReleased(object? sender, PointerReleasedEventArgs e)
+        {
+            if (_resizeEdge is null) return;
+
+            _resizeEdge = null;
+            e.Pointer.Capture(null);
+
+            // Once per drag, not once per pixel: OnResizePointerMoved fires
+            // continuously and this writes a file. Saved against the orb rather
+            // than the session so the size follows the agent across runs — see
+            // ChatPanelSizes in ClaudeBuddySettings for why a session id would
+            // not have survived one.
+            if (_owner is { } owner)
+            {
+                ClaudeBuddySettings.SetChatPanelSize(owner.PositionKey, Width, Height);
+            }
+        }
+
+        // The size this agent's panel should open at: what it was last dragged
+        // to, or the shipped default if it never has been.
+        //
+        // Clamped against this build's own Min/Max rather than trusted: the
+        // bounds are in the XAML and could tighten in a later version, and a
+        // hand-edited settings.json is a normal thing to find. An out-of-range
+        // Width set on a Window is not politely ignored — it is honoured, and a
+        // panel wider than any screen has no visible way back.
+        private void ApplySavedSize(OrbWindow orb)
+        {
+            var saved = ClaudeBuddySettings.ChatPanelSizeFor(orb.PositionKey);
+
+            Width = saved is null
+                ? _defaultWidth
+                : Math.Clamp(saved.Width, MinWidth, MaxWidth);
+            Height = saved is null
+                ? _defaultHeight
+                : Math.Clamp(saved.Height, MinHeight, MaxHeight);
         }
 
         private void Reposition()
@@ -699,8 +1068,11 @@ namespace ClaudeBuddy
             var scale = screen.Scaling;
             var work = screen.WorkingArea;
 
-            var width = (int)(340 * scale);
-            var height = (int)(Math.Max(Root.Bounds.Height, MinHeight) * scale);
+            // Width and Height are the resize target (see the XAML comment),
+            // so unlike the old SizeToContent world these are already final —
+            // no need to wait on Root's laid-out bounds.
+            var width = (int)(Width * scale);
+            var height = (int)(Height * scale);
             var gap = (int)(Gap * scale);
 
             // Below by default, flipped above when it would run off the bottom.
@@ -717,6 +1089,59 @@ namespace ClaudeBuddy
 
         private void OnInputKeyDown(object? sender, KeyEventArgs e)
         {
+            // Only a session that has somewhere to put a picture gets its
+            // paste intercepted at all — see IRemoteChatImages. Anything
+            // else falls straight through to the TextBox's own paste, which
+            // is exactly what happened here before this feature existed.
+            if (_session is IRemoteChatImages && IsPasteGesture(e))
+            {
+                e.Handled = true;
+                _ = HandlePasteAsync();
+                return;
+            }
+
+            // While suggestions are up, the keys that would otherwise send or
+            // insert a newline instead drive the popup — the same keys a
+            // terminal's own "/" autocomplete would claim.
+            if (_slashMatches.Count > 0)
+            {
+                if (e.Key == Key.Down)
+                {
+                    _slashSelected = (_slashSelected + 1) % _slashMatches.Count;
+                    RenderSlashSuggestions();
+                    e.Handled = true;
+                    return;
+                }
+
+                if (e.Key == Key.Up)
+                {
+                    _slashSelected = (_slashSelected - 1 + _slashMatches.Count) % _slashMatches.Count;
+                    RenderSlashSuggestions();
+                    e.Handled = true;
+                    return;
+                }
+
+                if (e.Key == Key.Escape)
+                {
+                    // Dismisses the popup only. A second Escape then reaches
+                    // OnPanelKeyDown and closes the panel — the same
+                    // two-step precedent recording already sets below.
+                    HideSlashSuggestions();
+                    e.Handled = true;
+                    return;
+                }
+
+                var accepting = e.Key == Key.Tab
+                    || (e.Key is Key.Enter or Key.Return && !e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+
+                if (accepting)
+                {
+                    AcceptSlashSuggestion(_slashMatches[_slashSelected]);
+                    e.Handled = true;
+                    return;
+                }
+            }
+
             if (e.Key != Key.Enter && e.Key != Key.Return) return;
 
             // Shift+Enter is left entirely alone so the TextBox inserts the
@@ -725,6 +1150,203 @@ namespace ClaudeBuddy
 
             e.Handled = true;
             Send();
+        }
+
+        // TextBox's own PasteGesture rather than a hard-coded Ctrl/Cmd+V:
+        // it is already the platform-correct chord (Cmd on macOS, Ctrl
+        // elsewhere), and asking Input for its own answer means this never
+        // drifts from whatever the TextBox itself would have matched.
+        private static bool IsPasteGesture(KeyEventArgs e)
+        {
+            var gesture = TextBox.PasteGesture;
+            return gesture is not null && e.Key == gesture.Key && e.KeyModifiers == gesture.KeyModifiers;
+        }
+
+        // Whether the paste this preempted turns out to be a picture can
+        // only be known asynchronously, so the keystroke is always taken
+        // first and one of two things is done with it here: a picture
+        // becomes a pending attachment, and anything else — plain text, or
+        // a clipboard with nothing this app can read — is pasted by hand,
+        // since the TextBox's own paste handler never got the chance to.
+        private async Task HandlePasteAsync()
+        {
+            var clipboard = Clipboard;
+            if (clipboard is null) return;
+
+            var bitmap = await TryClipboardBitmap(clipboard);
+
+            if (bitmap is not null)
+            {
+                await AttachImageAsync(bitmap);
+                return;
+            }
+
+            var text = await TryClipboardText(clipboard);
+
+            if (!string.IsNullOrEmpty(text)) PasteText(text);
+        }
+
+        // Excluded from coverage: both exist to be a try/catch around another
+        // process's clipboard, and neither catch is arrangeable here. Avalonia's
+        // headless clipboard is a real implementation rather than a fake that can
+        // be told to fail, so there is no way to make TryGetBitmapAsync or
+        // TryGetTextAsync throw on cue — and what they throw for is a clipboard
+        // owner that has gone away or is handing over a format it cannot actually
+        // produce, which belongs to whatever app was copied from.
+        //
+        // The paste paths themselves are covered: a bitmap arriving is
+        // AttachImageAsync, plain text is PasteText, and an empty clipboard is the
+        // null both of these return.
+        [ExcludeFromCodeCoverage]
+        private static async Task<Bitmap?> TryClipboardBitmap(IClipboard clipboard)
+        {
+            try { return await clipboard.TryGetBitmapAsync(); }
+            catch { return null; }
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static async Task<string?> TryClipboardText(IClipboard clipboard)
+        {
+            try { return await clipboard.TryGetTextAsync(); }
+            catch { return null; }
+        }
+
+        // What TextBox.Paste() would have done with the same string: replace
+        // the selection, or insert at the caret when there isn't one.
+        private void PasteText(string text)
+        {
+            var current = Input.Text ?? "";
+            var start = Math.Clamp(Math.Min(Input.SelectionStart, Input.SelectionEnd), 0, current.Length);
+            var end = Math.Clamp(Math.Max(Input.SelectionStart, Input.SelectionEnd), 0, current.Length);
+
+            Input.Text = current[..start] + text + current[end..];
+            Input.CaretIndex = start + text.Length;
+        }
+
+        // Saved to disk immediately rather than held as a bitmap until Send:
+        // Send needs a path to type into the terminal, and writing it once
+        // here means a picture that sits pasted for an hour is written once
+        // rather than re-encoded at the moment it is finally needed.
+        //
+        // The encode itself runs off the UI thread — the same reasoning
+        // TurnView.LoadImage gives for decoding a received picture there:
+        // a full-screen screenshot is large enough that PNG-encoding it is a
+        // visible hitch on the thread that draws, and nothing here needs the
+        // result before the next frame.
+        private async Task AttachImageAsync(Bitmap bitmap)
+        {
+            var path = await Task.Run(() => ChatAttachments.Save(bitmap));
+
+            _pendingImages.Add(new PendingImage(path, bitmap));
+            Attachments.IsVisible = true;
+        }
+
+        private void Attachment_Remove_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            e.Handled = true;
+
+            if ((sender as Control)?.DataContext is not PendingImage image) return;
+
+            _pendingImages.Remove(image);
+            Attachments.IsVisible = _pendingImages.Count > 0;
+        }
+
+        // What a pasted picture looks like before it has been sent: a path
+        // already on disk (see AttachImage), and the same decoded bitmap the
+        // clipboard handed over, small enough at 40pt that reusing it as
+        // its own thumbnail costs nothing worth a second decode.
+        private sealed record PendingImage(string Path, Bitmap Thumbnail);
+        // Only while the input's first word is still being typed and starts
+        // with "/" — a slash command is the whole message, not something
+        // that can appear after other text, so anything past the first space
+        // isn't a command being completed any more.
+        private void UpdateSlashSuggestions()
+        {
+            var commands = SlashCommands;
+            if (commands.Count == 0) { HideSlashSuggestions(); return; }
+
+            var text = Input.Text ?? "";
+            var caret = Math.Clamp(Input.CaretIndex, 0, text.Length);
+            var token = text[..caret];
+
+            if (token.Length == 0 || token[0] != '/' || token.Contains(' ') || token.Contains('\n'))
+            {
+                HideSlashSuggestions();
+                return;
+            }
+
+            _slashMatches = commands
+                .Where(c => c.Name.StartsWith(token, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // Also closes once the only match is exactly what's already
+            // typed — otherwise finishing a command by hand and pressing
+            // Enter would "accept" it into itself instead of sending.
+            if (_slashMatches.Count == 0
+                || (_slashMatches.Count == 1 && string.Equals(_slashMatches[0].Name, token, StringComparison.OrdinalIgnoreCase)))
+            {
+                HideSlashSuggestions();
+                return;
+            }
+
+            _slashSelected = 0;
+            RenderSlashSuggestions();
+            SlashBox.IsVisible = true;
+        }
+
+        private static readonly IBrush SlashRowFill = new SolidColorBrush(Colors.Transparent);
+        private static readonly IBrush SlashRowSelected = new SolidColorBrush(Color.Parse("#33FFFFFF"));
+
+        private void RenderSlashSuggestions()
+        {
+            SlashList.ItemsSource = _slashMatches
+                .Select((c, i) => new SlashSuggestionView(c, i == _slashSelected ? SlashRowSelected : SlashRowFill))
+                .ToList();
+        }
+
+        private void HideSlashSuggestions()
+        {
+            if (_slashMatches.Count == 0 && !SlashBox.IsVisible) return;
+
+            _slashMatches = new List<SlashCommand>();
+            _slashSelected = 0;
+            SlashBox.IsVisible = false;
+            SlashList.ItemsSource = null;
+        }
+
+        // Replaces the token being completed with the chosen command, the
+        // way every other editor's autocomplete does — not sent outright.
+        // Deciding a bare "/rename" is done and should go is the same
+        // judgement call Send() already leaves to whoever is typing.
+        private void AcceptSlashSuggestion(SlashCommand command)
+        {
+            var text = Input.Text ?? "";
+            var caret = Math.Clamp(Input.CaretIndex, 0, text.Length);
+            var rest = text[caret..];
+            var replacement = command.Name + " ";
+
+            Input.Text = replacement + rest;
+            Input.CaretIndex = replacement.Length;
+
+            // Last, not first: setting Text above already re-ran this via
+            // TextChanged, and calling it again here is what makes the
+            // outcome "closed" regardless of what that intermediate pass
+            // computed.
+            HideSlashSuggestions();
+            Input.Focus();
+        }
+
+        private void SlashSuggestion_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {
+            e.Handled = true;
+
+            if ((sender as Control)?.DataContext is SlashSuggestionView view) AcceptSlashSuggestion(view.Command);
+        }
+
+        private sealed record SlashSuggestionView(SlashCommand Command, IBrush RowFill)
+        {
+            public string Name => Command.Name;
+            public string Description => Command.Description;
         }
 
         private void OnPanelKeyDown(object? sender, KeyEventArgs e)
@@ -752,9 +1374,13 @@ namespace ClaudeBuddy
         private void Send()
         {
             var text = (Input.Text ?? "").Trim();
-            if (text.Length == 0 || _session is null) return;
+            if ((text.Length == 0 && _pendingImages.Count == 0) || _session is null) return;
 
             Input.Text = "";
+
+            var images = _pendingImages.Select(p => p.Path).ToList();
+            _pendingImages.Clear();
+            Attachments.IsVisible = false;
 
             // Sending is the one time the view should jump to the bottom
             // regardless. The autoscroll rule elsewhere deliberately leaves you
@@ -765,9 +1391,25 @@ namespace ClaudeBuddy
             // Deliberately not inserting the user's turn here: the session
             // raises TurnAdded for it, so one thing owns the transcript and a
             // failed send leaves nothing behind to clean up.
-            _ = _session.SendAsync(text);
+            if (images.Count > 0 && _session is IRemoteChatImages withImages)
+            {
+                _ = withImages.SendWithImagesAsync(text, images);
+            }
+            else
+            {
+                _ = _session.SendAsync(text);
+            }
         }
 
+        // Excluded from coverage: the one line a test cannot reach is Speak(),
+        // which makes the machine make a noise — and an exclusion stops that line
+        // being counted, not being run, so reaching it is not an option either.
+        //
+        // Everything this method decides is covered around it: already speaking
+        // cancels instead of starting a second voice, and a conversation with no
+        // assistant reply, or a blank one, speaks nothing. Those two arms return
+        // before the call and are exercised in ChatPanelInteractionTests.
+        [ExcludeFromCodeCoverage]
         private void SpeakLatest()
         {
             if (TextToSpeech.IsSpeaking)
@@ -779,8 +1421,18 @@ namespace ClaudeBuddy
             var last = _turns.LastOrDefault(t => t.Role == ChatRole.Assistant);
             if (last is null || string.IsNullOrWhiteSpace(last.Text)) return;
 
-            TextToSpeech.Speak(last.Text, ClaudeBuddySettings.SpeakVoice);
+            Speak(last.Text);
         }
+
+        // TextToSpeech.Speak is itself excluded from coverage ("starts a speech
+        // engine and makes the machine make a noise" — see its own comment) —
+        // pulled out here so that exclusion covers only this one call and not
+        // the decision above it, which a headless test can and does exercise
+        // (IsSpeaking -> cancel, no eligible reply -> do nothing). This one
+        // line — actually reaching a real utterance — has no headless seam and
+        // is deliberately left uncovered rather than exercised for real.
+        [ExcludeFromCodeCoverage]
+        private static void Speak(string text) => TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
 
         private void ApplySpeakState(TextToSpeech.SpeakState state)
         {
@@ -854,12 +1506,36 @@ namespace ClaudeBuddy
             }
         }
 
+        // Drops the row for a turn the session has retracted. Matched by
+        // reference through the view wrapper, because the text is not unique —
+        // two "working…" lines would be identical strings.
+        private void OnTurnRemoved(ChatTurn turn)
+        {
+            for (var i = 0; i < _turns.Count; i++)
+            {
+                if (!ReferenceEquals(_turns[i].Source, turn)) continue;
+
+                _turns.RemoveAt(i);
+                return;
+            }
+        }
+
         private void OnHistoryReplaced()
         {
             if (_session is null) return;
 
             _turns.Clear();
             foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
+
+            // Re-read rather than left at what Bind found.
+            //
+            // A remote panel can change what it *is* while open: it starts as a
+            // messaging channel and upgrades to a live view of the far session
+            // the moment that machine's Buddy answers, and the box's own
+            // description of where a message goes changes with it — from
+            // "message this session" to "type into its terminal". Read once at
+            // bind, the box would go on describing the panel it used to be.
+            Input.Watermark = (_session as IRemoteChatComposer)?.ComposerHint ?? "Message…";
 
             // Straight to the bottom rather than the pinned-only rule: a
             // transcript that has just been replaced wholesale has no scroll
@@ -972,6 +1648,12 @@ namespace ClaudeBuddy
             if (_session is not null) Drafts[_session.SessionId] = Input.Text ?? "";
 
             StopAvatarAnimation();
+
+            // Nothing on screen to beat for. Without this the timer outlives the
+            // panel and goes on scaling a hidden TextBlock 20 times a second for
+            // as long as the app runs.
+            StopHeartAnimation();
+
             AvatarPopup.Close();
 
             // Cleared with the panel, not left standing: the next session bound
@@ -1027,7 +1709,13 @@ namespace ClaudeBuddy
                 };
 
                 if (!string.IsNullOrEmpty(turn.ImageUrl)) LoadImage();
+                else if (turn.ImageBytes is { Length: > 0 } bytes) LoadImageBytes(bytes);
             }
+
+            // The turn this row was built from, so the panel can find a row
+            // again by identity. Text is not unique enough — two "working…"
+            // lines would be the same string.
+            public ChatTurn Source => _turn;
 
             public ChatRole Role => _turn.Role;
             public string Text => _turn.Text;
@@ -1207,14 +1895,43 @@ namespace ClaudeBuddy
             private Bitmap? _image;
             private byte[]? _bytes;
 
+            // Excluded from coverage: the catch around it cannot be reached with a
+            // picture, and the picture is the only thing this is ever handed.
+            // Avalonia's Bitmap.DecodeToWidth does not throw on rubbish — five
+            // random bytes and a truncated PNG both come back as an ordinary
+            // 456x456 bitmap, which is the finding recorded in
+            // ChatPanelMarkdownTests. So the fallback this catch promises never
+            // happens, and a test cannot make it happen either.
+            [ExcludeFromCodeCoverage]
+            private static Bitmap DecodeAtDrawWidth(byte[] bytes)
+            {
+                using var stream = new MemoryStream(bytes);
+                return Bitmap.DecodeToWidth(stream, 456);
+            }
+
             // Full size, in the OS's own viewer — see OpenClawMedia for why this
             // isn't a window of ours.
+            // Excluded from coverage: ends in OpenClawMedia.Open, which writes the
+            // picture to a temporary file and hands it to the OS — Preview.app on
+            // macOS. A test that reached it would open a window on the machine
+            // running the suite. The guard in front of it, a turn with no bytes to
+            // open, is the half worth covering and is covered.
+            [ExcludeFromCodeCoverage]
             public void OpenFullSize()
             {
                 if (_bytes is null) return;
 
-                OpenClawMedia.Open(_bytes, _turn.ImageAlt);
+                OpenInViewer(_bytes, _turn.ImageAlt);
             }
+
+            // OpenClawMedia.Open is itself excluded from coverage — it writes a
+            // real file and hands it to the OS's own viewer (/usr/bin/open on
+            // macOS). Wrapped here so that exclusion covers only this one call
+            // rather than the guard above it; a headless test proves the guard
+            // without ever actually launching a viewer, and this one line is
+            // left uncovered rather than exercised for real.
+            [ExcludeFromCodeCoverage]
+            private static void OpenInViewer(byte[] bytes, string alt) => OpenClawMedia.Open(bytes, alt);
 
             public Bitmap? Image
             {
@@ -1238,6 +1955,17 @@ namespace ClaudeBuddy
                 var bytes = await OpenClawSessions.FetchMediaAsync(_turn.ImageUrl!, CancellationToken.None);
                 if (bytes is null || bytes.Length == 0) return;
 
+                await DecodeAndShowAsync(bytes);
+            }
+
+            // The bytes are already in hand — decoded from a local CLI's own
+            // transcript (ChatTranscript's image handling), or read straight
+            // back off a picture the panel itself just wrote to disk — so
+            // there is nothing to fetch, only to decode.
+            public async void LoadImageBytes(byte[] bytes) => await DecodeAndShowAsync(bytes);
+
+            private async Task DecodeAndShowAsync(byte[] bytes)
+            {
                 // Kept as they arrived, not as they were decoded: opening the
                 // picture full size should hand over the original rather than
                 // the 456px copy the bubble draws.
@@ -1254,11 +1982,7 @@ namespace ClaudeBuddy
                     // Retina: keeping them at full size to show them at 228
                     // would be most of a megabyte of pixels each, held for as
                     // long as the panel is open.
-                    var bitmap = await Task.Run(() =>
-                    {
-                        using var stream = new MemoryStream(bytes);
-                        return Bitmap.DecodeToWidth(stream, 456);
-                    });
+                    var bitmap = await Task.Run(() => DecodeAtDrawWidth(bytes));
 
                     Dispatcher.UIThread.Post(() => Image = bitmap);
                 }
@@ -1416,7 +2140,31 @@ namespace ClaudeBuddy
                 ? new Thickness(0, 2, 0, 2)
                 : IsUser ? new Thickness(40, 2, 0, 3) : new Thickness(0, 2, 40, 3);
 
-            public double MaxBubbleWidth => IsSystem ? 300 : 244;
+            // Set from outside — see ChatPanel's Scroll.SizeChanged handler and
+            // the _turns.CollectionChanged hook that seeds it on every new
+            // turn — rather than read some ambient static, so a TurnView stays
+            // a plain value holder that answers what it's told.
+            private double _availableWidth = 306;
+
+            public double AvailableWidth
+            {
+                get => _availableWidth;
+                set
+                {
+                    if (_availableWidth.Equals(value)) return;
+
+                    _availableWidth = value;
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(MaxBubbleWidth)));
+                }
+            }
+
+            // A fraction of what's actually available rather than a fixed
+            // 244px, now that the panel is user-resizable: a message keeps a
+            // comfortable line length instead of either hugging the old cap
+            // forever on a wide window or never using the room a narrow one
+            // freed up. System lines run almost the full width because they
+            // read as a note about the conversation, not one side of it.
+            public double MaxBubbleWidth => Math.Max(140, AvailableWidth * (IsSystem ? 0.95 : 0.8));
 
             public double Size => IsSystem ? 10 : 11.5;
 

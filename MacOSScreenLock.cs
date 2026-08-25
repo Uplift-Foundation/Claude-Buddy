@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
 namespace ClaudeBuddy
@@ -15,6 +16,11 @@ namespace ClaudeBuddy
     // returns null when there is no window server session at all (a daemon
     // context), which is treated the same as locked: either way there's no
     // display to drive.
+    // Excluded from coverage: CGSessionCopyCurrentDictionary, which reports
+    // whether the login session's screen is locked. A CI runner has no
+    // interactive session for the answer to be about, and WaitForUnlock is a
+    // poll around it that would exit immediately with nothing asserted.
+    [ExcludeFromCodeCoverage]
     internal static class MacOSScreenLock
     {
         private const string CoreGraphics =

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 
 namespace ClaudeBuddy
 {
@@ -16,9 +17,16 @@ namespace ClaudeBuddy
         // are copies of something the gateway already holds, they are only
         // meaningful while the viewer is open, and the temp directory is where
         // the operating system expects to clean up after us.
+        // Excluded from coverage along with Open, its only caller: nothing else
+        // in this class touches the filesystem, so measuring the path this one
+        // builds would mean writing a file to prove a Path.Combine.
+        [ExcludeFromCodeCoverage]
         private static string Directory_ =>
             Path.Combine(Path.GetTempPath(), "claude_buddy_media");
 
+        // Excluded from coverage: writes the file and hands it to the OS's default
+        // viewer; the filename rule is SafeName, which is tested.
+        [ExcludeFromCodeCoverage]
         public static void Open(byte[] bytes, string name)
         {
             try
@@ -54,7 +62,10 @@ namespace ClaudeBuddy
         // The gateway's own filename, which is what makes the viewer's title bar
         // say something useful, minus anything that could point the write
         // somewhere other than here.
-        private static string SafeName(string name)
+        // internal, not private: this decides where a byte array from a remote
+        // gateway is allowed to land on disk, so "does a traversal survive it"
+        // is a question worth answering in a test rather than by reading it.
+        internal static string SafeName(string name)
         {
             var trimmed = string.IsNullOrWhiteSpace(name) ? "image.png" : Path.GetFileName(name);
 
@@ -73,6 +84,9 @@ namespace ClaudeBuddy
         // Anything from a previous sitting. Deleting on the way in rather than
         // on the way out, because there is no reliable "on the way out" — the
         // app can be killed, and a viewer may still have the file open.
+        // Excluded from coverage: deletes real files from a real directory by
+        // mtime.
+        [ExcludeFromCodeCoverage]
         private static void Sweep()
         {
             try

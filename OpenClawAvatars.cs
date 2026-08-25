@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
@@ -67,9 +68,26 @@ namespace ClaudeBuddy
             lock (Gate) Cache.Remove(agentId);
         }
 
+        // Excluded from coverage: exists to be the try/catch, and the catch is
+        // for Skia rather than for anything this code decides. Bytes that are not
+        // a picture at all, and a picture truncated partway through, both come
+        // back as a null codec or an empty frame list — DecodeFrames handles
+        // those and is measured, and OpenClawAvatarsTests asserts both.
+        //
+        // What is left is a header Skia accepts and then throws on, which cannot
+        // be produced from inside a test without shipping a corrupt file as a
+        // fixture. Kept because a picture that won't decode is not a reason to
+        // lose the orb — falling back to the emoji is the whole contract of this
+        // class.
+        [ExcludeFromCodeCoverage]
         private static Avatar? Decode(byte[] bytes)
         {
-            try
+            try { return DecodeFrames(bytes); }
+            catch { return null; }
+        }
+
+        private static Avatar? DecodeFrames(byte[] bytes)
+        {
             {
                 using var data = SKData.CreateCopy(bytes);
                 using var codec = SKCodec.Create(data);
@@ -116,11 +134,6 @@ namespace ClaudeBuddy
                 }
 
                 return frames.Count == 0 ? null : new Avatar(frames, delays);
-            }
-            catch
-            {
-                // A picture that won't decode is not a reason to lose the orb.
-                return null;
             }
         }
 

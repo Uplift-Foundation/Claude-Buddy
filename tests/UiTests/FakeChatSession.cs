@@ -13,11 +13,19 @@ namespace ClaudeBuddy.Tests;
 //  4. History is pre-bounded and already ordered oldest to newest — callers
 //     of this fake are expected to build it that way; it does no trimming or
 //     sorting of its own.
-internal sealed class FakeChatSession : IRemoteChatSession
+internal sealed class FakeChatSession : IRemoteChatSession, IRemoteChatImages, IRemoteChatSlashCommands
 {
     public string SessionId { get; init; } = "fake-session";
     public string DisplayName { get; init; } = "Fake Session";
     public RemoteChatState State { get; set; } = RemoteChatState.Connected;
+
+    // Empty by default, the same as a session with nothing to say about
+    // IRemoteChatSlashCommands. Settable rather than init-only, and after
+    // OpenFor as well as before: a session on another machine has to be asked
+    // what it can run, so its list arrives well after the panel has bound to
+    // it, and a fake that could only be set up front could not express the
+    // case that mattered.
+    public IReadOnlyList<SlashCommand> SlashCommands { get; set; } = Array.Empty<SlashCommand>();
 
     private readonly List<ChatTurn> _history;
     public IReadOnlyList<ChatTurn> History => _history;
@@ -50,6 +58,22 @@ internal sealed class FakeChatSession : IRemoteChatSession
     public void Cancel()
     {
         // No-op: nothing is ever in flight in this fake.
+    }
+
+    // What SendWithImagesAsync was actually called with — the panel's paste
+    // path takes this route instead of SendAsync whenever it is holding at
+    // least one pending picture (see IRemoteChatImages).
+    public List<(string Text, List<string> ImagePaths)> SentWithImages { get; } = new();
+
+    public Task SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths)
+    {
+        SentWithImages.Add((text, imagePaths.ToList()));
+
+        var turn = new ChatTurn { Role = ChatRole.User, Text = text };
+        _history.Add(turn);
+        TurnAdded?.Invoke(turn);
+
+        return Task.CompletedTask;
     }
 
     // Test helpers, not part of the interface: raise the two events the

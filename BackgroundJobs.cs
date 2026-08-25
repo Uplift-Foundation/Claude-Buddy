@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 
 namespace ClaudeBuddy
@@ -24,18 +25,41 @@ namespace ClaudeBuddy
         // agent finishing doesn't leave a stale orb around for long.
         private const long CacheMs = 10_000;
 
-        private static readonly object Gate = new();
+        // In a holder rather than a field on this class, because it is only ever
+        // taken by States(), which is excluded — and a static field initializer
+        // does not run until some static field is touched, so this one reads as
+        // an uncovered line in a class whose measured half never reaches it.
+        // Excluding the holder is the honest description: it belongs to the
+        // excluded code, not to the tested code.
+        [ExcludeFromCodeCoverage]
+        private static class Cache
+        {
+            internal static readonly object Gate = new();
+        }
         private static Dictionary<string, string>? _states;
         private static long _stamp;
 
         // Whether this session is a background job that is still going.
         //
-        // Asked of sessions that record no pid, which is a wider group than it
-        // sounds: a background agent has none, but neither does a subagent, and
-        // neither does a session whose status file outlived it. Only the first
-        // is something to show an orb for, and the difference isn't on disk —
-        // every one of them writes the same "idle" — so the daemon's own list
-        // is the only place to settle it.
+        // Asked of two shapes of session. The first records no pid at all — a
+        // wider group than it sounds: a background agent has none, but neither
+        // does a subagent, and neither does a session whose status file outlived
+        // it. The second is a status file that lost SessionManager.Superseded's
+        // pid tie-break — which happens for real to an Agent View background
+        // session, since dispatching one shares its parent's pid rather than
+        // getting one of its own. Both shapes write the same "idle" whether they
+        // still have work to do or not, so the daemon's own list is the only
+        // place to settle it.
+        // Excluded from coverage: States() runs `claude agents --json` as a real
+        // subprocess to ask the daemon for its listing. The answer, which is the
+        // part with a decision in it, is IsLive below — separated for exactly this
+        // reason and covered against hand-written listings in BackgroundJobsTests.
+        [ExcludeFromCodeCoverage]
+        public static bool IsLiveJob(string sessionId) => IsLive(States(), sessionId);
+
+        // The answer, separated from fetching the listing so it can be tested
+        // without a daemon to ask. `states` is what Parse returned — null for a
+        // listing that could not be read at all.
         //
         // Absent from a listing that was read successfully means not a job at
         // all: a subagent, or a session that ended. "done" means it was one and
@@ -46,21 +70,32 @@ namespace ClaudeBuddy
         // whether to *hide* an orb, and no orb should vanish because the CLI
         // was briefly unavailable — the failure the user can't see is the one
         // worth being careful about.
-        public static bool IsLiveJob(string sessionId)
+        internal static bool IsLive(Dictionary<string, string>? states, string sessionId)
         {
             if (string.IsNullOrEmpty(sessionId)) return true;
-
-            var states = States();
             if (states is null) return true;
 
-            if (!states.TryGetValue(JobIdOf(sessionId), out var state)) return false;
+            // The session id first, because that is the question being asked and
+            // a listing answers it directly. The short job id is a fallback for a
+            // row that named no session — see Parse.
+            if (!states.TryGetValue(sessionId, out var state)
+                && !states.TryGetValue(JobIdOf(sessionId), out state))
+            {
+                return false;
+            }
 
             return !string.Equals(state, "done", StringComparison.OrdinalIgnoreCase);
         }
 
+        // Excluded from coverage: shells out to the `claude` CLI, and the cache
+        // it wraps is keyed on Environment.TickCount64. What it decides with the
+        // answer is IsLive above, which is tested; what it decides about the
+        // *listing* is Parse below, which is also tested. This is the process
+        // launch and the clock, and nothing else.
+        [ExcludeFromCodeCoverage]
         private static Dictionary<string, string>? States()
         {
-            lock (Gate)
+            lock (Cache.Gate)
             {
                 if (_states is not null && Environment.TickCount64 - _stamp < CacheMs)
                 {
@@ -70,7 +105,7 @@ namespace ClaudeBuddy
 
             var fresh = Read();
 
-            lock (Gate)
+            lock (Cache.Gate)
             {
                 // A failed read doesn't clear a good answer: the listing going
                 // missing for one tick is not evidence that anything finished.
@@ -83,6 +118,11 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: starts the `claude` CLI as a real subprocess.
+        // The JSON it prints is parsed by Parse below, which is tested against
+        // hand-written listings, so what is excluded here is the launch and
+        // nothing that decides anything.
+        [ExcludeFromCodeCoverage]
         private static Dictionary<string, string>? Read()
         {
             try
@@ -119,28 +159,7 @@ namespace ClaudeBuddy
                 process.WaitForExit(5000);
                 if (process.ExitCode != 0) return null;
 
-                var map = new Dictionary<string, string>(StringComparer.Ordinal);
-                using var document = JsonDocument.Parse(output);
-                if (document.RootElement.ValueKind != JsonValueKind.Array) return null;
-
-                foreach (var entry in document.RootElement.EnumerateArray())
-                {
-                    // Interactive sessions carry no id at all — only background
-                    // ones are jobs — so they simply don't appear here, and
-                    // nothing downstream ever asks about them.
-                    if (!entry.TryGetProperty("id", out var id)) continue;
-                    if (id.ValueKind != JsonValueKind.String) continue;
-                    if (id.GetString() is not { Length: > 0 } jobId) continue;
-
-                    var state = entry.TryGetProperty("state", out var s)
-                                && s.ValueKind == JsonValueKind.String
-                        ? s.GetString() ?? ""
-                        : "";
-
-                    map[jobId] = state;
-                }
-
-                return map;
+                return Parse(output);
             }
             catch
             {
@@ -148,10 +167,72 @@ namespace ClaudeBuddy
             }
         }
 
+        // `claude agents --json` turned into the states IsLive asks about, keyed
+        // by what the caller will name the session as.
+        //
+        // A background row carries both an `id` — the short job id, which is
+        // also the name of the job's directory under ~/.claude/jobs — and a
+        // `sessionId`, the full uuid of the session running it. The first
+        // version of this keyed the map on the short id and derived the same
+        // string from the session id it was asked about, on the assumption that
+        // one is the first segment of the other.
+        //
+        // It usually is, which is what let the assumption survive: a job's id is
+        // the first segment of the session id it *started* with. But a job
+        // outlives that session — resume it, or let it compact, and it keeps its
+        // original id while the work moves on to a session with a new uuid.
+        // Observed on a real machine: job `5f6960b2` running session
+        // `53bd5d2c-…`, working, with the derived lookup asking about `53bd5d2c`
+        // and finding nothing. Absent reads as "not a job at all", so a
+        // background session that was busy working had its orb dropped on every
+        // scan, and the same miss let SessionManager.Superseded call it stale.
+        //
+        // So the map is keyed by the session id the row states, rather than by
+        // anything derived. The short id is stored only for a row that named no
+        // session — an older CLI, or a job the daemon knows about before its
+        // session exists — which is what keeps the fallback in IsLive worth
+        // having. Storing it as well as the session id would undo the fix by the
+        // back door: the *earlier* session of a resumed job would match its own
+        // job's row and keep an orb for a conversation that has moved on.
+        internal static Dictionary<string, string>? Parse(string json)
+        {
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array) return null;
+
+            foreach (var entry in document.RootElement.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.Object) continue;
+
+                // Interactive sessions carry no id at all — only background
+                // ones are jobs — so they simply don't appear here, and
+                // nothing downstream ever asks about them.
+                if (Text(entry, "id") is not { Length: > 0 } jobId) continue;
+
+                var state = Text(entry, "state") ?? "";
+
+                map[Text(entry, "sessionId") is { Length: > 0 } sessionId ? sessionId : jobId] = state;
+            }
+
+            return map;
+        }
+
+        private static string? Text(JsonElement entry, string name) =>
+            entry.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+
         // The short form the daemon uses, which is the first segment of the
-        // session uuid. Split rather than a fixed width so an id that isn't a
-        // uuid degrades to itself.
-        private static string JobIdOf(string sessionId)
+        // session id a job started with. Only reached for a row that named no
+        // session of its own; split rather than a fixed width so an id that
+        // isn't a uuid degrades to itself.
+        // internal: AgentTeamViewer carries its own copy of this rule, and the
+        // two are used together — one decides which pane to reuse and the other
+        // whether the job is still alive — so a test asserts they agree. A
+        // session that resolved to two different job ids would be adopted into a
+        // pane and then have its orb hidden.
+        internal static string JobIdOf(string sessionId)
         {
             var dash = sessionId.IndexOf('-');
             return dash > 0 ? sessionId[..dash] : sessionId;

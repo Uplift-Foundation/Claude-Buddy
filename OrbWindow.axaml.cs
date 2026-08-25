@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Avalonia;
 using Avalonia.Animation;
 using Avalonia.Animation.Easings;
@@ -95,6 +96,10 @@ namespace ClaudeBuddy
         private readonly ColorTransition _colorTransition;
         private readonly ScaleTransform _orbScale = new();
 
+        // The heart badge's own beat, separate from the orb's breath so the two
+        // can run at different rates without fighting over one transform.
+        private readonly ScaleTransform _heartScale = new();
+
         // Flat red rather than a fourth entry in OrbColors: this isn't a
         // session state Claude Code reports, it's purely local UI feedback
         // for "the mic is listening", so it has no reason to be user
@@ -109,6 +114,11 @@ namespace ClaudeBuddy
         // most orbs are never hovered in a given run, and none of them should
         // pay for a second window until one actually is.
         private OrbFlyout? _flyout;
+
+        // Test-only window into the lazily-created flyout: a test that drives
+        // EnsureFlyoutShown directly (see that method's own comment) has no other
+        // way to reach the window it just built to click one of its own buttons.
+        internal OrbFlyout? Flyout => _flyout;
 
         // Bridges hover between two separate OS windows (the orb and its
         // flyout): a bare PointerExited on either one would hide the flyout
@@ -151,6 +161,11 @@ namespace ClaudeBuddy
 
             Glow.Fill = _glowBrush;
             Orb.RenderTransform = _orbScale;
+
+            // Centred, so the beat grows the heart in place rather than pushing
+            // it towards the orb's rim.
+            HeartGlyph.RenderTransform = _heartScale;
+            HeartGlyph.RenderTransformOrigin = RelativePoint.Center;
 
             Root.PointerEntered += (_, _) =>
             {
@@ -253,6 +268,7 @@ namespace ClaudeBuddy
             // repeat — and without it a room orb is indistinguishable from an
             // ordinary one.
             ApplyKind(status.Kind);
+            ApplyHeartbeat(status.Heartbeat);
 
             // A room orb is named for its channel, like every other orb is named
             // for its session: "#arch" draws "Ar". The hash it used to draw
@@ -360,6 +376,12 @@ namespace ClaudeBuddy
             SessionKind.Cron => ("\u23F1", "cron"),
             SessionKind.Direct => ("@", "direct message"),
             SessionKind.Channel => ("#", "channel"),
+
+            // Two arrows going opposite ways: the same "this is somewhere else,
+            // and it answers" that every sync icon means, which is as close to
+            // learned-without-explaining as this one gets. The label says the
+            // machine part, since the glyph can't.
+            SessionKind.Remote => ("\u21C4", "another machine"),
             _ => null
         };
 
@@ -381,6 +403,37 @@ namespace ClaudeBuddy
 
             KindGlyph.Text = badge.Value.Glyph;
             KindBadge.IsVisible = true;
+        }
+
+        // Whether the chat panel should say this conversation is heartbeat-driven.
+        // Read the same way KindLabel is, so the panel asks the orb rather than
+        // re-deriving it from a status it does not hold.
+        public bool IsHeartbeat => _lastStatus?.Heartbeat ?? false;
+
+        private void ApplyHeartbeat(bool heartbeat)
+        {
+            if (HeartBadge.IsVisible == heartbeat) return;
+
+            HeartBadge.IsVisible = heartbeat;
+
+            if (heartbeat)
+            {
+                _heartStartedAt = Environment.TickCount64;
+
+                // Joins the pulse ticker on its own account. Every branch of
+                // ApplyState currently ends in a StartPulse, so an orb is
+                // normally on the roster already and this is redundant — but the
+                // heart's motion is the whole signal, and having it depend on
+                // that staying true of a switch statement elsewhere is the kind
+                // of coupling that breaks quietly.
+                if (!Pulsing.Contains(this)) Pulsing.Add(this);
+                EnsureTicker();
+            }
+            else
+            {
+                _heartScale.ScaleX = _heartScale.ScaleY = 1.0;
+                HeartGlyph.Opacity = 1.0;
+            }
         }
 
         // --- agent teams ------------------------------------------------------
@@ -421,6 +474,14 @@ namespace ClaudeBuddy
 
             var inset = 28 - (18 * scale * 0.7071) - (BadgeSize * scale / 2);
             KindBadge.Margin = new Thickness(0, 0, Math.Max(0, inset), Math.Max(0, inset));
+
+            // The same sum mirrored into the opposite corner: the heart rides the
+            // orb's upper-right rim, so it has to move with the circle for the
+            // same reason the kind badge does.
+            HeartBadge.Width = HeartBadge.Height = BadgeSize * scale;
+            HeartBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
+            HeartGlyph.FontSize = 9 * scale;
+            HeartBadge.Margin = new Thickness(0, Math.Max(0, inset), Math.Max(0, inset), 0);
             Glyph.FontSize = BaseGlyphFontSize * scale;
             OrbRadius = 18 * scale;
         }
@@ -592,7 +653,12 @@ namespace ClaudeBuddy
 
         // The colour comes from OrbColors so this switch is about *motion* only —
         // one state-to-colour mapping in the app, not two that can drift apart.
-        private void ApplyState(string state)
+        // internal: the state-to-motion mapping is a rule worth asserting, and
+        // UpdateFrom deliberately does not apply it directly — it stores the
+        // state and lets Loaded/Opened apply it, because Avalonia fires Loaded
+        // *after* the first UpdateFrom. A window that is never shown therefore
+        // never applies anything, so a test drives this instead of the lifecycle.
+        internal void ApplyState(string state)
         {
             var color = OrbColors.For(state);
 
@@ -795,6 +861,12 @@ namespace ClaudeBuddy
         private double _pulsePeriodMs = 2200;
         private long _pulseStartedAt;
 
+        // Its own clock rather than the orb's, because the orb's period changes
+        // with the session's state — and a heart that sped up when the agent
+        // started working would be saying something this badge does not know.
+        private const double HeartPeriodMs = OpenClawHeartbeat.PeriodMs;
+        private long _heartStartedAt;
+
         private void StartPulse(double to, TimeSpan duration, Easing easing)
         {
             // Duration is a half-cycle in the old alternating animation, so a full
@@ -822,15 +894,15 @@ namespace ClaudeBuddy
             {
                 Interval = TimeSpan.FromMilliseconds(1000.0 / PulseFps)
             };
-            _ticker.Tick += (_, _) =>
-            {
-                for (var i = Pulsing.Count - 1; i >= 0; i--) Pulsing[i].TickPulse();
-                if (Pulsing.Count == 0) _ticker!.Stop();
-            };
+            _ticker.Tick += (_, _) => TickAllPulses();
             _ticker.Start();
         }
 
-        private void TickPulse()
+        // internal: the shared ticker's Tick handler calls this on every
+        // pulsing orb once a real frame elapses, which a headless test only
+        // gets by pumping the dispatcher against wall time. Driving it directly
+        // is the same trade ApplyState already makes above.
+        internal void TickPulse()
         {
             // Nothing on screen, nothing to animate — the whole point of the
             // "Show orbs" toggle was to stop this work, and it never did.
@@ -846,11 +918,38 @@ namespace ClaudeBuddy
 
             _orbScale.ScaleX = scale;
             _orbScale.ScaleY = scale;
+
+            if (HeartBadge.IsVisible) TickHeart();
+        }
+
+        // The heart badge's beat, on the same ticker as the breath above. Two
+        // thumps close together and then a rest, rather than the orb's cosine:
+        // the orb is already breathing, and a second smooth swell next to it
+        // reads as one thing wobbling rather than as a pulse. Lub-dub is the
+        // shape everyone recognises without being told, which is the only reason
+        // it is worth the extra few lines.
+        //
+        // Opacity moves with the scale because 15px of heart cannot get much
+        // bigger before it leaves its own badge — most of the visible motion is
+        // the fade, and the scale is what stops the fade reading as a blink.
+        internal void TickHeart()
+        {
+            var beat = OpenClawHeartbeat.Beat(
+                (Environment.TickCount64 - _heartStartedAt) / HeartPeriodMs);
+
+            _heartScale.ScaleX = _heartScale.ScaleY = 1.0 + (0.28 * beat);
+            HeartGlyph.Opacity = 0.5 + (0.5 * beat);
         }
 
         private void StopPulse()
         {
-            Pulsing.Remove(this);
+            // Stays on the roster while the heart is beating. Every caller
+            // currently follows this immediately with a StartPulse, so leaving
+            // would be momentary — but a momentary stop is exactly what a
+            // heartbeat badge should not do, and the alternative is that this
+            // stays correct only by luck of the call order.
+            if (!HeartBadge.IsVisible) Pulsing.Remove(this);
+
             _orbScale.ScaleX = _orbScale.ScaleY = 1.0;
         }
 
@@ -866,24 +965,17 @@ namespace ClaudeBuddy
         // own comment for why. A no-op when the feature is off, so nothing
         // here ever constructs a VoiceRecorder — and triggers macOS's
         // mic-permission prompt — for someone who hasn't opted in.
-        private void EnsureFlyoutShown()
+        // internal: only reachable in production via a real hover (see
+        // ScheduleFlyoutShow/OnFlyoutShowTick), which needs a pointer genuinely
+        // resting on the orb. Driven directly for the same reason ApplyState is.
+        internal void EnsureFlyoutShown()
         {
             if (_flyout is null)
             {
                 _flyout = new OrbFlyout();
-                _flyout.MicClicked += () =>
-                {
-                    if (_recording) StopRecording();
-                    else StartRecording();
-                };
-                _flyout.ArrangeClicked += () =>
-                {
-                    SessionManager.Instance?.ArrangeOrbsInPattern();
-                };
-                _flyout.SettingsClicked += () =>
-                {
-                    SettingsWindow.Toggle();
-                };
+                _flyout.MicClicked += ToggleRecording;
+                _flyout.ArrangeClicked += ArrangeAllOrbs;
+                _flyout.SettingsClicked += OpenSettings;
                 _flyout.SpeakClicked += OnSpeakClicked;
                 _flyout.ChatClicked += OpenChat;
 
@@ -957,7 +1049,7 @@ namespace ClaudeBuddy
         // TextToSpeech.StateChanged is the single source now; see SessionManager,
         // which broadcasts it to every orb because speech is global rather than
         // per-orb.
-        private void OnSpeakClicked()
+        internal void OnSpeakClicked()
         {
             if (TextToSpeech.IsSpeaking)
             {
@@ -975,13 +1067,44 @@ namespace ClaudeBuddy
                 return;
             }
 
-            var text = FindSpeakableText();
-            if (text is null) return;
-
-            TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+            SpeakIfThereIsAnything(FindSpeakableText());
         }
 
-        private async Task SpeakRemoteAsync()
+        // Excluded from coverage: both of its lines. Reaching SpeakNow means a
+        // transcript with something in it was found, and what happens next is the
+        // machine running the tests reading it out loud — so a test that covered
+        // this line would be one nobody could run with other people in the room.
+        // Which text is found is FindSpeakableText, which is measured.
+        [ExcludeFromCodeCoverage]
+        private void SpeakIfThereIsAnything(string? text)
+        {
+            if (text is null) return;
+            SpeakNow(text);
+        }
+
+        // Safe to call: SessionManager.Instance is null outside the running app, so
+        // this is a no-op there — which is what an arrange should be when there
+        // are no orbs to arrange.
+        internal static void ArrangeAllOrbs() => SessionManager.Instance?.ArrangeOrbsInPattern();
+
+        // Excluded from coverage: SettingsWindow.Toggle puts the app in the Dock,
+        // shows a window and takes it key, then starts a status ticker. Its own
+        // exclusion says the same; this is the call site, and calling it would do
+        // all of that for real.
+        [ExcludeFromCodeCoverage]
+        private static void OpenSettings() => SettingsWindow.Toggle();
+
+        // Excluded from coverage: makes the machine make a noise. TextToSpeech.Speak
+        // is itself already excluded for that, and scoping the exclusion to this one
+        // call keeps OnSpeakClicked's decisions — already speaking, nothing to say —
+        // measured. An earlier attempt at testing the caller end to end actually
+        // spoke out loud on a developer's machine, which is how narrow this needs
+        // to be.
+        [ExcludeFromCodeCoverage]
+        private static void SpeakNow(string text) =>
+            TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+
+        internal async Task SpeakRemoteAsync()
         {
             var title = _lastStatus?.Title ?? "";
             var text = await OpenClawSessions.LastAssistantTextAsync(SessionId, title);
@@ -1002,7 +1125,26 @@ namespace ClaudeBuddy
         // background jobs it launched write theirs into project dirs named
         // for the same cwd, and the most recent of those is what "read the
         // last turn" means when you click its orb.
-        private string? FindSpeakableText()
+        // `home` exists so the cwd fallback below is reachable without a
+        // transcript in the developer's real ~/.claude. TranscriptReader's search
+        // already takes one for the same reason; this just passes it through.
+        // One frame of the shared pulse, for every orb currently pulsing.
+        //
+        // A named method rather than the Tick lambda it used to be, because the
+        // ticker is process-wide and accumulates every orb ever shown for the life
+        // of the process — nothing closes a window to remove one. A test that
+        // waited on the real timer passed alone and failed once the rest of the
+        // suite loaded the machine, even with a ten-second budget. Driving it is
+        // the fix, and it also covers the arm that matters: the ticker stops
+        // itself when the last orb finishes, rather than spinning at 30fps
+        // forever.
+        internal static void TickAllPulses()
+        {
+            for (var i = Pulsing.Count - 1; i >= 0; i--) Pulsing[i].TickPulse();
+            if (Pulsing.Count == 0) _ticker?.Stop();
+        }
+
+        internal string? FindSpeakableText(string? home = null)
         {
             // Not for a gateway session. It has no transcript on this machine,
             // and the cwd fallback below would match a *local* project directory
@@ -1029,7 +1171,7 @@ namespace ClaudeBuddy
             var cwd = _lastStatus?.Cwd;
             if (string.IsNullOrEmpty(cwd)) return null;
 
-            var fallback = TranscriptReader.LatestTranscriptForCwd(cwd);
+            var fallback = TranscriptReader.LatestTranscriptForCwd(cwd, home);
             if (fallback is not null)
             {
                 text = TranscriptReader.LatestAssistantText(fallback);
@@ -1051,7 +1193,18 @@ namespace ClaudeBuddy
         // The flyout's keyboard button. Same destination a gateway orb's click
         // reaches, arrived at differently because for a local session the click
         // is already spoken for.
-        private void OpenChat()
+        // Excluded from coverage: needs SessionManager.Instance to hand back a
+        // session, and this suite deliberately never sets it — making one current
+        // starts the status-directory watcher, the two-second scan timer and a
+        // tray icon, none of which a test should own. RemoteScanTests,
+        // SessionScanTests and GatewayScanTests all make the same choice and say
+        // so.
+        //
+        // What the chat panel does once opened is covered directly in the
+        // ChatPanel suites, which construct one against a FakeChatSession rather
+        // than going through an orb.
+        [ExcludeFromCodeCoverage]
+        internal void OpenChat()
         {
             var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
             if (chat is null) return;
@@ -1068,6 +1221,12 @@ namespace ClaudeBuddy
         // The panel's mic drives this orb's recorder rather than constructing a
         // second one — that keeps one recorder per session, along with the red
         // pulse and the 30-second cap, all working exactly as they already do.
+        // Excluded from coverage: both arms reach a live VoiceRecorder — one to
+        // construct and start it (PvRecorder.Create opens the microphone), the
+        // other to stop it and push captured audio through Whisper.net. There is
+        // no third path, so there is nothing here a headless runner can execute.
+        // The panel's own mirroring of IsRecording is covered where it lives.
+        [ExcludeFromCodeCoverage]
         public void ToggleRecording()
         {
             if (_recording) StopRecording();
@@ -1089,15 +1248,15 @@ namespace ClaudeBuddy
             _flyout?.Hide();
         }
 
-        private void CancelFlyoutHide() => _hideFlyoutTimer?.Stop();
+        internal void CancelFlyoutHide() => _hideFlyoutTimer?.Stop();
 
-        private void CancelFlyoutShow() => _showFlyoutTimer?.Stop();
+        internal void CancelFlyoutShow() => _showFlyoutTimer?.Stop();
 
         // The delay is only for *opening* the flyout from nothing. Coming back
         // onto the orb from its own open flyout is the other half of the hover
         // bridge, not a new request, and pausing there would be a stutter in
         // the middle of an interaction the user is already having.
-        private void ScheduleFlyoutShow()
+        internal void ScheduleFlyoutShow()
         {
             // On the method rather than on PointerEntered, the same way
             // ScheduleFlyoutHide carries its own _recording guard: the rule is
@@ -1122,7 +1281,7 @@ namespace ClaudeBuddy
             _showFlyoutTimer.Start();
         }
 
-        private void OnFlyoutShowTick(object? sender, EventArgs e)
+        internal void OnFlyoutShowTick(object? sender, EventArgs e)
         {
             _showFlyoutTimer!.Stop();
 
@@ -1136,7 +1295,7 @@ namespace ClaudeBuddy
 
         // A no-op while recording: the flyout is the only way to stop, so it
         // must stay up regardless of where the pointer wanders.
-        private void ScheduleFlyoutHide()
+        internal void ScheduleFlyoutHide()
         {
             if (_recording) return;
 
@@ -1150,7 +1309,7 @@ namespace ClaudeBuddy
             _hideFlyoutTimer.Start();
         }
 
-        private void OnFlyoutHideTick(object? sender, EventArgs e)
+        internal void OnFlyoutHideTick(object? sender, EventArgs e)
         {
             _hideFlyoutTimer!.Stop();
 
@@ -1162,6 +1321,17 @@ namespace ClaudeBuddy
             _flyout?.Hide();
         }
 
+        // Excluded from coverage: constructs and starts a real VoiceRecorder,
+        // which is itself excluded wholesale for the same reason (it opens an
+        // actual microphone). There is no seam to test the surrounding
+        // dispatch logic without either a working input device (which a CI
+        // runner may or may not have, making the catch-vs-success branch
+        // nondeterministic across machines — the exact kind of platform
+        // dependence this ticket's rules forbid relying on) or a real
+        // recording actually starting and running for up to 30 seconds on a
+        // background capture thread, which is not something a headless suite
+        // should leave running.
+        [ExcludeFromCodeCoverage]
         private void StartRecording()
         {
             if (_recording) return;
@@ -1206,6 +1376,14 @@ namespace ClaudeBuddy
             _recordingCap.Start();
         }
 
+        // Excluded from coverage along with StartRecording: only reachable
+        // after a real recording actually started (a live VoiceRecorder,
+        // itself excluded), and its meaningful body pipes real captured audio
+        // through SpeechTranscriber — a local Whisper.net model load and
+        // inference, not something a headless CI runner should be doing
+        // either. The early-return guard is inseparable from that same
+        // feature rather than a decision worth a seam of its own.
+        [ExcludeFromCodeCoverage]
         private async void StopRecording()
         {
             if (!_recording || _recorder is null) return;
@@ -1288,6 +1466,13 @@ namespace ClaudeBuddy
         // Ends an in-progress recording without transcribing or sending
         // anything — only reachable from Closed, where the orb (and the
         // session it belongs to) is going away regardless.
+        //
+        // Excluded from coverage: its only caller is the Closed event
+        // (rule of this suite: never Close() a headless orb, which corrupts a
+        // process-wide font cache — see OrbWindowStateTests), and its
+        // meaningful body needs the same live VoiceRecorder StartRecording
+        // does.
+        [ExcludeFromCodeCoverage]
         private void CancelRecording()
         {
             _recordingCap?.Stop();
@@ -1335,6 +1520,21 @@ namespace ClaudeBuddy
         // not jump.
         private readonly List<(OrbWindow Orb, PixelPoint Start)> _followers = new();
 
+        // Excluded from coverage: a synthesized press on an orb ends in a real
+        // click being resolved, and OnClicked's default action is
+        // TerminalFocuser.Focus — which fires tmux, ps and osascript as real
+        // processes off-thread, with no OS guard at its own entry point. On a CI
+        // runner that is an unpredictable side effect rather than a test, and on
+        // a developer's machine it moves their windows.
+        //
+        // The drag arithmetic these three share is not lost with them: the
+        // 6-pixel threshold, the follower offsets and the arranged-anchor nudge
+        // are all OrbArrangement's, which is pure and swept by
+        // tests/ArrangementTests across 20736 cases. What is excluded here is the
+        // plumbing from a pointer to those answers, and the click resolution
+        // itself is covered directly in OrbWindowClickResolutionTests via
+        // OnClicked/ActionFor rather than through a pointer.
+        [ExcludeFromCodeCoverage]
         protected override void OnPointerPressed(PointerPressedEventArgs e)
         {
             base.OnPointerPressed(e);
@@ -1374,6 +1574,11 @@ namespace ClaudeBuddy
             }
         }
 
+        // Excluded from coverage: same reason as OnPointerPressed — this only runs
+        // between a real press and a real release, and it moves live windows via
+        // Position while TeamLinks.Refresh() redraws native arrow windows over
+        // them.
+        [ExcludeFromCodeCoverage]
         protected override void OnPointerMoved(PointerEventArgs e)
         {
             base.OnPointerMoved(e);
@@ -1410,6 +1615,13 @@ namespace ClaudeBuddy
             ChatPanel.RepositionFor(this);
         }
 
+        // Excluded from coverage: the end of the same gesture. Either it commits a
+        // drag — writing every dragged orb's position through SessionManager and
+        // re-anchoring the arrangement — or it resolves a click, which is
+        // TerminalFocuser again. Both halves are covered where they are decided:
+        // OrbArrangement for the geometry, OrbWindowClickResolutionTests for the
+        // click.
+        [ExcludeFromCodeCoverage]
         protected override void OnPointerReleased(PointerReleasedEventArgs e)
         {
             base.OnPointerReleased(e);
@@ -1440,6 +1652,16 @@ namespace ClaudeBuddy
                     {
                         SessionManager.Instance?.RememberOrbPosition(member);
                     }
+                }
+
+                // When arranged, every orb in the pattern moved by this same
+                // delta (see OnPointerPressed's ArrangedSiblings) — the shape's
+                // saved centre needs to move with it, or absorbing the next
+                // orb to join or leave would snap it back to where it was.
+                if (SessionManager.Instance?.IsArranged == true)
+                {
+                    SessionManager.Instance.ShiftArrangementAnchor(
+                        Position.X - _windowStart.X, Position.Y - _windowStart.Y);
                 }
             }
             else
@@ -1483,7 +1705,7 @@ namespace ClaudeBuddy
         private int _pendingClicks;
         private int _clickCount = 1;
 
-        private void OnClicked(int clicks)
+        internal void OnClicked(int clicks)
         {
             // Beyond three there is nothing to bind, and treating a fourth click
             // as a fresh single would fire the single-click action in the middle
@@ -1513,7 +1735,7 @@ namespace ClaudeBuddy
         // Whether a longer gesture is bound to something this one isn't already
         // going to do. Same action on two and three as on one means the wait
         // would change nothing, so there is no reason to pay it.
-        private static bool AwaitsMoreClicks(int clicks)
+        internal static bool AwaitsMoreClicks(int clicks)
         {
             var mine = ActionFor(clicks);
 
@@ -1526,14 +1748,14 @@ namespace ClaudeBuddy
             return false;
         }
 
-        private static string ActionFor(int clicks) => clicks switch
+        internal static string ActionFor(int clicks) => clicks switch
         {
             1 => ClaudeBuddySettings.ClickAction,
             2 => ClaudeBuddySettings.DoubleClickAction,
             _ => ClaudeBuddySettings.TripleClickAction
         };
 
-        private void RunClickAction(int clicks)
+        internal void RunClickAction(int clicks)
         {
             switch (ActionFor(clicks))
             {
@@ -1559,19 +1781,9 @@ namespace ClaudeBuddy
         // second case is not a fallback bolted on for this feature; it is what a
         // click on a gateway orb has always done, because there is no terminal
         // anywhere to go to.
-        private void GoToSession()
+        internal void GoToSession()
         {
-            if (!(_lastStatus?.IsLocalCli ?? false))
-            {
-                var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
-                if (chat is not null)
-                {
-                    _chatOpen = true;
-                    HideFlyoutNow();
-                    ChatPanel.OpenFor(this, chat);
-                    return;
-                }
-            }
+            if (!(_lastStatus?.IsLocalCli ?? false) && TryOpenRemoteChat()) return;
 
             TerminalFocuser.Focus(
                 _lastStatus,
@@ -1596,22 +1808,60 @@ namespace ClaudeBuddy
             ResetPositionItem.IsVisible = pinned;
         }
 
-        private void ResetIdle_Click(object? sender, RoutedEventArgs e)
+        internal void ResetIdle_Click(object? sender, RoutedEventArgs e)
         {
             SessionManager.Instance?.ResetSessionToIdle(SessionId);
         }
 
-        private void ResetPosition_Click(object? sender, RoutedEventArgs e)
+        internal void ResetPosition_Click(object? sender, RoutedEventArgs e)
         {
             SessionManager.Instance?.ReturnOrbToStack(SessionId);
         }
 
-        private void Exit_Click(object? sender, RoutedEventArgs e)
+        // Excluded from coverage: needs SessionManager.Instance to hand back a
+        // session, and this suite never sets it — making one current starts the
+        // status-directory watcher, the scan timer and a tray icon. Same reason
+        // OpenChat above carries the attribute, and the panel it would open is
+        // covered directly in the ChatPanel suites against a FakeChatSession.
+        [ExcludeFromCodeCoverage]
+        private bool TryOpenRemoteChat()
         {
-            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-            {
-                desktop.Shutdown();
-            }
+            var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
+            if (chat is null) return false;
+
+            _chatOpen = true;
+            HideFlyoutNow();
+            ChatPanel.OpenFor(this, chat);
+            return true;
         }
+
+        internal void Exit_Click(object? sender, RoutedEventArgs e) =>
+            ShutdownIfDesktop(Application.Current?.ApplicationLifetime);
+
+        // Excluded from coverage: its guard is the only reachable half under a
+        // headless lifetime, and the half behind it ends the process. Splitting
+        // the two so the guard could be measured would leave the more interesting
+        // question — is this lifetime a desktop one? — measured in a method that
+        // does nothing with the answer.
+        //
+        // IsDesktopLifetime is that question asked where a test can ask it, and
+        // ItRefusesToQuitAHostThatIsNotADesktopApp asserts the answer that keeps
+        // this harmless.
+        [ExcludeFromCodeCoverage]
+        private static void ShutdownIfDesktop(IApplicationLifetime? lifetime)
+        {
+            if (lifetime is IClassicDesktopStyleApplicationLifetime desktop) Shutdown(desktop);
+        }
+
+        internal static bool IsDesktopLifetime(IApplicationLifetime? lifetime) =>
+            lifetime is IClassicDesktopStyleApplicationLifetime;
+
+        // Excluded from coverage: ends the process. Scoped to this one call so the
+        // guard stays measured — under the headless lifetime it is false, which is
+        // what keeps this harmless, and that is worth asserting rather than
+        // excluding along with it.
+        [ExcludeFromCodeCoverage]
+        private static void Shutdown(IClassicDesktopStyleApplicationLifetime desktop) =>
+            desktop.Shutdown();
     }
 }

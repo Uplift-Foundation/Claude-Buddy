@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
@@ -113,6 +114,12 @@ namespace ClaudeBuddy
             // latency, not something the section depends on for correctness.
             ClaudeDesktopManager.KickRefresh();
 
+            // Which Claude Desktop instance the user is in, sampled on the same
+            // tick. The URL router needs it to answer "which profile asked for
+            // this sign-in callback" once the browser has taken focus and the
+            // frontmost app is no longer Claude at all.
+            ClaudeDesktopUrlRouter.NoteFrontmost();
+
             Apply(sessions);
         }
 
@@ -224,35 +231,103 @@ namespace ClaudeBuddy
                 ToggleType = MenuItemToggleType.CheckBox,
                 IsChecked = SessionManager.Instance?.OrbsVisible ?? true
             };
-            orbsItem.Click += (_, _) =>
-                SessionManager.Instance?.SetOrbsVisible(!SessionManager.Instance.OrbsVisible);
+            orbsItem.Click += (_, _) => ToggleOrbsVisible();
             menu.Add(orbsItem);
 
             var resetItem = new NativeMenuItem("Reset all sessions to idle")
             {
                 IsEnabled = sessions.Count > 0
             };
-            resetItem.Click += (_, _) => SessionManager.Instance?.ResetAllSessionsToIdle();
+            resetItem.Click += (_, _) => ResetAllSessions();
             menu.Add(resetItem);
+
+            // The on-demand trigger for sessions on other machines.
+            //
+            // In the tray rather than as a new window or an orb affordance
+            // because it is a verb the app performs once, not a thing to look
+            // at — and because there is nowhere else for it to live: the orbs
+            // it produces do not exist until it runs, so it cannot hang off one
+            // of them. Reaching for the relay is exactly the kind of
+            // occasionally-needed action this menu is already full of.
+            //
+            // Hidden entirely unless the feature is on, so the menu does not
+            // grow a line about machines for the majority who have not asked
+            // for any.
+            if (ClaudeBuddySettings.RemoteControlEnabled && RemoteControlBridge.IsSupported)
+            {
+                var remoteItem = new NativeMenuItem("Connect to other machines");
+                remoteItem.Click += (_, _) => ConnectToOtherMachines();
+                menu.Add(remoteItem);
+            }
 
             menu.Add(new NativeMenuItemSeparator());
 
             var settingsItem = new NativeMenuItem("Settings…");
-            settingsItem.Click += (_, _) => SettingsWindow.Toggle();
+            settingsItem.Click += (_, _) => OpenSettings();
             menu.Add(settingsItem);
 
             var quitItem = new NativeMenuItem("Quit Claude Buddy");
-            quitItem.Click += (_, _) =>
-            {
-                if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-                {
-                    desktop.Shutdown();
-                }
-            };
+            quitItem.Click += (_, _) => QuitApp();
             menu.Add(quitItem);
         }
 
-        private static string Summary(int total, int waiting, int generating)
+        // The five things the tray menu can do, as named methods rather than the
+        // lambdas they used to be — so each can be judged on its own rather than
+        // the whole menu being written off. TrayMenuTests' own header records the
+        // standing decision not to invoke Click handlers, and it was right about
+        // three of the five.
+
+        // Safe to call: SessionManager.Instance is null outside the running app,
+        // so this is a no-op there — which is exactly what a tray item should be
+        // when there is nothing to show.
+        internal static void ToggleOrbsVisible() =>
+            SessionManager.Instance?.SetOrbsVisible(!SessionManager.Instance.OrbsVisible);
+
+        internal static void ResetAllSessions() =>
+            SessionManager.Instance?.ResetAllSessionsToIdle();
+
+        // Safe to call: under the headless lifetime Application.Current's lifetime
+        // is never IClassicDesktopStyleApplicationLifetime, so the guard is false
+        // and Shutdown is never reached. That guard is the point — it is what
+        // keeps a Quit item from taking down a host that is not a desktop app.
+        //
+        // Excluded from coverage for the half a headless run cannot reach, which
+        // is the half that ends the process. The guard itself is
+        // OrbWindow.IsDesktopLifetime, asked there because the two Quit paths in
+        // this app have to agree about it, and asserted there.
+        [ExcludeFromCodeCoverage]
+        internal static void QuitApp()
+        {
+            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            {
+                Shutdown(desktop);
+            }
+        }
+
+        // Excluded from coverage: ends the process. Scoped to this one call so the
+        // guard in front of it — the thing that stops a Quit item taking down a
+        // host that is not a desktop app — stays measured, and is the only part a
+        // headless run can reach anyway.
+        [ExcludeFromCodeCoverage]
+        private static void Shutdown(IClassicDesktopStyleApplicationLifetime desktop) =>
+            desktop.Shutdown();
+
+        // Excluded from coverage: SettingsWindow.Toggle puts the app in the Dock
+        // via MacOSActivation.SetRegular, shows a window and takes it key, then
+        // starts a one-second status ticker. Its own exclusion says the same; this
+        // is the call site, and calling it would do all of that for real.
+        [ExcludeFromCodeCoverage]
+        internal static void OpenSettings() => SettingsWindow.Toggle();
+
+        // Excluded from coverage: starts a relay, which is a live Claude Code
+        // session in a tmux pane on another machine — and that costs the person
+        // running the tests real money. TrayRemoteItemTests records the same thing
+        // from the other side, which is why it checks the item exists and stops
+        // there.
+        [ExcludeFromCodeCoverage]
+        internal static void ConnectToOtherMachines() => RemoteControlSessions.EnsureStarted();
+
+        internal static string Summary(int total, int waiting, int generating)
         {
             if (total == 0) return "Claude Buddy — no sessions";
 
@@ -267,7 +342,7 @@ namespace ClaudeBuddy
         // comes first because a team's members all inherit the team session's
         // title, and four identical rows only differed by the id this menu
         // appends when it can't tell them apart.
-        private static string DisplayName(SessionEntry session)
+        internal static string DisplayName(SessionEntry session)
         {
             if (!string.IsNullOrEmpty(session.Status.Agent)) return session.Status.Agent;
             if (!string.IsNullOrEmpty(session.Status.Title)) return session.Status.Title;
@@ -281,7 +356,7 @@ namespace ClaudeBuddy
 
         private const int MaxLabelLength = 44;
 
-        private static string SessionLabel(SessionEntry session, bool disambiguate)
+        internal static string SessionLabel(SessionEntry session, bool disambiguate)
         {
             var folder = DisplayName(session);
 
@@ -343,7 +418,7 @@ namespace ClaudeBuddy
         // something about the re-tint failed, and then the baked PNG is a
         // graceful answer: the icon still says which state we're in, just not in
         // the chosen hue.
-        private static WindowIcon? Tinted(string state)
+        internal static WindowIcon? Tinted(string state)
         {
             if (OrbColors.IsDefault(state)) return null;
 

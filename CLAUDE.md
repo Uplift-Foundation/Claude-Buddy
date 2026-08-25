@@ -9,6 +9,136 @@ files because each CLI looks for its own name and neither reads the other's —
 **if you change one, change both.** A symlink would look like one file until
 someone checks the repo out on Windows.
 
+## How a feature gets built
+
+**Every feature is a ticket, a team, and a round trip through QA — in that
+order.** The backlog is Jira project **CB**, board 70:
+
+<https://uplifttech.atlassian.net/jira/software/projects/CB/boards/70/backlog>
+
+No feature work starts from a chat message alone. A request that arrives in a
+terminal, in an issue, or in conversation becomes a CB ticket first, and from
+then on the ticket is what moves — every agent in the chain leaves the board in
+a state that says where the work actually is, so someone reading the board and
+someone reading the terminal see the same thing.
+
+**Prefer the autonomous path at every step.** The escalations below are for an
+agent that is genuinely not confident, not checkpoints to hit out of habit. An
+agent that can defend its plan, its tests and its screenshots should carry the
+feature through to done and say so; one that cannot should ask early, while the
+answer is still cheap, rather than after building the wrong thing.
+
+### The team
+
+Features are built by an **agent team**, not by one session doing everything.
+That is the same mechanism this app draws orbs for: Claude Code spawns each
+member as its own `claude` process carrying `--agent-name`, `--team-name` and
+`--parent-session-id`, and `AgentTeam.cs` reads the last of those straight off
+the process to link a member to its lead — deliberately not out of the
+transcript, so a team that has gone quiet still draws its arrows. Building Claude Buddy with the thing Claude Buddy visualises is
+deliberate — a team whose shape looks wrong on the board is a bug report about
+the app, and you get it for free.
+
+The roles, and who hands to whom:
+
+- **Product manager** — writes the requirement, owns the ticket's status, and
+  makes the final call on done.
+- **Architect** and **engineer** — take a refined ticket and build it. Spawn as
+  many of each as the work genuinely splits into; one per independent surface
+  beats one agent doing all of them in sequence.
+- **QA** — tests what the engineers build and hands failures back. A loop, not a
+  gate at the end: build a piece, test a piece, send it back, repeat until QA
+  has nothing left to return.
+
+### Product manager: requirement first, then plan
+
+The PM agent creates the requirement in CB as a **`Feature`** and leaves it in
+**Refinement**, which is where CB's workflow puts a new issue anyway. CB's issue
+types are `Epic`, `Feature`, `Story`, `Task`, `Bug` and `Subtask` (one word, no
+hyphen); `Feature` sits at the same level as `Story` rather than above it, so an
+`Epic` is still what groups a multi-ticket effort.
+
+**CB's board has four columns, and they are now confirmed** — read off CB-1, the
+first ticket filed, which is what this paragraph used to ask for. They are
+**Refinement → Development → Testing → Done**, with transition ids 11, 21, 31 and
+41; every transition is global, so any status can be reached from any other. The
+name this file guessed was "Refining", which is a status on project FMN and not
+one CB has: a team-managed project owns its workflow separately, and the guess
+was wrong. Nothing else here needed correcting.
+
+Then the PM writes a plan, and **plans on a stronger model than the one that
+will implement it.** Planning is where a wrong decision is cheapest to fix and
+most expensive to miss, so spend the capability there and let implementation run
+cheaper:
+
+| Feature | Plan with | Implement with |
+| --- | --- | --- |
+| Complex — a new subsystem, a cross-platform surface, anything touching the hook or transcript contracts | `fable` | `opus` or `sonnet` |
+| Simpler — a setting, a bounded UI change, a fix with an obvious shape | `opus` or `sonnet` | `sonnet` |
+
+Those are the `model:` values the Agent and Workflow tools accept (`fable`,
+`opus`, `sonnet`, `haiku`). `effort:` is the other dial and moves the same way —
+high while planning, lower for the mechanical stages afterwards.
+
+**If the PM is not confident the requirement and plan are enough to build from
+autonomously, it asks a human before spending a team on it.** Ask on GitHub,
+against the repo, with a link to the CB ticket — and because this repo is public
+while the Jira site is not, put enough of the requirement in the comment that
+the question stands on its own for someone who cannot open the link. Repo admins
+are the escalation point (`wtvamp` and `lunarjuice` at the time of writing;
+`gh api repos/Uplift-Foundation/Claude-Buddy/collaborators` prints the current
+list).
+
+If it *is* confident, it hands straight to the architects and engineers, and the
+feature proceeds without a human in the loop.
+
+### Build and QA, in a loop
+
+Engineers and architects build, QA agents test, and the work goes back and forth
+until it stops coming back. The substance of QA's half is **Every feature ships
+with its tests** below — unit, integration and UI, covering 100% of the lines
+the branch adds — so "QA passed" means those exist and are green, not that
+somebody had a look.
+
+**A feature works on Windows and macOS, or it is not a feature.** CI enforces
+the shape of that already: the matrix is `macos-latest`/`osx-arm64` and
+`windows-latest`/`win-x64`, and every suite runs on both legs. Parity is more
+than a green build, though — a feature no install path wires up is equally
+unfinished. Before calling it done, check `tools/build-macos-dmg.sh`,
+`tools/build-macos-app.sh`'s Resources copy, `tools/ClaudeBuddy.iss`,
+`tools/install-hooks.sh`/`.ps1` and the README's install section, and satisfy
+yourself that any platform-specific gate is real (WSL) rather than accidental.
+
+### PR, screenshots, and the call on done
+
+The feature goes up as a PR against `develop`, per **Pull requests** below.
+
+**Don't attach screenshots by hand — they are already automatic.** `ci.yml`
+captures a PNG per `tests/UiScreenshots` scenario on both runners;
+`publish-screenshots.yml` then picks those artifacts up on a `workflow_run`
+trigger, pushes them to the `screenshots` branch and comments on the PR with
+real `raw.githubusercontent.com` image URLs, labelled per rid. (The two-workflow
+split is not stylistic: a `pull_request` run from a fork gets a read-only token
+and every PR here is one. Both files' header comments have the full story.) A
+feature with a visible surface adds its capture to that suite, and the PR
+comment is what everyone reviews.
+
+The PM agent reviews that comment — **both** rids, since a macOS-only
+implementation shows itself precisely there — and **if it can approve the
+feature as done autonomously, it should**, moving the ticket accordingly.
+
+If it cannot, it asks a human to pull the branch, install it and approve by
+hand:
+
+- **If someone is driving the feature in Claude Code**, ask them in the terminal.
+  They are already there and the round trip costs seconds.
+- **If nobody is watching the terminal**, ask on GitHub, on the PR.
+
+Either way, name the specific thing you could not confirm from the screenshots.
+"The Windows flyout renders, but I can't tell from the capture whether the mic
+button is enabled" is a request someone can settle in a minute. "Needs manual
+approval" is not.
+
 ## Branching: gitflow
 
 Two long-lived branches:
@@ -60,6 +190,11 @@ Say in the PR body what was actually verified and what wasn't. This project
 keeps that distinction deliberately — see `docs/*-findings.md`, which separate
 "confirmed on a real machine" from "assumed to work". A PR that claims more than
 was tested costs more than one that admits a gap.
+
+That includes the tests — see **Every feature ships with its tests** below. A PR
+that adds or changes behaviour without covering it isn't ready to review,
+however well the behaviour itself works, and a line the tests can't reach is
+named in the body rather than left for the next person to discover.
 
 **Don't rename a pushed branch to fix its name.** GitHub closes the open PR
 instead of retargeting it, and reopening is refused once the old head ref is
@@ -114,6 +249,77 @@ has the full story.
 `<Version>` in `ClaudeBuddy.csproj` is the single source of truth for the
 shipped version — the packaging scripts and the release workflow parse it out of
 there.
+
+## Every feature ships with its tests
+
+**A feature request is not finished when the feature works. It is finished when
+the feature works and the code that makes it work is covered.** Tests land in
+the same branch as the behaviour they cover — not a follow-up, not an issue
+filed against `develop` — and the target for the lines that branch adds or
+changes is **100%**: every new method, every arm of every new conditional,
+every error path you wrote a `catch` for.
+
+Cover it at all three levels the suites already separate, rather than only the
+one that is easiest to reach from where the change happens to live:
+
+- **Unit** (`tests/UnitTests`) — the decisions. If the change added a rule about
+  which orb wins, which name is used, or where something is drawn, that rule
+  belongs in a function with no window and no settings behind it, and that
+  function gets a case per outcome. If new logic can't be reached without
+  constructing a window, that is a seam to fix before writing the test, not a
+  reason to skip it — the same argument that keeps `OrbArrangement`, `OrbGlyph`
+  and both transcript parsers pure.
+- **Integration** (`tests/IntegrationTests`) — the seams with what this process
+  does not own: the hook scripts run as real subprocesses, files on disk,
+  settings round-tripped through a real file. Anything touching a format
+  someone else defines is covered here *as well as* by a unit test of the
+  parsing, because the two fail differently — the parser gets a field wrong,
+  the seam gets the whole exchange wrong.
+- **UI** (`tests/UiTests`) — the headless Avalonia path. A new window, panel,
+  control, binding or click handler gets driven with a synthesized click or a
+  real `UpdateFrom`, and asserted on what a user would have seen. `ChatPanel`'s
+  `FakeChatSession` is the pattern for anything that would otherwise need a
+  live session behind it. A new *visible* surface also gets a capture in
+  `tests/UiScreenshots`, which renders through real Skia rather than the null
+  renderer; its cases are hand-written one per scenario, so adding a `UiTests`
+  scenario does not add its screenshot for you.
+
+A change to geometry, transcript parsing or orb initials extends the three
+console suites too — `dotnet test tests/Tests.sln` does not run them, and CI
+failing on `ArrangementTests` after a green `dotnet test` is a bad way to find
+that out. CI runs every suite on both runners, so a test that only passes on
+the machine you wrote it on blocks the build.
+
+**100% means the diff, not the repository.** The app is nowhere near it — as of
+this writing `UnitTests` alone covers about 3% of the assembly, and whole areas
+of it (`TerminalFocuser`, the tray, the installers) make real
+`tmux`/`ps`/`osascript` calls that a headless runner must not execute. Holding
+new work to 100% is how that number climbs without a rewrite; holding the
+existing repository to it would make the rule something everybody quietly
+ignores, which is worse than not having one.
+
+Where a line genuinely cannot be covered — an OS call with no seam, a `catch`
+for something only the other platform throws — **name it in the PR body and say
+why**, in the same voice this project already uses to separate "confirmed on a
+real machine" from "assumed to work". An uncovered line that is named is a known
+gap; an uncovered line that isn't is a claim about the suite that isn't true.
+
+To see the number:
+
+```bash
+dotnet add tests/UnitTests/ClaudeBuddy.UnitTests.csproj package coverlet.collector
+dotnet test tests/UnitTests --collect:"XPlat Code Coverage"
+# tests/UnitTests/TestResults/<guid>/coverage.cobertura.xml
+```
+
+**Nothing in the repository collects coverage today, and the flag fails
+silently without that package.** `--collect:"XPlat Code Coverage"` against a
+project with no `coverlet.collector` reference creates an empty `TestResults/`
+directory, prints no warning and exits 0 — a run that measured nothing, and
+reads exactly like one that measured everything. Add the package to whichever
+suite you are measuring and take it back out before you push, unless you are
+deliberately wiring collection into all three suites and CI, which is its own
+change and needs its own reasoning.
 
 ## Testing UI behavior
 
@@ -177,8 +383,32 @@ One command runs all three: `dotnet test tests/Tests.sln`. They join the three
 suites above rather than replacing them — `Tests.sln` holds only the xUnit
 projects, so it can't accidentally try to `dotnet test` an exe with no test
 SDK reference, and `claudeBuddy.sln` stays app-only. CI (`.github/workflows/ci.yml`)
-runs all six, on both runners, before packaging — a failing test blocks the
+runs every one of them, plus `tests/UiScreenshots`, on both runners, before
+packaging — a failing test blocks the
 build the same way a failed `dotnet publish` already did.
+
+**Run the UI suite in Release before pushing, because CI does and
+`dotnet test` does not.**
+
+```bash
+dotnet test tests/Tests.sln            # Debug — what everyone runs
+dotnet test tests/UiTests -c Release   # what CI actually runs
+```
+
+`dotnet test` defaults to Debug; `ci.yml` builds Release. That gap is not
+theoretical and it is not about optimisation changing behaviour — Release simply
+runs faster, which reorders a parallel suite and closes the gaps between writes
+to a scratch directory. CB-3 landed six `SessionScanTests` that were green in
+Debug on three separate machines and red in Release on both CI legs, every
+attempt: no exception in the app, just a scan that found no sessions, because a
+timing assumption held at Debug speed and not at Release speed.
+
+The other three suites have been clean in both so far. It is `tests/UiTests` that
+is worth the extra half-minute, being the one with a dispatcher, real timers and
+process-wide statics in it. If a test passes in one configuration and not the
+other, the answer is to make it independent of what else is running — never a
+sleep, never a widened tolerance. This branch has fixed four flakes of that shape
+and each commit says why.
 
 They reference `ClaudeBuddy.csproj` directly with a `<ProjectReference>`
 rather than compiling individual files in with `<Compile Include>` the way
@@ -232,12 +462,92 @@ elsewhere. Each project's `TestBootstrap.cs` sets `CLAUDE_BUDDY_SETTINGS_DIR`
 to a fresh temp directory via a `[ModuleInitializer]`, before any test can
 run and before any settings static constructor can fire.
 
+## Coverage
+
+```bash
+./tools/coverage.sh                            # whole-app line and branch coverage
+./tools/coverage.sh --base upstream/develop    # ...and just the lines you added
+```
+
+**Two collectors, not one, and it has to stay that way.** `tests/UnitTests` and
+`tests/IntegrationTests` run on VSTest and use `coverlet.collector`;
+`tests/UiTests` and `tests/UiScreenshots` run on the Microsoft Testing Platform
+(both moved to xUnit v3 for `Avalonia.Headless.XUnit` 12.x — see their csprojs)
+where VSTest data collectors do not apply at all, so they use
+`Microsoft.Testing.Extensions.CodeCoverage`'s own coverage switch instead. That
+package is **pinned to 17.14.2** in both, for the same reason everything else in
+those csprojs is pinned: 18.x depends on `Microsoft.Testing.Platform` 2.x while
+xunit.v3 3.2.2 brings the `mtp-v1` packages, and the mix throws
+`TypeLoadException` for `IDataConsumer` before one test runs. Bump xunit.v3 and
+you have to re-check both pins.
+
+That leaves four cobertura files measuring the *same* assembly, which is what
+`tools/merge-coverage.py` is for: a line counts as covered if **any** suite
+covered it. Adding the reports up instead is wrong in both directions at once —
+it double-counts the denominator while undercounting the numerator, since a
+line only a UI test reaches is reported unhit by the other three.
+
+`tests/UiScreenshots` counts as of CB-3 and did not before. CI has always run
+it, and it is the only suite that draws through **real Skia** rather than the
+null renderer — so a few things are reachable only there, a bitmap actually
+written to disk most obviously (`ClaudeDesktopBundles.WriteTinted`, whose pixel
+maths is tested there for exactly this reason). Leaving it out meant those lines
+were verified and counted nowhere, which is the same invisible-verification
+problem the console suites had.
+
+Four things the number does not say, worth remembering before quoting it:
+
+- **The number is only reproducible because the settings-touching UI classes are
+  serialised — keep them that way.** `ClaudeBuddySettings` is a process-wide
+  static and nearly every visual class reads it while being constructed, so two
+  test classes running in parallel with one of them flipping a setting do not
+  race to a failure, they race to a *different set of executed lines*. Before
+  CB-3 serialised them, three consecutive runs of `tests/UiTests` over an
+  identical binary reported 1914, 2024 and 1914 covered lines in
+  `SettingsWindow.cs`. That swing is bigger than most real changes, so it reads
+  as one — and it cost this ticket an hour of chasing a 145-line "regression"
+  that was scheduling. Anything new that reads or writes settings joins
+  `[Collection("Settings")]` in `tests/UiTests/SettingsCollection.cs`, whose
+  comment has the rest of the story.
+
+- **`--base` is the number that matters when reviewing a change.** A file-level
+  percentage is dominated by whatever was already in the file; the added-lines
+  figure is the one that says whether the new code is tested.
+- **The three console suites still contribute nothing to it** as suites —
+  `ArrangementTests`, `GlyphTests` and `TranscriptTests` are plain exes, not
+  test-SDK projects. Their *cases* do count now, because CB-3 moved each one's
+  matrix into a class that `tests/UnitTests` compiles in and runs (see
+  `ArrangementSweep`, `GlyphSuite`, `TranscriptSuite`), so `OrbArrangement` no
+  longer reads 0% while being the most exhaustively verified file in the repo.
+  Running the exes is still the way to get the grouped failure report.
+- **What has been excluded is printed next to the number.** An excluded file and
+  a deleted one look identical in a report, and a percentage can be walked to
+  100% by excluding whatever refuses to be covered. `merge-coverage.py` therefore
+  reads the attributes back out of the sources and reports files held out
+  entirely, further sites inside measured files, and files absent for no stated
+  reason at all. Read the headline as coverage **of what remains**.
+- **The two engines disagree about `[ExcludeFromCodeCoverage]` on a *method*, and
+  the merge compensates.** coverlet honours it — an excluded method's body is not
+  instrumented at all — while `Microsoft.CodeCoverage`, which both MTP suites
+  use, instruments it anyway and reports every line unhit. Both honour it on a
+  *class*, which is how the gap went unnoticed until CB-3 had 157 member-level
+  exclusions for it to show up in. So the merge is not a plain union:
+  **coverlet's view of which lines exist is the authority**, and the MTP reports
+  contribute hits for those lines only. If you ever change that, an exclusion on
+  a method silently stops meaning anything.
+
 Everything else about orb behavior is still verified by running the app.
 Two things make that survivable:
 
 - The status directory comes from the temp path, so `TMPDIR=<dir>` plus
   hand-written `<session-id>.txt` files gives a second instance its own fake
   sessions without touching real ones.
+- The cloned-bundle cache honours `CLAUDE_BUDDY_BUNDLE_ROOT`, added by CB-3 for
+  the same reason: without it, the only place a test of `ClaudeDesktopBundles`
+  could write is the real `~/Library/Application Support/ClaudeBuddy/bundles` —
+  the live cache, holding real cloned `.app` bundles whose icons a user is
+  looking at. That the seam did not exist is the whole reason nothing in that
+  file was covered.
 - Settings now honour `CLAUDE_BUDDY_SETTINGS_DIR`, an env-var override
   checked before `SpecialFolder.ApplicationData` — the same pattern as
   `CLAUDE_BUDDY_PROFILE_ROOT` in `ClaudeDesktopManager.cs`. Without it a test

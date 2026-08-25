@@ -100,6 +100,43 @@ public class OrbWindowUpdateFromTests
     }
 
     [AvaloniaFact]
+    public void RemoteKindShowsTheTwoWayArrowBadge()
+    {
+        // BadgeFor(SessionKind.Remote) => ("\u21C4", "another machine").
+        //
+        // This badge carries more weight than the gateway ones beside it: a
+        // remote orb is the only orb whose click opens a chat instead of jumping
+        // to a terminal, on a screen where almost everything else is local. The
+        // mark is how that is knowable before clicking rather than after.
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = SessionKind.Remote;
+
+        orb.UpdateFrom(status);
+
+        Assert.Equal("another machine", orb.KindLabel);
+        Assert.Equal("\u21C4", orb.KindGlyphText);
+    }
+
+    // A remote session has no terminal on this machine, so the orb must not
+    // present one. Focus() already returns early for anything that isn't a
+    // local CLI, and IsLocalCli being false is what makes that fire — asserted
+    // here as well as in the unit suite because this is the orb's own contract:
+    // this status must never be treated as clickable-through to a pane.
+    [AvaloniaFact]
+    public void ARemoteStatusIsNeverTreatedAsHavingATerminal()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Source = SessionSource.RemoteControl;
+        status.Kind = SessionKind.Remote;
+
+        orb.UpdateFrom(status);
+
+        Assert.False(status.IsLocalCli);
+    }
+
+    [AvaloniaFact]
     public void DirectKindShowsTheAtBadge()
     {
         var orb = new OrbWindow(Guid.NewGuid().ToString());
@@ -123,6 +160,106 @@ public class OrbWindowUpdateFromTests
 
         Assert.Equal("cron", orb.KindLabel);
         Assert.Equal("⏱", orb.KindGlyphText);
+    }
+
+    // --- the heartbeat heart ---------------------------------------------
+    // Which sessions get one is OpenClawHeartbeat's decision and is tested
+    // without a screen in tests/TranscriptTests. What is worth asserting here is
+    // the other half: that the status flag actually reaches the badge, and that
+    // the badge is *independent* of the kind badge beside it — the two answer
+    // different questions and a heartbeat session can want both.
+
+    private static Border Heart(OrbWindow orb) => orb.FindControl<Border>("HeartBadge")!;
+
+    [AvaloniaFact]
+    public void AHeartbeatSessionWearsABeatingHeart()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Heartbeat = true;
+
+        orb.UpdateFrom(status);
+
+        Assert.True(Heart(orb).IsVisible);
+        Assert.True(orb.IsHeartbeat);
+    }
+
+    [AvaloniaFact]
+    public void AnOrdinarySessionWearsNoHeart()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+
+        orb.UpdateFrom(PlainStatus());
+
+        Assert.False(Heart(orb).IsVisible);
+        Assert.False(orb.IsHeartbeat);
+    }
+
+    [AvaloniaFact]
+    public void TheHeartGoesAwayWhenTheSessionStopsBeingOne()
+    {
+        // The gateway can stop reporting a session as heartbeat-driven — the
+        // switch in Settings does exactly that. ApplyHeartbeat returns early when
+        // nothing moved, so this is the path that early return has to not break.
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Heartbeat = true;
+        orb.UpdateFrom(status);
+
+        status.Heartbeat = false;
+        orb.UpdateFrom(status);
+
+        Assert.False(Heart(orb).IsVisible);
+        Assert.False(orb.IsHeartbeat);
+    }
+
+    [AvaloniaFact]
+    public void TheHeartAndTheKindBadgeAreIndependent()
+    {
+        // A heartbeat retargeted at a channel is still a channel, and a channel
+        // that isn't heartbeat-driven must not grow a heart. Asserted together
+        // because the two badges share a parent grid and nothing else.
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = SessionKind.Channel;
+        status.Heartbeat = true;
+
+        orb.UpdateFrom(status);
+
+        Assert.Equal("channel", orb.KindLabel);
+        Assert.True(Heart(orb).IsVisible);
+
+        status.Heartbeat = false;
+        orb.UpdateFrom(status);
+
+        Assert.Equal("channel", orb.KindLabel);
+        Assert.False(Heart(orb).IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void AHeartbeatOrbInATeamKeepsItsHeartOnTheSmallerRim()
+    {
+        // A team member is drawn at 0.72, and both badges are repositioned onto
+        // the smaller circle's rim by hand (SetTeamRole). The heart's margin is
+        // the kind badge's sum mirrored into the opposite corner, so if one is
+        // right and the other was left behind, these two disagree.
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Heartbeat = true;
+        status.Lead = "some-other-session";
+
+        orb.UpdateFrom(status);
+
+        var heart = Heart(orb);
+        var kind = orb.FindControl<Border>("KindBadge")!;
+
+        Assert.True(heart.IsVisible);
+        Assert.Equal(kind.Width, heart.Width);
+        Assert.Equal(kind.Margin.Right, heart.Margin.Right);
+
+        // Mirrored: the kind badge hangs off the bottom, the heart off the top.
+        Assert.Equal(kind.Margin.Bottom, heart.Margin.Top);
+        Assert.Equal(0, heart.Margin.Bottom);
     }
 
     [AvaloniaFact]
