@@ -69,6 +69,29 @@ namespace ClaudeBuddy
 
                 new SessionManager().Start();
 
+                // Claude Desktop's URL schemes resolve to a bundle *id*, and
+                // every tinted clone shares Claude Desktop's — so a sign-in
+                // callback cannot say which profile it belongs to and always
+                // lands in Default. Claude Buddy claims the schemes and
+                // forwards each link to the right instance instead; see
+                // ClaudeDesktopUrlRouting. A no-op off macOS, and a no-op with
+                // fewer than two profiles, where there is nothing to route.
+                ClaudeDesktopUrlRouter.Start();
+
+                // The other half of that: the links themselves. Avalonia
+                // surfaces macOS protocol activation here, so no Apple Event
+                // plumbing of our own is needed.
+                if (ApplicationLifetime is IActivatableLifetime activatable)
+                {
+                    activatable.Activated += (_, args) =>
+                    {
+                        if (args is ProtocolActivatedEventArgs protocol)
+                        {
+                            ClaudeDesktopUrlRouter.Handle(protocol.Uri.ToString());
+                        }
+                    };
+                }
+
                 // An upgrade leaves the previous release's speech engine on disk
                 // and this build looking for its own. Speaking still works from
                 // the old one, so nothing here is urgent — but the matching

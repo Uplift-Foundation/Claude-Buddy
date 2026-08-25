@@ -318,7 +318,7 @@ namespace ClaudeBuddy
             // after them with its own profiles, which is where someone looking
             // for them would go first.
             root.Children.Add(Group("Claude Desktop",
-                Card(ClaudeDesktopTintRow()),
+                Card(ClaudeDesktopRows(OperatingSystem.IsMacOS())),
                 ProfilesCard()));
 
             // macOS preference windows are dismissed by the window's own close
@@ -407,9 +407,31 @@ namespace ClaudeBuddy
         // --- Voice input ---
         // --- Auto-organize ---
 
-        // internal so a test can drive the switch directly.
+        // internal so a test can drive the switches directly, and taking the
+        // platform rather than asking for it so both shapes of this group are
+        // reachable from either machine — the same reason
+        // ClaudeDesktopManager.LogCandidates takes one.
+        internal Control[] ClaudeDesktopRows(bool macOs)
+        {
+            var rows = new List<Control> { ClaudeDesktopTintRow() };
+
+            // macOS only: this is about LaunchServices, and the collision it
+            // works around is caused by the tinted clones, which are a macOS
+            // feature with no Windows analogue.
+            if (macOs) rows.Add(ClaudeDesktopUrlRoutingRow());
+
+            return rows.ToArray();
+        }
+
         internal Control ClaudeDesktopTintRow() => Row("Tint the active window",
             Switch(ClaudeDesktopOverlay.Enabled, ClaudeDesktopOverlay.SetEnabled));
+
+        internal Control ClaudeDesktopUrlRoutingRow() => Row(
+            "Send Claude links to the right profile",
+            Switch(ClaudeBuddySettings.RouteClaudeUrls, ClaudeDesktopUrlRouter.SetEnabled),
+            "Claude Desktop's sign-in callback resolves to a bundle id that every "
+            + "profile shares, so without this it opens the Default profile whichever "
+            + "profile you were signing in to. Only used when you have more than one.");
 
         // --- what a click does ---
 

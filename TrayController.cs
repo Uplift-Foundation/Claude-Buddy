@@ -114,6 +114,12 @@ namespace ClaudeBuddy
             // latency, not something the section depends on for correctness.
             ClaudeDesktopManager.KickRefresh();
 
+            // Which Claude Desktop instance the user is in, sampled on the same
+            // tick. The URL router needs it to answer "which profile asked for
+            // this sign-in callback" once the browser has taken focus and the
+            // frontmost app is no longer Claude at all.
+            ClaudeDesktopUrlRouter.NoteFrontmost();
+
             Apply(sessions);
         }
 
