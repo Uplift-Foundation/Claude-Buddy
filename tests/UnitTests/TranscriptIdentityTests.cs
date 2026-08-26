@@ -161,6 +161,41 @@ public class TranscriptIdentityTests
     }
 
     [Fact]
+    public void AnUnusableRecordDoesNotEraseAGoodAnswerBeforeIt()
+    {
+        // "Newest wins" has to mean newest *usable*, for all three record
+        // types. A truncated or empty row appended after a real one must not
+        // take a name or a colour back off an orb that already had it — which
+        // is the same instinct as never overwriting what the hook recorded,
+        // one level down.
+        var identity = TranscriptIdentity.From(new[]
+        {
+            "{\"type\":\"custom-title\",\"customTitle\":\"kept\"}",
+            "{\"type\":\"agent-color\",\"agentColor\":\"teal\"}",
+            "{\"type\":\"custom-title\",\"customTitle\":\"\"}",
+            "{\"type\":\"agent-color\",\"agentColor\":\"000000\"}",
+            "{\"type\":\"custom-title\",\"customTitle\":\"truncated",
+        });
+
+        Assert.Equal("kept", identity.Title);
+        Assert.Equal("teal", identity.Color);
+    }
+
+    [Fact]
+    public void AnUnusableGeneratedTitleDoesNotEraseAGoodOneBeforeIt()
+    {
+        // The same arm on the ai-title branch, which no other case reaches:
+        // there is nothing to fall back to but the earlier generated name.
+        var identity = TranscriptIdentity.From(new[]
+        {
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Fixing the blank orb\"}",
+            "{\"type\":\"ai-title\",\"aiTitle\":\"   \"}",
+        });
+
+        Assert.Equal("Fixing the blank orb", identity.Title);
+    }
+
+    [Fact]
     public void AnEmptyTranscriptIsEmpty()
     {
         Assert.True(TranscriptIdentity.From(new string[0]).IsEmpty);
