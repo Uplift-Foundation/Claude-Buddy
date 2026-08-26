@@ -510,29 +510,16 @@ namespace ClaudeBuddy
         // --- sending ---
 
         public string ComposerHint =>
-            ComposerHintFor(TerminalFocuser.CanSendQuietly(_status), _format.ReplyEnabled(),
-                            TerminalFocuser.PaneEvidenceIsCurrent(_status));
+            ComposerHintFor(TerminalFocuser.CanSendQuietly(_status), _format.ReplyEnabled());
 
         // Both answers are reachable from a test this way, where they were not
         // before: whether there is a pane to type into depends on a real tmux and
         // a real session, so asking it here and deciding somewhere else is what
         // makes "no pane" something a test can state rather than something the
         // machine happens to be.
-        // Precedence, and each step is a different problem:
-        //
-        // "no pane" first, unchanged, because it is about whether there is
-        // anywhere to type at all and the other two presuppose there is.
-        //
-        // Then whether the pane can still be believed to hold this conversation.
-        // Ahead of the reply switch deliberately: replying being off is a
-        // setting the user can change, where this is the app saying it does not
-        // know enough to type safely, and offering to send when the destination
-        // is in doubt would be the wrong thing to advertise.
-        internal static string ComposerHintFor(
-            bool canSendQuietly, bool replyEnabled, bool paneEvidenceIsCurrent)
+        internal static string ComposerHintFor(bool canSendQuietly, bool replyEnabled)
         {
             if (!canSendQuietly) return "No pane to type into";
-            if (!paneEvidenceIsCurrent) return "Quiet too long — reply in the terminal";
             return replyEnabled ? "Message…" : "Replying is off";
         }
 
@@ -618,12 +605,6 @@ namespace ClaudeBuddy
                 return;
             }
 
-            if (!TerminalFocuser.PaneEvidenceIsCurrent(_status))
-            {
-                Note(StalePaneNote);
-                return;
-            }
-
             await TypeIntoTerminalAsync(typedText, displayText, imageBytes);
         }
 
@@ -639,19 +620,6 @@ namespace ClaudeBuddy
         // in its own terminal, where a missing tmux binary cannot be worked
         // around at all. Telling someone to go to a terminal that isn't there is
         // the failure this distinction exists to avoid.
-        // Says what it does not know, rather than blaming the session. The pane
-        // is real and the session may well be fine — what has gone stale is this
-        // app's evidence that the two still belong together, and the honest
-        // answer is that it will not guess about where a sentence goes.
-        //
-        // Names the terminal as the way through, because it is: typing there
-        // fires a hook, the status file is rewritten, and the orb goes back to
-        // being typeable within a scan.
-        internal const string StalePaneNote =
-            "This session has been quiet too long for me to be sure its tmux pane still "
-            + "holds this conversation, so I didn't type. Reply in the terminal — that "
-            + "refreshes what I know and the composer works again.";
-
         internal static string NoPaneNote(string? tmuxPane) =>
             string.IsNullOrEmpty(tmuxPane)
                 ? "This session isn't in a tmux pane, so there is nowhere to type without "

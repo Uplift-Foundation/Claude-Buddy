@@ -1748,13 +1748,6 @@ namespace ClaudeBuddy
             return false;
         }
 
-        // Only the clock lives here; the rule is in TerminalScripts, which is not
-        // excluded from coverage.
-        internal static bool CanJumpToTerminal(SessionStatus status) =>
-            TerminalScripts.CanJumpToPane(
-                status.TmuxPane, status.Written, DateTime.UtcNow,
-                TerminalScripts.PaneEvidenceMaxAge);
-
         internal static string ActionFor(int clicks) => clicks switch
         {
             1 => ClaudeBuddySettings.ClickAction,
@@ -1791,18 +1784,6 @@ namespace ClaudeBuddy
         internal void GoToSession()
         {
             if (!(_lastStatus?.IsLocalCli ?? false) && TryOpenRemoteChat()) return;
-
-            // Don't jump to a pane this app's information is too old to describe
-            // — see TerminalScripts.CanJumpToPane. The chat panel opens instead,
-            // rather than nothing happening: its composer says why in words, and
-            // a click that silently did nothing would read as the orb being
-            // broken, which is how the underlying problem was described in the
-            // first place.
-            if (_lastStatus is not null && !CanJumpToTerminal(_lastStatus))
-            {
-                OpenChat();
-                return;
-            }
 
             TerminalFocuser.Focus(
                 _lastStatus,

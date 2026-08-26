@@ -198,17 +198,6 @@ namespace ClaudeBuddy
             && !string.IsNullOrEmpty(status.TmuxPane)
             && ResolveTmuxBinary(status.TmuxBin) is not null;
 
-        // Whether the pane this session names can still be believed to hold it.
-        //
-        // The rule is in TerminalScripts, not here, for the reason this class's
-        // own exclusion comment gives: it decides something and touches no OS,
-        // so leaving it in here would make it untestable by association. This
-        // is only the call that reads the clock.
-        public static bool PaneEvidenceIsCurrent(SessionStatus? status) =>
-            status is null
-            || TerminalScripts.PaneEvidenceIsCurrent(
-                status.Written, DateTime.UtcNow, TerminalScripts.PaneEvidenceMaxAge);
-
         // Types the text and presses Enter. The Enter is the whole difference
         // from SendText above, and it is why this is reached only from a Send
         // button behind a setting that is off by default: dictation is a typing
