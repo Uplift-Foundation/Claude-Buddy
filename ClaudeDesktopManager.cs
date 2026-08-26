@@ -656,7 +656,22 @@ namespace ClaudeBuddy
             // nothing on Windows for this rule to find.
             if (instance.BundlePath is not { Length: > 0 } bundle) return null;
 
-            var directory = Path.GetDirectoryName(bundle.TrimEnd('/'));
+            // Normalise before taking it apart. The path arrives from another
+            // process through proc_pidpath rather than from PathFor, and
+            // decomposing it by hand reads any "." or ".." component as a
+            // directory name: "<root>/./Claude.app" was answered with a profile
+            // called ".", which is a name no profile has and so would have
+            // failed silently in Compose rather than visibly here. Found by the
+            // test that went looking for the last uncovered branch.
+            //
+            // GetFullPath, not Canonicalise: this must stay pure. Resolving
+            // symlinks would put a filesystem call in a rule that runs for every
+            // process on every scan, and the caller compares against a root that
+            // has not been symlink-resolved either.
+            var full = SafeFullPath(bundle);
+            if (full is null) return null;
+
+            var directory = Path.GetDirectoryName(full.TrimEnd('/'));
             if (directory is null) return null;
 
             var parent = Path.GetDirectoryName(directory);

@@ -126,6 +126,8 @@ public class OrphanedInstanceTests
     [InlineData("/Claude.app")]
     [InlineData("Claude.app")]
     [InlineData("")]
+    [InlineData(Root + "//Claude.app")]
+    [InlineData(Root + "/./Claude.app")]
     public void APathWithNoRoomAboveItIsNotAClone(string bundle)
     {
         Assert.Null(ClaudeDesktopManager.OrphanedCloneFolder(
