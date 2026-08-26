@@ -28,6 +28,68 @@ namespace ClaudeBuddy
         //
         // -S pins the server: several can coexist (plain tmux, tmuxinator, a -L
         // named socket), and the pane id is only unique within one.
+        // How old the app's evidence may be before it refuses to type into a
+        // pane. Deliberately not the "Keep orbs for" lifetime — see below.
+        internal static readonly TimeSpan PaneEvidenceMaxAge = TimeSpan.FromMinutes(30);
+
+        // Whether a status file is recent enough to be believed about which
+        // conversation is sitting in the tmux pane it names.
+        //
+        // This belongs in this file more squarely than anything else in it. The
+        // header above says a builder that drops a clause "does not display
+        // something incorrect — it presses something, somewhere else", and two
+        // of the loops here exist because that was reported. This rule exists
+        // because the same thing happened one level up: not a script pressing
+        // the wrong key, but a whole sentence typed into a conversation the user
+        // had not chosen.
+        //
+        // A status file is the app's *only* reason to think a session owns a
+        // pane, and a pane is not owned for the life of a process. Claude Code
+        // mints a new session id on /clear, on resume, and when a conversation
+        // migrates between processes, and the hook writes a new file each time
+        // without deleting the old one. So a stale file can name a pane that has
+        // moved on to something else entirely.
+        //
+        // Measured, and the reason this exists: a status file last written at
+        // 10:28 still named pane %8, whose only claude — alive, started 10:27 —
+        // was by 14:08 four hours into a different conversation, one sharing
+        // zero message uuids with it. CanSendQuietly was true and *correct*: the
+        // pane was real and tmux was real. So the orb typed, the sentence landed
+        // in the other conversation, and the orb's own panel went on reading a
+        // transcript that had stopped growing at 10:31. It reads as "the orb
+        // isn't responding", which is a kinder symptom than what happened,
+        // because the text went somewhere.
+        //
+        // Nothing in the two files linked them — different ids, different pids,
+        // and only the stale one claimed a pane — so no amount of grouping could
+        // pair them. The staleness of the evidence is the only signal there is.
+        //
+        // Kept apart from the orb-lifetime setting on purpose. "Keep orbs for:
+        // forever" is the user asking to *see* quiet sessions, which is why that
+        // orb was on screen and is entirely reasonable. It is not them saying
+        // the app may type into a pane on four-hour-old information. Visibility
+        // and delivery are different promises, and only one of them is
+        // destructive to get wrong.
+        //
+        // Generous, because a session in use refreshes this constantly: the hook
+        // fires on every prompt and every stop, so anything touched in the last
+        // half hour has a fresh file. When it does fall the wrong way the cost is
+        // one terminal round-trip, and the composer says which and why rather
+        // than failing silently — after which the file is fresh and the orb
+        // types as normal.
+        internal static bool PaneEvidenceIsCurrent(DateTime written, DateTime now, TimeSpan maxAge)
+        {
+            // No recorded time is not evidence of staleness. It is a status this
+            // app built rather than read — ResetSessionToIdle, a gateway
+            // stand-in, a test fixture — and refusing those would stop typing
+            // for reasons that have nothing to do with panes.
+            if (written == default) return true;
+
+            // A file written a moment ago and one written slightly in the future
+            // both land here. Clock skew ahead is not evidence of being behind.
+            return now - written <= maxAge;
+        }
+
         internal static string[] TmuxArgs(string? socket, params string[] args)
         {
             if (string.IsNullOrEmpty(socket)) return args;

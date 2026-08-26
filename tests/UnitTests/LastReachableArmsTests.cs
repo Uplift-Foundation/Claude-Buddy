@@ -539,7 +539,7 @@ public class LastReachableArmsTests
         var now = new DateTime(2026, 8, 26, 14, 17, 0, DateTimeKind.Utc);
         var window = TimeSpan.FromMinutes(30);
 
-        Assert.False(TerminalFocuser.PaneEvidenceIsCurrent(
+        Assert.False(TerminalScripts.PaneEvidenceIsCurrent(
             new DateTime(2026, 8, 26, 10, 28, 50, DateTimeKind.Utc), now, window));
     }
 
@@ -551,12 +551,12 @@ public class LastReachableArmsTests
 
         // A session being used refreshes this on every prompt and every stop,
         // so the ordinary case is seconds old, not minutes.
-        Assert.True(TerminalFocuser.PaneEvidenceIsCurrent(now.AddSeconds(-2), now, window));
+        Assert.True(TerminalScripts.PaneEvidenceIsCurrent(now.AddSeconds(-2), now, window));
 
         // Exactly at the boundary counts as current: the rule refuses only what
         // is definitely too old.
-        Assert.True(TerminalFocuser.PaneEvidenceIsCurrent(now - window, now, window));
-        Assert.False(TerminalFocuser.PaneEvidenceIsCurrent(
+        Assert.True(TerminalScripts.PaneEvidenceIsCurrent(now - window, now, window));
+        Assert.False(TerminalScripts.PaneEvidenceIsCurrent(
             now - window - TimeSpan.FromSeconds(1), now, window));
     }
 
@@ -567,7 +567,7 @@ public class LastReachableArmsTests
         // ahead is not evidence of being behind.
         var now = new DateTime(2026, 8, 26, 14, 17, 0, DateTimeKind.Utc);
 
-        Assert.True(TerminalFocuser.PaneEvidenceIsCurrent(
+        Assert.True(TerminalScripts.PaneEvidenceIsCurrent(
             now.AddMinutes(5), now, TimeSpan.FromMinutes(30)));
     }
 
@@ -577,7 +577,7 @@ public class LastReachableArmsTests
         // Not a status file this app read, but one it built: ResetSessionToIdle,
         // a gateway stand-in, a test fixture. Refusing those would stop typing
         // for reasons that have nothing to do with panes.
-        Assert.True(TerminalFocuser.PaneEvidenceIsCurrent(
+        Assert.True(TerminalScripts.PaneEvidenceIsCurrent(
             default, new DateTime(2026, 8, 26, 14, 17, 0, DateTimeKind.Utc),
             TimeSpan.FromMinutes(30)));
 
