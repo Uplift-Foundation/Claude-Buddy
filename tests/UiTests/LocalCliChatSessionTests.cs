@@ -364,6 +364,14 @@ public class LocalCliChatSessionTests : IDisposable
     // do nothing on a runner without tmux, which is the same test passing for two
     // different reasons. The setting's own behaviour is covered where it is
     // decided, in the settings suite.
+    //
+    // The stale-evidence branch ("Quiet too long — reply in the terminal") is
+    // absent for exactly that reason and not for want of trying: it sits behind
+    // the same CanSendQuietly gate, so at this level it is unreachable without a
+    // real pane. Both the rule and its precedence against the other two are
+    // asserted in tests/UnitTests — see LastReachableArmsTests' composer and
+    // pane-evidence sections, which drive it against a fixed clock rather than
+    // whatever the machine's is.
     [AvaloniaFact]
     public void ASessionWithNoPaneSaysSoRatherThanBlamingTheSetting()
     {
