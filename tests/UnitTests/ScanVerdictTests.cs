@@ -58,13 +58,39 @@ public class ScanVerdictTests
             "session-1", status, written ?? Now, Now, staleAfter,
             superseded ?? Nothing, isRunning ?? AllAlive);
 
+    // Defaults to "the transcript is there", so every case written before the
+    // NothingToShow rule existed still asks what it was asking. A status with no
+    // TranscriptPath at all cannot reach that rule anyway — which is most of
+    // them below, and is the conservative half of the rule rather than an
+    // accident of the fixtures.
     private static SessionManager.ScanVerdict Reachability(
         SessionStatus status,
         ISet<string>? leads = null,
         Func<string, bool>? isLiveJob = null,
-        string sessionId = "session-1") =>
+        string sessionId = "session-1",
+        Func<string, bool>? transcriptExists = null) =>
         SessionManager.JudgeReachability(
-            sessionId, status, leads ?? Nothing, isLiveJob ?? NoLiveJobs);
+            sessionId, status, leads ?? Nothing, isLiveJob ?? NoLiveJobs,
+            transcriptExists ?? TranscriptIsThere);
+
+    private static readonly Func<string, bool> TranscriptIsThere = _ => true;
+    private static readonly Func<string, bool> TranscriptIsGone = _ => false;
+
+    // The shape CB-9 was filed for: a background job with no terminal of its
+    // own, live in the daemon's listing, naming a transcript that was never
+    // written. Everything about it is real — this is job "evidence" off a real
+    // machine, `state: blocked`, `needs: send a prompt to start`.
+    private static SessionStatus UnpromptedJob(
+        SessionSource source = SessionSource.ClaudeCode,
+        string transcriptPath =
+            "/Users/x/.claude/projects/-Users-x-Evidence/0e043819.jsonl") =>
+        new()
+        {
+            Source = source,
+            State = "idle",
+            SessionPid = 57319,
+            TranscriptPath = transcriptPath,
+        };
 
     // --- JudgeLiveness -------------------------------------------------------
 
@@ -360,7 +386,7 @@ public class ScanVerdictTests
 
         var verdict = SessionManager.JudgeReachability(
             "openclaw:agent:main", gateway, Nothing,
-            id => { asked.Add(id); return false; });
+            id => { asked.Add(id); return false; }, TranscriptIsThere);
 
         Assert.Equal(SessionManager.ScanVerdict.Keep, verdict);
         Assert.Empty(asked);
@@ -374,8 +400,137 @@ public class ScanVerdictTests
 
         SessionManager.JudgeReachability(
             "session-1", Healthy(), Nothing,
-            id => { asked.Add(id); return true; });
+            id => { asked.Add(id); return true; }, TranscriptIsThere);
 
         Assert.Empty(asked);
+    }
+
+    // --- JudgeReachability: nothing to show (CB-9) ----------------------------
+
+    [Fact]
+    public void AnUnpromptedBackgroundJobWithNoTranscriptGetsNoOrb()
+    {
+        // The bug: the live-job exemption on the no-terminal rule waved this
+        // through, so the orb stayed and its chat could only ever open blank.
+        // The exemption is right about the terminal — a background job has none
+        // by nature — and says nothing about whether there is a conversation.
+        Assert.Equal(
+            SessionManager.ScanVerdict.NothingToShow,
+            Reachability(UnpromptedJob(), isLiveJob: EveryIdIsALiveJob,
+                         transcriptExists: TranscriptIsGone));
+    }
+
+    [Fact]
+    public void TheSameJobKeepsItsOrbOnceThereIsATranscriptToRead()
+    {
+        // The other half of the same machine's evidence: job "evidence (2)",
+        // identically shaped and identically terminal-less, with 86KB of
+        // transcript being written to it. Its chat works, so its orb stays.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(UnpromptedJob(), isLiveJob: EveryIdIsALiveJob,
+                         transcriptExists: TranscriptIsThere));
+    }
+
+    [Fact]
+    public void ATerminalIsEnoughOnItsOwnEvenWithNoTranscript()
+    {
+        // Deliberately narrow: the click still lands, so the orb still earns
+        // its place. A session in a real terminal has no transcript for its
+        // first moment, and flickering its orb would be the worse bug.
+        var inATerminal = UnpromptedJob();
+        inATerminal.TermProgram = "iTerm.app";
+
+        var withATty = UnpromptedJob();
+        withATty.Tty = "/dev/ttys004";
+
+        var inTmux = UnpromptedJob();
+        inTmux.TmuxPane = "%4";
+
+        var onWindows = UnpromptedJob();
+        onWindows.TermPid = 9182;
+
+        foreach (var reachable in new[] { inATerminal, withATty, inTmux, onWindows })
+        {
+            Assert.Equal(
+                SessionManager.ScanVerdict.Keep,
+                Reachability(reachable, isLiveJob: EveryIdIsALiveJob,
+                             transcriptExists: TranscriptIsGone));
+        }
+    }
+
+    [Fact]
+    public void ALeadWithLiveAgentsIsExemptFromThisRuleToo()
+    {
+        // Same reasoning as the no-terminal rule's own exemption: agents drawn
+        // on screen pointing at nothing is a worse lie than a thin chat.
+        var leads = new HashSet<string>(StringComparer.Ordinal) { "session-1" };
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(UnpromptedJob(), leads, EveryIdIsALiveJob,
+                         transcriptExists: TranscriptIsGone));
+    }
+
+    [Fact]
+    public void ATranscriptPathTheHookNeverRecordedAnswersKeepNotDrop()
+    {
+        // "Nowhere recorded" means this app does not know where the
+        // conversation would be, not that there isn't one — Codex's
+        // transcript_path is nullable and the chat panel falls back to hunting
+        // the projects directories by session id. Same reasoning as
+        // BackgroundJobs.IsLive answering true for a listing it could not read.
+        //
+        // The disk is not touched at all in that case, which is also what keeps
+        // this O(1) per session per scan.
+        var asked = new List<string>();
+        var noPath = UnpromptedJob(transcriptPath: "");
+
+        var verdict = SessionManager.JudgeReachability(
+            "session-1", noPath, Nothing, EveryIdIsALiveJob,
+            path => { asked.Add(path); return false; });
+
+        Assert.Equal(SessionManager.ScanVerdict.Keep, verdict);
+        Assert.Empty(asked);
+    }
+
+    [Theory]
+    [InlineData(SessionSource.OpenClaw)]
+    [InlineData(SessionSource.RemoteControl)]
+    public void AGatewaySessionIsNeverDroppedForHavingNoTranscriptOnThisDisk(
+        SessionSource source)
+    {
+        // Its transcript is on the machine running the gateway, so asking this
+        // disk about it can only ever answer no. Left ungated this rule alone
+        // would drop every gateway orb, every scan — the same trap the
+        // no-terminal rule above already carries a comment about.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(UnpromptedJob(source), transcriptExists: TranscriptIsGone));
+    }
+
+    [Fact]
+    public void NothingToShowIsAnsweredBeforeNoTerminal()
+    {
+        // Both rules fit a session with no terminal and no transcript, and
+        // which one answers is the half a regression shows up in — the enum
+        // exists so that "dropped" is never the whole story. NothingToShow is
+        // the more specific reading and comes first.
+        Assert.Equal(
+            SessionManager.ScanVerdict.NothingToShow,
+            Reachability(UnpromptedJob(), transcriptExists: TranscriptIsGone));
+    }
+
+    [Fact]
+    public void ACodexSessionWithNeitherIsDroppedForTheSameReason()
+    {
+        // Codex is exempt from the live-job exemption, not from this rule: it
+        // has no background jobs to be one of, but a Codex session with no
+        // terminal and no transcript is just as inert.
+        Assert.Equal(
+            SessionManager.ScanVerdict.NothingToShow,
+            Reachability(UnpromptedJob(SessionSource.Codex),
+                         isLiveJob: EveryIdIsALiveJob,
+                         transcriptExists: TranscriptIsGone));
     }
 }

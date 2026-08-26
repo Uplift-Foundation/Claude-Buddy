@@ -593,6 +593,10 @@ namespace ClaudeBuddy
 
             // No process named, and the daemon does not know it as a job.
             NotALiveJob,
+
+            // No terminal to jump to and no transcript to read: an orb that
+            // can't be clicked anywhere and whose chat can only ever be blank.
+            NothingToShow,
         }
 
         // The rules that need nothing but the file, its mtime, and whether its
@@ -694,8 +698,60 @@ namespace ClaudeBuddy
         // background lead a terminal it had none of a moment earlier.
         internal static ScanVerdict JudgeReachability(
             string sessionId, SessionStatus status,
-            ISet<string> leadsWithLiveAgents, Func<string, bool> isLiveJob)
+            ISet<string> leadsWithLiveAgents, Func<string, bool> isLiveJob,
+            Func<string, bool> transcriptExists)
         {
+            // An orb is good for two things: clicking it to reach the session's
+            // terminal, and opening its chat to read the conversation. A session
+            // with neither a terminal nor a transcript has nothing behind it in
+            // either direction — the click goes nowhere and the chat opens
+            // blank, showing an amber "connecting" dot that never turns green
+            // and a composer disabled with "No pane to type into".
+            //
+            // This is what a background job that has not been given a prompt
+            // looks like. Measured on a real machine: job "evidence", `state:
+            // blocked` and `needs: send a prompt to start` in the daemon's own
+            // record, live in `claude agents --json`, forty minutes old, and no
+            // transcript written anywhere under either config root. The
+            // no-terminal rule below would have caught it, but the live-job
+            // exemption there — which exists because a background job has no
+            // terminal *by nature* — waved it through. That exemption is right
+            // about the terminal and says nothing about whether there is a
+            // conversation, which is what this rule adds.
+            //
+            // Deliberately narrow, and it has to be:
+            //
+            // - A session with a terminal is never touched. It may have no
+            //   transcript yet, but the click still lands, so the orb still
+            //   earns its place.
+            // - A lead with live agents is exempt for the same reason it is
+            //   exempt below: agents drawn on screen pointing at nothing is a
+            //   worse lie than an orb whose chat is thin.
+            // - An *empty* transcript path answers "keep", not "drop". A path
+            //   the hook never recorded means this app does not know where the
+            //   conversation would be, not that there isn't one — Codex's
+            //   transcript_path is nullable, and the chat panel itself falls
+            //   back to hunting the projects directories by session id. Same
+            //   reasoning as BackgroundJobs.IsLive answering true for a listing
+            //   it could not read: the rule only fires on a positive answer,
+            //   because the failure the user cannot see is the one worth being
+            //   careful about. It is also what keeps this O(1) per session per
+            //   scan rather than a deep directory walk every two seconds.
+            //
+            // The cost is that a background job's orb appears a scan or two
+            // late — the status file is written before the first transcript row
+            // — and a job sitting unprompted stays hidden until it is prompted.
+            // Both are the intended reading of "nothing to show".
+            if (status.IsLocalCli
+                && !KnowsATerminal(status)
+                && string.IsNullOrEmpty(status.Tty)
+                && !leadsWithLiveAgents.Contains(sessionId)
+                && !string.IsNullOrEmpty(status.TranscriptPath)
+                && !transcriptExists(status.TranscriptPath))
+            {
+                return ScanVerdict.NothingToShow;
+            }
+
             // A session with no terminal recorded at all can't be jumped
             // to, so an orb for it is a dead click. This is what headless and
             // bridged invocations look like: no tty, no terminal program, no
@@ -1049,7 +1105,7 @@ namespace ClaudeBuddy
                 }
 
                 if (JudgeReachability(sessionId, status, leadsWithLiveAgents,
-                                      BackgroundJobs.IsLiveJob) != ScanVerdict.Keep)
+                                      BackgroundJobs.IsLiveJob, File.Exists) != ScanVerdict.Keep)
                 {
                     continue;   // removed in the pass below
                 }
@@ -1691,8 +1747,33 @@ namespace ClaudeBuddy
             // thing rather than a convenient one: it is what *you* called that
             // session, so an orb follows the name you gave it rather than the
             // folder it happens to share.
+            // An untitled session keys on its own id rather than on the bare
+            // directory, which is what the paragraph above only half fixed.
+            // Adding the title separates two *titled* sessions in one folder and
+            // does nothing at all when the title is empty — every untitled
+            // session in a directory fell back to the same bare-cwd key and
+            // collided exactly as before. Measured on a real machine: three
+            // live untitled sessions in Documents/GTD/Evidence sharing one key,
+            // so RestoreOrbPosition refused a slot to two of them and three
+            // orbs read as two on screen.
+            //
+            // Empty is not a rare case. Claude Code names a session only once it
+            // has something to name it from, so every session is untitled for
+            // its first stretch, and a background job's status file can stay
+            // that way for its whole life.
+            //
+            // The id is per-session rather than per-directory, so an orb dragged
+            // while untitled does not find that position again — a fresh id next
+            // run, and a different key again once the session is finally named.
+            // That is the right way round: an untitled orb's saved slot is
+            // precisely the one that could not be trusted to belong to it, and
+            // landing in the auto-arranged stack is better than landing on top
+            // of a sibling. A titled session's key is byte-for-byte what it was,
+            // so every position already saved on this machine still matches.
             var title = (status.Title ?? "").Trim();
-            return prefix + (title.Length == 0 ? cwd : cwd + "\n" + title);
+            if (title.Length == 0) return sessionId;
+
+            return prefix + cwd + "\n" + title;
         }
 
         internal static string DirectoryKeyFor(SessionStatus status) =>
