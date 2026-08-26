@@ -1154,7 +1154,12 @@ namespace ClaudeBuddy
         // point at, which is the one outcome this feature must never produce.
         internal static int StrandedPid(ProfileView profile)
         {
-            if (!OperatingSystem.IsMacOS()) return 0;
+            // No platform check, deliberately. OrphanPid can only ever be
+            // non-zero where per-profile clones exist, and only macOS has those
+            // — OrphanedCloneFolder returns null for the null BundlePath Windows
+            // always reports. Asking OperatingSystem here as well would add an
+            // arm no test on either platform can take, to re-answer a question
+            // the data has already answered.
 
             // A profile that is running has its own instance, and Quit is the
             // item for that. Offering both through one pid would make which
