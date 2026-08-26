@@ -117,6 +117,21 @@ public class OrphanedInstanceTests
                 Instance(1, null, Clone("Claude-Board")), Root + "/", DefaultFolder));
     }
 
+    // Paths with nothing above them. None of these can come off a real clone,
+    // but the string arrives from another process via proc_pidpath rather than
+    // from the function that built it, so the walk up to the root has to have an
+    // answer for each of them rather than throwing inside a menu rebuild.
+    [Theory]
+    [InlineData("/")]
+    [InlineData("/Claude.app")]
+    [InlineData("Claude.app")]
+    [InlineData("")]
+    public void APathWithNoRoomAboveItIsNotAClone(string bundle)
+    {
+        Assert.Null(ClaudeDesktopManager.OrphanedCloneFolder(
+            Instance(9, null, bundle), Root, DefaultFolder));
+    }
+
     // ---- MapOrphans ------------------------------------------------------
 
     [Fact]
@@ -225,11 +240,13 @@ public class OrphanedInstanceTests
         new("Board", "/Users/x/Library/Application Support/Claude-Board", false,
             isRunning, pid, ProfileActivity.None, null, "system", isRunning ? 1 : 0, orphanPid);
 
+    // Platform-independent on purpose: the rule that produces OrphanPid already
+    // returns null for Windows' null BundlePath, so this answers off the data
+    // and needs no OperatingSystem arm that neither platform's tests can take.
     [Fact]
     public void StrandedPidIsTheOrphanWhenTheProfileItselfIsDown()
     {
-        var expected = OperatingSystem.IsMacOS() ? 26126 : 0;
-        Assert.Equal(expected, ClaudeDesktopManager.StrandedPid(View(false, 0, 26126)));
+        Assert.Equal(26126, ClaudeDesktopManager.StrandedPid(View(false, 0, 26126)));
     }
 
     // A running profile has its own instance and its own Quit. Answering with
