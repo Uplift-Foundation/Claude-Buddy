@@ -31,7 +31,13 @@ namespace ClaudeBuddy
         // 0 or 1; more than that is the concurrent-access case that corrupts
         // leveldb and SQLite, and the menu says so rather than hiding it behind
         // a single "running" row.
-        int InstanceCount = 1);
+        int InstanceCount = 1,
+        // A process running from *this* profile's tinted clone while sitting on
+        // the Default userData directory, or 0 for none. See
+        // OrphanedCloneFolder: it is a real state the menu could not previously
+        // describe, and the row it belongs on is this one — the profile whose
+        // colour is on screen in the Dock while its row reads "not running".
+        int OrphanPid = 0);
 
     internal sealed record DesktopSnapshot(bool AppInstalled, IReadOnlyList<ProfileView> Profiles);
 
@@ -97,7 +103,13 @@ namespace ClaudeBuddy
             bool Installed,
             string DefaultDirectory,
             IReadOnlyList<(string Name, string Directory)> Profiles,
-            IReadOnlyDictionary<string, InstanceGroup> Running);
+            IReadOnlyDictionary<string, InstanceGroup> Running,
+            // Profile folder -> pid of a process running from that profile's
+            // clone while on Default. Null rather than an empty dictionary only
+            // because a record's primary constructor cannot default to one;
+            // Compose reads it as "none", which is the right answer for a scan
+            // that did not look.
+            IReadOnlyDictionary<string, int>? Orphans = null);
 
         private static readonly Dictionary<string, Transient> Transients = new(StringComparer.Ordinal);
         private static readonly object TransientGate = new();
@@ -171,10 +183,24 @@ namespace ClaudeBuddy
 
             IReadOnlyList<(string Name, string Directory)> profiles =
                 installed ? Discover() : Array.Empty<(string Name, string Directory)>();
-            IReadOnlyDictionary<string, InstanceGroup> running =
-                installed ? MapInstances(ScanProcesses()) : EmptyRunning;
 
-            Adopt(new ScanResult(installed, DefaultDirectory(), profiles, running));
+            // One scan, read twice. MapInstances files each process under the
+            // profile directory it is on; MapOrphans asks the different question
+            // of which clone a selector-less process came *from*. Scanning twice
+            // would also let the two answers disagree about a process that
+            // started or died between them.
+            var instances = installed ? ScanProcesses() : Array.Empty<ClaudeInstance>();
+
+            IReadOnlyDictionary<string, InstanceGroup> running =
+                installed ? MapInstances(instances) : EmptyRunning;
+
+            var defaultDirectory = DefaultDirectory();
+
+            IReadOnlyDictionary<string, int> orphans = installed
+                ? MapOrphans(instances, ClaudeDesktopBundles.Root, Path.GetFileName(defaultDirectory))
+                : EmptyOrphans;
+
+            Adopt(new ScanResult(installed, defaultDirectory, profiles, running, orphans));
         }
 
         // Remember a scan as the current one and publish what it composes to.
@@ -196,6 +222,9 @@ namespace ClaudeBuddy
 
         private static readonly IReadOnlyDictionary<string, InstanceGroup> EmptyRunning =
             new Dictionary<string, InstanceGroup>(StringComparer.Ordinal);
+
+        internal static readonly IReadOnlyDictionary<string, int> EmptyOrphans =
+            new Dictionary<string, int>(StringComparer.Ordinal);
 
         // Recompose from the last scan without re-scanning — for when a click
         // has changed transient state and the menu should say so immediately.
@@ -251,9 +280,14 @@ namespace ClaudeBuddy
                     // stable while the processes are, and without it a profile
                     // going from one instance to two would never repaint the
                     // menu, so the duplicate warning would never appear.
+                    // Whether there is an orphan, never which pid it is: the pid
+                    // is what Quit acts on, but putting it in here would repaint
+                    // the menu every time the updater cycled a process, and the
+                    // rule at the top of this method is that nothing volatile
+                    // goes in the digest.
                     return $"{p.DisplayName}:{(p.IsRunning ? 1 : 0)}:{p.Activity}:{p.Message}"
                            + $":{p.ThemeMode}:{colour}:{(settings.ShowSwatch ? 1 : 0)}"
-                           + $":{p.InstanceCount}";
+                           + $":{p.InstanceCount}:{(p.OrphanPid != 0 ? 1 : 0)}";
                 })
                 .OrderBy(entry => entry, StringComparer.Ordinal));
         }
@@ -264,12 +298,20 @@ namespace ClaudeBuddy
             var defaultDirectory = scan.DefaultDirectory;
             var views = new List<ProfileView>(scan.Profiles.Count);
 
+            var orphans = scan.Orphans ?? EmptyOrphans;
+
             foreach (var (name, directory) in scan.Profiles)
             {
                 var isRunning = scan.Running.TryGetValue(directory, out var group);
                 var (activity, message) = ResolveTransient(directory, isRunning, now);
 
                 var chosenName = ClaudeBuddySettings.For(name).Name;
+
+                // Keyed on the folder rather than the directory: an orphan is
+                // identified by the clone it runs from, and clones are named for
+                // the profile folder (ClaudeDesktopBundles.PathFor), not for the
+                // full profile path.
+                orphans.TryGetValue(name, out var orphanPid);
 
                 views.Add(new ProfileView(
                     chosenName is { Length: > 0 } ? chosenName : DisplayNameFor(name),
@@ -280,7 +322,8 @@ namespace ClaudeBuddy
                     activity,
                     message,
                     ReadThemeMode(directory),
-                    isRunning ? group.Count : 0));
+                    isRunning ? group.Count : 0,
+                    orphanPid));
             }
 
             return new DesktopSnapshot(scan.Installed, views);
@@ -559,6 +602,95 @@ namespace ClaudeBuddy
             }
 
             return running;
+        }
+
+        // ---- orphaned instances --------------------------------------------
+
+        // The profile whose tinted clone this instance is running from, when the
+        // instance carries no userData selector at all — which means it is on
+        // Default. Null when that is not what this process is.
+        //
+        // Claude Desktop's own updater is what produces these. Squirrel
+        // relaunches the bundle it just updated with launchAfterInstallation,
+        // and the process it starts inherits neither --user-data-dir nor
+        // CLAUDE_USER_DATA_DIR, so an instance this app launched correctly onto
+        // a profile silently moves to Default the first time it updates itself.
+        // Observed live: a process running from bundles/Claude-Board/Claude.app
+        // with 39 files open under Application Support/Claude and none under
+        // Claude-Board, alongside a second instance already on Default. That is
+        // the concurrent leveldb/SQLite access this whole feature exists to
+        // prevent, arriving by a route neither the launcher nor the URL router
+        // can reach — Squirrel is upstream, its relaunch is not
+        // argument-injectable, and rewriting an updater inside a signed bundle
+        // would break the identical-CDHash property the clones depend on.
+        //
+        // So it is detected rather than prevented. The combination is evidence
+        // and not a heuristic *for this app's own launches*: every created
+        // profile is launched with both selectors, so no launch here can produce
+        // a selector-less process running from a created profile's clone.
+        //
+        // Default's own clone is the exception that makes this a rule worth
+        // writing down rather than the one sentence the ticket proposed.
+        // LaunchMac gives Default a tinted clone too once a colour is picked for
+        // it, and launches it with *neither* selector on purpose — so
+        // bundles/Claude/Claude.app with no selector is the correct, ordinary
+        // Default instance, and a rule that only asked "clone, and no selector?"
+        // would report the most common configuration on this machine as broken.
+        // Hence defaultFolder, and hence this returning the folder rather than a
+        // bool: the caller needs to know *which* profile's colour is on screen.
+        //
+        // What it cannot distinguish is a user who launched a clone from the
+        // Dock or Spotlight themselves, which produces an identical process.
+        // That is why the menu describes the state rather than blaming the
+        // updater — see ClaudeDesktopSection.ProfileLabel.
+        internal static string? OrphanedCloneFolder(
+            ClaudeInstance instance, string bundleRoot, string defaultFolder)
+        {
+            // A selector of any kind means the launcher put it there, and
+            // MapInstances has already filed it under the right profile.
+            if (instance.UserDataDir is not null) return null;
+
+            // Null on Windows, which has no per-profile bundles at all — see
+            // ClaudeInstance. The feature is therefore macOS-only by data rather
+            // than by a platform guard, which is the honest shape: there is
+            // nothing on Windows for this rule to find.
+            if (instance.BundlePath is not { Length: > 0 } bundle) return null;
+
+            var directory = Path.GetDirectoryName(bundle.TrimEnd('/'));
+            if (directory is null) return null;
+
+            var parent = Path.GetDirectoryName(directory);
+            if (parent is null) return null;
+
+            if (!string.Equals(
+                    parent.TrimEnd('/'), bundleRoot.TrimEnd('/'), StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            var folder = Path.GetFileName(directory);
+            if (folder.Length == 0) return null;
+
+            return string.Equals(folder, defaultFolder, StringComparison.Ordinal) ? null : folder;
+        }
+
+        // Profile folder -> the first pid found orphaned onto Default from that
+        // profile's clone. First wins, matching MapInstances, so the menu and
+        // anything acting on the pid agree about which process they mean.
+        internal static IReadOnlyDictionary<string, int> MapOrphans(
+            IReadOnlyList<ClaudeInstance> instances, string bundleRoot, string defaultFolder)
+        {
+            var orphans = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            foreach (var instance in instances)
+            {
+                var folder = OrphanedCloneFolder(instance, bundleRoot, defaultFolder);
+                if (folder is null) continue;
+
+                if (!orphans.ContainsKey(folder)) orphans[folder] = instance.Pid;
+            }
+
+            return orphans;
         }
 
         // ---- url routing ---------------------------------------------------
@@ -971,6 +1103,65 @@ namespace ClaudeBuddy
                     SetTransient(directory, ProfileActivity.Error, ErrorMs, "allow Automation to quit");
                 }
             });
+        }
+
+        // Quit a window stranded on Default by the updater — the pid in
+        // ProfileView.OrphanPid rather than the one in Pid, which for a stranded
+        // profile is 0 because nothing is on its own directory.
+        //
+        // macOS only, and not by a platform guard: OrphanPid can only ever be
+        // non-zero on a machine with per-profile clones, and only macOS has
+        // those (ClaudeInstance.BundlePath is null on Windows). The check below
+        // is on the pid, so Windows gets the right answer by having nothing to
+        // act on rather than by being asked what platform it is.
+        //
+        // Deliberately not a relaunch. Quitting and relaunching in one click
+        // reads as one action and is two, the second of which can fail on its
+        // own — and the window being quit is a live Claude Desktop signed into
+        // the user's Default account, which may hold unsaved work. Quit, let the
+        // row go back to "not running", and let the user press Launch when they
+        // are ready. The transient goes on the *stranded* profile's row because
+        // that is the row the click came from and the row whose label will stop
+        // warning once it works.
+        //
+        // Excluded from coverage: sends a real Apple Event to another
+        // application, exactly as Quit does. StrandedPid below is the decision.
+        [ExcludeFromCodeCoverage]
+        public static void QuitStranded(ProfileView profile)
+        {
+            var pid = StrandedPid(profile);
+            if (pid <= 0) return;
+
+            var directory = profile.Directory;
+            SetTransient(directory, ProfileActivity.Quitting, QuitWindowMs);
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                // Activate first for the same reason Quit does: an unsaved-work
+                // sheet belongs in front of the user, not behind them.
+                MacOSAppActivation.Activate(pid);
+
+                if (!MacOSAppActivation.Terminate(pid))
+                {
+                    SetTransient(directory, ProfileActivity.Error, ErrorMs, "allow Automation to quit");
+                }
+            });
+        }
+
+        // The pid QuitStranded acts on, or 0 when there is nothing to act on.
+        // Pulled out so the rule is reachable without sending an Apple Event:
+        // acting on the wrong pid here means quitting a window the user did not
+        // point at, which is the one outcome this feature must never produce.
+        internal static int StrandedPid(ProfileView profile)
+        {
+            if (!OperatingSystem.IsMacOS()) return 0;
+
+            // A profile that is running has its own instance, and Quit is the
+            // item for that. Offering both through one pid would make which
+            // window closed depend on scan timing.
+            if (profile.IsRunning) return 0;
+
+            return profile.OrphanPid > 0 ? profile.OrphanPid : 0;
         }
 
         // Claude Desktop can't be made to quit gracefully from outside on this
