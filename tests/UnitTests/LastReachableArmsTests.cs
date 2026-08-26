@@ -476,8 +476,7 @@ public class LastReachableArmsTests
     public void WithNoPaneTheComposerSaysSoRatherThanOfferingToSend()
     {
         Assert.Equal("No pane to type into",
-            LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: true, paneEvidenceIsCurrent: true));
+            LocalCliChatSession.ComposerHintFor(canSendQuietly: false, replyEnabled: true));
     }
 
     // No pane beats replying-off, because it is the more specific answer: the
@@ -486,147 +485,16 @@ public class LastReachableArmsTests
     public void NoPaneBeatsReplyingOff()
     {
         Assert.Equal("No pane to type into",
-            LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: false, paneEvidenceIsCurrent: true));
-    }
-
-    // ...and beats stale evidence too, for the same reason: there is nowhere to
-    // type at all, so how well the pane is known does not arise.
-    [Fact]
-    public void NoPaneBeatsStaleEvidence()
-    {
-        Assert.Equal("No pane to type into",
-            LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: true, paneEvidenceIsCurrent: false));
+            LocalCliChatSession.ComposerHintFor(canSendQuietly: false, replyEnabled: false));
     }
 
     [Fact]
     public void WithAPaneTheHintFollowsTheReplySetting()
     {
         Assert.Equal("Message…",
-            LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: true, replyEnabled: true, paneEvidenceIsCurrent: true));
+            LocalCliChatSession.ComposerHintFor(canSendQuietly: true, replyEnabled: true));
         Assert.Equal("Replying is off",
-            LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: true, replyEnabled: false, paneEvidenceIsCurrent: true));
-    }
-
-    // Stale evidence outranks the reply setting, and the ordering is the point
-    // rather than a detail. Replying being off is a switch the user can flip;
-    // this is the app saying it does not know where a sentence would land, and
-    // advertising "Message…" while the destination is in doubt is how text ended
-    // up in somebody else's conversation in the first place.
-    [Fact]
-    public void StaleEvidenceOutranksTheReplySetting()
-    {
-        Assert.Equal("Quiet too long — reply in the terminal",
-            LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: true, replyEnabled: true, paneEvidenceIsCurrent: false));
-        Assert.Equal("Quiet too long — reply in the terminal",
-            LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: true, replyEnabled: false, paneEvidenceIsCurrent: false));
-    }
-
-    // ---- how old the evidence may be ---------------------------------------
-
-    // The rule that decides the above, against a fixed clock rather than the
-    // machine's. The real case: a status file written at 10:28 that still named
-    // tmux pane %8, whose live claude was four hours into a different
-    // conversation by then.
-    [Fact]
-    public void EvidenceOlderThanTheWindowIsNotCurrent()
-    {
-        var now = new DateTime(2026, 8, 26, 14, 17, 0, DateTimeKind.Utc);
-        var window = TimeSpan.FromMinutes(30);
-
-        Assert.False(TerminalScripts.PaneEvidenceIsCurrent(
-            new DateTime(2026, 8, 26, 10, 28, 50, DateTimeKind.Utc), now, window));
-    }
-
-    [Fact]
-    public void EvidenceInsideTheWindowIsCurrent()
-    {
-        var now = new DateTime(2026, 8, 26, 14, 17, 0, DateTimeKind.Utc);
-        var window = TimeSpan.FromMinutes(30);
-
-        // A session being used refreshes this on every prompt and every stop,
-        // so the ordinary case is seconds old, not minutes.
-        Assert.True(TerminalScripts.PaneEvidenceIsCurrent(now.AddSeconds(-2), now, window));
-
-        // Exactly at the boundary counts as current: the rule refuses only what
-        // is definitely too old.
-        Assert.True(TerminalScripts.PaneEvidenceIsCurrent(now - window, now, window));
-        Assert.False(TerminalScripts.PaneEvidenceIsCurrent(
-            now - window - TimeSpan.FromSeconds(1), now, window));
-    }
-
-    [Fact]
-    public void AFutureTimestampIsNotTreatedAsStale()
-    {
-        // Clock skew between the hook's write and this process's read. Being
-        // ahead is not evidence of being behind.
-        var now = new DateTime(2026, 8, 26, 14, 17, 0, DateTimeKind.Utc);
-
-        Assert.True(TerminalScripts.PaneEvidenceIsCurrent(
-            now.AddMinutes(5), now, TimeSpan.FromMinutes(30)));
-    }
-
-    [Fact]
-    public void AStatusWithNoRecordedTimeIsBelieved()
-    {
-        // Not a status file this app read, but one it built: ResetSessionToIdle,
-        // a gateway stand-in, a test fixture. Refusing those would stop typing
-        // for reasons that have nothing to do with panes.
-        Assert.True(TerminalScripts.PaneEvidenceIsCurrent(
-            default, new DateTime(2026, 8, 26, 14, 17, 0, DateTimeKind.Utc),
-            TimeSpan.FromMinutes(30)));
-
-        // Which is also what the status-taking overload answers for a status
-        // that has never been through a scan, and for no status at all.
-        Assert.True(TerminalFocuser.PaneEvidenceIsCurrent(new SessionStatus()));
-        Assert.True(TerminalFocuser.PaneEvidenceIsCurrent(null));
-    }
-
-    // ---- and the same guard on a click, not just on typing ------------------
-
-    // Gating typing alone was an incomplete fix: a double-click went on jumping
-    // straight to the pane, reported as "double-clicking Ev takes me to the Jl
-    // pane". Nothing is written by a jump, so it is less destructive than a
-    // typed sentence, but it is the same stale claim telling the same lie about
-    // which conversation lives where.
-    [Fact]
-    public void AClickWillNotJumpToAPaneOnStaleEvidence()
-    {
-        var now = new DateTime(2026, 8, 26, 14, 28, 0, DateTimeKind.Utc);
-        var window = TimeSpan.FromMinutes(30);
-
-        Assert.False(TerminalScripts.CanJumpToPane(
-            "%8", new DateTime(2026, 8, 26, 10, 28, 50, DateTimeKind.Utc), now, window));
-
-        Assert.True(TerminalScripts.CanJumpToPane("%8", now.AddMinutes(-1), now, window));
-    }
-
-    [Fact]
-    public void ASessionWithNoPaneIsNotGatedByThisRuleAtAll()
-    {
-        // It is reached by tty or by terminal program instead. This rule is
-        // about a pane claim specifically — the thing that was measured
-        // outliving the conversation that owned it.
-        var now = new DateTime(2026, 8, 26, 14, 28, 0, DateTimeKind.Utc);
-        var ancient = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-
-        Assert.True(TerminalScripts.CanJumpToPane("", ancient, now, TimeSpan.FromMinutes(30)));
-        Assert.True(TerminalScripts.CanJumpToPane(null, ancient, now, TimeSpan.FromMinutes(30)));
-    }
-
-    [Fact]
-    public void TheStatusOverloadRefusesAFileThatIsGenuinelyOld()
-    {
-        // Reads the real clock, so the fixture is anchored far enough back that
-        // no plausible skew reaches it.
-        var stale = new SessionStatus { Written = DateTime.UtcNow.AddHours(-4) };
-
-        Assert.False(TerminalFocuser.PaneEvidenceIsCurrent(stale));
+            LocalCliChatSession.ComposerHintFor(canSendQuietly: true, replyEnabled: false));
     }
 
     // ---- the notes a refused send leaves -----------------------------------

@@ -117,20 +117,6 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public bool IsRoom { get; set; }
 
-        // When the hook last rewrote this status file. [JsonIgnore] for the same
-        // reason Source and Kind are: it is the file's own mtime, read during
-        // the scan, and ResetSessionToIdle rewrites a status file from this
-        // object.
-        //
-        // Carried on the status rather than left in ScanEntry because it is
-        // *evidence*, and one thing needs it far from the scan: the status file
-        // is the app's only reason to believe this session is the conversation
-        // sitting in the tmux pane it names, and typing into that pane on the
-        // strength of hours-old evidence is how text ends up in somebody else's
-        // conversation. See TerminalFocuser.PaneEvidenceIsCurrent.
-        [JsonIgnore]
-        public DateTime Written { get; set; }
-
         // Where the session's terminal lives (macOS hook only; empty on
         // Windows or with an older hook script). See TerminalFocuser.
         [JsonPropertyName("term_program")]
@@ -964,7 +950,6 @@ namespace ClaudeBuddy
                 if (status is null) continue;
 
                 status.Source = SourceOf(status);
-                status.Written = written;
 
                 // A name the status file never caught, read from the transcript
                 // it already names. Costs nothing for a session that has one.
