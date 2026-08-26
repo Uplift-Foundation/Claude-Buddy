@@ -110,8 +110,14 @@ namespace ClaudeBuddy
                 if (!document.RootElement.TryGetProperty(name, out var property)) return null;
                 if (property.ValueKind != JsonValueKind.String) return null;
 
-                var text = property.GetString()?.Trim();
-                return string.IsNullOrEmpty(text) ? null : text;
+                // No null-conditional on GetString(): the ValueKind check above
+                // has already established this is a JSON string, and for that
+                // kind GetString() cannot return null. Writing `?.` here left a
+                // branch no test could ever take, which is worse than the
+                // keystroke it saves — an unreachable arm reads like an
+                // uncovered one.
+                var text = property.GetString();
+                return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
             }
             catch (JsonException)
             {

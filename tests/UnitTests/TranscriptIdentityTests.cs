@@ -203,6 +203,16 @@ public class TranscriptIdentityTests
     }
 
     [Fact]
+    public void EitherHalfOnItsOwnIsEnoughToNotBeEmpty()
+    {
+        // Both arms of IsEmpty, which decides whether a read is worth applying
+        // at all: a session with a name and no colour has still been identified.
+        Assert.False(new TranscriptIdentity("named", null).IsEmpty);
+        Assert.False(new TranscriptIdentity(null, "teal").IsEmpty);
+        Assert.False(new TranscriptIdentity("named", "teal").IsEmpty);
+    }
+
+    [Fact]
     public void ARowThatIsNullIsSteppedOver()
     {
         var identity = TranscriptIdentity.From(new string?[]
