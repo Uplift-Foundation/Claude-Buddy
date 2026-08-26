@@ -311,4 +311,59 @@ public class OrbWindowClickResolutionTests
 
         orb.Exit_Click(null, null!);
     }
+
+    // --- whether a click may jump to a pane at all ---------------------------
+
+    // The gate GoToSession consults before it reaches TerminalFocuser.Focus, and
+    // the reason a *local* session's click is now less dangerous than this
+    // file's header describes: a pane claim the app cannot vouch for is
+    // short-circuited into OpenChat before any process is launched.
+    //
+    // Asserted through the static rather than by driving the click, because
+    // proving Focus was *not* reached would mean proving the absence of a
+    // subprocess, and the honest version of that assertion is this one.
+    // TerminalScripts.CanJumpToPane carries the fixed-clock cases in
+    // tests/UnitTests; this is the wiring that hands it a status.
+    [AvaloniaFact]
+    public void AStalePaneClaimIsNotWorthJumpingTo()
+    {
+        var stale = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            TmuxPane = "%8",
+            Written = DateTime.UtcNow.AddHours(-4),
+        };
+
+        Assert.False(OrbWindow.CanJumpToTerminal(stale));
+    }
+
+    [AvaloniaFact]
+    public void AFreshPaneClaimIsJumpedToAsBefore()
+    {
+        var fresh = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            TmuxPane = "%8",
+            Written = DateTime.UtcNow,
+        };
+
+        Assert.True(OrbWindow.CanJumpToTerminal(fresh));
+    }
+
+    [AvaloniaFact]
+    public void ASessionWithNoPaneClaimIsUnaffected()
+    {
+        // Reached by tty or terminal program instead, and this rule is only
+        // about a pane id outliving the conversation that owned it. Also the
+        // shape every status already in this file has, which is why none of
+        // their behaviour changes.
+        var noPane = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            Tty = "/dev/ttys004",
+            Written = DateTime.UtcNow.AddHours(-4),
+        };
+
+        Assert.True(OrbWindow.CanJumpToTerminal(noPane));
+    }
 }

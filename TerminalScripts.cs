@@ -90,6 +90,25 @@ namespace ClaudeBuddy
             return now - written <= maxAge;
         }
 
+        // Whether a click should jump to the pane this session names.
+        //
+        // The same evidence a typed message rests on, so it needs the same
+        // guard, and leaving it out was an incomplete fix rather than a
+        // deliberate omission: the first version of this rule gated typing only,
+        // and a double-click went on jumping straight to the pane. Reported as
+        // "double-clicking Ev takes me to the Jl pane" — which is the same
+        // stale claim doing the same wrong thing through the other door. A jump
+        // is less destructive than a typed sentence, because nothing is written,
+        // but it is the same lie about which conversation lives where.
+        //
+        // A session with no tmux pane is not gated at all. It is reached by tty
+        // or by terminal program instead, and this rule is about a pane claim
+        // specifically — the case that was measured and the case where a pane id
+        // outlives the conversation that owned it.
+        internal static bool CanJumpToPane(
+            string? tmuxPane, DateTime written, DateTime now, TimeSpan maxAge) =>
+            string.IsNullOrEmpty(tmuxPane) || PaneEvidenceIsCurrent(written, now, maxAge);
+
         internal static string[] TmuxArgs(string? socket, params string[] args)
         {
             if (string.IsNullOrEmpty(socket)) return args;

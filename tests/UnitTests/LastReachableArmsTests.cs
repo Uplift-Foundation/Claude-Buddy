@@ -587,6 +587,38 @@ public class LastReachableArmsTests
         Assert.True(TerminalFocuser.PaneEvidenceIsCurrent(null));
     }
 
+    // ---- and the same guard on a click, not just on typing ------------------
+
+    // Gating typing alone was an incomplete fix: a double-click went on jumping
+    // straight to the pane, reported as "double-clicking Ev takes me to the Jl
+    // pane". Nothing is written by a jump, so it is less destructive than a
+    // typed sentence, but it is the same stale claim telling the same lie about
+    // which conversation lives where.
+    [Fact]
+    public void AClickWillNotJumpToAPaneOnStaleEvidence()
+    {
+        var now = new DateTime(2026, 8, 26, 14, 28, 0, DateTimeKind.Utc);
+        var window = TimeSpan.FromMinutes(30);
+
+        Assert.False(TerminalScripts.CanJumpToPane(
+            "%8", new DateTime(2026, 8, 26, 10, 28, 50, DateTimeKind.Utc), now, window));
+
+        Assert.True(TerminalScripts.CanJumpToPane("%8", now.AddMinutes(-1), now, window));
+    }
+
+    [Fact]
+    public void ASessionWithNoPaneIsNotGatedByThisRuleAtAll()
+    {
+        // It is reached by tty or by terminal program instead. This rule is
+        // about a pane claim specifically — the thing that was measured
+        // outliving the conversation that owned it.
+        var now = new DateTime(2026, 8, 26, 14, 28, 0, DateTimeKind.Utc);
+        var ancient = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        Assert.True(TerminalScripts.CanJumpToPane("", ancient, now, TimeSpan.FromMinutes(30)));
+        Assert.True(TerminalScripts.CanJumpToPane(null, ancient, now, TimeSpan.FromMinutes(30)));
+    }
+
     [Fact]
     public void TheStatusOverloadRefusesAFileThatIsGenuinelyOld()
     {
