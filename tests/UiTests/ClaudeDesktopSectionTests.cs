@@ -29,7 +29,8 @@ public class ClaudeDesktopSectionTests
         ProfileActivity activity = ProfileActivity.None,
         string? message = null,
         string themeMode = "system",
-        int instances = 1) =>
+        int instances = 1,
+        int orphanPid = 0) =>
         new(DisplayName: name,
             Directory: "/tmp/" + name,
             IsDefault: false,
@@ -38,7 +39,8 @@ public class ClaudeDesktopSectionTests
             Activity: activity,
             Message: message,
             ThemeMode: themeMode,
-            InstanceCount: instances);
+            InstanceCount: instances,
+            OrphanPid: orphanPid);
 
     // ---- the label -------------------------------------------------------
 
@@ -226,6 +228,82 @@ public class ClaudeDesktopSectionTests
 
         Assert.False(stopped.Single(i => i.Header == "Quit").IsEnabled);
         Assert.True(running.Single(i => i.Header == "Quit").IsEnabled);
+    }
+
+    // CB-7. A window wearing this profile's colour while using Default's
+    // account, which Claude Desktop's own updater produces by relaunching a
+    // clone without either selector. The row was previously silent about it:
+    // the profile reads "not running" — truthfully, nothing is on its directory
+    // — while a window in that profile's colour sits in the Dock.
+    [AvaloniaFact]
+    public void AStrandedWindowIsNamedOnTheProfileWhoseColourItWears()
+    {
+        var label = ClaudeDesktopSection.ProfileLabel(Profile(running: false, orphanPid: 26126));
+
+        Assert.Contains("⚠", label);
+        Assert.Contains("on Default", label);
+    }
+
+    // The text says what is true, not what probably happened. A user who
+    // launched the clone from the Dock produces an identical process, so naming
+    // the updater would be a guess — and "on Default" is the half a user can
+    // check against the window in front of them.
+    [AvaloniaFact]
+    public void TheStrandedWarningDoesNotBlameTheUpdater()
+    {
+        var label = ClaudeDesktopSection.ProfileLabel(Profile(running: false, orphanPid: 26126));
+
+        Assert.DoesNotContain("update", label, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Squirrel", label, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Two processes on one directory is corrupting data now; a stranded window
+    // is one process on the wrong account. Both at once is possible, and the
+    // worse one has to be the one on screen.
+    [AvaloniaFact]
+    public void TheDuplicateWarningOutranksTheStrandedOne()
+    {
+        var label = ClaudeDesktopSection.ProfileLabel(
+            Profile(running: true, instances: 2, orphanPid: 26126));
+
+        Assert.Contains("2 instances", label);
+        Assert.DoesNotContain("on Default", label);
+    }
+
+    [AvaloniaFact]
+    public void AnActivityStillOutranksTheStrandedWarning()
+    {
+        var label = ClaudeDesktopSection.ProfileLabel(
+            Profile(running: false, activity: ProfileActivity.Launching, orphanPid: 26126));
+
+        Assert.Contains("Launching…", label);
+        Assert.DoesNotContain("on Default", label);
+    }
+
+    // Quit is retargeted rather than joined by a fifth item — the submenu is a
+    // fixed four on purpose, and a menu that grows precisely when something is
+    // wrong jumps under the pointer at the worst moment.
+    [AvaloniaFact]
+    public void QuitTakesTheStrandedWindowWhenTheProfileItselfIsDown()
+    {
+        var items = Children(ClaudeDesktopSection.BuildProfileItem(
+            Profile(running: false, orphanPid: 26126)));
+
+        var quit = items.Single(i => i.Header == "Quit the window on Default");
+        Assert.True(quit.IsEnabled);
+        Assert.Equal(4, items.Count);
+    }
+
+    // A running profile has its own instance and its own Quit; the stranded
+    // window is not what that item means.
+    [AvaloniaFact]
+    public void ARunningProfileKeepsTheOrdinaryQuit()
+    {
+        var items = Children(ClaudeDesktopSection.BuildProfileItem(
+            Profile(running: true, orphanPid: 26126)));
+
+        Assert.Contains(items, i => i.Header == "Quit");
+        Assert.DoesNotContain(items, i => i.Header == "Quit the window on Default");
     }
 
     [AvaloniaFact]
