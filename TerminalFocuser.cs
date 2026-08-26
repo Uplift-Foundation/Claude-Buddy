@@ -198,6 +198,67 @@ namespace ClaudeBuddy
             && !string.IsNullOrEmpty(status.TmuxPane)
             && ResolveTmuxBinary(status.TmuxBin) is not null;
 
+        // How old the app's evidence may be before it refuses to type into a
+        // pane. Not the "Keep orbs for" lifetime, deliberately — see below.
+        internal static readonly TimeSpan PaneEvidenceMaxAge = TimeSpan.FromMinutes(30);
+
+        // Whether the status file is recent enough to be believed about which
+        // conversation is sitting in the pane it names.
+        //
+        // A status file is the app's *only* reason to think a session owns a
+        // tmux pane, and a pane is not owned for the life of a process. Claude
+        // Code mints a new session id on /clear, on resume, and when a
+        // conversation migrates between processes, and the hook writes a new
+        // file each time without deleting the old one. So a stale file can name
+        // a pane that has since moved on to a different conversation entirely.
+        //
+        // Confirmed on a real machine, and the reason this exists: a status file
+        // last written at 10:28 still named tmux pane %8, whose live claude was
+        // by then four hours into a different conversation. The orb typed —
+        // CanSendQuietly was true, the pane and the tmux binary were both real —
+        // and the sentence landed in that other conversation, while the orb's
+        // own panel went on reading a transcript that had stopped growing. The
+        // user reported it as "the orb isn't responding"; what had actually
+        // happened is worse than no answer, because the text went somewhere.
+        //
+        // Nothing in the two status files linked them: different session ids,
+        // different pids, and only the stale one claimed the pane. Superseded
+        // groups by pid and so could not pair them; the no-terminal rule cannot
+        // fire on a file naming a tty, a term program and a pane; and the
+        // process-gone rule cannot fire on a pid that is alive and merely busy
+        // with something else. So the staleness of the evidence is the only
+        // signal there is, and this is it.
+        //
+        // Kept separate from the orb-lifetime setting on purpose. "Keep orbs
+        // for: forever" is the user saying they want to *see* quiet sessions,
+        // which is reasonable and is why that orb was still on screen. It is not
+        // them saying the app may type into a pane on four-hour-old
+        // information. Visibility and delivery are different promises and only
+        // one of them is destructive to get wrong.
+        //
+        // The threshold is generous because a session being used refreshes this
+        // constantly: the hook fires on every prompt and every stop, so any
+        // conversation touched in the last half hour has a fresh file. The cost
+        // of the rule falling the wrong way is one terminal round-trip, and the
+        // composer says so rather than failing silently — after which the file
+        // is fresh again and the orb types as normal.
+        internal static bool PaneEvidenceIsCurrent(DateTime written, DateTime now, TimeSpan maxAge)
+        {
+            // A file with no recorded time is not evidence of staleness — it is
+            // a status this app built rather than read (ResetSessionToIdle, a
+            // gateway stand-in, a test fixture), and refusing those would break
+            // typing for reasons that have nothing to do with panes.
+            if (written == default) return true;
+
+            // Clock skew and a file written a moment ago both land here. A
+            // future mtime is not stale.
+            return now - written <= maxAge;
+        }
+
+        public static bool PaneEvidenceIsCurrent(SessionStatus? status) =>
+            status is null
+            || PaneEvidenceIsCurrent(status.Written, DateTime.UtcNow, PaneEvidenceMaxAge);
+
         // Types the text and presses Enter. The Enter is the whole difference
         // from SendText above, and it is why this is reached only from a Send
         // button behind a setting that is off by default: dictation is a typing
