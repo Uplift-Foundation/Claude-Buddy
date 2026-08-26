@@ -256,8 +256,14 @@ namespace ClaudeBuddy
         // File.Exists and this open. That is a real race, since the file belongs
         // to a session that may be ending, but it is a race and not a state a test
         // can hold still.
+        // internal rather than private because SessionManager reads the same
+        // window for a different question — what the session is called — and it
+        // matters that the two windows are the same one. The hook decides a
+        // title from the last 256KB; if the app looked at a different amount it
+        // could disagree with the hook about a session's name, which is the one
+        // thing TranscriptIdentity exists to avoid.
         [ExcludeFromCodeCoverage]
-        private static string[] TailLines(string path)
+        internal static string[] TailLines(string path)
         {
             try { return ReadTail(path); }
             catch { return Array.Empty<string>(); }

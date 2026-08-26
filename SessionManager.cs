@@ -406,6 +406,76 @@ namespace ClaudeBuddy
         // written before this key existed has no "cli" at all and was Claude
         // Code, and a hook from some future version naming something this build
         // has never heard of is still, at worst, a local session in a terminal.
+        // Whether this session's own transcript is worth asking what it is
+        // called. See TranscriptIdentity for the case this exists for — a status
+        // file whose title was caught empty in a one-off race and never
+        // corrected, because the hook only runs when something happens.
+        //
+        // Claude Code only: those three records are its own, and a Codex rollout
+        // contains none of them, so asking would be a tail read per scan that
+        // could only ever answer nothing. Same reason the hook's own branch is
+        // gated on the CLI.
+        //
+        // Asked only when something is actually missing, which is what keeps
+        // this off the path of every healthy session. A title the hook did
+        // record is never second-guessed: it read the same file with the same
+        // precedence, and if the two ever disagreed the status file is the more
+        // recent reading.
+        // The answer for one transcript, remembered against the file's length.
+        //
+        // Keyed on length rather than on a timer, because length is what decides
+        // whether the answer *could* have changed: these records are appended,
+        // never rewritten, so a file that has not grown cannot have gained a
+        // name. A stat per untitled session per scan is nothing; a 256KB tail
+        // read every two seconds for every unnamed session would not be.
+        //
+        // The negative answer is cached the same way as the positive one, which
+        // is the half that matters for cost — a session that genuinely has no
+        // title yet is exactly the one this would otherwise re-read forever.
+        // It still notices the title arriving, because arriving means the file
+        // grew.
+        //
+        // Excluded from coverage: the two file-system calls and the dictionary
+        // around them. What is worth asserting is which sessions get asked
+        // (WantsIdentityFromTranscript), what is done with the answer
+        // (ApplyIdentity) and how a transcript is read (TranscriptIdentity.From)
+        // — all three pure, all three tested. This is the stat and the cache.
+        [ExcludeFromCodeCoverage]
+        private TranscriptIdentity IdentityFor(string path)
+        {
+            long length;
+            try { length = new FileInfo(path).Length; }
+            catch { return TranscriptIdentity.None; }
+
+            if (_identityCache.TryGetValue(path, out var cached) && cached.Length == length)
+                return cached.Identity;
+
+            var identity = TranscriptIdentity.From(TranscriptReader.TailLines(path));
+            _identityCache[path] = (length, identity);
+            return identity;
+        }
+
+        private readonly Dictionary<string, (long Length, TranscriptIdentity Identity)>
+            _identityCache = new(StringComparer.Ordinal);
+
+        internal static bool WantsIdentityFromTranscript(SessionStatus status) =>
+            status.Source == SessionSource.ClaudeCode
+            && !string.IsNullOrEmpty(status.TranscriptPath)
+            && (string.IsNullOrEmpty(status.Title) || string.IsNullOrEmpty(status.Color));
+
+        // Fills in only what the status file is missing, and only from a
+        // non-empty answer. Never an overwrite: a name or colour the hook
+        // recorded stays exactly as it was, so this can never move an orb that
+        // was already right.
+        internal static void ApplyIdentity(SessionStatus status, TranscriptIdentity identity)
+        {
+            if (string.IsNullOrEmpty(status.Title) && !string.IsNullOrEmpty(identity.Title))
+                status.Title = identity.Title;
+
+            if (string.IsNullOrEmpty(status.Color) && !string.IsNullOrEmpty(identity.Color))
+                status.Color = identity.Color;
+        }
+
         internal static SessionSource SourceOf(SessionStatus status) =>
             string.Equals(status.Cli, "codex", StringComparison.OrdinalIgnoreCase)
                 ? SessionSource.Codex
@@ -880,6 +950,11 @@ namespace ClaudeBuddy
                 if (status is null) continue;
 
                 status.Source = SourceOf(status);
+
+                // A name the status file never caught, read from the transcript
+                // it already names. Costs nothing for a session that has one.
+                if (WantsIdentityFromTranscript(status))
+                    ApplyIdentity(status, IdentityFor(status.TranscriptPath!));
 
                 // A CLI switched off is ignored, not unwired. Its hooks keep
                 // writing status files — they are the user's own config, and a
