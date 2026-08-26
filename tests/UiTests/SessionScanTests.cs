@@ -78,11 +78,15 @@ public class SessionScanTests
         }
 
         // A transcript on disk, so the rule under test is answered by a real
-        // File.Exists rather than by a predicate a test handed in.
-        public string WriteTranscript(string sessionId)
+        // File.Exists rather than by a predicate a test handed in. `rows` adds
+        // identity records for the sessions that are about to be asked what
+        // they are called.
+        public string WriteTranscript(string sessionId, params string[] rows)
         {
             var path = Path.Combine(Dir, sessionId + ".jsonl");
-            File.WriteAllText(path, "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}\n");
+            var lines = new List<string> { "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}" };
+            lines.AddRange(rows);
+            File.WriteAllText(path, string.Join("\n", lines) + "\n");
             return path;
         }
 
@@ -1019,6 +1023,71 @@ public class SessionScanTests
         // Codex prefix through a real scan rather than a direct call.
         Assert.Equal("/Users/warren/evidence\njob-lawyer", keys["titled-a"]);
         Assert.Equal("codex\n/Users/warren/evidence\nmakayla-lawyer", keys["titled-b"]);
+    }
+
+    // --- a name the status file never caught (CB-11) ---
+
+    [AvaloniaFact]
+    public void AnUntitledSessionTakesItsNameFromItsOwnTranscript()
+    {
+        // The fork case, end to end: the status file records no title because
+        // the hook fired once at fork time and lost the race with Claude Code's
+        // own append, and never fired again. The transcript has carried the name
+        // since its second row.
+        using var scratch = new Scratch();
+
+        var transcript = scratch.WriteTranscript("forked-job",
+            "{\"type\":\"custom-title\",\"customTitle\":\"evidence (2)\"}",
+            "{\"type\":\"agent-color\",\"agentColor\":\"teal\"}");
+
+        scratch.Write("forked-job", title: "", transcriptPath: transcript);
+
+        var status = Scan(scratch).StatusFor("forked-job");
+
+        Assert.NotNull(status);
+        Assert.Equal("evidence (2)", status!.Title);
+        Assert.Equal("teal", status.Color);
+
+        // Which is the visible payoff: it stops wearing the letters its parent
+        // is already wearing.
+        Assert.Equal("E2", OrbGlyph.For(status.Title, twoLetter: true));
+    }
+
+    [AvaloniaFact]
+    public void AStatusFileThatAlreadyHasANameIsLeftAlone()
+    {
+        // Never an overwrite. The hook read the same file with the same
+        // precedence, so if the two ever disagreed the status file is the more
+        // recent reading — and this must not be able to move an orb that was
+        // already right.
+        using var scratch = new Scratch();
+
+        var transcript = scratch.WriteTranscript("named-job",
+            "{\"type\":\"custom-title\",\"customTitle\":\"from the transcript\"}");
+
+        scratch.Write("named-job", title: "from the hook", transcriptPath: transcript);
+
+        var status = Scan(scratch).StatusFor("named-job");
+
+        Assert.NotNull(status);
+        Assert.Equal("from the hook", status!.Title);
+    }
+
+    [AvaloniaFact]
+    public void ATranscriptWithNoNameInItLeavesTheOrbAsItIs()
+    {
+        // The unchanged path, which is most sessions: nothing found, nothing
+        // written, and the orb keeps falling back to the folder name exactly as
+        // it does today.
+        using var scratch = new Scratch();
+
+        var transcript = scratch.WriteTranscript("nameless-job");
+        scratch.Write("nameless-job", title: "", transcriptPath: transcript);
+
+        var status = Scan(scratch).StatusFor("nameless-job");
+
+        Assert.NotNull(status);
+        Assert.Equal("", status!.Title);
     }
 
     // The key each orb actually carries, read off the windows the scan built
