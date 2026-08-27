@@ -1386,16 +1386,7 @@ namespace ClaudeBuddy
 
                 if (!SessionPresence.SweepDue(since, now, SweepGrace)) continue;
 
-                try
-                {
-                    File.Delete(Path.Combine(_statusDir, sessionId + ".txt"));
-                }
-                catch
-                {
-                    // Vanished under us, or not ours to delete. Either way the
-                    // next scan will not find it, or will try again.
-                }
-
+                DeleteStatusFile(sessionId);
                 _deadSince.Remove(sessionId);
             }
 
@@ -2171,14 +2162,26 @@ namespace ClaudeBuddy
                 return;
             }
 
+            DeleteStatusFile(sessionId);
+        }
+
+        // One place that knows how a status file is removed, and the only place
+        // that swallows the failure. Both callers want exactly the same thing:
+        // the file gone if it can be, and no complaint if it cannot.
+        //
+        // Nothing is reported because there is nowhere to report it. A file that
+        // vanished under us has already had the effect the caller asked for; one
+        // this process may not delete will simply be found again on the next
+        // scan, which is a better outcome than a message this app has no
+        // vocabulary for.
+        private void DeleteStatusFile(string sessionId)
+        {
             try
             {
                 File.Delete(Path.Combine(_statusDir, sessionId + ".txt"));
             }
             catch
             {
-                // Already gone, or not ours to delete. The orb goes on the next
-                // scan either way if the file is not there.
             }
         }
 
