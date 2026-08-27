@@ -646,161 +646,211 @@ public class SessionPresenceTests
         Assert.False(SessionPresence.ClaimStillHolds("", Glyph + Work));
     }
 
-    // --- ViewerAmong ---------------------------------------------------------
+    // --- ViewerAmong: the universe first -------------------------------------
+
+    // The machine that forced round nine, as a fixture. Four panes, one identical
+    // title. `%6` is the user's real viewer on the only attached server; the other
+    // three are two teammates and a remote-control relay on a detached
+    // `claude-swarm-<pid>` socket — and teammates title their own TUIs with the
+    // team title, so they are perfect impostors by construction.
+    private const string Swarm = "/tmp/tmux-501/claude-swarm-78137";
 
     private static SessionPresence.ViewerPane Pane(
-        string id, string window = "warren:1", bool active = true, bool claimed = false) =>
-        new(id, window, active, claimed);
+        string id, string window = "placement:1", bool active = true, bool claimed = false,
+        string socket = "") =>
+        new(socket, id, window, active, claimed);
+
+    private static IReadOnlyList<SessionPresence.ViewerPane> TheFourPanes() => new[]
+    {
+        Pane("%6", "placement:1", active: true),                                  // his chat
+        Pane("%98", "rc:1", active: true, socket: Swarm),                         // the relay
+        Pane("%21", "claude-swarm:1", active: false, socket: Swarm, claimed: true),
+        Pane("%53", "claude-swarm:1", active: true, socket: Swarm, claimed: true),
+    };
+
+    private static IReadOnlySet<string> Attached(params string[] sockets) =>
+        new HashSet<string>(sockets, StringComparer.Ordinal);
+
+    private static IReadOnlySet<(string Socket, string Window)> Watching(
+        params (string, string)[] windows) => new HashSet<(string, string)>(windows);
+
+    // The whole of round nine in one assertion. Only the default server has a
+    // client, so three of the four panes are not viewers at all — not ranked last,
+    // not tie-broken, simply not in the universe — and the one that is left is the
+    // chat the orb was clicked from.
+    [Fact]
+    public void OnlyPanesOnAServerSomebodyIsAttachedToAreViewers()
+    {
+        var (verdict, found) = SessionPresence.ViewerAmong(
+            TheFourPanes(),
+            Attached(""),
+            Watching(("", "placement:1")));
+
+        Assert.Equal(SessionPresence.ViewerVerdict.TheUserIsLookingAtIt, verdict);
+        Assert.Equal("%6", found!.Value.Pane);
+    }
+
+    // The same four panes with nobody attached anywhere: no viewer at all. A
+    // detached server is a screen nobody is looking at, so "focusing" one of its
+    // panes would select something invisible and then flash an acknowledgment for
+    // having done it. Falling through to the attach ladder is the honest answer.
+    [Fact]
+    public void WithNobodyAttachedAnywhereThereIsNoViewer()
+    {
+        var (verdict, found) = SessionPresence.ViewerAmong(
+            TheFourPanes(), Attached(), Watching());
+
+        Assert.Equal(SessionPresence.ViewerVerdict.NoneFound, verdict);
+        Assert.Null(found);
+    }
+
+    // And the case the filter is *not* allowed to swallow: a teammate someone
+    // attached to by hand. That server now has a client, so its panes are in the
+    // universe — which is why the inner rules are kept rather than deleted. Here
+    // the claim exclusion does the work it was built for: both teammate panes are
+    // claimed, so neither is focused, and the relay's unclaimed pane is the answer.
+    [Fact]
+    public void AttachingToASwarmServerBringsItsPanesIntoTheUniverse()
+    {
+        var (verdict, found) = SessionPresence.ViewerAmong(
+            TheFourPanes(),
+            Attached(Swarm),
+            Watching((Swarm, "claude-swarm:1")));
+
+        // %53 is active in the window being watched — but it is claimed, and the
+        // "already looking at it" answer does not consult claims, because it cannot
+        // be wrong about which session it found.
+        Assert.Equal(SessionPresence.ViewerVerdict.TheUserIsLookingAtIt, verdict);
+        Assert.Equal("%53", found!.Value.Pane);
+    }
 
     [Fact]
     public void NoCandidatesIsNoViewer()
     {
-        var (verdict, pane) = SessionPresence.ViewerAmong(
-            Array.Empty<SessionPresence.ViewerPane>(), "warren:1", anyClientAttached: true);
+        var (verdict, found) = SessionPresence.ViewerAmong(
+            Array.Empty<SessionPresence.ViewerPane>(), Attached(""), Watching());
 
         Assert.Equal(SessionPresence.ViewerVerdict.NoneFound, verdict);
-        Assert.Null(pane);
+        Assert.Null(found);
     }
 
-    // The case round seven exists for: the pane in front of them is showing it,
-    // so the click does nothing.
+    // Same window, but not the pane being watched — a split scrolled away from.
+    // That is "elsewhere": selecting it is a real move and a wanted one.
     [Fact]
-    public void TheActivePaneOfTheUsersOwnWindowMeansTheyAreLookingAtIt()
+    public void AnInactivePaneInTheWatchedWindowIsStillElsewhere()
+    {
+        var (verdict, found) = SessionPresence.ViewerAmong(
+            new[] { Pane("%7", "placement:1", active: false) },
+            Attached(""),
+            Watching(("", "placement:1")));
+
+        Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
+        Assert.Equal("%7", found!.Value.Pane);
+    }
+
+    // Attached, but which window could not be resolved. The weaker failure: the
+    // server has a client so its panes stay in the universe, and selecting one does
+    // reach a screen — it just cannot be called the pane in front of them.
+    [Fact]
+    public void AnAttachedServerWithNoResolvedWindowStillAllowsElsewhere()
+    {
+        var (verdict, found) = SessionPresence.ViewerAmong(
+            new[] { Pane("%6", "placement:1", active: true) }, Attached(""), Watching());
+
+        Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
+        Assert.Equal("%6", found!.Value.Pane);
+    }
+
+    // A window id is per server, so the same name on two servers is two different
+    // windows. Watching one must not make the other's pane read as the one in
+    // front of the user — which is why the pair is matched and not the string.
+    [Fact]
+    public void AWindowNameOnAnotherServerIsADifferentWindow()
     {
         var (verdict, _) = SessionPresence.ViewerAmong(
-            new[] { Pane("%6", "warren:1", active: true) }, "warren:1", anyClientAttached: true);
-
-        Assert.Equal(SessionPresence.ViewerVerdict.TheUserIsLookingAtIt, verdict);
-    }
-
-    // Same window, but not the pane they are looking at — a split they have
-    // scrolled away from. That is "elsewhere": selecting it is a real move and a
-    // wanted one.
-    [Fact]
-    public void AnInactivePaneInTheirWindowIsStillElsewhere()
-    {
-        var (verdict, pane) = SessionPresence.ViewerAmong(
-            new[] { Pane("%7", "warren:1", active: false) }, "warren:1", anyClientAttached: true);
+            new[] { Pane("%53", "claude-swarm:1", active: true, socket: Swarm) },
+            Attached("", Swarm),
+            Watching(("", "claude-swarm:1")));
 
         Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
-        Assert.Equal("%7", pane);
     }
 
-    // Their window could not be resolved, so nothing can be called the pane they
-    // are looking at and every match is treated as elsewhere. Fails toward doing
-    // something visible rather than toward silently doing nothing, which is the
-    // right way round: a click that opens a pane is recoverable, a click that
-    // decides you were already looking at something is not distinguishable from
-    // a broken one.
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    public void WithNoKnownWindowEveryMatchIsElsewhere(string? usersWindow)
-    {
-        var (verdict, pane) = SessionPresence.ViewerAmong(
-            new[] { Pane("%6", "warren:1", active: true) }, usersWindow, anyClientAttached: true);
-
-        Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
-        Assert.Equal("%6", pane);
-    }
-
-    // The collision guard, and the asymmetry that makes a shared title safe. Four
-    // panes carried one identical title for three sessions on the machine this was
-    // built for, because every member of an agent team inherits the team session's
-    // title. A pane another session's status file claims is the pane most likely to
-    // be one of those, and it is reachable by its own recorded coordinates anyway.
+    // The claim exclusion, inside the visible universe. Nearly vestigial there —
+    // teammates and relays are on detached sockets by construction — but kept,
+    // because "by construction" is a fact about how Claude Code launches things
+    // and not a guarantee.
     [Fact]
-    public void APaneAnotherSessionClaimsIsNotFocused()
+    public void AVisibleClaimedPaneIsNotFocused()
     {
-        var (verdict, pane) = SessionPresence.ViewerAmong(
-            new[] { Pane("%53", "claude-swarm:1", active: true, claimed: true) }, "warren:1",
-            anyClientAttached: true);
+        var (verdict, found) = SessionPresence.ViewerAmong(
+            new[] { Pane("%53", "claude-swarm:1", active: true, claimed: true) },
+            Attached(""),
+            Watching(("", "placement:1")));
 
         Assert.Equal(SessionPresence.ViewerVerdict.NoneFound, verdict);
-        Assert.Null(pane);
+        Assert.Null(found);
     }
 
-    // ...but the claim does not stop the do-nothing answer, and that is
-    // deliberate. Whatever a matched pane in front of the user holds, they are
-    // reading it, so doing nothing cannot be wrong about which session it found.
+    // ...and the asymmetry survives: a claim never blocks the answer that creates
+    // nothing. Whatever a pane in front of the user holds, they are reading it.
     [Fact]
     public void AClaimedPaneTheUserIsLookingAtStillStopsTheClick()
     {
         var (verdict, _) = SessionPresence.ViewerAmong(
-            new[] { Pane("%6", "warren:1", active: true, claimed: true) }, "warren:1",
-            anyClientAttached: true);
+            new[] { Pane("%6", "placement:1", active: true, claimed: true) },
+            Attached(""),
+            Watching(("", "placement:1")));
 
         Assert.Equal(SessionPresence.ViewerVerdict.TheUserIsLookingAtIt, verdict);
     }
 
-    // A server with no client anywhere is showing its panes to nobody, however
-    // convincingly their titles name a conversation. So there is no viewer to
-    // find — a click that "focused" one of them would select a pane on an
-    // invisible screen and then flash an acknowledgment for it. Falling through to
-    // the attach ladder is the honest answer, because it opens something the user
-    // can actually see. A viewer pane has to be attachable to an eyeball.
+    // The tie-break, also inside the visible universe: the pane active in its own
+    // window, else the first found.
     [Fact]
-    public void WithNothingAttachedThereIsNoViewerHoweverWellThePanesMatch()
+    public void AmongSeveralVisibleElsewhereTheActiveOneWins()
     {
-        var (verdict, pane) = SessionPresence.ViewerAmong(
-            new[] { Pane("%6", "warren:1", active: true) },
-            usersWindow: "warren:1",
-            anyClientAttached: false);
-
-        Assert.Equal(SessionPresence.ViewerVerdict.NoneFound, verdict);
-        Assert.Null(pane);
-    }
-
-    // The residual ambiguity, and the one case rarity is an honest answer to: two
-    // sessions with the same title each viewed in an *unclaimed* pane — two leads
-    // someone renamed identically, both open. Nothing can tell those apart, so the
-    // tie-break is stated: active in its own window, else first found. The team
-    // collision is a different thing and is not answered by rarity — see
-    // APaneAnotherSessionClaimsIsNotFocused.
-    [Fact]
-    public void AmongSeveralElsewhereTheActiveOneWins()
-    {
-        var (verdict, pane) = SessionPresence.ViewerAmong(
+        var (verdict, found) = SessionPresence.ViewerAmong(
             new[]
             {
                 Pane("%21", "claude-swarm:1", active: false),
-                Pane("%53", "claude-swarm:1", active: true),
+                Pane("%53", "claude-swarm:2", active: true),
             },
-            "warren:1", anyClientAttached: true);
+            Attached(""),
+            Watching(("", "placement:1")));
 
         Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
-        Assert.Equal("%53", pane);
+        Assert.Equal("%53", found!.Value.Pane);
     }
 
     [Fact]
     public void WithNoneActiveTheFirstFoundWins()
     {
-        var (_, pane) = SessionPresence.ViewerAmong(
+        var (_, found) = SessionPresence.ViewerAmong(
             new[]
             {
                 Pane("%21", "claude-swarm:1", active: false),
                 Pane("%53", "claude-swarm:2", active: false),
             },
-            "warren:1", anyClientAttached: true);
+            Attached(""),
+            Watching());
 
-        Assert.Equal("%21", pane);
+        Assert.Equal("%21", found!.Value.Pane);
     }
 
-    // A claimed pane is skipped rather than taken as the answer, so an unclaimed
-    // one behind it still wins.
     [Fact]
     public void AClaimedPaneDoesNotShadowAnUnclaimedOne()
     {
-        var (verdict, pane) = SessionPresence.ViewerAmong(
+        var (verdict, found) = SessionPresence.ViewerAmong(
             new[]
             {
                 Pane("%53", "claude-swarm:1", active: true, claimed: true),
                 Pane("%99", "other:1", active: false),
             },
-            "warren:1", anyClientAttached: true);
+            Attached(""),
+            Watching());
 
         Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
-        Assert.Equal("%99", pane);
+        Assert.Equal("%99", found!.Value.Pane);
     }
 
     // --- RuledOutAsAJob ------------------------------------------------------

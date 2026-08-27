@@ -177,6 +177,7 @@ namespace ClaudeBuddy
                             acknowledge?.Invoke();
                             return;
 
+
                         // On screen elsewhere. Focused through the ordinary pane
                         // tail — no attach, no split, nothing new.
                         // Acknowledged as well, and for the same reason: selecting
@@ -184,7 +185,7 @@ namespace ClaudeBuddy
                         // invisible as doing nothing, and the orb is the one
                         // surface they *are* looking at.
                         case (SessionPresence.ViewerVerdict.ElsewhereInTmux, { } showing):
-                            FocusPaneIfAny(showing, status.Cwd);
+                            FocusPaneIfAny(showing.Pane, status.Cwd, showing.Socket);
                             acknowledge?.Invoke();
                             return;
                     }
@@ -259,11 +260,18 @@ namespace ClaudeBuddy
         // its absence is what made a second click look like it did nothing: the
         // window existed and was reachable by hand, and the click stopped short of
         // switching to it.
-        private static void FocusPaneIfAny(string? pane, string cwd)
+        private static void FocusPaneIfAny(string? pane, string cwd, string? socket = null)
         {
             if (string.IsNullOrEmpty(pane)) return;
 
-            FocusCore(new SessionStatus { TmuxPane = pane, Cwd = cwd });
+            // The socket matters as much as the pane id, because a pane id is per
+            // server: `%98` on one server and `%98` on another are different panes,
+            // and looking for the wrong one finds nothing, says nothing, and drops
+            // the click through to minting a new window. Harmless while only the
+            // default server was ever read; a live bug the moment the viewer scan
+            // could return a pane from a second attached server, which is exactly
+            // what round nine's visible universe allows.
+            FocusCore(new SessionStatus { TmuxPane = pane, TmuxSocket = socket ?? "", Cwd = cwd });
         }
 
         // Types transcribed speech into the exact terminal/pane a session's
