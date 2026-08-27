@@ -66,7 +66,7 @@ public class GatewayScanTests
     private static void Publish(string sessionsJson)
     {
         ClaudeBuddySettings.OpenClawEnabled = true;
-        ClaudeBuddySettings.OpenClawShowHeartbeats = true;
+        ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
         ClaudeBuddySettings.OpenClawActiveWithinMinutes =
             ClaudeBuddySettings.OpenClawActiveWithinAll;
 
