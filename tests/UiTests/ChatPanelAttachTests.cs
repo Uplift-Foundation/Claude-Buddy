@@ -52,6 +52,34 @@ public class ChatPanelAttachTests : IDisposable
 
     private static void Flush() => Dispatcher.UIThread.RunJobs();
 
+    // The nine required members and nothing else, the way RemoteChat.cs's own
+    // comment describes the floor every transport has to clear.
+    private sealed class BareSession : IRemoteChatSession
+    {
+        public string SessionId { get; } = "attach-bare-" + Guid.NewGuid();
+        public string DisplayName => "Bare Session";
+        public RemoteChatState State => RemoteChatState.Connected;
+        public IReadOnlyList<ChatTurn> History { get; } = new List<ChatTurn>();
+
+        public event Action<ChatTurn>? TurnAdded;
+        public event Action<ChatTurn>? TurnUpdated;
+        public event Action<RemoteChatState>? StateChanged;
+
+        public Task SendAsync(string text)
+        {
+            // Nothing is ever sent through this one; the events exist because the
+            // interface has them and the panel subscribes.
+            TurnAdded?.Invoke(new ChatTurn { Role = ChatRole.User, Text = text });
+            TurnUpdated?.Invoke(new ChatTurn());
+            StateChanged?.Invoke(RemoteChatState.Connected);
+            return Task.CompletedTask;
+        }
+
+        public void Cancel()
+        {
+        }
+    }
+
     private static (TextBox Input, Grid Attach) Composer(ChatPanel panel) =>
         (panel.FindControl<TextBox>("Input")!, panel.FindControl<Grid>("AttachButton")!);
 
@@ -114,6 +142,35 @@ public class ChatPanelAttachTests : IDisposable
         Flush();
 
         Assert.Equal(1, fake.AttachCalls);
+    }
+
+    // A transport that implements neither optional interface — which is the shape
+    // RemoteChat.cs's own comment says every one of them must degrade to. The
+    // panel falls back to the ordinary hint and shows no button, and clicking the
+    // button anyway does nothing: the panel is a process-wide singleton and the
+    // handler runs against whatever is bound at the time, so null-safety there is
+    // the difference between a stale click and an exception in the UI thread.
+    [AvaloniaFact]
+    public void ASessionWithNoOptionalInterfacesGetsTheOrdinaryComposerAndNoButton()
+    {
+        var bare = new BareSession();
+        _sessionIdsToClean.Add(bare.SessionId);
+
+        ChatPanel.OpenFor(NewOrb(), bare);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var (input, attach) = Composer(panel);
+
+        Assert.Equal("Message…", input.Watermark);
+        Assert.False(attach.IsVisible);
+
+        attach.RaiseEvent(new PointerPressedEventArgs(
+            attach, new Pointer(2, PointerType.Mouse, true), attach, default, 0,
+            new PointerPointProperties(RawInputModifiers.LeftMouseButton,
+                PointerUpdateKind.LeftButtonPressed),
+            KeyModifiers.None));
+        Flush();
     }
 
     // Rebinding the panel to a different session re-reads both halves. The panel
