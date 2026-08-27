@@ -646,6 +646,55 @@ public class SessionPresenceTests
         Assert.False(SessionPresence.ClaimStillHolds("", Glyph + Work));
     }
 
+    // --- AnswersTheClick -----------------------------------------------------
+
+    // Both found verdicts answer the click, and they answer it the same way. Round
+    // ten's correction: being tmux-active is not being on the user's screen. These
+    // orbs float over every application and the terminal is routinely behind a
+    // browser when one is clicked, so a pane can be current in its tmux session and
+    // invisible on the desktop at the same moment — which is how "mechanically
+    // perfect" and "still doesn't work" were both true of the same click.
+    [Fact]
+    public void BothFoundVerdictsAnswerTheClick()
+    {
+        Assert.True(SessionPresence.AnswersTheClick(
+            SessionPresence.ViewerVerdict.TheUserIsLookingAtIt));
+
+        Assert.True(SessionPresence.AnswersTheClick(
+            SessionPresence.ViewerVerdict.ElsewhereInTmux));
+    }
+
+    // And nothing found means the click carries on down the attach ladder, which is
+    // the one case that must still create something.
+    [Fact]
+    public void NothingFoundDoesNotAnswerTheClick()
+    {
+        Assert.False(SessionPresence.AnswersTheClick(SessionPresence.ViewerVerdict.NoneFound));
+    }
+
+    // The invariant the single branch rests on: a verdict that answers the click
+    // always carries a pane to act on. If a found verdict could come back with no
+    // pane, the branch would fall through to the ladder and mint a window for a
+    // session that is already on screen — the exact failure this whole step exists
+    // to prevent.
+    [Fact]
+    public void EveryVerdictThatAnswersTheClickCarriesAPane()
+    {
+        foreach (var candidates in new[]
+                 {
+                     TheFourPanes(),                                             // → looking at it
+                     new[] { Pane("%7", "placement:1", active: false) },          // → elsewhere
+                 })
+        {
+            var (verdict, found) = SessionPresence.ViewerAmong(
+                candidates, Attached(""), Watching(("", "placement:1")));
+
+            Assert.True(SessionPresence.AnswersTheClick(verdict));
+            Assert.NotNull(found);
+            Assert.NotEqual("", found!.Value.Pane);
+        }
+    }
+
     // --- ViewerAmong: the universe first -------------------------------------
 
     // The machine that forced round nine, as a fixture. Four panes, one identical
