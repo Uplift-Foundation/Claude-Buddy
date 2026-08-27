@@ -92,6 +92,51 @@ public class SessionPresenceTests
             SessionPresence.ShapeOf(Status(), JobPhase.Unknown));
     }
 
+    // --- WorthAskingTheDaemon ------------------------------------------------
+
+    // The gate that keeps the subprocess off a quiet machine. `claude agents
+    // --json` is cached for ten seconds and the scan runs every two, so a rule
+    // that asked about every session would spawn a `claude` process every ten
+    // seconds forever — on a machine with nothing but terminal sessions, in
+    // service of a question whose answer cannot change anything.
+    [Fact]
+    public void OnlyASessionTheDaemonCouldKnowAboutIsWorthAsking()
+    {
+        // A background worker's file: a pid of its own, and no terminal, because
+        // the daemon that runs it has none to inherit.
+        Assert.True(SessionPresence.WorthAskingTheDaemon(Status(), knowsATerminal: false));
+
+        // A hook older than the session_pid field. Asked whatever else is true,
+        // which is the rule that predates this one.
+        Assert.True(SessionPresence.WorthAskingTheDaemon(Status(pid: 0), knowsATerminal: true));
+
+        // A session in a window on this machine, or one sharing a pid with such
+        // a session. Neither is a pooled worker, and this is the case that is
+        // almost every session almost all of the time.
+        Assert.False(SessionPresence.WorthAskingTheDaemon(Status(), knowsATerminal: true));
+    }
+
+    // Codex has no background jobs to be one of, and a gateway or bridged
+    // session is not on this machine at all — asking the local daemon about one
+    // is asking about a session it has never heard of, once per scan, forever.
+    [Fact]
+    public void TheDaemonIsNeverAskedAboutAnythingButClaudeCode()
+    {
+        var others = new[]
+        {
+            SessionSource.Codex, SessionSource.OpenClaw, SessionSource.RemoteControl,
+        };
+
+        foreach (var source in others)
+        {
+            Assert.False(SessionPresence.WorthAskingTheDaemon(
+                Status(source: source), knowsATerminal: false));
+
+            Assert.False(SessionPresence.WorthAskingTheDaemon(
+                Status(source: source, pid: 0), knowsATerminal: false));
+        }
+    }
+
     // --- IsParked: background sessions ---------------------------------------
 
     [Fact]

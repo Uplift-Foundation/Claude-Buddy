@@ -1168,6 +1168,118 @@ public class SessionScanTests
         }
     }
 
+    [AvaloniaFact]
+    public void ADeadPidsFileSurvivesUntilTheGraceHasActuallyPassed()
+    {
+        // The default ten minutes, so the second sighting is not yet due. The
+        // grace exists because the evidence can be momentarily wrong in one
+        // direction that matters — a recycled or briefly unreadable pid — and ten
+        // minutes of a file nobody is looking at costs nothing, while deleting a
+        // file the app was wrong about costs the user their session's identity.
+        using var scratch = new Scratch();
+        scratch.Write("recently-dead", pid: NeverAllocatedPid);
+        var path = Path.Combine(scratch.Dir, "recently-dead.txt");
+
+        var manager = Manager(scratch, () => Listing());
+
+        manager.ScanAndUpdate();
+        manager.ScanAndUpdate();
+        manager.ScanAndUpdate();
+
+        Assert.True(File.Exists(path));
+    }
+
+    // --- orphaned team members ---
+
+    // The green cluster on the screenshot: real claude processes in a detached
+    // tmux socket, with status files carrying tmux fields, so KnowsATerminal
+    // keeps them forever. Their arrows had already silently vanished with the
+    // lead they pointed at — TeamLinks draws nothing to a lead that is not on
+    // screen — which left the orb as the only thing still claiming anything
+    // about them.
+    //
+    // Membership is seeded into AgentTeam's cache rather than read off a real
+    // process, the same way the sibling test above does it: the real answer comes
+    // from a pid's command line, which a test cannot arrange without spawning a
+    // `claude` process carrying agent-team arguments.
+    private static Dictionary<int, (AgentTeam.Membership Value, long Stamp)> TeamCache() =>
+        (Dictionary<int, (AgentTeam.Membership Value, long Stamp)>)typeof(AgentTeam)
+            .GetField("Cache", BindingFlags.NonPublic | BindingFlags.Static)!
+            .GetValue(null)!;
+
+    [AvaloniaFact]
+    public void ATeamMemberWhoseLeadHasGoneIsDimmed()
+    {
+        var cache = TeamCache();
+        lock (cache) cache.Clear();
+        try
+        {
+            lock (cache)
+            {
+                cache[LivePid] = (
+                    new AgentTeam.Membership("absent-lead", "QA", ""), Environment.TickCount64);
+            }
+
+            using var scratch = new Scratch();
+            scratch.Write("orphan");
+
+            var manager = Manager(scratch, () => Listing());
+            manager.ScanAndUpdate();
+
+            var status = manager.StatusFor("orphan");
+            Assert.NotNull(status);
+            Assert.Equal("absent-lead", status!.Lead);
+            Assert.Equal(LocalSessionShape.Teammate, status.Shape);
+            Assert.True(status.Parked);
+
+            // Dimmed, not removed — for the same reason a parked job is kept.
+            Assert.Contains("orphan", OrbIds(manager));
+        }
+        finally
+        {
+            lock (cache) cache.Clear();
+        }
+    }
+
+    [AvaloniaFact]
+    public void ATeamMemberWhoseLeadIsOnScreenIsNotDimmed()
+    {
+        // The other half, and the one that would be the worse failure: dimming a
+        // live team says four agents at work are doing nothing.
+        //
+        // Two files on one pid without colliding in Superseded, because they name
+        // different CLIs — the trick the sibling tests use. AgentTeam.Of caches
+        // by pid alone, so the one seeded membership answers for both: the Codex
+        // entry never consults it (Lead is only derived for Claude Code), and the
+        // Claude Code entry reads its lead out of it.
+        var cache = TeamCache();
+        lock (cache) cache.Clear();
+        try
+        {
+            lock (cache)
+            {
+                cache[LivePid] = (
+                    new AgentTeam.Membership("present-lead", "QA", ""), Environment.TickCount64);
+            }
+
+            using var scratch = new Scratch();
+            scratch.Write("present-lead", cli: "codex");
+            scratch.Write("member");
+
+            var manager = Manager(scratch, () => Listing());
+            manager.ScanAndUpdate();
+
+            var status = manager.StatusFor("member");
+            Assert.NotNull(status);
+            Assert.Equal(LocalSessionShape.Teammate, status!.Shape);
+            Assert.False(status.Parked);
+        }
+        finally
+        {
+            lock (cache) cache.Clear();
+        }
+    }
+
     // --- dismiss and end ---
 
     [AvaloniaFact]
