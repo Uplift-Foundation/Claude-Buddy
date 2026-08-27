@@ -110,6 +110,43 @@ namespace ClaudeBuddy
                 or ClickFallback.AttachBackground
                 or ClickFallback.AttachById;
 
+        // Whether the team lead's window is allowed to answer this click.
+        //
+        // It is allowed only when nothing else would show the session that was
+        // actually clicked, and getting that round the right way is the whole of
+        // CB-13's team-orb bug. The lead used to be tried *first*, on the
+        // reasoning — stated in Focus, and quoted here because it was wrong
+        // rather than merely incomplete — that "a team member whose lead is
+        // focusable lands on the lead's window today, which works well and is
+        // what the user expects".
+        //
+        // It does not work well, and the failure is invisible, which is why it
+        // survived. The lead's window is, in the normal case, the window the user
+        // is already looking at: it is where they started the team from and where
+        // they are watching it work. Bringing it forward when it is already
+        // forward is indistinguishable from a click that did nothing — and it
+        // shows the *lead's* conversation, not the teammate's, so even when it
+        // does come forward it is the wrong session.
+        //
+        // The differential in the bug report falls straight out of the old
+        // ordering. A non-team orb has no lead, so its click fell through to the
+        // fallback below and opened a window someone could see; a team orb's
+        // click was answered by the lead and stopped there. Measured on the
+        // reporter's own machine: their teammates' panes were alive in a detached
+        // `claude-swarm-<pid>` socket (so AttachSocket was the right answer and
+        // was never asked for), while a lead sitting in the default socket had a
+        // client attached and was focusable — so every teammate click was
+        // swallowed by a window that never moved. The proof it never ran is on
+        // disk: attach-tmux-socket.sh, which that arm writes before it does
+        // anything else, had never been created.
+        //
+        // Pure and named rather than an inverted `if` inside Focus, for the
+        // reason the rest of this file is pure: the old ordering was reachable
+        // only by clicking an orb on a real machine and watching nothing happen,
+        // which is exactly how it stayed wrong.
+        internal static bool LeadMayAnswer(ClickFallback fallback) =>
+            fallback == ClickFallback.None;
+
         // paneAliveButDetached is what FocusTmux learned on the way past: the
         // pane exists, its server answered, the pane was selected — and no
         // client is attached to it anywhere. It is passed in rather than
