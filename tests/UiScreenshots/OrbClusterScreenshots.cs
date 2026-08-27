@@ -130,22 +130,28 @@ public class OrbClusterScreenshots
     // state. A capture of the default would show the two pickers and prove
     // nothing about the ones that appear.
     //
-    // The rows are re-asked of the window and rendered in a panel of their own,
-    // rather than photographed where they sit in the settings page. The first
-    // version did the latter — walking up from the row's label to the first
-    // ancestor over 200x200, the way the Claude Desktop group's capture does —
-    // and it came out *ghosted on Windows only*, every line of text doubled at
-    // a slight offset, while macOS was clean. Font metrics differ between the
-    // runners, so an ancestor picked by its measured size is not necessarily the
-    // same control on both, and the one Windows landed on rendered its subtree
-    // twice.
+    // The rows are re-asked of the window and rendered in a window of their own,
+    // sized to them, and it is that *window* that is captured. Two earlier
+    // versions of this were wrong on Windows only and both are worth recording,
+    // because the macOS capture was clean every time and a green build says
+    // nothing here.
     //
-    // Which is a real trap rather than a cosmetic one: a capture whose framing
-    // depends on how text measured is a capture that can silently start showing
-    // something other than what it is named after. Rendering the rows directly
-    // has no ancestor to guess at, no scroll viewer to clip against, and comes
-    // out identical on both — the same reason the plots above are built from a
-    // canvas rather than screenshotted off a desktop.
+    // The first walked up from the row's label to the first ancestor over
+    // 200x200, the way the Claude Desktop group's capture does. Ghosted on
+    // Windows: every line of text doubled at a slight offset.
+    //
+    // The second rendered the rows in a panel of their own and captured the
+    // panel. Still ghosted — so the ancestor was never the problem. What the two
+    // had in common is that both captured a *nested control whose content was
+    // taller than the window clipping it*: the panel's own capture came out
+    // truncated mid-sentence, which is the same fact showing itself a second
+    // way. In the same Windows run, the whole-window settings capture next door
+    // was crisp.
+    //
+    // So: SizeToContent, and CaptureAlreadyShown. A window is measured to its
+    // content rather than clipping it, and capturing the window is the code path
+    // that has always come out crisp on both runners. Nothing to guess at, and
+    // nothing rendered outside what holds it.
     [AvaloniaFact]
     public void TheOpenClawSectionShowsBothModeRowsAndBothShapeRows()
     {
@@ -172,7 +178,14 @@ public class OrbClusterScreenshots
             var panel = new StackPanel { Width = 520, Margin = new Thickness(16) };
             foreach (var row in settings.OpenClawRows()) panel.Children.Add(row);
 
-            var window = new Window { Content = panel, Width = 552, Height = 900 };
+            // SizeToContent rather than a height guessed here: these rows carry
+            // long help text that wraps to a different number of lines on each
+            // runner, so any fixed height is one that clips on one of them.
+            var window = new Window
+            {
+                Content = panel,
+                SizeToContent = SizeToContent.WidthAndHeight
+            };
 
             // Never closed, for the reason SettingsWindowScreenshots states.
             window.Show();
@@ -190,7 +203,15 @@ public class OrbClusterScreenshots
             Assert.Contains("Cron sessions", labels);
             Assert.Contains("Cron shape", labels);
 
-            ScreenshotHelper.CaptureControl(panel, "settings-openclaw-cluster-rows.png");
+            // The window, not the panel: see the note above this test.
+            ScreenshotHelper.CaptureAlreadyShown(window, "settings-openclaw-cluster-rows.png");
+
+            // Nothing clipped. The whole point of SizeToContent here, and the
+            // thing that was quietly wrong before — a capture that stops
+            // mid-sentence is one a reviewer cannot use.
+            Assert.True(
+                window.Bounds.Height >= panel.Bounds.Height,
+                $"the window is {window.Bounds.Height:0}px for {panel.Bounds.Height:0}px of rows");
         }
         finally
         {
