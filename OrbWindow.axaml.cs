@@ -1977,7 +1977,8 @@ namespace ClaudeBuddy
             TerminalFocuser.Focus(
                 _lastStatus,
                 SessionManager.Instance?.StatusFor(_lastStatus?.Lead),
-                SessionId);
+                SessionId,
+                SessionManager.Instance?.PanesClaimedByOthers(SessionId));
         }
 
         // Put the orb at a position it was dragged to in an earlier run, without
