@@ -412,5 +412,142 @@ namespace ClaudeBuddy.Tests
 
             return count;
         }
+
+        // --- PlacementFor -----------------------------------------------------
+
+        // Round 6a in three cases. "It's taking me to a different tmux window -
+        // not this one": every previous answer moved the user, and the complaint
+        // was never about the destination.
+        [Fact]
+        public void AResolvedActiveWindowMeansSplitBesideTheUser()
+        {
+            Assert.Equal(
+                TerminalScripts.AttachPlacement.BesideTheUser,
+                TerminalScripts.PlacementFor("warren", "warren:3"));
+        }
+
+        // Attached somewhere, but the second lookup failed. A new window in their
+        // own session is still inside the thing they use to move around, which is
+        // what this app did before 6a — a consolation prize, not a wrong answer.
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        public void AClientWithNoResolvableWindowGetsAWindowOfItsOwn(string? activeWindow)
+        {
+            Assert.Equal(
+                TerminalScripts.AttachPlacement.ItsOwnTmuxWindow,
+                TerminalScripts.PlacementFor("warren", activeWindow));
+        }
+
+        // No client attached anywhere: a window created in a detached server is
+        // the same nowhere the orb already pointed at, so neither tmux answer
+        // applies and a terminal of its own is the only one left. Asserted for a
+        // resolved window too, which cannot really happen — the window lookup is
+        // asked of a session a client is on — because the rule must not depend on
+        // that staying true.
+        [Theory]
+        [InlineData(null, null)]
+        [InlineData("", null)]
+        [InlineData(null, "warren:3")]
+        public void NothingAttachedMeansATerminalOfItsOwn(string? session, string? activeWindow)
+        {
+            Assert.Equal(
+                TerminalScripts.AttachPlacement.ATerminalWindow,
+                TerminalScripts.PlacementFor(session, activeWindow));
+        }
+
+        // --- TmuxSplitArgs / TmuxNewWindowArgs --------------------------------
+
+        // The command is the last element and arrives untouched. tmux hands that
+        // element to `sh -c`, so anything this builder did to it would be a
+        // syntax error in a pane that just appeared — see the `sh -n` cases in
+        // tests/IntegrationTests/TmuxAttachScriptTests.
+        [Fact]
+        public void TheSplitPutsTheCommandLastAndUnaltered()
+        {
+            const string command = "'/usr/bin/claude' attach '0e043819'";
+
+            var args = TerminalScripts.TmuxSplitArgs(null, "warren:3", "/tmp/x", command);
+
+            Assert.Equal(command, args[^1]);
+        }
+
+        // -h so the conversation lands beside their work rather than under it, and
+        // -P -F '#{pane_id}' so the new pane's id comes back for the caller to
+        // focus — the same contract new-window already had, and the reason neither
+        // builder selects or raises anything itself.
+        [Fact]
+        public void TheSplitAsksForAHorizontalPaneAndItsId()
+        {
+            var args = TerminalScripts.TmuxSplitArgs(null, "warren:3", "/tmp/x", "cmd");
+
+            Assert.Equal("split-window", args[0]);
+            Assert.Contains("-h", args);
+            Assert.Contains("-P", args);
+            Assert.Contains("#{pane_id}", args);
+
+            // Targeted at the window, not the session: that is the whole
+            // difference between landing beside the user and landing wherever
+            // their session last had current.
+            var target = Array.IndexOf(args, "-t");
+            Assert.Equal("warren:3", args[target + 1]);
+        }
+
+        // `-c ''` fails and would take the split with it, which is the same trap
+        // TmuxAttachScript's `cd` guard exists for. Omitted, not passed empty.
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        public void NoCwdMeansNoDashC(string? cwd)
+        {
+            Assert.DoesNotContain("-c", TerminalScripts.TmuxSplitArgs(null, "warren:3", cwd, "cmd"));
+            Assert.DoesNotContain("-c", TerminalScripts.TmuxNewWindowArgs(null, "warren", cwd, "cmd"));
+        }
+
+        [Fact]
+        public void ACwdIsPassedThroughDashC()
+        {
+            var args = TerminalScripts.TmuxSplitArgs(null, "warren:3", "/tmp/x", "cmd");
+            var at = Array.IndexOf(args, "-c");
+
+            Assert.True(at > 0);
+            Assert.Equal("/tmp/x", args[at + 1]);
+        }
+
+        // "<session>:" with the colon. Bare, tmux reads the target as a *window*
+        // and refuses with "index N in use" the moment that index is taken; the
+        // trailing colon names the session and lets it pick the next free index.
+        // That was a real failure, which is why it is asserted rather than left to
+        // a comment beside an argument list.
+        [Fact]
+        public void TheNewWindowTargetsTheSessionWithItsColon()
+        {
+            var args = TerminalScripts.TmuxNewWindowArgs(null, "warren", "/tmp/x", "cmd");
+
+            Assert.Equal("new-window", args[0]);
+
+            var target = Array.IndexOf(args, "-t");
+            Assert.Equal("warren:", args[target + 1]);
+        }
+
+        // Both go through TmuxArgs, so both pin the socket when there is one and
+        // pass nothing when there is not — the rule that keeps a swarm socket's
+        // pane from being looked for on the default server.
+        [Fact]
+        public void BothBuildersPinTheSocketWhenGivenOne()
+        {
+            var split = TerminalScripts.TmuxSplitArgs(
+                "/tmp/tmux-501/claude-swarm-1", "warren:3", "/tmp/x", "cmd");
+
+            Assert.Equal("-S", split[0]);
+            Assert.Equal("/tmp/tmux-501/claude-swarm-1", split[1]);
+            Assert.Equal("split-window", split[2]);
+
+            var window = TerminalScripts.TmuxNewWindowArgs(
+                "/tmp/tmux-501/claude-swarm-1", "warren", "/tmp/x", "cmd");
+
+            Assert.Equal("-S", window[0]);
+            Assert.Equal("new-window", window[2]);
+        }
     }
 }

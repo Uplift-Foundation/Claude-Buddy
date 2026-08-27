@@ -277,9 +277,43 @@ namespace ClaudeBuddy
         // prompted this rule in the first place. Of the two ways to be wrong,
         // only one of them argues with the person looking at the screen.
         internal static bool HasAttachClient(
+            IReadOnlyCollection<string>? attachedIds, string sessionId) =>
+            AttachClientFound(attachedIds, sessionId) ?? true;
+
+        // The same question asked by a *click*, which answers a failed scan the
+        // other way round — and this is now the one authority on it, rather than
+        // one of three overlapping ones.
+        //
+        // The direction first, because it is the part that is easy to get wrong by
+        // sharing. For dimming, wrong-true leaves a genuinely parked orb bright,
+        // which is this branch's original bug in its mildest form, while
+        // wrong-false dims a session the user is sitting in and typing at — so an
+        // unreadable process table means "assume attached". For a click, wrong-true
+        // means raising an app that has no such window and *not* creating the one
+        // the user asked for: a gesture that does nothing, which is the complaint
+        // the whole click ladder exists to answer. So here an unreadable process
+        // table means "assume not attached", and the click creates a pane. A
+        // duplicate is visible and closable; a dead click is neither.
+        //
+        // It replaced AgentTeamViewer.AttachedAlready, which asked the identical
+        // question of the identical population — `ps -eo args=`, matched on
+        // argv[1]=="attach" — and differed only in being uncached and in not
+        // sharing SameJobId. Two rules that mostly agree about whether a window
+        // already exists is the drift this file keeps writing comments against,
+        // and the failure it drifts into is a second window opened onto a
+        // conversation somebody is already reading.
+        internal static bool KnownAttachClient(
+            IReadOnlyCollection<string>? attachedIds, string sessionId) =>
+            AttachClientFound(attachedIds, sessionId) ?? false;
+
+        // Whether the scan found a client for this session, or null for a scan
+        // that could not be done at all. Split out so each policy above is one
+        // line beside its own reasoning, rather than one rule with a direction
+        // that only suits whichever caller was written first.
+        private static bool? AttachClientFound(
             IReadOnlyCollection<string>? attachedIds, string sessionId)
         {
-            if (attachedIds is null) return true;
+            if (attachedIds is null) return null;
             if (string.IsNullOrEmpty(sessionId)) return false;
 
             foreach (var id in attachedIds)

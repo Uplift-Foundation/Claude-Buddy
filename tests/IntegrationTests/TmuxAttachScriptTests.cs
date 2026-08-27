@@ -110,4 +110,53 @@ public class TmuxAttachScriptTests
     {
         AssertParses(TerminalScripts.TmuxAttachScript("/usr/bin/tmux", null, null));
     }
+
+    // --- the split-window command -------------------------------------------
+
+    // The last element of TmuxSplitArgs is a *shell* command, not an argv: tmux
+    // hands it to `sh -c`. So it is the same hazard as the script above one level
+    // down — a quoting mistake there does not throw anywhere this app can see,
+    // it prints a syntax error into a pane that just appeared and leaves the user
+    // looking at a shell instead of their conversation.
+    //
+    // Asserted by parsing that element on its own, which is what `sh -c` will do
+    // to it. The structural half — that it is the last element, that -h and
+    // -P/-F are there, that the socket is pinned — is TerminalScriptsTests'.
+    private static void AssertCommandParses(string[] args)
+    {
+        AssertParses("#!/bin/sh\n" + args[^1] + "\n");
+    }
+
+    [UnixFact]
+    public void TheSplitCommandParses()
+    {
+        AssertCommandParses(TerminalScripts.TmuxSplitArgs(
+            null, "warren:3", "/Users/warren/project",
+            "'/Users/warren/.local/bin/claude' attach '0e043819'"));
+    }
+
+    // A path with every character that would change what the shell does if the
+    // quoting let it through — the same set the script test uses, because the
+    // command is built by the same ShellQuote and travels through this builder
+    // untouched.
+    [UnixFact]
+    public void ASplitCommandFullOfShellMetacharactersParses()
+    {
+        AssertCommandParses(TerminalScripts.TmuxSplitArgs(
+            null, "warren:3", "/tmp",
+            TerminalScripts.ShellQuote("/Users/warren/a \"quoted\" $HOME `whoami`/claude")
+                + " attach " + TerminalScripts.ShellQuote("0e043819")));
+    }
+
+    // The new-window form takes the identical command through the identical
+    // path, and is the fallback that runs when the user's active window could
+    // not be resolved — so it gets the same check rather than being assumed to
+    // behave because its sibling does.
+    [UnixFact]
+    public void TheNewWindowCommandParses()
+    {
+        AssertCommandParses(TerminalScripts.TmuxNewWindowArgs(
+            null, "warren", "/Users/warren/project",
+            "'/Users/warren/.local/bin/claude' attach '0e043819'"));
+    }
 }
