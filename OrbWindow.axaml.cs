@@ -432,11 +432,12 @@ namespace ClaudeBuddy
             }
         }
 
-        // How this orb is currently drawn. Read by the UI suite, and by nothing
-        // in the app — the answer lives in the status.
+        // How this orb is currently drawn. Read by the UI suite, and by nothing in
+        // the app — the answer lives in the status. There used to be an IsParked
+        // bool beside this; it went with the bool it was derived from, since
+        // "dimmed" is now three different statements and a test that only asked
+        // whether an orb was dim could not tell which one it was making.
         internal OrbPresence Presence => _presence;
-
-        internal bool IsParked => _presence != OrbPresence.Present;
 
         // /color identifies *which* session; the fill keeps saying what it's
         // doing. An unknown or missing color name leaves the orb looking the

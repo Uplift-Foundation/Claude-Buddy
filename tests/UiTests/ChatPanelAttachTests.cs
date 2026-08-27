@@ -174,6 +174,57 @@ public class ChatPanelAttachTests : IDisposable
         Flush();
     }
 
+    // The header chip, which is the other place the presence word has to appear:
+    // the orb's tooltip and `claude agents` both say "needs input", and a panel
+    // that said only "background job" would be the one surface hiding the
+    // interesting half.
+    [AvaloniaFact]
+    public void TheHeaderChipNamesTheKindAndWhatItIsWaitingFor()
+    {
+        var orb = NewOrb();
+        orb.UpdateFrom(new SessionStatus
+        {
+            State = "idle",
+            Cwd = "/Users/warren/project",
+            Kind = SessionKind.Background,
+            Shape = LocalSessionShape.Background,
+            Presence = OrbPresence.NeedsInput,
+        });
+
+        var fake = NewFake("Needs input — open the agents view", canOpen: true);
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var chip = ChatPanelTestAccess.Instance!.FindControl<TextBlock>("KindChipText")!;
+
+        Assert.Contains("background job", chip.Text);
+        Assert.Contains("needs input", chip.Text);
+    }
+
+    // A kind with nothing to say about presence — every gateway and bridged
+    // session, which is what this chip was built for. The word is appended, not
+    // substituted, so those are unchanged.
+    [AvaloniaFact]
+    public void TheHeaderChipIsUnchangedForASessionWithNoPresenceToReport()
+    {
+        var orb = NewOrb();
+        orb.UpdateFrom(new SessionStatus
+        {
+            State = "idle",
+            Cwd = "/Users/warren/project",
+            Kind = SessionKind.Channel,
+        });
+
+        var fake = NewFake("Message…", canOpen: false);
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var chip = ChatPanelTestAccess.Instance!.FindControl<TextBlock>("KindChipText")!;
+
+        Assert.Contains("channel", chip.Text);
+        Assert.DoesNotContain("·", chip.Text);
+    }
+
     // Rebinding the panel to a different session re-reads both halves. The panel
     // is a process-wide singleton, so the state left by the last session it
     // showed is the state the next one inherits unless something says otherwise —
