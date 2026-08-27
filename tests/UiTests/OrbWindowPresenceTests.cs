@@ -163,6 +163,60 @@ public class OrbWindowPresenceTests
         Assert.True(Opacity(orb) < 1.0);
     }
 
+    // The force arm, whose only caller in the app is StopRecording — handing the
+    // orb's motion back after dictation, which puts it on the pulse roster
+    // whether or not it is parked. Driven directly here because StopRecording
+    // itself needs a live VoiceRecorder and a Whisper model load, and is
+    // excluded from coverage for exactly that reason.
+    [AvaloniaFact]
+    public void PresenceCanBeReAssertedAfterSomethingElseTookOverTheMotion()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.Show();
+        Flush();
+
+        orb.UpdateFrom(Status(parked: true));
+        Assert.False(IsOnThePulseRoster(orb));
+
+        // What the mic does: motion, on a parked orb, from outside the presence
+        // axis. The un-forced call then declines, since nothing about the
+        // presence changed — which is the whole reason force exists.
+        orb.ApplyState("generating");
+        Assert.True(IsOnThePulseRoster(orb));
+
+        orb.ApplyPresence(true);
+        Assert.True(IsOnThePulseRoster(orb));
+
+        orb.ApplyPresence(true, force: true);
+
+        Assert.True(orb.IsParked);
+        Assert.False(IsOnThePulseRoster(orb));
+        Assert.True(Opacity(orb) < 1.0);
+    }
+
+    // A session that has never reported a state at all — an orb built from a
+    // status file whose state field was empty. Un-parking has to fall back to
+    // "idle" rather than handing ApplyState an empty string, which is the same
+    // fallback the Loaded handler and ReapplyStateColors already make.
+    [AvaloniaFact]
+    public void UnparkingASessionThatNeverReportedAStateFallsBackToIdle()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.Show();
+        Flush();
+
+        orb.UpdateFrom(Status(parked: true, state: ""));
+        Assert.True(orb.IsParked);
+
+        orb.UpdateFrom(Status(parked: false, state: ""));
+
+        Assert.False(orb.IsParked);
+        Assert.Equal(1.0, Opacity(orb));
+
+        // Idle's slow breath, which is what ApplyState's default arm starts.
+        Assert.True(IsOnThePulseRoster(orb));
+    }
+
     // --- the gear badge -----------------------------------------------------
 
     // The badge says what a session *is*, which does not change while it runs.
