@@ -244,7 +244,18 @@ namespace ClaudeBuddy
                 ? name
                 : $"{status.Agent} · {label}";
 
+            // The presence word goes in the tooltip as well as on the badge,
+            // because a mark says *that* there is something and only a word says
+            // what. "needs input" is the daemon's own phrase for it, so the
+            // tooltip and `claude agents` agree rather than inventing a synonym.
+            var presenceWord = PresenceMarkFor(status.Presence)?.Label;
+
             var tipTitle = string.IsNullOrEmpty(described) ? SessionId : described;
+            if (presenceWord is not null)
+            {
+                tipTitle = tipTitle + " · " + presenceWord;
+            }
+
             var tipPath = string.IsNullOrEmpty(status.Cwd) ? null : status.Cwd;
             ToolTip.SetTip(Root, ThoughtBubble(tipTitle, tipPath));
 
@@ -312,7 +323,7 @@ namespace ClaudeBuddy
             // about stillness, and the state block is the thing that starts
             // motion. Applied in the other order, an orb that parked and
             // changed state in one update would be left breathing.
-            ApplyPresence(status.Parked);
+            ApplyPresence(status.Presence);
         }
 
         // --- presence ---------------------------------------------------------
@@ -335,35 +346,73 @@ namespace ClaudeBuddy
         // the parked job again.
         private const double ParkedOpacity = 0.45;
 
-        private bool _parked;
+        private OrbPresence _presence = OrbPresence.Present;
+
+        // The two things a dimmed orb can be saying, and nothing for the two that
+        // have nothing to add.
+        //
+        // "?" for a job the daemon is holding for you: several of the ones this
+        // was written for are literally questions waiting on an answer, and a
+        // question mark is the one glyph nobody has to be taught. "✓" for a job
+        // that is over — the opposite instruction, and worth being unmistakable
+        // from across a screen, because the difference between "this wants you"
+        // and "this wants nothing ever again" is the whole of why they are two
+        // states rather than one dim one.
+        //
+        // Neither is a *kind*: the gear says what the session is and does not
+        // change while it runs. These are presence, they change under it, and
+        // they live in their own corner for exactly that reason.
+        private static (string Glyph, string Label)? PresenceMarkFor(OrbPresence presence) =>
+            presence switch
+            {
+                OrbPresence.NeedsInput => ("?", "needs input"),
+                OrbPresence.Finished => ("\u2713", "finished"),
+                _ => null
+            };
+
+        // What the chat panel and the tooltip say about presence, or null when
+        // there is nothing to say. Read the same way KindLabel is, so the two
+        // cannot disagree about one orb.
+        public string? PresenceLabel => PresenceMarkFor(_lastStatus?.Presence ?? OrbPresence.Present)?.Label;
 
         // internal: driven directly by the UI suite, the same trade ApplyState
-        // documents — and worth asserting on its own, because the two arms are
-        // not symmetrical.
+        // documents — and worth asserting on its own, because the arms are not
+        // symmetrical.
         //
         // Deliberately not folded into ApplyState. That method is gated on the
-        // *state* having changed, and parking does not change it: a parked job's
+        // *state* having changed, and presence does not change it: a parked job's
         // state is a truthful "idle" both before and after, so the gate would
         // never fire and nothing would dim. Presence needs its own gate for
         // exactly that reason.
         //
         // force is for a re-assertion the presence itself did not ask for — see
         // StopRecording, which hands the orb's motion back after dictation and
-        // would otherwise leave a parked orb breathing. Same shape as
+        // would otherwise leave a dimmed orb breathing. Same shape as
         // ApplyAccent's force above and there for the same kind of reason.
-        internal void ApplyPresence(bool parked, bool force = false)
+        internal void ApplyPresence(OrbPresence presence, bool force = false)
         {
-            if (!force && _parked == parked) return;
-            _parked = parked;
+            if (!force && _presence == presence) return;
+            _presence = presence;
 
-            if (parked)
+            var mark = PresenceMarkFor(presence);
+            if (mark is null)
+            {
+                PresenceBadge.IsVisible = false;
+            }
+            else
+            {
+                PresenceGlyph.Text = mark.Value.Glyph;
+                PresenceBadge.IsVisible = true;
+            }
+
+            if (presence != OrbPresence.Present)
             {
                 Root.Opacity = ParkedOpacity;
 
                 // Off the shared roster as well as stopped. StopPulse alone
                 // leaves an orb on it when a heart is beating, which no local
                 // session has — but "no local orb has a heartbeat badge" is a
-                // fact about another feature, and a parked orb that kept being
+                // fact about another feature, and a dimmed orb that kept being
                 // ticked would breathe again the moment that changed.
                 StopPulse();
                 Pulsing.Remove(this);
@@ -383,9 +432,11 @@ namespace ClaudeBuddy
             }
         }
 
-        // Whether this orb is currently drawn as parked. Read by the UI suite,
-        // and by nothing in the app — the answer lives in the status.
-        internal bool IsParked => _parked;
+        // How this orb is currently drawn. Read by the UI suite, and by nothing
+        // in the app — the answer lives in the status.
+        internal OrbPresence Presence => _presence;
+
+        internal bool IsParked => _presence != OrbPresence.Present;
 
         // /color identifies *which* session; the fill keeps saying what it's
         // doing. An unknown or missing color name leaves the orb looking the
@@ -582,6 +633,15 @@ namespace ClaudeBuddy
             HeartBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
             HeartGlyph.FontSize = 9 * scale;
             HeartBadge.Margin = new Thickness(0, Math.Max(0, inset), Math.Max(0, inset), 0);
+
+            // And mirrored once more into the corner this one lives in. Same sum
+            // because it is the same circle: a team member's orb is smaller, and
+            // a mark left at the full-size margin would float off its rim.
+            PresenceBadge.Width = PresenceBadge.Height = BadgeSize * scale;
+            PresenceBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
+            PresenceGlyph.FontSize = 9 * scale;
+            PresenceBadge.Margin = new Thickness(Math.Max(0, inset), Math.Max(0, inset), 0, 0);
+
             Glyph.FontSize = BaseGlyphFontSize * scale;
             OrbRadius = 18 * scale;
         }
@@ -1504,7 +1564,7 @@ namespace ClaudeBuddy
             // nothing about the presence changed. Forced rather than reasoned
             // around: the mic owns the orb's motion while it is recording, and
             // this is where that ownership is handed back.
-            if (_parked) ApplyPresence(true, force: true);
+            if (_presence != OrbPresence.Present) ApplyPresence(_presence, force: true);
 
             // The pointer is very likely still over the mic right after a
             // click, but the recording that was forcing the flyout to stay

@@ -477,7 +477,8 @@ public class LastReachableArmsTests
     {
         Assert.Equal("No pane to type into",
             LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: true, LocalSessionShape.Terminal));
+                canSendQuietly: false, replyEnabled: true,
+                LocalSessionShape.Terminal, OrbPresence.Present));
     }
 
     // No pane beats replying-off, because it is the more specific answer: the
@@ -487,24 +488,55 @@ public class LastReachableArmsTests
     {
         Assert.Equal("No pane to type into",
             LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: false, LocalSessionShape.Terminal));
+                canSendQuietly: false, replyEnabled: false,
+                LocalSessionShape.Terminal, OrbPresence.Present));
     }
 
     // A background job has no pane and no terminal to be told to go to, which is
     // the point of it: a daemon runs it so that nothing has to hold it open. The
-    // old wording sent the user to a window that does not exist, and the panel's
-    // own attach button is what does — so the box names that instead.
+    // old wording sent the user to a window that does not exist; the box now names
+    // the place the button goes, which is the same place the orb's own click goes.
+    //
+    // And it uses the daemon's own words for the state. "Needs input" is what
+    // `claude agents` calls a blocked job, and several of them are literally
+    // holding a question — so a box that said only "no pane" was hiding the more
+    // interesting half of what was true.
     [Fact]
-    public void ABackgroundJobIsToldToAttachRatherThanToFindATerminal()
+    public void ABackgroundJobIsToldWhereToAnswerItAndWhatItWants()
     {
-        Assert.Equal("Parked — attach to type",
+        Assert.Equal("Needs input — open the agents view",
             LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: true, LocalSessionShape.Background));
+                canSendQuietly: false, replyEnabled: true,
+                LocalSessionShape.Background, OrbPresence.NeedsInput));
 
         // Still the more specific answer than replying-off, for the reason above.
-        Assert.Equal("Parked — attach to type",
+        Assert.Equal("Needs input — open the agents view",
             LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: false, LocalSessionShape.Background));
+                canSendQuietly: false, replyEnabled: false,
+                LocalSessionShape.Background, OrbPresence.NeedsInput));
+    }
+
+    // A job that has finished is a third thing again, and nobody should be typing
+    // at it: the box says so rather than inviting a reply that would go nowhere.
+    [Fact]
+    public void AFinishedJobSaysSoRatherThanInvitingAReply()
+    {
+        Assert.Equal("Finished — open the agents view",
+            LocalCliChatSession.ComposerHintFor(
+                canSendQuietly: false, replyEnabled: true,
+                LocalSessionShape.Background, OrbPresence.Finished));
+    }
+
+    // A background job that is *working*, or one whose presence nothing has said
+    // anything about: still nowhere to type, still the same destination, without
+    // claiming a state it does not have.
+    [Fact]
+    public void AWorkingBackgroundJobIsOfferedTheViewWithNoStateClaimed()
+    {
+        Assert.Equal("Open the agents view to reply",
+            LocalCliChatSession.ComposerHintFor(
+                canSendQuietly: false, replyEnabled: true,
+                LocalSessionShape.Background, OrbPresence.Present));
     }
 
     // An orphaned team member is dimmed like a parked job and is *not* one of
@@ -516,7 +548,8 @@ public class LastReachableArmsTests
     {
         Assert.Equal("No pane to type into",
             LocalCliChatSession.ComposerHintFor(
-                canSendQuietly: false, replyEnabled: true, LocalSessionShape.Teammate));
+                canSendQuietly: false, replyEnabled: true,
+                LocalSessionShape.Teammate, OrbPresence.Parked));
     }
 
     [Fact]
@@ -533,10 +566,10 @@ public class LastReachableArmsTests
             // hook has since recorded one — is an ordinary session from here on.
             Assert.Equal("Message…",
                 LocalCliChatSession.ComposerHintFor(
-                    canSendQuietly: true, replyEnabled: true, shape));
+                    canSendQuietly: true, replyEnabled: true, shape, OrbPresence.NeedsInput));
             Assert.Equal("Replying is off",
                 LocalCliChatSession.ComposerHintFor(
-                    canSendQuietly: true, replyEnabled: false, shape));
+                    canSendQuietly: true, replyEnabled: false, shape, OrbPresence.Present));
         }
     }
 
@@ -557,14 +590,15 @@ public class LastReachableArmsTests
     }
 
     [Fact]
-    public void ASessionInAPaneWithNoTmuxIsToldThatInstead()
+    public void AMachineWithNoTmuxIsToldThatInstead()
     {
         Assert.Equal("Couldn't find tmux to type with.",
             LocalCliChatSession.NoPaneNote("%12", LocalSessionShape.Terminal));
 
         // The pane is what decides this one, not the shape: a machine with no
-        // tmux binary cannot be worked around by attaching, and saying "attach"
-        // to someone whose tmux is missing would be a third wrong answer.
+        // tmux binary cannot be worked around by opening a view, and saying
+        // "open the agents view" to someone whose tmux is missing would be a
+        // third wrong answer.
         Assert.Equal("Couldn't find tmux to type with.",
             LocalCliChatSession.NoPaneNote("%12", LocalSessionShape.Background));
     }
@@ -572,13 +606,13 @@ public class LastReachableArmsTests
     // The note a background job's refused send leaves. The sentence it replaces
     // was actively wrong rather than merely unhelpful — it named a terminal that
     // does not exist — so this asserts both halves: that the old advice is gone,
-    // and that the new advice points at something the panel actually has.
+    // and that the new advice points at somewhere that exists.
     [Fact]
-    public void ABackgroundJobsRefusedSendPointsAtTheAttachButton()
+    public void ABackgroundJobsRefusedSendPointsAtTheAgentsView()
     {
         var note = LocalCliChatSession.NoPaneNote(null, LocalSessionShape.Background);
 
-        Assert.Contains("Attach it", note);
+        Assert.Contains("agents view", note);
         Assert.Contains("background job", note);
         Assert.DoesNotContain("Reply in the terminal instead", note);
     }

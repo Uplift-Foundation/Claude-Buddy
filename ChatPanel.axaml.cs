@@ -163,7 +163,7 @@ namespace ClaudeBuddy
             AttachButton.PointerPressed += (_, e) =>
             {
                 e.Handled = true;
-                (_session as IRemoteChatAttach)?.Attach();
+                (_session as IRemoteChatElsewhere)?.OpenElsewhere();
             };
             MicButton.PointerPressed += (_, e) => { e.Handled = true; _owner?.ToggleRecording(); };
             SpeakButton.PointerPressed += (_, e) => { e.Handled = true; SpeakLatest(); };
@@ -430,9 +430,25 @@ namespace ClaudeBuddy
             // Read off the orb rather than from the session, so the panel and
             // the badge on the thing that was clicked cannot disagree — the
             // same reason the header takes its colour and letter from there.
+            // The kind, and — for a session that is quiet in a way worth naming —
+            // what it is waiting for. Read off the orb rather than re-derived, so
+            // the chip and the thing that was clicked cannot disagree; the same
+            // reason KindLabel is read from there rather than from the status.
+            //
+            // "needs input" is the daemon's own phrase, so the chip, the orb's
+            // tooltip and `claude agents` all say the same words about the same
+            // session.
             var kind = orb.KindLabel;
-            KindChip.IsVisible = kind is not null;
-            KindChipText.Text = kind is null ? "" : $"{orb.KindGlyphText}  {kind}";
+            var presence = orb.PresenceLabel;
+
+            KindChip.IsVisible = kind is not null || presence is not null;
+            KindChipText.Text = (kind, presence) switch
+            {
+                (null, null) => "",
+                (null, not null) => presence,
+                (not null, null) => $"{orb.KindGlyphText}  {kind}",
+                _ => $"{orb.KindGlyphText}  {kind} · {presence}"
+            };
 
             ApplyHeartbeat(orb.IsHeartbeat);
 
@@ -487,7 +503,7 @@ namespace ClaudeBuddy
         private void ApplyComposerAffordances(IRemoteChatSession? session)
         {
             Input.Watermark = (session as IRemoteChatComposer)?.ComposerHint ?? "Message…";
-            AttachButton.IsVisible = (session as IRemoteChatAttach)?.CanAttach ?? false;
+            AttachButton.IsVisible = (session as IRemoteChatElsewhere)?.CanOpenElsewhere ?? false;
         }
 
         // The same decoded frames the orb draws, at a size worth looking at.

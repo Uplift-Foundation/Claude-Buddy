@@ -18,7 +18,8 @@ namespace ClaudeBuddy.Tests;
 // exist. A daemon runs the session precisely so that none has to.
 //
 // So the panel now says what is true and offers the way out: the same
-// `claude attach` the click fallback reaches for the same session. What is
+// destination the click fallback reaches for the same session — the
+// `claude agents` roster. What is
 // asserted here is the panel's half — the hint, the button's visibility, and
 // that clicking it reaches the session. The attach itself opens a terminal and
 // is counted rather than performed (see FakeChatSession.AttachCalls); its real
@@ -28,7 +29,7 @@ public class ChatPanelAttachTests : IDisposable
 {
     private readonly List<string> _sessionIdsToClean = new();
 
-    private FakeChatSession NewFake(string hint, bool canAttach)
+    private FakeChatSession NewFake(string hint, bool canOpen)
     {
         var id = "attach-" + Guid.NewGuid();
         _sessionIdsToClean.Add(id);
@@ -37,7 +38,7 @@ public class ChatPanelAttachTests : IDisposable
             SessionId = id,
             DisplayName = "Fake Session",
             ComposerHint = hint,
-            CanAttach = canAttach,
+            CanOpenElsewhere = canOpen,
         };
     }
 
@@ -86,7 +87,7 @@ public class ChatPanelAttachTests : IDisposable
     [AvaloniaFact]
     public void AParkedSessionsPanelNamesTheStateAndOffersTheAttach()
     {
-        var fake = NewFake("Parked — attach to type", canAttach: true);
+        var fake = NewFake("Needs input — open the agents view", canOpen: true);
 
         ChatPanel.OpenFor(NewOrb(), fake);
         Flush();
@@ -94,7 +95,7 @@ public class ChatPanelAttachTests : IDisposable
         var (input, attach) = Composer(ChatPanelTestAccess.Instance!);
 
         // Says what is true, on the box itself rather than after a failed send.
-        Assert.Equal("Parked — attach to type", input.Watermark);
+        Assert.Equal("Needs input — open the agents view", input.Watermark);
 
         // And offers the one thing that would change it.
         Assert.True(attach.IsVisible);
@@ -107,7 +108,7 @@ public class ChatPanelAttachTests : IDisposable
     [AvaloniaFact]
     public void AnOrdinarySessionsPanelIsUnchanged()
     {
-        var fake = NewFake("Message…", canAttach: false);
+        var fake = NewFake("Message…", canOpen: false);
 
         ChatPanel.OpenFor(NewOrb(), fake);
         Flush();
@@ -122,9 +123,9 @@ public class ChatPanelAttachTests : IDisposable
     // here: what happens next belongs to TerminalFocuser and is one shared
     // implementation with the click on the orb.
     [AvaloniaFact]
-    public void ClickingTheAttachButtonAsksTheSessionToAttach()
+    public void ClickingTheButtonAsksTheSessionToOpenItElsewhere()
     {
-        var fake = NewFake("Parked — attach to type", canAttach: true);
+        var fake = NewFake("Needs input — open the agents view", canOpen: true);
 
         ChatPanel.OpenFor(NewOrb(), fake);
         Flush();
@@ -132,7 +133,7 @@ public class ChatPanelAttachTests : IDisposable
         var panel = ChatPanelTestAccess.Instance!;
         var (_, attach) = Composer(panel);
 
-        Assert.Equal(0, fake.AttachCalls);
+        Assert.Equal(0, fake.OpenElsewhereCalls);
 
         attach.RaiseEvent(new PointerPressedEventArgs(
             attach, new Pointer(1, PointerType.Mouse, true), attach, default, 0,
@@ -141,7 +142,7 @@ public class ChatPanelAttachTests : IDisposable
             KeyModifiers.None));
         Flush();
 
-        Assert.Equal(1, fake.AttachCalls);
+        Assert.Equal(1, fake.OpenElsewhereCalls);
     }
 
     // A transport that implements neither optional interface — which is the shape
@@ -181,13 +182,13 @@ public class ChatPanelAttachTests : IDisposable
     [AvaloniaFact]
     public void OpeningASecondSessionReplacesBothHalvesOfTheComposer()
     {
-        var parked = NewFake("Parked — attach to type", canAttach: true);
+        var parked = NewFake("Needs input — open the agents view", canOpen: true);
         ChatPanel.OpenFor(NewOrb(), parked);
         Flush();
 
         Assert.True(Composer(ChatPanelTestAccess.Instance!).Attach.IsVisible);
 
-        var ordinary = NewFake("Message…", canAttach: false);
+        var ordinary = NewFake("Message…", canOpen: false);
         ChatPanel.OpenFor(NewOrb(), ordinary);
         Flush();
 

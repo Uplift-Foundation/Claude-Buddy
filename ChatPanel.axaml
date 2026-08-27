@@ -395,10 +395,11 @@
                              CornerRadius="6" Padding="6,3"/>
                     <!-- For a session there is nowhere to type into: a
                          background job, run by a daemon precisely so that no
-                         terminal has to hold it. Clicking it runs `claude attach`
-                         in a terminal, which is the same thing a click on the
-                         orb does — see ClickRouting.AttachWouldReach, which
-                         decides whether this is shown at all.
+                         terminal has to hold it. Clicking it opens (or brings
+                         forward) the `claude agents` roster, which is the same
+                         place a click on the orb goes — see
+                         ClickRouting.AttachWouldReach, which decides whether this
+                         is shown at all.
 
                          The gear matches the badge that orb wears, so the two
                          read as the same fact rather than as two unrelated
@@ -407,7 +408,7 @@
                          be typed into as it is. -->
                     <Grid x:Name="AttachButton" Grid.Column="1" Width="24" Height="24"
                           IsVisible="False" Cursor="Hand"
-                          ToolTip.Tip="Attach this session in a terminal">
+                          ToolTip.Tip="Open the agents view">
                         <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
                         <TextBlock Text="&#9881;" FontSize="11" Foreground="#DDFFFFFF"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"

@@ -1,3 +1,4 @@
+using System;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -166,89 +167,127 @@ public class SessionPresenceTests
         }
     }
 
-    // --- IsParked: background sessions ---------------------------------------
+    // --- PresenceOf: background sessions -------------------------------------
 
+    private static OrbPresence Presence(
+        LocalSessionShape shape = LocalSessionShape.Background,
+        string state = "idle",
+        JobPhase phase = JobPhase.Parked,
+        bool leadSeen = false,
+        bool leadIsLiveJob = false,
+        bool attached = false) =>
+        SessionPresence.PresenceOf(shape, state, phase, leadSeen, leadIsLiveJob, attached);
+
+    // The daemon's own word for a blocked job is "needs input", and several of
+    // the ones this was written for are literally holding a question — so a
+    // parked job is not merely quiet, and the mark is the difference between
+    // "nothing here" and "something here for you".
     [Fact]
-    public void ABackgroundJobBetweenTurnsIsParked()
+    public void ABackgroundJobBetweenTurnsNeedsInput()
     {
-        Assert.True(SessionPresence.IsParked(
-            LocalSessionShape.Background, "idle", JobPhase.Parked,
-            leadSeen: false, leadIsLiveJob: false));
+        Assert.Equal(OrbPresence.NeedsInput, Presence());
     }
 
     [Fact]
-    public void ABackgroundJobMidTurnIsNotParked()
+    public void ABackgroundJobMidTurnIsPresent()
     {
-        Assert.False(SessionPresence.IsParked(
-            LocalSessionShape.Background, "generating", JobPhase.Working,
-            leadSeen: false, leadIsLiveJob: false));
+        Assert.Equal(
+            OrbPresence.Present,
+            Presence(state: "generating", phase: JobPhase.Working));
+    }
+
+    // A job that is over. Marked differently from one that needs input because
+    // the two are opposite instructions — one wants you, one wants nothing ever
+    // again — and it is on its way off the screen anyway: the sweep has the same
+    // ten minutes' evidence by the time this is drawn.
+    [Fact]
+    public void AFinishedJobIsFinishedWhateverElseIsTrue()
+    {
+        Assert.Equal(OrbPresence.Finished, Presence(phase: JobPhase.Done));
+
+        // Including with somebody attached to it, which is reading rather than
+        // working, and including a file that says it is mid-turn — "done" is the
+        // daemon's last word on a job and there is nothing after it.
+        Assert.Equal(OrbPresence.Finished, Presence(phase: JobPhase.Done, attached: true));
+        Assert.Equal(
+            OrbPresence.Finished,
+            Presence(state: "generating", phase: JobPhase.Done));
+    }
+
+    // The contradiction the user hit within minutes: they attached to all three
+    // parked sessions and the orbs stayed grey. Attaching changes nothing this
+    // app was watching — the status file records the worker's ancestry and never
+    // the viewer's, and the daemon still says "blocked" — so the only place the
+    // person's presence exists is the process table.
+    [Fact]
+    public void AParkedJobSomebodyIsAttachedToIsPresent()
+    {
+        Assert.Equal(OrbPresence.Present, Presence(attached: true));
     }
 
     // The cache-lag fix, and the reason the file's own state is consulted at all.
     //
     // The daemon's listing is cached for ten seconds; the hook rewrites the
     // status file the instant a job resumes. So when the two disagree, the file
-    // is the fresher of them — and requiring it to still say "idle" is what
-    // makes un-dimming prompt (the next 2s scan) even though dimming lags. That
-    // asymmetry is deliberate: an orb still dim while work visibly resumes is a
-    // lie about the thing the user is watching happen.
+    // is the fresher of them — and requiring it to still say "idle" is what makes
+    // coming back to life prompt (the next 2s scan) even though going quiet lags.
+    // That asymmetry is deliberate: an orb still dim while work visibly resumes
+    // is a lie about the thing the user is watching happen.
     [Theory]
     [InlineData("generating")]
     [InlineData("waiting")]
-    public void ABlockedRowWhoseFileSaysWorkResumedIsNotParked(string state)
+    public void ABlockedRowWhoseFileSaysWorkResumedIsPresent(string state)
     {
-        Assert.False(SessionPresence.IsParked(
-            LocalSessionShape.Background, state, JobPhase.Parked,
-            leadSeen: false, leadIsLiveJob: false));
+        Assert.Equal(OrbPresence.Present, Presence(state: state));
     }
 
-    // Fail open. Unknown is "there was no listing", and no orb may change what
-    // it looks like on the strength of a question that could not be asked.
+    // Fail open. Unknown is "there was no listing", and no orb may change what it
+    // looks like on the strength of a question that could not be asked.
     [Fact]
-    public void OnlyBlockedParksABackgroundOrb()
+    public void OnlyBlockedEverMarksABackgroundOrbAsNeedingInput()
     {
-        var phases = new[] { JobPhase.Unknown, JobPhase.NotAJob, JobPhase.Working, JobPhase.Done };
+        var phases = new[] { JobPhase.Unknown, JobPhase.NotAJob, JobPhase.Working };
 
         foreach (var phase in phases)
         {
-            Assert.False(SessionPresence.IsParked(
-                LocalSessionShape.Background, "idle", phase,
-                leadSeen: false, leadIsLiveJob: false));
+            Assert.Equal(OrbPresence.Present, Presence(phase: phase));
         }
     }
 
-    // --- IsParked: teammates and terminals -----------------------------------
+    // --- PresenceOf: teammates and terminals ---------------------------------
 
     // The orphan case: a real claude process in a detached tmux socket, whose
-    // lead has gone. Its arrows have already silently vanished — TeamLinks draws
-    // nothing to a lead that is not on screen — so the orb is the last thing
-    // left saying anything about it.
+    // lead has gone. Dimmed with no mark, deliberately — nothing is waiting on
+    // the user and nothing has finished, so there is nothing to say beyond the
+    // dimming itself. Its arrows have already silently vanished, which is why the
+    // orb is the last thing left saying anything about it.
     [Fact]
-    public void ATeammateWhoseLeadHasGoneIsParked()
+    public void ATeammateWhoseLeadHasGoneIsParkedWithNoMark()
     {
-        Assert.True(SessionPresence.IsParked(
-            LocalSessionShape.Teammate, "idle", JobPhase.NotAJob,
-            leadSeen: false, leadIsLiveJob: false));
+        Assert.Equal(
+            OrbPresence.Parked,
+            Presence(shape: LocalSessionShape.Teammate, phase: JobPhase.NotAJob));
     }
 
     [Fact]
-    public void ATeammateWhoseLeadIsOnThisScanIsNotParked()
+    public void ATeammateWhoseLeadIsOnThisScanIsPresent()
     {
-        Assert.False(SessionPresence.IsParked(
-            LocalSessionShape.Teammate, "idle", JobPhase.NotAJob,
-            leadSeen: true, leadIsLiveJob: false));
+        Assert.Equal(
+            OrbPresence.Present,
+            Presence(shape: LocalSessionShape.Teammate, phase: JobPhase.NotAJob, leadSeen: true));
     }
 
     // A team led from a background job is the ordinary case, not an exception:
     // the lead has no status file of its own to be seen through, so the daemon's
-    // listing is the only place it exists. Parking its members would dim a live
+    // listing is the only place it exists. Dimming its members would dim a live
     // team.
     [Fact]
-    public void ATeammateWhoseLeadIsALiveJobIsNotParked()
+    public void ATeammateWhoseLeadIsALiveJobIsPresent()
     {
-        Assert.False(SessionPresence.IsParked(
-            LocalSessionShape.Teammate, "idle", JobPhase.NotAJob,
-            leadSeen: false, leadIsLiveJob: true));
+        Assert.Equal(
+            OrbPresence.Present,
+            Presence(shape: LocalSessionShape.Teammate, phase: JobPhase.NotAJob,
+                leadIsLiveJob: true));
     }
 
     // A teammate's own state is not consulted, unlike a background session's:
@@ -261,16 +300,16 @@ public class SessionPresenceTests
     [InlineData("waiting")]
     public void AnOrphanedTeammateIsParkedWhateverItsFileSays(string state)
     {
-        Assert.True(SessionPresence.IsParked(
-            LocalSessionShape.Teammate, state, JobPhase.NotAJob,
-            leadSeen: false, leadIsLiveJob: false));
+        Assert.Equal(
+            OrbPresence.Parked,
+            Presence(shape: LocalSessionShape.Teammate, state: state, phase: JobPhase.NotAJob));
     }
 
     // Somebody at a keyboard. A terminal session between turns is still a
     // terminal session — sitting there waiting for you is the whole of what it
     // does — so nothing about this shape is ever dimmed, whatever else is true.
     [Fact]
-    public void ATerminalSessionIsNeverParked()
+    public void ATerminalSessionIsAlwaysPresent()
     {
         var cases = new (JobPhase Phase, string State)[]
         {
@@ -278,20 +317,95 @@ public class SessionPresenceTests
             (JobPhase.Unknown, "idle"),
             (JobPhase.NotAJob, "generating"),
 
-            // Including the one combination that could not happen — a terminal
-            // session the daemon calls blocked — because ShapeOf would have
-            // called that Background, and this rule must not be the thing
+            // Including the two combinations that could not happen — a terminal
+            // session the daemon calls blocked or done — because ShapeOf would
+            // have called those Background, and this rule must not be the thing
             // relied on to notice.
             (JobPhase.Parked, "idle"),
+            (JobPhase.Done, "idle"),
         };
 
         foreach (var (phase, state) in cases)
         {
-            Assert.False(SessionPresence.IsParked(
-                LocalSessionShape.Terminal, state, phase,
-                leadSeen: false, leadIsLiveJob: false));
+            Assert.Equal(
+                OrbPresence.Present,
+                Presence(shape: LocalSessionShape.Terminal, state: state, phase: phase));
         }
     }
+
+    // --- HasAttachClient -----------------------------------------------------
+
+    // `claude attach` accepts the short job id and echoes it back that way, so a
+    // window opened by hand with `claude attach bd7919f8` has to count as session
+    // bd7919f8-…. Compared by prefix in both directions for that reason, the same
+    // way AgentTeamViewer already compares them.
+    [Fact]
+    public void AnAttachClientIsMatchedByEitherFormOfTheId()
+    {
+        var shortForm = new[] { "0e043819" };
+
+        Assert.True(SessionPresence.HasAttachClient(
+            shortForm, "0e043819-3c45-4f1a-9c2b-8d4e5f6a7b8c"));
+
+        var fullForm = new[] { "0e043819-3c45-4f1a-9c2b-8d4e5f6a7b8c" };
+        Assert.True(SessionPresence.HasAttachClient(fullForm, "0e043819"));
+    }
+
+    [Fact]
+    public void AnUnrelatedAttachClientDoesNotCount()
+    {
+        Assert.False(SessionPresence.HasAttachClient(
+            new[] { "5f6960b2" }, "0e043819-3c45-4f1a-9c2b-8d4e5f6a7b8c"));
+    }
+
+    [Fact]
+    public void WithNothingAttachedNothingMatches()
+    {
+        Assert.False(SessionPresence.HasAttachClient(
+            Array.Empty<string>(), "0e043819-3c45-4f1a-9c2b-8d4e5f6a7b8c"));
+    }
+
+    // A scan that could not be done answers "attached", and the direction is the
+    // whole point. Wrong-true leaves a genuinely parked orb bright, which is this
+    // branch's original bug in its mildest form. Wrong-false dims a session the
+    // user is sitting in and typing at — the contradiction that prompted the rule.
+    // Only one of the two ways to be wrong argues with the person at the screen.
+    [Fact]
+    public void AScanThatCouldNotBeDoneCountsAsAttached()
+    {
+        Assert.True(SessionPresence.HasAttachClient(null, "0e043819"));
+
+        // And it reaches all the way through: nothing is dimmed on the strength
+        // of a question that could not be asked.
+        Assert.Equal(OrbPresence.Present, Presence(attached: true));
+    }
+
+    // Nothing was asked, so nothing matches — rather than every attach client on
+    // the machine matching an empty id by prefix, which is what a bare
+    // StartsWith would do.
+    [Fact]
+    public void AnEmptySessionIdMatchesNothing()
+    {
+        Assert.False(SessionPresence.HasAttachClient(new[] { "0e043819" }, ""));
+    }
+
+    // --- RuledOutAsAJob ------------------------------------------------------
+
+    // The gate on an orb's existence, and the reversal this round made: only a
+    // listing that was read and did not name the session rules it out. A finished
+    // job is no longer ruled out, which is what lets it stay on screen — dimmed
+    // and marked as finished — for as long as its status file does.
+    [Fact]
+    public void OnlyAReadListingThatDoesNotNameTheSessionRulesItOut()
+    {
+        Assert.True(SessionPresence.RuledOutAsAJob(JobPhase.NotAJob));
+
+        foreach (var phase in new[] { JobPhase.Working, JobPhase.Parked, JobPhase.Done, JobPhase.Unknown })
+        {
+            Assert.False(SessionPresence.RuledOutAsAJob(phase));
+        }
+    }
+
 
     // --- the two menu items --------------------------------------------------
 

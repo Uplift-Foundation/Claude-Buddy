@@ -159,6 +159,39 @@
                        IsHitTestVisible="False"/>
         </Border>
 
+        <!-- Presence: what this session wants from you, when the answer is
+             "something" or "nothing ever again".
+
+             Top-*left*, which is the corner the other three channels left. The
+             kind badge is bottom-right and the heart is top-right, and both are
+             about what a session *is*; this is about whether anything is on the
+             other end of it, and a session can want both said at once — a
+             background job (gear, bottom-right) that is holding a question (mark,
+             top-left).
+
+             One border with the glyph swapped rather than two badges: the two
+             answers are mutually exclusive by construction (a job cannot be
+             holding a question and finished at the same time), so two controls
+             would be two things to keep from colliding for no case that exists.
+
+             Same opaque fill as the others, and for the same reason: this sits on
+             top of whatever the orb's fill is, including a photograph. -->
+        <Border x:Name="PresenceBadge"
+                Width="15" Height="15"
+                IsVisible="False"
+                CornerRadius="7.5"
+                Background="#F2202024"
+                BorderBrush="#59FFFFFF" BorderThickness="1"
+                HorizontalAlignment="Left" VerticalAlignment="Top"
+                Margin="8,8,0,0"
+                IsHitTestVisible="False">
+            <TextBlock x:Name="PresenceGlyph"
+                       FontSize="9"
+                       Foreground="#F2FFFFFF"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Border>
+
         <!-- Folder initial so you can tell orbs apart at a glance
              (falls back to a dot until the session reports its cwd) -->
         <TextBlock x:Name="Glyph"

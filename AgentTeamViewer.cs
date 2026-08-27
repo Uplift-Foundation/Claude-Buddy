@@ -140,6 +140,205 @@ namespace ClaudeBuddy
             return null;
         }
 
+        // `<absolute claude> <verb> [arg]`, quoted for `sh -c`. Null when the
+        // claude binary cannot be found at all, which is the one failure worth
+        // returning rather than papering over: every caller's next move is to
+        // hand this to a shell.
+        //
+        // Absolute, never a bare `claude` resolved by a login shell. That was the
+        // original approach and it silently didn't work: `zsh -lc` skips .zshrc
+        // (non-interactive), which is where a PATH addition for ~/.local/bin
+        // normally lives, so the script died with "command not found" whenever
+        // the app was launched from Finder rather than a terminal. See
+        // ClaudeBinary.
+        // Excluded from coverage: probes the filesystem for the claude binary.
+        [ExcludeFromCodeCoverage]
+        private static string? ClaudeCommand(string verb, string? argument = null)
+        {
+            var claude = ClaudeBinary.Path;
+            if (claude is null) return null;
+
+            var command = TerminalScripts.ShellQuote(claude) + " " + verb;
+            return argument is null ? command : command + " " + TerminalScripts.ShellQuote(argument);
+        }
+
+        // Opens a `claude agents` roster, in tmux for someone who lives there and
+        // in a terminal window otherwise.
+        //
+        // In tmux when there is a tmux to go into, for the reason AttachSession
+        // gives at the same fork: a bare window for someone whose windows are all
+        // inside tmux puts the thing *outside* what they use to move between
+        // windows, which is worse than an extra pane inside it.
+        // Excluded from coverage: writes a script and opens a terminal on it.
+        [ExcludeFromCodeCoverage]
+        private static string? OpenAgentsView(string cwd)
+        {
+            if (ClaudeCommand("agents") is not { } command) return null;
+
+            if (PlaceInTmux(command, cwd) is { Length: > 0 } pane) return pane;
+
+            try
+            {
+                System.IO.Directory.CreateDirectory(ClaudeBuddySettings.Directory);
+                var script = Path.Combine(ClaudeBuddySettings.Directory, "open-agents-roster.sh");
+
+                // The cd is for after the roster is quit rather than for the
+                // roster itself, the same as every other script this file writes:
+                // the useful place to land is the directory whose orb was clicked.
+                // Skipped with no cwd, because `cd ''` fails and `|| exit 1` would
+                // take the roster down with it.
+                var body = "#!/bin/sh\n";
+                if (!string.IsNullOrEmpty(cwd))
+                {
+                    body += "cd " + TerminalScripts.ShellQuote(cwd) + " || exit 1\n";
+                }
+
+                File.WriteAllText(script, body + "exec " + command + "\n");
+                File.SetUnixFileMode(script,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+                var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
+                psi.ArgumentList.Add("-a");
+                psi.ArgumentList.Add(TerminalApp());
+                psi.ArgumentList.Add(script);
+                Process.Start(psi);
+
+                // The window takes a moment to appear, and until it does the
+                // process scan above says nothing is open — which is what would
+                // otherwise let a second click open a second roster.
+                Forget(cwd);
+                return null;
+            }
+            catch
+            {
+                // Same contract as everything else on this path: failing to open
+                // a window is a click that did nothing, never a crash.
+                return null;
+            }
+        }
+
+        // The `claude agents` view: brought forward if one is running, opened if
+        // not.
+        //
+        // The click destination for a background orb, and it is a decision about
+        // vocabulary rather than a mechanism. The user's words, looking at the
+        // roster: "don't understand why the orbs can't just match this and attach
+        // to this", and then "I don't understand why you can't go straight to
+        // it!" The view already groups what needs answering at the top, already
+        // knows how to attach to a row, and is where these sessions are managed
+        // from — so an orb that lands there lands somewhere the user recognises,
+        // rather than in a terminal running one session with no way back to the
+        // others.
+        //
+        // Unfiltered, deliberately: `claude agents --help` offers only `--cwd
+        // <path>` and no per-session preselect, and jobs on the machine this was
+        // written for span several projects — a filtered view per project would
+        // multiply windows for no gain, since the roster is short and sorted with
+        // the ones wanting attention first.
+        //
+        // Returns the pane it went into when it went into tmux, for the caller to
+        // select and raise through the ordinary path — the same contract
+        // AttachSession has, and for the same reason: this file does not grow its
+        // own copy of client resolution and window raising.
+        // Excluded from coverage: walks the process table, then either activates
+        // a real application or opens a terminal on a script.
+        [ExcludeFromCodeCoverage]
+        public static string? OpenOrFocusAgentsView(string cwd)
+        {
+            if (!OperatingSystem.IsMacOS()) return null;
+
+            // Already open somewhere. Focused rather than duplicated: a second
+            // roster of the same sessions is not a second thing to look at.
+            //
+            // Asked of the process table rather than of Launched, so a view the
+            // user opened by hand counts — which is the common case, since this
+            // is where they manage these sessions from.
+            foreach (var pid in ViewerPids())
+            {
+                var env = MacOSProcessScan.EnvironmentValues(pid, "TMUX", "TMUX_PANE");
+                var pane = env.GetValueOrDefault("TMUX_PANE", "");
+
+                // In tmux: hand the pane back, exactly as AttachSession does, so
+                // the caller selects it and raises its client's window.
+                if (!string.IsNullOrEmpty(pane)) return pane;
+
+                // Outside tmux: its tty is enough for the app to find the window
+                // that owns it, which is what ActivateApp's caller does with it.
+                var tty = TtyOf(pid);
+                if (string.IsNullOrEmpty(tty)) continue;
+
+                ActivateApp(TerminalApp());
+                return null;
+            }
+
+            return OpenAgentsView(cwd);
+        }
+
+        // Every `claude attach <id>` client running on this machine, keyed by the
+        // id it was given — or null when the process table could not be read at
+        // all, which is a different answer and the caller treats it as one.
+        //
+        // The point of it is a contradiction the user hit immediately: they
+        // attached to all three parked sessions and the orbs stayed grey.
+        // Attaching changes nothing this app was looking at — the status file
+        // records the *worker's* ancestry and never the viewer's, so the tty
+        // stays empty, and the daemon still says "blocked", because from its side
+        // nothing has changed. The person's presence exists in exactly one place,
+        // which is the process table.
+        //
+        // Matched on the arguments rather than the executable path, for the
+        // reason ViewerPids gives: the path is a version-stamped location that
+        // moves under you. Cached on the same clock as the viewer lookup — one
+        // `ps` per five seconds rather than one per session per scan.
+        // Excluded from coverage: walks the live process table. What is decided
+        // with the answer is SessionPresence.HasAttachClient, which is pure and
+        // covered per case, including the null.
+        [ExcludeFromCodeCoverage]
+        public static HashSet<string>? AttachedJobIds()
+        {
+            var now = Environment.TickCount64;
+
+            lock (Gate)
+            {
+                if (_attachedStamp != 0 && now - _attachedStamp < CacheMs) return _attached;
+            }
+
+            HashSet<string>? found = null;
+
+            if (TryRun("/bin/ps", out var listing, "-eo", "args="))
+            {
+                found = new HashSet<string>(StringComparer.Ordinal);
+
+                foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var words = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (words.Length < 3) continue;
+                    if (Path.GetFileName(words[0]) is not ("claude" or "claude.exe")) continue;
+                    if (words[1] != "attach") continue;
+
+                    found.Add(words[2]);
+                }
+            }
+
+            lock (Gate)
+            {
+                // A failed read does not clear a good answer for the rest of the
+                // cache window, the same way BackgroundJobs' listing does not:
+                // the process table being briefly unreadable is not evidence that
+                // anybody detached.
+                if (found is not null)
+                {
+                    _attached = found;
+                    _attachedStamp = now;
+                }
+
+                return _attached;
+            }
+        }
+
+        private static HashSet<string>? _attached;
+        private static long _attachedStamp;
+
         // Opens the one session an orb stands for, in a terminal.
         //
         // TryAdopt can only adopt a window that already exists, which leaves
@@ -211,7 +410,8 @@ namespace ClaudeBuddy
             // their usual navigation can't reach it — the window is *outside*
             // the thing they use to move between windows, which is worse than
             // an extra pane inside it.
-            if (PlaceInTmux(JobIdOf(sessionId), cwd) is { Length: > 0 } pane)
+            if (ClaudeCommand("attach", JobIdOf(sessionId)) is { } attachCommand
+                && PlaceInTmux(attachCommand, cwd) is { Length: > 0 } pane)
             {
                 return pane;
             }
@@ -346,7 +546,7 @@ namespace ClaudeBuddy
         // the window and bring its app forward.
         // Excluded from coverage: creates a real tmux window and sends keys to it.
         [ExcludeFromCodeCoverage]
-        private static string? PlaceInTmux(string jobId, string cwd)
+        private static string? PlaceInTmux(string command, string cwd)
         {
             var tmux = ResolveTmux();
             if (tmux is null) return null;
@@ -366,16 +566,12 @@ namespace ClaudeBuddy
 
             if (session is null) return null;
 
-            // An absolute path here too. tmux runs the command with `sh -c`,
-            // and the server's environment is whatever it happened to be
+            // `command` arrives already quoted and already naming an absolute
+            // claude, for the reason its builders record: tmux runs it with
+            // `sh -c`, and the server's environment is whatever it happened to be
             // started with — which needn't include wherever `claude` lives, and
             // can't be assumed to match this app's. See ClaudeBinary for why
             // asking a login shell to resolve it isn't the fix it looks like.
-            var claude = ClaudeBinary.Path;
-            if (claude is null) return null;
-
-            var command = "'" + claude.Replace("'", "'\\''") + "'"
-                          + " attach '" + jobId.Replace("'", "'\\''") + "'";
 
             // "<session>:" with the colon, not the bare name. Bare, tmux reads
             // the target as a *window* and refuses with "index N in use" the

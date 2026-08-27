@@ -41,7 +41,7 @@ namespace ClaudeBuddy
     //    trivially, since the whole turn is all there ever is.
     internal sealed class LocalCliChatSession :
         IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer, IRemoteChatPrompts,
-        IRemoteChatImages, IRemoteChatSlashCommands, IRemoteChatAttach, IDisposable
+        IRemoteChatImages, IRemoteChatSlashCommands, IRemoteChatElsewhere, IDisposable
     {
         // How much of the tail to read when the panel first opens.
         //
@@ -511,7 +511,8 @@ namespace ClaudeBuddy
 
         public string ComposerHint =>
             ComposerHintFor(
-                TerminalFocuser.CanSendQuietly(_status), _format.ReplyEnabled(), _status.Shape);
+                TerminalFocuser.CanSendQuietly(_status), _format.ReplyEnabled(),
+                _status.Shape, _status.Presence);
 
         // Both answers are reachable from a test this way, where they were not
         // before: whether there is a pane to type into depends on a real tmux and
@@ -519,21 +520,33 @@ namespace ClaudeBuddy
         // makes "no pane" something a test can state rather than something the
         // machine happens to be.
         //
-        // shape is here because "no pane" has two quite different causes and only
-        // one of them has anything the user can do about it in this panel. A
-        // terminal session outside tmux can be replied to in its own terminal,
-        // which is what the old wording said — and for a background job that
-        // wording was advice to go somewhere that does not exist, since a daemon
-        // runs it precisely so that no terminal has to. The panel's own attach
-        // button is the answer for that one, so the box names it.
+        // shape and presence are here because "no pane" has two quite different
+        // causes and only one of them has anything the user can do about it in
+        // this panel. A terminal session outside tmux can be replied to in its own
+        // terminal, which is what the old wording said — and for a background job
+        // that wording was advice to go somewhere that does not exist, since a
+        // daemon runs it precisely so that no terminal has to. The button beside
+        // the box is the answer for that one, so the box names where it goes.
+        //
+        // The presence word is the daemon's own: it calls a parked job "needs
+        // input", and several of them are literally holding a question. A box that
+        // said only "no pane" was hiding the more interesting half of what was
+        // true — and a job that has *finished* is a third thing again, which
+        // nobody should be typing at, so it says so rather than inviting a reply.
         internal static string ComposerHintFor(
-            bool canSendQuietly, bool replyEnabled, LocalSessionShape shape)
+            bool canSendQuietly, bool replyEnabled,
+            LocalSessionShape shape, OrbPresence presence)
         {
             if (!canSendQuietly)
             {
-                return shape == LocalSessionShape.Background
-                    ? "Parked — attach to type"
-                    : "No pane to type into";
+                if (shape != LocalSessionShape.Background) return "No pane to type into";
+
+                return presence switch
+                {
+                    OrbPresence.NeedsInput => "Needs input — open the agents view",
+                    OrbPresence.Finished => "Finished — open the agents view",
+                    _ => "Open the agents view to reply"
+                };
             }
 
             return replyEnabled ? "Message…" : "Replying is off";
@@ -576,13 +589,14 @@ namespace ClaudeBuddy
         // So: the honest affordance now, and the send when someone has watched an
         // attach happen on a real machine and knows which of the two worlds we
         // are in.
-        public bool CanAttach => ClickRouting.AttachWouldReach(_status, SessionId);
+        public bool CanOpenElsewhere => ClickRouting.AttachWouldReach(_status, SessionId);
 
-        // Excluded from coverage: one line, and it opens a terminal and runs
-        // `claude attach` in it. What decides whether it is offered is CanAttach
-        // above, which is pure both sides of the call.
+        // Excluded from coverage: one line, and it opens or focuses a real window.
+        // What decides whether it is offered is CanOpenElsewhere above, which is
+        // pure both sides of the call, and where it goes is ClickRouting's, which
+        // is pure and covered per case.
         [ExcludeFromCodeCoverage]
-        public void Attach() => TerminalFocuser.Attach(SessionId, _status.Cwd);
+        public void OpenElsewhere() => TerminalFocuser.Elsewhere(_status, SessionId);
 
         // A message sent from the panel, waiting for the transcript row it will
         // produce. Held so the two can be reconciled instead of the same
@@ -694,7 +708,7 @@ namespace ClaudeBuddy
             if (shape == LocalSessionShape.Background)
             {
                 return "This is a background job with no terminal of its own. "
-                    + "Attach it (⚙ beside the box) to type into it.";
+                    + "Open the agents view (⚙ beside the box) to answer it there.";
             }
 
             return "This session isn't in a tmux pane, so there is nowhere to type without "

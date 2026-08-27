@@ -31,9 +31,25 @@ namespace ClaudeBuddy
         // exactly where it was written for.
         None,
 
-        // A background job, in any phase: `claude attach <id>`. It has no
-        // terminal of its own and never will, so this is the answer rather
-        // than a fallback.
+        // A background session, in any phase: the `claude agents` roster —
+        // focused if one is running, opened if not.
+        //
+        // The user's own words, looking at that roster: "don't understand why the
+        // orbs can't just match this and attach to this", and then "I don't
+        // understand why you can't go straight to it!" It replaced a per-session
+        // `claude attach` as the default for these orbs, and the reason is not
+        // that attach did not work — it did, verified on a real machine — but
+        // that it lands you in one session with no way back to the others, when
+        // the roster is where these sessions are managed from, already groups the
+        // ones wanting attention at the top, and already knows how to attach to a
+        // row.
+        AgentsView,
+
+        // `claude attach <id>` for a session that records no pid at all — a hook
+        // older than that field. Kept separate from AgentsView because such a
+        // session is not necessarily a job the roster would list: the roster is
+        // the right answer for something the daemon knows about, and naming the
+        // session directly is the only answer for something nobody can enumerate.
         AttachBackground,
 
         // The pane is alive in a tmux server nothing is attached to. Open a
@@ -77,8 +93,8 @@ namespace ClaudeBuddy
             && string.IsNullOrEmpty(status.TmuxPane)
             && status.TermPid == 0;
 
-        // Whether an attach would reach this session at all — the question the
-        // chat panel asks, where the click asks "what should this gesture do".
+        // Whether *somewhere* would reach this session — the question the chat
+        // panel asks, where the click asks "what should this gesture do".
         //
         // Answered by running the same rule with paneAliveButDetached false,
         // rather than by a second rule that agrees with it today: the panel must
@@ -90,7 +106,9 @@ namespace ClaudeBuddy
         // selected).
         internal static bool AttachWouldReach(SessionStatus status, string? sessionId) =>
             FallbackFor(status, sessionId, paneAliveButDetached: false)
-                is ClickFallback.AttachBackground or ClickFallback.AttachById;
+                is ClickFallback.AgentsView
+                or ClickFallback.AttachBackground
+                or ClickFallback.AttachById;
 
         // paneAliveButDetached is what FocusTmux learned on the way past: the
         // pane exists, its server answered, the pane was selected — and no
@@ -118,18 +136,27 @@ namespace ClaudeBuddy
             // someone else's session.
             var claudeCode = status.Source == SessionSource.ClaudeCode;
 
-            // First, because it is the most precise answer available: a
-            // background job's own session, named directly. A parked job can
-            // have been adopted into a `claude agents` viewer pane, and if that
-            // viewer's server happens to be detached this would otherwise
-            // attach to the *roster* rather than to the session that was
-            // clicked.
+            // First, and ahead of the socket answer below, because it is where
+            // the user asked to be taken. A parked job can have been adopted into
+            // a `claude agents` viewer pane, and if that viewer's server happens
+            // to be detached, the socket answer would attach a terminal to the
+            // roster's server — which is the same destination by a worse route,
+            // and one that cannot focus an already-open roster.
             //
-            // The pid test is kept alongside the shape test rather than
-            // replaced by it: a hook older than the session_pid field still
-            // writes 0, and that is still a session with nowhere of its own.
-            if (claudeCode && named
-                && (status.SessionPid <= 0 || status.Shape == LocalSessionShape.Background))
+            // The shape rather than the phase: a background session is a
+            // background session whether it is working, holding a question or
+            // finished, and the roster shows all three. The orb's *rendering*
+            // distinguishes them; where the click goes does not need to.
+            if (claudeCode && status.Shape == LocalSessionShape.Background)
+            {
+                return ClickFallback.AgentsView;
+            }
+
+            // A hook older than the session_pid field, which is the rule the
+            // shape test above was widened from. Such a session may not be a job
+            // at all — nobody can enumerate it — so it gets its own name handed
+            // to `claude attach` rather than a roster that may not list it.
+            if (claudeCode && named && status.SessionPid <= 0)
             {
                 return ClickFallback.AttachBackground;
             }

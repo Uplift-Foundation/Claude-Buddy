@@ -66,25 +66,26 @@ public class LocalCliChatSessionTests : IDisposable
     // fail silently, since a session that always answered false would simply
     // show no button and look like a session that could be typed into.
     [AvaloniaFact]
-    public void ABackgroundSessionOffersTheAttachAndSaysSoOnTheBox()
+    public void ABackgroundSessionOffersTheViewAndSaysWhatItWants()
     {
         var session = new LocalCliChatSession("s1", new SessionStatus
         {
             Source = SessionSource.ClaudeCode,
             Shape = LocalSessionShape.Background,
+            Presence = OrbPresence.NeedsInput,
             SessionPid = Environment.ProcessId,
             State = "idle",
         });
 
-        Assert.True(session.CanAttach);
-        Assert.Equal("Parked — attach to type", session.ComposerHint);
+        Assert.True(session.CanOpenElsewhere);
+        Assert.Equal("Needs input — open the agents view", session.ComposerHint);
     }
 
     // An ordinary session in a tmux pane: nothing to attach, and the box says
     // what it has always said. A button on every panel would be a mark that
     // distinguishes nothing, which is the argument the orb's badges are held to.
     [AvaloniaFact]
-    public void AnOrdinarySessionOffersNoAttach()
+    public void AnOrdinarySessionOffersNothingElsewhere()
     {
         var session = new LocalCliChatSession("s1", new SessionStatus
         {
@@ -96,7 +97,7 @@ public class LocalCliChatSessionTests : IDisposable
             State = "idle",
         });
 
-        Assert.False(session.CanAttach);
+        Assert.False(session.CanOpenElsewhere);
     }
 
     // The read runs on a worker and posts its result back, so the loop has to be

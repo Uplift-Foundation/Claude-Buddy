@@ -58,13 +58,14 @@ public class ChatPanelScreenshots : IDisposable
             ChatPanelTestAccess.Instance!, "chat-panel-heartbeat-chip.png");
     }
 
-    // The panel for a session there is nowhere to type into: the box says so and
-    // there is a gear beside it that puts the session in a terminal. Captured
+    // The panel for a session there is nowhere to type into: the box says what it
+    // is waiting for, and there is a gear beside it that opens the roster where
+    // it can be answered. Captured
     // because it is a new visible surface, and because the thing worth reviewing
     // is a judgement — whether the box's wording and one small button are enough
     // for someone who clicked a grey orb expecting to be able to talk to it.
     [AvaloniaFact]
-    public void AParkedSessionsPanelSaysSoAndOffersTheAttach()
+    public void AParkedSessionsPanelSaysSoAndOffersTheView()
     {
         var fake = NewFake(new[]
         {
@@ -72,8 +73,8 @@ public class ChatPanelScreenshots : IDisposable
             new ChatTurn { Role = ChatRole.Assistant, Text = "Done — three merged, one had conflicts." },
         });
 
-        fake.ComposerHint = "Parked — attach to type";
-        fake.CanAttach = true;
+        fake.ComposerHint = "Needs input — open the agents view";
+        fake.CanOpenElsewhere = true;
 
         ChatPanel.OpenFor(NewOrb(), fake);
         ScreenshotHelper.Flush();

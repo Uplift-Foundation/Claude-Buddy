@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace ClaudeBuddy
 {
@@ -27,6 +28,45 @@ namespace ClaudeBuddy
         // status file is real, and nothing about either says the thing it was
         // answering to has gone.
         Teammate
+    }
+
+    // What an orb should say about whether anything is on the other end of this
+    // session — the third axis, beside identity (its colour) and state (its
+    // fill).
+    //
+    // Four answers rather than the bool this started as, because the three ways
+    // of being quiet are not the same thing to a person looking at the screen and
+    // the difference is exactly what the original bug was. A daemon calls a job
+    // between turns "blocked", and several of the ones on the machine this was
+    // written for were literally holding a question — so "dim" undersold them,
+    // and "dim, with nothing to distinguish it from a job that has finished for
+    // good" was the same mistake one level down.
+    public enum OrbPresence
+    {
+        // Someone or something is on the other end: a session at work, a session
+        // waiting at a keyboard, or a parked job with a `claude attach` client
+        // sitting in it. Full brightness, ordinary motion.
+        Present,
+
+        // Quiet, with nothing more to say about it. An orphaned team member is
+        // the only thing here: its lead has gone, and no daemon knows anything
+        // about it that would justify a mark. Dimmed.
+        Parked,
+
+        // A background job the daemon is holding for you. "Needs input" is the
+        // daemon's own word for it, and several are questions waiting on an
+        // answer, so it is dimmed — it is not competing with live work — and
+        // marked, because "there is something here for you" is the opposite of
+        // what plain dimming says.
+        NeedsInput,
+
+        // A background job that is over. Dimmed and marked differently from
+        // NeedsInput, because the two are opposite instructions: one wants you,
+        // and one wants nothing ever again. It stays on screen only as long as
+        // its status file does — the sweep deletes that after the grace period,
+        // and the orb goes with it, so a finished job fades from the screen at
+        // the same moment it stops existing on disk.
+        Finished
     }
 
     // Whether a session is *present* — someone or something is on the other end
@@ -129,47 +169,131 @@ namespace ClaudeBuddy
             status.Source == SessionSource.ClaudeCode
             && (status.SessionPid <= 0 || !knowsATerminal || sharesItsPid);
 
-        // Whether nothing is on the other end of this session right now.
+        // Which of the four an orb should be drawn as.
         //
-        // Parked is not the same claim as gone, which is why it dims an orb
-        // rather than removing one. The session is resumable, it is still worth
-        // clicking, and the user asked for it to stay on screen — what is wrong
-        // today is only that it looks like work in progress.
+        // Parked is not the same claim as gone, which is why nothing here removes
+        // an orb: the session is resumable, it is still worth clicking, and the
+        // user asked for it to stay on screen. What was wrong before this existed
+        // is only that all of them looked like work in progress.
         //
         // `state` is the status file's own word, and for a background session it
         // is load-bearing rather than decorative. The daemon's listing is cached
         // for ten seconds while the hook rewrites the file the instant a job
-        // resumes, so the file is the fresher of the two sources: requiring it
-        // to still say "idle" is what makes un-dimming prompt (next 2s scan)
-        // even though dimming lags (up to the cache plus a scan). The lag is one
-        // way round on purpose. An orb that stays dim for ten seconds after work
-        // resumes is a lie about the thing the user is watching happen; an orb
-        // that takes ten seconds to go dim is a lie about nothing happening,
-        // which nobody is watching for.
+        // resumes, so the file is the fresher of the two sources: requiring it to
+        // still say "idle" is what makes coming back to life prompt (next 2s
+        // scan) even though going quiet lags (up to the cache plus a scan). The
+        // lag is one way round on purpose. An orb that stays dim for ten seconds
+        // after work resumes is a lie about the thing the user is watching
+        // happen; an orb that takes ten seconds to go dim is a lie about nothing
+        // happening, which nobody is watching for.
+        //
+        // `attached` is whether a `claude attach` client is sitting in this job.
+        // A parked session someone is looking at is not quiet — the whole point
+        // of attaching is that you are in it — and dimming it while the user
+        // types was the plainest contradiction on the screen: they attached to
+        // all three and watched them stay grey. The daemon still says "blocked",
+        // because from its side nothing has changed; the person's presence is the
+        // thing it does not know about and the process table does.
         //
         // leadSeen / leadIsLiveJob are the orphan rule, and both have to be
-        // false. A teammate whose lead is on this scan is part of a live team.
-        // A teammate whose lead is a background job the daemon still lists is
-        // also part of a live team — the lead simply has no status file of its
-        // own to be seen through, which is the ordinary case for a team led from
-        // a job. Only when neither holds is the member answering to something
-        // that is not there any more, and an orphaned teammate is the one shape
-        // here whose arrows have already silently vanished, so the orb is the
-        // last thing left saying anything about it.
-        internal static bool IsParked(
+        // false. A teammate whose lead is on this scan is part of a live team. A
+        // teammate whose lead is a background job the daemon still lists is also
+        // part of a live team — the lead simply has no status file of its own to
+        // be seen through, which is the ordinary case for a team led from a job.
+        // Only when neither holds is the member answering to something that is
+        // not there any more, and an orphaned teammate is the one shape here
+        // whose arrows have already silently vanished, so the orb is the last
+        // thing left saying anything about it.
+        internal static OrbPresence PresenceOf(
             LocalSessionShape shape, string state, JobPhase phase,
-            bool leadSeen, bool leadIsLiveJob) => shape switch
+            bool leadSeen, bool leadIsLiveJob, bool attached) => shape switch
         {
-            LocalSessionShape.Background =>
-                phase == JobPhase.Parked && string.Equals(state, "idle", StringComparison.Ordinal),
+            LocalSessionShape.Background => BackgroundPresence(state, phase, attached),
 
-            LocalSessionShape.Teammate => !leadSeen && !leadIsLiveJob,
+            LocalSessionShape.Teammate =>
+                !leadSeen && !leadIsLiveJob ? OrbPresence.Parked : OrbPresence.Present,
 
-            // Including Terminal, said as the default rather than as a case so
-            // a fourth shape added later is present until someone decides
+            // Including Terminal, said as the default rather than as a case so a
+            // fourth shape added later is present until someone decides
             // otherwise, rather than dim because a switch was not revisited.
-            _ => false
+            // Somebody at a keyboard is never dimmed: a terminal session between
+            // turns is still a terminal session, sitting there waiting for you.
+            _ => OrbPresence.Present
         };
+
+        private static OrbPresence BackgroundPresence(string state, JobPhase phase, bool attached)
+        {
+            // Finished first, and regardless of the file's state or of anyone
+            // being attached: a job that is over is over, and an attach client
+            // sitting in a finished job is reading rather than working. Unlike
+            // the others this one is also on its way out — the sweep has the same
+            // ten minutes' evidence by now — so what it says has to be "this is
+            // done" rather than "this is idle".
+            if (phase == JobPhase.Done) return OrbPresence.Finished;
+
+            if (phase != JobPhase.Parked) return OrbPresence.Present;
+
+            // The file overrides the listing, and a person overrides both.
+            if (!string.Equals(state, "idle", StringComparison.Ordinal)) return OrbPresence.Present;
+
+            return attached ? OrbPresence.Present : OrbPresence.NeedsInput;
+        }
+
+        // Whether the daemon has *ruled out* this session being a background job.
+        //
+        // The distinction matters because the answer gates an orb's existence.
+        // "Not a job" is a fact — the listing was read and this session is not on
+        // it, so it is a subagent or a file that outlived its session, and an orb
+        // for it is a dead click. Every other answer, Unknown included, leaves the
+        // orb alone: a job mid-turn, a job holding a question, a job that has
+        // finished but whose file is still here, and a CLI that could not be
+        // asked at all.
+        //
+        // "Finished but still here" is the new one, and it is a deliberate
+        // reversal. A `done` job used to lose its orb the instant the daemon said
+        // so, on the reasoning that a finished job has nothing to show — true of
+        // clicking it, and the wrong thing to do to a screen: the user watched an
+        // orb appear and vanish while they were looking at it and reported it as a
+        // bug, because a thing that disappears without being dismissed reads as a
+        // fault rather than as a finish. It now stays, dimmed and marked as
+        // finished, for exactly as long as its status file does — which the sweep
+        // deletes on the same ten minutes' evidence, so the orb goes when the file
+        // goes and the two never disagree.
+        internal static bool RuledOutAsAJob(JobPhase phase) => phase == JobPhase.NotAJob;
+
+        // Whether some `claude attach` client is sitting in this session.
+        //
+        // `attachedIds` is what the process scan found — the argv[2] of every
+        // `claude attach <id>` running on this machine — or null for a scan that
+        // could not be done at all. Compared by prefix in both directions, the
+        // way AgentTeamViewer already compares them: attach accepts the short job
+        // id and echoes it back that way, so a window opened by hand with
+        // `claude attach bd7919f8` has to count as session bd7919f8-….
+        //
+        // A scan that failed answers **true**, and the direction is deliberate.
+        // Wrong-true leaves a genuinely parked orb at full brightness, which is
+        // the bug this branch started from, in its mildest form. Wrong-false dims
+        // a session the user is sitting in and typing at — the contradiction that
+        // prompted this rule in the first place. Of the two ways to be wrong,
+        // only one of them argues with the person looking at the screen.
+        internal static bool HasAttachClient(IReadOnlyCollection<string>? attachedIds, string sessionId)
+        {
+            if (attachedIds is null) return true;
+            if (string.IsNullOrEmpty(sessionId)) return false;
+
+            foreach (var id in attachedIds)
+            {
+                if (string.IsNullOrEmpty(id)) continue;
+
+                if (sessionId.StartsWith(id, StringComparison.Ordinal)
+                    || id.StartsWith(sessionId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         // Whether "Dismiss this orb" should be offered: it deletes a status
         // file, and only a local CLI session has one. A gateway or bridged
