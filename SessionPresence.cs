@@ -406,6 +406,48 @@ namespace ClaudeBuddy
                 || argv0.Contains("\\claude\\versions\\", StringComparison.Ordinal);
         }
 
+        // Whether a pane claim is still live.
+        //
+        // A status file records the pane its session was in when the hook last
+        // ran, and a client can move on: switch conversations, or be replaced by
+        // something else in that pane. A claim that outlives the thing it
+        // describes is not harmless here — the exclusion it feeds is what stops a
+        // click focusing the wrong pane, and a *stale* exclusion does the reverse,
+        // pushing a click that could have focused a real viewer down into the
+        // attach ladder to make a duplicate instead. That is the bug the exclusion
+        // was added to prevent, arriving from the other side.
+        //
+        // Corroborated by the pane's own current title: if the claimant's
+        // conversation is what that pane is showing, the claim describes something
+        // still true.
+        //
+        // **A claimant with no title of its own keeps its claim**, and the
+        // direction is deliberate. An empty title is not evidence that the client
+        // moved on; it is the absence of evidence either way, and it is common for
+        // an honest reason — the hook records a title when it fires, so a session
+        // renamed since then reads as untitled. Releasing on no evidence would
+        // strip the exclusion from exactly the claims that cannot defend
+        // themselves, and hand the wrong-target risk back. A stale claim costs a
+        // duplicate pane, which is visible and closable; a released good claim
+        // costs a click landing in someone else's conversation, which is silent.
+        //
+        // What this therefore does *not* fix is a stale claim by an untitled
+        // session, and that combination is real: on the machine this was written
+        // for, the pane the user works in is claimed by a session whose recorded
+        // title is empty. That claim happens to be correct — the pane is still
+        // that session's — but nothing here could have told the difference, and
+        // the honest fix for it is a stronger identity than the title. The
+        // claimant's own session_pid in the pane's process tree would settle it
+        // exactly, and the scan already holds the pane's pid; it is a follow-up
+        // rather than this round because it changes what the scan asks for rather
+        // than how an answer is judged.
+        internal static bool ClaimStillHolds(string? claimantTitle, string? paneTitle)
+        {
+            if (string.IsNullOrEmpty(claimantTitle)) return true;
+
+            return TitleSaysViewing(paneTitle, claimantTitle);
+        }
+
         // What was found, because the two findings mean opposite things to a
         // click.
         internal enum ViewerVerdict

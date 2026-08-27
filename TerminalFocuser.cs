@@ -43,16 +43,31 @@ namespace ClaudeBuddy
         // it's the status file's name, not a field inside it. Needed for the
         // background case at the end, where the only way to reach a session is
         // to name it.
-        // panesClaimedByOthers is SessionManager's answer to "which tmux panes do
-        // other sessions record as their own", handed in the same way teamLead is
-        // and for the same reason: which status files exist is not this file's
-        // knowledge. Only the viewer scan uses it, and only for its riskier
-        // branch — see SessionManager.PanesClaimedByOthers.
+        // paneClaimsByOthers is SessionManager's answer to "which tmux panes do
+        // other sessions record as their own, and under what title", handed in the
+        // same way teamLead is and for the same reason: which status files exist is
+        // not this file's knowledge. The title is there because a claim only counts
+        // while it is still true — see SessionPresence.ClaimStillHolds. Only the
+        // viewer scan uses any of it, and only for its riskier branch.
+        // acknowledge is called when the click was answered *without creating
+        // anything* — the session was already on screen, or its pane was simply
+        // selected. A callback rather than this file reaching for the orb, because
+        // the layering runs the other way everywhere else here: TerminalFocuser is
+        // handed the facts it needs and hands back what it did.
+        //
+        // It exists because round seven worked and nobody could tell. Doing
+        // nothing is the correct answer to a click on a session you are already
+        // looking at, and it is indistinguishable from the broken clicks this
+        // whole ticket is about unless the orb says so.
+        //
+        // Invoked from the pool thread, so the caller marshals — see
+        // OrbWindow.GoToSession.
         public static void Focus(
             SessionStatus? status,
             SessionStatus? teamLead = null,
             string? sessionId = null,
-            IReadOnlySet<string>? panesClaimedByOthers = null)
+            IReadOnlyDictionary<string, string>? paneClaimsByOthers = null,
+            Action? acknowledge = null)
         {
             if (status is null) return;
 
@@ -110,7 +125,7 @@ namespace ClaudeBuddy
                     return;
                 }
 
-                RunFallback(fallback, status, sessionId, panesClaimedByOthers);
+                RunFallback(fallback, status, sessionId, paneClaimsByOthers, acknowledge);
             });
         }
 
@@ -124,7 +139,7 @@ namespace ClaudeBuddy
         // below by starting one.
         private static void RunFallback(
             ClickFallback fallback, SessionStatus status, string? sessionId,
-            IReadOnlySet<string>? panesClaimedByOthers)
+            IReadOnlyDictionary<string, string>? paneClaimsByOthers, Action? acknowledge)
         {
             switch (fallback)
             {
@@ -153,18 +168,24 @@ namespace ClaudeBuddy
                     // pane in a *detached* server, which by definition nobody is
                     // looking at, and the roster is a destination the user named
                     // outright from a menu.
-                    switch (AgentTeamViewer.ViewingPane(status.Title, panesClaimedByOthers))
+                    switch (AgentTeamViewer.ViewingPane(status.Title, paneClaimsByOthers))
                     {
                         // Already on screen, in front of them. Doing nothing is the
                         // whole feature: any window this opened would be a second
                         // copy of what they are reading.
                         case (SessionPresence.ViewerVerdict.TheUserIsLookingAtIt, _):
+                            acknowledge?.Invoke();
                             return;
 
                         // On screen elsewhere. Focused through the ordinary pane
                         // tail — no attach, no split, nothing new.
+                        // Acknowledged as well, and for the same reason: selecting
+                        // a pane in a window the user is not watching is as
+                        // invisible as doing nothing, and the orb is the one
+                        // surface they *are* looking at.
                         case (SessionPresence.ViewerVerdict.ElsewhereInTmux, { } showing):
                             FocusPaneIfAny(showing, status.Cwd);
+                            acknowledge?.Invoke();
                             return;
                     }
 
@@ -207,7 +228,8 @@ namespace ClaudeBuddy
             if (status is null) return;
 
             Task.Run(() => RunFallback(
-                ClickFallback.AgentsView, status, sessionId: null, panesClaimedByOthers: null));
+                ClickFallback.AgentsView, status, sessionId: null,
+                paneClaimsByOthers: null, acknowledge: null));
         }
 
         // The chat panel's half of the same answer: it has made no focus attempt,
@@ -217,13 +239,14 @@ namespace ClaudeBuddy
         // offered at all.
         public static void Elsewhere(
             SessionStatus? status, string? sessionId,
-            IReadOnlySet<string>? panesClaimedByOthers = null)
+            IReadOnlyDictionary<string, string>? paneClaimsByOthers = null,
+            Action? acknowledge = null)
         {
             if (status is null) return;
 
             Task.Run(() => RunFallback(
                 ClickRouting.FallbackFor(status, sessionId, paneAliveButDetached: false),
-                status, sessionId, panesClaimedByOthers));
+                status, sessionId, paneClaimsByOthers, acknowledge));
         }
 
         // The tail every opener above shares: if what it opened (or found) went

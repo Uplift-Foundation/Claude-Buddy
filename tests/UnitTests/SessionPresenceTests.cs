@@ -577,6 +577,67 @@ public class SessionPresenceTests
         Assert.False(SessionPresence.LooksLikeClaudeBinary(argv0));
     }
 
+    // --- ClaimStillHolds -----------------------------------------------------
+
+    // The claim describes something still true: the pane is showing the
+    // claimant's own conversation.
+    [Fact]
+    public void AClaimTheCurrentTitleConfirmsStillHolds()
+    {
+        Assert.True(SessionPresence.ClaimStillHolds(Work, Glyph + Work));
+    }
+
+    // The client moved on — the pane is showing a different conversation now — so
+    // the claim describes the past and the pane returns to candidacy. Without this
+    // a stale exclusion pushes a click that could have focused a real viewer down
+    // into the attach ladder to make a duplicate, which is the failure the
+    // exclusion exists to prevent, arriving from the other side.
+    [Fact]
+    public void AClaimTheCurrentTitleContradictsIsReleased()
+    {
+        Assert.False(SessionPresence.ClaimStillHolds(Work, Glyph + "Something else entirely"));
+    }
+
+    // A pane that is no longer running a Claude session at all — someone quit and
+    // typed something. Not the claimant's conversation, so not the claimant's
+    // pane any more.
+    [Fact]
+    public void AClaimOnAPaneNoLongerShowingASessionIsReleased()
+    {
+        Assert.False(SessionPresence.ClaimStillHolds(Work, "~/src"));
+        Assert.False(SessionPresence.ClaimStillHolds(Work, ""));
+        Assert.False(SessionPresence.ClaimStillHolds(Work, null));
+    }
+
+    // An untitled claimant keeps its claim, and the direction is the decision
+    // rather than a fallthrough. An empty title is not evidence that the client
+    // moved on; it is the absence of evidence, and it is common for an honest
+    // reason — the hook records a title when it fires, so a session renamed since
+    // reads as untitled. Releasing on no evidence would strip the exclusion from
+    // exactly the claims that cannot defend themselves. A stale claim costs a
+    // duplicate pane, visible and closable; a released good claim costs a click
+    // landing in someone else's conversation, silently.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void AnUntitledClaimantKeepsItsClaim(string? claimantTitle)
+    {
+        Assert.True(SessionPresence.ClaimStillHolds(claimantTitle, Glyph + Work));
+        Assert.True(SessionPresence.ClaimStillHolds(claimantTitle, "anything at all"));
+        Assert.True(SessionPresence.ClaimStillHolds(claimantTitle, null));
+    }
+
+    // The collision case, which must keep working: every member of an agent team
+    // shares the team session's title, so a teammate's claim on its own pane is
+    // confirmed by that pane's title even though the title is also the clicked
+    // session's. That is what keeps the teammate protection intact — the reason
+    // the exclusion was added in the first place.
+    [Fact]
+    public void ATeammatesClaimSurvivesTheSharedTitle()
+    {
+        Assert.True(SessionPresence.ClaimStillHolds(Work, Glyph + Work));
+    }
+
     // --- ViewerAmong ---------------------------------------------------------
 
     private static SessionPresence.ViewerPane Pane(

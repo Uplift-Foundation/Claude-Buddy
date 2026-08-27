@@ -597,7 +597,12 @@ namespace ClaudeBuddy
         // is pure and covered per case.
         [ExcludeFromCodeCoverage]
         public void OpenElsewhere() => TerminalFocuser.Elsewhere(
-            _status, SessionId, SessionManager.Instance?.PanesClaimedByOthers(SessionId));
+            _status, SessionId, SessionManager.Instance?.PaneClaimsByOthers(SessionId),
+            // Through the manager, because a chat session knows its id and not its
+            // orb — and the button must acknowledge for the same reason the click
+            // does, since the two share one destination.
+            acknowledge: () => Avalonia.Threading.Dispatcher.UIThread.Post(
+                () => SessionManager.Instance?.AcknowledgeClickOn(SessionId)));
 
         // A message sent from the panel, waiting for the transcript row it will
         // produce. Held so the two can be reconciled instead of the same

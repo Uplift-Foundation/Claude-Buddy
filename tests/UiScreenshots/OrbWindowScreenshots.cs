@@ -171,6 +171,31 @@ public class OrbWindowScreenshots
     }
 
     [AvaloniaFact]
+    public void AParkedJobAcknowledgingAClickWearsAHalo()
+    {
+        // The click that deliberately does nothing, saying so. Round eight exists
+        // because round seven worked and nobody could tell: doing nothing is the
+        // right answer to a click on a session already on screen, and it is
+        // indistinguishable from the broken clicks this whole ticket is about
+        // unless the orb answers.
+        //
+        // Captured mid-flight rather than at rest, because at rest there is
+        // nothing to see — the halo is 280ms of growing and fading. Two ticks in,
+        // the glow is wider than the orb and part-faded, which is the whole point:
+        // it reads as a ripple leaving the orb rather than as the orb changing
+        // state. Scale is deliberately untouched, since that channel is the breath
+        // and this says nothing about what the session is doing.
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(BackgroundStatus(OrbPresence.NeedsInput));
+
+        orb.Acknowledge();
+        orb.TickAcknowledgement();
+        orb.TickAcknowledgement();
+
+        ScreenshotHelper.Capture(orb, "orb-window-acknowledging-a-click.png");
+    }
+
+    [AvaloniaFact]
     public void AParkedJobSomebodyIsAttachedToLooksOrdinary()
     {
         // A parked job with a `claude attach` client sitting in it. The daemon

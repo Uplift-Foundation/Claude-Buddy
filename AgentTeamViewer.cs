@@ -383,7 +383,7 @@ namespace ClaudeBuddy
         // SessionPresence.TitleSaysViewing, LooksLikeClaudeBinary and ViewerAmong.
         [ExcludeFromCodeCoverage]
         public static (SessionPresence.ViewerVerdict Verdict, string? Pane) ViewingPane(
-            string? sessionTitle, IReadOnlySet<string>? panesClaimedByOthers)
+            string? sessionTitle, IReadOnlyDictionary<string, string>? paneClaimsByOthers)
         {
             var none = (SessionPresence.ViewerVerdict.NoneFound, (string?)null);
 
@@ -418,11 +418,20 @@ namespace ClaudeBuddy
                 if (!int.TryParse(parts[1], out var panePid)) continue;
                 if (!RunsClaude(panePid)) continue;
 
+                // A claim only counts while it is still true. The pane's own
+                // current title is the corroboration, which is why this is asked
+                // here rather than where the claims were collected — only the scan
+                // has both halves.
+                var claimed =
+                    paneClaimsByOthers is not null
+                    && paneClaimsByOthers.TryGetValue(parts[0], out var claimantTitle)
+                    && SessionPresence.ClaimStillHolds(claimantTitle, parts[4]);
+
                 candidates.Add(new SessionPresence.ViewerPane(
                     Pane: parts[0],
                     Window: parts[3],
                     ActiveInItsWindow: parts[2] == "1",
-                    ClaimedByAnother: panesClaimedByOthers?.Contains(parts[0]) ?? false));
+                    ClaimedByAnother: claimed));
             }
 
             return SessionPresence.ViewerAmong(candidates, ActiveWindowOfAttachedClient(tmux));
