@@ -51,6 +51,114 @@ namespace ClaudeBuddy
         internal static string ShellQuote(string value) =>
             "'" + value.Replace("'", "'\\''") + "'";
 
+        // Where a fresh `claude attach` should be put.
+        //
+        // The whole of round 6a, and it came out of one sentence: "it's taking me
+        // to a different tmux window - not this one." Every previous answer moved
+        // the *user* — a new tmux window, a new terminal window, a switch-client —
+        // and the complaint was never that the destination was wrong. It was that
+        // being moved is wrong. So the session comes to them instead: a pane
+        // split into the window they are already looking at.
+        //
+        // Three answers, in descending order of how little they disturb:
+        //
+        // - BesideTheUser: they are attached to tmux and we know which window
+        //   their client is showing. Split it. Nothing moves, and "this one"
+        //   stays this one.
+        // - ItsOwnTmuxWindow: they are attached somewhere but the window could
+        //   not be resolved. A new window in their session is still inside the
+        //   thing they use to move around, which is what this app chose before
+        //   6a and remains the right consolation prize.
+        // - ATerminalWindow: nothing is attached to their tmux at all, so there
+        //   is no screen to split or to make a window on — a window created in a
+        //   detached server is the same nowhere the orb already pointed at.
+        //
+        // Pure, and split out from PlaceInTmux for the reason ClickRouting was
+        // split out of TerminalFocuser: the old form of this decision was three
+        // early returns interleaved with the subprocesses that answered them, so
+        // the only way to ask what it did was to click an orb and watch.
+        internal enum AttachPlacement
+        {
+            BesideTheUser,
+            ItsOwnTmuxWindow,
+            ATerminalWindow
+        }
+
+        // attachedSession is the first session name `list-clients` gave back, or
+        // empty for a server with no client anywhere. activeWindow is
+        // "<session>:<index>" for the window that client is showing, or empty when
+        // that second question could not be answered — it is a separate lookup and
+        // it can fail on its own, which is exactly the middle case above.
+        internal static AttachPlacement PlacementFor(string? attachedSession, string? activeWindow)
+        {
+            if (string.IsNullOrEmpty(attachedSession)) return AttachPlacement.ATerminalWindow;
+
+            return string.IsNullOrEmpty(activeWindow)
+                ? AttachPlacement.ItsOwnTmuxWindow
+                : AttachPlacement.BesideTheUser;
+        }
+
+        // `split-window` into the window the user is looking at.
+        //
+        // -h so the conversation lands beside their work rather than under it: a
+        // chat is read in lines, and half the height of a terminal is fewer lines
+        // than half its width is columns.
+        //
+        // -P -F '#{pane_id}' so the new pane's id comes back on stdout, which is
+        // what the caller hands to the ordinary pane-focusing path — the same
+        // contract new-window already had, and the reason neither of these
+        // selects or raises anything itself.
+        //
+        // -c is omitted rather than passed empty when no cwd was recorded: `-c ''`
+        // fails and would take the split with it, which is the same trap
+        // TmuxAttachScript's `cd` guard documents one screen down.
+        internal static string[] TmuxSplitArgs(
+            string? socket, string target, string? cwd, string command)
+        {
+            var args = new List<string> { "split-window", "-h", "-t", target };
+
+            if (!string.IsNullOrEmpty(cwd))
+            {
+                args.Add("-c");
+                args.Add(cwd);
+            }
+
+            args.Add("-P");
+            args.Add("-F");
+            args.Add("#{pane_id}");
+            args.Add(command);
+
+            return TmuxArgs(socket, args.ToArray());
+        }
+
+        // A new window in the user's own session, for when their active window
+        // could not be resolved.
+        //
+        // "<session>:" with the colon, not the bare name. Bare, tmux reads the
+        // target as a *window* and refuses with "index N in use" the moment that
+        // index is taken; the trailing colon names the session and lets it pick
+        // the next free index. That was a real failure, and stating it here rather
+        // than in a comment beside an argument list is the point of extracting
+        // this at all.
+        internal static string[] TmuxNewWindowArgs(
+            string? socket, string session, string? cwd, string command)
+        {
+            var args = new List<string> { "new-window", "-t", session + ":" };
+
+            if (!string.IsNullOrEmpty(cwd))
+            {
+                args.Add("-c");
+                args.Add(cwd);
+            }
+
+            args.Add("-P");
+            args.Add("-F");
+            args.Add("#{pane_id}");
+            args.Add(command);
+
+            return TmuxArgs(socket, args.ToArray());
+        }
+
         // The shell script that puts a terminal onto an existing tmux server.
         //
         // For a session whose pane is alive in a server nothing is attached to —

@@ -389,6 +389,38 @@ public class SessionPresenceTests
         Assert.False(SessionPresence.HasAttachClient(new[] { "0e043819" }, ""));
     }
 
+    // --- KnownAttachClient ---------------------------------------------------
+
+    // The click's half of the same question, and the direction is the whole
+    // reason it is a second function rather than a second caller. It is the one
+    // authority on "is anything already attached" for a click — it replaced
+    // AgentTeamViewer.AttachedAlready, which asked the identical question of the
+    // identical `ps -eo args=` population and differed only in being uncached.
+    [Fact]
+    public void TheClickSeesTheSameMatchesTheDimmingRuleDoes()
+    {
+        const string full = "0e043819-3c45-4f1a-9c2b-8d4e5f6a7b8c";
+
+        Assert.True(SessionPresence.KnownAttachClient(new[] { "0e043819" }, full));
+        Assert.False(SessionPresence.KnownAttachClient(new[] { "5f6960b2" }, full));
+        Assert.False(SessionPresence.KnownAttachClient(Array.Empty<string>(), full));
+        Assert.False(SessionPresence.KnownAttachClient(new[] { "0e043819" }, ""));
+    }
+
+    // And where the two part company. A scan that could not be done means
+    // "attached" for dimming, because being wrong there dims a session somebody
+    // is typing into; it means "not attached" for a click, because being wrong
+    // there raises an app with no such window and creates nothing — a gesture
+    // that does nothing, which is the complaint the whole click ladder exists to
+    // answer. One duplicate pane is visible and closable; a dead click is
+    // neither.
+    [Fact]
+    public void AScanThatCouldNotBeDoneStopsTheDimmingAndNotTheClick()
+    {
+        Assert.True(SessionPresence.HasAttachClient(null, "0e043819"));
+        Assert.False(SessionPresence.KnownAttachClient(null, "0e043819"));
+    }
+
     // --- SameJobId -----------------------------------------------------------
 
     // The prefix rule itself, now that it is one function rather than three

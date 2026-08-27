@@ -274,7 +274,12 @@ namespace ClaudeBuddy
         {
             _statusDir = statusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
-            _attachClients = attachClients ?? AgentTeamViewer.AttachedJobIds;
+            // Wrapped rather than handed over as a method group: AttachedJobIds
+            // grew an optional `fresh` parameter for the click path, and an
+            // optional parameter stops a method group converting to a
+            // zero-argument Func. The scan wants the cached form, which is the
+            // default, so the lambda says so explicitly.
+            _attachClients = attachClients ?? (() => AgentTeamViewer.AttachedJobIds());
         }
 
         private readonly Func<Dictionary<string, string>?> _jobListing;
