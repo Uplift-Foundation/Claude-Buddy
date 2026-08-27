@@ -378,7 +378,7 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
 
-                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="5">
+                <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="5">
                     <!-- AcceptsReturn so the TextBox owns newline insertion,
                          caret placement and undo; Enter-to-send is
                          intercepted on the tunnel route instead, and so is a
@@ -393,14 +393,34 @@
                              CaretBrush="#EEFFFFFF"
                              BorderBrush="#40FFFFFF" BorderThickness="1"
                              CornerRadius="6" Padding="6,3"/>
-                    <Grid x:Name="MicButton" Grid.Column="1" Width="24" Height="24"
+                    <!-- For a session there is nowhere to type into: a
+                         background job, run by a daemon precisely so that no
+                         terminal has to hold it. Clicking it runs `claude attach`
+                         in a terminal, which is the same thing a click on the
+                         orb does — see ClickRouting.AttachWouldReach, which
+                         decides whether this is shown at all.
+
+                         The gear matches the badge that orb wears, so the two
+                         read as the same fact rather than as two unrelated
+                         marks. First in the row because it is what you would do
+                         *before* typing, and hidden for every session that can
+                         be typed into as it is. -->
+                    <Grid x:Name="AttachButton" Grid.Column="1" Width="24" Height="24"
+                          IsVisible="False" Cursor="Hand"
+                          ToolTip.Tip="Attach this session in a terminal">
+                        <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+                        <TextBlock Text="&#9881;" FontSize="11" Foreground="#DDFFFFFF"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   IsHitTestVisible="False"/>
+                    </Grid>
+                    <Grid x:Name="MicButton" Grid.Column="2" Width="24" Height="24"
                           IsVisible="False" Cursor="Hand">
                         <Ellipse x:Name="MicFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
                         <TextBlock Text="&#127908;" FontSize="11"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"
                                    IsHitTestVisible="False"/>
                     </Grid>
-                    <Grid x:Name="SendButton" Grid.Column="2" Width="24" Height="24" Cursor="Hand">
+                    <Grid x:Name="SendButton" Grid.Column="3" Width="24" Height="24" Cursor="Hand">
                         <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
                         <TextBlock Text="&#10148;" FontSize="11" Foreground="#DDFFFFFF"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"

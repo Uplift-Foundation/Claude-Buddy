@@ -172,6 +172,55 @@ public class ClickRoutingTests
         Assert.Equal(ClickFallback.AttachById, Fallback(Status()));
     }
 
+    // --- what the chat panel asks ---------------------------------------------
+
+    // The panel's question is not the click's — "is there an attach that would
+    // reach this session" rather than "what should this gesture do" — but it must
+    // never offer an attach for a session a click would not attach, so it is the
+    // same rule run with paneAliveButDetached false rather than a second rule
+    // that agrees today.
+    [Fact]
+    public void ThePanelOffersAnAttachForExactlyTheSessionsAClickWouldAttach()
+    {
+        // A background job in any phase, and a headless session with nothing
+        // recorded: the two the click answers with an attach.
+        Assert.True(ClickRouting.AttachWouldReach(
+            Status(shape: LocalSessionShape.Background), "session-1"));
+        Assert.True(ClickRouting.AttachWouldReach(Status(), "session-1"));
+        Assert.True(ClickRouting.AttachWouldReach(Status(pid: 0), "session-1"));
+
+        // An ordinary session in a pane or a window: the click focuses it, so
+        // there is nothing to offer and no button.
+        Assert.False(ClickRouting.AttachWouldReach(Status(tmuxPane: "%7"), "session-1"));
+        Assert.False(ClickRouting.AttachWouldReach(Status(tty: "/dev/ttys004"), "session-1"));
+        Assert.False(ClickRouting.AttachWouldReach(
+            Status(termProgram: "iTerm.app"), "session-1"));
+    }
+
+    // Codex has no `claude attach` to be offered, and a session with no id
+    // cannot be named to one. Both are the click's refusals, which is the point
+    // of asking the same function.
+    [Fact]
+    public void ThePanelOffersNothingWhereTheClickWouldRefuse()
+    {
+        Assert.False(ClickRouting.AttachWouldReach(
+            Status(source: SessionSource.Codex), "session-1"));
+        Assert.False(ClickRouting.AttachWouldReach(Status(), null));
+        Assert.False(ClickRouting.AttachWouldReach(Status(), ""));
+    }
+
+    // The socket answer is deliberately not one the panel can offer: it is about
+    // a pane the *click* already selected on its way past, which the panel has
+    // not done and cannot claim.
+    [Fact]
+    public void ThePanelNeverOffersTheSocketAttach()
+    {
+        var inADetachedPane = Status(tmuxPane: "%7");
+
+        Assert.Equal(ClickFallback.AttachSocket, Fallback(inADetachedPane, detached: true));
+        Assert.False(ClickRouting.AttachWouldReach(inADetachedPane, "session-1"));
+    }
+
     // --- the mic uses the same predicate --------------------------------------
 
     // TerminalFocuser.SendText guards on this too, and the reason is worth a

@@ -170,6 +170,30 @@ namespace ClaudeBuddy
         string ComposerHint { get; }
     }
 
+    // A session that cannot be typed into where it is, but can be brought
+    // somewhere it can.
+    //
+    // One implementation, and the same reason the interfaces above are separate
+    // from IRemoteChatSession rather than on it: a transport with no such answer
+    // simply does not implement this, and the panel offers nothing. A gateway
+    // session has nowhere to be attached to; a background job has exactly one
+    // place, and until this existed the panel's advice for one was "reply in the
+    // terminal instead" — a terminal that does not exist, which is the whole
+    // reason a daemon runs the session.
+    public interface IRemoteChatAttach
+    {
+        // Whether the panel should offer it. Decided by the session rather than
+        // by the panel, because the rule is the click path's
+        // (ClickRouting.AttachWouldReach) and the panel has no business holding
+        // a second copy of it.
+        bool CanAttach { get; }
+
+        // Fire and forget, like the click it shares its implementation with:
+        // opening a terminal is not something the panel waits on, and what
+        // arrives afterwards arrives through the ordinary scan.
+        void Attach();
+    }
+
     // A session where a pasted picture can actually go somewhere.
     //
     // Not on IRemoteChatSession itself, for the same reason the three
