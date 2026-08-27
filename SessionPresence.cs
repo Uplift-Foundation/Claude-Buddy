@@ -276,24 +276,38 @@ namespace ClaudeBuddy
         // a session the user is sitting in and typing at — the contradiction that
         // prompted this rule in the first place. Of the two ways to be wrong,
         // only one of them argues with the person looking at the screen.
-        internal static bool HasAttachClient(IReadOnlyCollection<string>? attachedIds, string sessionId)
+        internal static bool HasAttachClient(
+            IReadOnlyCollection<string>? attachedIds, string sessionId)
         {
             if (attachedIds is null) return true;
             if (string.IsNullOrEmpty(sessionId)) return false;
 
             foreach (var id in attachedIds)
             {
-                if (string.IsNullOrEmpty(id)) continue;
-
-                if (sessionId.StartsWith(id, StringComparison.Ordinal)
-                    || id.StartsWith(sessionId, StringComparison.Ordinal))
-                {
-                    return true;
-                }
+                if (SameJobId(sessionId, id)) return true;
             }
 
             return false;
         }
+
+        // Whether two ids name the same job.
+        //
+        // Prefix in both directions, and empty matches nothing. `claude attach`
+        // accepts the short job id and echoes it back that way, so a window
+        // opened by hand with `claude attach bd7919f8` has to count as session
+        // bd7919f8-…; and the app hands it the short form itself.
+        //
+        // Here rather than inline at each site because there were three copies of
+        // it — this one, AgentTeamViewer.AttachedAlready's and
+        // ExistingAttachPane's — and they decide whether a click opens a second
+        // window onto a conversation somebody is already reading. Three copies of
+        // that is three chances for two of them to disagree about the same pair of
+        // ids.
+        internal static bool SameJobId(string a, string b) =>
+            !string.IsNullOrEmpty(a)
+            && !string.IsNullOrEmpty(b)
+            && (a.StartsWith(b, StringComparison.Ordinal)
+                || b.StartsWith(a, StringComparison.Ordinal));
 
         // Whether "Dismiss this orb" should be offered: it deletes a status
         // file, and only a local CLI session has one. A gateway or bridged

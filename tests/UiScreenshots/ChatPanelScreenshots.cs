@@ -73,7 +73,7 @@ public class ChatPanelScreenshots : IDisposable
             new ChatTurn { Role = ChatRole.Assistant, Text = "Done — three merged, one had conflicts." },
         });
 
-        fake.ComposerHint = "Needs input — open the agents view";
+        fake.ComposerHint = "Needs input — attach to reply";
         fake.CanOpenElsewhere = true;
 
         ChatPanel.OpenFor(NewOrb(), fake);

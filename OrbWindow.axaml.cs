@@ -302,6 +302,7 @@ namespace ClaudeBuddy
             // the manager's own guards cannot disagree about what is possible —
             // an item that is offered and then silently does nothing is worse
             // than one that is not there.
+            AgentsViewItem.IsVisible = ClickRouting.OffersTheAgentsView(status);
             DismissItem.IsVisible = SessionPresence.CanDismiss(status);
             EndSessionItem.IsVisible = SessionPresence.CanEndSession(status);
 
@@ -1994,6 +1995,20 @@ namespace ClaudeBuddy
             IsPinned = pinned;
             // Only worth offering once there's something to undo.
             ResetPositionItem.IsVisible = pinned;
+        }
+
+        // The roster, for a background orb that wants it. Delegates the same way
+        // the two lifecycle handlers below do: the orb knows which session was
+        // right-clicked and nothing else, and every rule about where a gesture
+        // goes lives in ClickRouting with the subprocesses in TerminalFocuser.
+        //
+        // Safe with no status yet — TerminalFocuser.OpenAgentsView returns on
+        // null — which matters because the menu is built before the first
+        // UpdateFrom, and a right-click during that window would otherwise be
+        // the one gesture that could throw.
+        internal void AgentsView_Click(object? sender, RoutedEventArgs e)
+        {
+            TerminalFocuser.OpenAgentsView(_lastStatus);
         }
 
         internal void ResetIdle_Click(object? sender, RoutedEventArgs e)

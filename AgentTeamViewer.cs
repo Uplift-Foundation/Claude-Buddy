@@ -679,12 +679,7 @@ namespace ClaudeBuddy
                 if (Path.GetFileName(words[0]) is not ("claude" or "claude.exe")) continue;
                 if (words[1] != "attach") continue;
 
-                var id = words[2];
-                if (jobId.StartsWith(id, StringComparison.Ordinal)
-                    || id.StartsWith(jobId, StringComparison.Ordinal))
-                {
-                    return parts[0];
-                }
+                if (SessionPresence.SameJobId(jobId, words[2])) return parts[0];
             }
 
             return null;
@@ -699,6 +694,21 @@ namespace ClaudeBuddy
         // Excluded from coverage: asks tmux whether a pane is still running the
         // attach.
         [ExcludeFromCodeCoverage]
+        // Its own fresh `ps` rather than the cached AttachedJobIds() beside it, and
+        // returning **false** when that read fails — both deliberate, and both the
+        // opposite of the dimming rule's choices for the same question.
+        //
+        // Fresh because this decides a gesture the user just made. The cache is
+        // five seconds old at worst, which is nothing for a scan that runs every
+        // two seconds and everything for someone who closed their attach window
+        // and immediately clicked the orb: they would get an app raised that has
+        // no such window, and the click would appear to do nothing.
+        //
+        // False on failure for the same reason. SessionPresence.HasAttachClient
+        // answers an unreadable process table with **true**, because there the
+        // cost of being wrong is dimming a session somebody is typing into. Here
+        // the cost of being wrong-true is a dead click, and the cost of being
+        // wrong-false is one duplicate window — visible, and closable.
         private static bool AttachedAlready(string sessionId)
         {
             if (!TryRun("/bin/ps", out var listing, "-eo", "args=")) return false;
@@ -710,12 +720,7 @@ namespace ClaudeBuddy
                 if (Path.GetFileName(words[0]) is not ("claude" or "claude.exe")) continue;
                 if (words[1] != "attach") continue;
 
-                var id = words[2];
-                if (sessionId.StartsWith(id, StringComparison.Ordinal)
-                    || id.StartsWith(sessionId, StringComparison.Ordinal))
-                {
-                    return true;
-                }
+                if (SessionPresence.SameJobId(sessionId, words[2])) return true;
             }
 
             return false;

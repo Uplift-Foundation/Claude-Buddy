@@ -38,7 +38,12 @@ public class OrbWindowPresenceTests
         SessionKind kind = SessionKind.Background,
         string state = "idle",
         int pid = 4321,
-        SessionSource source = SessionSource.ClaudeCode) =>
+        SessionSource source = SessionSource.ClaudeCode,
+        // Overrides the shape the kind would imply. Needed because the two are
+        // not the same axis — SessionKind is what a *gateway* conversation is,
+        // LocalSessionShape is whose lifecycle a local session follows — and a
+        // teammate has no kind at all, so it cannot be reached by picking one.
+        LocalSessionShape? shape = null) =>
         new()
         {
             Source = source,
@@ -47,9 +52,10 @@ public class OrbWindowPresenceTests
             Presence = presence,
             SessionPid = pid,
             Cwd = "/Users/warren/project",
-            Shape = kind == SessionKind.Background
+            Lead = shape == LocalSessionShape.Teammate ? "lead-session-id" : "",
+            Shape = shape ?? (kind == SessionKind.Background
                 ? LocalSessionShape.Background
-                : LocalSessionShape.Terminal,
+                : LocalSessionShape.Terminal),
         };
 
     // The shared pulse roster, which is what "held still" actually means — a
@@ -423,6 +429,62 @@ public class OrbWindowPresenceTests
 
         Assert.False(orb.FindControl<MenuItem>("DismissItem")!.IsVisible);
         Assert.False(orb.FindControl<MenuItem>("EndSessionItem")!.IsVisible);
+    }
+
+    // --- the agents-view item -----------------------------------------------
+
+    // The `claude agents` roster, offered on the orbs the roster lists. It was
+    // briefly what a double-click did, and live use reversed that within the hour
+    // — "cd is taking me to the wrong window" — so the menu is where it lives now.
+    // See ClickRouting.AgentsView.
+    [AvaloniaFact]
+    public void ABackgroundOrbOffersTheAgentsView()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(shape: LocalSessionShape.Background));
+
+        Assert.True(orb.FindControl<MenuItem>("AgentsViewItem")!.IsVisible);
+    }
+
+    // Every other orb: the roster is jobs, not terminals, so on a terminal
+    // session or a teammate it would open a window with the clicked session
+    // nowhere in it.
+    [AvaloniaTheory]
+    [InlineData(LocalSessionShape.Terminal)]
+    [InlineData(LocalSessionShape.Teammate)]
+    public void NoOtherShapeOffersTheAgentsView(LocalSessionShape shape)
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(shape: shape));
+
+        Assert.False(orb.FindControl<MenuItem>("AgentsViewItem")!.IsVisible);
+    }
+
+    // It reappears and disappears with the shape, rather than latching on the
+    // first status that qualified: a session the scan reclassifies must not keep
+    // a menu item that no longer applies to it.
+    [AvaloniaFact]
+    public void TheAgentsViewItemFollowsAChangeOfShape()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+
+        orb.UpdateFrom(Status(shape: LocalSessionShape.Background));
+        Assert.True(orb.FindControl<MenuItem>("AgentsViewItem")!.IsVisible);
+
+        orb.UpdateFrom(Status(shape: LocalSessionShape.Terminal));
+        Assert.False(orb.FindControl<MenuItem>("AgentsViewItem")!.IsVisible);
+    }
+
+    // The handler, on an orb that has never had a status. TerminalFocuser's own
+    // entry point returns on null, which is what makes this safe to call at all
+    // in a headless suite — with a status it would run tmux and osascript for
+    // real, which is why no test here gives it one. Named as the gap it is.
+    [AvaloniaFact]
+    public void TheAgentsViewHandlerIsSafeBeforeAnyStatusArrives()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+
+        orb.AgentsView_Click(null, null!);
     }
 
     // Both handlers with no SessionManager current, which is this suite's

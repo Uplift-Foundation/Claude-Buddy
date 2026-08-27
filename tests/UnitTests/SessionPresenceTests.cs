@@ -389,6 +389,59 @@ public class SessionPresenceTests
         Assert.False(SessionPresence.HasAttachClient(new[] { "0e043819" }, ""));
     }
 
+    // --- SameJobId -----------------------------------------------------------
+
+    // The prefix rule itself, now that it is one function rather than three
+    // copies of an inline comparison. It decides whether a click opens a *second*
+    // window onto a conversation somebody is already reading, which is why the
+    // copies were worth collapsing: two of them disagreeing about one pair of ids
+    // is a duplicate window or a dead click, and nothing in between.
+    [Fact]
+    public void TwoFormsOfOneJobIdAreTheSameJob()
+    {
+        const string full = "0e043819-3c45-4f1a-9c2b-8d4e5f6a7b8c";
+
+        Assert.True(SessionPresence.SameJobId(full, "0e043819"));
+        Assert.True(SessionPresence.SameJobId("0e043819", full));
+        Assert.True(SessionPresence.SameJobId(full, full));
+    }
+
+    [Fact]
+    public void DifferentJobIdsAreNotTheSameJob()
+    {
+        Assert.False(SessionPresence.SameJobId("0e043819", "5f6960b2"));
+
+        // Sharing a leading character is not sharing a prefix in either
+        // direction — asserted because a looser rule would match half the
+        // machine's jobs to each other.
+        Assert.False(SessionPresence.SameJobId("0e043819", "0f043819"));
+    }
+
+    // Empty matches nothing, in either position. Without this a bare StartsWith
+    // would make an empty id match every job on the machine — and the empty case
+    // is real on both sides: a `ps` line whose third word is missing, and an orb
+    // whose session id never reached the click.
+    [Fact]
+    public void AnEmptyIdIsNeverTheSameJobAsAnything()
+    {
+        Assert.False(SessionPresence.SameJobId("", "0e043819"));
+        Assert.False(SessionPresence.SameJobId("0e043819", ""));
+        Assert.False(SessionPresence.SameJobId("", ""));
+    }
+
+    // And through the collection rule, since that is where an empty id actually
+    // arrives from: AttachedJobIds parses argv, and a malformed line can put a
+    // blank in the set beside good ones.
+    [Fact]
+    public void ABlankInTheAttachedSetDoesNotMatchEverything()
+    {
+        Assert.False(SessionPresence.HasAttachClient(
+            new[] { "", "5f6960b2" }, "0e043819-3c45-4f1a-9c2b-8d4e5f6a7b8c"));
+
+        Assert.True(SessionPresence.HasAttachClient(
+            new[] { "", "0e043819" }, "0e043819-3c45-4f1a-9c2b-8d4e5f6a7b8c"));
+    }
+
     // --- RuledOutAsAJob ------------------------------------------------------
 
     // The gate on an orb's existence, and the reversal this round made: only a

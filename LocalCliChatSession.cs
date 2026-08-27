@@ -543,9 +543,9 @@ namespace ClaudeBuddy
 
                 return presence switch
                 {
-                    OrbPresence.NeedsInput => "Needs input — open the agents view",
-                    OrbPresence.Finished => "Finished — open the agents view",
-                    _ => "Open the agents view to reply"
+                    OrbPresence.NeedsInput => "Needs input — attach to reply",
+                    OrbPresence.Finished => "Finished — attach to read it",
+                    _ => "Attach to reply"
                 };
             }
 
@@ -708,7 +708,7 @@ namespace ClaudeBuddy
             if (shape == LocalSessionShape.Background)
             {
                 return "This is a background job with no terminal of its own. "
-                    + "Open the agents view (⚙ beside the box) to answer it there.";
+                    + "Attach it (⚙ beside the box) to answer it there.";
             }
 
             return "This session isn't in a tmux pane, so there is nowhere to type without "

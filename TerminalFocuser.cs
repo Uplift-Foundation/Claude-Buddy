@@ -152,6 +152,25 @@ namespace ClaudeBuddy
             }
         }
 
+        // "Open agents view", from a background orb's right-click menu.
+        //
+        // Its own entry point because the roster is no longer an answer to a
+        // click — see ClickRouting.AgentsView for the misreading that made it one
+        // for an hour, and ClickRouting.OffersTheAgentsView for which orbs offer
+        // it. Named rather than routed through FallbackFor, since the user has
+        // said which destination they want and there is nothing left to decide.
+        //
+        // Through RunFallback all the same, so the pane-focusing tail is shared:
+        // a roster that opens into tmux still has to be selected and its client's
+        // window raised, and that step being forgotten is exactly what once made
+        // a second click look like it did nothing.
+        public static void OpenAgentsView(SessionStatus? status)
+        {
+            if (status is null) return;
+
+            Task.Run(() => RunFallback(ClickFallback.AgentsView, status, sessionId: null));
+        }
+
         // The chat panel's half of the same answer: it has made no focus attempt,
         // so it asks the rule with nothing learned about detached panes and
         // carries out whatever comes back. One verb, one destination — see

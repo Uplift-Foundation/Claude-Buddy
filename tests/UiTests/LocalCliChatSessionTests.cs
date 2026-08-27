@@ -66,7 +66,7 @@ public class LocalCliChatSessionTests : IDisposable
     // fail silently, since a session that always answered false would simply
     // show no button and look like a session that could be typed into.
     [AvaloniaFact]
-    public void ABackgroundSessionOffersTheViewAndSaysWhatItWants()
+    public void ABackgroundSessionOffersAnAttachAndSaysWhatItWants()
     {
         var session = new LocalCliChatSession("s1", new SessionStatus
         {
@@ -78,7 +78,7 @@ public class LocalCliChatSessionTests : IDisposable
         });
 
         Assert.True(session.CanOpenElsewhere);
-        Assert.Equal("Needs input — open the agents view", session.ComposerHint);
+        Assert.Equal("Needs input — attach to reply", session.ComposerHint);
     }
 
     // An ordinary session in a tmux pane: nothing to attach, and the box says

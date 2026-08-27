@@ -89,70 +89,116 @@ public class ClickRoutingTests
 
     // --- case 1: a background session, in any phase --------------------------
 
-    // The `claude agents` roster, which is where these sessions are managed
-    // from. The user's words, looking at it: "I don't understand why you can't go
-    // straight to it!" — and the *shape* decides, not the phase, because the
-    // roster shows a working job, one holding a question and one that has
-    // finished alike. The orb's rendering is what distinguishes those; where the
-    // click goes does not need to.
+    // `claude attach <id>`, which lands the click *in the conversation*. The
+    // *shape* decides, not the phase, because attach reaches a working job, one
+    // holding a question and one that has finished alike. The orb's rendering is
+    // what distinguishes those; where the click goes does not need to.
+    //
+    // This answer was briefly the `claude agents` roster instead, on a misreading
+    // of "I don't understand why you can't go straight to it!" — the roster was
+    // what the user happened to be looking at when they said it. Live use settled
+    // it within the hour: double-clicking the orb of the session they were
+    // mid-conversation with pulled them out of that window onto the dashboard,
+    // "cd is taking me to the wrong window". "It" was the session. The roster is
+    // still built and still reachable; it is a right-click item now — see
+    // OffersTheAgentsView below.
     [Fact]
-    public void ABackgroundSessionGoesToTheAgentsViewWhateverElseItRecorded()
+    public void ABackgroundSessionIsAttachedDirectlyWhateverElseItRecorded()
     {
         Assert.Equal(
-            ClickFallback.AgentsView,
+            ClickFallback.AttachBackground,
             Fallback(Status(shape: LocalSessionShape.Background)));
 
         // Even one that inherited or was adopted into terminal coordinates: it
         // has no terminal of its own and never will, so this is the answer rather
         // than a fallback.
         Assert.Equal(
-            ClickFallback.AgentsView,
+            ClickFallback.AttachBackground,
             Fallback(Status(shape: LocalSessionShape.Background, tmuxPane: "%7")));
     }
 
-    // The roster is not named per session — `claude agents --help` offers only
-    // `--cwd`, and no preselect — so unlike both attach answers this one needs no
-    // session id at all. Asserted rather than left to the reader, because an orb
-    // whose id somehow did not reach the click would otherwise be the one orb
-    // with nowhere to go.
+    // Unlike the roster it replaced, this answer *is* named per session — it is
+    // `claude attach <id>` — so an orb whose id somehow did not reach the click
+    // has nothing to hand it and must not claim otherwise. RunFallback's arm
+    // dereferences that id, so a rule that answered AttachBackground without one
+    // would be a crash rather than a click.
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    public void TheAgentsViewNeedsNoSessionId(string? sessionId)
+    public void TheAttachAnswerIsWithheldFromABackgroundSessionWithNoId(string? sessionId)
     {
         Assert.Equal(
-            ClickFallback.AgentsView,
+            ClickFallback.None,
             Fallback(Status(shape: LocalSessionShape.Background), sessionId: sessionId));
     }
 
     // A hook older than the session_pid field writes 0, and such a session may
-    // not be a job at all — nobody can enumerate it, so the roster might not list
-    // it. It keeps `claude attach` with its own name, which is the one answer that
-    // works for something nothing else can name.
+    // not be a job at all — nobody can enumerate it. It gets the same answer for
+    // a different reason: its own name is the only handle anything has on it.
     [Fact]
     public void ASessionThatRecordedNoPidIsStillAttachedById()
     {
         Assert.Equal(ClickFallback.AttachBackground, Fallback(Status(pid: 0)));
         Assert.Equal(ClickFallback.AttachBackground, Fallback(Status(pid: -1)));
 
-        // ...unless the scan did place it as a background session, in which case
-        // the roster knows it and is the better destination.
+        // And a session that is both is not a third case.
         Assert.Equal(
-            ClickFallback.AgentsView,
+            ClickFallback.AttachBackground,
             Fallback(Status(pid: 0, shape: LocalSessionShape.Background)));
     }
 
     // A parked job can have been adopted into a `claude agents` viewer pane, and
     // if that viewer's own server is detached, the socket answer would attach a
-    // terminal to the roster's server — the same destination by a worse route,
-    // and one that cannot bring an already-open roster forward. The roster answer
-    // wins.
+    // terminal to the roster's server — landing the click on a dashboard when it
+    // asked for a conversation. The attach answer wins.
     [Fact]
     public void ABackgroundSessionBeatsTheSocketAnswerWhenBothWouldApply()
     {
         Assert.Equal(
-            ClickFallback.AgentsView,
+            ClickFallback.AttachBackground,
             Fallback(Status(shape: LocalSessionShape.Background, tmuxPane: "%7"), detached: true));
+    }
+
+    // --- OffersTheAgentsView -------------------------------------------------
+
+    // The roster's new home: a right-click item on the orbs it lists, which is
+    // background sessions and nothing else. On any other orb it would open a
+    // window with the clicked session nowhere in it, since Claude Code's roster
+    // is jobs and not terminals.
+    [Fact]
+    public void OnlyABackgroundOrbOffersTheAgentsView()
+    {
+        Assert.True(ClickRouting.OffersTheAgentsView(
+            Status(shape: LocalSessionShape.Background)));
+
+        Assert.False(ClickRouting.OffersTheAgentsView(Status()));
+        Assert.False(ClickRouting.OffersTheAgentsView(
+            Status(shape: LocalSessionShape.Teammate)));
+    }
+
+    // The roster is Claude Code's own view of Claude Code's own jobs. A Codex or
+    // gateway session has no row in it, however it is shaped.
+    [Theory]
+    [InlineData(SessionSource.Codex)]
+    [InlineData(SessionSource.OpenClaw)]
+    [InlineData(SessionSource.RemoteControl)]
+    public void TheAgentsViewIsNotOfferedForAnythingButClaudeCode(SessionSource source)
+    {
+        Assert.False(ClickRouting.OffersTheAgentsView(
+            Status(source: source, shape: LocalSessionShape.Background)));
+    }
+
+    // Unlike every FallbackFor answer, this one needs no session id — the roster
+    // is not named per session (`claude agents --help` offers only `--cwd`, and no
+    // preselect), which is why TerminalFocuser.OpenAgentsView passes none.
+    [Fact]
+    public void TheAgentsViewItemIsDecidedFromTheStatusAlone()
+    {
+        // No id anywhere in the question. Stated as a test rather than left to
+        // the signature, because the previous design *did* route the roster
+        // through FallbackFor and an id-less orb was a live edge case there.
+        Assert.True(ClickRouting.OffersTheAgentsView(
+            new SessionStatus { Shape = LocalSessionShape.Background }));
     }
 
     // --- case 2: a live pane in a server nothing is attached to --------------
@@ -211,14 +257,17 @@ public class ClickRoutingTests
     [Fact]
     public void ThePanelOffersAnAttachForExactlyTheSessionsAClickWouldAttach()
     {
-        // A background session in any phase (the roster), and a headless session
-        // with nothing recorded (an attach): the answers the click has for a
-        // session with nowhere of its own.
+        // A background session in any phase, and a headless session with nothing
+        // recorded: the two answers the click has for a session with nowhere of
+        // its own, and both are `claude attach`.
         Assert.True(ClickRouting.AttachWouldReach(
             Status(shape: LocalSessionShape.Background), "session-1"));
 
-        // Including with no id, since the roster does not need one.
-        Assert.True(ClickRouting.AttachWouldReach(
+        // ...but not without an id. Every answer the button can offer names the
+        // session, so an orb whose id did not reach it has nothing to press —
+        // which is a change from when the roster was among the answers, since the
+        // roster needed no id and the button was therefore always offered.
+        Assert.False(ClickRouting.AttachWouldReach(
             Status(shape: LocalSessionShape.Background), null));
         Assert.True(ClickRouting.AttachWouldReach(Status(), "session-1"));
         Assert.True(ClickRouting.AttachWouldReach(Status(pid: 0), "session-1"));

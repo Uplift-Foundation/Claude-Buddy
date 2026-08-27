@@ -495,7 +495,9 @@ public class LastReachableArmsTests
     // A background job has no pane and no terminal to be told to go to, which is
     // the point of it: a daemon runs it so that nothing has to hold it open. The
     // old wording sent the user to a window that does not exist; the box now names
-    // the place the button goes, which is the same place the orb's own click goes.
+    // what the button does, which is the same thing the orb's own click does. It
+    // said "open the agents view" for an hour, between the roster becoming the
+    // click default and live use reversing that — see ClickRouting.AgentsView.
     //
     // And it uses the daemon's own words for the state. "Needs input" is what
     // `claude agents` calls a blocked job, and several of them are literally
@@ -504,13 +506,13 @@ public class LastReachableArmsTests
     [Fact]
     public void ABackgroundJobIsToldWhereToAnswerItAndWhatItWants()
     {
-        Assert.Equal("Needs input — open the agents view",
+        Assert.Equal("Needs input — attach to reply",
             LocalCliChatSession.ComposerHintFor(
                 canSendQuietly: false, replyEnabled: true,
                 LocalSessionShape.Background, OrbPresence.NeedsInput));
 
         // Still the more specific answer than replying-off, for the reason above.
-        Assert.Equal("Needs input — open the agents view",
+        Assert.Equal("Needs input — attach to reply",
             LocalCliChatSession.ComposerHintFor(
                 canSendQuietly: false, replyEnabled: false,
                 LocalSessionShape.Background, OrbPresence.NeedsInput));
@@ -521,19 +523,19 @@ public class LastReachableArmsTests
     [Fact]
     public void AFinishedJobSaysSoRatherThanInvitingAReply()
     {
-        Assert.Equal("Finished — open the agents view",
+        Assert.Equal("Finished — attach to read it",
             LocalCliChatSession.ComposerHintFor(
                 canSendQuietly: false, replyEnabled: true,
                 LocalSessionShape.Background, OrbPresence.Finished));
     }
 
     // A background job that is *working*, or one whose presence nothing has said
-    // anything about: still nowhere to type, still the same destination, without
+    // anything about: still nowhere to type, still the same answer, without
     // claiming a state it does not have.
     [Fact]
-    public void AWorkingBackgroundJobIsOfferedTheViewWithNoStateClaimed()
+    public void AWorkingBackgroundJobIsOfferedAnAttachWithNoStateClaimed()
     {
-        Assert.Equal("Open the agents view to reply",
+        Assert.Equal("Attach to reply",
             LocalCliChatSession.ComposerHintFor(
                 canSendQuietly: false, replyEnabled: true,
                 LocalSessionShape.Background, OrbPresence.Present));
@@ -596,9 +598,9 @@ public class LastReachableArmsTests
             LocalCliChatSession.NoPaneNote("%12", LocalSessionShape.Terminal));
 
         // The pane is what decides this one, not the shape: a machine with no
-        // tmux binary cannot be worked around by opening a view, and saying
-        // "open the agents view" to someone whose tmux is missing would be a
-        // third wrong answer.
+        // tmux binary cannot be worked around by attaching, and offering an
+        // attach to someone whose tmux is missing would be a third wrong
+        // answer — `claude attach` is placed in a tmux window.
         Assert.Equal("Couldn't find tmux to type with.",
             LocalCliChatSession.NoPaneNote("%12", LocalSessionShape.Background));
     }
@@ -608,11 +610,11 @@ public class LastReachableArmsTests
     // does not exist — so this asserts both halves: that the old advice is gone,
     // and that the new advice points at somewhere that exists.
     [Fact]
-    public void ABackgroundJobsRefusedSendPointsAtTheAgentsView()
+    public void ABackgroundJobsRefusedSendPointsAtTheAttach()
     {
         var note = LocalCliChatSession.NoPaneNote(null, LocalSessionShape.Background);
 
-        Assert.Contains("agents view", note);
+        Assert.Contains("Attach it", note);
         Assert.Contains("background job", note);
         Assert.DoesNotContain("Reply in the terminal instead", note);
     }
