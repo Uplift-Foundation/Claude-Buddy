@@ -56,6 +56,95 @@ namespace ClaudeBuddy.Tests
             Assert.Equal(new[] { "-S", "/s" }, TerminalScripts.TmuxArgs("/s"));
         }
 
+        // --- ShellQuote and TmuxAttachScript: attaching a detached server ---
+        //
+        // The script that answers a click on an agent-team member whose pane is
+        // alive in a `claude-swarm-<pid>` socket nothing is attached to. Being
+        // wrong here is the same shape as being wrong anywhere else in this file:
+        // the output is executed, not displayed.
+
+        // A directory with a space or an apostrophe has to arrive as one word,
+        // and the shell's way to put a quote inside single quotes is to close,
+        // escape and reopen. Getting this wrong splits the argument, and `cd`
+        // then either fails or — worse — succeeds somewhere else.
+        [Theory]
+        [InlineData("/Users/warren/Source/Claude-Buddy", "'/Users/warren/Source/Claude-Buddy'")]
+        [InlineData("/Users/warren/My Projects", "'/Users/warren/My Projects'")]
+        [InlineData("/Users/warren/warren's", "'/Users/warren/warren'\\''s'")]
+        [InlineData("", "''")]
+        public void AnArgumentIsQuotedTheWayTheShellUnderstands(string value, string want)
+        {
+            Assert.Equal(want, TerminalScripts.ShellQuote(value));
+        }
+
+        [Fact]
+        public void TheAttachScriptPinsTheServerAndExecsTheAttach()
+        {
+            var script = TerminalScripts.TmuxAttachScript(
+                "/opt/homebrew/bin/tmux", "/tmp/tmux-501/claude-swarm-88341",
+                "/Users/warren/Source/Claude-Buddy");
+
+            Assert.StartsWith("#!/bin/sh\n", script);
+
+            // The socket, pinned. A pane id is only unique within one server, and
+            // a swarm socket is not the default one — attaching to the wrong
+            // server would show somebody else's session.
+            Assert.Contains("'-S' '/tmp/tmux-501/claude-swarm-88341'", script);
+
+            // A plain attach, with no target: the caller has already run
+            // select-window and select-pane against the pane it wants, so this
+            // lands on the right teammate.
+            Assert.EndsWith("'attach'\n", script);
+
+            // exec, not a call: the window's shell becomes tmux rather than
+            // waiting behind it.
+            Assert.Contains("exec '/opt/homebrew/bin/tmux'", script);
+
+            // The cd is for after the attach ends — detach or exit drops the
+            // window to a shell, and the useful place to land is the directory
+            // whose orb was clicked.
+            Assert.Contains("cd '/Users/warren/Source/Claude-Buddy' || exit 1\n", script);
+        }
+
+        // No socket recorded means the default server, which `attach` finds on
+        // its own. TmuxArgs already answers this and is reused rather than
+        // re-decided, so the two can never disagree about when -S is passed.
+        [Theory]
+        [InlineData("")]
+        [InlineData(null)]
+        public void WithNoSocketTheAttachDoesNotPinAServer(string? socket)
+        {
+            var script = TerminalScripts.TmuxAttachScript("/usr/bin/tmux", socket, "/tmp");
+
+            Assert.DoesNotContain("-S", script);
+            Assert.EndsWith("exec '/usr/bin/tmux' 'attach'\n", script);
+        }
+
+        // `cd ''` fails, and `|| exit 1` would then take the attach with it —
+        // the one thing the script exists to do. A session with no cwd recorded
+        // still gets its terminal.
+        [Theory]
+        [InlineData("")]
+        [InlineData(null)]
+        public void WithNoCwdTheScriptIsJustTheAttach(string? cwd)
+        {
+            var script = TerminalScripts.TmuxAttachScript("/usr/bin/tmux", "/tmp/s", cwd);
+
+            Assert.DoesNotContain("cd ", script);
+            Assert.Equal("#!/bin/sh\nexec '/usr/bin/tmux' '-S' '/tmp/s' 'attach'\n", script);
+        }
+
+        // A directory with an apostrophe in it, end to end — the case the
+        // quoting rule above exists for, asserted where it is actually used.
+        [Fact]
+        public void AnAwkwardDirectoryStillArrivesAsOneWord()
+        {
+            var script = TerminalScripts.TmuxAttachScript(
+                "/usr/bin/tmux", null, "/Users/warren/warren's stuff");
+
+            Assert.Contains("cd '/Users/warren/warren'\\''s stuff' || exit 1", script);
+        }
+
         // --- LeafOf: naming a Windows Terminal tab after its directory ---
 
         [Theory]
