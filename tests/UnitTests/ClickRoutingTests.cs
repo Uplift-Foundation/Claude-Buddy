@@ -172,6 +172,35 @@ public class ClickRoutingTests
         Assert.Equal(ClickFallback.AttachById, Fallback(Status()));
     }
 
+    // --- the mic uses the same predicate --------------------------------------
+
+    // TerminalFocuser.SendText guards on this too, and the reason is worth a
+    // case of its own here rather than only a comment there: a local CLI session
+    // with no coordinates passes SendText's `IsLocalCli` check, finds no pane and
+    // no tty to type into, and falls through to an unconditional System Events
+    // keystroke — a dictated sentence landing in a browser, an editor, or another
+    // session. The mic is offered on every orb, and this branch keeps a whole
+    // class of terminal-less orbs on screen that used to be dropped.
+    //
+    // One predicate for both gestures, deliberately. "Is there anywhere to aim
+    // this" has one answer, and two copies of it would drift — with the click
+    // opening a terminal for a session the mic was still typing at.
+    [Fact]
+    public void TheSameNoCoordinatesRuleIsWhatTheMicRefusesOn()
+    {
+        // What a click answers with AttachById is exactly what dictation must
+        // refuse: no pane, no tty, nothing to receive the words.
+        var headless = Status();
+
+        Assert.True(ClickRouting.NoCoordinatesAtAll(headless));
+        Assert.Equal(ClickFallback.AttachById, Fallback(headless));
+
+        // And an ordinary session is untouched by either rule — a tmux pane or a
+        // tty is somewhere to type, and dictation goes on working.
+        Assert.False(ClickRouting.NoCoordinatesAtAll(Status(tmuxPane: "%7")));
+        Assert.False(ClickRouting.NoCoordinatesAtAll(Status(tty: "/dev/ttys004")));
+    }
+
     // --- what is refused ------------------------------------------------------
 
     // `claude attach` is Claude Code's own verb and Codex has no equivalent. The

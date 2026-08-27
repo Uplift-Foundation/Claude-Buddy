@@ -72,31 +72,62 @@ namespace ClaudeBuddy
                 : LocalSessionShape.Teammate;
         }
 
-        // Whether the daemon is worth asking about this session at all.
+        // Whether this session is a reason to ask the daemon anything.
         //
         // The lookup is a subprocess (`claude agents --json`, cached for ten
         // seconds), and JudgeReachability already records the rule this keeps:
-        // an ordinary session never pays for it. Before this gate existed the
-        // scan fetched the listing on every pass whether or not anything needed
-        // it, which on a machine with nothing but terminal sessions is a `claude`
-        // process spawned every ten seconds forever, in service of a question
-        // whose answer cannot change anything.
+        // an ordinary session never pays for it. Fetching the listing on every
+        // pass regardless is, on a machine with nothing but terminal sessions, a
+        // `claude` process spawned every ten seconds forever in service of a
+        // question whose answer cannot change anything.
         //
-        // The two shapes that are worth asking about are the two the daemon can
-        // actually know: a session that recorded no pid (a hook older than that
-        // field, or a shape that has none), and a session whose own status file
-        // names no terminal — which is what a background worker's file looks
-        // like, because the daemon that runs it has no terminal to inherit one
-        // from. A file that *does* name a terminal is a session in a window on
-        // this machine, or one sharing a pid with such a session, and neither is
-        // a pooled worker.
+        // Three shapes are worth asking about, and the third was missing:
         //
-        // knowsATerminal is passed in rather than derived, because the caller
-        // has to answer it at a particular moment: before the agent-viewer
-        // adoption, which can hand a terminal to a session that had none.
-        internal static bool WorthAskingTheDaemon(SessionStatus status, bool knowsATerminal) =>
+        // - No pid recorded: a hook older than that field, or a shape that has
+        //   none.
+        // - A status file that names no terminal — what a background worker's
+        //   file looks like when its daemon has none to pass down.
+        // - **A file that shares its pid with another file.** This is the second
+        //   of the two shapes BackgroundJobs' own comment says only the daemon
+        //   can settle: an Agent-View-dispatched background session does not fork
+        //   a process, it starts a second conversation inside the one `claude`
+        //   process already running, so its file names a live interactive
+        //   session's pid. Left out, the gate above refused to ask about exactly
+        //   the case that was documented as needing to be asked — and refused
+        //   twice over, because InheritTerminalInfo donates terminal fields
+        //   between files sharing a pid, so such a file *acquires* a terminal
+        //   before this is asked and then reads as an ordinary session.
+        //
+        //   That donation is also why this clause subsumes the inheritance
+        //   problem rather than needing a pre-inheritance snapshot beside it:
+        //   InheritTerminalInfo only ever moves fields within one (pid, source)
+        //   group, so anything it could have touched shares its pid by
+        //   definition and is being asked about regardless of what it now names.
+        //
+        //   It is free, too. Two files on one pid is precisely the situation
+        //   Superseded already resolves by asking the daemon, so the listing is
+        //   in hand for this pass before the question is put.
+        //
+        // knowsATerminal and sharesItsPid are passed in rather than derived: the
+        // first has to be answered at a particular moment — before the
+        // agent-viewer adoption, which can hand a terminal to a session that had
+        // none — and the second is a fact about the *other* files in the scan,
+        // which a single status knows nothing about.
+        //
+        // What this still does not reach is a background job whose own hook
+        // wrote a terminal into its file. The hook interpolates $TERM_PROGRAM
+        // from the environment, so a daemon started from inside a terminal
+        // passes it down to every job under it. Named rather than papered over:
+        // the obvious extra clause is "no tty", and the Windows hook records no
+        // tty at all, so that clause would make every session on Windows spawn a
+        // subprocess every ten seconds. Such a session's click also lands on the
+        // terminal its daemon was started from, which is a real window rather
+        // than nothing. The scan closes most of this gap another way — see the
+        // note on asking about everything once the listing has been paid for.
+        internal static bool WorthAskingTheDaemon(
+            SessionStatus status, bool knowsATerminal, bool sharesItsPid) =>
             status.Source == SessionSource.ClaudeCode
-            && (status.SessionPid <= 0 || !knowsATerminal);
+            && (status.SessionPid <= 0 || !knowsATerminal || sharesItsPid);
 
         // Whether nothing is on the other end of this session right now.
         //

@@ -630,6 +630,43 @@ namespace ClaudeBuddy
             }
         }
 
+        // Ids whose file shares its (pid, source) with another file in this scan.
+        //
+        // The domain InheritTerminalInfo donates within, and the situation
+        // Superseded exists to resolve — stated once so the rule that consults it
+        // cannot drift from either. Grouped by pid *and* source for the reason
+        // both of those give: a nested `codex exec` can record the pid of the
+        // Claude Code session that started it, and two CLIs never share a real
+        // process.
+        //
+        // A pid of 0 shares nothing. It means a hook older than the session_pid
+        // field, and bucketing those together would say every such file shares a
+        // pid with every other — the same trap Superseded's own comment names.
+        internal static HashSet<string> SharingAPid(List<ScanEntry> found)
+        {
+            var counts = new Dictionary<(int Pid, SessionSource Source), int>();
+            foreach (var entry in found)
+            {
+                if (entry.Status.SessionPid <= 0) continue;
+
+                var key = (entry.Status.SessionPid, entry.Status.Source);
+                counts[key] = counts.GetValueOrDefault(key) + 1;
+            }
+
+            var shared = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entry in found)
+            {
+                if (entry.Status.SessionPid <= 0) continue;
+
+                if (counts[(entry.Status.SessionPid, entry.Status.Source)] > 1)
+                {
+                    shared.Add(entry.SessionId);
+                }
+            }
+
+            return shared;
+        }
+
         // Why a status file gets no orb this scan, or Keep when it does.
         //
         // Named answers rather than a bool, because every one of these five
@@ -1057,6 +1094,19 @@ namespace ClaudeBuddy
                     remote.Seen));
             }
 
+            // Before InheritTerminalInfo, so this describes the files as the
+            // hooks wrote them. It happens to be immune to the donation — pid and
+            // source are not among the fields moved — but this ordering is the one
+            // that needs no argument.
+            var sharingAPid = SharingAPid(found);
+
+            // Whether anything on this machine is worth spending a subprocess on.
+            // Decided over the whole set before any of it is judged, so it cannot
+            // depend on which file the directory happened to enumerate first. The
+            // three shapes are in SessionPresence.WorthAskingTheDaemon.
+            var worthAsking = found.Any(e => SessionPresence.WorthAskingTheDaemon(
+                e.Status, KnowsATerminal(e.Status), sharingAPid.Contains(e.SessionId)));
+
             InheritTerminalInfo(found);
 
             // One listing for the whole pass, where this used to ask three
@@ -1150,16 +1200,23 @@ namespace ClaudeBuddy
 
             foreach (var (sessionId, status, written) in found)
             {
-                // What the daemon says about this session — asked from the
-                // pass's own listing, and only of a session it could plausibly
-                // know about. Everything else keeps Unknown, which is the answer
-                // that says "nobody asked" and which no rule below acts on.
+                // What the daemon says about this session — read from the pass's
+                // own listing, for every Claude Code session, once anything on
+                // the machine has made that listing worth fetching.
                 //
-                // Asked here rather than after the adoption below, because
-                // adoption is what can hand a background lead a terminal it had
-                // none of a moment earlier — and having a terminal is half of
-                // what makes this worth skipping.
-                var phase = SessionPresence.WorthAskingTheDaemon(status, KnowsATerminal(status))
+                // The gate decides whether to *spend the subprocess*, not whether
+                // to read the answer. Once some session has paid for it a lookup
+                // is a dictionary hit, and asking about everything is what closes
+                // the one hole the gate cannot: the hook interpolates
+                // $TERM_PROGRAM out of its environment, so a daemon started from
+                // inside a terminal passes it down to every job under it, and
+                // those files name a terminal in every field while still being
+                // jobs the daemon knows about.
+                //
+                // On a machine with nothing background-ish on it every session
+                // keeps Unknown, which is the answer that means "nobody asked"
+                // and which no rule below acts on.
+                var phase = worthAsking && status.Source == SessionSource.ClaudeCode
                     ? BackgroundJobs.Phase(Jobs(), sessionId)
                     : JobPhase.Unknown;
 
@@ -1361,6 +1418,14 @@ namespace ClaudeBuddy
         // Self-correcting in the one direction it can be wrong: if a session this
         // deleted a file for turns out to still be running, its next hook event
         // writes the file again and the orb comes back.
+        //
+        // One consequence of the superseded rule worth stating, because it looks
+        // like a bug from the outside: a terminal that was /cleared several times
+        // and then killed leaves a trail of files on one dead pid, and Superseded
+        // outranks ProcessGone, so only the newest of them is ever evidence. The
+        // trail therefore drains one file per grace period rather than all at
+        // once. Slow, self-healing, and cheaper than teaching the sweep to
+        // second-guess which of several verdicts a file "really" deserved.
         private void SweepDeadFiles(List<ScanEntry> found, ISet<string> dead, DateTime now)
         {
             foreach (var (sessionId, status, _) in found)
