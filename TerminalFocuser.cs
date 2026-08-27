@@ -76,20 +76,35 @@ namespace ClaudeBuddy
                 // about a moment that has already gone.
                 if (FocusCore(status, out var detached)) return;
 
-                // The team lead first, still, and this ordering is the half of
-                // the click rules that is easiest to get wrong. A team member
-                // whose lead *is* focusable lands on the lead's window today,
-                // which works well and is what the user expects — the lead is
-                // where that agent's work is being driven from. Only when that
-                // fails too is there nothing on screen for this click, and only
-                // then may a new window be opened.
-                if (teamLead is not null && FocusCore(teamLead)) return;
+                // Nothing on screen shows this session. Which way out applies is
+                // decided by ClickRouting, which is pure and covered per case; the
+                // reason there is any way out at all is that every failure above
+                // this line is silent.
+                //
+                // Asked *before* the team lead is tried, which is the fix for
+                // CB-13's team-orb bug and the reverse of what this method did.
+                // The lead used to come first, and a lead that could be focused
+                // ended the click there — so a teammate whose own session had a
+                // perfectly good answer waiting (a terminal on its detached swarm
+                // socket, landing on the pane the tmux attempt above had just
+                // selected) never got it, and the user got a window that was
+                // already in front of them. See ClickRouting.LeadMayAnswer, which
+                // is where that ordering now lives and why.
+                var fallback = ClickRouting.FallbackFor(status, sessionId, detached);
 
-                // Nothing on screen shows this session, and nothing else is
-                // going to. Which way out applies is decided by ClickRouting,
-                // which is pure and covered per case; the reason there is any way
-                // out at all is that every failure above this line is silent.
-                RunFallback(ClickRouting.FallbackFor(status, sessionId, detached), status, sessionId);
+                // The lead only when nothing would show the session that was
+                // clicked. It is still the right answer then — the lead is where
+                // that agent's work is being driven from, and a window showing
+                // the wrong session beats no window at all — but it is the last
+                // answer rather than the first.
+                if (ClickRouting.LeadMayAnswer(fallback)
+                    && teamLead is not null
+                    && FocusCore(teamLead))
+                {
+                    return;
+                }
+
+                RunFallback(fallback, status, sessionId);
             });
         }
 

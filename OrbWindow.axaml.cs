@@ -1874,12 +1874,31 @@ namespace ClaudeBuddy
         private int _pendingClicks;
         private int _clickCount = 1;
 
+        // How many clicks this orb last resolved, and how many gestures have
+        // reached that point at all. Written here and read by the UI suite, by
+        // nothing in the app.
+        //
+        // It exists because the two ways a click can come to nothing are
+        // indistinguishable from outside, and telling them apart is the whole of
+        // the team-orb bug this was added for: a gesture that was *eaten* before
+        // it ever became a click, and a gesture that arrived here and found
+        // "none" bound to it, both look exactly like an orb that ignored you.
+        // Every other observable is downstream of RunClickAction, so a test that
+        // asserts on one of those is asserting the destination and cannot say
+        // whether the journey started.
+        internal int ResolvedGestures { get; private set; }
+
+        internal int LastResolvedClicks { get; private set; }
+
         internal void OnClicked(int clicks)
         {
             // Beyond three there is nothing to bind, and treating a fourth click
             // as a fresh single would fire the single-click action in the middle
             // of somebody drumming on the orb.
             if (clicks > 3) return;
+
+            ResolvedGestures++;
+            LastResolvedClicks = clicks;
 
             _clickTimer?.Stop();
             _clickTimer = null;

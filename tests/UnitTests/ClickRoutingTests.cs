@@ -318,4 +318,48 @@ public class ClickRoutingTests
         Assert.Equal(ClickFallback.None, Fallback(Status(), sessionId: sessionId));
         Assert.Equal(ClickFallback.None, Fallback(Status(pid: 0), sessionId: sessionId));
     }
+
+    // --- LeadMayAnswer -----------------------------------------------------
+
+    // The team lead may answer only the click nothing else can, and every other
+    // answer wins over it. This is the rule that had the ordering backwards, and
+    // the case that matters most is AttachSocket: that is a teammate whose own
+    // pane is alive in a detached swarm socket, which is precisely the orb the
+    // bug was reported against.
+    // One [Fact] over the four rather than a [Theory] per value: ClickFallback is
+    // internal, and an InlineData of an internal type on a public test method is
+    // an accessibility error rather than a style choice.
+    [Fact]
+    public void AnAnswerThatShowsTheClickedSessionBeatsTheTeamLead()
+    {
+        Assert.False(ClickRouting.LeadMayAnswer(ClickFallback.AgentsView));
+        Assert.False(ClickRouting.LeadMayAnswer(ClickFallback.AttachBackground));
+        Assert.False(ClickRouting.LeadMayAnswer(ClickFallback.AttachSocket));
+        Assert.False(ClickRouting.LeadMayAnswer(ClickFallback.AttachById));
+    }
+
+    [Fact]
+    public void TheTeamLeadAnswersTheClickNothingElseWill()
+    {
+        Assert.True(ClickRouting.LeadMayAnswer(ClickFallback.None));
+    }
+
+    // The two halves joined up, on the shape measured on the reporter's machine:
+    // a teammate with a live pane in a server nothing is attached to. The rule
+    // says AttachSocket, and AttachSocket says the lead does not get to pre-empt
+    // it — which together are the whole of the fix.
+    [Fact]
+    public void ATeammateInADetachedPaneIsAnsweredByItsOwnSocketAndNotByItsLead()
+    {
+        var teammate = Status(
+            shape: LocalSessionShape.Teammate,
+            tty: "ttys018",
+            termProgram: "tmux",
+            tmuxPane: "%53");
+
+        var fallback = Fallback(teammate, detached: true);
+
+        Assert.Equal(ClickFallback.AttachSocket, fallback);
+        Assert.False(ClickRouting.LeadMayAnswer(fallback));
+    }
 }
