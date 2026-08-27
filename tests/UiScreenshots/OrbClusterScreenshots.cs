@@ -123,18 +123,33 @@ public class OrbClusterScreenshots
         ScreenshotHelper.CaptureControl(canvas, fileName);
     }
 
-    // And the rows that turn it on, which sit below the fold of the settings
-    // page — so captured as a control rather than trusting the whole-window
-    // shot, exactly as the Claude Desktop group is.
+    // And the rows that turn it on.
     //
     // Both groups on Own shape, because that is the state with the most rows in
     // it: two mode pickers and the two shape pickers that only exist in this
     // state. A capture of the default would show the two pickers and prove
     // nothing about the ones that appear.
+    //
+    // The rows are re-asked of the window and rendered in a panel of their own,
+    // rather than photographed where they sit in the settings page. The first
+    // version did the latter — walking up from the row's label to the first
+    // ancestor over 200x200, the way the Claude Desktop group's capture does —
+    // and it came out *ghosted on Windows only*, every line of text doubled at
+    // a slight offset, while macOS was clean. Font metrics differ between the
+    // runners, so an ancestor picked by its measured size is not necessarily the
+    // same control on both, and the one Windows landed on rendered its subtree
+    // twice.
+    //
+    // Which is a real trap rather than a cosmetic one: a capture whose framing
+    // depends on how text measured is a capture that can silently start showing
+    // something other than what it is named after. Rendering the rows directly
+    // has no ancestor to guess at, no scroll viewer to clip against, and comes
+    // out identical on both — the same reason the plots above are built from a
+    // canvas rather than screenshotted off a desktop.
     [AvaloniaFact]
     public void TheOpenClawSectionShowsBothModeRowsAndBothShapeRows()
     {
-        var mode = ClaudeBuddySettings.OpenClawEnabled;
+        var enabled = ClaudeBuddySettings.OpenClawEnabled;
         var heartbeats = ClaudeBuddySettings.OpenClawHeartbeatMode;
         var crons = ClaudeBuddySettings.OpenClawCronMode;
 
@@ -149,30 +164,39 @@ public class OrbClusterScreenshots
                 types: Type.EmptyTypes)
                 ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
 
-            var window = (Window)ctor.Invoke(null);
+            var settings = (SettingsWindow)ctor.Invoke(null);
 
+            // Fresh controls — OpenClawRows() builds them rather than handing
+            // back the ones already on the page, which is what lets them be
+            // parented here. Same seam tests/UiTests drives these rows through.
+            var panel = new StackPanel { Width = 520, Margin = new Thickness(16) };
+            foreach (var row in settings.OpenClawRows()) panel.Children.Add(row);
+
+            var window = new Window { Content = panel, Width = 552, Height = 900 };
+
+            // Never closed, for the reason SettingsWindowScreenshots states.
             window.Show();
             ScreenshotHelper.Flush();
 
-            // Anchored on the first of the four new rows rather than on the
-            // section heading, so the capture starts at the thing under review.
-            var anchor = window.GetLogicalDescendants()
-                .OfType<TextBlock>()
-                .FirstOrDefault(block => block.Text == "Heartbeat sessions");
+            // The four rows this feature adds are in there, which is what the
+            // capture is of — asserted so a framing change cannot quietly turn
+            // this into a photograph of something else.
+            var labels = panel.GetLogicalDescendants().OfType<TextBlock>()
+                .Select(block => block.Text)
+                .ToList();
 
-            Assert.NotNull(anchor);
+            Assert.Contains("Heartbeat sessions", labels);
+            Assert.Contains("Heartbeat shape", labels);
+            Assert.Contains("Cron sessions", labels);
+            Assert.Contains("Cron shape", labels);
 
-            var card = anchor!.GetLogicalAncestors().OfType<Control>()
-                .FirstOrDefault(control => control.Bounds.Height > 200 && control.Bounds.Width > 200)
-                ?? (Control)anchor;
-
-            ScreenshotHelper.CaptureControl(card, "settings-openclaw-cluster-rows.png");
+            ScreenshotHelper.CaptureControl(panel, "settings-openclaw-cluster-rows.png");
         }
         finally
         {
             ClaudeBuddySettings.OpenClawCronMode = crons;
             ClaudeBuddySettings.OpenClawHeartbeatMode = heartbeats;
-            ClaudeBuddySettings.OpenClawEnabled = mode;
+            ClaudeBuddySettings.OpenClawEnabled = enabled;
         }
     }
 }
