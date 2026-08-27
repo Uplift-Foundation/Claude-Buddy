@@ -1224,6 +1224,18 @@ namespace ClaudeBuddy
             EnsureTicker();
         }
 
+        // What GoToSession hands the focuser as its acknowledgment callback.
+        //
+        // A named method rather than a lambda at the call site, because the
+        // marshalling is the whole content of it and a lambda body there is
+        // reachable only by a real click resolving through TerminalFocuser — which
+        // this suite must never do, so it would be an uncovered line that looks
+        // like an oversight rather than the seam it is.
+        //
+        // Marshalled because Focus answers from a pool thread and this touches the
+        // orb's own visual tree.
+        internal void AcknowledgeFromAnyThread() => Dispatcher.UIThread.Post(Acknowledge);
+
         // internal for the same reason TickPulse is: a headless test cannot wait
         // for real frames, and driving the tick directly is how every other
         // animation in this file is asserted.
@@ -2130,9 +2142,7 @@ namespace ClaudeBuddy
                 SessionManager.Instance?.StatusFor(_lastStatus?.Lead),
                 SessionId,
                 SessionManager.Instance?.PaneClaimsByOthers(SessionId),
-                // Marshalled: Focus answers from a pool thread, and this touches
-                // the orb's own visual tree.
-                acknowledge: () => Dispatcher.UIThread.Post(Acknowledge));
+                acknowledge: AcknowledgeFromAnyThread);
         }
 
         // Put the orb at a position it was dragged to in an earlier run, without
