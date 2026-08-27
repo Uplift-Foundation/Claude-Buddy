@@ -441,14 +441,16 @@ namespace ClaudeBuddy
             var kind = orb.KindLabel;
             var presence = orb.PresenceLabel;
 
-            KindChip.IsVisible = kind is not null || presence is not null;
-            KindChipText.Text = (kind, presence) switch
-            {
-                (null, null) => "",
-                (null, not null) => presence,
-                (not null, null) => $"{orb.KindGlyphText}  {kind}",
-                _ => $"{orb.KindGlyphText}  {kind} · {presence}"
-            };
+            // Gated on the kind, not on either: a presence word without a kind
+            // cannot happen — both marks belong to background sessions, and every
+            // one of those is badged — and a chip that made room for the
+            // impossible case would be a claim about this app that is not true.
+            KindChip.IsVisible = kind is not null;
+            KindChipText.Text = kind is null
+                ? ""
+                : presence is null
+                    ? $"{orb.KindGlyphText}  {kind}"
+                    : $"{orb.KindGlyphText}  {kind} · {presence}";
 
             ApplyHeartbeat(orb.IsHeartbeat);
 

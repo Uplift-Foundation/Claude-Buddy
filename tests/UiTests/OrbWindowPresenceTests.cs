@@ -94,11 +94,11 @@ public class OrbWindowPresenceTests
         // Working first, so this is a transition rather than an initial value —
         // the same order the scan produces when a job's turn ends.
         orb.UpdateFrom(Status(OrbPresence.Present, state: "generating"));
-        Assert.False(orb.IsParked);
+        Assert.Equal(OrbPresence.Present, orb.Presence);
 
         orb.UpdateFrom(Status(OrbPresence.NeedsInput));
 
-        Assert.True(orb.IsParked);
+        Assert.NotEqual(OrbPresence.Present, orb.Presence);
         Assert.True(Opacity(orb) < 1.0);
         Assert.False(IsOnThePulseRoster(orb));
     }
@@ -109,7 +109,7 @@ public class OrbWindowPresenceTests
         var orb = new OrbWindow(Guid.NewGuid().ToString());
         orb.UpdateFrom(Status(OrbPresence.Present));
 
-        Assert.False(orb.IsParked);
+        Assert.Equal(OrbPresence.Present, orb.Presence);
         Assert.Equal(1.0, Opacity(orb));
     }
 
@@ -122,7 +122,7 @@ public class OrbWindowPresenceTests
 
         orb.UpdateFrom(Status(OrbPresence.Present, state: "generating"));
 
-        Assert.False(orb.IsParked);
+        Assert.Equal(OrbPresence.Present, orb.Presence);
         Assert.Equal(1.0, Opacity(orb));
     }
 
@@ -164,7 +164,7 @@ public class OrbWindowPresenceTests
         orb.UpdateFrom(Status(OrbPresence.Present, state: "generating"));
         orb.UpdateFrom(Status(OrbPresence.NeedsInput, state: "idle"));
 
-        Assert.True(orb.IsParked);
+        Assert.NotEqual(OrbPresence.Present, orb.Presence);
         Assert.False(IsOnThePulseRoster(orb));
         Assert.True(Opacity(orb) < 1.0);
     }
@@ -195,7 +195,7 @@ public class OrbWindowPresenceTests
 
         orb.ApplyPresence(OrbPresence.NeedsInput, force: true);
 
-        Assert.True(orb.IsParked);
+        Assert.NotEqual(OrbPresence.Present, orb.Presence);
         Assert.False(IsOnThePulseRoster(orb));
         Assert.True(Opacity(orb) < 1.0);
     }
@@ -212,11 +212,11 @@ public class OrbWindowPresenceTests
         Flush();
 
         orb.UpdateFrom(Status(OrbPresence.NeedsInput, state: ""));
-        Assert.True(orb.IsParked);
+        Assert.NotEqual(OrbPresence.Present, orb.Presence);
 
         orb.UpdateFrom(Status(OrbPresence.Present, state: ""));
 
-        Assert.False(orb.IsParked);
+        Assert.Equal(OrbPresence.Present, orb.Presence);
         Assert.Equal(1.0, Opacity(orb));
 
         // Idle's slow breath, which is what ApplyState's default arm starts.
