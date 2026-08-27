@@ -357,35 +357,36 @@ namespace ClaudeBuddy
         // one — step zero of the click ladder, ahead of everything that creates a
         // window.
         //
-        // It exists because of the one thing every earlier round assumed was
-        // undiscoverable. The socket, file, argv and environment proofs all
-        // stand: a session's rv socket has exactly one external peer, `claude
-        // daemon run`, so the topology is a star and the viewer mapping is
-        // hub-internal, and the interactive client holds no transcript file open.
-        // What none of that covered is that the TUI *publishes* the conversation
-        // title to the terminal, and tmux keeps it in `#{pane_title}`. Found in
-        // the reporter's own screenshot, which is worth recording: the answer had
-        // been on screen the whole time.
+        // It exists because of the one thing several rounds assumed was
+        // undiscoverable. The socket, file, argv and environment proofs all stand:
+        // a session's rv socket has exactly one external peer, `claude daemon run`,
+        // so the topology is a star and the viewer mapping is hub-internal, and the
+        // interactive client holds no transcript file open. What none of that
+        // covered is that the TUI *publishes* the conversation title to the
+        // terminal, and tmux keeps it in `#{pane_title}`. Found in the reporter's
+        // own screenshot: the answer had been on screen the whole time.
         //
-        // It is a weaker signal than it first looks, and the code is shaped around
-        // that. The title is per *conversation*, not per session, and every member
-        // of an agent team inherits the team session's title — measured here, four
-        // panes with one identical title for three different sessions. So the
-        // title only nominates candidates; SessionPresence.ViewerAmong decides,
-        // and it is deliberately readier to answer "do nothing" than "go here",
-        // because the first cannot be wrong about which session it found.
+        // **The candidate universe is panes on servers somebody is attached to,
+        // and that is the load-bearing part.** A title is per conversation rather
+        // than per session — every member of an agent team inherits the team
+        // session's title, and a teammate's own TUI titles itself with it — so
+        // matching on the title alone finds perfect impostors. Three rounds went
+        // into trying to tell them apart. They are all on detached
+        // `claude-swarm-<pid>` sockets, which nobody's eyes are on, so the honest
+        // answer was that they were never viewers at all. Measured: four panes with
+        // one identical title, and the visibility filter leaves exactly the one the
+        // user was reading.
         //
-        // The default socket only. A pane in a detached `claude-swarm-<pid>`
-        // server is not being looked at by definition, which is the whole reason
-        // the socket answer exists further down the ladder.
-        // Excluded from coverage: lists live tmux panes and reads their processes.
-        // Every rule it applies is pure and covered per clause — see
-        // SessionPresence.TitleSaysViewing, LooksLikeClaudeBinary and ViewerAmong.
+        // Excluded from coverage: lists tmux servers, their clients and their
+        // panes, and reads pane processes. Every rule it applies is pure and
+        // covered per clause — SessionPresence.TitleSaysViewing,
+        // LooksLikeClaudeBinary, ClaimStillHolds and ViewerAmong, the last of which
+        // owns the visibility filter itself.
         [ExcludeFromCodeCoverage]
-        public static (SessionPresence.ViewerVerdict Verdict, string? Pane) ViewingPane(
-            string? sessionTitle, IReadOnlyDictionary<string, string>? paneClaimsByOthers)
+        public static (SessionPresence.ViewerVerdict Verdict, SessionPresence.ViewerPane? Found)
+            ViewingPane(string? sessionTitle, IReadOnlyDictionary<string, string>? paneClaimsByOthers)
         {
-            var none = (SessionPresence.ViewerVerdict.NoneFound, (string?)null);
+            var none = (SessionPresence.ViewerVerdict.NoneFound, (SessionPresence.ViewerPane?)null);
 
             if (!OperatingSystem.IsMacOS()) return none;
             if (string.IsNullOrEmpty(sessionTitle)) return none;
@@ -393,15 +394,96 @@ namespace ClaudeBuddy
             var tmux = ResolveTmux();
             if (tmux is null) return none;
 
-            // pane_title last, and split with a limit: a conversation title
-            // contains spaces, and every field before it does not.
-            if (!TryRun(tmux, out var listing, "list-panes", "-a", "-F",
-                    "#{pane_id} #{pane_pid} #{pane_active} #{session_name}:#{window_index} #{pane_title}"))
+            var matches = new List<SessionPresence.ViewerPane>();
+            var withClients = new HashSet<string>(StringComparer.Ordinal);
+            var watched = new HashSet<(string Socket, string Window)>();
+
+            foreach (var socket in KnownSockets())
             {
-                return none;
+                // Asked first, and of every server, because the answer decides
+                // whether that server's panes are in the universe at all. A
+                // detached server is a screen nobody is looking at.
+                if (!TryAttachedClient(tmux, socket, out var window)) continue;
+
+                withClients.Add(socket);
+                if (window is { Length: > 0 }) watched.Add((socket, window));
+
+                CollectMatches(tmux, socket, sessionTitle, paneClaimsByOthers, matches);
             }
 
-            var candidates = new List<SessionPresence.ViewerPane>();
+            return SessionPresence.ViewerAmong(matches, withClients, watched);
+        }
+
+        // Every tmux server this machine might have, as socket paths — with the
+        // empty string standing for the default one, the way TerminalScripts.TmuxArgs
+        // already reads it.
+        //
+        // The directory rather than the status files, because the socket that
+        // matters most is the one a *person* attached to, and nothing in this app
+        // records that. tmux keeps its sockets in one place per user and names them
+        // after the server; a stale socket for a dead server simply answers no
+        // clients and drops out one line later.
+        // Excluded from coverage: reads the tmux socket directory.
+        [ExcludeFromCodeCoverage]
+        private static IEnumerable<string> KnownSockets()
+        {
+            // The default server first, and unconditionally: it is where a person
+            // who has not thought about sockets ends up, and it is named by no
+            // path at all.
+            yield return "";
+
+            var dir = Environment.GetEnvironmentVariable("TMUX_TMPDIR") is { Length: > 0 } custom
+                ? custom
+                : "/tmp/tmux-" + GetUid();
+
+            string[] entries;
+            try
+            {
+                entries = System.IO.Directory.GetFiles(dir);
+            }
+            catch
+            {
+                // No directory, or no permission to read it. One server is still
+                // better than none, and the default has already been yielded.
+                yield break;
+            }
+
+            foreach (var entry in entries)
+            {
+                // "default" is the same server the empty string already named, and
+                // asking twice would double every match on it.
+                if (Path.GetFileName(entry) == "default") continue;
+
+                yield return entry;
+            }
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static string GetUid()
+        {
+            // The socket directory is named for the *real* uid, which is what
+            // getuid reports. Read through a subprocess rather than a p/invoke to
+            // keep this file's OS surface to the two binaries it already runs.
+            return TryRun("/usr/bin/id", out var uid, "-u") ? uid.Trim() : "0";
+        }
+
+        // Every pane on one server whose title and process say it is showing this
+        // session, appended to matches.
+        // Excluded from coverage: lists live tmux panes and reads their processes.
+        [ExcludeFromCodeCoverage]
+        private static void CollectMatches(
+            string tmux, string socket, string sessionTitle,
+            IReadOnlyDictionary<string, string>? paneClaimsByOthers,
+            List<SessionPresence.ViewerPane> matches)
+        {
+            // pane_title last, and split with a limit: a conversation title
+            // contains spaces, and every field before it does not.
+            if (!TryRun(tmux, out var listing, TerminalScripts.TmuxArgs(socket,
+                    "list-panes", "-a", "-F",
+                    "#{pane_id} #{pane_pid} #{pane_active} #{session_name}:#{window_index} #{pane_title}")))
+            {
+                return;
+            }
 
             foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
             {
@@ -410,33 +492,28 @@ namespace ClaudeBuddy
 
                 if (!SessionPresence.TitleSaysViewing(parts[4], sessionTitle)) continue;
 
-                // The belt, paid for only by a pane whose title already matched —
-                // usually none, and never more than a team's worth. Asked of the
-                // pane's own process and its children, because an interactive
-                // session runs as a child of the pane's shell while a team member
-                // is the pane's process itself.
+                // The belt, paid for only by a pane whose title already matched.
+                // Asked of the pane's own process and its children, because an
+                // interactive session runs as a child of the pane's shell while a
+                // team member is the pane's process itself.
                 if (!int.TryParse(parts[1], out var panePid)) continue;
                 if (!RunsClaude(panePid)) continue;
 
-                // A claim only counts while it is still true. The pane's own
-                // current title is the corroboration, which is why this is asked
-                // here rather than where the claims were collected — only the scan
-                // has both halves.
+                // A claim only counts while it is still evidence about who is
+                // *reading* the pane, which the pane's own current title is what
+                // settles — see SessionPresence.ClaimStillHolds.
                 var claimed =
                     paneClaimsByOthers is not null
                     && paneClaimsByOthers.TryGetValue(parts[0], out var claimantTitle)
                     && SessionPresence.ClaimStillHolds(claimantTitle, parts[4]);
 
-                candidates.Add(new SessionPresence.ViewerPane(
+                matches.Add(new SessionPresence.ViewerPane(
+                    Socket: socket,
                     Pane: parts[0],
                     Window: parts[3],
                     ActiveInItsWindow: parts[2] == "1",
                     ClaimedByAnother: claimed));
             }
-
-            var (attached, usersWindow) = AttachedClientView(tmux);
-
-            return SessionPresence.ViewerAmong(candidates, usersWindow, attached);
         }
 
         // Whether this pane is running Claude Code — as its own process, or as a
@@ -454,32 +531,19 @@ namespace ClaudeBuddy
             // One level down is enough: a pane runs a shell, and the shell runs
             // the session. Walking further would start counting a session's own
             // subprocesses, which are not what is being displayed.
-            if (!TryRun("/bin/ps", out var children, "-o", "args=", "--ppid", panePid.ToString()))
-            {
-                // BSD ps has no --ppid; ask for the whole table and filter. Kept
-                // as a fallback rather than the only path so a platform that does
-                // support it pays for one process instead of all of them.
-                if (!TryRun("/bin/ps", out var all, "-eo", "ppid=,args=")) return false;
+            if (!TryRun("/bin/ps", out var all, "-eo", "ppid=,args=")) return false;
 
-                foreach (var line in all.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            foreach (var line in all.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var trimmed = line.Trim();
+                var split = trimmed.IndexOf(' ');
+                if (split <= 0) continue;
+                if (!int.TryParse(trimmed[..split], out var ppid) || ppid != panePid) continue;
+
+                if (SessionPresence.LooksLikeClaudeBinary(FirstWord(trimmed[(split + 1)..])))
                 {
-                    var trimmed = line.Trim();
-                    var split = trimmed.IndexOf(' ');
-                    if (split <= 0) continue;
-                    if (!int.TryParse(trimmed[..split], out var ppid) || ppid != panePid) continue;
-
-                    if (SessionPresence.LooksLikeClaudeBinary(FirstWord(trimmed[(split + 1)..])))
-                    {
-                        return true;
-                    }
+                    return true;
                 }
-
-                return false;
-            }
-
-            foreach (var line in children.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-            {
-                if (SessionPresence.LooksLikeClaudeBinary(FirstWord(line))) return true;
             }
 
             return false;
@@ -494,36 +558,35 @@ namespace ClaudeBuddy
             return space < 0 ? trimmed : trimmed[..space];
         }
 
-        // Whether anything is attached to this server, and if so which window that
-        // client is showing.
-        //
-        // Two answers rather than one nullable, because they fail differently and
-        // the viewer rule treats them differently. "Nothing attached" means these
-        // panes are on a screen nobody is looking at, so none of them can be a
-        // viewer. "Attached, window unknown" is the weaker failure — somebody is
-        // there and we could not work out where — and a pane can still be selected
-        // for them. Collapsed into one null, the first would have been read as the
-        // second and a click would have selected a pane on an invisible screen.
-        //
-        // Shared by the viewer scan above and PlaceInTmux below, which want the
-        // window for opposite reasons: one to recognise the pane the user is in,
-        // the other to split into it.
+        // False when nothing is attached to this server, which is the answer that
+        // takes its panes out of the universe entirely. True with a null window is
+        // the weaker failure — somebody is there and the window could not be
+        // resolved — which still lets a pane be selected for them. Two answers
+        // rather than one nullable string, because a null string cannot say which
+        // of those two it means, and treating the first as the second is how a
+        // click came to select a pane on a screen nobody was looking at.
         // Excluded from coverage: runs tmux.
         [ExcludeFromCodeCoverage]
-        private static (bool Attached, string? Window) AttachedClientView(string tmux)
+        private static bool TryAttachedClient(string tmux, string socket, out string? window)
         {
-            if (!TryRun(tmux, out var clients, "list-clients", "-F", "#{client_session}"))
+            window = null;
+
+            if (!TryRun(tmux, out var clients,
+                    TerminalScripts.TmuxArgs(socket, "list-clients", "-F", "#{client_session}")))
             {
-                return (false, null);
+                return false;
             }
 
             var session = FirstLine(clients);
-            if (session is null) return (false, null);
+            if (session is null) return false;
 
-            return TryRun(tmux, out var window,
-                    "display-message", "-p", "-t", session, "#{session_name}:#{window_index}")
-                ? (true, FirstLine(window))
-                : (true, null);
+            if (TryRun(tmux, out var found, TerminalScripts.TmuxArgs(socket,
+                    "display-message", "-p", "-t", session, "#{session_name}:#{window_index}")))
+            {
+                window = FirstLine(found);
+            }
+
+            return true;
         }
 
         // Opens the one session an orb stands for, in a terminal.
@@ -778,7 +841,12 @@ namespace ClaudeBuddy
             // bool. Shared with the viewer scan above rather than asked twice:
             // the two want the same fact for opposite reasons, one to recognise
             // the pane the user is in and one to split into it.
-            var activeWindow = session is null ? null : AttachedClientView(tmux).Window;
+            // The user's own server, which is where a split has to land. PlaceInTmux
+            // only ever works on the default socket — a person's tmux is the one
+            // they attached to by hand, and the swarm sockets are the app's own.
+            var activeWindow = session is null || !TryAttachedClient(tmux, "", out var usersWindow)
+                ? null
+                : usersWindow;
 
             // `command` arrives already quoted and already naming an absolute
             // claude, for the reason its builders record: tmux runs it with

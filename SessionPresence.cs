@@ -468,85 +468,94 @@ namespace ClaudeBuddy
             ElsewhereInTmux
         }
 
-        // One candidate pane, as the scan found it. Title and process have already
-        // been vetted by the caller; what is left is pure choosing.
+        // One pane whose title and process say it is showing a session.
+        //
+        // Socket is carried because nothing about a pane is unique without it. A
+        // pane id is per server, and so is a window id — two servers can both have
+        // a `claude-swarm:1` — so a candidate identified by pane alone would be
+        // looked for on the wrong server the moment more than one is in scope, and
+        // "focus that pane" would silently find nothing and fall through to
+        // minting a new one.
         internal readonly record struct ViewerPane(
-            string Pane, string Window, bool ActiveInItsWindow, bool ClaimedByAnother);
+            string Socket, string Pane, string Window, bool ActiveInItsWindow, bool ClaimedByAnother);
 
         // Which candidate answers the click, and how.
         //
-        // usersWindow is "<session>:<index>" for the window their attached client
-        // is showing, or null when that could not be resolved — in which case
-        // nothing can be called "the pane they are looking at" and every match is
-        // treated as elsewhere.
+        // **The first act is the universe, and it is where round nine's whole
+        // correction lives.** A pane on a server with no attached client is not a
+        // viewer that ranks last; it is not a viewer at all. Nobody's eyes can be
+        // on a detached server, so its panes cannot be "where the user is reading"
+        // however exactly their titles match — and every collision this rule has
+        // been patched for was manufactured by treating them as if they could be.
         //
-        // The asymmetry between the two outcomes is deliberate and is what makes
-        // a title collision survivable. Doing nothing needs no certainty about
-        // which session was found. *Focusing* a pane does: send a click to the
-        // wrong same-titled pane and it silently shows another conversation, which
-        // is worse than the duplicate pane this feature replaces. So the
-        // elsewhere branch additionally refuses any pane another session's status
-        // file claims as its own — those sessions are reachable by their recorded
-        // coordinates and never need this path, so excluding them costs nothing
-        // and removes exactly the panes most likely to collide.
-        internal static (ViewerVerdict Verdict, string? Pane) ViewerAmong(
-            IReadOnlyList<ViewerPane> candidates, string? usersWindow, bool anyClientAttached)
+        // On the machine that forced this: four panes carried one identical title.
+        // One was the user's real viewer on the only attached server; the other
+        // three were two teammates and a remote-control relay, all on a detached
+        // `claude-swarm-<pid>` socket. Teammates title their own TUIs with the team
+        // title, so they are perfect impostors by construction — and the answer was
+        // never a better way to tell them apart, it was that they were never
+        // candidates. The filter alone leaves exactly the user's own chat.
+        //
+        // socketsWithClients is therefore not an optimisation and not a tiebreak.
+        // Everything below it is choosing between things a person can actually
+        // see.
+        //
+        // watchedWindows is the (socket, window) of each attached client's current
+        // window. Empty means somebody is attached and we could not work out to
+        // which window — the weaker failure, which still allows the elsewhere
+        // answer, because selecting a pane on a server with a client does reach a
+        // screen.
+        internal static (ViewerVerdict Verdict, ViewerPane? Found) ViewerAmong(
+            IReadOnlyList<ViewerPane> matches,
+            IReadOnlySet<string> socketsWithClients,
+            IReadOnlySet<(string Socket, string Window)> watchedWindows)
         {
-            if (candidates.Count == 0) return (ViewerVerdict.NoneFound, null);
+            var visible = new List<ViewerPane>();
 
-            // A viewer pane has to be attachable to an eyeball. A tmux server with
-            // no client anywhere is showing its panes to nobody, however
-            // convincingly their titles name a conversation — so there is no
-            // viewer to find, and a click that "focused" one of them would select
-            // a pane on an invisible screen and then flash an acknowledgment for
-            // it. Falling through to the attach ladder is the honest answer: it
-            // opens something the user can actually see.
-            //
-            // Distinct from usersWindow being null, which is the weaker failure —
-            // somebody *is* attached and we could not work out to which window.
-            // That one still allows the elsewhere answer, because selecting a pane
-            // on a server someone is attached to does reach a screen.
-            if (!anyClientAttached) return (ViewerVerdict.NoneFound, null);
-
-            if (!string.IsNullOrEmpty(usersWindow))
+            foreach (var pane in matches)
             {
-                foreach (var pane in candidates)
+                if (socketsWithClients.Contains(pane.Socket)) visible.Add(pane);
+            }
+
+            if (visible.Count == 0) return (ViewerVerdict.NoneFound, null);
+
+            foreach (var pane in visible)
+            {
+                if (pane.ActiveInItsWindow
+                    && watchedWindows.Contains((pane.Socket, pane.Window)))
                 {
-                    if (pane.ActiveInItsWindow
-                        && string.Equals(pane.Window, usersWindow, StringComparison.Ordinal))
-                    {
-                        return (ViewerVerdict.TheUserIsLookingAtIt, pane.Pane);
-                    }
+                    return (ViewerVerdict.TheUserIsLookingAtIt, pane);
                 }
             }
 
-            // What is left after the exclusion is a genuine residual, and it is
-            // worth being precise about which ambiguity is handled by which
-            // mechanism, because the rarity argument is only honest about one of
-            // them.
+            // The two rules below are what remains of three rounds of trying to
+            // tell impostors apart by inspection, and inside the visible universe
+            // they are very nearly vestigial: teammates and relays live on
+            // detached swarm sockets by construction, so the collisions that
+            // motivated both have already been filtered out above. They are kept
+            // rather than deleted because "by construction" is a fact about how
+            // Claude Code launches things today, and a teammate attached into a
+            // visible server by hand is a thing a person can do.
             //
-            // The *team* collision — several panes sharing one title because every
-            // member inherits the team session's — is not rare at all. It was the
-            // normal state of the machine this was written on: four panes, one
-            // title, three sessions. Rarity would have been the wrong answer to
-            // it, and the exclusion above is the right one, because those panes
-            // are claimed by the sessions that own them.
-            //
-            // What rarity *is* honest about is two sessions with the same title
-            // each viewed in an unclaimed pane — two leads someone renamed
-            // identically, both open at once. Nothing here can tell those apart:
-            // the title is equal by construction and neither pane is claimed. So
-            // the tie-break is stated rather than engineered — the pane active in
-            // its own window, else the first found — and it earns that because a
-            // title is /rename-assigned by hand, so two matching ones are a
-            // coincidence a person created rather than a shape the app produces.
-            // If that ever stops being rare, the fix is a stronger identity than
-            // the title, not a cleverer tie-break.
+            // The claim exclusion, first: a pane another session records as its own
+            // is refused for *focusing*, though not for the answer above — see
+            // ClaimStillHolds for when a claim is still evidence about a viewer at
+            // all, and note that the asymmetry survives for the same reason it was
+            // built. Being told "you are already looking at it" cannot be wrong
+            // about which session it found; being sent somewhere can.
             ViewerPane? best = null;
 
-            foreach (var pane in candidates)
+            foreach (var pane in visible)
             {
                 if (pane.ClaimedByAnother) continue;
+
+                // And the tie-break: the pane active in its own window, else the
+                // first found. Two sessions with one title, both visible, neither
+                // claimed — two leads someone renamed identically and attached to
+                // separately. Nothing here can tell those apart, and a title is
+                // /rename-assigned by hand, so that is a coincidence a person
+                // created rather than a shape the app produces. If it stops being
+                // rare the fix is a stronger identity than the title.
                 if (best is null || (pane.ActiveInItsWindow && !best.Value.ActiveInItsWindow))
                 {
                     best = pane;
@@ -555,7 +564,7 @@ namespace ClaudeBuddy
 
             return best is null
                 ? (ViewerVerdict.NoneFound, null)
-                : (ViewerVerdict.ElsewhereInTmux, best.Value.Pane);
+                : (ViewerVerdict.ElsewhereInTmux, best);
         }
 
         // Whether two ids name the same job.
