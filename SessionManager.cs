@@ -1983,10 +1983,34 @@ namespace ClaudeBuddy
                 ClaudeBuddySettings.ArrangeSpacing,
                 ArrangementAnchor(work));
 
-            var placed = OrbArrangement.Compute(allOrbs.Count, leadOf, layout);
+            var heartbeats = ClaudeBuddySettings.OpenClawHeartbeatMode;
+            var crons = ClaudeBuddySettings.OpenClawCronMode;
+
+            var groupOf = new int[allOrbs.Count];
+            for (var i = 0; i < allOrbs.Count; i++)
+            {
+                groupOf[i] = _statuses.TryGetValue(allOrbs[i].SessionId, out var status)
+                    ? OrbClusters.GroupOf(
+                        OrbClusters.Of(status.Heartbeat, status.Kind), heartbeats, crons)
+                    : 0;
+            }
+
+            var placed = OrbArrangement.Compute(allOrbs.Count, leadOf, groupOf, Shapes(), layout);
 
             return allOrbs.Select((orb, i) => (orb, placed[i])).ToList();
         }
+
+        // One shape name per group, in the order OrbClusters.GroupOf indexes
+        // them. Its *length* is what tells OrbArrangement how many bands it may
+        // cut, so the two have to be built together — a group added to
+        // OrbClusters without an entry here would have its orbs quietly folded
+        // back in with the chats, which is a setting that silently does nothing.
+        private static string[] Shapes() => new[]
+        {
+            ClaudeBuddySettings.ArrangeShape,
+            ClaudeBuddySettings.OpenClawHeartbeatShape,
+            ClaudeBuddySettings.OpenClawCronShape
+        };
 
         // Where the shape gets drawn. The first time ever, that's the middle
         // of the work area — same point OrbArrangement used to compute on its
