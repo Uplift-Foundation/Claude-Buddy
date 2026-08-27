@@ -579,28 +579,51 @@ public class SessionPresenceTests
 
     // --- ClaimStillHolds -----------------------------------------------------
 
-    // The claim describes something still true: the pane is showing the
-    // claimant's own conversation.
+    // The claim agrees with the pane's title, which is the only case where the
+    // title cannot tell the two apart — and so the only case where the claim is
+    // worth honouring. It is also the case the exclusion was added for: every
+    // member of an agent team inherits the team session's title, so a teammate's
+    // claim on its own pane looks exactly like this, and without it clicking a
+    // lead would focus a teammate's conversation.
     [Fact]
-    public void AClaimTheCurrentTitleConfirmsStillHolds()
+    public void AClaimThatAgreesWithTheDisplayedTitleHolds()
     {
         Assert.True(SessionPresence.ClaimStillHolds(Work, Glyph + Work));
     }
 
-    // The client moved on — the pane is showing a different conversation now — so
-    // the claim describes the past and the pane returns to candidacy. Without this
-    // a stale exclusion pushes a click that could have focused a real viewer down
-    // into the attach ladder to make a duplicate, which is the failure the
-    // exclusion exists to prevent, arriving from the other side.
+    // The pane is showing something else, so the process living there is not what
+    // is on screen. The displayed title trumps the resident claim: the TUI titles
+    // what it *shows*, the status file records what *lives* there, and only the
+    // first is talking about a viewer.
     [Fact]
-    public void AClaimTheCurrentTitleContradictsIsReleased()
+    public void AClaimTheDisplayedTitleContradictsIsReleased()
     {
         Assert.False(SessionPresence.ClaimStillHolds(Work, Glyph + "Something else entirely"));
     }
 
-    // A pane that is no longer running a Claude session at all — someone quit and
-    // typed something. Not the claimant's conversation, so not the claimant's
-    // pane any more.
+    // An untitled claimant releases its claim, and this is the case the machine
+    // settled by photographing itself. The claude process in the user's pane is
+    // the recorded session_pid of a session whose title was never captured, and
+    // that pane was rendering a *different* session's conversation — true as
+    // process residence and stale as viewer evidence at the same moment.
+    //
+    // Keeping the claim, which is what this rule did first, left the user's own
+    // pane out of candidacy so a click went on opening a duplicate beside the
+    // conversation it was clicked from. Confirming it by session_pid-in-the-tree
+    // would have done the same, since the pid genuinely is there. Only the title
+    // distinguishes them, so only the title decides.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void AnUntitledClaimantCannotHoldAPaneOutOfCandidacy(string? claimantTitle)
+    {
+        Assert.False(SessionPresence.ClaimStillHolds(claimantTitle, Glyph + Work));
+        Assert.False(SessionPresence.ClaimStillHolds(claimantTitle, "anything at all"));
+        Assert.False(SessionPresence.ClaimStillHolds(claimantTitle, null));
+    }
+
+    // A pane no longer showing a session at all — someone quit and typed
+    // something. Nothing there is evidence about a viewer.
     [Fact]
     public void AClaimOnAPaneNoLongerShowingASessionIsReleased()
     {
@@ -609,33 +632,18 @@ public class SessionPresenceTests
         Assert.False(SessionPresence.ClaimStillHolds(Work, null));
     }
 
-    // An untitled claimant keeps its claim, and the direction is the decision
-    // rather than a fallthrough. An empty title is not evidence that the client
-    // moved on; it is the absence of evidence, and it is common for an honest
-    // reason — the hook records a title when it fires, so a session renamed since
-    // reads as untitled. Releasing on no evidence would strip the exclusion from
-    // exactly the claims that cannot defend themselves. A stale claim costs a
-    // duplicate pane, visible and closable; a released good claim costs a click
-    // landing in someone else's conversation, silently.
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    public void AnUntitledClaimantKeepsItsClaim(string? claimantTitle)
-    {
-        Assert.True(SessionPresence.ClaimStillHolds(claimantTitle, Glyph + Work));
-        Assert.True(SessionPresence.ClaimStillHolds(claimantTitle, "anything at all"));
-        Assert.True(SessionPresence.ClaimStillHolds(claimantTitle, null));
-    }
-
-    // The collision case, which must keep working: every member of an agent team
-    // shares the team session's title, so a teammate's claim on its own pane is
-    // confirmed by that pane's title even though the title is also the clicked
-    // session's. That is what keeps the teammate protection intact — the reason
-    // the exclusion was added in the first place.
+    // Both of this machine's shapes side by side, which is the pair that has to
+    // come out differently for the feature to work at all.
     [Fact]
-    public void ATeammatesClaimSurvivesTheSharedTitle()
+    public void TheTeammatesPaneStaysExcludedAndTheUsersOwnPaneDoesNot()
     {
+        // %53: teammate, title inherited from the team, pane title the same.
+        // Indistinguishable by title, so the claim decides.
         Assert.True(SessionPresence.ClaimStillHolds(Work, Glyph + Work));
+
+        // %6: claimant's recorded title empty, pane showing another session's
+        // conversation. Distinguishable, so the title decides.
+        Assert.False(SessionPresence.ClaimStillHolds("", Glyph + Work));
     }
 
     // --- ViewerAmong ---------------------------------------------------------
@@ -648,7 +656,7 @@ public class SessionPresenceTests
     public void NoCandidatesIsNoViewer()
     {
         var (verdict, pane) = SessionPresence.ViewerAmong(
-            Array.Empty<SessionPresence.ViewerPane>(), "warren:1");
+            Array.Empty<SessionPresence.ViewerPane>(), "warren:1", anyClientAttached: true);
 
         Assert.Equal(SessionPresence.ViewerVerdict.NoneFound, verdict);
         Assert.Null(pane);
@@ -660,7 +668,7 @@ public class SessionPresenceTests
     public void TheActivePaneOfTheUsersOwnWindowMeansTheyAreLookingAtIt()
     {
         var (verdict, _) = SessionPresence.ViewerAmong(
-            new[] { Pane("%6", "warren:1", active: true) }, "warren:1");
+            new[] { Pane("%6", "warren:1", active: true) }, "warren:1", anyClientAttached: true);
 
         Assert.Equal(SessionPresence.ViewerVerdict.TheUserIsLookingAtIt, verdict);
     }
@@ -672,7 +680,7 @@ public class SessionPresenceTests
     public void AnInactivePaneInTheirWindowIsStillElsewhere()
     {
         var (verdict, pane) = SessionPresence.ViewerAmong(
-            new[] { Pane("%7", "warren:1", active: false) }, "warren:1");
+            new[] { Pane("%7", "warren:1", active: false) }, "warren:1", anyClientAttached: true);
 
         Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
         Assert.Equal("%7", pane);
@@ -690,7 +698,7 @@ public class SessionPresenceTests
     public void WithNoKnownWindowEveryMatchIsElsewhere(string? usersWindow)
     {
         var (verdict, pane) = SessionPresence.ViewerAmong(
-            new[] { Pane("%6", "warren:1", active: true) }, usersWindow);
+            new[] { Pane("%6", "warren:1", active: true) }, usersWindow, anyClientAttached: true);
 
         Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
         Assert.Equal("%6", pane);
@@ -705,7 +713,8 @@ public class SessionPresenceTests
     public void APaneAnotherSessionClaimsIsNotFocused()
     {
         var (verdict, pane) = SessionPresence.ViewerAmong(
-            new[] { Pane("%53", "claude-swarm:1", active: true, claimed: true) }, "warren:1");
+            new[] { Pane("%53", "claude-swarm:1", active: true, claimed: true) }, "warren:1",
+            anyClientAttached: true);
 
         Assert.Equal(SessionPresence.ViewerVerdict.NoneFound, verdict);
         Assert.Null(pane);
@@ -718,9 +727,28 @@ public class SessionPresenceTests
     public void AClaimedPaneTheUserIsLookingAtStillStopsTheClick()
     {
         var (verdict, _) = SessionPresence.ViewerAmong(
-            new[] { Pane("%6", "warren:1", active: true, claimed: true) }, "warren:1");
+            new[] { Pane("%6", "warren:1", active: true, claimed: true) }, "warren:1",
+            anyClientAttached: true);
 
         Assert.Equal(SessionPresence.ViewerVerdict.TheUserIsLookingAtIt, verdict);
+    }
+
+    // A server with no client anywhere is showing its panes to nobody, however
+    // convincingly their titles name a conversation. So there is no viewer to
+    // find — a click that "focused" one of them would select a pane on an
+    // invisible screen and then flash an acknowledgment for it. Falling through to
+    // the attach ladder is the honest answer, because it opens something the user
+    // can actually see. A viewer pane has to be attachable to an eyeball.
+    [Fact]
+    public void WithNothingAttachedThereIsNoViewerHoweverWellThePanesMatch()
+    {
+        var (verdict, pane) = SessionPresence.ViewerAmong(
+            new[] { Pane("%6", "warren:1", active: true) },
+            usersWindow: "warren:1",
+            anyClientAttached: false);
+
+        Assert.Equal(SessionPresence.ViewerVerdict.NoneFound, verdict);
+        Assert.Null(pane);
     }
 
     // The residual ambiguity, and the one case rarity is an honest answer to: two
@@ -738,7 +766,7 @@ public class SessionPresenceTests
                 Pane("%21", "claude-swarm:1", active: false),
                 Pane("%53", "claude-swarm:1", active: true),
             },
-            "warren:1");
+            "warren:1", anyClientAttached: true);
 
         Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
         Assert.Equal("%53", pane);
@@ -753,7 +781,7 @@ public class SessionPresenceTests
                 Pane("%21", "claude-swarm:1", active: false),
                 Pane("%53", "claude-swarm:2", active: false),
             },
-            "warren:1");
+            "warren:1", anyClientAttached: true);
 
         Assert.Equal("%21", pane);
     }
@@ -769,7 +797,7 @@ public class SessionPresenceTests
                 Pane("%53", "claude-swarm:1", active: true, claimed: true),
                 Pane("%99", "other:1", active: false),
             },
-            "warren:1");
+            "warren:1", anyClientAttached: true);
 
         Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
         Assert.Equal("%99", pane);
