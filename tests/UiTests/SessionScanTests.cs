@@ -930,13 +930,20 @@ public class SessionScanTests
     private static SessionManager Manager(
         Scratch scratch,
         Func<Dictionary<string, string>?>? jobListing = null,
-        TimeSpan? sweepGrace = null)
+        TimeSpan? sweepGrace = null,
+        Func<HashSet<string>?>? attachClients = null)
     {
         // Both CLIs on, for the reason Scan above states at length.
         ClaudeBuddySettings.ClaudeCodeEnabled = true;
         ClaudeBuddySettings.CodexEnabled = true;
 
-        var manager = new SessionManager(scratch.Dir, jobListing);
+        // Nobody attached unless a test says so. Handed over rather than scanned
+        // for the same reason the listing is: the real one walks the process
+        // table, and on this machine that table holds the user's own attached
+        // sessions.
+        var manager = new SessionManager(
+            scratch.Dir, jobListing,
+            attachClients ?? (() => new HashSet<string>(StringComparer.Ordinal)));
         if (sweepGrace is not null) manager.SweepGrace = sweepGrace.Value;
         return manager;
     }
@@ -985,7 +992,7 @@ public class SessionScanTests
         var status = manager.StatusFor("bg-parked");
         Assert.NotNull(status);
         Assert.Equal(LocalSessionShape.Background, status!.Shape);
-        Assert.True(status.Parked);
+        Assert.Equal(OrbPresence.NeedsInput, status.Presence);
         Assert.Equal(SessionKind.Background, status.Kind);
     }
 
@@ -1004,7 +1011,7 @@ public class SessionScanTests
         var status = manager.StatusFor("bg-working");
         Assert.NotNull(status);
         Assert.Equal(LocalSessionShape.Background, status!.Shape);
-        Assert.False(status.Parked);
+        Assert.Equal(OrbPresence.Present, status.Presence);
         Assert.Equal(SessionKind.Background, status.Kind);
     }
 
@@ -1021,14 +1028,14 @@ public class SessionScanTests
 
         var manager = Manager(scratch, () => Listing(("bg-resumed", "blocked")));
         manager.ScanAndUpdate();
-        Assert.True(manager.StatusFor("bg-resumed")!.Parked);
+        Assert.Equal(OrbPresence.NeedsInput, manager.StatusFor("bg-resumed")!.Presence);
 
         WriteBackgroundFile(scratch, "bg-resumed", state: "generating");
         manager.ScanAndUpdate();
 
         var status = manager.StatusFor("bg-resumed");
         Assert.Equal(LocalSessionShape.Background, status!.Shape);
-        Assert.False(status.Parked);
+        Assert.Equal(OrbPresence.Present, status.Presence);
     }
 
     [AvaloniaFact]
@@ -1046,7 +1053,7 @@ public class SessionScanTests
 
         var status = manager.StatusFor("bg-unknown");
         Assert.NotNull(status);
-        Assert.False(status!.Parked);
+        Assert.Equal(OrbPresence.Present, status!.Presence);
 
         // An unreadable listing keeps the orb (BackgroundJobs.IsLive answers
         // true) and cannot be evidence of anything, so the file survives even
@@ -1100,7 +1107,7 @@ public class SessionScanTests
         Assert.Equal("iTerm.app", job!.TermProgram);
 
         Assert.Equal(LocalSessionShape.Background, job.Shape);
-        Assert.True(job.Parked);
+        Assert.Equal(OrbPresence.NeedsInput, job.Presence);
         Assert.Equal(SessionKind.Background, job.Kind);
 
         // And the sibling is untouched: a terminal session is never parked, and
@@ -1108,7 +1115,7 @@ public class SessionScanTests
         var sibling = manager.StatusFor("interactive");
         Assert.NotNull(sibling);
         Assert.Equal(LocalSessionShape.Terminal, sibling!.Shape);
-        Assert.False(sibling.Parked);
+        Assert.Equal(OrbPresence.Present, sibling.Presence);
     }
 
     [AvaloniaFact]
@@ -1145,7 +1152,7 @@ public class SessionScanTests
         var inherited = manager.StatusFor("env-job");
         Assert.NotNull(inherited);
         Assert.Equal(LocalSessionShape.Background, inherited!.Shape);
-        Assert.True(inherited.Parked);
+        Assert.Equal(OrbPresence.NeedsInput, inherited.Presence);
     }
 
     [AvaloniaFact]
@@ -1171,7 +1178,7 @@ public class SessionScanTests
 
         // Unknown all round, which is the answer that means nobody asked — and
         // no rule acts on it, so nothing is dimmed and nothing is swept.
-        Assert.False(manager.StatusFor("terminal-a")!.Parked);
+        Assert.Equal(OrbPresence.Present, manager.StatusFor("terminal-a")!.Presence);
         Assert.Equal(LocalSessionShape.Terminal, manager.StatusFor("terminal-a")!.Shape);
     }
 
@@ -1196,8 +1203,158 @@ public class SessionScanTests
         manager.ScanAndUpdate();
 
         Assert.Equal(1, asked);
-        Assert.True(manager.StatusFor("job-a")!.Parked);
-        Assert.False(manager.StatusFor("job-b")!.Parked);
+        Assert.Equal(OrbPresence.NeedsInput, manager.StatusFor("job-a")!.Presence);
+        Assert.Equal(OrbPresence.Present, manager.StatusFor("job-b")!.Presence);
+    }
+
+    // --- somebody is in it ---------------------------------------------------
+
+    [AvaloniaFact]
+    public void AParkedJobWithAnAttachClientIsDrawnAsPresent()
+    {
+        // The contradiction the user hit within minutes of the first build: they
+        // ran `claude attach` on all three parked sessions, sat in them, and the
+        // orbs stayed grey. Nothing this app was watching had changed — the
+        // status file records the *worker's* ancestry and never the viewer's, so
+        // the tty stays empty, and the daemon still says "blocked" because from
+        // its side nothing happened. The person's presence exists in one place,
+        // which is the process table.
+        //
+        // The client's argv is the short job id, exactly as `claude attach
+        // 0e043819` writes it, which is why the match is by prefix.
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "0e043819-3c45-4f1a-9c2b-8d4e5f6a7b8c");
+
+        var manager = Manager(
+            scratch,
+            () => Listing(("0e043819-3c45-4f1a-9c2b-8d4e5f6a7b8c", "blocked")),
+            attachClients: () => new HashSet<string>(StringComparer.Ordinal) { "0e043819" });
+
+        manager.ScanAndUpdate();
+
+        var status = manager.StatusFor("0e043819-3c45-4f1a-9c2b-8d4e5f6a7b8c");
+        Assert.NotNull(status);
+        Assert.Equal(LocalSessionShape.Background, status!.Shape);
+        Assert.Equal(OrbPresence.Present, status.Presence);
+
+        // Still a background job, and still badged as one: the gear says what the
+        // session *is*, which somebody looking at it does not change.
+        Assert.Equal(SessionKind.Background, status.Kind);
+    }
+
+    [AvaloniaFact]
+    public void AnUnrelatedAttachClientDoesNotUndimAnything()
+    {
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "bg-parked");
+
+        var manager = Manager(
+            scratch, () => Listing(("bg-parked", "blocked")),
+            attachClients: () => new HashSet<string>(StringComparer.Ordinal) { "5f6960b2" });
+
+        manager.ScanAndUpdate();
+
+        Assert.Equal(OrbPresence.NeedsInput, manager.StatusFor("bg-parked")!.Presence);
+    }
+
+    [AvaloniaFact]
+    public void AProcessScanThatFailedLeavesEveryOrbAsItWas()
+    {
+        // Fail open, in the one direction that matters: a scan that could not be
+        // done must not dim a session somebody is sitting in. Wrong the other way
+        // leaves a genuinely parked orb bright, which is this branch's original
+        // bug in its mildest form — and mild beats arguing with the person at the
+        // screen.
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "bg-parked");
+
+        var manager = Manager(
+            scratch, () => Listing(("bg-parked", "blocked")), attachClients: () => null);
+
+        manager.ScanAndUpdate();
+
+        Assert.Equal(OrbPresence.Present, manager.StatusFor("bg-parked")!.Presence);
+    }
+
+    [AvaloniaFact]
+    public void TheProcessTableIsNotWalkedForAMachineWithNoBackgroundSessions()
+    {
+        // The scan costs a `ps`, so it is only paid for when the answer could
+        // change a rendering — which is only when something here is a background
+        // session at all. Counted rather than inferred, the same way the daemon
+        // listing's own gate is.
+        using var scratch = new Scratch();
+        scratch.Write("terminal-a");
+
+        var asked = 0;
+        var manager = Manager(
+            scratch, () => Listing(),
+            attachClients: () => { asked++; return new HashSet<string>(StringComparer.Ordinal); });
+
+        manager.ScanAndUpdate();
+
+        Assert.Equal(0, asked);
+    }
+
+    // --- a finished job lingers ----------------------------------------------
+
+    [AvaloniaFact]
+    public void AFinishedJobIsDrawnAsFinishedRatherThanVanishing()
+    {
+        // Reported as a bug in exactly those words: "one appears and disappears
+        // instead of greying out". A `done` job's orb used to go the instant the
+        // daemon said so, while the user was looking at it — and a thing that
+        // disappears without being dismissed reads as a fault rather than as a
+        // finish.
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "bg-finished");
+
+        var manager = Manager(scratch, () => Listing(("bg-finished", "done")));
+        manager.ScanAndUpdate();
+
+        Assert.Contains("bg-finished", OrbIds(manager));
+
+        var status = manager.StatusFor("bg-finished");
+        Assert.Equal(LocalSessionShape.Background, status!.Shape);
+        Assert.Equal(OrbPresence.Finished, status.Presence);
+        Assert.Equal(SessionKind.Background, status.Kind);
+    }
+
+    [AvaloniaFact]
+    public void DismissingAFinishedJobTakesItAwayImmediately()
+    {
+        // The user's own way out, for a finished orb they would rather not look
+        // at for ten minutes. Deleting the file is the whole of it — and unlike
+        // every other session, this one will not write itself back, because
+        // nothing is running to fire a hook.
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "bg-finished");
+
+        var manager = Manager(scratch, () => Listing(("bg-finished", "done")));
+        manager.ScanAndUpdate();
+        Assert.Contains("bg-finished", OrbIds(manager));
+
+        manager.DismissSession("bg-finished");
+        manager.ScanAndUpdate();
+
+        Assert.DoesNotContain("bg-finished", OrbIds(manager));
+        Assert.False(File.Exists(Path.Combine(scratch.Dir, "bg-finished.txt")));
+    }
+
+    // A subagent, or a file that outlived its session: still dropped, and this is
+    // the distinction the whole reversal turns on. "The listing was read and does
+    // not name this" is a fact about the session; "the listing says it finished"
+    // is a fact about a job that existed.
+    [AvaloniaFact]
+    public void ASessionTheListingDoesNotNameStillLosesItsOrb()
+    {
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "not-a-job");
+
+        var manager = Manager(scratch, () => Listing(("something-else", "blocked")));
+        manager.ScanAndUpdate();
+
+        Assert.DoesNotContain("not-a-job", OrbIds(manager));
     }
 
     // --- the sweep ---
@@ -1250,12 +1407,27 @@ public class SessionScanTests
         manager.ScanAndUpdate();
         Assert.True(File.Exists(path));
 
-        // Its orb is already gone — a finished job has nothing to show, which
-        // BackgroundJobs was written for — and now the file goes too.
-        Assert.DoesNotContain("bg-done", OrbIds(manager));
+        // Its orb is still there, and this is the reversal: a `done` job's orb
+        // used to go the instant the daemon said so, and the user watched one
+        // appear and vanish while looking at it — which reads as a fault rather
+        // than as a finish. It now lingers, dimmed and marked as finished, for
+        // exactly as long as its file does.
+        Assert.Contains("bg-done", OrbIds(manager));
+        Assert.Equal(OrbPresence.Finished, manager.StatusFor("bg-done")!.Presence);
 
         manager.ScanAndUpdate();
         Assert.False(File.Exists(path));
+
+        // The orb follows one tick behind the file, not in the same pass: the
+        // sweep runs *after* the removal pass, so by the time the file goes this
+        // scan has already drawn the orb from it. Two seconds later there is no
+        // file to draw and the orb goes the ordinary way — through the same
+        // removal pass that handles a SessionEnd. Deliberately not special-cased
+        // into the sweep: an orb removed by the thing that deletes files would be
+        // a second removal path, and this one is late by one tick rather than
+        // wrong.
+        manager.ScanAndUpdate();
+        Assert.DoesNotContain("bg-done", OrbIds(manager));
     }
 
     [AvaloniaFact]
@@ -1379,7 +1551,12 @@ public class SessionScanTests
             Assert.NotNull(status);
             Assert.Equal("absent-lead", status!.Lead);
             Assert.Equal(LocalSessionShape.Teammate, status.Shape);
-            Assert.True(status.Parked);
+
+            // Dimmed with no mark, deliberately: nothing is waiting on the user
+            // and nothing has finished, so there is nothing to say beyond the
+            // dimming. The two marks belong to the daemon's own vocabulary, and
+            // the daemon has never heard of this session.
+            Assert.Equal(OrbPresence.Parked, status.Presence);
 
             // Dimmed, not removed — for the same reason a parked job is kept.
             Assert.Contains("orphan", OrbIds(manager));
@@ -1421,7 +1598,7 @@ public class SessionScanTests
             var status = manager.StatusFor("member");
             Assert.NotNull(status);
             Assert.Equal(LocalSessionShape.Teammate, status!.Shape);
-            Assert.False(status.Parked);
+            Assert.Equal(OrbPresence.Present, status.Presence);
         }
         finally
         {

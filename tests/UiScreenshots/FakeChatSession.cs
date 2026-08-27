@@ -6,16 +6,16 @@ namespace ClaudeBuddy.Tests;
 // fake itself needs nothing internal, so a plain copy costs nothing. See
 // the original for the four IRemoteChatSession rules this honours.
 internal sealed class FakeChatSession :
-    IRemoteChatSession, IRemoteChatComposer, IRemoteChatAttach
+    IRemoteChatSession, IRemoteChatComposer, IRemoteChatElsewhere
 {
     // Both default to what an ordinary typeable session answers — an ordinary
     // hint and no button — so every capture that predates them is unchanged.
     public string ComposerHint { get; set; } = "Message…";
 
-    public bool CanAttach { get; set; }
+    public bool CanOpenElsewhere { get; set; }
 
-    // Never called from a capture, and it would open a terminal if it were.
-    public void Attach()
+    // Never called from a capture, and it would open a window if it were.
+    public void OpenElsewhere()
     {
     }
 

@@ -130,17 +130,17 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public LocalSessionShape Shape { get; set; } = LocalSessionShape.Terminal;
 
-        // Whether nothing is on the other end of this session right now: a
-        // background job between turns, or a team member whose lead has gone.
-        // Derived beside Shape and [JsonIgnore] for the same reason.
+        // What the orb should say about anything being on the other end of this
+        // session: present, quiet, holding a question, or finished. Derived
+        // beside Shape and [JsonIgnore] for the same reason.
         //
         // Deliberately not folded into State, which is what the *session* is
         // doing and is the hook's to write. This is a third axis — the orb's
-        // colour is its identity, its fill is its state, and its opacity and
-        // stillness are its presence — and a parked session's state is a
-        // truthful "idle" that should keep meaning what it means.
+        // colour is its identity, its fill is its state, and its opacity and its
+        // marks are its presence — and a parked session's state is a truthful
+        // "idle" that should keep meaning what it means.
         [JsonIgnore]
-        public bool Parked { get; set; }
+        public OrbPresence Presence { get; set; } = OrbPresence.Present;
 
         // Where the session's terminal lives (macOS hook only; empty on
         // Windows or with an older hook script). See TerminalFocuser.
@@ -267,13 +267,25 @@ namespace ClaudeBuddy
         // GatewayScanTests) that look it up by exact signature. A default
         // parameter would satisfy the compiler and hand both of them a null
         // constructor at runtime.
-        internal SessionManager(string statusDir, Func<Dictionary<string, string>?>? jobListing)
+        internal SessionManager(
+            string statusDir,
+            Func<Dictionary<string, string>?>? jobListing,
+            Func<HashSet<string>?>? attachClients = null)
         {
             _statusDir = statusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
+            _attachClients = attachClients ?? AgentTeamViewer.AttachedJobIds;
         }
 
         private readonly Func<Dictionary<string, string>?> _jobListing;
+
+        // Every `claude attach` client running on this machine, for the rule that
+        // un-dims a parked session somebody is sitting in. A seam for the same
+        // reason the listing is one: the real one walks the process table, and a
+        // test of the scan has no business asking what is running on the machine
+        // it happens to be on — least of all on this one, where the answer
+        // includes the user's own attached sessions.
+        private readonly Func<HashSet<string>?> _attachClients;
 
         // How long a status file has to keep looking dead before the scan
         // deletes it. See SessionPresence.EvidenceOfDeath for what "dead" is
@@ -792,9 +804,20 @@ namespace ClaudeBuddy
         // Whether an orb for this session would go anywhere when it was
         // clicked. Asked after adoption above, which is what can give a
         // background lead a terminal it had none of a moment earlier.
+        // phase is what the daemon said about this session, rather than the
+        // is-it-live bool this used to take. Two reasons, and the first is only
+        // tidiness: the caller has the phase already, so passing a closure that
+        // reduces it to a bool was a second question about the same answer.
+        //
+        // The second is behaviour. "Live" collapsed the two ways a job can be
+        // finished-with — over, and never a job at all — and only one of them
+        // should cost an orb its place on screen. See
+        // SessionPresence.RuledOutAsAJob, which is now what both exemptions below
+        // ask, and which keeps the fail-open direction: a listing that could not
+        // be read rules nothing out.
         internal static ScanVerdict JudgeReachability(
             string sessionId, SessionStatus status,
-            ISet<string> leadsWithLiveAgents, Func<string, bool> isLiveJob)
+            ISet<string> leadsWithLiveAgents, JobPhase phase)
         {
             // A session with no terminal recorded at all can't be jumped
             // to, so an orb for it is a dead click. This is what headless and
@@ -821,7 +844,8 @@ namespace ClaudeBuddy
                 && string.IsNullOrEmpty(status.TmuxPane)
                 && status.TermPid == 0
                 && !leadsWithLiveAgents.Contains(sessionId)
-                && !(status.Source == SessionSource.ClaudeCode && isLiveJob(sessionId))
+                && !(status.Source == SessionSource.ClaudeCode
+                     && !SessionPresence.RuledOutAsAJob(phase))
                 && status.SessionPid > 0)
             {
                 return ScanVerdict.NoTerminal;
@@ -849,7 +873,7 @@ namespace ClaudeBuddy
             // back "not a job", which it always would.
             if (status.Source == SessionSource.ClaudeCode
                 && status.SessionPid <= 0
-                && !isLiveJob(sessionId))
+                && SessionPresence.RuledOutAsAJob(phase))
             {
                 return ScanVerdict.NotALiveJob;
             }
@@ -1144,6 +1168,18 @@ namespace ClaudeBuddy
 
             Func<string, bool> isLiveJob = id => BackgroundJobs.IsLive(Jobs(), id);
 
+            // Who is sitting in a job, asked once per pass and only when the
+            // answer could change a rendering — which is to say only when
+            // something here is a background session at all. Cached behind the
+            // seam as well (five seconds, one `ps`), so the cost of the question
+            // is per-machine rather than per-session.
+            //
+            // Null is a scan that could not be done, which is a third answer and
+            // not the same as "nobody is attached" —
+            // SessionPresence.HasAttachClient is where that direction is decided
+            // and why.
+            var attachClients = worthAsking ? _attachClients() : null;
+
             var superseded = Superseded(found, isLiveJob);
 
             // Sessions that live agents name as their lead. Used for two things
@@ -1247,8 +1283,8 @@ namespace ClaudeBuddy
                     AgentTeamViewer.TryAdopt(status);
                 }
 
-                if (JudgeReachability(sessionId, status, leadsWithLiveAgents,
-                                      isLiveJob) != ScanVerdict.Keep)
+                if (JudgeReachability(sessionId, status, leadsWithLiveAgents, phase)
+                        != ScanVerdict.Keep)
                 {
                     continue;   // removed in the pass below
                 }
@@ -1289,10 +1325,11 @@ namespace ClaudeBuddy
                     status.Shape = SessionPresence.ShapeOf(status, phase);
 
                     var hasLead = !string.IsNullOrEmpty(status.Lead);
-                    status.Parked = SessionPresence.IsParked(
+                    status.Presence = SessionPresence.PresenceOf(
                         status.Shape, status.State, phase,
                         hasLead && presentIds.Contains(status.Lead),
-                        hasLead && isLiveJob(status.Lead));
+                        hasLead && isLiveJob(status.Lead),
+                        SessionPresence.HasAttachClient(attachClients, sessionId));
 
                     // The badge, which says what this session *is*. Assigned
                     // here rather than in OrbWindow because Kind is the one

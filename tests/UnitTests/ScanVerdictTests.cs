@@ -58,13 +58,16 @@ public class ScanVerdictTests
             "session-1", status, written ?? Now, Now, staleAfter,
             superseded ?? Nothing, isRunning ?? AllAlive);
 
+    // phase is what the daemon said, where this used to take a closure that
+    // reduced the same answer to a bool. The default is NotAJob — the only answer
+    // that rules a session out — so a test that says nothing about the daemon is
+    // asking the strictest version of each rule.
     private static SessionManager.ScanVerdict Reachability(
         SessionStatus status,
         ISet<string>? leads = null,
-        Func<string, bool>? isLiveJob = null,
+        JobPhase phase = JobPhase.NotAJob,
         string sessionId = "session-1") =>
-        SessionManager.JudgeReachability(
-            sessionId, status, leads ?? Nothing, isLiveJob ?? NoLiveJobs);
+        SessionManager.JudgeReachability(sessionId, status, leads ?? Nothing, phase);
 
     // --- JudgeLiveness -------------------------------------------------------
 
@@ -291,13 +294,13 @@ public class ScanVerdictTests
 
         Assert.Equal(
             SessionManager.ScanVerdict.Keep,
-            Reachability(claude, isLiveJob: EveryIdIsALiveJob));
+            Reachability(claude, phase: JobPhase.Parked));
 
         // Codex has no background jobs to be one of, so the exemption must not
         // reach it however the daemon answers.
         Assert.Equal(
             SessionManager.ScanVerdict.NoTerminal,
-            Reachability(codex, isLiveJob: EveryIdIsALiveJob));
+            Reachability(codex, phase: JobPhase.Parked));
     }
 
     [Theory]
@@ -327,7 +330,7 @@ public class ScanVerdictTests
         Assert.Equal(SessionManager.ScanVerdict.NotALiveJob, Reachability(pidless));
         Assert.Equal(
             SessionManager.ScanVerdict.Keep,
-            Reachability(pidless, isLiveJob: EveryIdIsALiveJob));
+            Reachability(pidless, phase: JobPhase.Parked));
     }
 
     [Fact]
@@ -345,25 +348,31 @@ public class ScanVerdictTests
         Assert.Equal(SessionManager.ScanVerdict.NotALiveJob, Reachability(codex));
         Assert.Equal(
             SessionManager.ScanVerdict.NotALiveJob,
-            Reachability(codex, isLiveJob: EveryIdIsALiveJob));
+            Reachability(codex, phase: JobPhase.Parked));
     }
 
     [Fact]
-    public void APidlessGatewaySessionIsNeverAskedAboutAtAll()
+    public void APidlessGatewaySessionIsKeptWhateverTheDaemonSaidAboutJobs()
     {
-        // A gateway session records no pid, so this rule would ask the local
-        // daemon about a session it has never heard of — once per scan, per
-        // session — and drop the orb when the answer came back "not a job",
-        // which it always would.
-        var asked = new List<string>();
+        // A gateway session records no pid and is not a local job, so both
+        // job-shaped rules have to leave it alone whatever phase they are handed
+        // — the daemon has never heard of it, and the honest answer to "is this a
+        // background job" is that the question does not apply.
+        //
+        // This used to assert that the daemon was not *asked*, by counting calls
+        // to a closure. The closure is gone: the phase is decided once per pass
+        // and handed in, so "who pays for the lookup" is now a property of the
+        // scan rather than of this rule — asserted there, by counting, in
+        // SessionScanTests.AMachineWithNothingBackgroundIshOnItNeverAsksTheDaemon.
         var gateway = new SessionStatus { Source = SessionSource.OpenClaw };
 
-        var verdict = SessionManager.JudgeReachability(
-            "openclaw:agent:main", gateway, Nothing,
-            id => { asked.Add(id); return false; });
-
-        Assert.Equal(SessionManager.ScanVerdict.Keep, verdict);
-        Assert.Empty(asked);
+        foreach (var phase in new[] { JobPhase.NotAJob, JobPhase.Unknown, JobPhase.Done })
+        {
+            Assert.Equal(
+                SessionManager.ScanVerdict.Keep,
+                SessionManager.JudgeReachability(
+                    "openclaw:agent:main", gateway, Nothing, phase));
+        }
     }
 
     // A parked background job keeps its orb, through both verdicts. This is the
@@ -393,19 +402,57 @@ public class ScanVerdictTests
 
         Assert.Equal(
             SessionManager.ScanVerdict.Keep,
-            Reachability(parked, isLiveJob: EveryIdIsALiveJob));
+            Reachability(parked, phase: JobPhase.Parked));
     }
 
     [Fact]
-    public void TheDaemonIsNotAskedAboutASessionThatAlreadyKnowsATerminal()
+    public void AnOrdinarySessionIsKeptWhateverTheDaemonSaid()
     {
-        // The lookup shells out, so an ordinary session must never pay for it.
-        var asked = new List<string>();
+        // A session with a terminal and a live process is not the daemon's
+        // business either way, so no phase can change what happens to it. Which
+        // is also why the scan does not pay for a lookup on its behalf — see
+        // SessionPresence.WorthAskingTheDaemon, and the call-counting test in
+        // SessionScanTests that pins it.
+        foreach (var phase in new[] { JobPhase.NotAJob, JobPhase.Unknown, JobPhase.Done })
+        {
+            Assert.Equal(
+                SessionManager.ScanVerdict.Keep,
+                Reachability(Healthy(), phase: phase));
+        }
+    }
 
-        SessionManager.JudgeReachability(
-            "session-1", Healthy(), Nothing,
-            id => { asked.Add(id); return true; });
+    // The reversal this round made, at the level of the rule that used to drop
+    // it. A `done` job's orb went the instant the daemon said so, and the user
+    // watched one appear and vanish while looking at it — which reads as a fault,
+    // not as a finish. It now survives, to be drawn dimmed and marked as
+    // finished, for as long as its status file exists.
+    [Fact]
+    public void AFinishedJobKeepsItsOrbUntilItsFileGoes()
+    {
+        var done = new SessionStatus { Source = SessionSource.ClaudeCode, SessionPid = 4321 };
 
-        Assert.Empty(asked);
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(done, phase: JobPhase.Done));
+
+        // ...where a session the listing genuinely does not name — a subagent, or
+        // a file that outlived its session — still goes, which is the distinction
+        // the whole rule turns on.
+        Assert.Equal(
+            SessionManager.ScanVerdict.NoTerminal,
+            Reachability(done, phase: JobPhase.NotAJob));
+    }
+
+    // And the same for one that recorded no pid at all: a finished job whose file
+    // predates the session_pid field is still a finished job, not a subagent.
+    [Fact]
+    public void AFinishedJobWithNoPidIsAlsoKept()
+    {
+        var pidless = new SessionStatus { Source = SessionSource.ClaudeCode, SessionPid = 0 };
+
+        Assert.Equal(SessionManager.ScanVerdict.Keep, Reachability(pidless, phase: JobPhase.Done));
+        Assert.Equal(
+            SessionManager.ScanVerdict.NotALiveJob,
+            Reachability(pidless, phase: JobPhase.NotAJob));
     }
 }

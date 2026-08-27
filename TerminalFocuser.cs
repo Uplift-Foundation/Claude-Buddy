@@ -86,58 +86,83 @@ namespace ClaudeBuddy
                 if (teamLead is not null && FocusCore(teamLead)) return;
 
                 // Nothing on screen shows this session, and nothing else is
-                // going to. Which of the three ways out applies is decided by
-                // ClickRouting, which is pure and covered per case; the reason
-                // there are three is written there, and the reason there is any
-                // at all is that every failure above this line is silent.
-                switch (ClickRouting.FallbackFor(status, sessionId, detached))
-                {
-                    case ClickFallback.AttachBackground:
-                    case ClickFallback.AttachById:
-                        AttachAndFocus(sessionId!, status.Cwd);
-                        break;
-
-                    case ClickFallback.AttachSocket:
-                        // The pane is already selected — FocusTmux did that
-                        // before finding no client — so a plain attach lands on
-                        // the right pane rather than on whatever the session
-                        // last had current.
-                        AgentTeamViewer.AttachTmuxSocket(
-                            ResolveTmuxBinary(status.TmuxBin) ?? "", status.TmuxSocket, status.Cwd);
-                        break;
-
-                    case ClickFallback.None:
-                        // Coordinates were recorded and could not be resolved.
-                        // Deliberately nothing further: opening a second window
-                        // onto a session that already has one would hide a real
-                        // failure behind a new window every time. The failure is
-                        // reported (to stderr, which a bundled app has nowhere to
-                        // show — a follow-up ticket, not this one).
-                        break;
-                }
+                // going to. Which way out applies is decided by ClickRouting,
+                // which is pure and covered per case; the reason there is any way
+                // out at all is that every failure above this line is silent.
+                RunFallback(ClickRouting.FallbackFor(status, sessionId, detached), status, sessionId);
             });
         }
 
-        // `claude attach <id>`, and then the ordinary focus path onto whatever it
-        // produced.
+        // One place the four answers are carried out, because two gestures reach
+        // them: a click on an orb, and the chat panel's button for a session it
+        // cannot type into. Two switches would be two chances for the same orb to
+        // send its click and its button to different places.
         //
-        // Shared by the two answers that end in an attach — a background job in
-        // any phase, and a session with no coordinates at all — because what
-        // happens *after* the attach is identical and is the part that was
-        // missing when this was first written: if it went into tmux, the pane
-        // still has to be selected and its client's window raised, which
-        // FocusCore already knows how to do for every other pane in the app.
-        // public: the chat panel offers this as a button for a session it cannot
-        // type into, which is the same answer the click fallback reaches for the
-        // same session. One implementation, so the two cannot land in different
-        // places — see ClickRouting.AttachWouldReach, which decides whether the
-        // button is offered at all.
-        public static void Attach(string sessionId, string cwd) =>
-            Task.Run(() => AttachAndFocus(sessionId, cwd));
-
-        private static void AttachAndFocus(string sessionId, string cwd)
+        // Off the UI thread by contract — every arm here runs subprocesses — which
+        // Focus above satisfies by being inside its own Task.Run, and Elsewhere
+        // below by starting one.
+        private static void RunFallback(
+            ClickFallback fallback, SessionStatus status, string? sessionId)
         {
-            var pane = AgentTeamViewer.AttachSession(sessionId, cwd);
+            switch (fallback)
+            {
+                case ClickFallback.AgentsView:
+                    // Where these sessions are managed from. Focused if a roster
+                    // is already open, opened if not, and finished off through the
+                    // ordinary pane path when it went into tmux.
+                    FocusPaneIfAny(AgentTeamViewer.OpenOrFocusAgentsView(status.Cwd), status.Cwd);
+                    break;
+
+                case ClickFallback.AttachBackground:
+                case ClickFallback.AttachById:
+                    FocusPaneIfAny(AgentTeamViewer.AttachSession(sessionId!, status.Cwd), status.Cwd);
+                    break;
+
+                case ClickFallback.AttachSocket:
+                    // The pane is already selected — FocusTmux did that before
+                    // finding no client — so a plain attach lands on the right
+                    // pane rather than on whatever the session last had current.
+                    AgentTeamViewer.AttachTmuxSocket(
+                        ResolveTmuxBinary(status.TmuxBin) ?? "", status.TmuxSocket, status.Cwd);
+                    break;
+
+                case ClickFallback.None:
+                    // Coordinates were recorded and could not be resolved.
+                    // Deliberately nothing further: opening a second window onto a
+                    // session that already has one would hide a real failure
+                    // behind a new window every time. The failure is reported (to
+                    // stderr, which a bundled app has nowhere to show — a
+                    // follow-up ticket, not this one).
+                    break;
+            }
+        }
+
+        // The chat panel's half of the same answer: it has made no focus attempt,
+        // so it asks the rule with nothing learned about detached panes and
+        // carries out whatever comes back. One verb, one destination — see
+        // ClickRouting.AttachWouldReach, which decides whether the button is
+        // offered at all.
+        public static void Elsewhere(SessionStatus? status, string? sessionId)
+        {
+            if (status is null) return;
+
+            Task.Run(() => RunFallback(
+                ClickRouting.FallbackFor(status, sessionId, paneAliveButDetached: false),
+                status, sessionId));
+        }
+
+        // The tail every opener above shares: if what it opened (or found) went
+        // into tmux, the pane still has to be selected and its client's window
+        // raised, which FocusCore already knows how to do for every other pane in
+        // the app. Null means it went into a window of its own, or did not happen
+        // — in both cases there is nothing left here to do.
+        //
+        // This was the part missing when the attach path was first written, and
+        // its absence is what made a second click look like it did nothing: the
+        // window existed and was reachable by hand, and the click stopped short of
+        // switching to it.
+        private static void FocusPaneIfAny(string? pane, string cwd)
+        {
             if (string.IsNullOrEmpty(pane)) return;
 
             FocusCore(new SessionStatus { TmuxPane = pane, Cwd = cwd });

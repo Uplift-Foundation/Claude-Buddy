@@ -87,42 +87,71 @@ public class ClickRoutingTests
         Assert.True(ClickRouting.NoCoordinatesAtAll(Status()));
     }
 
-    // --- case 1: a background job, in any phase ------------------------------
+    // --- case 1: a background session, in any phase --------------------------
 
+    // The `claude agents` roster, which is where these sessions are managed
+    // from. The user's words, looking at it: "I don't understand why you can't go
+    // straight to it!" — and the *shape* decides, not the phase, because the
+    // roster shows a working job, one holding a question and one that has
+    // finished alike. The orb's rendering is what distinguishes those; where the
+    // click goes does not need to.
     [Fact]
-    public void ABackgroundJobIsAttachedByIdWhateverElseItRecorded()
+    public void ABackgroundSessionGoesToTheAgentsViewWhateverElseItRecorded()
     {
         Assert.Equal(
-            ClickFallback.AttachBackground,
+            ClickFallback.AgentsView,
             Fallback(Status(shape: LocalSessionShape.Background)));
 
         // Even one that inherited or was adopted into terminal coordinates: it
-        // has no terminal of its own and never will, so attach is the answer
-        // rather than a fallback.
+        // has no terminal of its own and never will, so this is the answer rather
+        // than a fallback.
         Assert.Equal(
-            ClickFallback.AttachBackground,
+            ClickFallback.AgentsView,
             Fallback(Status(shape: LocalSessionShape.Background, tmuxPane: "%7")));
     }
 
-    // A hook older than the session_pid field writes 0, and that is still a
-    // session with nowhere of its own — the rule the shape test was widened
-    // from, kept alongside it rather than replaced by it.
+    // The roster is not named per session — `claude agents --help` offers only
+    // `--cwd`, and no preselect — so unlike both attach answers this one needs no
+    // session id at all. Asserted rather than left to the reader, because an orb
+    // whose id somehow did not reach the click would otherwise be the one orb
+    // with nowhere to go.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void TheAgentsViewNeedsNoSessionId(string? sessionId)
+    {
+        Assert.Equal(
+            ClickFallback.AgentsView,
+            Fallback(Status(shape: LocalSessionShape.Background), sessionId: sessionId));
+    }
+
+    // A hook older than the session_pid field writes 0, and such a session may
+    // not be a job at all — nobody can enumerate it, so the roster might not list
+    // it. It keeps `claude attach` with its own name, which is the one answer that
+    // works for something nothing else can name.
     [Fact]
     public void ASessionThatRecordedNoPidIsStillAttachedById()
     {
         Assert.Equal(ClickFallback.AttachBackground, Fallback(Status(pid: 0)));
         Assert.Equal(ClickFallback.AttachBackground, Fallback(Status(pid: -1)));
+
+        // ...unless the scan did place it as a background session, in which case
+        // the roster knows it and is the better destination.
+        Assert.Equal(
+            ClickFallback.AgentsView,
+            Fallback(Status(pid: 0, shape: LocalSessionShape.Background)));
     }
 
-    // Precision: a parked job can have been adopted into a `claude agents`
-    // viewer pane, and if that viewer's own server is detached, attaching the
-    // socket would land on the *roster* rather than on the session that was
-    // clicked. Naming the session wins.
+    // A parked job can have been adopted into a `claude agents` viewer pane, and
+    // if that viewer's own server is detached, the socket answer would attach a
+    // terminal to the roster's server — the same destination by a worse route,
+    // and one that cannot bring an already-open roster forward. The roster answer
+    // wins.
     [Fact]
-    public void ABackgroundJobBeatsTheSocketAnswerWhenBothWouldApply()
+    public void ABackgroundSessionBeatsTheSocketAnswerWhenBothWouldApply()
     {
         Assert.Equal(
-            ClickFallback.AttachBackground,
+            ClickFallback.AgentsView,
             Fallback(Status(shape: LocalSessionShape.Background, tmuxPane: "%7"), detached: true));
     }
 
@@ -182,10 +211,15 @@ public class ClickRoutingTests
     [Fact]
     public void ThePanelOffersAnAttachForExactlyTheSessionsAClickWouldAttach()
     {
-        // A background job in any phase, and a headless session with nothing
-        // recorded: the two the click answers with an attach.
+        // A background session in any phase (the roster), and a headless session
+        // with nothing recorded (an attach): the answers the click has for a
+        // session with nowhere of its own.
         Assert.True(ClickRouting.AttachWouldReach(
             Status(shape: LocalSessionShape.Background), "session-1"));
+
+        // Including with no id, since the roster does not need one.
+        Assert.True(ClickRouting.AttachWouldReach(
+            Status(shape: LocalSessionShape.Background), null));
         Assert.True(ClickRouting.AttachWouldReach(Status(), "session-1"));
         Assert.True(ClickRouting.AttachWouldReach(Status(pid: 0), "session-1"));
 
@@ -205,6 +239,8 @@ public class ClickRoutingTests
     {
         Assert.False(ClickRouting.AttachWouldReach(
             Status(source: SessionSource.Codex), "session-1"));
+        Assert.False(ClickRouting.AttachWouldReach(
+            Status(source: SessionSource.Codex, shape: LocalSessionShape.Background), "session-1"));
         Assert.False(ClickRouting.AttachWouldReach(Status(), null));
         Assert.False(ClickRouting.AttachWouldReach(Status(), ""));
     }
@@ -277,9 +313,9 @@ public class ClickRoutingTests
     [InlineData("")]
     public void WithNoSessionIdThereIsNothingToAttachTo(string? sessionId)
     {
+        // Both attach answers name the session, so neither is available. The
+        // roster is unaffected — see TheAgentsViewNeedsNoSessionId.
         Assert.Equal(ClickFallback.None, Fallback(Status(), sessionId: sessionId));
-        Assert.Equal(
-            ClickFallback.None,
-            Fallback(Status(shape: LocalSessionShape.Background), sessionId: sessionId));
+        Assert.Equal(ClickFallback.None, Fallback(Status(pid: 0), sessionId: sessionId));
     }
 }

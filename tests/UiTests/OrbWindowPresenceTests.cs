@@ -34,7 +34,7 @@ public class OrbWindowPresenceTests
     }
 
     private static SessionStatus Status(
-        bool parked = false,
+        OrbPresence presence = OrbPresence.Present,
         SessionKind kind = SessionKind.Background,
         string state = "idle",
         int pid = 4321,
@@ -44,7 +44,7 @@ public class OrbWindowPresenceTests
             Source = source,
             State = state,
             Kind = kind,
-            Parked = parked,
+            Presence = presence,
             SessionPid = pid,
             Cwd = "/Users/warren/project",
             Shape = kind == SessionKind.Background
@@ -71,6 +71,12 @@ public class OrbWindowPresenceTests
         return false;
     }
 
+    private static Border Badge(OrbWindow orb, string name) =>
+        orb.FindControl<Border>(name)!;
+
+    private static string Glyph(OrbWindow orb, string name) =>
+        orb.FindControl<TextBlock>(name)!.Text ?? "";
+
     private static double Opacity(OrbWindow orb)
     {
         var root = orb.FindControl<Grid>("Root");
@@ -87,10 +93,10 @@ public class OrbWindowPresenceTests
 
         // Working first, so this is a transition rather than an initial value —
         // the same order the scan produces when a job's turn ends.
-        orb.UpdateFrom(Status(parked: false, state: "generating"));
+        orb.UpdateFrom(Status(OrbPresence.Present, state: "generating"));
         Assert.False(orb.IsParked);
 
-        orb.UpdateFrom(Status(parked: true));
+        orb.UpdateFrom(Status(OrbPresence.NeedsInput));
 
         Assert.True(orb.IsParked);
         Assert.True(Opacity(orb) < 1.0);
@@ -101,7 +107,7 @@ public class OrbWindowPresenceTests
     public void AnUnparkedSessionIsDrawnAtFullOpacity()
     {
         var orb = new OrbWindow(Guid.NewGuid().ToString());
-        orb.UpdateFrom(Status(parked: false));
+        orb.UpdateFrom(Status(OrbPresence.Present));
 
         Assert.False(orb.IsParked);
         Assert.Equal(1.0, Opacity(orb));
@@ -111,10 +117,10 @@ public class OrbWindowPresenceTests
     public void ResumingWorkRestoresTheOpacity()
     {
         var orb = new OrbWindow(Guid.NewGuid().ToString());
-        orb.UpdateFrom(Status(parked: true));
+        orb.UpdateFrom(Status(OrbPresence.NeedsInput));
         Assert.True(Opacity(orb) < 1.0);
 
-        orb.UpdateFrom(Status(parked: false, state: "generating"));
+        orb.UpdateFrom(Status(OrbPresence.Present, state: "generating"));
 
         Assert.False(orb.IsParked);
         Assert.Equal(1.0, Opacity(orb));
@@ -135,10 +141,10 @@ public class OrbWindowPresenceTests
         Flush();
         Assert.True(orb.IsLoaded);
 
-        orb.UpdateFrom(Status(parked: true));
+        orb.UpdateFrom(Status(OrbPresence.NeedsInput));
         Assert.False(IsOnThePulseRoster(orb));
 
-        orb.UpdateFrom(Status(parked: false, state: "generating"));
+        orb.UpdateFrom(Status(OrbPresence.Present, state: "generating"));
 
         Assert.True(IsOnThePulseRoster(orb));
         Assert.Equal(1.0, Opacity(orb));
@@ -155,8 +161,8 @@ public class OrbWindowPresenceTests
         orb.Show();
         Flush();
 
-        orb.UpdateFrom(Status(parked: false, state: "generating"));
-        orb.UpdateFrom(Status(parked: true, state: "idle"));
+        orb.UpdateFrom(Status(OrbPresence.Present, state: "generating"));
+        orb.UpdateFrom(Status(OrbPresence.NeedsInput, state: "idle"));
 
         Assert.True(orb.IsParked);
         Assert.False(IsOnThePulseRoster(orb));
@@ -175,7 +181,7 @@ public class OrbWindowPresenceTests
         orb.Show();
         Flush();
 
-        orb.UpdateFrom(Status(parked: true));
+        orb.UpdateFrom(Status(OrbPresence.NeedsInput));
         Assert.False(IsOnThePulseRoster(orb));
 
         // What the mic does: motion, on a parked orb, from outside the presence
@@ -184,10 +190,10 @@ public class OrbWindowPresenceTests
         orb.ApplyState("generating");
         Assert.True(IsOnThePulseRoster(orb));
 
-        orb.ApplyPresence(true);
+        orb.ApplyPresence(OrbPresence.NeedsInput);
         Assert.True(IsOnThePulseRoster(orb));
 
-        orb.ApplyPresence(true, force: true);
+        orb.ApplyPresence(OrbPresence.NeedsInput, force: true);
 
         Assert.True(orb.IsParked);
         Assert.False(IsOnThePulseRoster(orb));
@@ -205,16 +211,141 @@ public class OrbWindowPresenceTests
         orb.Show();
         Flush();
 
-        orb.UpdateFrom(Status(parked: true, state: ""));
+        orb.UpdateFrom(Status(OrbPresence.NeedsInput, state: ""));
         Assert.True(orb.IsParked);
 
-        orb.UpdateFrom(Status(parked: false, state: ""));
+        orb.UpdateFrom(Status(OrbPresence.Present, state: ""));
 
         Assert.False(orb.IsParked);
         Assert.Equal(1.0, Opacity(orb));
 
         // Idle's slow breath, which is what ApplyState's default arm starts.
         Assert.True(IsOnThePulseRoster(orb));
+    }
+
+    // --- the two presence marks ---------------------------------------------
+
+    // The daemon's own taxonomy calls a blocked job "Needs input", and several of
+    // the ones this was written for are literally holding a question — so plain
+    // dimming undersold them. Dim *and* marked: dim because it is not competing
+    // with live work, marked because "there is something here for you" is the
+    // opposite of what dimming alone says.
+    [AvaloniaFact]
+    public void ASessionNeedingInputIsDimmedAndMarked()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(OrbPresence.NeedsInput));
+
+        Assert.True(Opacity(orb) < 1.0);
+        Assert.Equal("needs input", orb.PresenceLabel);
+
+        var badge = Badge(orb, "PresenceBadge");
+        Assert.True(badge.IsVisible);
+        Assert.Equal("?", Glyph(orb, "PresenceGlyph"));
+    }
+
+    // A finished job: dimmed the same, marked differently. The two are opposite
+    // instructions — one wants you, one wants nothing ever again — and being
+    // unmistakable from across a screen is the whole reason they are two states
+    // rather than one dim one.
+    [AvaloniaFact]
+    public void AFinishedSessionIsDimmedAndMarkedDifferently()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(OrbPresence.Finished));
+
+        Assert.True(Opacity(orb) < 1.0);
+        Assert.Equal("finished", orb.PresenceLabel);
+        Assert.True(Badge(orb, "PresenceBadge").IsVisible);
+        Assert.Equal("✓", Glyph(orb, "PresenceGlyph"));
+    }
+
+    // An orphaned team member: dimmed, and deliberately unmarked. Nothing is
+    // waiting on the user and nothing has finished, so there is nothing to say
+    // beyond the dimming — and both marks are the daemon's vocabulary, which has
+    // never heard of this session.
+    [AvaloniaFact]
+    public void AnOrphanedTeammateIsDimmedWithNoMark()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(OrbPresence.Parked, kind: SessionKind.Unknown));
+
+        Assert.True(Opacity(orb) < 1.0);
+        Assert.Null(orb.PresenceLabel);
+        Assert.False(Badge(orb, "PresenceBadge").IsVisible);
+    }
+
+    // A present session carries no mark at all, which is most orbs most of the
+    // time — the same argument the kind badges are held to.
+    [AvaloniaFact]
+    public void APresentSessionCarriesNoPresenceMark()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        Assert.Null(orb.PresenceLabel);
+        Assert.False(Badge(orb, "PresenceBadge").IsVisible);
+    }
+
+    // The mark goes away again when the session comes back, which is the case a
+    // one-way "apply the badge" would quietly get wrong: an attach un-dims a
+    // parked job, and a stale "?" on a session somebody is sitting in says the
+    // opposite of what is true.
+    [AvaloniaFact]
+    public void ComingBackToLifeTakesTheMarkAwayWithTheDimming()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(OrbPresence.NeedsInput));
+        Assert.True(Badge(orb, "PresenceBadge").IsVisible);
+
+        orb.UpdateFrom(Status(OrbPresence.Present, state: "generating"));
+
+        Assert.False(Badge(orb, "PresenceBadge").IsVisible);
+        Assert.Equal(1.0, Opacity(orb));
+    }
+
+    // Both marks live in their own corner. The kind badge is bottom-right and the
+    // heart is top-right, and a session can want two of the three said at once —
+    // a background job (gear) holding a question (mark) — so a collision would be
+    // one mark hidden under another rather than a layout nitpick.
+    [AvaloniaFact]
+    public void ThePresenceMarkAndTheKindBadgeOccupyDifferentCorners()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(OrbPresence.NeedsInput));
+
+        var presence = Badge(orb, "PresenceBadge");
+        var kind = Badge(orb, "KindBadge");
+
+        Assert.True(presence.IsVisible);
+        Assert.True(kind.IsVisible);
+
+        Assert.Equal(Avalonia.Layout.HorizontalAlignment.Left, presence.HorizontalAlignment);
+        Assert.Equal(Avalonia.Layout.VerticalAlignment.Top, presence.VerticalAlignment);
+        Assert.Equal(Avalonia.Layout.HorizontalAlignment.Right, kind.HorizontalAlignment);
+        Assert.Equal(Avalonia.Layout.VerticalAlignment.Bottom, kind.VerticalAlignment);
+    }
+
+    // A team member's orb is drawn smaller, and every badge has to move with the
+    // circle or it floats off the rim. The presence mark joins the same sum the
+    // other two use rather than carrying its own copy of it.
+    [AvaloniaFact]
+    public void ThePresenceMarkShrinksOntoATeamMembersSmallerRim()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(OrbPresence.NeedsInput));
+
+        var full = Badge(orb, "PresenceBadge").Margin;
+
+        var status = Status(OrbPresence.NeedsInput);
+        status.Lead = "lead-session-id";
+        orb.UpdateFrom(status);
+
+        var member = Badge(orb, "PresenceBadge").Margin;
+
+        Assert.True(member.Left > full.Left);
+        Assert.Equal(member.Left, member.Top);
+        Assert.Equal(Badge(orb, "KindBadge").Margin.Right, member.Left);
     }
 
     // --- the gear badge -----------------------------------------------------
@@ -225,12 +356,13 @@ public class OrbWindowPresenceTests
     // dim. Badging only the parked ones would smuggle a state into the kind
     // channel.
     [AvaloniaTheory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void ABackgroundJobWearsTheGearWhetherItIsParkedOrWorking(bool parked)
+    [InlineData(OrbPresence.NeedsInput)]
+    [InlineData(OrbPresence.Present)]
+    [InlineData(OrbPresence.Finished)]
+    public void ABackgroundJobWearsTheGearWhateverItsPresence(OrbPresence presence)
     {
         var orb = new OrbWindow(Guid.NewGuid().ToString());
-        orb.UpdateFrom(Status(parked: parked));
+        orb.UpdateFrom(Status(presence));
 
         Assert.Equal("background job", orb.KindLabel);
         Assert.Equal("⚙", orb.KindGlyphText);

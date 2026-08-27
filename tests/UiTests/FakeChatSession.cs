@@ -15,7 +15,7 @@ namespace ClaudeBuddy.Tests;
 //     sorting of its own.
 internal sealed class FakeChatSession :
     IRemoteChatSession, IRemoteChatImages, IRemoteChatSlashCommands,
-    IRemoteChatComposer, IRemoteChatAttach
+    IRemoteChatComposer, IRemoteChatElsewhere
 {
     public string SessionId { get; init; } = "fake-session";
     public string DisplayName { get; init; } = "Fake Session";
@@ -35,15 +35,14 @@ internal sealed class FakeChatSession :
     // by their arrival: an ordinary hint, and no button.
     public string ComposerHint { get; set; } = "Message…";
 
-    public bool CanAttach { get; set; }
+    public bool CanOpenElsewhere { get; set; }
 
-    // Counted rather than performed. The real one opens a terminal and runs
-    // `claude attach` in it, which is the half this suite must never execute —
-    // what is being tested is that a click on the button reaches the session at
-    // all.
-    public int AttachCalls { get; private set; }
+    // Counted rather than performed. The real one opens or focuses a real
+    // window, which is the half this suite must never execute — what is being
+    // tested is that a click on the button reaches the session at all.
+    public int OpenElsewhereCalls { get; private set; }
 
-    public void Attach() => AttachCalls++;
+    public void OpenElsewhere() => OpenElsewhereCalls++;
 
     private readonly List<ChatTurn> _history;
     public IReadOnlyList<ChatTurn> History => _history;
