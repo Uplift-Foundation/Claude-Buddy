@@ -87,7 +87,7 @@ public class ChatPanelAttachTests : IDisposable
     [AvaloniaFact]
     public void AParkedSessionsPanelNamesTheStateAndOffersTheAttach()
     {
-        var fake = NewFake("Needs input — open the agents view", canOpen: true);
+        var fake = NewFake("Needs input — attach to reply", canOpen: true);
 
         ChatPanel.OpenFor(NewOrb(), fake);
         Flush();
@@ -95,7 +95,7 @@ public class ChatPanelAttachTests : IDisposable
         var (input, attach) = Composer(ChatPanelTestAccess.Instance!);
 
         // Says what is true, on the box itself rather than after a failed send.
-        Assert.Equal("Needs input — open the agents view", input.Watermark);
+        Assert.Equal("Needs input — attach to reply", input.Watermark);
 
         // And offers the one thing that would change it.
         Assert.True(attach.IsVisible);
@@ -125,7 +125,7 @@ public class ChatPanelAttachTests : IDisposable
     [AvaloniaFact]
     public void ClickingTheButtonAsksTheSessionToOpenItElsewhere()
     {
-        var fake = NewFake("Needs input — open the agents view", canOpen: true);
+        var fake = NewFake("Needs input — attach to reply", canOpen: true);
 
         ChatPanel.OpenFor(NewOrb(), fake);
         Flush();
@@ -191,7 +191,7 @@ public class ChatPanelAttachTests : IDisposable
             Presence = OrbPresence.NeedsInput,
         });
 
-        var fake = NewFake("Needs input — open the agents view", canOpen: true);
+        var fake = NewFake("Needs input — attach to reply", canOpen: true);
         ChatPanel.OpenFor(orb, fake);
         Flush();
 
@@ -233,7 +233,7 @@ public class ChatPanelAttachTests : IDisposable
     [AvaloniaFact]
     public void OpeningASecondSessionReplacesBothHalvesOfTheComposer()
     {
-        var parked = NewFake("Needs input — open the agents view", canOpen: true);
+        var parked = NewFake("Needs input — attach to reply", canOpen: true);
         ChatPanel.OpenFor(NewOrb(), parked);
         Flush();
 
