@@ -467,10 +467,28 @@ namespace ClaudeBuddy
                 }
             }
 
-            // Ambiguity beyond that is rare — a title is assigned per
-            // conversation and only a team shares one — so the tie-break is
-            // stated rather than engineered: the pane that is active in its own
-            // window, else the first found.
+            // What is left after the exclusion is a genuine residual, and it is
+            // worth being precise about which ambiguity is handled by which
+            // mechanism, because the rarity argument is only honest about one of
+            // them.
+            //
+            // The *team* collision — several panes sharing one title because every
+            // member inherits the team session's — is not rare at all. It was the
+            // normal state of the machine this was written on: four panes, one
+            // title, three sessions. Rarity would have been the wrong answer to
+            // it, and the exclusion above is the right one, because those panes
+            // are claimed by the sessions that own them.
+            //
+            // What rarity *is* honest about is two sessions with the same title
+            // each viewed in an unclaimed pane — two leads someone renamed
+            // identically, both open at once. Nothing here can tell those apart:
+            // the title is equal by construction and neither pane is claimed. So
+            // the tie-break is stated rather than engineered — the pane active in
+            // its own window, else the first found — and it earns that because a
+            // title is /rename-assigned by hand, so two matching ones are a
+            // coincidence a person created rather than a shape the app produces.
+            // If that ever stops being rare, the fix is a stronger identity than
+            // the title, not a cleverer tie-break.
             ViewerPane? best = null;
 
             foreach (var pane in candidates)

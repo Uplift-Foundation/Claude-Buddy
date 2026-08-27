@@ -662,9 +662,12 @@ public class SessionPresenceTests
         Assert.Equal(SessionPresence.ViewerVerdict.TheUserIsLookingAtIt, verdict);
     }
 
-    // Ambiguity beyond the user's own pane: prefer the one active in its own
-    // window, else the first found. Rare enough to state rather than engineer,
-    // since a title is per conversation and only a team shares one.
+    // The residual ambiguity, and the one case rarity is an honest answer to: two
+    // sessions with the same title each viewed in an *unclaimed* pane — two leads
+    // someone renamed identically, both open. Nothing can tell those apart, so the
+    // tie-break is stated: active in its own window, else first found. The team
+    // collision is a different thing and is not answered by rarity — see
+    // APaneAnotherSessionClaimsIsNotFocused.
     [Fact]
     public void AmongSeveralElsewhereTheActiveOneWins()
     {
