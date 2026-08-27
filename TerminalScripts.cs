@@ -1,4 +1,4 @@
-using System.Linq;
+using System.Collections.Generic;
 
 namespace ClaudeBuddy
 {
@@ -79,8 +79,15 @@ namespace ClaudeBuddy
         // it — the one thing this script exists to do.
         internal static string TmuxAttachScript(string tmuxBinary, string? socket, string? cwd)
         {
-            var attach = string.Join(" ",
-                TmuxArgs(socket, "attach").Select(ShellQuote).Prepend(ShellQuote(tmuxBinary)));
+            // Built with a loop rather than a LINQ chain, which is not a style
+            // preference: everything else in this file is plain string building,
+            // and a deferred Select/Prepend puts a compiler-generated state
+            // machine on the line, which reads in a coverage report as a branch
+            // nothing took while the line itself is plainly executed.
+            var parts = new List<string> { ShellQuote(tmuxBinary) };
+            foreach (var arg in TmuxArgs(socket, "attach")) parts.Add(ShellQuote(arg));
+
+            var attach = string.Join(" ", parts);
 
             var script = "#!/bin/sh\n";
             if (!string.IsNullOrEmpty(cwd)) script += "cd " + ShellQuote(cwd) + " || exit 1\n";
