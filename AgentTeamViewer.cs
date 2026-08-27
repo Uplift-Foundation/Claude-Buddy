@@ -434,7 +434,9 @@ namespace ClaudeBuddy
                     ClaimedByAnother: claimed));
             }
 
-            return SessionPresence.ViewerAmong(candidates, ActiveWindowOfAttachedClient(tmux));
+            var (attached, usersWindow) = AttachedClientView(tmux);
+
+            return SessionPresence.ViewerAmong(candidates, usersWindow, attached);
         }
 
         // Whether this pane is running Claude Code — as its own process, or as a
@@ -492,24 +494,36 @@ namespace ClaudeBuddy
             return space < 0 ? trimmed : trimmed[..space];
         }
 
-        // The window the user's attached client is showing, as
-        // "<session>:<index>", or null when nothing is attached or the lookup
-        // fails. Shared by the viewer scan above and PlaceInTmux below, which ask
-        // it for opposite reasons — one to recognise the pane the user is in, the
-        // other to split into it.
+        // Whether anything is attached to this server, and if so which window that
+        // client is showing.
+        //
+        // Two answers rather than one nullable, because they fail differently and
+        // the viewer rule treats them differently. "Nothing attached" means these
+        // panes are on a screen nobody is looking at, so none of them can be a
+        // viewer. "Attached, window unknown" is the weaker failure — somebody is
+        // there and we could not work out where — and a pane can still be selected
+        // for them. Collapsed into one null, the first would have been read as the
+        // second and a click would have selected a pane on an invisible screen.
+        //
+        // Shared by the viewer scan above and PlaceInTmux below, which want the
+        // window for opposite reasons: one to recognise the pane the user is in,
+        // the other to split into it.
         // Excluded from coverage: runs tmux.
         [ExcludeFromCodeCoverage]
-        private static string? ActiveWindowOfAttachedClient(string tmux)
+        private static (bool Attached, string? Window) AttachedClientView(string tmux)
         {
-            if (!TryRun(tmux, out var clients, "list-clients", "-F", "#{client_session}")) return null;
+            if (!TryRun(tmux, out var clients, "list-clients", "-F", "#{client_session}"))
+            {
+                return (false, null);
+            }
 
             var session = FirstLine(clients);
-            if (session is null) return null;
+            if (session is null) return (false, null);
 
             return TryRun(tmux, out var window,
                     "display-message", "-p", "-t", session, "#{session_name}:#{window_index}")
-                ? FirstLine(window)
-                : null;
+                ? (true, FirstLine(window))
+                : (true, null);
         }
 
         // Opens the one session an orb stands for, in a terminal.
@@ -764,7 +778,7 @@ namespace ClaudeBuddy
             // bool. Shared with the viewer scan above rather than asked twice:
             // the two want the same fact for opposite reasons, one to recognise
             // the pane the user is in and one to split into it.
-            var activeWindow = session is null ? null : ActiveWindowOfAttachedClient(tmux);
+            var activeWindow = session is null ? null : AttachedClientView(tmux).Window;
 
             // `command` arrives already quoted and already naming an absolute
             // claude, for the reason its builders record: tmux runs it with

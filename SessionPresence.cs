@@ -406,47 +406,44 @@ namespace ClaudeBuddy
                 || argv0.Contains("\\claude\\versions\\", StringComparison.Ordinal);
         }
 
-        // Whether a pane claim is still live.
+        // Whether a pane claim is still evidence about who is *reading* that pane.
         //
-        // A status file records the pane its session was in when the hook last
-        // ran, and a client can move on: switch conversations, or be replaced by
-        // something else in that pane. A claim that outlives the thing it
-        // describes is not harmless here — the exclusion it feeds is what stops a
-        // click focusing the wrong pane, and a *stale* exclusion does the reverse,
-        // pushing a click that could have focused a real viewer down into the
-        // attach ladder to make a duplicate instead. That is the bug the exclusion
-        // was added to prevent, arriving from the other side.
+        // A status file records which session's process lives in a pane. That is
+        // not the same fact as which conversation the pane is showing, and the
+        // machine this was built for proved it by displaying both at once: the
+        // claude process in the user's pane is the recorded session_pid of session
+        // e95dffe6, and the pane was photographed rendering a *different* session's
+        // conversation. One client, several conversations, one of them on screen —
+        // which is the same thing WorthAskingTheDaemon's comment already says from
+        // the other side, where an Agent-View-dispatched session starts a second
+        // conversation inside a process that is already running.
         //
-        // Corroborated by the pane's own current title: if the claimant's
-        // conversation is what that pane is showing, the claim describes something
-        // still true.
+        // So the claim was real as a process-residence fact and stale as viewer
+        // evidence, simultaneously. Two rules were proposed for it and the machine
+        // killed both: corroborate-by-title-but-keep-an-untitled-claim left the
+        // pane excluded (that claimant's recorded title is empty), and
+        // confirm-by-session_pid-in-the-tree left it excluded too (the pid is
+        // genuinely there). Either way the user's own pane stayed out of
+        // candidacy and the click went on making a duplicate beside it.
         //
-        // **A claimant with no title of its own keeps its claim**, and the
-        // direction is deliberate. An empty title is not evidence that the client
-        // moved on; it is the absence of evidence either way, and it is common for
-        // an honest reason — the hook records a title when it fires, so a session
-        // renamed since then reads as untitled. Releasing on no evidence would
-        // strip the exclusion from exactly the claims that cannot defend
-        // themselves, and hand the wrong-target risk back. A stale claim costs a
-        // duplicate pane, which is visible and closable; a released good claim
-        // costs a click landing in someone else's conversation, which is silent.
+        // **The displayed title trumps the resident claim.** The TUI titles what it
+        // is *showing*; the status file records what is *living there*. When they
+        // disagree, the title is the one talking about a viewer, so a claim earns
+        // its exclusion only while it agrees with the title — which is to say, only
+        // in the case where the title cannot tell the two apart anyway.
         //
-        // What this therefore does *not* fix is a stale claim by an untitled
-        // session, and that combination is real: on the machine this was written
-        // for, the pane the user works in is claimed by a session whose recorded
-        // title is empty. That claim happens to be correct — the pane is still
-        // that session's — but nothing here could have told the difference, and
-        // the honest fix for it is a stronger identity than the title. The
-        // claimant's own session_pid in the pane's process tree would settle it
-        // exactly, and the scan already holds the pane's pid; it is a follow-up
-        // rather than this round because it changes what the scan asks for rather
-        // than how an answer is judged.
-        internal static bool ClaimStillHolds(string? claimantTitle, string? paneTitle)
-        {
-            if (string.IsNullOrEmpty(claimantTitle)) return true;
-
-            return TitleSaysViewing(paneTitle, claimantTitle);
-        }
+        // That keeps the exclusion doing the job it was added for. Every member of
+        // an agent team inherits the team session's title, so a teammate's claim on
+        // its own pane matches that pane's title and still excludes it; without
+        // that, clicking a lead would focus a teammate's conversation. And it
+        // releases the case above, where the titles differ and the title is right.
+        //
+        // A named rule rather than the bare call, because "does this claim still
+        // describe a viewer" and "does this title say viewing" are different
+        // questions that happen to have the same answer, and the next person to
+        // change either needs to see which one they are changing.
+        internal static bool ClaimStillHolds(string? claimantTitle, string? paneTitle) =>
+            TitleSaysViewing(paneTitle, claimantTitle);
 
         // What was found, because the two findings mean opposite things to a
         // click.
@@ -493,9 +490,23 @@ namespace ClaudeBuddy
         // coordinates and never need this path, so excluding them costs nothing
         // and removes exactly the panes most likely to collide.
         internal static (ViewerVerdict Verdict, string? Pane) ViewerAmong(
-            IReadOnlyList<ViewerPane> candidates, string? usersWindow)
+            IReadOnlyList<ViewerPane> candidates, string? usersWindow, bool anyClientAttached)
         {
             if (candidates.Count == 0) return (ViewerVerdict.NoneFound, null);
+
+            // A viewer pane has to be attachable to an eyeball. A tmux server with
+            // no client anywhere is showing its panes to nobody, however
+            // convincingly their titles name a conversation — so there is no
+            // viewer to find, and a click that "focused" one of them would select
+            // a pane on an invisible screen and then flash an acknowledgment for
+            // it. Falling through to the attach ladder is the honest answer: it
+            // opens something the user can actually see.
+            //
+            // Distinct from usersWindow being null, which is the weaker failure —
+            // somebody *is* attached and we could not work out to which window.
+            // That one still allows the elsewhere answer, because selecting a pane
+            // on a server someone is attached to does reach a screen.
+            if (!anyClientAttached) return (ViewerVerdict.NoneFound, null);
 
             if (!string.IsNullOrEmpty(usersWindow))
             {
