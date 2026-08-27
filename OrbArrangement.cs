@@ -98,7 +98,6 @@ namespace ClaudeBuddy
             var centreOf = new (double X, double Y)[slots];
             var nearestOf = new double[slots];
             var groupAt = new int[count];
-            var fallback = (PixelPoint?)null;
 
             var drawn = new PixelPoint[slots][];
 
@@ -138,7 +137,6 @@ namespace ClaudeBuddy
 
                 centreOf[g] = Centre(shape);
                 nearestOf[g] = Nearest(shape);
-                fallback ??= shape[0];
             }
 
             // Breadth-first from the anchors, so a lead that is itself somebody's
@@ -173,10 +171,15 @@ namespace ClaudeBuddy
                 }
             }
 
-            // Anything a cycle left unreachable still needs somewhere to be.
+            // Anything a cycle left unreachable still needs somewhere to be. The
+            // first anchor, which is always placed: Classify guarantees a
+            // non-empty set has an anchor, and every anchor was given a position
+            // above. So this is a point on a real shape rather than an invented
+            // one — and there is no "if we have somewhere" arm here that no
+            // input could ever take.
             for (var i = 0; i < count; i++)
             {
-                if (!placed[i]) result[i] = fallback ?? new PixelPoint(layout.Work.X, layout.Work.Y);
+                if (!placed[i]) result[i] = result[anchors[0]];
             }
 
             return Separate(result, leadOf, circle, layout.Work, window, layout.Spacing);
@@ -406,6 +409,15 @@ namespace ClaudeBuddy
             {
                 var above = widths.Sum(w => Math.Max(0, w - floor));
 
+                // Provably redundant, and kept: the floors together can never
+                // ask for more than the width, because the floor is capped at an
+                // equal share — so an overshoot can only come from a group that
+                // is *above* its floor, which means `above` is at least as big
+                // as the overshoot whenever there is one. The false arm is
+                // therefore unreachable and is named as such in the PR that
+                // added it. Kept because what it prevents is a division by zero
+                // that would put every orb at NaN, which is worse than a branch
+                // nothing takes.
                 if (above > 0.001)
                 {
                     var take = Math.Min(slack, above);

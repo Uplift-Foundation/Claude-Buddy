@@ -284,6 +284,85 @@ namespace ClaudeBuddy.Tests
         }
 
         [Fact]
+        public void NoOrbsIsAnEmptyAnswerFromEitherEntryPoint()
+        {
+            // Reachable for real: SessionManager calls this with whatever orbs
+            // are visible, and every orb can be hidden — set both timer groups
+            // to Hidden on a gateway that has nothing else on it and this is what
+            // arrives. An exception here would take the arrange button down.
+            var layout = new OrbArrangement.Layout(Work, 1.0, "heart", 0.85, null);
+
+            Assert.Empty(OrbArrangement.Compute(0, Array.Empty<int>(), layout));
+            Assert.Empty(OrbArrangement.Compute(
+                0, Array.Empty<int>(), Array.Empty<int>(), new[] { "heart" }, layout));
+        }
+
+        [Fact]
+        public void AGroupBeyondTheShapesArrayIsFoldedInWithTheChats()
+        {
+            // The shapes array shorter than the group indices in play, which is
+            // what a caller produces by adding a group to OrbClusters and
+            // forgetting SessionManager.Shapes(). The number of shapes is what
+            // says how many bands may be cut, so a group past the end is not
+            // given a band of its own — its orbs join group 0, which is one
+            // shape rather than an orb left behind or a throw.
+            var groups = new[] { 0, 0, 0, 2, 2, 2 };
+            var leads = Enumerable.Repeat(-1, groups.Length).ToArray();
+            var layout = new OrbArrangement.Layout(Work, 1.0, "line", 0.85, null);
+
+            var placed = OrbArrangement.Compute(
+                groups.Length, leads, groups, new[] { "line", "circle" }, layout);
+
+            Assert.Equal(groups.Length, placed.Length);
+
+            // One shape, not two: every orb is in the line, so the whole set is
+            // flat. Two bands would have put three of them in a circle.
+            var height = placed.Max(p => p.Y) - placed.Min(p => p.Y);
+
+            Assert.True(height < Window, $"the arrangement came out {height}px tall");
+        }
+
+        [Fact]
+        public void NoShapesAtAllFallsBackToTheLayoutsOwnShape()
+        {
+            // An empty shapes array — the degenerate version of the same caller
+            // error. There is still one band, and the shape it draws is the one
+            // on the layout, which is where the chats' shape comes from anyway.
+            var groups = new[] { 0, 0, 0, 1, 1 };
+            var leads = Enumerable.Repeat(-1, groups.Length).ToArray();
+            var layout = new OrbArrangement.Layout(Work, 1.0, "line", 0.85, null);
+
+            var placed = OrbArrangement.Compute(
+                groups.Length, leads, groups, Array.Empty<string>(), layout);
+
+            Assert.Equal(groups.Length, placed.Length);
+
+            var height = placed.Max(p => p.Y) - placed.Min(p => p.Y);
+            Assert.True(height < Window, $"the arrangement came out {height}px tall");
+        }
+
+        [Fact]
+        public void ABlankShapeNameFallsBackToTheChatsShapeRatherThanTheDefault()
+        {
+            // A hand-edited settings.json with `"openclawCronShape": ""`. An
+            // empty string reaching OrbArrangement.Unit would draw a heart — its
+            // answer for anything unrecognised — so a user who blanked the field
+            // would get a shape they never chose. Falling back to the shape the
+            // chats are using is the answer that surprises least.
+            var groups = new[] { 0, 0, 0, 1, 1, 1 };
+            var leads = Enumerable.Repeat(-1, groups.Length).ToArray();
+            var layout = new OrbArrangement.Layout(Work, 1.0, "line", 0.85, null);
+
+            var placed = OrbArrangement.Compute(
+                groups.Length, leads, groups, new[] { "line", "   " }, layout);
+
+            var mine = new[] { placed[3], placed[4], placed[5] };
+            var height = mine.Max(p => p.Y) - mine.Min(p => p.Y);
+
+            Assert.True(height < Window, $"the blank shape came out {height}px tall");
+        }
+
+        [Fact]
         public void PuttingEveryOrbInOneGroupIsIdenticalToNotGroupingAtAll()
         {
             // The compatibility promise the whole change rests on: nobody who

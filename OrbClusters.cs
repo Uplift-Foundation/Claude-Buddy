@@ -117,15 +117,20 @@ namespace ClaudeBuddy
         // reach here with a hidden orb — Visible above is checked during the
         // scan, before an orb is made — and if something does, being drawn with
         // the chats is a better failure than a crash or a fourth empty band.
+        //
+        // Two statements rather than a switch over all three clusters, and not
+        // for brevity: Chats can never pass the first line, because ModeOf
+        // answers WithChats for them whatever the settings say. Written as a
+        // switch, its Chats arm is a line nothing can execute — which is a line
+        // that will read as a coverage gap forever and can never be defended
+        // with a test. Asking the question ModeOf already answers is the way not
+        // to have one.
         public static int GroupOf(OrbCluster cluster, ClusterMode heartbeats, ClusterMode crons)
-            => ModeOf(cluster, heartbeats, crons) == ClusterMode.OwnShape
-                ? cluster switch
-                {
-                    OrbCluster.Heartbeats => 1,
-                    OrbCluster.Crons => 2,
-                    _ => 0
-                }
-                : 0;
+        {
+            if (ModeOf(cluster, heartbeats, crons) != ClusterMode.OwnShape) return 0;
+
+            return cluster == OrbCluster.Heartbeats ? 1 : 2;
+        }
 
         // --- settings wire format ---------------------------------------------
         // Strings on the wire, an enum in the app: the same split
