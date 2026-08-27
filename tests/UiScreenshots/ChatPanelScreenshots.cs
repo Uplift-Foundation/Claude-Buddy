@@ -58,6 +58,29 @@ public class ChatPanelScreenshots : IDisposable
             ChatPanelTestAccess.Instance!, "chat-panel-heartbeat-chip.png");
     }
 
+    // The panel for a session there is nowhere to type into: the box says so and
+    // there is a gear beside it that puts the session in a terminal. Captured
+    // because it is a new visible surface, and because the thing worth reviewing
+    // is a judgement — whether the box's wording and one small button are enough
+    // for someone who clicked a grey orb expecting to be able to talk to it.
+    [AvaloniaFact]
+    public void AParkedSessionsPanelSaysSoAndOffersTheAttach()
+    {
+        var fake = NewFake(new[]
+        {
+            new ChatTurn { Role = ChatRole.User, Text = "merge the open PRs" },
+            new ChatTurn { Role = ChatRole.Assistant, Text = "Done — three merged, one had conflicts." },
+        });
+
+        fake.ComposerHint = "Parked — attach to type";
+        fake.CanAttach = true;
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.CaptureAlreadyShown(
+            ChatPanelTestAccess.Instance!, "chat-panel-parked-attach.png");
+    }
+
     public void Dispose()
     {
         foreach (var id in _sessionIdsToClean) ChatPanel.HideFor(id);

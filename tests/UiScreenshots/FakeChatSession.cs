@@ -5,8 +5,20 @@ namespace ClaudeBuddy.Tests;
 // (see TestAppBuilder's own comment on why the two stay isolated), and the
 // fake itself needs nothing internal, so a plain copy costs nothing. See
 // the original for the four IRemoteChatSession rules this honours.
-internal sealed class FakeChatSession : IRemoteChatSession
+internal sealed class FakeChatSession :
+    IRemoteChatSession, IRemoteChatComposer, IRemoteChatAttach
 {
+    // Both default to what an ordinary typeable session answers — an ordinary
+    // hint and no button — so every capture that predates them is unchanged.
+    public string ComposerHint { get; set; } = "Message…";
+
+    public bool CanAttach { get; set; }
+
+    // Never called from a capture, and it would open a terminal if it were.
+    public void Attach()
+    {
+    }
+
     public string SessionId { get; init; } = "fake-session";
     public string DisplayName { get; init; } = "Fake Session";
     public RemoteChatState State { get; set; } = RemoteChatState.Connected;

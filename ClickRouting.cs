@@ -77,6 +77,21 @@ namespace ClaudeBuddy
             && string.IsNullOrEmpty(status.TmuxPane)
             && status.TermPid == 0;
 
+        // Whether an attach would reach this session at all — the question the
+        // chat panel asks, where the click asks "what should this gesture do".
+        //
+        // Answered by running the same rule with paneAliveButDetached false,
+        // rather than by a second rule that agrees with it today: the panel must
+        // never offer an attach for a session a click would not attach, and the
+        // two would drift the first time either changed. False is the honest
+        // input here — the panel has not tried to focus anything, so it has not
+        // learned that anything is detached, and the socket answer is not one it
+        // can offer anyway (that one is about a pane the *click* already
+        // selected).
+        internal static bool AttachWouldReach(SessionStatus status, string? sessionId) =>
+            FallbackFor(status, sessionId, paneAliveButDetached: false)
+                is ClickFallback.AttachBackground or ClickFallback.AttachById;
+
         // paneAliveButDetached is what FocusTmux learned on the way past: the
         // pane exists, its server answered, the pane was selected — and no
         // client is attached to it anywhere. It is passed in rather than

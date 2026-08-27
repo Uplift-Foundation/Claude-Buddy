@@ -127,6 +127,14 @@ namespace ClaudeBuddy
         // missing when this was first written: if it went into tmux, the pane
         // still has to be selected and its client's window raised, which
         // FocusCore already knows how to do for every other pane in the app.
+        // public: the chat panel offers this as a button for a session it cannot
+        // type into, which is the same answer the click fallback reaches for the
+        // same session. One implementation, so the two cannot land in different
+        // places — see ClickRouting.AttachWouldReach, which decides whether the
+        // button is offered at all.
+        public static void Attach(string sessionId, string cwd) =>
+            Task.Run(() => AttachAndFocus(sessionId, cwd));
+
         private static void AttachAndFocus(string sessionId, string cwd)
         {
             var pane = AgentTeamViewer.AttachSession(sessionId, cwd);
