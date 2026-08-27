@@ -1219,6 +1219,79 @@ public class SessionScanTests
     }
 
     [AvaloniaFact]
+    public void TheSweepForgetsAnIdWhoseFileGoesAwayByOtherMeans()
+    {
+        // A file can leave the directory while the sweep is still counting down
+        // on it: SessionEnd fires, or the user dismisses the orb. Without this
+        // the dictionary keeps the id for the life of the process — a slow leak
+        // keyed on every session the app has ever seen die, and a stale clock if
+        // the same id ever came back.
+        //
+        // The default ten-minute grace, deliberately, so nothing is swept and
+        // the only thing under test is the forgetting.
+        using var scratch = new Scratch();
+        scratch.Write("gone-elsewhere", pid: NeverAllocatedPid);
+
+        var manager = Manager(scratch, () => Listing());
+        manager.ScanAndUpdate();
+
+        var deadSince = (Dictionary<string, DateTime>)typeof(SessionManager)
+            .GetField("_deadSince", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(manager)!;
+
+        Assert.Contains("gone-elsewhere", deadSince.Keys);
+
+        scratch.Delete("gone-elsewhere");
+        manager.ScanAndUpdate();
+
+        Assert.Empty(deadSince);
+    }
+
+    [AvaloniaFact]
+    public void AStatusFileThatCannotBeDeletedIsLeftAloneRatherThanThrowing()
+    {
+        // Both the sweep and Dismiss go through one delete that swallows its
+        // failure, because there is nowhere to report one: a file this process
+        // may not delete is simply found again on the next scan.
+        //
+        // Provoked with a read-only status directory, which is a POSIX
+        // permission — on Windows a read-only directory does not stop a delete,
+        // so there is no equivalent to arrange and this returns instead of
+        // asserting something untrue. That leaves the catch measured on the
+        // macOS and Linux legs and unmeasured on the Windows one, which is the
+        // same shape as every other platform split in this repo.
+        if (OperatingSystem.IsWindows()) return;
+
+        using var scratch = new Scratch();
+        scratch.Write("undeletable");
+        var path = Path.Combine(scratch.Dir, "undeletable.txt");
+
+        var manager = Scan(scratch);
+        Assert.Contains("undeletable", OrbIds(manager));
+
+        // Readable and listable, not writable: the scan can still read the file,
+        // and only the unlink fails.
+        File.SetUnixFileMode(scratch.Dir,
+            UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            manager.DismissSession("undeletable");
+
+            Assert.True(File.Exists(path));
+        }
+        finally
+        {
+            File.SetUnixFileMode(scratch.Dir,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        // ...and the orb is still there on the next scan, which is the point of
+        // failing this way rather than optimistically removing it.
+        manager.ScanAndUpdate();
+        Assert.Contains("undeletable", OrbIds(manager));
+    }
+
+    [AvaloniaFact]
     public void DismissingAnIdTheManagerHasNeverSeenIsHarmless()
     {
         // No status, so no guard to consult — it falls through to a delete of a
