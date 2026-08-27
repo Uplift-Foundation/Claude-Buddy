@@ -286,6 +286,14 @@ namespace ClaudeBuddy
             SessionPathItem.IsVisible = !string.IsNullOrEmpty(status.Title)
                                         && !string.IsNullOrEmpty(status.Cwd);
 
+            // Which of the two lifecycle actions this session can be offered.
+            // Asked of SessionPresence rather than decided here, so the menu and
+            // the manager's own guards cannot disagree about what is possible —
+            // an item that is offered and then silently does nothing is worse
+            // than one that is not there.
+            DismissItem.IsVisible = SessionPresence.CanDismiss(status);
+            EndSessionItem.IsVisible = SessionPresence.CanEndSession(status);
+
             if (status.State != _lastState)
             {
                 _lastState = status.State;
@@ -299,7 +307,85 @@ namespace ClaudeBuddy
                 // whatever _lastState ends up being once dictation finishes,
                 // so a state change mid-recording isn't lost, just deferred.
             }
+
+            // Last, and after the state block above deliberately: parking is
+            // about stillness, and the state block is the thing that starts
+            // motion. Applied in the other order, an orb that parked and
+            // changed state in one update would be left breathing.
+            ApplyPresence(status.Parked);
         }
+
+        // --- presence ---------------------------------------------------------
+        // A third axis, beside identity and state. The orb's colour says which
+        // session this is, its fill says what that session is doing, and its
+        // opacity and stillness say whether anything is on the other end of it
+        // at all — a background job parked between turns, or a team member whose
+        // lead has gone. See SessionPresence for what counts as either.
+        //
+        // Dimmed and kept, rather than hidden. A parked job is real, resumable
+        // and worth clicking, and the user's own "Keep orbs for" setting is what
+        // decides how long a quiet session stays on screen; hiding one would
+        // trade "why are fifteen orbs breathing" for "where did my job go",
+        // which is the worse of the two questions because nothing on screen
+        // would answer it.
+
+        // Dim enough to read as background at a glance across a screen, light
+        // enough that the letter and the ring are still legible — the orb has to
+        // stay identifiable, because the whole point is that the user can find
+        // the parked job again.
+        private const double ParkedOpacity = 0.45;
+
+        private bool _parked;
+
+        // internal: driven directly by the UI suite, the same trade ApplyState
+        // documents — and worth asserting on its own, because the two arms are
+        // not symmetrical.
+        //
+        // Deliberately not folded into ApplyState. That method is gated on the
+        // *state* having changed, and parking does not change it: a parked job's
+        // state is a truthful "idle" both before and after, so the gate would
+        // never fire and nothing would dim. Presence needs its own gate for
+        // exactly that reason.
+        //
+        // force is for a re-assertion the presence itself did not ask for — see
+        // StopRecording, which hands the orb's motion back after dictation and
+        // would otherwise leave a parked orb breathing. Same shape as
+        // ApplyAccent's force above and there for the same kind of reason.
+        internal void ApplyPresence(bool parked, bool force = false)
+        {
+            if (!force && _parked == parked) return;
+            _parked = parked;
+
+            if (parked)
+            {
+                Root.Opacity = ParkedOpacity;
+
+                // Off the shared roster as well as stopped. StopPulse alone
+                // leaves an orb on it when a heart is beating, which no local
+                // session has — but "no local orb has a heartbeat badge" is a
+                // fact about another feature, and a parked orb that kept being
+                // ticked would breathe again the moment that changed.
+                StopPulse();
+                Pulsing.Remove(this);
+                return;
+            }
+
+            Root.Opacity = 1.0;
+
+            // Back to whatever it was doing. Guarded exactly as UpdateFrom's
+            // state block is, and for the same two reasons: before Loaded there
+            // is no point (the Loaded handler applies _lastState anyway), and
+            // during dictation the mic owns the orb's colour and motion —
+            // StopRecording is what restores it, and this must not race that.
+            if (IsLoaded && !_recording)
+            {
+                ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
+            }
+        }
+
+        // Whether this orb is currently drawn as parked. Read by the UI suite,
+        // and by nothing in the app — the answer lives in the status.
+        internal bool IsParked => _parked;
 
         // /color identifies *which* session; the fill keeps saying what it's
         // doing. An unknown or missing color name leaves the orb looking the
@@ -382,6 +468,20 @@ namespace ClaudeBuddy
             // learned-without-explaining as this one gets. The label says the
             // machine part, since the glyph can't.
             SessionKind.Remote => ("\u21C4", "another machine"),
+
+            // A gear, for a job the daemon runs with nobody on the other end.
+            // Machinery is the idea, which is as close as this gets to
+            // learned-without-explaining, and it is the one badge that says
+            // something about *this* machine rather than somewhere else.
+            //
+            // Worn by a working background job as well as a parked one. The
+            // badge channel says what a session is, which does not change while
+            // it runs; whether anything is happening in it rides the orb's
+            // opacity — see ApplyPresence. Badging only the parked ones would
+            // smuggle a state into the kind channel, and then two orbs of the
+            // same kind would carry different marks depending on what they were
+            // doing, which is what every other badge here avoids.
+            SessionKind.Background => ("\u2699", "background job"),
             _ => null
         };
 
@@ -1398,6 +1498,14 @@ namespace ClaudeBuddy
             // colour drawn over it.
             ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
 
+            // ...and back to still, if this orb is parked. The line above puts
+            // it on the pulse roster, which is right for every orb except a
+            // parked one — and ApplyPresence's own gate would decline, since
+            // nothing about the presence changed. Forced rather than reasoned
+            // around: the mic owns the orb's motion while it is recording, and
+            // this is where that ownership is handed back.
+            if (_parked) ApplyPresence(true, force: true);
+
             // The pointer is very likely still over the mic right after a
             // click, but the recording that was forcing the flyout to stay
             // up just ended — re-derive from where the pointer actually is
@@ -1816,6 +1924,20 @@ namespace ClaudeBuddy
         internal void ResetPosition_Click(object? sender, RoutedEventArgs e)
         {
             SessionManager.Instance?.ReturnOrbToStack(SessionId);
+        }
+
+        // Both of these delegate rather than acting, the same way ResetIdle_Click
+        // does: the orb knows which session was right-clicked and nothing else,
+        // and every rule about what may be done to a session lives with the
+        // manager that owns its file and its pid.
+        internal void Dismiss_Click(object? sender, RoutedEventArgs e)
+        {
+            SessionManager.Instance?.DismissSession(SessionId);
+        }
+
+        internal void EndSession_Click(object? sender, RoutedEventArgs e)
+        {
+            SessionManager.Instance?.EndSession(SessionId);
         }
 
         // Excluded from coverage: needs SessionManager.Instance to hand back a

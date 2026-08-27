@@ -4,6 +4,38 @@ using System.Text.Json;
 
 namespace ClaudeBuddy
 {
+    // What the daemon says a background session is *doing*, as opposed to
+    // whether it is worth an orb at all.
+    //
+    // Five answers rather than a bool for the same reason SessionManager's
+    // ScanVerdict is an enum: the two "no" answers below are not the same fact.
+    // NotAJob is something known about the session — the listing was read and
+    // this session is not in it. Unknown is something known about the *CLI* —
+    // there was no listing to read. Only the first may change what an orb looks
+    // like, and collapsing them is how a briefly unavailable `claude` would dim
+    // fifteen orbs at once.
+    internal enum JobPhase
+    {
+        // Read a listing, and this session was not on it: an interactive
+        // session, a subagent, or a status file that outlived its session.
+        NotAJob,
+
+        // Mid-turn. Indistinguishable from Parked on disk, which is the whole
+        // reason this enum exists.
+        Working,
+
+        // Between turns: the job's worker is alive and resumable, and nothing
+        // is happening in it. The daemon's word for this is "blocked".
+        Parked,
+
+        // Finished for good. Its worker stays alive, so nothing about the
+        // process says so — see the hygiene sweep in SessionManager.
+        Done,
+
+        // No listing. Fail-open: nothing downstream may act on this.
+        Unknown
+    }
+
     // What the daemon thinks of a background session, which its status file
     // can't tell you.
     //
@@ -86,6 +118,65 @@ namespace ClaudeBuddy
 
             return !string.Equals(state, "done", StringComparison.OrdinalIgnoreCase);
         }
+
+        // The same lookup as IsLive, answering the question IsLive throws away:
+        // not "is this still worth an orb" but "what is it doing".
+        //
+        // That distinction is the whole of the parked-orb bug. A background
+        // session between turns and one mid-turn both answer IsLive true and
+        // both write "idle" into their status file, so fifteen parked workers
+        // rendered exactly like fifteen agents at work — same fill, same
+        // breathing, no badge, nothing to say the difference. The daemon knew
+        // all along: "blocked" for the parked ones, "working" for the busy one.
+        //
+        // Same key fallback as IsLive (session id first, short job id for a row
+        // that named no session) and the same fail-open posture, stated the same
+        // way: a listing that could not be read answers Unknown, and every rule
+        // built on this treats Unknown as "change nothing".
+        //
+        // A state this build has never heard of reads as Working, which is
+        // exactly what IsLive already does with it — "done" is the only word
+        // that removes an orb and "blocked" the only one that dims it, so a
+        // daemon that grows a sixth state renders as it always did rather than
+        // going quietly still.
+        internal static JobPhase Phase(Dictionary<string, string>? states, string sessionId)
+        {
+            if (string.IsNullOrEmpty(sessionId)) return JobPhase.Unknown;
+            if (states is null) return JobPhase.Unknown;
+
+            if (!states.TryGetValue(sessionId, out var state)
+                && !states.TryGetValue(JobIdOf(sessionId), out state))
+            {
+                return JobPhase.NotAJob;
+            }
+
+            if (Is(state, "working")) return JobPhase.Working;
+            if (Is(state, "blocked")) return JobPhase.Parked;
+            if (Is(state, "done")) return JobPhase.Done;
+
+            return JobPhase.Working;
+        }
+
+        private static bool Is(string? state, string word) =>
+            string.Equals(state, word, StringComparison.OrdinalIgnoreCase);
+
+        // One listing, for one scan.
+        //
+        // States() is cached for ten seconds and the scan runs every two, so
+        // asking it once per rule is asking a question that can change its
+        // answer halfway through a pass: the cache can expire between the
+        // superseded check and the reachability one, and a session can be a
+        // live job for the first and not for the second. That was survivable
+        // while every consumer wanted the same bool. It stops being survivable
+        // once the same listing also decides whether an orb is dimmed, because
+        // then a single pass can both keep an orb and describe it wrongly.
+        //
+        // Excluded from coverage for the reason States() is: this is the process
+        // launch and the clock, with no decision in it. What is decided with the
+        // answer is IsLive and Phase above, both covered against hand-written
+        // listings in BackgroundJobsTests and JobPhaseTests.
+        [ExcludeFromCodeCoverage]
+        internal static Dictionary<string, string>? SnapshotForScan() => States();
 
         // Excluded from coverage: shells out to the `claude` CLI, and the cache
         // it wraps is keyed on Environment.TickCount64. What it decides with the

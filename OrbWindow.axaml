@@ -54,6 +54,30 @@
                           IsVisible="False"
                           Click="ResetPosition_Click"/>
                 <MenuItem Header="Reset this session to idle" Click="ResetIdle_Click"/>
+                <!-- The two lifecycle actions, hidden for a session they cannot
+                     serve rather than greyed out — see
+                     SessionPresence.CanDismiss/CanEndSession, which is also
+                     where the reasoning lives. Visibility is set in
+                     OrbWindow.UpdateFrom.
+
+                     Neither asks for confirmation, and that is a decision
+                     rather than an omission: this app has no dialog vocabulary
+                     anywhere, and a context menu is already a two-step gesture
+                     (right-click, then aim). Dismiss is undone by the session's
+                     next hook event; End is the one that is not, which is why
+                     it is worded as what it does to the session rather than to
+                     the orb. -->
+                <MenuItem x:Name="DismissItem"
+                          Header="Dismiss this orb"
+                          IsVisible="False"
+                          Click="Dismiss_Click"/>
+                <MenuItem x:Name="EndSessionItem"
+                          Header="End this session"
+                          IsVisible="False"
+                          Click="EndSession_Click"/>
+                <!-- Exit is the whole app, not this session — worth a rule
+                     between it and two items that end one thing each. -->
+                <Separator/>
                 <MenuItem Header="Exit Claude Buddy" Click="Exit_Click"/>
             </ContextMenu>
         </Grid.ContextMenu>

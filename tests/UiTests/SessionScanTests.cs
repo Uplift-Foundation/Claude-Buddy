@@ -881,7 +881,14 @@ public class SessionScanTests
                     // running under `claude daemon run`.
                 }));
 
-            var manager = new SessionManager(scratch.Dir);
+            // The listing is handed over rather than fetched, which it did not
+            // used to need to be. The lead below names no terminal, and the scan
+            // now asks the daemon about exactly that shape of session — see
+            // SessionPresence.WorthAskingTheDaemon — so without this seam this
+            // test would run `claude agents --json` against whatever daemon the
+            // machine happens to be running. Empty rather than null: this lead
+            // is not a job, and saying so is what the rest of the test is about.
+            var manager = new SessionManager(scratch.Dir, () => Listing());
             manager.ScanAndUpdate();
 
             // The member keeps its own terminal-based orb as normal...
@@ -897,5 +904,384 @@ public class SessionScanTests
         {
             lock (cache) cache.Clear();
         }
+    }
+
+    // --- background jobs: presence, and the hygiene sweep -------------------
+    //
+    // The scan's half of CB-13. The rules are pure and covered case by case in
+    // tests/UnitTests (SessionPresenceTests, SweepRulesTests, JobPhaseTests);
+    // what is left — and what the bug actually was — is whether the scan wires
+    // them to anything. Fifteen orbs breathing on an idle machine was not a
+    // wrong rule, it was a right answer that was parsed and then discarded.
+    //
+    // Every test below hands over the daemon's listing through the constructor
+    // seam rather than letting the scan fetch one. That is not only about speed:
+    // the machine this suite runs on is the one that exhibited the bug, and its
+    // real listing names the user's real background sessions. A test that read
+    // it would be asserting about those.
+
+    private static Dictionary<string, string> Listing(params (string SessionId, string State)[] rows)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (sessionId, state) in rows) map[sessionId] = state;
+        return map;
+    }
+
+    private static SessionManager Manager(
+        Scratch scratch,
+        Func<Dictionary<string, string>?>? jobListing = null,
+        TimeSpan? sweepGrace = null)
+    {
+        // Both CLIs on, for the reason Scan above states at length.
+        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+        ClaudeBuddySettings.CodexEnabled = true;
+
+        var manager = new SessionManager(scratch.Dir, jobListing);
+        if (sweepGrace is not null) manager.SweepGrace = sweepGrace.Value;
+        return manager;
+    }
+
+    // A status file shaped the way a background worker's is: a real pid of its
+    // own, and no terminal anywhere — not even a tty, because the hook's walk
+    // runs under a daemon that has no controlling terminal to find. That shape
+    // is load-bearing in both directions and worth stating: it is what makes a
+    // *live* job depend on the daemon's exemption for its orb (JudgeReachability
+    // would otherwise call it a dead click), and it is what already drops a
+    // *finished* one's orb, which is the behaviour the sweep is bolted onto.
+    //
+    // The empty cwd is what keeps AgentTeamViewer.TryAdopt's real ps/lsof scan
+    // out of this, exactly as the sibling test above does — WantsAgentViewer
+    // fires for this shape by design, and TryAdopt's own first check is what
+    // declines.
+    private static void WriteBackgroundFile(Scratch scratch, string sessionId, string state = "idle")
+    {
+        File.WriteAllText(Path.Combine(scratch.Dir, sessionId + ".txt"),
+            System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+            {
+                State = state,
+                SessionPid = LivePid,
+            }));
+    }
+
+    [AvaloniaFact]
+    public void ABlockedBackgroundJobIsDimmedAndBadgedRatherThanRemoved()
+    {
+        // The orb on the screenshot this ticket came from. "blocked" is a pooled
+        // worker between turns: alive, resumable, and doing nothing — and its
+        // own status file says "idle", exactly as a job mid-turn's does.
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "bg-parked");
+
+        var manager = Manager(scratch, () => Listing(("bg-parked", "blocked")));
+        manager.ScanAndUpdate();
+
+        // Kept, first of all. Parking dims an orb and must never remove one.
+        Assert.Contains("bg-parked", OrbIds(manager));
+
+        var status = manager.StatusFor("bg-parked");
+        Assert.NotNull(status);
+        Assert.Equal(LocalSessionShape.Background, status!.Shape);
+        Assert.True(status.Parked);
+        Assert.Equal(SessionKind.Background, status.Kind);
+    }
+
+    [AvaloniaFact]
+    public void AWorkingBackgroundJobIsBadgedButNotDimmed()
+    {
+        // The wedged session on the same screenshot, and the reason the badge is
+        // not conditional: this one is genuinely at work as far as the daemon is
+        // concerned, and the orb has to say so.
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "bg-working", state: "generating");
+
+        var manager = Manager(scratch, () => Listing(("bg-working", "working")));
+        manager.ScanAndUpdate();
+
+        var status = manager.StatusFor("bg-working");
+        Assert.NotNull(status);
+        Assert.Equal(LocalSessionShape.Background, status!.Shape);
+        Assert.False(status.Parked);
+        Assert.Equal(SessionKind.Background, status.Kind);
+    }
+
+    [AvaloniaFact]
+    public void AResumedJobUnDimsOnTheNextScanWhileTheListingIsStillCatchingUp()
+    {
+        // The cache-lag fix, end to end. The daemon's listing is cached for ten
+        // seconds; the hook rewrites the status file the instant a turn starts.
+        // So the file is the fresher source, and the same "blocked" row must
+        // stop parking the orb as soon as the file says work resumed — otherwise
+        // an orb sits dim for ten seconds while the user watches the work happen.
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "bg-resumed");
+
+        var manager = Manager(scratch, () => Listing(("bg-resumed", "blocked")));
+        manager.ScanAndUpdate();
+        Assert.True(manager.StatusFor("bg-resumed")!.Parked);
+
+        WriteBackgroundFile(scratch, "bg-resumed", state: "generating");
+        manager.ScanAndUpdate();
+
+        var status = manager.StatusFor("bg-resumed");
+        Assert.Equal(LocalSessionShape.Background, status!.Shape);
+        Assert.False(status.Parked);
+    }
+
+    [AvaloniaFact]
+    public void AListingThatCouldNotBeReadParksNothingAndRemovesNothing()
+    {
+        // Fail open, at the level that matters: the `claude` CLI being briefly
+        // unavailable must not dim every background orb on screen at once, and
+        // must not delete any file either.
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "bg-unknown");
+
+        var manager = Manager(scratch, () => null, sweepGrace: TimeSpan.Zero);
+        manager.ScanAndUpdate();
+        manager.ScanAndUpdate();
+
+        var status = manager.StatusFor("bg-unknown");
+        Assert.NotNull(status);
+        Assert.False(status!.Parked);
+
+        // An unreadable listing keeps the orb (BackgroundJobs.IsLive answers
+        // true) and cannot be evidence of anything, so the file survives even
+        // with no grace period at all.
+        Assert.True(File.Exists(Path.Combine(scratch.Dir, "bg-unknown.txt")));
+        Assert.Contains("bg-unknown", OrbIds(manager));
+    }
+
+    // --- the sweep ---
+
+    // A pid that was never allocated: 2147483646 is far above any platform's
+    // pid_max, so it cannot name a process on the machine running this. Used
+    // rather than spawning and reaping a real child, which
+    // ProcessLivenessTests does because it is asking about a *reaped* pid
+    // specifically — here all that is wanted is a pid the kernel says nothing
+    // is behind, and inventing one nothing can ever collide with is both
+    // cheaper and safer. Nothing in this suite signals it.
+    private const int NeverAllocatedPid = int.MaxValue - 1;
+
+    [AvaloniaFact]
+    public void ADeadPidsFileIsSweptOnceTheGraceHasPassed()
+    {
+        // The Ctrl+C case. SessionEnd never fired, so nothing has ever deleted
+        // this file — the orb goes on the first scan and the file stayed for
+        // good, on every machine, until this sweep existed.
+        using var scratch = new Scratch();
+        scratch.Write("ctrl-c-ed", pid: NeverAllocatedPid);
+        var path = Path.Combine(scratch.Dir, "ctrl-c-ed.txt");
+
+        var manager = Manager(scratch, () => Listing(), sweepGrace: TimeSpan.Zero);
+
+        // The first pass records the sighting and deletes nothing, whatever the
+        // grace is: evidence has to survive two consecutive scans before a file
+        // goes, which is what a momentarily unreadable pid is protected by.
+        manager.ScanAndUpdate();
+        Assert.DoesNotContain("ctrl-c-ed", OrbIds(manager));
+        Assert.True(File.Exists(path));
+
+        manager.ScanAndUpdate();
+        Assert.False(File.Exists(path));
+    }
+
+    [AvaloniaFact]
+    public void AFinishedJobsFileIsSweptEvenThoughItsWorkerIsStillAlive()
+    {
+        // The case no liveness rule can ever reach, and the reason the sweep
+        // consults the job phase at all: a finished job's pooled worker is kept
+        // alive on purpose, so its pid answers forever. Before this, every job
+        // anyone ever ran left a file behind permanently.
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "bg-done");
+        var path = Path.Combine(scratch.Dir, "bg-done.txt");
+
+        var manager = Manager(scratch, () => Listing(("bg-done", "done")), sweepGrace: TimeSpan.Zero);
+
+        manager.ScanAndUpdate();
+        Assert.True(File.Exists(path));
+
+        // Its orb is already gone — a finished job has nothing to show, which
+        // BackgroundJobs was written for — and now the file goes too.
+        Assert.DoesNotContain("bg-done", OrbIds(manager));
+
+        manager.ScanAndUpdate();
+        Assert.False(File.Exists(path));
+    }
+
+    [AvaloniaFact]
+    public void AJobThatComesBackRestartsTheGraceClock()
+    {
+        // Evidence that goes away resets the clock rather than being remembered.
+        // Without this a job that finishes, is resumed, and finishes again would
+        // be swept on the strength of the accumulated total of its quiet spells —
+        // and a resumed job's file is the only place its identity lives.
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "bg-flapping");
+        var path = Path.Combine(scratch.Dir, "bg-flapping.txt");
+
+        var state = "done";
+        var manager = Manager(
+            scratch, () => Listing(("bg-flapping", state)), sweepGrace: TimeSpan.Zero);
+
+        manager.ScanAndUpdate();            // sighting recorded
+        state = "working";
+        manager.ScanAndUpdate();            // ...and forgotten again
+        state = "done";
+        manager.ScanAndUpdate();            // sighting recorded afresh
+
+        Assert.True(File.Exists(path));
+
+        // Only now, on a second consecutive sighting, does it go.
+        manager.ScanAndUpdate();
+        Assert.False(File.Exists(path));
+    }
+
+    [AvaloniaFact]
+    public void AQuietSessionIsNeverSweptHoweverLongItHasBeenQuiet()
+    {
+        // Expiry is the user's own display setting, not evidence about the
+        // session — and this is the one that would be a disaster: the file is
+        // the only place a live session's terminal coordinates and colour live,
+        // and the hook writes nothing more until its next event. Deleting it
+        // would take the orb away and leave the session running.
+        var before = ClaudeBuddySettings.OrbLifetimeMinutes;
+        try
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = 5;
+
+            using var scratch = new Scratch();
+            scratch.Write("quiet", written: DateTime.UtcNow - TimeSpan.FromHours(2));
+            var path = Path.Combine(scratch.Dir, "quiet.txt");
+
+            var manager = Manager(scratch, () => Listing(), sweepGrace: TimeSpan.Zero);
+            manager.ScanAndUpdate();
+            manager.ScanAndUpdate();
+
+            // Orb gone, file kept.
+            Assert.DoesNotContain("quiet", OrbIds(manager));
+            Assert.True(File.Exists(path));
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = before;
+        }
+    }
+
+    // --- dismiss and end ---
+
+    [AvaloniaFact]
+    public void DismissingAnOrbDeletesItsFileAndTheNextScanTakesTheOrb()
+    {
+        // Deleting the file is the whole of it: in the app the watcher's Deleted
+        // event drives the debounced rescan, which is driven directly here for
+        // the reason this suite never calls Start().
+        using var scratch = new Scratch();
+        scratch.Write("dismiss-me");
+
+        var manager = Scan(scratch);
+        Assert.Contains("dismiss-me", OrbIds(manager));
+
+        manager.DismissSession("dismiss-me");
+        Assert.False(File.Exists(Path.Combine(scratch.Dir, "dismiss-me.txt")));
+
+        manager.ScanAndUpdate();
+        Assert.DoesNotContain("dismiss-me", OrbIds(manager));
+        Assert.Null(manager.StatusFor("dismiss-me"));
+    }
+
+    [AvaloniaFact]
+    public void DismissingASessionThatLivesSomewhereElseTouchesNothing()
+    {
+        // A gateway session's orb comes from a socket, and the path this would
+        // build from its namespaced key is not one this app should write to.
+        // Seeded through _statuses directly rather than by standing up a gateway,
+        // the same way OrbIds reaches _windows: what is being tested is the
+        // guard, and the guard reads exactly this dictionary.
+        using var scratch = new Scratch();
+        var manager = Manager(scratch, () => Listing());
+
+        var statuses = (Dictionary<string, SessionStatus>)typeof(SessionManager)
+            .GetField("_statuses", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(manager)!;
+
+        const string key = "openclaw:agent:main:discord:channel:1";
+        statuses[key] = new SessionStatus { Source = SessionSource.OpenClaw };
+
+        // A file named to prove the guard returns before any delete: were the
+        // key spliced into a path, this is what it would have found.
+        var decoy = Path.Combine(scratch.Dir, "decoy.txt");
+        File.WriteAllText(decoy, "{}");
+
+        manager.DismissSession(key);
+
+        Assert.True(File.Exists(decoy));
+    }
+
+    [AvaloniaFact]
+    public void DismissingAnIdTheManagerHasNeverSeenIsHarmless()
+    {
+        // No status, so no guard to consult — it falls through to a delete of a
+        // file that is not there, which is the catch's whole job.
+        using var scratch = new Scratch();
+        var manager = Manager(scratch, () => Listing());
+
+        manager.DismissSession("never-heard-of-it");
+    }
+
+    [AvaloniaFact]
+    public void EndingASessionRefusesEveryShapeItCannotEnd()
+    {
+        // The one irreversible thing in the app, so what is asserted here is the
+        // refusals. An id with no status at all, and a session with no pid
+        // recorded (a hook older than that field) — neither reaches
+        // SessionTerminator, which is what makes this safe to run at all.
+        using var scratch = new Scratch();
+        var manager = Manager(scratch, () => Listing());
+
+        var statuses = (Dictionary<string, SessionStatus>)typeof(SessionManager)
+            .GetField("_statuses", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(manager)!;
+
+        statuses["pidless"] = new SessionStatus { Source = SessionSource.ClaudeCode, SessionPid = 0 };
+        statuses["gateway"] = new SessionStatus { Source = SessionSource.OpenClaw, SessionPid = 4321 };
+
+        manager.EndSession("never-heard-of-it");
+        manager.EndSession("pidless");
+        manager.EndSession("gateway");
+    }
+
+    [AvaloniaFact]
+    public void EndingASessionSignalsThePidTheStatusNames()
+    {
+        // The one path that does reach SessionTerminator, driven with a pid
+        // nothing can be behind: 2147483646 is far above any platform's pid_max,
+        // so the signal lands on ESRCH (or, on Windows, an ArgumentException from
+        // GetProcessById) and is swallowed — which is also the documented
+        // "already gone counts as success" behaviour.
+        //
+        // This is deliberately not driven with a real pid. A test that ended a
+        // real process on the machine running it would be a worse bug than the
+        // one this ticket is about, and the machine this suite runs on has the
+        // user's own background sessions on it.
+        using var scratch = new Scratch();
+        var manager = Manager(scratch, () => Listing());
+
+        var statuses = (Dictionary<string, SessionStatus>)typeof(SessionManager)
+            .GetField("_statuses", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(manager)!;
+
+        statuses["ends"] = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            SessionPid = NeverAllocatedPid,
+        };
+
+        manager.EndSession("ends");
+
+        // Nothing is removed from screen by the call itself — the orb goes when
+        // the next scan sees the pid stop answering, which is the same path any
+        // other ending session takes.
+        Assert.Null(manager.StatusFor("no-orb-was-touched"));
     }
 }
