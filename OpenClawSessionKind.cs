@@ -27,7 +27,23 @@ namespace ClaudeBuddy
         // marking — clicking one opens a chat instead of jumping to a terminal,
         // and knowing that before you click is the difference between the app
         // feeling consistent and feeling broken.
-        Remote
+        Remote,
+
+        // A Claude Code background job: no terminal of its own, run inside a
+        // pooled worker the daemon keeps alive between turns, reached with
+        // `claude attach` rather than by jumping to a window.
+        //
+        // In this enum despite having nothing to do with a gateway, because
+        // Remote already broke that reading and the badge is drawn from one
+        // switch (OrbWindow.BadgeFor). A second kind-of-thing enum with a second
+        // badge switch beside it is how one orb ends up wearing two marks, or
+        // none — this is the channel that answers "what kind of thing is this",
+        // and a background job is an answer to that question.
+        //
+        // Badged whether the job is working or parked. The badge says what a
+        // session *is*, which does not change; whether anything is happening in
+        // it rides the orb's opacity instead. See SessionStatus.Parked.
+        Background
     }
 
     // Working out what kind of conversation a gateway session is, from the two

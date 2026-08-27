@@ -366,6 +366,36 @@ public class ScanVerdictTests
         Assert.Empty(asked);
     }
 
+    // A parked background job keeps its orb, through both verdicts. This is the
+    // half of CB-13 that is *not* a change: parking dims an orb and must never
+    // remove one, so the session that started this ticket — a pooled worker
+    // sitting between turns, alive and resumable, with no terminal of its own —
+    // has to survive every rule here exactly as a working job does.
+    //
+    // Worth pinning because the two facts about it are the same two facts that
+    // drop a *finished* job: no terminal, and nothing but the daemon's word to
+    // go on. The only thing separating them is which word the daemon said.
+    [Fact]
+    public void AParkedBackgroundJobKeepsItsOrbJustAsAWorkingOneDoes()
+    {
+        var parked = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            State = "idle",
+            SessionPid = 4321,
+        };
+
+        // "blocked" is live as far as IsLive is concerned — only "done" is not —
+        // so the daemon's answer here is the same true a working job gets.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Liveness(parked, staleAfter: null));
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(parked, isLiveJob: EveryIdIsALiveJob));
+    }
+
     [Fact]
     public void TheDaemonIsNotAskedAboutASessionThatAlreadyKnowsATerminal()
     {

@@ -85,8 +85,20 @@ namespace ClaudeBuddy
                 // nothing should reach here — this is the belt to that braces,
                 // because the failure it prevents is a window opening onto
                 // someone else's session.
+                // Widened from "no pid recorded" to "no pid recorded, or the
+                // scan says this is a background job".
+                //
+                // The pid test used to be a working proxy for "this is a
+                // background session", and it stopped being one when the hook
+                // learned to record a background agent's own pid: a parked job
+                // now has a pid like anything else, so its click fell through
+                // to nothing at all. It has no terminal to focus and never
+                // will — the daemon runs it — so `claude attach` is not a
+                // fallback for it, it is the answer. The proxy is kept
+                // alongside the real thing rather than replaced by it, because
+                // a hook older than the pid field still writes 0.
                 if (status.Source == SessionSource.ClaudeCode
-                    && status.SessionPid <= 0
+                    && (status.SessionPid <= 0 || status.Shape == LocalSessionShape.Background)
                     && !string.IsNullOrEmpty(sessionId))
                 {
                     var pane = AgentTeamViewer.AttachSession(sessionId, status.Cwd);

@@ -116,6 +116,41 @@ public class OrbWindowScreenshots
         ScreenshotHelper.Capture(orb, "orb-window-heartbeat-team-member.png");
     }
 
+    // The two CB-13 scenarios, and the pair is the point: these are the only
+    // captures in this suite where the *difference between them* is the whole
+    // review. A parked job and a working one differ in one channel — opacity —
+    // and nothing else, so a reviewer comparing the two images is looking at
+    // exactly what the ticket claims to have changed. One image alone would show
+    // a dim orb with no evidence that anything else stayed put.
+    [AvaloniaFact]
+    public void AParkedBackgroundJobIsDimmedAndWearsTheGear()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.Kind = SessionKind.Background;
+        status.Shape = LocalSessionShape.Background;
+        status.Parked = true;
+        orb.UpdateFrom(status);
+
+        ScreenshotHelper.Capture(orb, "orb-window-background-job-parked.png");
+    }
+
+    [AvaloniaFact]
+    public void AWorkingBackgroundJobWearsTheGearAtFullOpacity()
+    {
+        // Same badge, same colours, full opacity — the badge says what the
+        // session is and the opacity says whether anything is happening in it.
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+        status.State = "generating";
+        status.Kind = SessionKind.Background;
+        status.Shape = LocalSessionShape.Background;
+        status.Parked = false;
+        orb.UpdateFrom(status);
+
+        ScreenshotHelper.Capture(orb, "orb-window-background-job-working.png");
+    }
+
     [AvaloniaFact]
     public void KnownColorNameSetsTheOrbsAccentColor()
     {
