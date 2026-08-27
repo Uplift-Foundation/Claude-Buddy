@@ -281,6 +281,64 @@ namespace ClaudeBuddy
             }
         }
 
+        // Opens a terminal attached to an existing tmux server, for a session
+        // whose pane is alive in one nothing is attached to.
+        //
+        // The other half of "a click on an orb must produce a visible result".
+        // AttachSession above answers the session that has no terminal anywhere;
+        // this answers the one that has a *pane* and no screen — an agent-team
+        // member in a detached `claude-swarm-<pid>` socket, which is what the
+        // user was clicking when they reported orbs that "do nothing". Six
+        // things went right on that path and the last one had nowhere to go.
+        //
+        // Here rather than in TerminalFocuser because opening a terminal on a
+        // script file is this file's mechanism, and a second copy of it there
+        // would be a second thing to keep right about which terminal app the
+        // user has and how `open -a` behaves. The command itself is built by
+        // TerminalScripts.TmuxAttachScript, which is pure and tested; what is
+        // left here is the file and the launch.
+        //
+        // Deliberately no "already open?" guard, unlike AttachSession, and the
+        // asymmetry is the point: the moment a client attaches to that server,
+        // the ordinary focus path finds it and raises its window, so the second
+        // click never reaches this. AttachSession needs a guard because a window
+        // running `claude attach` is not discoverable that way.
+        //
+        // Excluded from coverage: writes a script and opens a terminal on it.
+        [ExcludeFromCodeCoverage]
+        public static bool AttachTmuxSocket(string tmuxBinary, string? socket, string cwd)
+        {
+            if (!OperatingSystem.IsMacOS()) return false;
+            if (string.IsNullOrEmpty(tmuxBinary)) return false;
+
+            try
+            {
+                System.IO.Directory.CreateDirectory(ClaudeBuddySettings.Directory);
+
+                // Its own name, not open-agents-view.sh: the two can be launched
+                // moments apart, and a shared file would mean the second write
+                // deciding what the first window runs.
+                var script = Path.Combine(ClaudeBuddySettings.Directory, "attach-tmux-socket.sh");
+
+                File.WriteAllText(script, TerminalScripts.TmuxAttachScript(tmuxBinary, socket, cwd));
+                File.SetUnixFileMode(script,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+                var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
+                psi.ArgumentList.Add("-a");
+                psi.ArgumentList.Add(TerminalApp());
+                psi.ArgumentList.Add(script);
+                Process.Start(psi);
+                return true;
+            }
+            catch
+            {
+                // Same contract as everything else on this path: failing to open
+                // a window is a click that did nothing, never a crash.
+                return false;
+            }
+        }
+
         // Runs the attach in a new window of whichever tmux session already has
         // a client, and hands back its pane. Nothing is selected or raised here
         // — returning the pane lets the caller reuse the focus path every other

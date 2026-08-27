@@ -1,3 +1,5 @@
+using System.Linq;
+
 namespace ClaudeBuddy
 {
     // The text that gets handed to `osascript`, and the small pure decisions
@@ -37,6 +39,53 @@ namespace ClaudeBuddy
             full[1] = socket;
             args.CopyTo(full, 2);
             return full;
+        }
+
+        // One argument, safe to hand to `sh -c`.
+        //
+        // Single-quoted, with any embedded quote closed and reopened the shell
+        // way, so a directory with a space or an apostrophe still arrives as one
+        // word. AgentTeamViewer has carried two inline copies of this rule since
+        // `claude attach` was wired up; this is the same rule stated where it can
+        // be tested, and the builder below is the first caller.
+        internal static string ShellQuote(string value) =>
+            "'" + value.Replace("'", "'\\''") + "'";
+
+        // The shell script that puts a terminal onto an existing tmux server.
+        //
+        // For a session whose pane is alive in a server nothing is attached to —
+        // an agent-team member in a detached `claude-swarm-<pid>` socket, which
+        // is the shape the user reported as an orb that "does nothing". A plain
+        // `attach` is all that is needed: the caller has already run
+        // select-window and select-pane against that pane, so the client lands on
+        // the right teammate rather than on whatever the session last had
+        // current.
+        //
+        // A script file rather than AppleScript's `do script`, for the reason
+        // AgentTeamViewer.AttachSession records: `do script` is Terminal.app's
+        // own vocabulary, while `open -a <app> <executable file>` is understood
+        // by every terminal this app names, so one path covers all of them.
+        //
+        // An absolute tmux path, never a bare `tmux` resolved by a login shell:
+        // `zsh -lc` skips .zshrc, which is where a PATH addition for Homebrew
+        // normally lives, so a bare name silently fails whenever the app was
+        // launched from Finder. See ClaudeBinary, and the identical note in
+        // AgentTeamViewer.
+        //
+        // The `cd` is for after the attach ends rather than for the attach
+        // itself: detach or exit and the window drops to a shell, and the useful
+        // place to land is the directory whose orb was clicked. Skipped when no
+        // cwd was recorded, because `cd ''` fails and would take the attach with
+        // it — the one thing this script exists to do.
+        internal static string TmuxAttachScript(string tmuxBinary, string? socket, string? cwd)
+        {
+            var attach = string.Join(" ",
+                TmuxArgs(socket, "attach").Select(ShellQuote).Prepend(ShellQuote(tmuxBinary)));
+
+            var script = "#!/bin/sh\n";
+            if (!string.IsNullOrEmpty(cwd)) script += "cd " + ShellQuote(cwd) + " || exit 1\n";
+
+            return script + "exec " + attach + "\n";
         }
 
         // The last path segment, used to name a Windows Terminal tab after the

@@ -69,55 +69,70 @@ namespace ClaudeBuddy
             // duration of the click.
             Task.Run(() =>
             {
-                if (FocusCore(status)) return;
+                // detached is what the tmux attempt learned on its way past: the
+                // pane is alive, it has been selected, and no client is attached
+                // to that server anywhere. Kept rather than re-asked, because
+                // answering it costs three subprocesses and because it is a fact
+                // about a moment that has already gone.
+                if (FocusCore(status, out var detached)) return;
+
+                // The team lead first, still, and this ordering is the half of
+                // the click rules that is easiest to get wrong. A team member
+                // whose lead *is* focusable lands on the lead's window today,
+                // which works well and is what the user expects — the lead is
+                // where that agent's work is being driven from. Only when that
+                // fails too is there nothing on screen for this click, and only
+                // then may a new window be opened.
                 if (teamLead is not null && FocusCore(teamLead)) return;
 
-                // Nothing on screen shows this session. For a background one
-                // that is the normal case rather than a failure — it runs under
-                // a daemon with no terminal of its own — so open one on it
-                // rather than leave the click doing nothing. Gated on having no
-                // pid so a real session whose terminal merely couldn't be
-                // resolved gets a diagnosis rather than a surprise window.
-                //
-                // Still Claude Code's alone. This ends in `claude attach`, and
-                // there is no Codex equivalent to attach to. The scan already
-                // drops a pid-less Codex session before it can have an orb, so
-                // nothing should reach here — this is the belt to that braces,
-                // because the failure it prevents is a window opening onto
-                // someone else's session.
-                // Widened from "no pid recorded" to "no pid recorded, or the
-                // scan says this is a background job".
-                //
-                // The pid test used to be a working proxy for "this is a
-                // background session", and it stopped being one when the hook
-                // learned to record a background agent's own pid: a parked job
-                // now has a pid like anything else, so its click fell through
-                // to nothing at all. It has no terminal to focus and never
-                // will — the daemon runs it — so `claude attach` is not a
-                // fallback for it, it is the answer. The proxy is kept
-                // alongside the real thing rather than replaced by it, because
-                // a hook older than the pid field still writes 0.
-                if (status.Source == SessionSource.ClaudeCode
-                    && (status.SessionPid <= 0 || status.Shape == LocalSessionShape.Background)
-                    && !string.IsNullOrEmpty(sessionId))
+                // Nothing on screen shows this session, and nothing else is
+                // going to. Which of the three ways out applies is decided by
+                // ClickRouting, which is pure and covered per case; the reason
+                // there are three is written there, and the reason there is any
+                // at all is that every failure above this line is silent.
+                switch (ClickRouting.FallbackFor(status, sessionId, detached))
                 {
-                    var pane = AgentTeamViewer.AttachSession(sessionId, status.Cwd);
+                    case ClickFallback.AttachBackground:
+                    case ClickFallback.AttachById:
+                        AttachAndFocus(sessionId!, status.Cwd);
+                        break;
 
-                    // It went into tmux, so finish the job the ordinary way:
-                    // FocusCore already knows how to select a pane, find the
-                    // client showing it and bring that client's window
-                    // forward. Only the pane is new — everything after it is
-                    // the path every other tmux session takes.
-                    if (!string.IsNullOrEmpty(pane))
-                    {
-                        FocusCore(new SessionStatus
-                        {
-                            TmuxPane = pane,
-                            Cwd = status.Cwd
-                        });
-                    }
+                    case ClickFallback.AttachSocket:
+                        // The pane is already selected — FocusTmux did that
+                        // before finding no client — so a plain attach lands on
+                        // the right pane rather than on whatever the session
+                        // last had current.
+                        AgentTeamViewer.AttachTmuxSocket(
+                            ResolveTmuxBinary(status.TmuxBin) ?? "", status.TmuxSocket, status.Cwd);
+                        break;
+
+                    case ClickFallback.None:
+                        // Coordinates were recorded and could not be resolved.
+                        // Deliberately nothing further: opening a second window
+                        // onto a session that already has one would hide a real
+                        // failure behind a new window every time. The failure is
+                        // reported (to stderr, which a bundled app has nowhere to
+                        // show — a follow-up ticket, not this one).
+                        break;
                 }
             });
+        }
+
+        // `claude attach <id>`, and then the ordinary focus path onto whatever it
+        // produced.
+        //
+        // Shared by the two answers that end in an attach — a background job in
+        // any phase, and a session with no coordinates at all — because what
+        // happens *after* the attach is identical and is the part that was
+        // missing when this was first written: if it went into tmux, the pane
+        // still has to be selected and its client's window raised, which
+        // FocusCore already knows how to do for every other pane in the app.
+        private static void AttachAndFocus(string sessionId, string cwd)
+        {
+            var pane = AgentTeamViewer.AttachSession(sessionId, cwd);
+            if (string.IsNullOrEmpty(pane)) return;
+
+            FocusCore(new SessionStatus { TmuxPane = pane, Cwd = cwd });
         }
 
         // Types transcribed speech into the exact terminal/pane a session's
@@ -299,8 +314,18 @@ namespace ClaudeBuddy
         // Whether anything was actually brought forward. False means the click
         // had no effect at all, which is what the team-lead fallback above is
         // for — and what made two orbs on screen feel broken before it existed.
-        private static bool FocusCore(SessionStatus status)
+        private static bool FocusCore(SessionStatus status) => FocusCore(status, out _);
+
+        // paneAliveButDetached is only ever set by the tmux branch, and only for
+        // the one outcome no other rule can see from outside: the pane exists and
+        // nothing is attached to its server. Threaded out as a second answer
+        // rather than folded into the bool, because it is not a *kind* of failure
+        // to focus — it is a fact about where the session is, which the caller
+        // needs and which costs three subprocesses to establish.
+        private static bool FocusCore(SessionStatus status, out bool paneAliveButDetached)
         {
+            paneAliveButDetached = false;
+
             if (OperatingSystem.IsWindows())
             {
                 FocusWindows(status);
@@ -311,7 +336,11 @@ namespace ClaudeBuddy
 
             // tmux first: when a session is inside tmux, nothing else the hook
             // recorded points at a window you can actually see.
-            if (!string.IsNullOrEmpty(status.TmuxPane) && FocusTmux(status)) return true;
+            if (!string.IsNullOrEmpty(status.TmuxPane)
+                && FocusTmux(status, out paneAliveButDetached))
+            {
+                return true;
+            }
 
             string? script;
             if (!string.IsNullOrEmpty(status.TermId))
@@ -385,8 +414,10 @@ namespace ClaudeBuddy
         //      you can detach and reattach a tmux session from a different app
         //      (or from none at all), so it's resolved from the live client's
         //      tty on every click.
-        private static bool FocusTmux(SessionStatus status)
+        private static bool FocusTmux(SessionStatus status, out bool paneAliveButDetached)
         {
+            paneAliveButDetached = false;
+
             var tmux = ResolveTmuxBinary(status.TmuxBin);
             if (tmux is null) return false;
 
@@ -412,7 +443,19 @@ namespace ClaudeBuddy
             // but there's no window to bring forward. Report that we didn't
             // activate anything so the caller can still try its own heuristics
             // rather than treating the click as handled.
-            if (client is null) return false;
+            //
+            // And say *why*, which is the new part. "Couldn't focus" and "there
+            // is a live pane here with no screen on it" are different facts, and
+            // only the second one has an answer: attach a terminal to this
+            // server and the user is looking at the pane that was already
+            // selected two lines up. Left as a bare false, this was the exact
+            // path a click on an agent-team member in a detached swarm socket
+            // took to doing nothing at all.
+            if (client is null)
+            {
+                paneAliveButDetached = true;
+                return false;
+            }
 
             var (clientTty, controlMode) = client.Value;
             var app = ResolveAppBundleForTty(clientTty);
