@@ -474,6 +474,243 @@ public class SessionPresenceTests
             new[] { "", "0e043819" }, "0e043819-3c45-4f1a-9c2b-8d4e5f6a7b8c"));
     }
 
+    // --- TitleSaysViewing ----------------------------------------------------
+
+    private const string Glyph = "\u2733 ";
+    private const string Work = "Claude desktop app multiple profiles bug";
+
+    // What Claude Code's TUI actually writes, measured off a live pane: the
+    // glyph, a space, then the conversation title verbatim.
+    [Fact]
+    public void APaneTitledByClaudeCodeMatchesItsSession()
+    {
+        Assert.True(SessionPresence.TitleSaysViewing(Glyph + Work, Work));
+    }
+
+    // The false positive this whole clause exists for. A pane title is writable
+    // by any program — one `printf` of an OSC 2 escape — so an editor opened on a
+    // file of the same name would otherwise be mistaken for the session, and the
+    // click would be sent to it. Without the glyph there is no match.
+    [Fact]
+    public void APaneSomeOtherProgramTitledDoesNotMatch()
+    {
+        Assert.False(SessionPresence.TitleSaysViewing(Work, Work));
+        Assert.False(SessionPresence.TitleSaysViewing("vim " + Work, Work));
+        Assert.False(SessionPresence.TitleSaysViewing("~/src \u2014 " + Work, Work));
+    }
+
+    // A different glyph is not this glyph. Stated because the observed set is one
+    // member and a future version could grow another, and the direction of that
+    // failure is the safe one: no match sends the click down the attach ladder,
+    // where the worst case is a duplicate pane the user can see and close.
+    [Fact]
+    public void AnotherGlyphIsNotTheOne()
+    {
+        Assert.False(SessionPresence.TitleSaysViewing("\u2733" + Work, Work));   // no space
+        Assert.False(SessionPresence.TitleSaysViewing("\u273b " + Work, Work));  // a spinner frame
+        Assert.False(SessionPresence.TitleSaysViewing("* " + Work, Work));
+    }
+
+    // An exact suffix, not a contains: a pane whose title merely mentions the
+    // session — a shell sitting in a directory of that name, a log being tailed —
+    // is not showing the conversation.
+    [Fact]
+    public void APaneThatOnlyMentionsTheTitleDoesNotMatch()
+    {
+        Assert.False(SessionPresence.TitleSaysViewing(Glyph + Work + " (log)", Work));
+        Assert.False(SessionPresence.TitleSaysViewing(Glyph + "re: " + Work + " notes", Work));
+
+        // A longer conversation title that ends with the shorter one is a genuine
+        // suffix match and is allowed — the app cannot tell those apart, and the
+        // process check plus the claimed-pane rule are what narrow it.
+        Assert.True(SessionPresence.TitleSaysViewing(Glyph + "re: " + Work, Work));
+    }
+
+    // Nothing to match on either side. A session whose title the hook never
+    // caught is the common case here, and it must fall through rather than match
+    // every Claude pane on the machine.
+    [Theory]
+    [InlineData(null, "x")]
+    [InlineData("", "x")]
+    [InlineData("\u2733 x", null)]
+    [InlineData("\u2733 x", "")]
+    [InlineData(null, null)]
+    public void NothingToMatchIsNotAMatch(string? paneTitle, string? sessionTitle)
+    {
+        Assert.False(SessionPresence.TitleSaysViewing(paneTitle, sessionTitle));
+    }
+
+    // The glyph alone, with no title after it — the degenerate case that would
+    // otherwise satisfy both StartsWith and EndsWith against a title that is
+    // itself the glyph.
+    [Fact]
+    public void TheGlyphWithNothingAfterItIsNotAMatch()
+    {
+        Assert.False(SessionPresence.TitleSaysViewing("\u2733 ", "\u2733 "));
+        Assert.False(SessionPresence.TitleSaysViewing("\u2733", "\u2733"));
+    }
+
+    // --- LooksLikeClaudeBinary -----------------------------------------------
+
+    // Both shapes observed live on one machine, and neither is what the obvious
+    // rule catches. An interactive session runs as plain `claude`; a team member
+    // runs as the versioned install path, whose file *name* is a version number —
+    // which is also what tmux reports as that pane's current command.
+    [Fact]
+    public void BothShapesOfTheClaudeBinaryAreRecognised()
+    {
+        Assert.True(SessionPresence.LooksLikeClaudeBinary("claude"));
+        Assert.True(SessionPresence.LooksLikeClaudeBinary("/Users/w/.local/bin/claude"));
+        Assert.True(SessionPresence.LooksLikeClaudeBinary(
+            "/Users/w/.local/share/claude/versions/2.1.246"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("-zsh")]
+    [InlineData("vim")]
+    [InlineData("/usr/bin/tmux")]
+    [InlineData("/Users/w/claude-notes/versions/1.0")]
+    public void AnythingElseIsNotTheClaudeBinary(string? argv0)
+    {
+        Assert.False(SessionPresence.LooksLikeClaudeBinary(argv0));
+    }
+
+    // --- ViewerAmong ---------------------------------------------------------
+
+    private static SessionPresence.ViewerPane Pane(
+        string id, string window = "warren:1", bool active = true, bool claimed = false) =>
+        new(id, window, active, claimed);
+
+    [Fact]
+    public void NoCandidatesIsNoViewer()
+    {
+        var (verdict, pane) = SessionPresence.ViewerAmong(
+            Array.Empty<SessionPresence.ViewerPane>(), "warren:1");
+
+        Assert.Equal(SessionPresence.ViewerVerdict.NoneFound, verdict);
+        Assert.Null(pane);
+    }
+
+    // The case round seven exists for: the pane in front of them is showing it,
+    // so the click does nothing.
+    [Fact]
+    public void TheActivePaneOfTheUsersOwnWindowMeansTheyAreLookingAtIt()
+    {
+        var (verdict, _) = SessionPresence.ViewerAmong(
+            new[] { Pane("%6", "warren:1", active: true) }, "warren:1");
+
+        Assert.Equal(SessionPresence.ViewerVerdict.TheUserIsLookingAtIt, verdict);
+    }
+
+    // Same window, but not the pane they are looking at — a split they have
+    // scrolled away from. That is "elsewhere": selecting it is a real move and a
+    // wanted one.
+    [Fact]
+    public void AnInactivePaneInTheirWindowIsStillElsewhere()
+    {
+        var (verdict, pane) = SessionPresence.ViewerAmong(
+            new[] { Pane("%7", "warren:1", active: false) }, "warren:1");
+
+        Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
+        Assert.Equal("%7", pane);
+    }
+
+    // Their window could not be resolved, so nothing can be called the pane they
+    // are looking at and every match is treated as elsewhere. Fails toward doing
+    // something visible rather than toward silently doing nothing, which is the
+    // right way round: a click that opens a pane is recoverable, a click that
+    // decides you were already looking at something is not distinguishable from
+    // a broken one.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void WithNoKnownWindowEveryMatchIsElsewhere(string? usersWindow)
+    {
+        var (verdict, pane) = SessionPresence.ViewerAmong(
+            new[] { Pane("%6", "warren:1", active: true) }, usersWindow);
+
+        Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
+        Assert.Equal("%6", pane);
+    }
+
+    // The collision guard, and the asymmetry that makes a shared title safe. Four
+    // panes carried one identical title for three sessions on the machine this was
+    // built for, because every member of an agent team inherits the team session's
+    // title. A pane another session's status file claims is the pane most likely to
+    // be one of those, and it is reachable by its own recorded coordinates anyway.
+    [Fact]
+    public void APaneAnotherSessionClaimsIsNotFocused()
+    {
+        var (verdict, pane) = SessionPresence.ViewerAmong(
+            new[] { Pane("%53", "claude-swarm:1", active: true, claimed: true) }, "warren:1");
+
+        Assert.Equal(SessionPresence.ViewerVerdict.NoneFound, verdict);
+        Assert.Null(pane);
+    }
+
+    // ...but the claim does not stop the do-nothing answer, and that is
+    // deliberate. Whatever a matched pane in front of the user holds, they are
+    // reading it, so doing nothing cannot be wrong about which session it found.
+    [Fact]
+    public void AClaimedPaneTheUserIsLookingAtStillStopsTheClick()
+    {
+        var (verdict, _) = SessionPresence.ViewerAmong(
+            new[] { Pane("%6", "warren:1", active: true, claimed: true) }, "warren:1");
+
+        Assert.Equal(SessionPresence.ViewerVerdict.TheUserIsLookingAtIt, verdict);
+    }
+
+    // Ambiguity beyond the user's own pane: prefer the one active in its own
+    // window, else the first found. Rare enough to state rather than engineer,
+    // since a title is per conversation and only a team shares one.
+    [Fact]
+    public void AmongSeveralElsewhereTheActiveOneWins()
+    {
+        var (verdict, pane) = SessionPresence.ViewerAmong(
+            new[]
+            {
+                Pane("%21", "claude-swarm:1", active: false),
+                Pane("%53", "claude-swarm:1", active: true),
+            },
+            "warren:1");
+
+        Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
+        Assert.Equal("%53", pane);
+    }
+
+    [Fact]
+    public void WithNoneActiveTheFirstFoundWins()
+    {
+        var (_, pane) = SessionPresence.ViewerAmong(
+            new[]
+            {
+                Pane("%21", "claude-swarm:1", active: false),
+                Pane("%53", "claude-swarm:2", active: false),
+            },
+            "warren:1");
+
+        Assert.Equal("%21", pane);
+    }
+
+    // A claimed pane is skipped rather than taken as the answer, so an unclaimed
+    // one behind it still wins.
+    [Fact]
+    public void AClaimedPaneDoesNotShadowAnUnclaimedOne()
+    {
+        var (verdict, pane) = SessionPresence.ViewerAmong(
+            new[]
+            {
+                Pane("%53", "claude-swarm:1", active: true, claimed: true),
+                Pane("%99", "other:1", active: false),
+            },
+            "warren:1");
+
+        Assert.Equal(SessionPresence.ViewerVerdict.ElsewhereInTmux, verdict);
+        Assert.Equal("%99", pane);
+    }
+
     // --- RuledOutAsAJob ------------------------------------------------------
 
     // The gate on an orb's existence, and the reversal this round made: only a

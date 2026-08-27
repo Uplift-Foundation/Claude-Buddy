@@ -324,6 +324,169 @@ namespace ClaudeBuddy
             return false;
         }
 
+        // --- a pane that is already showing a session -------------------------
+
+        // The glyph Claude Code's TUI puts in front of the conversation title
+        // when it writes the tmux pane title.
+        //
+        // U+2733, EIGHT SPOKED ASTERISK, followed by a space. Observed rather
+        // than documented — nothing in Claude Code promises this — so it was
+        // measured before it was relied on: 24 samples over ten seconds across
+        // three panes, one of them mid-turn and two idle, and every one of the 72
+        // readings was the same glyph. It is a brand mark, not a state
+        // indicator, and it does not animate. That was worth establishing,
+        // because a spinner in this position would have made the prefix useless.
+        //
+        // Requiring it is the conservative direction and the direction matters.
+        // A pane title is writable by any program — `printf '\033]2;...\007'` is
+        // all it takes — so a prefix this specific is what separates a real
+        // Claude Code pane from an editor someone opened on a file with the same
+        // name. If a future version changes the glyph, this rule stops matching
+        // and the click falls through to the attach ladder: the user gets the
+        // duplicate pane this feature exists to avoid, which is visible,
+        // closable and immediately reported. The opposite mistake — matching
+        // something that is not a session — sends a click to another program's
+        // window and says nothing.
+        internal const string PaneTitleGlyph = "\u2733 ";
+
+        // Whether a tmux pane's title says it is showing this session's
+        // conversation.
+        //
+        // Only the *title* half of the question, and named so. It is not
+        // sufficient on its own and cannot be made so: on the machine this was
+        // built for, four panes carried the identical title
+        // "\u2733 Claude desktop app multiple profiles bug" for three different
+        // sessions, because every member of an agent team inherits the team
+        // session's title. So this is a filter that produces candidates, and what
+        // narrows them is the process behind the pane and, for the riskier of the
+        // two outcomes, which panes other sessions already claim.
+        //
+        // An exact suffix rather than a contains: the title is the whole of what
+        // the TUI puts after the glyph, and "contains" would match a pane whose
+        // title merely mentions this session's name — a shell in a directory of
+        // that name, a log file being tailed.
+        internal static bool TitleSaysViewing(string? paneTitle, string? sessionTitle)
+        {
+            if (string.IsNullOrEmpty(paneTitle) || string.IsNullOrEmpty(sessionTitle)) return false;
+
+            // A session whose own title is a glyph-prefixed string would
+            // otherwise let a bare title match; and the two halves must not
+            // overlap, or "\u2733 x" would match session title "\u2733 x" with
+            // nothing in between.
+            if (paneTitle.Length <= PaneTitleGlyph.Length) return false;
+
+            return paneTitle.StartsWith(PaneTitleGlyph, StringComparison.Ordinal)
+                && paneTitle.EndsWith(sessionTitle, StringComparison.Ordinal)
+                && paneTitle.Length >= PaneTitleGlyph.Length + sessionTitle.Length;
+        }
+
+        // Whether an argv[0] names the Claude Code binary — the belt to the
+        // title's braces, asked of the process behind a candidate pane.
+        //
+        // Two shapes, both observed live, and neither is what the obvious rule
+        // would catch. An interactive session launched from a shell runs as plain
+        // `claude`; a team member runs as
+        // `/Users/…/.local/share/claude/versions/2.1.246`, whose file *name* is a
+        // version number and whose `pane_current_command` tmux reports is
+        // "2.1.246". So a filename test alone misses every teammate, and this
+        // takes the versioned install path as the second form.
+        //
+        // Kept beside the title rule rather than in the scan that uses it,
+        // because "what counts as the Claude binary" is precisely the sort of
+        // thing that gets a second, differently-wrong copy — ViewerPids has the
+        // filename half of it already, for the narrower job of spotting
+        // `claude agents`.
+        internal static bool LooksLikeClaudeBinary(string? argv0)
+        {
+            if (string.IsNullOrEmpty(argv0)) return false;
+
+            if (System.IO.Path.GetFileName(argv0) is "claude" or "claude.exe") return true;
+
+            return argv0.Contains("/claude/versions/", StringComparison.Ordinal)
+                || argv0.Contains("\\claude\\versions\\", StringComparison.Ordinal);
+        }
+
+        // What was found, because the two findings mean opposite things to a
+        // click.
+        internal enum ViewerVerdict
+        {
+            // No pane is showing this session. The click carries on down the
+            // attach ladder.
+            NoneFound,
+
+            // The pane the user is looking at right now is showing it. **The
+            // click does nothing**, and that is the entire point of round seven:
+            // "Nobody wants the same chat in two windows next to each other!!
+            // This is the chat!!" Doing nothing is also the one outcome that
+            // cannot be wrong about *which* session it found — whatever that pane
+            // holds, the user is already reading it, so a title collision costs
+            // nothing here.
+            TheUserIsLookingAtIt,
+
+            // A pane elsewhere in tmux is showing it. Focused through the
+            // ordinary select-window/select-pane tail — no attach, no split, no
+            // duplicate.
+            ElsewhereInTmux
+        }
+
+        // One candidate pane, as the scan found it. Title and process have already
+        // been vetted by the caller; what is left is pure choosing.
+        internal readonly record struct ViewerPane(
+            string Pane, string Window, bool ActiveInItsWindow, bool ClaimedByAnother);
+
+        // Which candidate answers the click, and how.
+        //
+        // usersWindow is "<session>:<index>" for the window their attached client
+        // is showing, or null when that could not be resolved — in which case
+        // nothing can be called "the pane they are looking at" and every match is
+        // treated as elsewhere.
+        //
+        // The asymmetry between the two outcomes is deliberate and is what makes
+        // a title collision survivable. Doing nothing needs no certainty about
+        // which session was found. *Focusing* a pane does: send a click to the
+        // wrong same-titled pane and it silently shows another conversation, which
+        // is worse than the duplicate pane this feature replaces. So the
+        // elsewhere branch additionally refuses any pane another session's status
+        // file claims as its own — those sessions are reachable by their recorded
+        // coordinates and never need this path, so excluding them costs nothing
+        // and removes exactly the panes most likely to collide.
+        internal static (ViewerVerdict Verdict, string? Pane) ViewerAmong(
+            IReadOnlyList<ViewerPane> candidates, string? usersWindow)
+        {
+            if (candidates.Count == 0) return (ViewerVerdict.NoneFound, null);
+
+            if (!string.IsNullOrEmpty(usersWindow))
+            {
+                foreach (var pane in candidates)
+                {
+                    if (pane.ActiveInItsWindow
+                        && string.Equals(pane.Window, usersWindow, StringComparison.Ordinal))
+                    {
+                        return (ViewerVerdict.TheUserIsLookingAtIt, pane.Pane);
+                    }
+                }
+            }
+
+            // Ambiguity beyond that is rare — a title is assigned per
+            // conversation and only a team shares one — so the tie-break is
+            // stated rather than engineered: the pane that is active in its own
+            // window, else the first found.
+            ViewerPane? best = null;
+
+            foreach (var pane in candidates)
+            {
+                if (pane.ClaimedByAnother) continue;
+                if (best is null || (pane.ActiveInItsWindow && !best.Value.ActiveInItsWindow))
+                {
+                    best = pane;
+                }
+            }
+
+            return best is null
+                ? (ViewerVerdict.NoneFound, null)
+                : (ViewerVerdict.ElsewhereInTmux, best.Value.Pane);
+        }
+
         // Whether two ids name the same job.
         //
         // Prefix in both directions, and empty matches nothing. `claude attach`

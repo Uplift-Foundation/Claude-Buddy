@@ -596,7 +596,8 @@ namespace ClaudeBuddy
         // pure both sides of the call, and where it goes is ClickRouting's, which
         // is pure and covered per case.
         [ExcludeFromCodeCoverage]
-        public void OpenElsewhere() => TerminalFocuser.Elsewhere(_status, SessionId);
+        public void OpenElsewhere() => TerminalFocuser.Elsewhere(
+            _status, SessionId, SessionManager.Instance?.PanesClaimedByOthers(SessionId));
 
         // A message sent from the panel, waiting for the transcript row it will
         // produce. Held so the two can be reconciled instead of the same

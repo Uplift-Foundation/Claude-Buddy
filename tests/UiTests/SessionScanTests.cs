@@ -55,7 +55,7 @@ public class SessionScanTests
             string sessionId, string state = "idle", string cli = "",
             string title = "", string cwd = "/Users/warren/project",
             int? pid = null, string termProgram = "iTerm.app",
-            DateTime? written = null)
+            DateTime? written = null, string tmuxPane = "")
         {
             var path = Path.Combine(Dir, sessionId + ".txt");
             File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new SessionStatus
@@ -67,6 +67,7 @@ public class SessionScanTests
                 SessionPid = pid ?? LivePid,
                 TermProgram = termProgram,
                 Tty = "/dev/ttys004",
+                TmuxPane = tmuxPane,
             }));
 
             if (written is not null) File.SetLastWriteTimeUtc(path, written.Value);
@@ -1794,5 +1795,82 @@ public class SessionScanTests
         // the next scan sees the pid stop answering, which is the same path any
         // other ending session takes.
         Assert.Null(manager.StatusFor("no-orb-was-touched"));
+    }
+
+    // --- PanesClaimedByOthers -----------------------------------------------
+
+    // Seeded straight into _statuses rather than scanned in from files, and the
+    // reason is the thing this method exists to work around. Several sessions with
+    // *different* recorded panes is the whole point of the rule, and a test cannot
+    // write that through a scan: the only pid a test can be sure is alive is its
+    // own, so every scratch file would share one — and InheritTerminalInfo
+    // deliberately donates terminal fields between files sharing a pid, so the two
+    // sessions arrive holding the same pane and the fixture destroys itself. The
+    // dictionary is already reached this way by the tests above; what is asserted
+    // here is the projection over it, which is all this method is.
+    private static SessionManager Seeded(
+        Scratch scratch, params (string Id, string Pane)[] sessions)
+    {
+        var manager = Manager(scratch);
+        var statuses = Statuses(manager);
+
+        foreach (var (id, pane) in sessions)
+        {
+            statuses[id] = new SessionStatus { Cwd = "/Users/warren/project", TmuxPane = pane };
+        }
+
+        return manager;
+    }
+
+    // The disambiguator the pane-title viewer scan needs. A conversation title is
+    // shared by every member of an agent team, so several panes can match one
+    // session's title — four panes with one identical title for three sessions, on
+    // the machine this was built for. A pane another session's file claims is the
+    // one most likely to be one of those, and excluding it costs nothing: that
+    // session is reached by its own recorded coordinates long before the viewer
+    // path is asked.
+    [AvaloniaFact]
+    public void ThePanesOtherSessionsClaimAreListedAndThisOnesIsNot()
+    {
+        using var scratch = new Scratch();
+
+        var claimed = Seeded(scratch, ("mine", "%6"), ("theirs", "%53"), ("also", "%21"))
+            .PanesClaimedByOthers("mine");
+
+        Assert.Contains("%53", claimed);
+        Assert.Contains("%21", claimed);
+
+        // Its own pane is not "claimed by another" — the point is to exclude panes
+        // belonging to other conversations, and a session must never exclude
+        // itself from its own candidates.
+        Assert.DoesNotContain("%6", claimed);
+    }
+
+    // A session that records no pane contributes nothing, rather than an empty
+    // string that would then match a pane id nobody has.
+    [AvaloniaFact]
+    public void ASessionWithNoPaneClaimsNothing()
+    {
+        using var scratch = new Scratch();
+
+        var claimed = Seeded(scratch, ("mine", "%6"), ("paneless", ""))
+            .PanesClaimedByOthers("mine");
+
+        Assert.Empty(claimed);
+    }
+
+    // No id given — the shape the chat panel's button can produce — means every
+    // recorded pane counts as another session's. That is the conservative
+    // direction: with nothing to exclude itself by, the viewer scan should decline
+    // to focus a pane rather than guess which one is its own.
+    [AvaloniaFact]
+    public void WithNoSessionIdEveryRecordedPaneCountsAsAnothers()
+    {
+        using var scratch = new Scratch();
+
+        var claimed = Seeded(scratch, ("one", "%6"), ("two", "%53"))
+            .PanesClaimedByOthers(null);
+
+        Assert.Equal(2, claimed.Count);
     }
 }

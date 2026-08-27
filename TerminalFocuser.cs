@@ -43,10 +43,16 @@ namespace ClaudeBuddy
         // it's the status file's name, not a field inside it. Needed for the
         // background case at the end, where the only way to reach a session is
         // to name it.
+        // panesClaimedByOthers is SessionManager's answer to "which tmux panes do
+        // other sessions record as their own", handed in the same way teamLead is
+        // and for the same reason: which status files exist is not this file's
+        // knowledge. Only the viewer scan uses it, and only for its riskier
+        // branch — see SessionManager.PanesClaimedByOthers.
         public static void Focus(
             SessionStatus? status,
             SessionStatus? teamLead = null,
-            string? sessionId = null)
+            string? sessionId = null,
+            IReadOnlySet<string>? panesClaimedByOthers = null)
         {
             if (status is null) return;
 
@@ -104,7 +110,7 @@ namespace ClaudeBuddy
                     return;
                 }
 
-                RunFallback(fallback, status, sessionId);
+                RunFallback(fallback, status, sessionId, panesClaimedByOthers);
             });
         }
 
@@ -117,7 +123,8 @@ namespace ClaudeBuddy
         // Focus above satisfies by being inside its own Task.Run, and Elsewhere
         // below by starting one.
         private static void RunFallback(
-            ClickFallback fallback, SessionStatus status, string? sessionId)
+            ClickFallback fallback, SessionStatus status, string? sessionId,
+            IReadOnlySet<string>? panesClaimedByOthers)
         {
             switch (fallback)
             {
@@ -130,6 +137,37 @@ namespace ClaudeBuddy
 
                 case ClickFallback.AttachBackground:
                 case ClickFallback.AttachById:
+                    // Step zero, ahead of anything that creates a window: is a
+                    // pane already showing this conversation?
+                    //
+                    // "Nobody wants the same chat in two windows next to each
+                    // other!! This is the chat!!" — said after round 6a split a
+                    // second view of the session the user was reading into the
+                    // window they were reading it in. Every earlier round assumed
+                    // this was undiscoverable, and the socket, file, argv and
+                    // environment proofs of that all stand; what none of them
+                    // covered is that the TUI publishes the conversation title to
+                    // the terminal, where tmux keeps it in #{pane_title}.
+                    //
+                    // Only the two attach answers ask. The socket answer is about a
+                    // pane in a *detached* server, which by definition nobody is
+                    // looking at, and the roster is a destination the user named
+                    // outright from a menu.
+                    switch (AgentTeamViewer.ViewingPane(status.Title, panesClaimedByOthers))
+                    {
+                        // Already on screen, in front of them. Doing nothing is the
+                        // whole feature: any window this opened would be a second
+                        // copy of what they are reading.
+                        case (SessionPresence.ViewerVerdict.TheUserIsLookingAtIt, _):
+                            return;
+
+                        // On screen elsewhere. Focused through the ordinary pane
+                        // tail — no attach, no split, nothing new.
+                        case (SessionPresence.ViewerVerdict.ElsewhereInTmux, { } showing):
+                            FocusPaneIfAny(showing, status.Cwd);
+                            return;
+                    }
+
                     FocusPaneIfAny(AgentTeamViewer.AttachSession(sessionId!, status.Cwd), status.Cwd);
                     break;
 
@@ -168,7 +206,8 @@ namespace ClaudeBuddy
         {
             if (status is null) return;
 
-            Task.Run(() => RunFallback(ClickFallback.AgentsView, status, sessionId: null));
+            Task.Run(() => RunFallback(
+                ClickFallback.AgentsView, status, sessionId: null, panesClaimedByOthers: null));
         }
 
         // The chat panel's half of the same answer: it has made no focus attempt,
@@ -176,13 +215,15 @@ namespace ClaudeBuddy
         // carries out whatever comes back. One verb, one destination — see
         // ClickRouting.AttachWouldReach, which decides whether the button is
         // offered at all.
-        public static void Elsewhere(SessionStatus? status, string? sessionId)
+        public static void Elsewhere(
+            SessionStatus? status, string? sessionId,
+            IReadOnlySet<string>? panesClaimedByOthers = null)
         {
             if (status is null) return;
 
             Task.Run(() => RunFallback(
                 ClickRouting.FallbackFor(status, sessionId, paneAliveButDetached: false),
-                status, sessionId));
+                status, sessionId, panesClaimedByOthers));
         }
 
         // The tail every opener above shares: if what it opened (or found) went

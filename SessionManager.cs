@@ -1733,6 +1733,42 @@ namespace ClaudeBuddy
         public SessionStatus? StatusFor(string? sessionId) =>
             string.IsNullOrEmpty(sessionId) ? null : _statuses.GetValueOrDefault(sessionId);
 
+        // Every tmux pane some *other* session's status file claims as its own.
+        //
+        // The disambiguator the pane-title viewer scan needs, and it needs it for
+        // one branch only. A conversation title is shared by every member of an
+        // agent team, so several panes can match one session's title — measured on
+        // the machine this was built for, four panes with one identical title for
+        // three sessions. Answering "the user is already looking at it" survives
+        // that, because whatever the matched pane holds the user is reading it.
+        // Answering "go to that pane" does not: focus the wrong same-titled pane
+        // and it silently shows another conversation.
+        //
+        // A pane another session records is exactly the pane most likely to
+        // collide, and excluding it costs nothing: a session that records its own
+        // pane is reached by FocusCore long before any of this, so it never needs
+        // the viewer path and never loses anything by being kept out of another
+        // session's candidates.
+        //
+        // Answered here rather than by the scan itself, for the same reason
+        // StatusFor is handed to TerminalFocuser rather than looked up inside it:
+        // which files exist and what they claim is this class's knowledge, and
+        // AgentTeamViewer deliberately depends on nothing in it.
+        public IReadOnlySet<string> PanesClaimedByOthers(string? sessionId)
+        {
+            var claimed = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var (id, status) in _statuses)
+            {
+                if (string.Equals(id, sessionId, StringComparison.Ordinal)) continue;
+                if (string.IsNullOrEmpty(status.TmuxPane)) continue;
+
+                claimed.Add(status.TmuxPane);
+            }
+
+            return claimed;
+        }
+
         // The orbs that follow this one when it's dragged: the members of the
         // team it leads. Empty for everything else, including a member — a
         // member is dragged on its own, which is how you pull one out of the
