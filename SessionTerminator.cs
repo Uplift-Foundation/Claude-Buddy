@@ -16,6 +16,14 @@ namespace ClaudeBuddy
     // which deletes the status file and takes the orb with it. SIGKILL would
     // leave both behind and land the cleanup on the sweep instead.
     //
+    // That reasoning is the Unix arm's alone, and the Windows arm cannot have
+    // it: Kill() is TerminateProcess, which is unconditional and runs no
+    // shutdown, so there is no SessionEnd and no `rm -f`. On Windows the orb
+    // still goes on the next scan — the pid stops answering, which is all
+    // ProcessGone needs — and the file waits for the sweep's grace to expire.
+    // Nothing is lost either way; the difference is ten minutes of a file
+    // nobody is looking at, and .NET offers no portable "ask it to stop".
+    //
     // Only ever the session's own pid. Not TermPid, which is the terminal the
     // user is typing in; not the daemon, which hosts every other background job
     // on the machine. One worker hosts exactly one session — each row of

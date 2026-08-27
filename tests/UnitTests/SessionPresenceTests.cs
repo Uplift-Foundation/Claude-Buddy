@@ -104,16 +104,42 @@ public class SessionPresenceTests
     {
         // A background worker's file: a pid of its own, and no terminal, because
         // the daemon that runs it has none to inherit.
-        Assert.True(SessionPresence.WorthAskingTheDaemon(Status(), knowsATerminal: false));
+        Assert.True(SessionPresence.WorthAskingTheDaemon(
+            Status(), knowsATerminal: false, sharesItsPid: false));
 
         // A hook older than the session_pid field. Asked whatever else is true,
         // which is the rule that predates this one.
-        Assert.True(SessionPresence.WorthAskingTheDaemon(Status(pid: 0), knowsATerminal: true));
+        Assert.True(SessionPresence.WorthAskingTheDaemon(
+            Status(pid: 0), knowsATerminal: true, sharesItsPid: false));
 
-        // A session in a window on this machine, or one sharing a pid with such
-        // a session. Neither is a pooled worker, and this is the case that is
-        // almost every session almost all of the time.
-        Assert.False(SessionPresence.WorthAskingTheDaemon(Status(), knowsATerminal: true));
+        // An ordinary session: a window on this machine, its own pid, and nothing
+        // else sharing it. Almost every session almost all of the time, and the
+        // one case that must not spend a subprocess.
+        Assert.False(SessionPresence.WorthAskingTheDaemon(
+            Status(), knowsATerminal: true, sharesItsPid: false));
+    }
+
+    // The third shape, and the one that was missing. An Agent-View-dispatched
+    // background session does not fork a process — it starts a second
+    // conversation inside the `claude` process already running — so its file
+    // names a live interactive session's pid. BackgroundJobs' own comment names
+    // it as one of exactly two shapes only the daemon can settle, and the first
+    // version of this gate refused to ask about it.
+    //
+    // Refused twice over, in fact: InheritTerminalInfo donates terminal fields
+    // between files sharing a pid, so such a file *acquires* a terminal before
+    // this is asked and then reads as an ordinary session. Which is also why the
+    // clause needs no pre-inheritance snapshot beside it — the donation only
+    // happens inside a (pid, source) group, so anything it could have touched
+    // shares its pid by definition.
+    [Fact]
+    public void AFileSharingItsPidWithAnotherIsAlwaysWorthAsking()
+    {
+        Assert.True(SessionPresence.WorthAskingTheDaemon(
+            Status(), knowsATerminal: true, sharesItsPid: true));
+
+        Assert.True(SessionPresence.WorthAskingTheDaemon(
+            Status(pid: 0), knowsATerminal: true, sharesItsPid: true));
     }
 
     // Codex has no background jobs to be one of, and a gateway or bridged
@@ -130,10 +156,13 @@ public class SessionPresenceTests
         foreach (var source in others)
         {
             Assert.False(SessionPresence.WorthAskingTheDaemon(
-                Status(source: source), knowsATerminal: false));
+                Status(source: source), knowsATerminal: false, sharesItsPid: false));
 
             Assert.False(SessionPresence.WorthAskingTheDaemon(
-                Status(source: source, pid: 0), knowsATerminal: false));
+                Status(source: source, pid: 0), knowsATerminal: false, sharesItsPid: false));
+
+            Assert.False(SessionPresence.WorthAskingTheDaemon(
+                Status(source: source), knowsATerminal: true, sharesItsPid: true));
         }
     }
 

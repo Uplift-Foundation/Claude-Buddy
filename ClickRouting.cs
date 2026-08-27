@@ -16,12 +16,19 @@ namespace ClaudeBuddy
     // user saw nothing move.
     internal enum ClickFallback
     {
-        // Coordinates were recorded and could not be resolved. Deliberately
-        // still nothing: this is the case the old gate's
-        // diagnosis-over-surprise-window reasoning was written for, and it
-        // holds — a session that named a terminal has one, and opening a
-        // *second* window onto it would hide a real failure behind a new
-        // window every time.
+        // Nothing further to try, which is not quite the same as "coordinates
+        // were recorded". The rule below reaches this for a session that
+        // recorded coordinates *and* has a pid, and for one this app will not
+        // attach for at all (Codex, or an orb whose id was not passed in) —
+        // while a session with coordinates and no pid is answered by
+        // AttachBackground, because a hook too old to record a pid is too old to
+        // be trusted about the rest.
+        //
+        // Deliberately nothing in the case that matters, though: a session that
+        // named a terminal has one, and opening a *second* window onto it would
+        // hide a real failure behind a new window every time. That is the old
+        // gate's diagnosis-over-surprise-window reasoning, and it still holds
+        // exactly where it was written for.
         None,
 
         // A background job, in any phase: `claude attach <id>`. It has no

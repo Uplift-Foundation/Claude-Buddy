@@ -165,6 +165,29 @@ namespace ClaudeBuddy
             // would make it the normal case.
             if (!status.IsLocalCli) return Task.CompletedTask;
 
+            // And the other half of the same hazard, which the guard above only
+            // covered by accident of who tends to have it. A session that
+            // recorded no terminal coordinates at all is a local CLI, so it
+            // passes that test, and then every branch below fails to find
+            // anywhere to type until the last one sprays keystrokes at whatever
+            // is frontmost — a browser, an editor, somebody else's session.
+            //
+            // The mic is offered on every orb, and this branch keeps a whole
+            // class of terminal-less orbs on screen that used to be dropped, so
+            // the number of orbs that could do this has gone up. Same predicate
+            // the click path uses (ClickRouting.NoCoordinatesAtAll), which is
+            // the point: one answer to "is there anywhere to aim this", not two
+            // that can drift.
+            //
+            // Silently nothing, rather than an attach the way a *click* on the
+            // same orb gets. A click asks to be taken somewhere and a new window
+            // is a fair answer; dictation asks for words to arrive in a specific
+            // prompt, and the honest failure is that they do not arrive at all.
+            // Typing them into a terminal the user was not looking at, or
+            // opening one and racing its startup, are both worse than nothing —
+            // and unlike a click, nothing here is irreversible.
+            if (ClickRouting.NoCoordinatesAtAll(status)) return Task.CompletedTask;
+
             return Task.Run(async () =>
             {
                 // Reuses FocusCore as-is rather than a bespoke synchronous

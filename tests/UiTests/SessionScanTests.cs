@@ -953,14 +953,18 @@ public class SessionScanTests
     // out of this, exactly as the sibling test above does — WantsAgentViewer
     // fires for this shape by design, and TryAdopt's own first check is what
     // declines.
-    private static void WriteBackgroundFile(Scratch scratch, string sessionId, string state = "idle")
+    private static void WriteBackgroundFile(
+        Scratch scratch, string sessionId, string state = "idle", DateTime? written = null)
     {
-        File.WriteAllText(Path.Combine(scratch.Dir, sessionId + ".txt"),
-            System.Text.Json.JsonSerializer.Serialize(new SessionStatus
-            {
-                State = state,
-                SessionPid = LivePid,
-            }));
+        var path = Path.Combine(scratch.Dir, sessionId + ".txt");
+
+        File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+        {
+            State = state,
+            SessionPid = LivePid,
+        }));
+
+        if (written is not null) File.SetLastWriteTimeUtc(path, written.Value);
     }
 
     [AvaloniaFact]
@@ -1049,6 +1053,151 @@ public class SessionScanTests
         // with no grace period at all.
         Assert.True(File.Exists(Path.Combine(scratch.Dir, "bg-unknown.txt")));
         Assert.Contains("bg-unknown", OrbIds(manager));
+    }
+
+    // --- the two ways the daemon question used to be dodged ------------------
+    //
+    // Both defeat paths QA found, as fixtures. The gate that decides whether to
+    // spend a subprocess was written around "this file names no terminal", and a
+    // background session's file can name one two different ways.
+
+    [AvaloniaFact]
+    public void ABackgroundSessionThatBorrowedASiblingsTerminalIsStillDimmed()
+    {
+        // Path one: InheritTerminalInfo donates terminal fields between files
+        // that share a (pid, source), and the Agent-View-dispatched background
+        // session is exactly that shape — dispatching one does not fork a
+        // process, it starts a second conversation inside the `claude` process
+        // already running. So the job's file *acquires* a terminal from its
+        // interactive sibling before the phase question is put, and used to read
+        // as an ordinary session from that point on.
+        //
+        // Both files name this process's own pid, which is the one pid on the
+        // machine that is certainly alive — and the job's file is the *older* of
+        // the two, which is the real shape rather than a convenience:
+        // BackgroundJobs' own comment describes this session as one that "lost
+        // SessionManager.Superseded's pid tie-break", and it survives that only
+        // because the daemon still lists it. Written the other way round, the
+        // *interactive* file is the one Superseded drops, which is a real
+        // limitation of that rule and not what this test is about.
+        // Two seconds, not two minutes: the default "Keep orbs for" is five
+        // minutes, and an mtime older than that expires the orb before any of
+        // this is reached — which is a rule this test has no business exercising.
+        // All that is wanted is an ordering.
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "dispatched-job",
+            written: DateTime.UtcNow - TimeSpan.FromSeconds(2));
+        scratch.Write("interactive", title: "the terminal");
+
+        var manager = Manager(scratch, () => Listing(("dispatched-job", "blocked")));
+        manager.ScanAndUpdate();
+
+        var job = manager.StatusFor("dispatched-job");
+        Assert.NotNull(job);
+
+        // It did inherit — which is the point of the fixture, and what made the
+        // old gate refuse to ask about it.
+        Assert.Equal("iTerm.app", job!.TermProgram);
+
+        Assert.Equal(LocalSessionShape.Background, job.Shape);
+        Assert.True(job.Parked);
+        Assert.Equal(SessionKind.Background, job.Kind);
+
+        // And the sibling is untouched: a terminal session is never parked, and
+        // sharing a pid with a job does not make it one.
+        var sibling = manager.StatusFor("interactive");
+        Assert.NotNull(sibling);
+        Assert.Equal(LocalSessionShape.Terminal, sibling!.Shape);
+        Assert.False(sibling.Parked);
+    }
+
+    [AvaloniaFact]
+    public void ABackgroundSessionWhoseHookInheritedTermProgramIsStillDimmed()
+    {
+        // Path two, and the subtler one: the hook does not *decide* term_program,
+        // it interpolates $TERM_PROGRAM out of its environment
+        // (ClaudeBuddyHook.sh). A daemon started from inside a terminal passes
+        // that down to every job it hosts, so a background file can name a
+        // terminal with no sibling and no inheritance involved at all. This
+        // machine's daemon happens to be launchd-parented, which is why the
+        // field was empty in the forensics this branch was built from.
+        //
+        // Closed by asking about every Claude Code session once the listing has
+        // been paid for by *something* — here, the second file below, which is
+        // the ordinary no-terminal background shape.
+        using var scratch = new Scratch();
+
+        File.WriteAllText(Path.Combine(scratch.Dir, "env-job.txt"),
+            System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+            {
+                State = "idle",
+                SessionPid = LivePid,
+                TermProgram = "iTerm.app",   // inherited by the daemon, not resolved
+                Tty = "/dev/ttys004",
+            }));
+
+        WriteBackgroundFile(scratch, "plain-job");
+
+        var manager = Manager(
+            scratch, () => Listing(("env-job", "blocked"), ("plain-job", "blocked")));
+        manager.ScanAndUpdate();
+
+        var inherited = manager.StatusFor("env-job");
+        Assert.NotNull(inherited);
+        Assert.Equal(LocalSessionShape.Background, inherited!.Shape);
+        Assert.True(inherited.Parked);
+    }
+
+    [AvaloniaFact]
+    public void AMachineWithNothingBackgroundIshOnItNeverAsksTheDaemon()
+    {
+        // The other side of that, and the reason the gate exists at all: the
+        // listing is a `claude agents --json` subprocess, and a machine with
+        // nothing but terminal sessions must not spawn one every ten seconds
+        // forever to be told what it already knows.
+        //
+        // Counted rather than inferred — the whole point is that the call does
+        // not happen, and a test that only checked the outcome would pass just as
+        // well if it happened and was ignored.
+        using var scratch = new Scratch();
+        scratch.Write("terminal-a");
+        scratch.Write("terminal-b", cli: "codex");
+
+        var asked = 0;
+        var manager = Manager(scratch, () => { asked++; return Listing(); });
+        manager.ScanAndUpdate();
+
+        Assert.Equal(0, asked);
+
+        // Unknown all round, which is the answer that means nobody asked — and
+        // no rule acts on it, so nothing is dimmed and nothing is swept.
+        Assert.False(manager.StatusFor("terminal-a")!.Parked);
+        Assert.Equal(LocalSessionShape.Terminal, manager.StatusFor("terminal-a")!.Shape);
+    }
+
+    [AvaloniaFact]
+    public void TheDaemonIsAskedAtMostOncePerScanHoweverManySessionsThereAre()
+    {
+        // One listing for the whole pass. The cache behind it is ten seconds
+        // wide while the scan runs every two, so asking per rule could answer two
+        // rules differently about one session in a single pass — which was
+        // survivable while every consumer wanted the same bool, and is not now
+        // that the same listing also decides whether an orb is dimmed.
+        using var scratch = new Scratch();
+        WriteBackgroundFile(scratch, "job-a");
+        WriteBackgroundFile(scratch, "job-b");
+        scratch.Write("terminal");
+
+        var asked = 0;
+        var manager = Manager(
+            scratch,
+            () => { asked++; return Listing(("job-a", "blocked"), ("job-b", "working")); });
+
+        manager.ScanAndUpdate();
+
+        Assert.Equal(1, asked);
+        Assert.True(manager.StatusFor("job-a")!.Parked);
+        Assert.False(manager.StatusFor("job-b")!.Parked);
     }
 
     // --- the sweep ---
