@@ -1797,7 +1797,7 @@ public class SessionScanTests
         Assert.Null(manager.StatusFor("no-orb-was-touched"));
     }
 
-    // --- PanesClaimedByOthers -----------------------------------------------
+    // --- PaneClaimsByOthers -----------------------------------------------
 
     // Seeded straight into _statuses rather than scanned in from files, and the
     // reason is the thing this method exists to work around. Several sessions with
@@ -1816,7 +1816,12 @@ public class SessionScanTests
 
         foreach (var (id, pane) in sessions)
         {
-            statuses[id] = new SessionStatus { Cwd = "/Users/warren/project", TmuxPane = pane };
+            statuses[id] = new SessionStatus
+            {
+                Cwd = "/Users/warren/project",
+                TmuxPane = pane,
+                Title = "conversation " + id,
+            };
         }
 
         return manager;
@@ -1835,15 +1840,15 @@ public class SessionScanTests
         using var scratch = new Scratch();
 
         var claimed = Seeded(scratch, ("mine", "%6"), ("theirs", "%53"), ("also", "%21"))
-            .PanesClaimedByOthers("mine");
+            .PaneClaimsByOthers("mine");
 
-        Assert.Contains("%53", claimed);
-        Assert.Contains("%21", claimed);
+        Assert.Contains("%53", claimed.Keys);
+        Assert.Contains("%21", claimed.Keys);
 
         // Its own pane is not "claimed by another" — the point is to exclude panes
         // belonging to other conversations, and a session must never exclude
         // itself from its own candidates.
-        Assert.DoesNotContain("%6", claimed);
+        Assert.DoesNotContain("%6", claimed.Keys);
     }
 
     // A session that records no pane contributes nothing, rather than an empty
@@ -1854,7 +1859,7 @@ public class SessionScanTests
         using var scratch = new Scratch();
 
         var claimed = Seeded(scratch, ("mine", "%6"), ("paneless", ""))
-            .PanesClaimedByOthers("mine");
+            .PaneClaimsByOthers("mine");
 
         Assert.Empty(claimed);
     }
@@ -1869,8 +1874,36 @@ public class SessionScanTests
         using var scratch = new Scratch();
 
         var claimed = Seeded(scratch, ("one", "%6"), ("two", "%53"))
-            .PanesClaimedByOthers(null);
+            .PaneClaimsByOthers(null);
 
         Assert.Equal(2, claimed.Count);
+    }
+
+    // The claimant's own title comes back with the pane, because a claim is only
+    // worth honouring while the pane still shows that conversation — the scan
+    // pairs this with the pane's current title. See
+    // SessionPresence.ClaimStillHolds.
+    [AvaloniaFact]
+    public void EachClaimCarriesTheClaimantsOwnTitle()
+    {
+        using var scratch = new Scratch();
+
+        var claimed = Seeded(scratch, ("mine", "%6"), ("theirs", "%53"))
+            .PaneClaimsByOthers("mine");
+
+        Assert.Equal("conversation theirs", claimed["%53"]);
+    }
+
+    // An untitled claimant still claims, with an empty title — which
+    // ClaimStillHolds reads as "no evidence either way" and honours. A null title
+    // must not reach it as a null.
+    [AvaloniaFact]
+    public void AnUntitledClaimantClaimsWithAnEmptyTitle()
+    {
+        using var scratch = new Scratch();
+        var manager = Manager(scratch);
+        Statuses(manager)["theirs"] = new SessionStatus { TmuxPane = "%6", Title = null! };
+
+        Assert.Equal("", manager.PaneClaimsByOthers("mine")["%6"]);
     }
 }

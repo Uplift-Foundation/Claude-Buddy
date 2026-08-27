@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Reflection;
 using Avalonia.Controls;
+using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
@@ -429,6 +430,184 @@ public class OrbWindowPresenceTests
 
         Assert.False(orb.FindControl<MenuItem>("DismissItem")!.IsVisible);
         Assert.False(orb.FindControl<MenuItem>("EndSessionItem")!.IsVisible);
+    }
+
+    // A parked orb that was *already* parked when its window first appeared.
+    //
+    // The order the scan produces every time — construct, UpdateFrom, Show — and
+    // the one this suite never exercised, because its tests assert before Loaded
+    // has fired. ApplyState calls StartPulse in every arm and knows nothing about
+    // presence, so the Loaded handler used to set a dimmed orb breathing again a
+    // moment after ApplyPresence had held it still. Dim and breathing is the shape
+    // this whole ticket started from.
+    [AvaloniaFact]
+    public void AnOrbThatIsAlreadyParkedWhenItLoadsDoesNotStartBreathing()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(OrbPresence.NeedsInput));
+        orb.Show();
+        Flush();
+
+        Assert.False(IsOnThePulseRoster(orb));
+        Assert.True(Opacity(orb) < 1.0);
+        Assert.Equal(1.0, ((Avalonia.Media.ScaleTransform)
+            orb.FindControl<Ellipse>("Orb")!.RenderTransform!).ScaleX);
+    }
+
+    // --- the click acknowledgment -------------------------------------------
+
+    private static Ellipse Halo(OrbWindow orb) => orb.FindControl<Ellipse>("Glow")!;
+
+    private static double HaloScale(OrbWindow orb) =>
+        ((Avalonia.Media.ScaleTransform)Halo(orb).RenderTransform!).ScaleX;
+
+    // Round eight in one assertion. The click that correctly does nothing —
+    // because the session is already on screen — was indistinguishable from the
+    // broken clicks the whole ticket is about: "still not working", said of a
+    // gesture that had worked perfectly. So the orb answers.
+    [AvaloniaFact]
+    public void AnAcknowledgedClickStartsTheHalo()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        Assert.False(orb.IsAcknowledging);
+
+        orb.Acknowledge();
+
+        Assert.True(orb.IsAcknowledging);
+    }
+
+    // The motion itself: out and away, growing and fading the whole time. Driven
+    // a tick at a time rather than waited for, the way every other animation in
+    // this suite is — TickAcknowledgement is reached from the shared ticker in
+    // production and directly here.
+    [AvaloniaFact]
+    public void TheHaloGrowsAndFadesRatherThanSwelling()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        orb.Acknowledge();
+        orb.TickAcknowledgement();
+        Flush();
+
+        var firstScale = HaloScale(orb);
+        var firstOpacity = Halo(orb).Opacity;
+
+        Assert.True(firstScale >= 1.0);
+        Assert.True(firstOpacity <= 1.0);
+
+        // A later tick is further out and fainter, never back. A swell-and-return
+        // would be the breath's shape at a different speed, which is the confusion
+        // this channel exists to avoid.
+        orb.TickAcknowledgement();
+        Flush();
+
+        Assert.True(HaloScale(orb) >= firstScale);
+        Assert.True(Halo(orb).Opacity <= firstOpacity);
+    }
+
+    // And it ends, restoring the halo exactly. An acknowledgment that left the
+    // glow enlarged or faded would be a permanent mark for a momentary answer.
+    [AvaloniaFact]
+    public async System.Threading.Tasks.Task TheHaloReturnsToRestAndTheOrbStopsAcknowledging()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        orb.Acknowledge();
+
+        // AckMs is 280; pump real time until it has elapsed, the pattern
+        // OrbWindowClickResolutionTests uses for its own timed behaviour.
+        for (var attempt = 0; attempt < 80 && orb.IsAcknowledging; attempt++)
+        {
+            orb.TickAcknowledgement();
+            Flush();
+            await System.Threading.Tasks.Task.Delay(10);
+        }
+
+        Assert.False(orb.IsAcknowledging);
+        Assert.Equal(1.0, HaloScale(orb));
+        Assert.Equal(1.0, Halo(orb).Opacity);
+    }
+
+    // A parked orb is deliberately held still and off the shared roster, and it
+    // still has to be able to answer a click — a click on a parked orb is the
+    // whole reason any of this exists. What it must *not* do is start breathing:
+    // scale is the state channel, and an orb that swelled for a quarter of a
+    // second would be claiming to have come back to life.
+    [AvaloniaFact]
+    public void AParkedOrbAcknowledgesWithoutStartingToBreathe()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(OrbPresence.NeedsInput));
+        Flush();
+
+        Assert.False(IsOnThePulseRoster(orb));
+
+        orb.Acknowledge();
+        orb.TickPulse();
+        Flush();
+
+        Assert.True(orb.IsAcknowledging);
+
+        // On the roster for the duration, because that is what drives it...
+        Assert.True(IsOnThePulseRoster(orb));
+
+        // ...and still not breathing: the orb's own scale is untouched.
+        Assert.Equal(1.0, ((Avalonia.Media.ScaleTransform)
+            orb.FindControl<Ellipse>("Orb")!.RenderTransform!).ScaleX);
+
+        // Still dim, too. Acknowledging a click says nothing about presence.
+        Assert.True(Opacity(orb) < 1.0);
+    }
+
+    // ...and it gives the roster back. Left on it, a parked orb would be ticked
+    // forever for an animation that finished — the exact waste the "Show orbs"
+    // toggle and ApplyPresence's own Pulsing.Remove exist to avoid.
+    [AvaloniaFact]
+    public async System.Threading.Tasks.Task AParkedOrbLeavesTheRosterWhenTheHaloEnds()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(OrbPresence.NeedsInput));
+        Flush();
+
+        orb.Acknowledge();
+        Assert.True(IsOnThePulseRoster(orb));
+
+        for (var attempt = 0; attempt < 80 && orb.IsAcknowledging; attempt++)
+        {
+            orb.TickAcknowledgement();
+            Flush();
+            await System.Threading.Tasks.Task.Delay(10);
+        }
+
+        Assert.False(IsOnThePulseRoster(orb));
+    }
+
+    // A breathing orb keeps breathing through an acknowledgment and stays on the
+    // roster afterwards: the halo borrowed nothing from it, so it has nothing to
+    // give back.
+    [AvaloniaFact]
+    public async System.Threading.Tasks.Task AWorkingOrbKeepsItsBreathAfterAcknowledging()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(OrbPresence.Present, state: "generating"));
+        Flush();
+
+        Assert.True(IsOnThePulseRoster(orb));
+
+        orb.Acknowledge();
+
+        for (var attempt = 0; attempt < 80 && orb.IsAcknowledging; attempt++)
+        {
+            orb.TickAcknowledgement();
+            Flush();
+            await System.Threading.Tasks.Task.Delay(10);
+        }
+
+        Assert.True(IsOnThePulseRoster(orb));
     }
 
     // --- the agents-view item -----------------------------------------------

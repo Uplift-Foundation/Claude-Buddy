@@ -1733,6 +1733,24 @@ namespace ClaudeBuddy
         public SessionStatus? StatusFor(string? sessionId) =>
             string.IsNullOrEmpty(sessionId) ? null : _statuses.GetValueOrDefault(sessionId);
 
+        // Make this session's orb acknowledge a click that was answered without
+        // creating anything.
+        //
+        // The chat panel's ⚙ shares its destination with the orb click through
+        // RunFallback, so it has to share the acknowledgment too — otherwise the
+        // one gesture whose success is invisible is invisible from exactly one of
+        // the two places it can be made. The orb click needs no hop like this
+        // because it already has itself; a chat session knows only its id.
+        //
+        // Silent when there is no orb: a session can be typed at from the panel
+        // after its orb has gone, and there is nothing to flash.
+        internal void AcknowledgeClickOn(string? sessionId)
+        {
+            if (string.IsNullOrEmpty(sessionId)) return;
+
+            if (_windows.TryGetValue(sessionId, out var window)) window.Acknowledge();
+        }
+
         // Every tmux pane some *other* session's status file claims as its own.
         //
         // The disambiguator the pane-title viewer scan needs, and it needs it for
@@ -1754,16 +1772,26 @@ namespace ClaudeBuddy
         // StatusFor is handed to TerminalFocuser rather than looked up inside it:
         // which files exist and what they claim is this class's knowledge, and
         // AgentTeamViewer deliberately depends on nothing in it.
-        public IReadOnlySet<string> PanesClaimedByOthers(string? sessionId)
+        // Returns pane id to the claimant's own conversation title, because a
+        // claim is only worth honouring while it is still true — see
+        // SessionPresence.ClaimStillHolds, which the scan asks with the pane's
+        // *current* title beside this. A claim that outlives the client that made
+        // it pushes a click into making a duplicate, which is the very failure the
+        // exclusion exists to prevent, arriving from the other side.
+        public IReadOnlyDictionary<string, string> PaneClaimsByOthers(string? sessionId)
         {
-            var claimed = new HashSet<string>(StringComparer.Ordinal);
+            var claimed = new Dictionary<string, string>(StringComparer.Ordinal);
 
             foreach (var (id, status) in _statuses)
             {
                 if (string.Equals(id, sessionId, StringComparison.Ordinal)) continue;
                 if (string.IsNullOrEmpty(status.TmuxPane)) continue;
 
-                claimed.Add(status.TmuxPane);
+                // Last writer wins, and it does not matter which: two sessions
+                // claiming one pane means at least one of them is stale, and the
+                // corroboration step is what settles that — not the order this
+                // dictionary happened to be built in.
+                claimed[status.TmuxPane] = status.Title ?? "";
             }
 
             return claimed;
