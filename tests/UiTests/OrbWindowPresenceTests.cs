@@ -610,6 +610,46 @@ public class OrbWindowPresenceTests
         Assert.True(IsOnThePulseRoster(orb));
     }
 
+    // The callback GoToSession actually hands the focuser. Its whole content is
+    // the hop onto the UI thread, and the click path that invokes it in
+    // production is the one thing this suite must not drive — so it is driven
+    // here instead of being an uncovered line that reads as an oversight.
+    [AvaloniaFact]
+    public void TheCallbackTheFocuserIsGivenAcknowledgesOnTheUiThread()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        orb.AcknowledgeFromAnyThread();
+
+        // Posted rather than run inline, so nothing has happened yet.
+        Assert.False(orb.IsAcknowledging);
+
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(orb.IsAcknowledging);
+    }
+
+    // While dictation is running the mic owns the orb's colour and motion, and
+    // StopRecording is what hands it back. An acknowledgment that fought that
+    // would leave the orb mid-halo when dictation ended, so it declines — the
+    // same guard ApplyPresence carries, set the same way the flyout suite sets it.
+    [AvaloniaFact]
+    public void AnOrbBusyRecordingDoesNotAcknowledge()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        typeof(OrbWindow)
+            .GetField("_recording", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(orb, true);
+
+        orb.Acknowledge();
+
+        Assert.False(orb.IsAcknowledging);
+        Assert.False(IsOnThePulseRoster(orb));
+    }
+
     // --- the agents-view item -----------------------------------------------
 
     // The `claude agents` roster, offered on the orbs the roster lists. It was

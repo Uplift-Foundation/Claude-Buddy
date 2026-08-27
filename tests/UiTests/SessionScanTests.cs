@@ -1906,4 +1906,38 @@ public class SessionScanTests
 
         Assert.Equal("", manager.PaneClaimsByOthers("mine")["%6"]);
     }
+
+    // --- AcknowledgeClickOn --------------------------------------------------
+
+    // The hop the chat panel's button needs: it knows its session id and not its
+    // orb, and it has to acknowledge for the same reason the click does, since the
+    // two share one destination through RunFallback.
+    [AvaloniaFact]
+    public void TheOrbForASessionAcknowledgesThroughTheManager()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("live");
+
+        var manager = Scan(scratch);
+        var orb = WindowFor(manager, "live");
+
+        Assert.False(orb.IsAcknowledging);
+
+        manager.AcknowledgeClickOn("live");
+
+        Assert.True(orb.IsAcknowledging);
+    }
+
+    // Silent for a session with no orb — one can be typed at from the panel after
+    // its orb has gone, and there is nothing to flash — and for no id at all.
+    [AvaloniaTheory]
+    [InlineData("no-such-session")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void AcknowledgingASessionWithNoOrbIsSilent(string? sessionId)
+    {
+        using var scratch = new Scratch();
+
+        Manager(scratch).AcknowledgeClickOn(sessionId);
+    }
 }
