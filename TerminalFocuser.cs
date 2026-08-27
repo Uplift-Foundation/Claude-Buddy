@@ -168,26 +168,29 @@ namespace ClaudeBuddy
                     // pane in a *detached* server, which by definition nobody is
                     // looking at, and the roster is a destination the user named
                     // outright from a menu.
-                    switch (AgentTeamViewer.ViewingPane(status.Title, paneClaimsByOthers))
+                    var (verdict, showing) = AgentTeamViewer.ViewingPane(
+                        status.Title, paneClaimsByOthers);
+
+                    // One branch for both found verdicts, because both mean the
+                    // same thing to the destination — see
+                    // SessionPresence.AnswersTheClick, and note that being
+                    // tmux-active is not the same as being on the user's screen.
+                    // The orbs float over every application and the terminal is
+                    // routinely behind something else when one is clicked, so
+                    // "already here" has to raise the terminal too; for a pane that
+                    // is already current, the raise is the *only* part of this that
+                    // does anything.
+                    if (SessionPresence.AnswersTheClick(verdict) && showing is { } pane)
                     {
-                        // Already on screen, in front of them. Doing nothing is the
-                        // whole feature: any window this opened would be a second
-                        // copy of what they are reading.
-                        case (SessionPresence.ViewerVerdict.TheUserIsLookingAtIt, _):
-                            acknowledge?.Invoke();
-                            return;
+                        // Acknowledged first, and deliberately. The flash is a Post
+                        // to the UI thread so it cannot delay the raise, and making
+                        // the one thing that answers the gesture immediately wait
+                        // on a few hundred milliseconds of tmux and osascript is
+                        // the same mistake as the invisible no-op it exists to fix.
+                        acknowledge?.Invoke();
 
-
-                        // On screen elsewhere. Focused through the ordinary pane
-                        // tail — no attach, no split, nothing new.
-                        // Acknowledged as well, and for the same reason: selecting
-                        // a pane in a window the user is not watching is as
-                        // invisible as doing nothing, and the orb is the one
-                        // surface they *are* looking at.
-                        case (SessionPresence.ViewerVerdict.ElsewhereInTmux, { } showing):
-                            FocusPaneIfAny(showing.Pane, status.Cwd, showing.Socket);
-                            acknowledge?.Invoke();
-                            return;
+                        FocusPaneIfAny(pane.Pane, status.Cwd, pane.Socket);
+                        return;
                     }
 
                     FocusPaneIfAny(AgentTeamViewer.AttachSession(sessionId!, status.Cwd), status.Cwd);

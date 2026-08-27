@@ -468,6 +468,32 @@ namespace ClaudeBuddy
             ElsewhereInTmux
         }
 
+        // Whether a verdict means "a pane on screen answers this click".
+        //
+        // Both found verdicts do, and they do the *same* thing, which is round
+        // ten's correction. Being tmux-active is not the same as being on the
+        // user's screen: these orbs float over every application, and the terminal
+        // is routinely behind a browser or a chat window when one is clicked. The
+        // pane can be current in its tmux session and invisible on the desktop at
+        // the same moment — so an "already here" that only flashed was telling the
+        // truth about tmux and lying about what the person could see. "Mechanically
+        // perfect" and "still doesn't work" were both accurate.
+        //
+        // So the two answers converge: bring that pane to the screen, then say the
+        // gesture was handled. For a pane already current, bringing it to the
+        // screen is only the application raise — the select-window and select-pane
+        // in that tail land on the window and pane that are already chosen, and do
+        // nothing. Raising an application that is already frontmost is a no-op too,
+        // which is why this needs no idea of what is in front: always raise.
+        //
+        // The verdicts stay distinct because the distinction is still load-bearing
+        // where it was built — "already looking at it" ignores pane claims and
+        // "elsewhere" respects them, which is what keeps a title collision from
+        // sending a click into someone else's conversation. What round ten changes
+        // is only that both answers mean the same thing to the destination.
+        internal static bool AnswersTheClick(ViewerVerdict verdict) =>
+            verdict is ViewerVerdict.TheUserIsLookingAtIt or ViewerVerdict.ElsewhereInTmux;
+
         // One pane whose title and process say it is showing a session.
         //
         // Socket is carried because nothing about a pane is unique without it. A
