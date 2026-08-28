@@ -214,12 +214,18 @@ namespace ClaudeBuddy
                     break;
 
                 case ClickFallback.AttachSocket:
-                    // The pane is already selected — FocusTmux did that before
-                    // finding no client — so a plain attach lands on the right
-                    // pane rather than on whatever the session last had current.
-                    AgentTeamViewer.AttachTmuxSocket(
-                        ResolveTmuxBinary(status.TmuxBin) ?? "", status.TmuxSocket,
-                        status.TmuxPane, status.Cwd);
+                    // Arrives beside the user, like every other answer here: a
+                    // pane in the window they are already in, running an attach
+                    // targeted at the clicked session. The pane was selected on
+                    // the way past by FocusTmux, and round 14's `-t` is what makes
+                    // the attach land on that session rather than on whichever the
+                    // server used last — the selects aim within a session and the
+                    // target chooses which.
+                    FocusPaneIfAny(
+                        AgentTeamViewer.AttachTmuxSocket(
+                            ResolveTmuxBinary(status.TmuxBin) ?? "", status.TmuxSocket,
+                            status.TmuxPane, status.Cwd),
+                        status.Cwd);
                     break;
 
                 case ClickFallback.None:
