@@ -593,6 +593,12 @@ namespace ClaudeBuddy
 
         private readonly TranscriptHunts _transcriptHunts = new();
 
+        // File.Exists as a delegate, once. The repair asks it twice per file in
+        // the scan loop, and a method group converted at a call site compiles
+        // to a hidden per-site cache with a null-check branch in it — a branch
+        // no test can pin both arms of on purpose. One named field, no branch.
+        private static readonly Func<string, bool> FileExists = File.Exists;
+
         internal static SessionSource SourceOf(SessionStatus status) =>
             string.Equals(status.Cli, "codex", StringComparison.OrdinalIgnoreCase)
                 ? SessionSource.Codex
@@ -1165,10 +1171,10 @@ namespace ClaudeBuddy
                 // produces one. In memory only, deliberately: the file is the
                 // hook's record of what Claude Code said, and the next event
                 // will rewrite it anyway.
-                if (WantsTranscriptRepair(status, File.Exists))
+                if (WantsTranscriptRepair(status, FileExists))
                 {
                     var hunted = _transcriptHunts.Locate(
-                        sessionId, now, _transcriptHunt, File.Exists);
+                        sessionId, now, _transcriptHunt, FileExists);
                     if (hunted is not null) status.TranscriptPath = hunted;
                 }
 
