@@ -772,6 +772,13 @@ namespace ClaudeBuddy
             // The CLI process that wrote the file has exited.
             ProcessGone,
 
+            // The conversation was handed to a background job mid-turn and
+            // nothing has happened in this session since — see
+            // TranscriptHandoff. The fork wears the conversation now, badge,
+            // title and all; this file is what the handoff left behind, and no
+            // hook will ever rewrite it.
+            Backgrounded,
+
             // Quiet for longer than the user's "Keep orbs for" allows.
             Expired,
 
@@ -786,15 +793,25 @@ namespace ClaudeBuddy
             NothingToShow,
         }
 
-        // The rules that need nothing but the file, its mtime, and whether its
-        // process is alive.
+        // The rules that need nothing but the file, its mtime, whether its
+        // process is alive, and whether its transcript says the conversation
+        // was handed away.
         //
         // isRunning is passed in for the reason Superseded's isLiveJob is: the
         // real one is a kill(2) against a pid this machine may or may not have,
         // which is not a thing a unit test should be deciding.
+        //
+        // handedToBackground is a closure rather than a bool for the same
+        // reason isRunning is not a bool: it costs a stat (and on a change, a
+        // read) against a transcript on this machine's disk, and a session the
+        // rules above have already dropped must never pay for it. The gates on
+        // when it is even worth asking live in
+        // SessionPresence.CouldBeABackgroundedHusk; the answer itself is
+        // TranscriptHandoff's.
         internal static ScanVerdict JudgeLiveness(
             string sessionId, SessionStatus status, DateTime written, DateTime now,
-            TimeSpan? staleAfter, ISet<string> superseded, Func<int, bool> isRunning)
+            TimeSpan? staleAfter, ISet<string> superseded, Func<int, bool> isRunning,
+            Func<bool> handedToBackground)
         {
             // Dropped here rather than left to the lifetime timer, which is the
             // only other thing that would ever catch it.
@@ -807,6 +824,15 @@ namespace ClaudeBuddy
             // below deliberately never touches; an unanswered prompt whose
             // session was killed used to sit on screen indefinitely.
             if (status.SessionPid > 0 && !isRunning(status.SessionPid)) return ScanVerdict.ProcessGone;
+
+            // A turn the user backgrounded leaves this file behind: frozen at
+            // whatever the hook last wrote — "generating", usually, and
+            // sometimes "waiting" — while the conversation carries on under
+            // the fork's session id and the fork's own orb. Two orbs wearing
+            // one title, one of them a lie that no hook will ever correct,
+            // which is why this outranks the state exemptions below: a husk
+            // frozen at "waiting" is not waiting on anyone.
+            if (handedToBackground()) return ScanVerdict.Backgrounded;
 
             // A session waiting on you (permission prompt / question) never
             // goes stale on its own — no further hook fires until you
@@ -1433,6 +1459,17 @@ namespace ClaudeBuddy
                     ? BackgroundJobs.Phase(Jobs(), sessionId)
                     : JobPhase.Unknown;
 
+                // Whether this file is the husk a backgrounded turn leaves
+                // behind — a closure so that only a session the earlier rules
+                // kept ever pays the stat, gated in
+                // SessionPresence.CouldBeABackgroundedHusk (which is also what
+                // keeps the fork itself, listed by the daemon as a live job,
+                // from reading its own inherited marker), answered from the
+                // transcript by TranscriptHandoff behind its own cache.
+                Func<bool> handedToBackground = () =>
+                    SessionPresence.CouldBeABackgroundedHusk(status, phase)
+                    && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
+
                 // Two verdicts rather than one, with the viewer hunt sitting
                 // between them, because the order is load-bearing in both
                 // directions: adoption can hand a background lead the very
@@ -1440,7 +1477,8 @@ namespace ClaudeBuddy
                 // the process table to do it, which is far too expensive to
                 // spend on a session JudgeLiveness has already dropped.
                 var liveness = JudgeLiveness(sessionId, status, written, now, StaleAfter,
-                                             superseded, ProcessLiveness.IsRunning);
+                                             superseded, ProcessLiveness.IsRunning,
+                                             handedToBackground);
 
                 // Asked before the drop below rather than after, and of the
                 // liveness verdict rather than the reachability one, because the

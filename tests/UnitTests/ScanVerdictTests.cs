@@ -48,15 +48,20 @@ public class ScanVerdictTests
             Tty = "/dev/ttys004",
         };
 
+    // handedToBackground defaults to "the transcript says nothing", so every
+    // case written before the Backgrounded verdict existed still asks what it
+    // was asking — the same convention Reachability's transcriptExists keeps.
     private static SessionManager.ScanVerdict Liveness(
         SessionStatus status,
         TimeSpan? staleAfter = null,
         DateTime? written = null,
         ISet<string>? superseded = null,
-        Func<int, bool>? isRunning = null) =>
+        Func<int, bool>? isRunning = null,
+        Func<bool>? handedToBackground = null) =>
         SessionManager.JudgeLiveness(
             "session-1", status, written ?? Now, Now, staleAfter,
-            superseded ?? Nothing, isRunning ?? AllAlive);
+            superseded ?? Nothing, isRunning ?? AllAlive,
+            handedToBackground ?? (() => false));
 
     // phase is what the daemon said, where this used to take a closure that
     // reduced the same answer to a bool. The default is NotAJob — the only answer
@@ -202,6 +207,68 @@ public class ScanVerdictTests
         Assert.Equal(
             SessionManager.ScanVerdict.Expired,
             Liveness(Healthy(SessionSource.OpenClaw, pid: 0), staleAfter, old));
+    }
+
+    // --- JudgeLiveness: the backgrounded husk (see TranscriptHandoff) --------
+
+    [Fact]
+    public void AHandedOffTurnCostsTheHuskItsOrb()
+    {
+        // The duplicate-orb bug in one line: the husk is healthy by every other
+        // measure — live process, real terminal, file written a moment ago —
+        // and the only thing wrong with it is what its own transcript says.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Backgrounded,
+            Liveness(Healthy(state: "generating"), handedToBackground: () => true));
+    }
+
+    [Fact]
+    public void AHuskFrozenAtWaitingIsNotWaitingOnAnyone()
+    {
+        // "waiting" is exempt from the lifetime timer because answering the
+        // prompt is the only thing that unfreezes it — but a husk's prompt
+        // moved to the fork with everything else, so the exemption must not
+        // shelter it. The arm sits above the state exemptions for exactly this.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Backgrounded,
+            Liveness(Healthy(state: "waiting"), staleAfter: TimeSpan.FromMinutes(5),
+                     written: new DateTime(2020, 1, 1),
+                     handedToBackground: () => true));
+    }
+
+    [Fact]
+    public void BackgroundedOutranksExpiredSoTheFileGetsSweptNotJustHidden()
+    {
+        // Both verdicts hide the orb; only Backgrounded is evidence the sweep
+        // may act on (see SessionPresence.EvidenceOfDeath), so the more
+        // specific reading has to be the one reported.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Backgrounded,
+            Liveness(Healthy(state: "generating"), staleAfter: TimeSpan.FromMinutes(5),
+                     written: new DateTime(2020, 1, 1),
+                     handedToBackground: () => true));
+    }
+
+    [Fact]
+    public void ADroppedSessionNeverPaysForTheTranscriptRead()
+    {
+        // The closure costs a stat against the disk, which is why it is a
+        // closure: a session already superseded, or whose process has exited,
+        // is dropped before the question is asked. The counting proves the
+        // laziness rather than assuming it.
+        var asked = 0;
+        Func<bool> counting = () => { asked++; return true; };
+
+        var superseded = new HashSet<string>(StringComparer.Ordinal) { "session-1" };
+        Assert.Equal(
+            SessionManager.ScanVerdict.Superseded,
+            Liveness(Healthy(), superseded: superseded, handedToBackground: counting));
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.ProcessGone,
+            Liveness(Healthy(), isRunning: AllDead, handedToBackground: counting));
+
+        Assert.Equal(0, asked);
     }
 
     // --- WantsAgentViewer ----------------------------------------------------
