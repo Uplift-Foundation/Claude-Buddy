@@ -878,6 +878,96 @@ namespace ClaudeBuddy
             return ScanVerdict.Keep;
         }
 
+        // The scan, reduced to what another machine's Buddy needs before this
+        // one has a UI.
+        //
+        // Exists for exactly one caller: RemoteControlSessions.LocalSessions,
+        // in the window between the relay starting to serve (Program.Main,
+        // before the screen-lock wait — see CB-24) and SessionManager.Start
+        // handing over the real provider. A headless machine whose screen never
+        // unlocks lives in that window permanently, so the roster served from
+        // it has to be right rather than a placeholder.
+        //
+        // Composed from the same rules the live scan applies, in the same order
+        // — SourceOf, EnabledFor, the own-relay drop, Superseded, JudgeLiveness
+        // — so the two cannot disagree about which sessions exist. What it
+        // deliberately skips are the live scan's two refinements, transcript
+        // re-hunting and the identity read: both lean on per-instance memos
+        // that belong to the scan loop, so a session in this window serves
+        // under the name and paths its status file already carries, and the
+        // real provider replaces this one the moment the UI starts.
+        //
+        // Every input is a parameter with the real one as its default — the
+        // same pattern, for the same reason, as ClaudeBinary.Locate: a test
+        // hands in a scratch directory and fixed answers, and the machine the
+        // test runs on stops mattering. The default arms themselves shell out
+        // (`claude agents --json`) or read this machine's real temp directory,
+        // so tests always pass all four; those four `??` arms are the named
+        // coverage gap, exactly as the live scan's constructor defaults are.
+        internal static List<(string SessionId, SessionStatus Status)> HeadlessSnapshot(
+            string? statusDir = null,
+            Func<Dictionary<string, string>?>? jobListing = null,
+            Func<int, bool>? isRunning = null,
+            DateTime? nowUtc = null)
+        {
+            statusDir ??= Path.Combine(Path.GetTempPath(), "claude_buddy");
+            var now = nowUtc ?? DateTime.UtcNow;
+
+            IEnumerable<string> files;
+            try
+            {
+                files = Directory.EnumerateFiles(statusDir, "*.txt");
+            }
+            catch
+            {
+                // No directory yet means no sessions yet, which is an answer.
+                return new List<(string, SessionStatus)>();
+            }
+
+            var found = new List<ScanEntry>();
+            foreach (var file in files)
+            {
+                SessionStatus? status;
+                DateTime written;
+                try
+                {
+                    written = File.GetLastWriteTimeUtc(file);
+                    using var stream = new FileStream(
+                        file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    status = System.Text.Json.JsonSerializer.Deserialize<SessionStatus>(stream);
+                }
+                catch
+                {
+                    continue; // mid-write or vanished, same as the live scan
+                }
+
+                if (status is null) continue;
+
+                status.Source = SourceOf(status);
+                if (!EnabledFor(status.Source)) continue;
+                if (RemoteControlBridge.IsOwnRelayCwd(status.Cwd)) continue;
+
+                found.Add(new ScanEntry(
+                    Path.GetFileNameWithoutExtension(file), status, written));
+            }
+
+            var jobs = (jobListing ?? BackgroundJobs.SnapshotForScan)();
+            Func<string, bool> isLiveJob = id => BackgroundJobs.IsLive(jobs, id);
+            var superseded = Superseded(found, isLiveJob);
+            var running = isRunning ?? ProcessLiveness.IsRunning;
+
+            var kept = new List<(string, SessionStatus)>();
+            foreach (var entry in found)
+            {
+                var verdict = JudgeLiveness(
+                    entry.SessionId, entry.Status, entry.Written,
+                    now, StaleAfter, superseded, running);
+                if (verdict == ScanVerdict.Keep) kept.Add((entry.SessionId, entry.Status));
+            }
+
+            return kept;
+        }
+
         // Whether this session is one of the shapes that is watched through a
         // `claude agents` window rather than through a terminal of its own, and
         // so worth hunting for one. See AgentTeamViewer, which finds it by
