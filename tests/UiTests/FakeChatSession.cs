@@ -13,7 +13,9 @@ namespace ClaudeBuddy.Tests;
 //  4. History is pre-bounded and already ordered oldest to newest — callers
 //     of this fake are expected to build it that way; it does no trimming or
 //     sorting of its own.
-internal sealed class FakeChatSession : IRemoteChatSession, IRemoteChatImages, IRemoteChatSlashCommands
+internal sealed class FakeChatSession :
+    IRemoteChatSession, IRemoteChatImages, IRemoteChatSlashCommands,
+    IRemoteChatComposer, IRemoteChatElsewhere
 {
     public string SessionId { get; init; } = "fake-session";
     public string DisplayName { get; init; } = "Fake Session";
@@ -26,6 +28,21 @@ internal sealed class FakeChatSession : IRemoteChatSession, IRemoteChatImages, I
     // it, and a fake that could only be set up front could not express the
     // case that mattered.
     public IReadOnlyList<SlashCommand> SlashCommands { get; set; } = Array.Empty<SlashCommand>();
+
+    // What the composer's box says, and whether the panel offers to attach this
+    // session somewhere it can be typed into. Both default to what an ordinary
+    // typeable session answers, so every existing test of this fake is unchanged
+    // by their arrival: an ordinary hint, and no button.
+    public string ComposerHint { get; set; } = "Message…";
+
+    public bool CanOpenElsewhere { get; set; }
+
+    // Counted rather than performed. The real one opens or focuses a real
+    // window, which is the half this suite must never execute — what is being
+    // tested is that a click on the button reaches the session at all.
+    public int OpenElsewhereCalls { get; private set; }
+
+    public void OpenElsewhere() => OpenElsewhereCalls++;
 
     private readonly List<ChatTurn> _history;
     public IReadOnlyList<ChatTurn> History => _history;

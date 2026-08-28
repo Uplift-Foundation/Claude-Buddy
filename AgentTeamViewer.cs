@@ -140,6 +140,478 @@ namespace ClaudeBuddy
             return null;
         }
 
+        // `<absolute claude> <verb> [arg]`, quoted for `sh -c`. Null when the
+        // claude binary cannot be found at all, which is the one failure worth
+        // returning rather than papering over: every caller's next move is to
+        // hand this to a shell.
+        //
+        // Absolute, never a bare `claude` resolved by a login shell. That was the
+        // original approach and it silently didn't work: `zsh -lc` skips .zshrc
+        // (non-interactive), which is where a PATH addition for ~/.local/bin
+        // normally lives, so the script died with "command not found" whenever
+        // the app was launched from Finder rather than a terminal. See
+        // ClaudeBinary.
+        // Excluded from coverage: probes the filesystem for the claude binary.
+        [ExcludeFromCodeCoverage]
+        private static string? ClaudeCommand(string verb, string? argument = null)
+        {
+            var claude = ClaudeBinary.Path;
+            if (claude is null) return null;
+
+            var command = TerminalScripts.ShellQuote(claude) + " " + verb;
+            return argument is null ? command : command + " " + TerminalScripts.ShellQuote(argument);
+        }
+
+        // Opens a `claude agents` roster, in tmux for someone who lives there and
+        // in a terminal window otherwise.
+        //
+        // In tmux when there is a tmux to go into, for the reason AttachSession
+        // gives at the same fork: a bare window for someone whose windows are all
+        // inside tmux puts the thing *outside* what they use to move between
+        // windows, which is worse than an extra pane inside it.
+        // Excluded from coverage: writes a script and opens a terminal on it.
+        [ExcludeFromCodeCoverage]
+        private static string? OpenAgentsView(string cwd)
+        {
+            if (ClaudeCommand("agents") is not { } command) return null;
+
+            if (PlaceInTmux(command, cwd) is { Length: > 0 } pane) return pane;
+
+            try
+            {
+                System.IO.Directory.CreateDirectory(ClaudeBuddySettings.Directory);
+                var script = Path.Combine(ClaudeBuddySettings.Directory, "open-agents-roster.sh");
+
+                // The cd is for after the roster is quit rather than for the
+                // roster itself, the same as every other script this file writes:
+                // the useful place to land is the directory whose orb was clicked.
+                // Skipped with no cwd, because `cd ''` fails and `|| exit 1` would
+                // take the roster down with it.
+                var body = "#!/bin/sh\n";
+                if (!string.IsNullOrEmpty(cwd))
+                {
+                    body += "cd " + TerminalScripts.ShellQuote(cwd) + " || exit 1\n";
+                }
+
+                File.WriteAllText(script, body + "exec " + command + "\n");
+                File.SetUnixFileMode(script,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+                var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
+                psi.ArgumentList.Add("-a");
+                psi.ArgumentList.Add(TerminalApp());
+                psi.ArgumentList.Add(script);
+                Process.Start(psi);
+
+                // The window takes a moment to appear, and until it does the
+                // process scan above says nothing is open — which is what would
+                // otherwise let a second click open a second roster.
+                Forget(cwd);
+                return null;
+            }
+            catch
+            {
+                // Same contract as everything else on this path: failing to open
+                // a window is a click that did nothing, never a crash.
+                return null;
+            }
+        }
+
+        // The `claude agents` view: brought forward if one is running, opened if
+        // not.
+        //
+        // The click destination for a background orb, and it is a decision about
+        // vocabulary rather than a mechanism. The user's words, looking at the
+        // roster: "don't understand why the orbs can't just match this and attach
+        // to this", and then "I don't understand why you can't go straight to
+        // it!" The view already groups what needs answering at the top, already
+        // knows how to attach to a row, and is where these sessions are managed
+        // from — so an orb that lands there lands somewhere the user recognises,
+        // rather than in a terminal running one session with no way back to the
+        // others.
+        //
+        // Unfiltered, deliberately: `claude agents --help` offers only `--cwd
+        // <path>` and no per-session preselect, and jobs on the machine this was
+        // written for span several projects — a filtered view per project would
+        // multiply windows for no gain, since the roster is short and sorted with
+        // the ones wanting attention first.
+        //
+        // Returns the pane it went into when it went into tmux, for the caller to
+        // select and raise through the ordinary path — the same contract
+        // AttachSession has, and for the same reason: this file does not grow its
+        // own copy of client resolution and window raising.
+        // Excluded from coverage: walks the process table, then either activates
+        // a real application or opens a terminal on a script.
+        [ExcludeFromCodeCoverage]
+        public static string? OpenOrFocusAgentsView(string cwd)
+        {
+            if (!OperatingSystem.IsMacOS()) return null;
+
+            // Already open somewhere. Focused rather than duplicated: a second
+            // roster of the same sessions is not a second thing to look at.
+            //
+            // Asked of the process table rather than of Launched, so a view the
+            // user opened by hand counts — which is the common case, since this
+            // is where they manage these sessions from.
+            foreach (var pid in ViewerPids())
+            {
+                var env = MacOSProcessScan.EnvironmentValues(pid, "TMUX", "TMUX_PANE");
+                var pane = env.GetValueOrDefault("TMUX_PANE", "");
+
+                // In tmux: hand the pane back, exactly as AttachSession does, so
+                // the caller selects it and raises its client's window.
+                if (!string.IsNullOrEmpty(pane)) return pane;
+
+                // Outside tmux: its tty is enough for the app to find the window
+                // that owns it, which is what ActivateApp's caller does with it.
+                var tty = TtyOf(pid);
+                if (string.IsNullOrEmpty(tty)) continue;
+
+                ActivateApp(TerminalApp());
+                return null;
+            }
+
+            return OpenAgentsView(cwd);
+        }
+
+        // Every `claude attach <id>` client running on this machine, keyed by the
+        // id it was given — or null when the process table could not be read at
+        // all, which is a different answer and the caller treats it as one.
+        //
+        // The point of it is a contradiction the user hit immediately: they
+        // attached to all three parked sessions and the orbs stayed grey.
+        // Attaching changes nothing this app was looking at — the status file
+        // records the *worker's* ancestry and never the viewer's, so the tty
+        // stays empty, and the daemon still says "blocked", because from its side
+        // nothing has changed. The person's presence exists in exactly one place,
+        // which is the process table.
+        //
+        // Matched on the arguments rather than the executable path, for the
+        // reason ViewerPids gives: the path is a version-stamped location that
+        // moves under you. Cached on the same clock as the viewer lookup — one
+        // `ps` per five seconds rather than one per session per scan.
+        // Excluded from coverage: walks the live process table. What is decided
+        // with the answer is SessionPresence.HasAttachClient, which is pure and
+        // covered per case, including the null.
+        [ExcludeFromCodeCoverage]
+        // fresh skips the cache read, for a caller answering a gesture the user
+        // just made rather than a scan that runs every two seconds. Five seconds
+        // of staleness is nothing to the scan and everything to someone who closed
+        // their attach window and immediately clicked the orb: they would get an
+        // app raised that has no such window, and the click would appear to do
+        // nothing. It still *writes* the cache, so a click warms the next scan
+        // rather than costing an extra `ps`.
+        //
+        // A parameter rather than a second method, because a second method is how
+        // this file came to hold two scans of the same process table — see
+        // SessionPresence.KnownAttachClient for what that cost.
+        public static HashSet<string>? AttachedJobIds(bool fresh = false)
+        {
+            var now = Environment.TickCount64;
+
+            lock (Gate)
+            {
+                if (!fresh && _attachedStamp != 0 && now - _attachedStamp < CacheMs)
+                {
+                    return _attached;
+                }
+            }
+
+            HashSet<string>? found = null;
+
+            if (TryRun("/bin/ps", out var listing, "-eo", "args="))
+            {
+                found = new HashSet<string>(StringComparer.Ordinal);
+
+                foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var words = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (words.Length < 3) continue;
+                    if (Path.GetFileName(words[0]) is not ("claude" or "claude.exe")) continue;
+                    if (words[1] != "attach") continue;
+
+                    found.Add(words[2]);
+                }
+            }
+
+            lock (Gate)
+            {
+                // A failed read does not clear a good answer for the rest of the
+                // cache window, the same way BackgroundJobs' listing does not:
+                // the process table being briefly unreadable is not evidence that
+                // anybody detached.
+                if (found is not null)
+                {
+                    _attached = found;
+                    _attachedStamp = now;
+                }
+
+                return _attached;
+            }
+        }
+
+        private static HashSet<string>? _attached;
+        private static long _attachedStamp;
+
+        // The tmux pane already *showing* this session's conversation, if there is
+        // one — step zero of the click ladder, ahead of everything that creates a
+        // window.
+        //
+        // It exists because of the one thing several rounds assumed was
+        // undiscoverable. The socket, file, argv and environment proofs all stand:
+        // a session's rv socket has exactly one external peer, `claude daemon run`,
+        // so the topology is a star and the viewer mapping is hub-internal, and the
+        // interactive client holds no transcript file open. What none of that
+        // covered is that the TUI *publishes* the conversation title to the
+        // terminal, and tmux keeps it in `#{pane_title}`. Found in the reporter's
+        // own screenshot: the answer had been on screen the whole time.
+        //
+        // **The candidate universe is panes on servers somebody is attached to,
+        // and that is the load-bearing part.** A title is per conversation rather
+        // than per session — every member of an agent team inherits the team
+        // session's title, and a teammate's own TUI titles itself with it — so
+        // matching on the title alone finds perfect impostors. Three rounds went
+        // into trying to tell them apart. They are all on detached
+        // `claude-swarm-<pid>` sockets, which nobody's eyes are on, so the honest
+        // answer was that they were never viewers at all. Measured: four panes with
+        // one identical title, and the visibility filter leaves exactly the one the
+        // user was reading.
+        //
+        // Excluded from coverage: lists tmux servers, their clients and their
+        // panes, and reads pane processes. Every rule it applies is pure and
+        // covered per clause — SessionPresence.TitleSaysViewing,
+        // LooksLikeClaudeBinary, ClaimStillHolds and ViewerAmong, the last of which
+        // owns the visibility filter itself.
+        [ExcludeFromCodeCoverage]
+        public static (SessionPresence.ViewerVerdict Verdict, SessionPresence.ViewerPane? Found)
+            ViewingPane(string? sessionTitle, IReadOnlyDictionary<string, string>? paneClaimsByOthers)
+        {
+            var none = (SessionPresence.ViewerVerdict.NoneFound, (SessionPresence.ViewerPane?)null);
+
+            if (!OperatingSystem.IsMacOS()) return none;
+            if (string.IsNullOrEmpty(sessionTitle)) return none;
+
+            var tmux = ResolveTmux();
+            if (tmux is null) return none;
+
+            var matches = new List<SessionPresence.ViewerPane>();
+            var withClients = new HashSet<string>(StringComparer.Ordinal);
+            var watched = new HashSet<(string Socket, string Window)>();
+
+            foreach (var socket in KnownSockets())
+            {
+                // Asked first, and of every server, because the answer decides
+                // whether that server's panes are in the universe at all. A
+                // detached server is a screen nobody is looking at.
+                var clients = AttachedClients(tmux, socket);
+                if (clients.Count == 0) continue;
+
+                withClients.Add(socket);
+
+                // Every attached client's window, not one of them: the user could
+                // be sitting at any of them, and a window missing from this set is
+                // a pane the scan will call "elsewhere" and try to move them to
+                // while they are already looking at it.
+                foreach (var client in clients)
+                {
+                    if (CurrentWindowOf(tmux, socket, client.Session) is { Length: > 0 } window)
+                    {
+                        watched.Add((socket, window));
+                    }
+                }
+
+                CollectMatches(tmux, socket, sessionTitle, paneClaimsByOthers, matches);
+            }
+
+            return SessionPresence.ViewerAmong(matches, withClients, watched);
+        }
+
+        // Every tmux server this machine might have, as socket paths — with the
+        // empty string standing for the default one, the way TerminalScripts.TmuxArgs
+        // already reads it.
+        //
+        // The directory rather than the status files, because the socket that
+        // matters most is the one a *person* attached to, and nothing in this app
+        // records that. tmux keeps its sockets in one place per user and names them
+        // after the server; a stale socket for a dead server simply answers no
+        // clients and drops out one line later.
+        // Excluded from coverage: reads the tmux socket directory.
+        [ExcludeFromCodeCoverage]
+        private static IEnumerable<string> KnownSockets()
+        {
+            // The default server first, and unconditionally: it is where a person
+            // who has not thought about sockets ends up, and it is named by no
+            // path at all.
+            yield return "";
+
+            var dir = Environment.GetEnvironmentVariable("TMUX_TMPDIR") is { Length: > 0 } custom
+                ? custom
+                : "/tmp/tmux-" + GetUid();
+
+            string[] entries;
+            try
+            {
+                entries = System.IO.Directory.GetFiles(dir);
+            }
+            catch
+            {
+                // No directory, or no permission to read it. One server is still
+                // better than none, and the default has already been yielded.
+                yield break;
+            }
+
+            foreach (var entry in entries)
+            {
+                // "default" is the same server the empty string already named, and
+                // asking twice would double every match on it.
+                if (Path.GetFileName(entry) == "default") continue;
+
+                yield return entry;
+            }
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static string GetUid()
+        {
+            // The socket directory is named for the *real* uid, which is what
+            // getuid reports. Read through a subprocess rather than a p/invoke to
+            // keep this file's OS surface to the two binaries it already runs.
+            return TryRun("/usr/bin/id", out var uid, "-u") ? uid.Trim() : "0";
+        }
+
+        // Every pane on one server whose title and process say it is showing this
+        // session, appended to matches.
+        // Excluded from coverage: lists live tmux panes and reads their processes.
+        [ExcludeFromCodeCoverage]
+        private static void CollectMatches(
+            string tmux, string socket, string sessionTitle,
+            IReadOnlyDictionary<string, string>? paneClaimsByOthers,
+            List<SessionPresence.ViewerPane> matches)
+        {
+            // pane_title last, and split with a limit: a conversation title
+            // contains spaces, and every field before it does not.
+            if (!TryRun(tmux, out var listing, TerminalScripts.TmuxArgs(socket,
+                    "list-panes", "-a", "-F",
+                    "#{pane_id} #{pane_pid} #{pane_active} #{session_name}:#{window_index} #{pane_title}")))
+            {
+                return;
+            }
+
+            foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Trim().Split(' ', 5, StringSplitOptions.None);
+                if (parts.Length < 5) continue;
+
+                if (!SessionPresence.TitleSaysViewing(parts[4], sessionTitle)) continue;
+
+                // The belt, paid for only by a pane whose title already matched.
+                // Asked of the pane's own process and its children, because an
+                // interactive session runs as a child of the pane's shell while a
+                // team member is the pane's process itself.
+                if (!int.TryParse(parts[1], out var panePid)) continue;
+                if (!RunsClaude(panePid)) continue;
+
+                // A claim only counts while it is still evidence about who is
+                // *reading* the pane, which the pane's own current title is what
+                // settles — see SessionPresence.ClaimStillHolds.
+                var claimed =
+                    paneClaimsByOthers is not null
+                    && paneClaimsByOthers.TryGetValue(parts[0], out var claimantTitle)
+                    && SessionPresence.ClaimStillHolds(claimantTitle, parts[4]);
+
+                matches.Add(new SessionPresence.ViewerPane(
+                    Socket: socket,
+                    Pane: parts[0],
+                    Window: parts[3],
+                    ActiveInItsWindow: parts[2] == "1",
+                    ClaimedByAnother: claimed));
+            }
+        }
+
+        // Whether this pane is running Claude Code — as its own process, or as a
+        // child of the shell it started.
+        // Excluded from coverage: reads the live process table.
+        [ExcludeFromCodeCoverage]
+        private static bool RunsClaude(int panePid)
+        {
+            if (TryRun("/bin/ps", out var own, "-p", panePid.ToString(), "-o", "args=")
+                && SessionPresence.LooksLikeClaudeBinary(FirstWord(own)))
+            {
+                return true;
+            }
+
+            // One level down is enough: a pane runs a shell, and the shell runs
+            // the session. Walking further would start counting a session's own
+            // subprocesses, which are not what is being displayed.
+            if (!TryRun("/bin/ps", out var all, "-eo", "ppid=,args=")) return false;
+
+            foreach (var line in all.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var trimmed = line.Trim();
+                var split = trimmed.IndexOf(' ');
+                if (split <= 0) continue;
+                if (!int.TryParse(trimmed[..split], out var ppid) || ppid != panePid) continue;
+
+                if (SessionPresence.LooksLikeClaudeBinary(FirstWord(trimmed[(split + 1)..])))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string? FirstWord(string line)
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0) return null;
+
+            var space = trimmed.IndexOf(' ');
+            return space < 0 ? trimmed : trimmed[..space];
+        }
+
+        // Every client attached to this server, and the window each one is
+        // showing. Empty list means nothing is attached, which is the answer that
+        // takes this server's panes out of the viewer universe entirely.
+        //
+        // *Every* client, not the first one printed. Two clients are two windows a
+        // person could be looking at, and picking one of them arbitrarily is the
+        // "any client" mistake round eleven found in ResolveClient — which
+        // survived here because this path picked its client by different code. On
+        // the machine that produced this round, the two clients were on sessions
+        // "0" and "1" and only the first was ever considered.
+        // Excluded from coverage: runs tmux.
+        [ExcludeFromCodeCoverage]
+        private static List<TerminalScripts.TmuxClient> AttachedClients(string tmux, string socket)
+        {
+            if (!TryRun(tmux, out var listing, TerminalScripts.TmuxArgs(
+                    socket, "list-clients", "-F", TerminalScripts.ClientListFormat)))
+            {
+                return new List<TerminalScripts.TmuxClient>();
+            }
+
+            return TerminalScripts.ParseClients(listing);
+        }
+
+        // The window a session is currently showing, as "<session>:<index>".
+        //
+        // Through TerminalScripts.PaneTargetForSession, which is not decoration:
+        // a bare session name here is parsed as a window index and answers about
+        // the wrong session without erroring. That comment has the measurements.
+        // Excluded from coverage: runs tmux.
+        [ExcludeFromCodeCoverage]
+        private static string? CurrentWindowOf(string tmux, string socket, string session)
+        {
+            if (string.IsNullOrEmpty(session)) return null;
+
+            return TryRun(tmux, out var found, TerminalScripts.TmuxArgs(
+                    socket, "display-message", "-p",
+                    "-t", TerminalScripts.PaneTargetForSession(session),
+                    "#{session_name}:#{window_index}"))
+                ? FirstLine(found)
+                : null;
+        }
+
         // Opens the one session an orb stands for, in a terminal.
         //
         // TryAdopt can only adopt a window that already exists, which leaves
@@ -175,43 +647,67 @@ namespace ClaudeBuddy
             if (!OperatingSystem.IsMacOS()) return null;
             if (string.IsNullOrEmpty(sessionId)) return null;
 
-            // A terminal may already be attached to this session and still not
-            // be adoptable: Locate needs a tty to hand back, and a window
-            // opened by `open` has none, so it declines one that is plainly
-            // there. Left at that, every click would open another terminal on
-            // a session that already has one. Existence is the right question
-            // here, not addressability — so ask it directly, and settle for
-            // bringing its app forward rather than attaching twice.
-            string? remembered;
-            lock (Gate) remembered = Launched.GetValueOrDefault(JobIdOf(sessionId));
+            var jobId = JobIdOf(sessionId);
 
-            // Already attached inside tmux. Hand the pane back so the caller
-            // selects it, rather than only bringing the app forward: the two
-            // look the same when you happen to be looking at that window
-            // already, and nothing like each other when you aren't. This is
-            // why a second click appeared to do nothing — the window existed
-            // and was reachable by hand, but the click stopped short of
-            // switching to it.
-            if (ExistingAttachPane(JobIdOf(sessionId)) is { Length: > 0 } existing)
+            // Step one of the ladder: does a client for this session already
+            // exist? One question, asked once, of one population.
+            //
+            // It used to be asked twice, of two populations that mostly agreed.
+            // AttachedAlready ran its own `ps -eo args=` and saw every `claude
+            // attach` process on the machine but knew nothing about where any of
+            // them was; ExistingAttachPane ran `tmux list-panes -a` plus a `ps`
+            // per pane and saw only those running as the direct process of a pane
+            // on the default socket; and Launched saw only what this app itself
+            // opened, this run. All three were consulted as whether-checks, and
+            // the case where the first two disagree — an attach in a window of its
+            // own — is exactly the one that decided whether a click opened a
+            // duplicate. So *whether* is settled here, once, by
+            // SessionPresence.KnownAttachClient over the single scan;
+            // ExistingAttachPane is demoted to answering *where*, which no set of
+            // argv strings can; and Launched answers only "into which app", which
+            // is neither of those questions. It is also no longer paid for on every
+            // click: the common case is a set lookup rather than a pane walk.
+            //
+            // A terminal may be attached to this session and still not be
+            // adoptable, which is why existence rather than addressability is the
+            // right question: Locate needs a tty to hand back, and a window opened
+            // by `open` has none, so it declines one that is plainly there.
+            if (SessionPresence.KnownAttachClient(AttachedJobIds(fresh: true), jobId))
             {
-                return existing;
-            }
+                // In a pane: hand it back so the caller selects it, rather than
+                // only bringing the app forward. The two look the same when you
+                // happen to be looking at that window already and nothing like
+                // each other when you aren't, which is why a second click once
+                // appeared to do nothing.
+                //
+                // Focused rather than only selected even when it sits in another of
+                // the user's windows, and that is a judgment rather than an
+                // oversight. Round 6a's rule is "never move the user", and
+                // switching windows is a move — but it is a move to a window they
+                // created and have now asked for by clicking, and the case 6a is
+                // actually about costs nothing either way: select-window onto the
+                // window that is already current changes nothing, so a pane beside
+                // them is reached without anything being disturbed.
+                if (ExistingAttachPane(jobId) is { Length: > 0 } existing) return existing;
 
-            // Attached, but in a terminal window of its own rather than a pane.
-            // There's nothing to select in that case, so raising its app is the
-            // whole of what can be done.
-            if (AttachedAlready(JobIdOf(sessionId)))
-            {
+                // Attached, but in a terminal window of its own. Nothing to
+                // select, so raising its app is the whole of what can be done —
+                // into the app this app opened it into if it remembers, which is
+                // the only thing Launched is still consulted for.
+                string? remembered;
+                lock (Gate) remembered = Launched.GetValueOrDefault(jobId);
+
                 ActivateApp(remembered ?? TerminalApp());
                 return null;
             }
 
-            // Into tmux when there's a tmux to go into. Opening a bare terminal
-            // window for someone who lives in tmux puts the session somewhere
-            // their usual navigation can't reach it — the window is *outside*
-            // the thing they use to move between windows, which is worse than
-            // an extra pane inside it.
-            if (PlaceInTmux(JobIdOf(sessionId), cwd) is { Length: > 0 } pane)
+            // Nothing is attached, so one has to be made. Into tmux when there is
+            // a tmux to go into — *beside* the user if they are in one, which is
+            // PlaceInTmux's whole job now. Opening a bare terminal window for
+            // someone who lives in tmux puts the session somewhere their usual
+            // navigation cannot reach it.
+            if (ClaudeCommand("attach", jobId) is { } attachCommand
+                && PlaceInTmux(attachCommand, cwd) is { Length: > 0 } pane)
             {
                 return pane;
             }
@@ -244,7 +740,6 @@ namespace ClaudeBuddy
                 // both side by side ("id": "162e0b4b", "sessionId":
                 // "162e0b4b-3c45-..."), which is where the relationship is
                 // confirmed rather than assumed.
-                var jobId = JobIdOf(sessionId);
                 var quotedId = "'" + jobId.Replace("'", "'\\''") + "'";
 
                 // The cd matters even though attach names the session outright:
@@ -281,6 +776,107 @@ namespace ClaudeBuddy
             }
         }
 
+        // Opens a terminal attached to an existing tmux server, for a session
+        // whose pane is alive in one nothing is attached to.
+        //
+        // The other half of "a click on an orb must produce a visible result".
+        // AttachSession above answers the session that has no terminal anywhere;
+        // this answers the one that has a *pane* and no screen — an agent-team
+        // member in a detached `claude-swarm-<pid>` socket, which is what the
+        // user was clicking when they reported orbs that "do nothing". Six
+        // things went right on that path and the last one had nowhere to go.
+        //
+        // Here rather than in TerminalFocuser because opening a terminal on a
+        // script file is this file's mechanism, and a second copy of it there
+        // would be a second thing to keep right about which terminal app the
+        // user has and how `open -a` behaves. The command itself is built by
+        // TerminalScripts.TmuxAttachScript, which is pure and tested; what is
+        // left here is the file and the launch.
+        //
+        // Deliberately no "already open?" guard, unlike AttachSession, and the
+        // asymmetry is the point: the moment a client attaches to that server,
+        // the ordinary focus path finds it and raises its window, so the second
+        // click never reaches this. AttachSession needs a guard because a window
+        // running `claude attach` is not discoverable that way.
+        //
+        // Excluded from coverage: writes a script and opens a terminal on it.
+        [ExcludeFromCodeCoverage]
+        public static string? AttachTmuxSocket(
+            string tmuxBinary, string? socket, string pane, string cwd)
+        {
+            if (!OperatingSystem.IsMacOS()) return null;
+            if (string.IsNullOrEmpty(tmuxBinary)) return null;
+            if (string.IsNullOrEmpty(pane)) return null;
+
+            // Which session that pane is in, because a server can hold more than
+            // one and an untargeted attach picks the busiest — see
+            // TerminalScripts.TmuxAttachScript for what that cost. Asked here
+            // rather than threaded down from FocusTmux, which already knows the
+            // answer, because this method is one tmux query away from opening a
+            // terminal and the alternative is a parameter carried through two
+            // layers that exist for other reasons.
+            //
+            // Refused rather than guessed when it cannot be answered. An attach
+            // with no target is not a lesser version of this; it is an attach to
+            // whatever happened to be busy, which on the server this matters for
+            // is the app's own relay.
+            if (!TryRun(tmuxBinary, out var found, TerminalScripts.TmuxArgs(
+                    socket, "display-message", "-p", "-t", pane, "#{session_name}")))
+            {
+                return null;
+            }
+
+            if (FirstLine(found) is not { Length: > 0 } session) return null;
+
+            // Beside the user first, which is the arrival every other answer on
+            // this ladder already gives. Warren chose it explicitly at the
+            // round-thirteen fork — "Splits in beside you showing what THAT agent
+            // is doing" — and it is the same rule round 6a settled for the
+            // background arm: the content comes to the user, nothing yanks. The
+            // command is targeted exactly as round 14 made it, so the pane lands
+            // in the clicked session and not in whichever the server used last.
+            //
+            // Returns the pane so the caller focuses it through the ordinary tail,
+            // the same contract AttachSession has and for the same reason.
+            var command = TerminalScripts.TmuxAttachCommand(tmuxBinary, socket, session);
+
+            if (PlaceInTmux(command, cwd) is { Length: > 0 } beside) return beside;
+
+            // No tmux of the user's own to split into. A terminal window of its
+            // own is what is left, and it keeps the shape it already had.
+            try
+            {
+                System.IO.Directory.CreateDirectory(ClaudeBuddySettings.Directory);
+
+                // Its own name, not open-agents-view.sh: the two can be launched
+                // moments apart, and a shared file would mean the second write
+                // deciding what the first window runs.
+                var script = Path.Combine(ClaudeBuddySettings.Directory, "attach-tmux-socket.sh");
+
+                File.WriteAllText(script,
+                    TerminalScripts.TmuxAttachScript(tmuxBinary, socket, session, cwd));
+                File.SetUnixFileMode(script,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+                var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
+                psi.ArgumentList.Add("-a");
+                psi.ArgumentList.Add(TerminalApp());
+                psi.ArgumentList.Add(script);
+                Process.Start(psi);
+
+                // Null rather than a pane: this went into a window of its own, so
+                // there is nothing for the caller to select. Same contract as
+                // AttachSession's own terminal fallback.
+                return null;
+            }
+            catch
+            {
+                // Same contract as everything else on this path: failing to open
+                // a window is a click that did nothing, never a crash.
+                return null;
+            }
+        }
+
         // Runs the attach in a new window of whichever tmux session already has
         // a client, and hands back its pane. Nothing is selected or raised here
         // — returning the pane lets the caller reuse the focus path every other
@@ -288,50 +884,74 @@ namespace ClaudeBuddy
         // the window and bring its app forward.
         // Excluded from coverage: creates a real tmux window and sends keys to it.
         [ExcludeFromCodeCoverage]
-        private static string? PlaceInTmux(string jobId, string cwd)
+        private static string? PlaceInTmux(string command, string cwd)
         {
             var tmux = ResolveTmux();
             if (tmux is null) return null;
 
             // A server with no client attached is a detached session: making a
-            // window in it would put the attach somewhere with no screen, which
-            // is the same nowhere the orb already pointed at.
-            if (!TryRun(tmux, out var clients, "list-clients", "-F", "#{client_session}"))
-            {
-                return null;
-            }
+            // window in it — let alone splitting one — would put the attach
+            // somewhere with no screen, which is the same nowhere the orb already
+            // pointed at. TerminalScripts.PlacementFor turns that into the
+            // ATerminalWindow answer, and this returning null is how the caller
+            // takes it.
+            //
+            // The default server only: a person's tmux is the one they attached to
+            // by hand, and the swarm sockets are this app's own.
+            //
+            // The client they are most likely sitting at, rather than whichever
+            // `list-clients` printed first. That was the same "any client" mistake
+            // round eleven fixed in ResolveClient, still here because this path
+            // chose its client by its own code — and with two clients attached it
+            // decided which window a pane got split into.
+            var session = TerminalScripts.MostRecentClient(AttachedClients(tmux, ""))?.Session;
 
-            var session = clients
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                .Select(line => line.Trim())
-                .FirstOrDefault(line => line.Length > 0);
+            // Which window that client is showing. A second question that can fail
+            // on its own, which is why PlacementFor takes both and has a middle
+            // answer.
+            var activeWindow = session is null ? null : CurrentWindowOf(tmux, "", session);
 
-            if (session is null) return null;
-
-            // An absolute path here too. tmux runs the command with `sh -c`,
-            // and the server's environment is whatever it happened to be
+            // `command` arrives already quoted and already naming an absolute
+            // claude, for the reason its builders record: tmux runs it with
+            // `sh -c`, and the server's environment is whatever it happened to be
             // started with — which needn't include wherever `claude` lives, and
             // can't be assumed to match this app's. See ClaudeBinary for why
             // asking a login shell to resolve it isn't the fix it looks like.
-            var claude = ClaudeBinary.Path;
-            if (claude is null) return null;
-
-            var command = "'" + claude.Replace("'", "'\\''") + "'"
-                          + " attach '" + jobId.Replace("'", "'\\''") + "'";
-
-            // "<session>:" with the colon, not the bare name. Bare, tmux reads
-            // the target as a *window* and refuses with "index N in use" the
-            // moment that index is taken; the trailing colon names the session
-            // and lets it pick the next free index.
-            if (!TryRun(tmux, out var pane,
-                    "new-window", "-t", session + ":", "-c", cwd,
-                    "-P", "-F", "#{pane_id}", command))
+            var args = TerminalScripts.PlacementFor(session, activeWindow) switch
             {
-                return null;
-            }
+                // The whole of round 6a. "It's taking me to a different tmux
+                // window - not this one" — so the conversation comes to them as a
+                // pane in the window they are already in, and nothing moves.
+                TerminalScripts.AttachPlacement.BesideTheUser =>
+                    TerminalScripts.TmuxSplitArgs(null, activeWindow!, cwd, command),
+
+                TerminalScripts.AttachPlacement.ItsOwnTmuxWindow =>
+                    TerminalScripts.TmuxNewWindowArgs(null, session!, cwd, command),
+
+                _ => null
+            };
+
+            if (args is null) return null;
+
+            if (!TryRun(tmux, out var pane, args)) return null;
 
             var id = pane.Trim();
             return id.StartsWith('%') ? id : null;
+        }
+
+        // The first non-blank line of a tmux answer, trimmed. Both lookups above
+        // ask for one field and can be handed several lines — `list-clients`
+        // genuinely lists, and `display-message -p` appends a newline — and both
+        // want the same thing from that.
+        private static string? FirstLine(string output)
+        {
+            foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Length > 0) return trimmed;
+            }
+
+            return null;
         }
 
         // Where tmux actually is. The app can't count on PATH — launched from
@@ -425,46 +1045,10 @@ namespace ClaudeBuddy
                 if (Path.GetFileName(words[0]) is not ("claude" or "claude.exe")) continue;
                 if (words[1] != "attach") continue;
 
-                var id = words[2];
-                if (jobId.StartsWith(id, StringComparison.Ordinal)
-                    || id.StartsWith(jobId, StringComparison.Ordinal))
-                {
-                    return parts[0];
-                }
+                if (SessionPresence.SameJobId(jobId, words[2])) return parts[0];
             }
 
             return null;
-        }
-
-        // Whether some terminal is already sitting on `claude attach <id>`.
-        // Matched the same way ViewerPids matches the agent view, and for the
-        // same reason: the executable path is version-stamped and moves, the
-        // arguments don't. The id is compared by prefix because attach accepts
-        // the short form and echoes it back that way, so a window opened by
-        // hand with `claude attach bd7919f8` must still count as this session's.
-        // Excluded from coverage: asks tmux whether a pane is still running the
-        // attach.
-        [ExcludeFromCodeCoverage]
-        private static bool AttachedAlready(string sessionId)
-        {
-            if (!TryRun("/bin/ps", out var listing, "-eo", "args=")) return false;
-
-            foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-            {
-                var words = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (words.Length < 3) continue;
-                if (Path.GetFileName(words[0]) is not ("claude" or "claude.exe")) continue;
-                if (words[1] != "attach") continue;
-
-                var id = words[2];
-                if (sessionId.StartsWith(id, StringComparison.Ordinal)
-                    || id.StartsWith(sessionId, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         private static void Forget(string cwd)

@@ -31,6 +31,76 @@ public class SessionScanRulesTests
         return new SessionManager.ScanEntry(id, status, written);
     }
 
+    // --- SharingAPid --------------------------------------------------------
+
+    // The domain InheritTerminalInfo donates within, and the situation
+    // Superseded exists to resolve, said once. Its consumer is the gate that
+    // decides whether to ask the daemon about a session — and the case it exists
+    // for is the Agent-View-dispatched background session, which does not fork a
+    // process and so lands on a live interactive session's pid.
+    [Fact]
+    public void TwoFilesOnOnePidBothCountAsSharingIt()
+    {
+        var found = new List<SessionManager.ScanEntry>
+        {
+            Entry("interactive", 4321, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 0, 0)),
+            Entry("dispatched", 4321, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 1, 0)),
+            Entry("elsewhere", 4322, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 2, 0)),
+        };
+
+        var shared = SessionManager.SharingAPid(found);
+
+        // Both of them, not just the one that lost the mtime tie-break: the
+        // donation runs in both directions and either file can be the job.
+        Assert.Contains("interactive", shared);
+        Assert.Contains("dispatched", shared);
+        Assert.DoesNotContain("elsewhere", shared);
+    }
+
+    // Keyed by pid *and* source, for the reason Superseded and
+    // InheritTerminalInfo both give: a nested `codex exec` can record the pid of
+    // the Claude Code session that started it, and two CLIs never share a real
+    // process. Treating that pair as one bucket would make an ordinary pair of
+    // sessions look like an Agent View pid.
+    [Fact]
+    public void OnePidAcrossTwoClisIsNotSharing()
+    {
+        var found = new List<SessionManager.ScanEntry>
+        {
+            Entry("claude", 4321, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 0, 0)),
+            Entry("codex", 4321, SessionSource.Codex, new DateTime(2026, 8, 27, 12, 1, 0)),
+        };
+
+        Assert.Empty(SessionManager.SharingAPid(found));
+    }
+
+    // A pid of 0 is a hook older than the session_pid field, not a shared
+    // process. Bucketing those together would say every such file shares a pid
+    // with every other — the same trap Superseded's own comment names, and here
+    // it would make the daemon be asked about all of them.
+    [Fact]
+    public void FilesThatRecordedNoPidShareNothing()
+    {
+        var found = new List<SessionManager.ScanEntry>
+        {
+            Entry("old-a", 0, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 0, 0)),
+            Entry("old-b", 0, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 1, 0)),
+        };
+
+        Assert.Empty(SessionManager.SharingAPid(found));
+    }
+
+    [Fact]
+    public void OneFileOnItsOwnPidSharesNothing()
+    {
+        var found = new List<SessionManager.ScanEntry>
+        {
+            Entry("solo", 4321, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 0, 0)),
+        };
+
+        Assert.Empty(SessionManager.SharingAPid(found));
+    }
+
     // --- Superseded ---------------------------------------------------------
 
     // None of these care about the daemon's job list, so they all pass a stub
