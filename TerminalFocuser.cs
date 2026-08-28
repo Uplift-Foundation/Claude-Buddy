@@ -43,10 +43,31 @@ namespace ClaudeBuddy
         // it's the status file's name, not a field inside it. Needed for the
         // background case at the end, where the only way to reach a session is
         // to name it.
+        // paneClaimsByOthers is SessionManager's answer to "which tmux panes do
+        // other sessions record as their own, and under what title", handed in the
+        // same way teamLead is and for the same reason: which status files exist is
+        // not this file's knowledge. The title is there because a claim only counts
+        // while it is still true — see SessionPresence.ClaimStillHolds. Only the
+        // viewer scan uses any of it, and only for its riskier branch.
+        // acknowledge is called when the click was answered *without creating
+        // anything* — the session was already on screen, or its pane was simply
+        // selected. A callback rather than this file reaching for the orb, because
+        // the layering runs the other way everywhere else here: TerminalFocuser is
+        // handed the facts it needs and hands back what it did.
+        //
+        // It exists because round seven worked and nobody could tell. Doing
+        // nothing is the correct answer to a click on a session you are already
+        // looking at, and it is indistinguishable from the broken clicks this
+        // whole ticket is about unless the orb says so.
+        //
+        // Invoked from the pool thread, so the caller marshals — see
+        // OrbWindow.GoToSession.
         public static void Focus(
             SessionStatus? status,
             SessionStatus? teamLead = null,
-            string? sessionId = null)
+            string? sessionId = null,
+            IReadOnlyDictionary<string, string>? paneClaimsByOthers = null,
+            Action? acknowledge = null)
         {
             if (status is null) return;
 
@@ -69,43 +90,215 @@ namespace ClaudeBuddy
             // duration of the click.
             Task.Run(() =>
             {
-                if (FocusCore(status)) return;
-                if (teamLead is not null && FocusCore(teamLead)) return;
+                // detached is what the tmux attempt learned on its way past: the
+                // pane is alive, it has been selected, and no client is attached
+                // to that server anywhere. Kept rather than re-asked, because
+                // answering it costs three subprocesses and because it is a fact
+                // about a moment that has already gone.
+                if (FocusCore(status, out var detached)) return;
 
-                // Nothing on screen shows this session. For a background one
-                // that is the normal case rather than a failure — it runs under
-                // a daemon with no terminal of its own — so open one on it
-                // rather than leave the click doing nothing. Gated on having no
-                // pid so a real session whose terminal merely couldn't be
-                // resolved gets a diagnosis rather than a surprise window.
+                // Nothing on screen shows this session. Which way out applies is
+                // decided by ClickRouting, which is pure and covered per case; the
+                // reason there is any way out at all is that every failure above
+                // this line is silent.
                 //
-                // Still Claude Code's alone. This ends in `claude attach`, and
-                // there is no Codex equivalent to attach to. The scan already
-                // drops a pid-less Codex session before it can have an orb, so
-                // nothing should reach here — this is the belt to that braces,
-                // because the failure it prevents is a window opening onto
-                // someone else's session.
-                if (status.Source == SessionSource.ClaudeCode
-                    && status.SessionPid <= 0
-                    && !string.IsNullOrEmpty(sessionId))
-                {
-                    var pane = AgentTeamViewer.AttachSession(sessionId, status.Cwd);
+                // Asked *before* the team lead is tried, which is the fix for
+                // CB-13's team-orb bug and the reverse of what this method did.
+                // The lead used to come first, and a lead that could be focused
+                // ended the click there — so a teammate whose own session had a
+                // perfectly good answer waiting (a terminal on its detached swarm
+                // socket, landing on the pane the tmux attempt above had just
+                // selected) never got it, and the user got a window that was
+                // already in front of them. See ClickRouting.LeadMayAnswer, which
+                // is where that ordering now lives and why.
+                var fallback = ClickRouting.FallbackFor(status, sessionId, detached);
 
-                    // It went into tmux, so finish the job the ordinary way:
-                    // FocusCore already knows how to select a pane, find the
-                    // client showing it and bring that client's window
-                    // forward. Only the pane is new — everything after it is
-                    // the path every other tmux session takes.
-                    if (!string.IsNullOrEmpty(pane))
-                    {
-                        FocusCore(new SessionStatus
-                        {
-                            TmuxPane = pane,
-                            Cwd = status.Cwd
-                        });
-                    }
+                // The lead only when nothing would show the session that was
+                // clicked. It is still the right answer then — the lead is where
+                // that agent's work is being driven from, and a window showing
+                // the wrong session beats no window at all — but it is the last
+                // answer rather than the first.
+                if (ClickRouting.LeadMayAnswer(fallback)
+                    && teamLead is not null
+                    && FocusCore(teamLead))
+                {
+                    return;
                 }
+
+                RunFallback(fallback, status, sessionId, paneClaimsByOthers, acknowledge);
             });
+        }
+
+        // One place the four answers are carried out, because two gestures reach
+        // them: a click on an orb, and the chat panel's button for a session it
+        // cannot type into. Two switches would be two chances for the same orb to
+        // send its click and its button to different places.
+        //
+        // Off the UI thread by contract — every arm here runs subprocesses — which
+        // Focus above satisfies by being inside its own Task.Run, and Elsewhere
+        // below by starting one.
+        private static void RunFallback(
+            ClickFallback fallback, SessionStatus status, string? sessionId,
+            IReadOnlyDictionary<string, string>? paneClaimsByOthers, Action? acknowledge)
+        {
+            switch (fallback)
+            {
+                case ClickFallback.AgentsView:
+                    // Where these sessions are managed from. Focused if a roster
+                    // is already open, opened if not, and finished off through the
+                    // ordinary pane path when it went into tmux.
+                    FocusPaneIfAny(AgentTeamViewer.OpenOrFocusAgentsView(status.Cwd), status.Cwd);
+                    break;
+
+                case ClickFallback.AttachBackground:
+                case ClickFallback.AttachById:
+                    // Step zero, ahead of anything that creates a window: is a
+                    // pane already showing this conversation?
+                    //
+                    // "Nobody wants the same chat in two windows next to each
+                    // other!! This is the chat!!" — said after round 6a split a
+                    // second view of the session the user was reading into the
+                    // window they were reading it in. Every earlier round assumed
+                    // this was undiscoverable, and the socket, file, argv and
+                    // environment proofs of that all stand; what none of them
+                    // covered is that the TUI publishes the conversation title to
+                    // the terminal, where tmux keeps it in #{pane_title}.
+                    //
+                    // Only the two attach answers ask. The socket answer is about a
+                    // pane in a *detached* server, which by definition nobody is
+                    // looking at, and the roster is a destination the user named
+                    // outright from a menu.
+                    // ...but not for a session that recorded a pane of its own.
+                    //
+                    // The scan finds a pane by *title*, which is a guess at where a
+                    // conversation is being displayed. For a session that told us
+                    // its own pane the guess cannot outrank the statement, and for
+                    // a teammate the guess is provably undecidable: a teammate
+                    // inherits its lead's title, so the lead's viewer pane and the
+                    // teammate's own are indistinguishable by the only thing this
+                    // scan reads. Answering that click with the lead's window is
+                    // what round thirteen was reported for.
+                    //
+                    // Belt to the ordering above, which already sends such a
+                    // session to its own pane. This is the brace: a recorded pane
+                    // that is *not* currently alive falls past that rule, and this
+                    // stops the title scan picking up the pieces with somebody
+                    // else's window.
+                    var (verdict, showing) = ClickRouting.RecordedItsOwnPane(status)
+                        ? (SessionPresence.ViewerVerdict.NoneFound, (SessionPresence.ViewerPane?)null)
+                        : AgentTeamViewer.ViewingPane(status.Title, paneClaimsByOthers);
+
+                    // One branch for both found verdicts, because both mean the
+                    // same thing to the destination — see
+                    // SessionPresence.AnswersTheClick, and note that being
+                    // tmux-active is not the same as being on the user's screen.
+                    // The orbs float over every application and the terminal is
+                    // routinely behind something else when one is clicked, so
+                    // "already here" has to raise the terminal too; for a pane that
+                    // is already current, the raise is the *only* part of this that
+                    // does anything.
+                    if (SessionPresence.AnswersTheClick(verdict) && showing is { } pane)
+                    {
+                        // Acknowledged first, and deliberately. The flash is a Post
+                        // to the UI thread so it cannot delay the raise, and making
+                        // the one thing that answers the gesture immediately wait
+                        // on a few hundred milliseconds of tmux and osascript is
+                        // the same mistake as the invisible no-op it exists to fix.
+                        acknowledge?.Invoke();
+
+                        FocusPaneIfAny(pane.Pane, status.Cwd, pane.Socket);
+                        return;
+                    }
+
+                    FocusPaneIfAny(AgentTeamViewer.AttachSession(sessionId!, status.Cwd), status.Cwd);
+                    break;
+
+                case ClickFallback.AttachSocket:
+                    // Arrives beside the user, like every other answer here: a
+                    // pane in the window they are already in, running an attach
+                    // targeted at the clicked session. The pane was selected on
+                    // the way past by FocusTmux, and round 14's `-t` is what makes
+                    // the attach land on that session rather than on whichever the
+                    // server used last — the selects aim within a session and the
+                    // target chooses which.
+                    FocusPaneIfAny(
+                        AgentTeamViewer.AttachTmuxSocket(
+                            ResolveTmuxBinary(status.TmuxBin) ?? "", status.TmuxSocket,
+                            status.TmuxPane, status.Cwd),
+                        status.Cwd);
+                    break;
+
+                case ClickFallback.None:
+                    // Coordinates were recorded and could not be resolved.
+                    // Deliberately nothing further: opening a second window onto a
+                    // session that already has one would hide a real failure
+                    // behind a new window every time. The failure is reported (to
+                    // stderr, which a bundled app has nowhere to show — a
+                    // follow-up ticket, not this one).
+                    break;
+            }
+        }
+
+        // "Open agents view", from a background orb's right-click menu.
+        //
+        // Its own entry point because the roster is no longer an answer to a
+        // click — see ClickRouting.AgentsView for the misreading that made it one
+        // for an hour, and ClickRouting.OffersTheAgentsView for which orbs offer
+        // it. Named rather than routed through FallbackFor, since the user has
+        // said which destination they want and there is nothing left to decide.
+        //
+        // Through RunFallback all the same, so the pane-focusing tail is shared:
+        // a roster that opens into tmux still has to be selected and its client's
+        // window raised, and that step being forgotten is exactly what once made
+        // a second click look like it did nothing.
+        public static void OpenAgentsView(SessionStatus? status)
+        {
+            if (status is null) return;
+
+            Task.Run(() => RunFallback(
+                ClickFallback.AgentsView, status, sessionId: null,
+                paneClaimsByOthers: null, acknowledge: null));
+        }
+
+        // The chat panel's half of the same answer: it has made no focus attempt,
+        // so it asks the rule with nothing learned about detached panes and
+        // carries out whatever comes back. One verb, one destination — see
+        // ClickRouting.AttachWouldReach, which decides whether the button is
+        // offered at all.
+        public static void Elsewhere(
+            SessionStatus? status, string? sessionId,
+            IReadOnlyDictionary<string, string>? paneClaimsByOthers = null,
+            Action? acknowledge = null)
+        {
+            if (status is null) return;
+
+            Task.Run(() => RunFallback(
+                ClickRouting.FallbackFor(status, sessionId, paneAliveButDetached: false),
+                status, sessionId, paneClaimsByOthers, acknowledge));
+        }
+
+        // The tail every opener above shares: if what it opened (or found) went
+        // into tmux, the pane still has to be selected and its client's window
+        // raised, which FocusCore already knows how to do for every other pane in
+        // the app. Null means it went into a window of its own, or did not happen
+        // — in both cases there is nothing left here to do.
+        //
+        // This was the part missing when the attach path was first written, and
+        // its absence is what made a second click look like it did nothing: the
+        // window existed and was reachable by hand, and the click stopped short of
+        // switching to it.
+        private static void FocusPaneIfAny(string? pane, string cwd, string? socket = null)
+        {
+            if (string.IsNullOrEmpty(pane)) return;
+
+            // The socket matters as much as the pane id, because a pane id is per
+            // server: `%98` on one server and `%98` on another are different panes,
+            // and looking for the wrong one finds nothing, says nothing, and drops
+            // the click through to minting a new window. Harmless while only the
+            // default server was ever read; a live bug the moment the viewer scan
+            // could return a pane from a second attached server, which is exactly
+            // what round nine's visible universe allows.
+            FocusCore(new SessionStatus { TmuxPane = pane, TmuxSocket = socket ?? "", Cwd = cwd });
         }
 
         // Types transcribed speech into the exact terminal/pane a session's
@@ -137,6 +330,29 @@ namespace ClaudeBuddy
             // is a latent hazard for any pane-less session; a gateway session
             // would make it the normal case.
             if (!status.IsLocalCli) return Task.CompletedTask;
+
+            // And the other half of the same hazard, which the guard above only
+            // covered by accident of who tends to have it. A session that
+            // recorded no terminal coordinates at all is a local CLI, so it
+            // passes that test, and then every branch below fails to find
+            // anywhere to type until the last one sprays keystrokes at whatever
+            // is frontmost — a browser, an editor, somebody else's session.
+            //
+            // The mic is offered on every orb, and this branch keeps a whole
+            // class of terminal-less orbs on screen that used to be dropped, so
+            // the number of orbs that could do this has gone up. Same predicate
+            // the click path uses (ClickRouting.NoCoordinatesAtAll), which is
+            // the point: one answer to "is there anywhere to aim this", not two
+            // that can drift.
+            //
+            // Silently nothing, rather than an attach the way a *click* on the
+            // same orb gets. A click asks to be taken somewhere and a new window
+            // is a fair answer; dictation asks for words to arrive in a specific
+            // prompt, and the honest failure is that they do not arrive at all.
+            // Typing them into a terminal the user was not looking at, or
+            // opening one and racing its startup, are both worse than nothing —
+            // and unlike a click, nothing here is irreversible.
+            if (ClickRouting.NoCoordinatesAtAll(status)) return Task.CompletedTask;
 
             return Task.Run(async () =>
             {
@@ -287,8 +503,18 @@ namespace ClaudeBuddy
         // Whether anything was actually brought forward. False means the click
         // had no effect at all, which is what the team-lead fallback above is
         // for — and what made two orbs on screen feel broken before it existed.
-        private static bool FocusCore(SessionStatus status)
+        private static bool FocusCore(SessionStatus status) => FocusCore(status, out _);
+
+        // paneAliveButDetached is only ever set by the tmux branch, and only for
+        // the one outcome no other rule can see from outside: the pane exists and
+        // nothing is attached to its server. Threaded out as a second answer
+        // rather than folded into the bool, because it is not a *kind* of failure
+        // to focus — it is a fact about where the session is, which the caller
+        // needs and which costs three subprocesses to establish.
+        private static bool FocusCore(SessionStatus status, out bool paneAliveButDetached)
         {
+            paneAliveButDetached = false;
+
             if (OperatingSystem.IsWindows())
             {
                 FocusWindows(status);
@@ -299,7 +525,11 @@ namespace ClaudeBuddy
 
             // tmux first: when a session is inside tmux, nothing else the hook
             // recorded points at a window you can actually see.
-            if (!string.IsNullOrEmpty(status.TmuxPane) && FocusTmux(status)) return true;
+            if (!string.IsNullOrEmpty(status.TmuxPane)
+                && FocusTmux(status, out paneAliveButDetached))
+            {
+                return true;
+            }
 
             string? script;
             if (!string.IsNullOrEmpty(status.TermId))
@@ -373,8 +603,10 @@ namespace ClaudeBuddy
         //      you can detach and reattach a tmux session from a different app
         //      (or from none at all), so it's resolved from the live client's
         //      tty on every click.
-        private static bool FocusTmux(SessionStatus status)
+        private static bool FocusTmux(SessionStatus status, out bool paneAliveButDetached)
         {
+            paneAliveButDetached = false;
+
             var tmux = ResolveTmuxBinary(status.TmuxBin);
             if (tmux is null) return false;
 
@@ -400,7 +632,19 @@ namespace ClaudeBuddy
             // but there's no window to bring forward. Report that we didn't
             // activate anything so the caller can still try its own heuristics
             // rather than treating the click as handled.
-            if (client is null) return false;
+            //
+            // And say *why*, which is the new part. "Couldn't focus" and "there
+            // is a live pane here with no screen on it" are different facts, and
+            // only the second one has an answer: attach a terminal to this
+            // server and the user is looking at the pane that was already
+            // selected two lines up. Left as a bare false, this was the exact
+            // path a click on an agent-team member in a detached swarm socket
+            // took to doing nothing at all.
+            if (client is null)
+            {
+                paneAliveButDetached = true;
+                return false;
+            }
 
             var (clientTty, controlMode) = client.Value;
             var app = ResolveAppBundleForTty(clientTty);
@@ -485,48 +729,35 @@ namespace ClaudeBuddy
         // once, and the one you touched last is the one you're sitting at.
         private static (string Tty, bool ControlMode)? ResolveClient(string tmux, SessionStatus status, string sessionName)
         {
-            if (!TryRun(tmux, out var listing, TmuxArgs(status, "list-clients", "-F",
-                    "#{client_tty}\t#{client_session}\t#{client_activity}\t#{client_control_mode}")))
+            if (!TryRun(tmux, out var listing, TmuxArgs(
+                    status, "list-clients", "-F", TerminalScripts.ClientListFormat)))
             {
                 return null;
             }
 
-            (string Tty, bool ControlMode)? onSession = null, anyClient = null;
-            string? onSessionBest = null, anyClientBest = null;
+            // One format string and one parse, shared with the viewer scan's own
+            // client listing — a field added to one used to be read out of
+            // position by the other.
+            var clients = TerminalScripts.ParseClients(listing);
 
-            foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            // Which one, decided where it can be read and tested — see
+            // TerminalScripts.ChooseClient. Everything below is aimed by the
+            // client this returns: the switch, the app lookup, and the per-tty
+            // window selection. With one client attached none of that mattered;
+            // with two, choosing wrong brings the wrong window of the same
+            // application to the front.
+            if (TerminalScripts.ChooseClient(clients, sessionName) is not { } choice) return null;
+
+            // Only when it is not already there. A client on the target session
+            // needs no switch, and switching a *second* client onto it would drag
+            // that one off whatever its own user was looking at.
+            if (choice.NeedsSwitch)
             {
-                var parts = line.Split('\t');
-                if (parts.Length < 2) continue;
-
-                var tty = parts[0].Trim();
-                if (tty.Length == 0) continue;
-
-                // client_activity is a unix timestamp; string-compare is fine
-                // for equal-width integers and avoids caring about the format.
-                var activity = parts.Length > 2 ? parts[2].Trim() : "";
-                var candidate = (tty, parts.Length > 3 && parts[3].Trim() == "1");
-
-                if (parts[1].Trim() == sessionName)
-                {
-                    if (onSession is null || activity.CompareTo(onSessionBest) > 0)
-                    {
-                        onSession = candidate;
-                        onSessionBest = activity;
-                    }
-                }
-                else if (anyClient is null || activity.CompareTo(anyClientBest) > 0)
-                {
-                    anyClient = candidate;
-                    anyClientBest = activity;
-                }
+                TryRun(tmux, out _, TmuxArgs(status,
+                    "switch-client", "-c", choice.Client.Tty, "-t", sessionName));
             }
 
-            if (onSession is not null) return onSession;
-            if (anyClient is null) return null;
-
-            TryRun(tmux, out _, TmuxArgs(status, "switch-client", "-c", anyClient.Value.Tty, "-t", sessionName));
-            return anyClient;
+            return (choice.Client.Tty, choice.Client.ControlMode);
         }
 
         // Walks up from whatever is running on a tty until it hits a process
