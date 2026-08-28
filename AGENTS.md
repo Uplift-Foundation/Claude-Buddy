@@ -415,6 +415,29 @@ a few things are reachable only there — a bitmap actually written to disk most
 obviously (`ClaudeDesktopBundles.WriteTinted`). Leaving it out meant those lines
 were verified and counted nowhere.
 
+**Check the run produced a number before quoting one.** `merged N report(s)` is
+the first line `coverage.sh` prints and it is a self-check: there are exactly
+four cobertura files, so **anything but `merged 4` means the figure below it is
+fiction**. Both directions turned up within one afternoon on CB-6 — `merged 1`,
+because another agent in the same clone ran `rm -rf bin obj tests/*/bin
+tests/*/obj` mid-measurement and deleted the binaries the report maps against;
+and `merged 6`, from stale reports left in the MTP suites' own `TestResults`,
+which `coverage.sh` reads and does not clear.
+
+"Quiet tree" therefore means the **process table**, not `git status` and not an
+agent roster that looks idle — `pgrep -fl "dotnet|coverage.sh|testhost"`, then a
+clean rebuild. A number taken while anything else was building does not leave
+the session that took it.
+
+Learn the signature, because it reads as a regression rather than as an error.
+CB-6 produced a phantom `56/60 = 93.3%` that was reported as a real branch drop
+and sent back as work; six later runs all gave `56/56 = 100%`. The tell was that
+two of the lines it called uncovered were **closing braces** and one was a
+range-slice assignment — none can hold a branch at all. Branch arms attributed
+to punctuation means the report was mapped against a stale or deleted binary.
+Three unreproducible numbers are now documented here and only one was the code's
+fault.
+
 The three console suites still contribute nothing *as suites* —
 `ArrangementTests`, `GlyphTests`, `TranscriptTests` are plain exes, not test-SDK
 projects. Their **cases** do count now: CB-3 moved each matrix into a class that
