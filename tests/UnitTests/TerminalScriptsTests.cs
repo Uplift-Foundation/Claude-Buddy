@@ -566,6 +566,81 @@ namespace ClaudeBuddy.Tests
             Assert.True(choice!.Value.Client.ControlMode);
         }
 
+        // --- MostRecentClient / ParseClients / PaneTargetForSession -----------
+
+        // The client a person is most likely sitting at. PlaceInTmux used to take
+        // whichever line `list-clients` printed first, which is the same "any
+        // client" mistake round eleven found one file away — and with two clients
+        // attached it decided which window a pane got split into.
+        [Fact]
+        public void TheMostRecentlyActiveClientIsTheOneTheUserIsAt()
+        {
+            var chosen = TerminalScripts.MostRecentClient(new[]
+            {
+                Client("/dev/ttys002", "0", activity: "1787874871"),
+                Client("/dev/ttys009", "1", activity: "1787875071"),
+            });
+
+            Assert.Equal("/dev/ttys009", chosen!.Value.Tty);
+        }
+
+        [Fact]
+        public void AClientWithNoTtyIsNeverTheOne()
+        {
+            // Later activity, and unusable: nothing downstream can aim at a client
+            // with no tty.
+            var chosen = TerminalScripts.MostRecentClient(new[]
+            {
+                Client("/dev/ttys002", "0", activity: "1000"),
+                Client("", "1", activity: "9999"),
+            });
+
+            Assert.Equal("/dev/ttys002", chosen!.Value.Tty);
+            Assert.Null(TerminalScripts.MostRecentClient(Array.Empty<TerminalScripts.TmuxClient>()));
+        }
+
+        // One format and one parse, shared by both listings — a field added to one
+        // used to be read out of position by the other.
+        [Fact]
+        public void AClientListingIsReadBackFieldForField()
+        {
+            var clients = TerminalScripts.ParseClients(
+                "/dev/ttys002\t0\t1787875071\t0\n/dev/ttys009\t1\t1787874871\t1\n");
+
+            Assert.Equal(2, clients.Count);
+            Assert.Equal("/dev/ttys002", clients[0].Tty);
+            Assert.Equal("0", clients[0].Session);
+            Assert.Equal("1787875071", clients[0].Activity);
+            Assert.False(clients[0].ControlMode);
+            Assert.True(clients[1].ControlMode);
+        }
+
+        [Fact]
+        public void AShortOrEmptyClientRowIsSkippedRatherThanGuessed()
+        {
+            var clients = TerminalScripts.ParseClients("\n/dev/ttys002\n/dev/ttys009\t1\n");
+
+            // One field is not a client row; two is the minimum that names a
+            // session, and the optional tail defaults rather than throwing.
+            Assert.Single(clients);
+            Assert.Equal("", clients[0].Activity);
+            Assert.False(clients[0].ControlMode);
+        }
+
+        // The measured one. `display-message -t <session>` takes a target *pane*,
+        // so a bare name is read as a window index in the current session and
+        // answers about the wrong session without erroring — on a server whose
+        // sessions are tmux's default "0" and "1", asking about "1" answered
+        // "0:1". The trailing colon makes it a pane target and "=" makes the match
+        // exact, which is what RemoteControlBridge.TmuxNames already builds and
+        // explains for the same two reasons.
+        [Fact]
+        public void ASessionIsNamedAsAPaneTargetNotABareName()
+        {
+            Assert.Equal("=1:", TerminalScripts.PaneTargetForSession("1"));
+            Assert.Equal("=claude-swarm:", TerminalScripts.PaneTargetForSession("claude-swarm"));
+        }
+
         // --- PlacementFor -----------------------------------------------------
 
         // Round 6a in three cases. "It's taking me to a different tmux window -

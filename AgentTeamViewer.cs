@@ -403,10 +403,22 @@ namespace ClaudeBuddy
                 // Asked first, and of every server, because the answer decides
                 // whether that server's panes are in the universe at all. A
                 // detached server is a screen nobody is looking at.
-                if (!TryAttachedClient(tmux, socket, out var window)) continue;
+                var clients = AttachedClients(tmux, socket);
+                if (clients.Count == 0) continue;
 
                 withClients.Add(socket);
-                if (window is { Length: > 0 }) watched.Add((socket, window));
+
+                // Every attached client's window, not one of them: the user could
+                // be sitting at any of them, and a window missing from this set is
+                // a pane the scan will call "elsewhere" and try to move them to
+                // while they are already looking at it.
+                foreach (var client in clients)
+                {
+                    if (CurrentWindowOf(tmux, socket, client.Session) is { Length: > 0 } window)
+                    {
+                        watched.Add((socket, window));
+                    }
+                }
 
                 CollectMatches(tmux, socket, sessionTitle, paneClaimsByOthers, matches);
             }
@@ -558,35 +570,46 @@ namespace ClaudeBuddy
             return space < 0 ? trimmed : trimmed[..space];
         }
 
-        // False when nothing is attached to this server, which is the answer that
-        // takes its panes out of the universe entirely. True with a null window is
-        // the weaker failure — somebody is there and the window could not be
-        // resolved — which still lets a pane be selected for them. Two answers
-        // rather than one nullable string, because a null string cannot say which
-        // of those two it means, and treating the first as the second is how a
-        // click came to select a pane on a screen nobody was looking at.
+        // Every client attached to this server, and the window each one is
+        // showing. Empty list means nothing is attached, which is the answer that
+        // takes this server's panes out of the viewer universe entirely.
+        //
+        // *Every* client, not the first one printed. Two clients are two windows a
+        // person could be looking at, and picking one of them arbitrarily is the
+        // "any client" mistake round eleven found in ResolveClient — which
+        // survived here because this path picked its client by different code. On
+        // the machine that produced this round, the two clients were on sessions
+        // "0" and "1" and only the first was ever considered.
         // Excluded from coverage: runs tmux.
         [ExcludeFromCodeCoverage]
-        private static bool TryAttachedClient(string tmux, string socket, out string? window)
+        private static List<TerminalScripts.TmuxClient> AttachedClients(string tmux, string socket)
         {
-            window = null;
-
-            if (!TryRun(tmux, out var clients,
-                    TerminalScripts.TmuxArgs(socket, "list-clients", "-F", "#{client_session}")))
+            if (!TryRun(tmux, out var listing, TerminalScripts.TmuxArgs(
+                    socket, "list-clients", "-F", TerminalScripts.ClientListFormat)))
             {
-                return false;
+                return new List<TerminalScripts.TmuxClient>();
             }
 
-            var session = FirstLine(clients);
-            if (session is null) return false;
+            return TerminalScripts.ParseClients(listing);
+        }
 
-            if (TryRun(tmux, out var found, TerminalScripts.TmuxArgs(socket,
-                    "display-message", "-p", "-t", session, "#{session_name}:#{window_index}")))
-            {
-                window = FirstLine(found);
-            }
+        // The window a session is currently showing, as "<session>:<index>".
+        //
+        // Through TerminalScripts.PaneTargetForSession, which is not decoration:
+        // a bare session name here is parsed as a window index and answers about
+        // the wrong session without erroring. That comment has the measurements.
+        // Excluded from coverage: runs tmux.
+        [ExcludeFromCodeCoverage]
+        private static string? CurrentWindowOf(string tmux, string socket, string session)
+        {
+            if (string.IsNullOrEmpty(session)) return null;
 
-            return true;
+            return TryRun(tmux, out var found, TerminalScripts.TmuxArgs(
+                    socket, "display-message", "-p",
+                    "-t", TerminalScripts.PaneTargetForSession(session),
+                    "#{session_name}:#{window_index}"))
+                ? FirstLine(found)
+                : null;
         }
 
         // Opens the one session an orb stands for, in a terminal.
@@ -852,24 +875,21 @@ namespace ClaudeBuddy
             // pointed at. TerminalScripts.PlacementFor turns that into the
             // ATerminalWindow answer, and this returning null is how the caller
             // takes it.
-            if (!TryRun(tmux, out var clients, "list-clients", "-F", "#{client_session}"))
-            {
-                return null;
-            }
+            //
+            // The default server only: a person's tmux is the one they attached to
+            // by hand, and the swarm sockets are this app's own.
+            //
+            // The client they are most likely sitting at, rather than whichever
+            // `list-clients` printed first. That was the same "any client" mistake
+            // round eleven fixed in ResolveClient, still here because this path
+            // chose its client by its own code — and with two clients attached it
+            // decided which window a pane got split into.
+            var session = TerminalScripts.MostRecentClient(AttachedClients(tmux, ""))?.Session;
 
-            var session = FirstLine(clients);
-
-            // Which window that client is *showing*. The second question, and it
-            // can fail on its own — hence the middle placement rather than one
-            // bool. Shared with the viewer scan above rather than asked twice:
-            // the two want the same fact for opposite reasons, one to recognise
-            // the pane the user is in and one to split into it.
-            // The user's own server, which is where a split has to land. PlaceInTmux
-            // only ever works on the default socket — a person's tmux is the one
-            // they attached to by hand, and the swarm sockets are the app's own.
-            var activeWindow = session is null || !TryAttachedClient(tmux, "", out var usersWindow)
-                ? null
-                : usersWindow;
+            // Which window that client is showing. A second question that can fail
+            // on its own, which is why PlacementFor takes both and has a middle
+            // answer.
+            var activeWindow = session is null ? null : CurrentWindowOf(tmux, "", session);
 
             // `command` arrives already quoted and already naming an absolute
             // claude, for the reason its builders record: tmux runs it with
