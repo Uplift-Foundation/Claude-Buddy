@@ -85,6 +85,45 @@ public class TranscriptHandoffWindowTests
         Assert.False(TranscriptHandoff.EndsBackgrounded(path));
     }
 
+    [Fact]
+    public void ARewriteThatKeepsTheLengthIsStillNoticedThroughTheMtime()
+    {
+        // The cache key is length *and* mtime, and the mtime half has to carry
+        // its own weight: a transcript is append-only today, but the key must
+        // not quietly become "length alone" the day something rewrites one in
+        // place. The replacement is padded to the byte, so only the mtime says
+        // anything changed.
+        var path = WriteTempFile(Marker);
+        Assert.True(TranscriptHandoff.EndsBackgrounded(path));
+
+        var markerBytes = new FileInfo(path).Length;
+        var replacement = UserSaid + new string(' ',
+            (int)markerBytes - System.Text.Encoding.UTF8.GetByteCount(UserSaid + "\n")) + "\n";
+        File.WriteAllText(path, replacement);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow + TimeSpan.FromSeconds(2));
+
+        Assert.Equal(markerBytes, new FileInfo(path).Length);
+        Assert.False(TranscriptHandoff.EndsBackgrounded(path));
+    }
+
+    [Fact]
+    public void TheCacheCapStartsOverRatherThanGrowingForever()
+    {
+        // Nothing ever unkeys a session's entry, so the cap is what stands
+        // between the cache and a slow leak across weeks of sessions. Filling
+        // it past 512 has to change no answer — the cap costs one extra read
+        // per entry when it fires, and nothing else.
+        var first = WriteTempFile(Marker);
+        Assert.True(TranscriptHandoff.EndsBackgrounded(first));
+
+        for (var i = 0; i < 513; i++)
+        {
+            Assert.False(TranscriptHandoff.EndsBackgrounded(WriteTempFile(UserSaid)));
+        }
+
+        Assert.True(TranscriptHandoff.EndsBackgrounded(first));
+    }
+
     private static string WriteTempFile(params string[] rows)
     {
         var path = Path.Combine(
