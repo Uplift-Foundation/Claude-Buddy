@@ -886,9 +886,34 @@ wakes each agent on a timer to do background work, and it does that in the
 agent's *own main session* — so on a gateway with several agents, that many orbs
 go active together every few minutes with nobody on the other end. Without the
 heart they read as somebody waiting for you; with it, the motion says the thing
-on the other end is a clock. **Show heartbeat sessions** turns those orbs off
-entirely if you would rather not have them, and the agents keep their colours in
-any channel they are in either way.
+on the other end is a clock.
+
+**Heartbeat sessions** and **Cron sessions** each decide what those timer-driven
+orbs do, and there are three answers rather than two:
+
+| | |
+| --- | --- |
+| **Hidden** | No orb at all. |
+| **With the chats** | An orb, gathered into the same shape as everything else when you press the arrange button. The default, and what the app has always done. |
+| **Own shape** | An orb, gathered into a shape of its own, drawn beside your conversations rather than among them. |
+
+Set both to *Own shape* and the arrange button draws three patterns side by side
+— your chats, the heartbeats, the crons — each with its own entry in Settings
+picking from the same six shapes. Leave both alone and it is one shape, exactly
+as before. The agents keep their colours in any channel they are in whichever you
+pick.
+
+The shapes sit beside each other rather than anywhere you place them
+individually: each gets a share of the screen in proportion to how many orbs it
+is holding, they are drawn as one group centred on wherever you last dragged the
+arrangement, and dragging it moves all of them together. Two shapes cannot be
+drawn on top of each other, which is the reason it works that way rather than by
+giving each shape its own position to lose.
+
+An upgrade changes nothing on screen. If you had turned the old **Show heartbeat
+sessions** switch off, that becomes *Hidden*; on — or never touched — becomes
+*With the chats*. Crons had no setting before this and always joined the one
+shape, which is what *With the chats* means.
 
 The heart marks **where a heartbeat lands**, not which individual turns were
 one — the gateway does not report heartbeats at all, and its own Control UI
