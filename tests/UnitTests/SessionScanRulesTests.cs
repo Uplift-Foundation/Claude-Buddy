@@ -382,27 +382,83 @@ public class SessionScanRulesTests
     [Fact]
     public void PositionKeyFor_LocalCodexSessionGetsCodexPrefixThatClaudeCodeDoesNot()
     {
-        var codex = new SessionStatus { Source = SessionSource.Codex, Cwd = "/Users/warren/project" };
-        var claude = new SessionStatus { Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/project" };
+        // Titled, because that is the only shape the prefix is observable in
+        // now: an untitled session of either CLI keys on its own id, which is
+        // already unique across the two.
+        var codex = new SessionStatus
+        {
+            Source = SessionSource.Codex, Cwd = "/Users/warren/project", Title = "build"
+        };
+        var claude = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/project", Title = "build"
+        };
 
-        Assert.Equal("codex\n/Users/warren/project", SessionManager.PositionKeyFor(codex, "id-1"));
-        Assert.Equal("/Users/warren/project", SessionManager.PositionKeyFor(claude, "id-2"));
+        Assert.Equal("codex\n/Users/warren/project\nbuild", SessionManager.PositionKeyFor(codex, "id-1"));
+        Assert.Equal("/Users/warren/project\nbuild", SessionManager.PositionKeyFor(claude, "id-2"));
     }
 
     [Fact]
-    public void PositionKeyFor_AppendsTitleWhenPresentAndOmitsItWhenEmpty()
+    public void PositionKeyFor_TitledSessionKeysOnDirectoryAndTitle()
     {
+        // Byte-for-byte what it always was, which is the compatibility point:
+        // every position already saved on a real machine still matches the
+        // session it was saved for.
         var titled = new SessionStatus
         {
             Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/evidence", Title = "job-lawyer"
         };
-        var untitled = new SessionStatus
+
+        Assert.Equal("/Users/warren/evidence\njob-lawyer", SessionManager.PositionKeyFor(titled, "id-1"));
+    }
+
+    [Fact]
+    public void PositionKeyFor_UntitledSessionsInOneDirectoryDoNotShareASlot()
+    {
+        // CB-10. Adding the title separated two *titled* sessions in one folder
+        // and did nothing when the title was empty, so every untitled session
+        // fell back to the same bare-cwd key. Measured: three live untitled
+        // sessions in Documents/GTD/Evidence sharing one key, so
+        // RestoreOrbPosition refused a slot to two of them and three orbs read
+        // as two on screen.
+        var first = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/evidence", Title = ""
+        };
+        var second = new SessionStatus
         {
             Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/evidence", Title = ""
         };
 
-        Assert.Equal("/Users/warren/evidence\njob-lawyer", SessionManager.PositionKeyFor(titled, "id-1"));
-        Assert.Equal("/Users/warren/evidence", SessionManager.PositionKeyFor(untitled, "id-2"));
+        var a = SessionManager.PositionKeyFor(first, "0e043819");
+        var b = SessionManager.PositionKeyFor(second, "0e9677a5");
+
+        Assert.Equal("0e043819", a);
+        Assert.Equal("0e9677a5", b);
+        Assert.NotEqual(a, b);
+
+        // And neither collides with the directory key a titled sibling uses.
+        var titled = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/evidence", Title = "job-lawyer"
+        };
+        Assert.NotEqual(SessionManager.PositionKeyFor(titled, "id-3"), a);
+    }
+
+    [Theory]
+    [InlineData("   ")]
+    [InlineData("\t")]
+    [InlineData(null)]
+    public void PositionKeyFor_ATitleOfNothingButSpaceCountsAsUntitled(string? title)
+    {
+        // The rule trims before deciding, so whitespace can't sneak a session
+        // back into the colliding branch.
+        var status = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/evidence", Title = title!
+        };
+
+        Assert.Equal("id-9", SessionManager.PositionKeyFor(status, "id-9"));
     }
 
     [Fact]

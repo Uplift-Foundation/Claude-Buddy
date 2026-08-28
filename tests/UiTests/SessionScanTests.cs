@@ -51,11 +51,15 @@ public class SessionScanTests
         // A status file the way the hooks write one: JSON, named for the
         // session id, with the app-derived fields (Lead, Agent, Source) absent
         // because they are [JsonIgnore] and the hook has never heard of them.
+        // tty and transcriptPath default to what an interactive session has —
+        // a terminal, and no transcript recorded — so every case written before
+        // the NothingToShow rule existed is untouched by it.
         public void Write(
             string sessionId, string state = "idle", string cli = "",
             string title = "", string cwd = "/Users/warren/project",
             int? pid = null, string termProgram = "iTerm.app",
-            DateTime? written = null, string tmuxPane = "")
+            DateTime? written = null, string tty = "/dev/ttys004",
+            string tmuxPane = "", string transcriptPath = "")
         {
             var path = Path.Combine(Dir, sessionId + ".txt");
             File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new SessionStatus
@@ -66,12 +70,29 @@ public class SessionScanTests
                 Cwd = cwd,
                 SessionPid = pid ?? LivePid,
                 TermProgram = termProgram,
-                Tty = "/dev/ttys004",
+                Tty = tty,
                 TmuxPane = tmuxPane,
+                TranscriptPath = transcriptPath,
             }));
 
             if (written is not null) File.SetLastWriteTimeUtc(path, written.Value);
         }
+
+        // A transcript on disk, so the rule under test is answered by a real
+        // File.Exists rather than by a predicate a test handed in. `rows` adds
+        // identity records for the sessions that are about to be asked what
+        // they are called.
+        public string WriteTranscript(string sessionId, params string[] rows)
+        {
+            var path = Path.Combine(Dir, sessionId + ".jsonl");
+            var lines = new List<string> { "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}" };
+            lines.AddRange(rows);
+            File.WriteAllText(path, string.Join("\n", lines) + "\n");
+            return path;
+        }
+
+        public string MissingTranscript(string sessionId) =>
+            Path.Combine(Dir, sessionId + "-never-written.jsonl");
 
         public void Delete(string sessionId) =>
             File.Delete(Path.Combine(Dir, sessionId + ".txt"));
@@ -905,6 +926,194 @@ public class SessionScanTests
         {
             lock (cache) cache.Clear();
         }
+    }
+
+    // --- nothing to show: no terminal and no transcript (CB-9) ---
+
+    // Driven through a real scan and a real File.Exists against a real path,
+    // which is the half a unit test cannot state: the rule is answered by the
+    // disk here, not by a predicate handed in. Which of the two terminal-less
+    // rules returns the verdict is pinned in ScanVerdictTests
+    // (NothingToShowIsAnsweredBeforeNoTerminal) — what matters here is the
+    // end-to-end outcome a user sees, and that nothing else in the scan
+    // undoes it.
+    //
+    // Nothing reaches BackgroundJobs.IsLiveJob: every entry carries a real
+    // pid, so the "no pid" branch that would shell out never fires. Same
+    // reasoning as the lead test above.
+    [AvaloniaFact]
+    public void AStatusFileNamingATranscriptThatIsNotThereGetsNoOrb()
+    {
+        using var scratch = new Scratch();
+
+        scratch.Write("unprompted-job", tty: "", termProgram: "",
+                      transcriptPath: scratch.MissingTranscript("unprompted-job"));
+
+        Assert.DoesNotContain("unprompted-job", OrbIds(Scan(scratch)));
+    }
+
+    [AvaloniaFact]
+    public void ASessionInARealTerminalKeepsItsOrbBeforeItHasWrittenAnything()
+    {
+        // The regression that would hurt most, and the reason the rule requires
+        // *both* halves: every session is transcript-less for its first moment,
+        // and an interactive one must not flicker off screen while it is. Its
+        // click lands in the terminal either way, so the orb has earned its
+        // place before the conversation exists.
+        using var scratch = new Scratch();
+
+        scratch.Write("fresh-terminal",
+                      transcriptPath: scratch.MissingTranscript("fresh-terminal"));
+
+        Assert.Contains("fresh-terminal", OrbIds(Scan(scratch)));
+    }
+
+    [AvaloniaFact]
+    public void ATranscriptOnDiskKeepsTheOrbTheMissingOneWouldHaveCost()
+    {
+        // The same file, the same absent terminal fields, one thing changed:
+        // the transcript is really there. Written to disk rather than asserted
+        // about, so this is File.Exists answering.
+        using var scratch = new Scratch();
+
+        scratch.Write("has-a-transcript", tty: "/dev/ttys004",
+                      transcriptPath: scratch.WriteTranscript("has-a-transcript"));
+
+        Assert.Contains("has-a-transcript", OrbIds(Scan(scratch)));
+    }
+
+    // --- untitled siblings do not share a slot (CB-10) ---
+
+    [AvaloniaFact]
+    public void TwoUntitledSessionsInOneDirectoryGetDifferentPositionKeys()
+    {
+        // Three live untitled sessions in one directory shared a single
+        // bare-cwd key on a real machine, so RestoreOrbPosition refused a slot
+        // to two of them and three orbs read as two on screen.
+        //
+        // The two name different CLIs so they can share this process's one
+        // certainly-alive pid without one superseding the other — the same
+        // trick ALeadWithALiveAgentKeepsItsOrbDespiteHavingNoTerminal uses, and
+        // free here because an untitled session keys on its id whichever CLI it
+        // is, so the Codex prefix cannot affect the answer.
+        using var scratch = new Scratch();
+
+        scratch.Write("untitled-a", title: "", cwd: "/Users/warren/evidence");
+        scratch.Write("untitled-b", title: "", cwd: "/Users/warren/evidence", cli: "codex");
+
+        var manager = Scan(scratch);
+
+        Assert.Contains("untitled-a", OrbIds(manager));
+        Assert.Contains("untitled-b", OrbIds(manager));
+
+        var keys = PositionKeys(manager);
+        Assert.Equal("untitled-a", keys["untitled-a"]);
+        Assert.Equal("untitled-b", keys["untitled-b"]);
+        Assert.NotEqual(keys["untitled-a"], keys["untitled-b"]);
+    }
+
+    [AvaloniaFact]
+    public void TwoTitledSessionsInOneDirectoryStillKeyOnDirectoryAndTitle()
+    {
+        // Unchanged, which is the compatibility half: every position already
+        // saved on a real machine has to keep matching the session it was
+        // saved for. These are the two names the original collision was found
+        // with.
+        using var scratch = new Scratch();
+
+        scratch.Write("titled-a", title: "job-lawyer", cwd: "/Users/warren/evidence");
+        scratch.Write("titled-b", title: "makayla-lawyer", cwd: "/Users/warren/evidence",
+                      cli: "codex");
+
+        var keys = PositionKeys(Scan(scratch));
+
+        // Different CLIs again, to share the one live pid — which also puts the
+        // Codex prefix through a real scan rather than a direct call.
+        Assert.Equal("/Users/warren/evidence\njob-lawyer", keys["titled-a"]);
+        Assert.Equal("codex\n/Users/warren/evidence\nmakayla-lawyer", keys["titled-b"]);
+    }
+
+    // --- a name the status file never caught (CB-11) ---
+
+    [AvaloniaFact]
+    public void AnUntitledSessionTakesItsNameFromItsOwnTranscript()
+    {
+        // The fork case, end to end: the status file records no title because
+        // the hook fired once at fork time and lost the race with Claude Code's
+        // own append, and never fired again. The transcript has carried the name
+        // since its second row.
+        using var scratch = new Scratch();
+
+        var transcript = scratch.WriteTranscript("forked-job",
+            "{\"type\":\"custom-title\",\"customTitle\":\"evidence (2)\"}",
+            "{\"type\":\"agent-color\",\"agentColor\":\"teal\"}");
+
+        scratch.Write("forked-job", title: "", transcriptPath: transcript);
+
+        var status = Scan(scratch).StatusFor("forked-job");
+
+        Assert.NotNull(status);
+        Assert.Equal("evidence (2)", status!.Title);
+        Assert.Equal("teal", status.Color);
+
+        // Which is the visible payoff: it stops wearing the letters its parent
+        // is already wearing.
+        Assert.Equal("E2", OrbGlyph.For(status.Title, twoLetter: true));
+    }
+
+    [AvaloniaFact]
+    public void AStatusFileThatAlreadyHasANameIsLeftAlone()
+    {
+        // Never an overwrite. The hook read the same file with the same
+        // precedence, so if the two ever disagreed the status file is the more
+        // recent reading — and this must not be able to move an orb that was
+        // already right.
+        using var scratch = new Scratch();
+
+        var transcript = scratch.WriteTranscript("named-job",
+            "{\"type\":\"custom-title\",\"customTitle\":\"from the transcript\"}");
+
+        scratch.Write("named-job", title: "from the hook", transcriptPath: transcript);
+
+        var status = Scan(scratch).StatusFor("named-job");
+
+        Assert.NotNull(status);
+        Assert.Equal("from the hook", status!.Title);
+    }
+
+    [AvaloniaFact]
+    public void ATranscriptWithNoNameInItLeavesTheOrbAsItIs()
+    {
+        // The unchanged path, which is most sessions: nothing found, nothing
+        // written, and the orb keeps falling back to the folder name exactly as
+        // it does today.
+        using var scratch = new Scratch();
+
+        var transcript = scratch.WriteTranscript("nameless-job");
+        scratch.Write("nameless-job", title: "", transcriptPath: transcript);
+
+        var status = Scan(scratch).StatusFor("nameless-job");
+
+        Assert.NotNull(status);
+        Assert.Equal("", status!.Title);
+    }
+
+    // The key each orb actually carries, read off the windows the scan built
+    // rather than recomputed — the same reasoning OrbIds records for reaching
+    // _windows at all.
+    private static Dictionary<string, string?> PositionKeys(SessionManager manager)
+    {
+        var field = typeof(SessionManager).GetField(
+            "_windows", BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(field);
+
+        var windows = (System.Collections.IDictionary)field!.GetValue(manager)!;
+        var keys = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        foreach (System.Collections.DictionaryEntry entry in windows)
+            keys[(string)entry.Key] = ((OrbWindow)entry.Value!).PositionKey;
+
+        return keys;
     }
 
     // --- background jobs: presence, and the hygiene sweep -------------------
