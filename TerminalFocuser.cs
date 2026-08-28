@@ -723,25 +723,16 @@ namespace ClaudeBuddy
         // once, and the one you touched last is the one you're sitting at.
         private static (string Tty, bool ControlMode)? ResolveClient(string tmux, SessionStatus status, string sessionName)
         {
-            if (!TryRun(tmux, out var listing, TmuxArgs(status, "list-clients", "-F",
-                    "#{client_tty}\t#{client_session}\t#{client_activity}\t#{client_control_mode}")))
+            if (!TryRun(tmux, out var listing, TmuxArgs(
+                    status, "list-clients", "-F", TerminalScripts.ClientListFormat)))
             {
                 return null;
             }
 
-            var clients = new List<TerminalScripts.TmuxClient>();
-
-            foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-            {
-                var parts = line.Split('\t');
-                if (parts.Length < 2) continue;
-
-                clients.Add(new TerminalScripts.TmuxClient(
-                    Tty: parts[0].Trim(),
-                    Session: parts[1].Trim(),
-                    Activity: parts.Length > 2 ? parts[2].Trim() : "",
-                    ControlMode: parts.Length > 3 && parts[3].Trim() == "1"));
-            }
+            // One format string and one parse, shared with the viewer scan's own
+            // client listing — a field added to one used to be read out of
+            // position by the other.
+            var clients = TerminalScripts.ParseClients(listing);
 
             // Which one, decided where it can be read and tested — see
             // TerminalScripts.ChooseClient. Everything below is aimed by the

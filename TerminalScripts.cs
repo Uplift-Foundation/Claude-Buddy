@@ -92,31 +92,105 @@ namespace ClaudeBuddy
         internal static ClientChoice? ChooseClient(
             IReadOnlyList<TmuxClient> clients, string targetSession)
         {
-            TmuxClient? onSession = null, other = null;
+            var onSession = new List<TmuxClient>();
+            var elsewhere = new List<TmuxClient>();
+
+            foreach (var client in clients)
+            {
+                (string.Equals(client.Session, targetSession, StringComparison.Ordinal)
+                    ? onSession
+                    : elsewhere).Add(client);
+            }
+
+            if (MostRecentClient(onSession) is { } here) return new ClientChoice(here, false);
+
+            return MostRecentClient(elsewhere) is { } there
+                ? new ClientChoice(there, NeedsSwitch: true)
+                : null;
+        }
+
+        // The client a person is most likely sitting at: the one touched last.
+        //
+        // Its own function because two callers want it and one of them is not
+        // choosing between sessions at all. PlaceInTmux asks "where is the user"
+        // in order to split a pane beside them, and it used to answer that by
+        // taking the *first line* `list-clients` happened to print — the same
+        // "any client" mistake round eleven found in ResolveClient, surviving one
+        // file away because the two picked their client by different code.
+        //
+        // Clients with no tty are skipped: nothing downstream can aim at one, and
+        // `list-clients` can produce them.
+        //
+        // `client_activity` is a unix timestamp, so an ordinal string comparison
+        // is right for equal-width integers and does not care about the format.
+        internal static TmuxClient? MostRecentClient(IEnumerable<TmuxClient> clients)
+        {
+            TmuxClient? best = null;
 
             foreach (var client in clients)
             {
                 if (string.IsNullOrEmpty(client.Tty)) continue;
 
-                if (string.Equals(client.Session, targetSession, StringComparison.Ordinal))
+                if (best is null
+                    || string.CompareOrdinal(client.Activity, best.Value.Activity) > 0)
                 {
-                    if (onSession is null
-                        || string.CompareOrdinal(client.Activity, onSession.Value.Activity) > 0)
-                    {
-                        onSession = client;
-                    }
-                }
-                else if (other is null
-                         || string.CompareOrdinal(client.Activity, other.Value.Activity) > 0)
-                {
-                    other = client;
+                    best = client;
                 }
             }
 
-            if (onSession is not null) return new ClientChoice(onSession.Value, NeedsSwitch: false);
-
-            return other is null ? null : new ClientChoice(other.Value, NeedsSwitch: true);
+            return best;
         }
+
+        // The `-F` every client listing asks for, and the parse that reads it
+        // back. One pair, because two call sites were building the format string
+        // and splitting the tabs separately, and a field added to one would have
+        // been read out of position by the other.
+        internal const string ClientListFormat =
+            "#{client_tty}\t#{client_session}\t#{client_activity}\t#{client_control_mode}";
+
+        internal static List<TmuxClient> ParseClients(string listing)
+        {
+            var clients = new List<TmuxClient>();
+
+            foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split('\t');
+                if (parts.Length < 2) continue;
+
+                clients.Add(new TmuxClient(
+                    Tty: parts[0].Trim(),
+                    Session: parts[1].Trim(),
+                    Activity: parts.Length > 2 ? parts[2].Trim() : "",
+                    ControlMode: parts.Length > 3 && parts[3].Trim() == "1"));
+            }
+
+            return clients;
+        }
+
+        // How to name a session when asking a command that wants a *pane*.
+        //
+        // Measured, because the obvious form is silently wrong and this cost a
+        // round to find. `display-message -p -t <session>` does not take a
+        // target-session — it takes a target-pane — so a bare name is parsed as a
+        // *window index in the current session*. On a server whose sessions are
+        // called "0" and "1", which is tmux's own default naming, asking about
+        // session "1" answered `0:1`: the right-looking answer for the wrong
+        // session, with no error. Both clients on that machine therefore resolved
+        // to the same window, and a pane split "beside the user" could land in
+        // somebody else's session.
+        //
+        //     -t "1"    -> 0:1     wrong, silently
+        //     -t "=1"   -> :       empty
+        //     -t "1:"   -> 1:1     right
+        //     -t "=1:"  -> 1:1     right, and exact
+        //
+        // The trailing colon makes it a pane target — "that session's active
+        // pane" — and "=" forces an exact match rather than a prefix one. Which
+        // is exactly what RemoteControlBridge.TmuxNames already builds and
+        // explains as its PaneTarget, for the same two measured reasons. This is
+        // the third call site on this branch found not to be using a rule the
+        // codebase had already written down.
+        internal static string PaneTargetForSession(string session) => "=" + session + ":";
 
         // Where a fresh `claude attach` should be put.
         //
