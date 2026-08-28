@@ -40,7 +40,30 @@ namespace ClaudeBuddy
             PixelPoint? Center = null);
 
         // leadOf[i] is the index of orb i's team lead, or -1 if it leads itself.
+        //
+        // One shape for everything, which is what the app did before groups
+        // existed and what it still does whenever every orb belongs to the same
+        // one. Kept as its own entry point rather than made a special case at the
+        // call site: the sweep in tests/ArrangementTests is written against it,
+        // and every case it walks has to keep meaning the same thing.
         internal static PixelPoint[] Compute(int count, int[] leadOf, Layout layout)
+            => count <= 0
+                ? Array.Empty<PixelPoint>()
+                : Compute(count, leadOf, new int[count], new[] { layout.Shape }, layout);
+
+        // The same, with the orbs split across up to `shapes.Count` shapes drawn
+        // side by side — see OrbClusters for what the groups mean and
+        // Bands below for where each one is drawn.
+        //
+        // groupOf[i] is which shape orb i joins, an index into `shapes`; out of
+        // range, or an array shorter than the orb count, reads as group 0. Only
+        // an *anchor's* group is consulted. A team member is drawn hanging off
+        // its lead, so the shape it belongs to is whichever one its lead is
+        // standing in — asking its own group instead would let a lead in one
+        // band fan its members into another, which is neither what the group
+        // setting means nor something the arrows could survive.
+        internal static PixelPoint[] Compute(
+            int count, int[] leadOf, int[] groupOf, IReadOnlyList<string> shapes, Layout layout)
         {
             if (count <= 0) return Array.Empty<PixelPoint>();
 
@@ -51,49 +74,378 @@ namespace ClaudeBuddy
 
             var window = (int)Math.Round(WindowDip * layout.Scale);
             var circle = CircleDip * layout.Scale;
+            var minGap = MinGap(circle, layout.Spacing);
 
-            var shape = Fit(ShapeFor(anchors.Count, layout), layout.Work, window, MinGap(circle, layout.Spacing));
+            var slots = Math.Max(1, shapes.Count);
+            var byGroup = new List<int>[slots];
+            for (var g = 0; g < slots; g++) byGroup[g] = new List<int>();
+
+            foreach (var anchor in anchors) byGroup[SlotOf(anchor, groupOf, slots)].Add(anchor);
+
+            var counts = new int[slots];
+            for (var g = 0; g < slots; g++) counts[g] = byGroup[g].Count;
+
+            var bands = Bands(layout.Work, counts, window);
+            var single = counts.Count(c => c > 0) <= 1;
 
             var result = new PixelPoint[count];
             var placed = new bool[count];
 
-            for (var i = 0; i < anchors.Count; i++)
+            // Kept per group, because each is what a fan-out needs to know about
+            // the shape its lead is standing in: which way is outward from the
+            // middle of it, and how much room a member has before it lands on
+            // the next orb along.
+            var centreOf = new (double X, double Y)[slots];
+            var nearestOf = new double[slots];
+            var groupAt = new int[count];
+
+            var drawn = new PixelPoint[slots][];
+
+            for (var g = 0; g < slots; g++)
             {
-                result[anchors[i]] = shape[i];
-                placed[anchors[i]] = true;
+                if (counts[g] == 0) continue;
+
+                var band = bands[g];
+
+                drawn[g] = Fit(
+                    ShapeFor(counts[g], layout with
+                    {
+                        Work = band,
+                        Shape = ShapeAt(shapes, g, layout.Shape),
+                        Center = CentreFor(band, layout, single)
+                    }),
+                    band, window, minGap);
             }
 
-            var nearest = Nearest(shape);
+            // With more than one shape in play, each has now been sized inside
+            // its own band and is sitting in the middle of it — which spreads
+            // three small shapes across the whole screen and leaves the saved
+            // anchor doing nothing. Gather them instead.
+            if (!single) Compact(drawn, layout, window, minGap);
+
+            for (var g = 0; g < slots; g++)
+            {
+                if (drawn[g] is not { } shape) continue;
+
+                for (var i = 0; i < counts[g]; i++)
+                {
+                    var orb = byGroup[g][i];
+                    result[orb] = shape[i];
+                    placed[orb] = true;
+                    groupAt[orb] = g;
+                }
+
+                centreOf[g] = Centre(shape);
+                nearestOf[g] = Nearest(shape);
+            }
 
             // Breadth-first from the anchors, so a lead that is itself somebody's
             // member is positioned before its own members are hung off it.
             // Walking only the anchors left those grandchildren wherever they
             // happened to be, which read as orbs ignoring the arrangement.
             var queue = new Queue<int>(anchors);
-            var centre = Centre(shape);
 
             while (queue.Count > 0)
             {
                 var lead = queue.Dequeue();
                 if (!members.TryGetValue(lead, out var team)) continue;
 
-                var positions = FanOut(result[lead], centre, team.Count, circle, nearest, layout.Work, window);
+                var g = groupAt[lead];
+
+                // Bounded by the whole work area rather than by the lead's own
+                // band. A fan needs its radius — that is the distance the arrow
+                // is drawn at — and a band three orbs wide cannot hold one, so
+                // bounding it there would turn every fan in a narrow band
+                // instead of only the ones near a screen edge. The separation
+                // pass afterwards is what keeps a fan that reached into the
+                // next band from landing on anything in it.
+                var positions = FanOut(
+                    result[lead], centreOf[g], team.Count, circle, nearestOf[g], layout.Work, window);
 
                 for (var i = 0; i < team.Count; i++)
                 {
                     result[team[i]] = positions[i];
                     placed[team[i]] = true;
+                    groupAt[team[i]] = g;
                     queue.Enqueue(team[i]);
                 }
             }
 
-            // Anything a cycle left unreachable still needs somewhere to be.
+            // Anything a cycle left unreachable still needs somewhere to be. The
+            // first anchor, which is always placed: Classify guarantees a
+            // non-empty set has an anchor, and every anchor was given a position
+            // above. So this is a point on a real shape rather than an invented
+            // one — and there is no "if we have somewhere" arm here that no
+            // input could ever take.
             for (var i = 0; i < count; i++)
             {
-                if (!placed[i]) result[i] = shape[0];
+                if (!placed[i]) result[i] = result[anchors[0]];
             }
 
             return Separate(result, leadOf, circle, layout.Work, window, layout.Spacing);
+        }
+
+        // Which shape an orb joins, defended against a caller that disagrees
+        // with itself. An index nothing has a shape for is group 0 rather than a
+        // throw: the arrangement is what puts orbs on the screen, and a screen
+        // with every orb in one shape is a far better answer to a bad index than
+        // a screen with none.
+        private static int SlotOf(int orb, int[] groupOf, int slots)
+        {
+            var g = orb < groupOf.Length ? groupOf[orb] : 0;
+            return g >= 0 && g < slots ? g : 0;
+        }
+
+        private static string ShapeAt(IReadOnlyList<string> shapes, int g, string fallback)
+        {
+            var shape = g < shapes.Count ? shapes[g] : null;
+            return string.IsNullOrWhiteSpace(shape) ? fallback : shape;
+        }
+
+        // Where a group's shape is drawn while it is being sized.
+        //
+        // With one group in play this is the saved anchor, untouched — the band
+        // is the whole work area, so the arrangement is bit-for-bit what it was
+        // before groups existed. That is the point of the `single` argument
+        // rather than arithmetic that happens to come out the same: the 20736
+        // cases in tests/ArrangementTests all take this branch, and they have to
+        // keep meaning what they meant.
+        //
+        // With more than one, the middle of the band and *not* the anchor. The
+        // anchor is applied once at the end, to all the shapes together — see
+        // Compact. Applying it here as well was the first draft, and it was
+        // wrong in a way worth recording: an anchor well off to one side pushes
+        // a far band's shape clear outside that band, Fit's Slide then puts it
+        // back against the band's edge, and from there the anchor can move as
+        // far as it likes without that shape moving at all. Which is precisely
+        // the bug the saved anchor exists to fix — a drag thrown away — except
+        // now it applied to one shape and not the others. The sweep caught it
+        // 842 times.
+        private static PixelPoint? CentreFor(PixelRect band, Layout layout, bool single) =>
+            single
+                ? layout.Center
+                : new PixelPoint(
+                    (int)Math.Round(band.X + band.Width / 2.0),
+                    (int)Math.Round(band.Y + band.Height / 2.0));
+
+        // Pull the shapes in from the middles of their bands until they sit
+        // beside each other as one arrangement, then put that arrangement where
+        // the anchor says.
+        //
+        // Two things this fixes, and they are the same thing seen from either
+        // end. Left in their bands, three shapes of three orbs each are drawn a
+        // thousand pixels apart on a wide screen — three lonely clusters rather
+        // than one arrangement with three parts. And the saved anchor has nothing
+        // to say, because each shape's position was decided by its band.
+        //
+        // Bands are still what does the work: they are where each shape's *size*
+        // came from, and they are why the boxes laid out below cannot overlap —
+        // a shape fitted inside a band is inside a rectangle that no other
+        // shape's rectangle touches, so butting those rectangles together in
+        // band order keeps them disjoint however oddly shaped their contents.
+        //
+        // Anchor-independent by construction, which the sweep checks: nothing
+        // above this point consults layout.Center when there is more than one
+        // group, and the offsets below are all relative. So moving the anchor
+        // moves every orb by exactly the same delta, which is what a
+        // whole-shape drag has to survive.
+        private static void Compact(PixelPoint[][] drawn, Layout layout, int window, double minGap)
+        {
+            var used = new List<int>();
+            for (var g = 0; g < drawn.Length; g++)
+                if (drawn[g] is { Length: > 0 }) used.Add(g);
+
+            if (used.Count <= 1) return;
+
+            var left = new int[drawn.Length];
+            var right = new int[drawn.Length];
+            var top = new int[drawn.Length];
+            var bottom = new int[drawn.Length];
+
+            foreach (var g in used)
+            {
+                left[g] = drawn[g].Min(p => p.X);
+                right[g] = drawn[g].Max(p => p.X) + window;
+                top[g] = drawn[g].Min(p => p.Y);
+                bottom[g] = drawn[g].Max(p => p.Y) + window;
+            }
+
+            // A whole window of air on top of the gap the orbs themselves are
+            // asking for, so the join between two shapes reads as a gap between
+            // arrangements rather than as one wide arrangement. Squeezed down,
+            // never past nothing, if the shapes together are already as wide as
+            // the screen — a gap is worth less than the shapes it separates.
+            //
+            // Rounded to a whole pixel here, and so is everything below it. That
+            // is not tidiness, and it cost this change a bug worth naming: with
+            // the gap left fractional, one group's translation came out at
+            // exactly x.5, and `Math.Round` sends an exact .5 to the even side —
+            // so a *one-ulp* difference in how that .5 was reached decided
+            // whether the shape landed a pixel left or right. Which made the
+            // whole arrangement move by 37 pixels when the anchor moved by 38,
+            // for one group out of three, on 11 of the sweep's cases.
+            //
+            // Whole-pixel translations make that impossible rather than unlikely:
+            // every shape has already been rounded to whole pixels by Fit, so
+            // moving it by an integer preserves it exactly, and an integer shift
+            // plus an integer anchor delta is an integer. Nothing is left for
+            // floating point to decide.
+            var boxes = used.Sum(g => right[g] - left[g]);
+            var gap = (int)Math.Round(Math.Min(
+                window + minGap,
+                Math.Max(0, (layout.Work.Width - boxes) / (double)(used.Count - 1))));
+
+            // Vertically centred on each other rather than each in its own band,
+            // which is the same thing today — every band is the full height of
+            // the work area — and stays right if bands are ever cut differently.
+            var midY = (int)Math.Round(used.Average(g => (top[g] + bottom[g]) / 2.0));
+
+            var offsetX = new int[drawn.Length];
+            var offsetY = new int[drawn.Length];
+            var x = 0;
+
+            foreach (var g in used)
+            {
+                offsetX[g] = x - left[g];
+                offsetY[g] = midY - (int)Math.Round((top[g] + bottom[g]) / 2.0);
+                x += right[g] - left[g] + gap;
+            }
+
+            var width = x - gap;   // no trailing gap after the last shape
+
+            var centreX = layout.Center?.X ?? layout.Work.X + layout.Work.Width / 2;
+            var centreY = layout.Center?.Y ?? layout.Work.Y + layout.Work.Height / 2;
+
+            var shiftX = centreX - (int)Math.Round(width / 2.0);
+            var shiftY = centreY - midY;
+
+            foreach (var g in used)
+            {
+                var dx = offsetX[g] + shiftX;
+                var dy = offsetY[g] + shiftY;
+
+                drawn[g] = drawn[g]
+                    .Select(p => new PixelPoint(p.X + dx, p.Y + dy))
+                    .ToArray();
+            }
+
+            // Back onto the screen as one piece, for the same reason Slide does
+            // it for a single shape: sliding the whole arrangement keeps the gaps
+            // inside it, where clamping each shape on its own would push them
+            // together against the edge and undo the separation just arranged.
+            var all = used.SelectMany(g => drawn[g]).ToArray();
+            var slid = Slide(all, layout.Work, window);
+
+            var at = 0;
+            foreach (var g in used)
+            {
+                var next = new PixelPoint[drawn[g].Length];
+                Array.Copy(slid, at, next, 0, next.Length);
+                at += next.Length;
+                drawn[g] = next;
+            }
+        }
+
+        // The strip of screen each group's shape is drawn in: side by side, left
+        // to right in group order, together covering the whole work area.
+        //
+        // Bands rather than three anchors the user places, and rather than three
+        // shapes drawn on one centre and pulled apart afterwards. Both
+        // alternatives were considered and both have the same failure: nothing
+        // stops one shape being drawn on top of another. Separate() at the end of
+        // Compute nudges *overlapping pairs* apart, which is the right tool for
+        // two orbs and the wrong one for two whole shapes — from a standing pile
+        // it produces a smear rather than three readable patterns. Disjoint
+        // bands mean the shapes cannot start on top of each other in the first
+        // place, and the fit inside each band keeps them there.
+        //
+        // Widths are proportional to how many orbs each group is holding,
+        // because a band's height is the full work area either way, so its width
+        // *is* its share of the room. Eight chats beside one cron get eight
+        // times the width, which is what makes the chats' shape the size it
+        // would have been on its own screen rather than a third of it.
+        //
+        // A floor under that, or a group of one would be handed a strip its
+        // single orb does not fit inside — the fit pass would then shrink the
+        // orb's shape to nothing and Separate would push it into the neighbour,
+        // which looks exactly like the bug bands were added to prevent. The
+        // floor is capped at an equal share so that the floors can never
+        // between them ask for more width than there is.
+        //
+        // Vertical strips and not horizontal ones: every screen this runs on is
+        // wider than it is tall, so cutting the long axis leaves each group a
+        // band closer to square — and a shape fits a square better than a
+        // letterbox, since Fit scales uniformly and the short side decides.
+        //
+        // Groups holding nothing get no band. Their entry in the returned array
+        // is the whole work area, which nothing reads: Compute skips an empty
+        // group before it asks for the band.
+        internal static PixelRect[] Bands(PixelRect work, int[] counts, int window)
+        {
+            var bands = new PixelRect[counts.Length];
+            for (var i = 0; i < counts.Length; i++) bands[i] = work;
+
+            var occupied = counts.Count(c => c > 0);
+            if (occupied <= 1) return bands;
+
+            var total = counts.Where(c => c > 0).Sum();
+            var floor = Math.Min(window * 2.0, work.Width / (double)occupied);
+
+            var widths = new double[counts.Length];
+            for (var i = 0; i < counts.Length; i++)
+            {
+                if (counts[i] <= 0) continue;
+                widths[i] = Math.Max(floor, work.Width * counts[i] / (double)total);
+            }
+
+            // Raising the small groups to the floor asks for more width than the
+            // screen has. Take the excess back off the groups that are above the
+            // floor, in proportion to how far above it they are — so the group
+            // with the most orbs gives up the most, and none is pushed back
+            // under the floor it was just raised to.
+            var slack = widths.Sum() - work.Width;
+
+            if (slack > 0)
+            {
+                var above = widths.Sum(w => Math.Max(0, w - floor));
+
+                // Provably redundant, and kept: the floors together can never
+                // ask for more than the width, because the floor is capped at an
+                // equal share — so an overshoot can only come from a group that
+                // is *above* its floor, which means `above` is at least as big
+                // as the overshoot whenever there is one. The false arm is
+                // therefore unreachable and is named as such in the PR that
+                // added it. Kept because what it prevents is a division by zero
+                // that would put every orb at NaN, which is worse than a branch
+                // nothing takes.
+                if (above > 0.001)
+                {
+                    var take = Math.Min(slack, above);
+                    for (var i = 0; i < widths.Length; i++)
+                    {
+                        if (widths[i] <= 0) continue;
+                        widths[i] -= Math.Max(0, widths[i] - floor) / above * take;
+                    }
+                }
+            }
+
+            // Laid out from a running total rather than by rounding each width on
+            // its own, so the rounding errors cannot accumulate into a gap
+            // between two bands or a last band that overshoots the screen.
+            var x = (double)work.X;
+
+            for (var i = 0; i < counts.Length; i++)
+            {
+                if (counts[i] <= 0) continue;
+
+                var left = (int)Math.Round(x);
+                x += widths[i];
+                var right = (int)Math.Round(x);
+
+                bands[i] = new PixelRect(left, work.Y, Math.Max(1, right - left), work.Height);
+            }
+
+            return bands;
         }
 
         // Who is an anchor and who hangs off whom. A lead that cannot be

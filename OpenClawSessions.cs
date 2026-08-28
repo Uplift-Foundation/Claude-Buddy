@@ -191,7 +191,8 @@ namespace ClaudeBuddy
 
         // Read per scan, for the same reason ActiveWithin above is: changing it
         // in Settings should take effect on the next poll.
-        private static bool ShowHeartbeats => ClaudeBuddySettings.OpenClawShowHeartbeats;
+        private static ClusterMode HeartbeatMode => ClaudeBuddySettings.OpenClawHeartbeatMode;
+        private static ClusterMode CronMode => ClaudeBuddySettings.OpenClawCronMode;
 
         internal sealed record Session(
             string Key,
@@ -850,21 +851,33 @@ namespace ClaudeBuddy
                 var within = ActiveWithin;
                 if (state != "generating" && within is not null && asOf - activity > within) continue;
 
-                // Sessions the heartbeat drives, when the user has said they
-                // don't want them. Deliberately below the two blocks above
-                // rather than at the top of the loop: a hidden session is still
-                // a member of any room it stands in, and its agent still needs a
-                // colour reserved for the bubbles it posts there. That is the
-                // same distinction the recency filter draws, for the same
-                // reason — "which orbs are worth showing" and "who is in this
-                // conversation" are different questions.
+                // Timer-driven sessions the user has asked not to see —
+                // heartbeats, scheduled jobs, or both. Deliberately below the
+                // two blocks above rather than at the top of the loop: a hidden
+                // session is still a member of any room it stands in, and its
+                // agent still needs a colour reserved for the bubbles it posts
+                // there. That is the same distinction the recency filter draws,
+                // for the same reason — "which orbs are worth showing" and "who
+                // is in this conversation" are different questions.
                 //
                 // Not exempted while generating, unlike the recency rule above.
                 // A heartbeat session is *always* about to be mid-run — that is
-                // what a heartbeat is — so exempting it would make the switch
-                // do nothing for exactly the sessions it exists to hide.
+                // what a heartbeat is — so exempting it would make the setting
+                // do nothing for exactly the sessions it exists to hide. The
+                // same goes for a cron that is running when the poll lands.
+                //
+                // Asked of OrbClusters rather than of the two settings directly,
+                // so the scan and the arrangement agree about what a session is:
+                // a cron labelled "Cron: Heartbeat (main)" is both by the two
+                // detectors, and it has to count as *one* of them in both
+                // places or an orb gets kept here and then drawn in a shape the
+                // user hid — or the reverse.
                 var heartbeat = OpenClawHeartbeat.Is(key, Str(s, "label"));
-                if (heartbeat && !ShowHeartbeats) continue;
+                var kind = KindFor(s, origin, key);
+
+                if (!OrbClusters.Visible(
+                        OrbClusters.Of(heartbeat, kind), HeartbeatMode, CronMode))
+                    continue;
 
                 result.Add(new Session(
                     key,
@@ -873,7 +886,7 @@ namespace ClaudeBuddy
                     state,
                     activity,
                     DeliveryFor(s),
-                    KindFor(s, origin, key),
+                    kind,
                     heartbeat));
             }
 

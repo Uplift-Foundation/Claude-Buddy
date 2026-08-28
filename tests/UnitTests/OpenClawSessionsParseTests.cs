@@ -42,7 +42,8 @@ namespace ClaudeBuddy.Tests
         private static (IReadOnlyList<OpenClawSessions.Session> Sessions, int Total) Parse(
             string json, bool heartbeats = true, int withinMinutes = ClaudeBuddySettings.OpenClawActiveWithinAll)
         {
-            ClaudeBuddySettings.OpenClawShowHeartbeats = heartbeats;
+            ClaudeBuddySettings.OpenClawHeartbeatMode =
+                heartbeats ? ClusterMode.WithChats : ClusterMode.Hidden;
             ClaudeBuddySettings.OpenClawActiveWithinMinutes = withinMinutes;
 
             return OpenClawSessions.Parse(Json(json), Now);

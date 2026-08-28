@@ -39,7 +39,7 @@ namespace ClaudeBuddy.Tests
         private static OpenClawSessions.Session? Listed(string key, int minutesAgo = 1)
         {
             ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawShowHeartbeats = true;
+            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
             ClaudeBuddySettings.OpenClawActiveWithinMinutes =
                 ClaudeBuddySettings.OpenClawActiveWithinAll;
 
@@ -171,7 +171,7 @@ namespace ClaudeBuddy.Tests
             Fire("agent", key);
 
             ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawShowHeartbeats = true;
+            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
             ClaudeBuddySettings.OpenClawActiveWithinMinutes = 5;
 
             // The listing says an hour ago. The event says a moment ago.
@@ -190,7 +190,7 @@ namespace ClaudeBuddy.Tests
         public void ASessionWithNoWatchedActivityIsStillFiltered()
         {
             ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawShowHeartbeats = true;
+            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
             ClaudeBuddySettings.OpenClawActiveWithinMinutes = 5;
 
             var key = Key();
@@ -214,7 +214,7 @@ namespace ClaudeBuddy.Tests
             Fire("cron", key, action: "finished");
 
             ClaudeBuddySettings.OpenClawEnabled = true;
-            ClaudeBuddySettings.OpenClawShowHeartbeats = true;
+            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
             ClaudeBuddySettings.OpenClawActiveWithinMinutes = 5;
 
             var stale = new DateTimeOffset(DateTime.UtcNow.AddHours(-1)).ToUnixTimeMilliseconds();
