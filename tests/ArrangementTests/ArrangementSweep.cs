@@ -39,17 +39,28 @@ namespace ClaudeBuddy.Tests
 
         internal readonly record struct Anchor(string Name, PixelPoint At);
 
+        // How the orbs are split across the shapes, when there is more than one
+        // shape. A function of the count for the same reason a TeamShape is:
+        // "chats and heartbeats" has to mean something at 2 orbs and at 30.
+        //
+        // null on a Case means the ungrouped entry point — the two-argument
+        // Compute, which is still what runs whenever every orb is in the same
+        // group and is the only thing the first two sweeps ever exercised.
+        internal readonly record struct Split(string Name, Func<int, int[]> Build);
+
         internal readonly record struct Case(
             Screen Screen,
             string Shape,
             double Spacing,
             int Count,
             TeamShape Team,
-            Anchor? Anchor)
+            Anchor? Anchor,
+            Split? Split = null)
         {
             public override string ToString()
                 => $"{Screen.Name} / {Shape} / spacing {Spacing:0.00} / {Count} orbs / {Team.Name}"
-                 + (Anchor is null ? "" : $" / anchor {Anchor.Value.Name}");
+                 + (Anchor is null ? "" : $" / anchor {Anchor.Value.Name}")
+                 + (Split is null ? "" : $" / groups {Split.Value.Name}");
         }
 
         internal static readonly string[] Shapes =
@@ -123,6 +134,57 @@ namespace ClaudeBuddy.Tests
             }),
         };
 
+        // Every way the three groups can be occupied that is not "all of them in
+        // one", plus two that are — the second of those being the case worth
+        // having deliberately: one group in use, but not group 0, so the band
+        // code has to notice how many slots are *occupied* rather than how many
+        // exist.
+        //
+        // The last two are hostile and are the reason SlotOf exists: a group
+        // index nothing has a shape for, and a groupOf array shorter than the
+        // orb count, both of which a caller can produce by getting the settings
+        // and the shapes array out of step. Neither may lose an orb.
+        internal static readonly Split[] Splits =
+        {
+            new("all in the chats", n => new int[n]),
+            new("all in the crons", n => Enumerable.Repeat(2, n).ToArray()),
+
+            new("chats + heartbeats", n =>
+                Enumerable.Range(0, n).Select(i => i % 3 == 1 ? 1 : 0).ToArray()),
+
+            new("chats + crons", n =>
+                Enumerable.Range(0, n).Select(i => i % 3 == 2 ? 2 : 0).ToArray()),
+
+            new("all three, evenly", n =>
+                Enumerable.Range(0, n).Select(i => i % 3).ToArray()),
+
+            new("all three, one orb each in 1 and 2", n =>
+                Enumerable.Range(0, n).Select(i => i < 2 ? i + 1 : 0).ToArray()),
+
+            new("a group index with no shape", n =>
+                Enumerable.Range(0, n).Select(i => i % 2 == 0 ? 0 : 7).ToArray()),
+
+            new("a groupOf array shorter than the orbs", n =>
+                Enumerable.Repeat(1, Math.Max(0, n - 2)).ToArray()),
+        };
+
+        // One shape per group, rotated off the case's own shape so that across
+        // the sweep every shape appears in every slot — and no two slots ever
+        // hold the same one, which is what makes a shape drawn in the wrong band
+        // visible rather than a coincidence.
+        internal static string[] ShapesFor(string shape)
+        {
+            var at = Array.IndexOf(Shapes, shape);
+            if (at < 0) at = 0;
+
+            return new[]
+            {
+                Shapes[at],
+                Shapes[(at + 1) % Shapes.Length],
+                Shapes[(at + 2) % Shapes.Length]
+            };
+        }
+
         // Two anchors well inside the work area, one hard against a corner, and
         // two that cannot be honoured at all. The hostile ones are deliberate:
         // honouring an anchor must never win over keeping orbs on the screen.
@@ -158,6 +220,34 @@ namespace ClaudeBuddy.Tests
             foreach (var count in Counts)
             foreach (var team in TeamShapes)
                 yield return new Case(screen, shape, spacing, count, team, anchor);
+
+            // And once more with the orbs split across up to three shapes.
+            //
+            // A subset of the team shapes and of the anchors rather than the full
+            // cross product, and that is a real limit worth stating rather than
+            // leaving for someone to infer: three groups multiply an already
+            // large matrix, and the expensive part of Compute is the separation
+            // pass, which is quadratic in the orb count and runs up to 150 times.
+            //
+            // The three team shapes kept are the ones that stress a fan-out
+            // inside a band — none, a small team, and every orb in one team,
+            // which is the case where a whole group is a single fan. Nested teams
+            // and the four malformed lead tables are exercised at full breadth by
+            // the two sweeps above, and grouping does not touch the code that
+            // resolves a lead: only an *anchor's* group is ever consulted, and a
+            // member is placed relative to its lead exactly as before.
+            var groupedTeams = TeamShapes
+                .Where(t => t.Name is "no teams" or "one team of 3" or "everything in one team")
+                .ToArray();
+
+            foreach (var screen in Screens)
+            foreach (var anchor in AnchorsFor(screen).Take(3).Select(a => (Anchor?)a).Append(null))
+            foreach (var shape in Shapes)
+            foreach (var spacing in Spacings)
+            foreach (var count in Counts)
+            foreach (var team in groupedTeams)
+            foreach (var split in Splits)
+                yield return new Case(screen, shape, spacing, count, team, anchor, split);
         }
 
         // One copy of the invariants, run for every case in both sweeps. An
@@ -180,11 +270,23 @@ namespace ClaudeBuddy.Tests
             var layout = new OrbArrangement.Layout(
                 screen.Work, screen.Scale, test.Shape, test.Spacing, test.Anchor?.At);
 
+            // Which entry point this case is about. The two-argument one is not
+            // just the grouped one with every orb in group 0 — it is the one the
+            // app still calls whenever nobody has asked for a separate shape, so
+            // it has to keep being exercised as itself.
+            var groups = test.Split?.Build(count);
+            var shapes = ShapesFor(test.Shape);
+
+            PixelPoint[] Arrange(int[] withLeads, OrbArrangement.Layout with) =>
+                groups is null
+                    ? OrbArrangement.Compute(count, withLeads, with)
+                    : OrbArrangement.Compute(count, withLeads, groups, shapes, with);
+
             PixelPoint[] pts;
 
             try
             {
-                pts = OrbArrangement.Compute(count, leads, layout);
+                pts = Arrange(leads, layout);
             }
             catch (Exception ex)
             {
@@ -267,7 +369,7 @@ namespace ClaudeBuddy.Tests
 
             // 4. Deterministic. An arrangement that moved on its own would make
             //    every other check meaningless.
-            var again = OrbArrangement.Compute(count, test.Team.Build(count), layout);
+            var again = Arrange(test.Team.Build(count), layout);
             if (!pts.SequenceEqual(again)) Fail("not deterministic — two runs disagreed");
 
             // 5. Moving the anchor moves the arrangement with it, by the same
@@ -312,8 +414,7 @@ namespace ClaudeBuddy.Tests
                 // one-pixel rounding comes out multiplied.)
                 const int dx = 38, dy = 24;
 
-                var moved = OrbArrangement.Compute(
-                    count,
+                var moved = Arrange(
                     test.Team.Build(count),
                     layout with { Center = new PixelPoint(a.At.X + dx, a.At.Y + dy) });
 
@@ -343,6 +444,65 @@ namespace ClaudeBuddy.Tests
                         Fail($"moving the anchor by ({dx},{dy}) moved orb {i} by ({gotX},{gotY}) instead");
                         break;
                     }
+                }
+            }
+
+            // 6. Each shape drawn where its band is: left to right in group
+            //    order, and never collapsed onto the group beside it.
+            //
+            //    The point of bands is that two shapes cannot start on top of
+            //    each other, and check 2 above already forbids any two *orbs*
+            //    overlapping — but it would pass just as happily with three
+            //    shapes interleaved into one indistinguishable cloud, which is
+            //    the failure that actually matters here and the one the whole
+            //    band mechanism exists to prevent.
+            //
+            //    Measured on the group centroids, and only over anchors: a team
+            //    member is drawn hanging off its lead and belongs to whichever
+            //    band its lead is standing in, whatever its own entry in groupOf
+            //    says. Resolves is the same question Compute asks to tell the
+            //    two apart.
+            //
+            //    Non-strict, with a window's slack. The separation pass runs
+            //    after the bands are cut and is allowed to push a crowded orb
+            //    across a boundary — that is it doing its job, and thirty orbs
+            //    in three groups on a 1280-wide screen genuinely have nowhere
+            //    tidier to be. A *swap*, or two centroids on the same point,
+            //    still fails, which is what this is watching for.
+            if (groups is not null && count > 1)
+            {
+                var sumX = new double[shapes.Length];
+                var anchors = new int[shapes.Length];
+
+                for (var i = 0; i < count; i++)
+                {
+                    if (OrbArrangement.Resolves(i, leads, count)) continue;   // a member, not an anchor
+
+                    var g = i < groups.Length ? groups[i] : 0;
+                    if (g < 0 || g >= shapes.Length) g = 0;
+
+                    sumX[g] += pts[i].X;
+                    anchors[g]++;
+                }
+
+                var previous = double.MinValue;
+                var previousGroup = -1;
+
+                for (var g = 0; g < shapes.Length; g++)
+                {
+                    if (anchors[g] == 0) continue;
+
+                    var centroid = sumX[g] / anchors[g];
+
+                    if (previousGroup >= 0 && centroid + window < previous)
+                    {
+                        Fail($"group {g} is drawn left of group {previousGroup} "
+                           + $"({centroid:0} against {previous:0})");
+                        break;
+                    }
+
+                    previous = centroid;
+                    previousGroup = g;
                 }
             }
 

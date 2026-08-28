@@ -83,7 +83,13 @@ namespace ClaudeBuddy
             "chatPanelSizes", "arrangeAnchor",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
+            // Still written, though nothing reads it into the model any more —
+            // see OpenClawHeartbeatMode. Listed here so it does not also
+            // round-trip through _unknownKeys, which Save would reject as a
+            // duplicate key.
             "openclawShowHeartbeats",
+            "openclawHeartbeatMode", "openclawHeartbeatShape",
+            "openclawCronMode", "openclawCronShape",
             "codexChatEnabled", "codexReplyEnabled", "autoColorSessions",
             "claudeCodeEnabled", "codexEnabled",
             "clickAction", "doubleClickAction", "tripleClickAction",
@@ -170,6 +176,18 @@ namespace ClaudeBuddy
 
         public const string DefaultArrangeShape = "heart";
         public const double DefaultArrangeSpacing = 0.85;
+
+        // The shapes the timer-driven groups arrange into when the user gives
+        // them one of their own. Neither is "heart", deliberately: the point of
+        // a separate shape is to be able to tell at a glance which shape you are
+        // looking at, and a second heart beside the first defeats that on the
+        // one screen it matters most.
+        //
+        // A circle for heartbeats because it is the plainest of the six and
+        // these are the orbs nobody is talking to; a line for crons because a
+        // schedule is the one thing on screen that really is a sequence.
+        public const string DefaultOpenClawHeartbeatShape = "circle";
+        public const string DefaultOpenClawCronShape = "line";
 
         private sealed class Model
         {
@@ -303,16 +321,33 @@ namespace ClaudeBuddy
             // conversations are candidates at all. Zero means all of them.
             public int OpenClawActiveWithinMinutes { get; set; } = DefaultOpenClawActiveWithin;
 
-            // Whether the sessions the gateway's heartbeat drives get orbs at
-            // all. See OpenClawHeartbeat for which those are.
+            // What the sessions the gateway's heartbeat drives do — no orb, an
+            // orb in the same shape as everything else, or an orb in a shape of
+            // their own. See OpenClawHeartbeat for which sessions those are and
+            // OrbClusters for what the three modes mean.
             //
-            // On by default, which is deliberately the *noisier* choice: these
-            // orbs are on screen today, and an upgrade that quietly removed
-            // several of somebody's agents would read as the gateway having
-            // dropped them rather than as a new setting having a default. The
-            // heart badge is what makes the noise explainable, and this is the
-            // switch for anyone who, having had it explained, wants it gone.
-            public bool OpenClawShowHeartbeats { get; set; } = true;
+            // WithChats by default, which is deliberately the *noisier* choice
+            // and the one the app has always had: these orbs are on screen
+            // today, and an upgrade that quietly removed several of somebody's
+            // agents would read as the gateway having dropped them rather than
+            // as a new setting having a default. The heart badge is what makes
+            // the noise explainable, and this is the setting for anyone who,
+            // having had it explained, wants them gone or wants them elsewhere.
+            //
+            // Replaces the `openclawShowHeartbeats` bool, which could only say
+            // the first and second of the three. Load migrates a saved one; Save
+            // keeps writing it, so a downgrade still hides what the user hid.
+            public ClusterMode OpenClawHeartbeatMode { get; set; } = ClusterMode.WithChats;
+
+            public string OpenClawHeartbeatShape { get; set; } = DefaultOpenClawHeartbeatShape;
+
+            // The same three answers for scheduled jobs, which until now had no
+            // setting at all — they always got an orb and it always joined the
+            // one shape. See OpenClawSessionKind, which reads a cron off the
+            // session key's third segment.
+            public ClusterMode OpenClawCronMode { get; set; } = ClusterMode.WithChats;
+
+            public string OpenClawCronShape { get; set; } = DefaultOpenClawCronShape;
 
             // Whether to show Claude Code sessions running on *other* machines,
             // reached through a hidden local bridge session that has Remote
@@ -630,12 +665,31 @@ namespace ClaudeBuddy
         }
 
         // Read once per scan by OpenClawSessions, like OpenClawActiveWithinMinutes
-        // above and for the same reason: turning it off should take the orbs off
-        // the screen on the next poll rather than at the next launch.
-        public static bool OpenClawShowHeartbeats
+        // above and for the same reason: setting one of these to Hidden should
+        // take the orbs off the screen on the next poll rather than at the next
+        // launch.
+        public static ClusterMode OpenClawHeartbeatMode
         {
-            get { Load(); lock (Gate) return _model.OpenClawShowHeartbeats; }
-            set { Load(); lock (Gate) _model.OpenClawShowHeartbeats = value; Save(); }
+            get { Load(); lock (Gate) return _model.OpenClawHeartbeatMode; }
+            set { Load(); lock (Gate) _model.OpenClawHeartbeatMode = value; Save(); }
+        }
+
+        public static string OpenClawHeartbeatShape
+        {
+            get { Load(); lock (Gate) return _model.OpenClawHeartbeatShape; }
+            set { Load(); lock (Gate) _model.OpenClawHeartbeatShape = value; Save(); }
+        }
+
+        public static ClusterMode OpenClawCronMode
+        {
+            get { Load(); lock (Gate) return _model.OpenClawCronMode; }
+            set { Load(); lock (Gate) _model.OpenClawCronMode = value; Save(); }
+        }
+
+        public static string OpenClawCronShape
+        {
+            get { Load(); lock (Gate) return _model.OpenClawCronShape; }
+            set { Load(); lock (Gate) _model.OpenClawCronShape = value; Save(); }
         }
 
         public static bool RemoteControlEnabled
@@ -1088,8 +1142,13 @@ namespace ClaudeBuddy
                         OpenClawReplyEnabled = root["openclawReplyEnabled"]?.GetValue<bool>() ?? false,
                         OpenClawActiveWithinMinutes =
                             root["openclawActiveWithinMinutes"]?.GetValue<int>() ?? DefaultOpenClawActiveWithin,
-                        OpenClawShowHeartbeats =
-                            root["openclawShowHeartbeats"]?.GetValue<bool>() ?? true,
+                        OpenClawHeartbeatMode = ClusterModeFrom(
+                            root["openclawHeartbeatMode"], root["openclawShowHeartbeats"]),
+                        OpenClawHeartbeatShape = Shape(
+                            root["openclawHeartbeatShape"], DefaultOpenClawHeartbeatShape),
+                        OpenClawCronMode = ClusterModeFrom(root["openclawCronMode"], null),
+                        OpenClawCronShape = Shape(
+                            root["openclawCronShape"], DefaultOpenClawCronShape),
                         RemoteControlEnabled = root["remoteControlEnabled"]?.GetValue<bool>() ?? false,
                         RemoteControlProfileDir = Text(root["remoteControlProfileDir"]),
                         RemoteControlIdleMinutes =
@@ -1297,6 +1356,40 @@ namespace ClaudeBuddy
                 ? text
                 : null;
 
+        // One of the three cluster modes, and the migration off the boolean that
+        // used to hold two of them.
+        //
+        // `legacy` is the old `openclawShowHeartbeats` node, consulted only when
+        // the new key is absent — so an install that has been through this
+        // version keeps whatever it chose, and one that has not gets exactly the
+        // behaviour it had. false becomes Hidden and true becomes WithChats,
+        // which is the whole of what the boolean could say.
+        //
+        // Read through Text/TryGetValue rather than GetValue for the reason
+        // Text() states: a hand-edited `"openclawShowHeartbeats": "no"` reaching
+        // GetValue<bool>() would throw into the catch that replaces the entire
+        // model with defaults, and cost someone every profile name and dragged
+        // orb position in the file over one typo about heartbeats.
+        private static ClusterMode ClusterModeFrom(JsonNode? node, JsonNode? legacy)
+        {
+            if (Text(node) is { } named) return OrbClusters.Parse(named);
+
+            if (legacy is JsonValue value && value.TryGetValue<bool>(out var shown))
+                return shown ? ClusterMode.WithChats : ClusterMode.Hidden;
+
+            return ClusterMode.WithChats;
+        }
+
+        // An arrangement shape name, falling back to the group's default.
+        //
+        // Deliberately doesn't check the name is one of the six, the same way
+        // Text() doesn't check a colour is a colour: OrbArrangement.Unit owns
+        // that question and already answers an unrecognised shape with the heart,
+        // and SettingsWindow's picker shows an unknown value as its own entry
+        // rather than silently swapping it for something else.
+        private static string Shape(JsonNode? node, string fallback) =>
+            Text(node) ?? fallback;
+
         // The same defence as Text() above, for a number.
         //
         // Written when chatPanelSizes went in, because that block reads two
@@ -1413,7 +1506,20 @@ namespace ClaudeBuddy
                         ["openclawFingerprint"] = _model.OpenClawFingerprint,
                         ["openclawReplyEnabled"] = _model.OpenClawReplyEnabled,
                         ["openclawActiveWithinMinutes"] = _model.OpenClawActiveWithinMinutes,
-                        ["openclawShowHeartbeats"] = _model.OpenClawShowHeartbeats,
+                        // Still written, and derived rather than stored: an older
+                        // build reading this file has no idea what
+                        // openclawHeartbeatMode means, and the one thing it can
+                        // still honour is whether the user wanted these orbs at
+                        // all. Dropping the key would have that build show them
+                        // again, which is the downgrade _unknownKeys exists to
+                        // prevent for keys it has never heard of and this line
+                        // does for one it has.
+                        ["openclawShowHeartbeats"] =
+                            _model.OpenClawHeartbeatMode != ClusterMode.Hidden,
+                        ["openclawHeartbeatMode"] = OrbClusters.Name(_model.OpenClawHeartbeatMode),
+                        ["openclawHeartbeatShape"] = _model.OpenClawHeartbeatShape,
+                        ["openclawCronMode"] = OrbClusters.Name(_model.OpenClawCronMode),
+                        ["openclawCronShape"] = _model.OpenClawCronShape,
                         ["remoteControlEnabled"] = _model.RemoteControlEnabled,
                         // Null when never chosen rather than a copy of the
                         // current default, the same as speakVoice below — so

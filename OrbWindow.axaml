@@ -54,6 +54,40 @@
                           IsVisible="False"
                           Click="ResetPosition_Click"/>
                 <MenuItem Header="Reset this session to idle" Click="ResetIdle_Click"/>
+                <!-- The `claude agents` roster, for the orbs it lists. Above
+                     the two lifecycle items because it is the harmless one of
+                     the three, and hidden rather than greyed for the same
+                     reason they are — see ClickRouting.OffersTheAgentsView,
+                     which is also where the reasoning lives for why this is a
+                     menu item and not what a double-click does. -->
+                <MenuItem x:Name="AgentsViewItem"
+                          Header="Open agents view"
+                          IsVisible="False"
+                          Click="AgentsView_Click"/>
+                <!-- The two lifecycle actions, hidden for a session they cannot
+                     serve rather than greyed out — see
+                     SessionPresence.CanDismiss/CanEndSession, which is also
+                     where the reasoning lives. Visibility is set in
+                     OrbWindow.UpdateFrom.
+
+                     Neither asks for confirmation, and that is a decision
+                     rather than an omission: this app has no dialog vocabulary
+                     anywhere, and a context menu is already a two-step gesture
+                     (right-click, then aim). Dismiss is undone by the session's
+                     next hook event; End is the one that is not, which is why
+                     it is worded as what it does to the session rather than to
+                     the orb. -->
+                <MenuItem x:Name="DismissItem"
+                          Header="Dismiss this orb"
+                          IsVisible="False"
+                          Click="Dismiss_Click"/>
+                <MenuItem x:Name="EndSessionItem"
+                          Header="End this session"
+                          IsVisible="False"
+                          Click="EndSession_Click"/>
+                <!-- Exit is the whole app, not this session — worth a rule
+                     between it and two items that end one thing each. -->
+                <Separator/>
                 <MenuItem Header="Exit Claude Buddy" Click="Exit_Click"/>
             </ContextMenu>
         </Grid.ContextMenu>
@@ -131,6 +165,39 @@
                        Text="&#x2665;"
                        FontSize="9"
                        Foreground="#FFFF6B81"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Border>
+
+        <!-- Presence: what this session wants from you, when the answer is
+             "something" or "nothing ever again".
+
+             Top-*left*, which is the corner the other three channels left. The
+             kind badge is bottom-right and the heart is top-right, and both are
+             about what a session *is*; this is about whether anything is on the
+             other end of it, and a session can want both said at once — a
+             background job (gear, bottom-right) that is holding a question (mark,
+             top-left).
+
+             One border with the glyph swapped rather than two badges: the two
+             answers are mutually exclusive by construction (a job cannot be
+             holding a question and finished at the same time), so two controls
+             would be two things to keep from colliding for no case that exists.
+
+             Same opaque fill as the others, and for the same reason: this sits on
+             top of whatever the orb's fill is, including a photograph. -->
+        <Border x:Name="PresenceBadge"
+                Width="15" Height="15"
+                IsVisible="False"
+                CornerRadius="7.5"
+                Background="#F2202024"
+                BorderBrush="#59FFFFFF" BorderThickness="1"
+                HorizontalAlignment="Left" VerticalAlignment="Top"
+                Margin="8,8,0,0"
+                IsHitTestVisible="False">
+            <TextBlock x:Name="PresenceGlyph"
+                       FontSize="9"
+                       Foreground="#F2FFFFFF"
                        HorizontalAlignment="Center" VerticalAlignment="Center"
                        IsHitTestVisible="False"/>
         </Border>

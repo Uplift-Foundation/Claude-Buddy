@@ -56,6 +56,180 @@ namespace ClaudeBuddy.Tests
             Assert.Equal(new[] { "-S", "/s" }, TerminalScripts.TmuxArgs("/s"));
         }
 
+        // --- ShellQuote and TmuxAttachScript: attaching a detached server ---
+        //
+        // The script that answers a click on an agent-team member whose pane is
+        // alive in a `claude-swarm-<pid>` socket nothing is attached to. Being
+        // wrong here is the same shape as being wrong anywhere else in this file:
+        // the output is executed, not displayed.
+
+        // A directory with a space or an apostrophe has to arrive as one word,
+        // and the shell's way to put a quote inside single quotes is to close,
+        // escape and reopen. Getting this wrong splits the argument, and `cd`
+        // then either fails or — worse — succeeds somewhere else.
+        [Theory]
+        [InlineData("/Users/warren/Source/Claude-Buddy", "'/Users/warren/Source/Claude-Buddy'")]
+        [InlineData("/Users/warren/My Projects", "'/Users/warren/My Projects'")]
+        [InlineData("/Users/warren/warren's", "'/Users/warren/warren'\\''s'")]
+        [InlineData("", "''")]
+        public void AnArgumentIsQuotedTheWayTheShellUnderstands(string value, string want)
+        {
+            Assert.Equal(want, TerminalScripts.ShellQuote(value));
+        }
+
+        [Fact]
+        public void TheAttachScriptPinsTheServerAndExecsTheAttach()
+        {
+            var script = TerminalScripts.TmuxAttachScript(
+                "/opt/homebrew/bin/tmux", "/tmp/tmux-501/claude-swarm-88341",
+                "claude-swarm", "/Users/warren/Source/Claude-Buddy");
+
+            Assert.StartsWith("#!/bin/sh\n", script);
+
+            // The socket, pinned. A pane id is only unique within one server, and
+            // a swarm socket is not the default one — attaching to the wrong
+            // server would show somebody else's session.
+            Assert.Contains("'-S' '/tmp/tmux-501/claude-swarm-88341'", script);
+
+            // And the session, targeted, with "=" for an exact match. This used
+            // to be a plain `attach`, on the reasoning that select-window and
+            // select-pane had already aimed the client — which is true about the
+            // window and says nothing about *which session*, and tmux picks the
+            // most recently used one. The swarm server holds two, because this
+            // app's own remote-control relay cohabits it, and the relay is always
+            // the busier: every click landed there and the tab closed on its own.
+            Assert.EndsWith("'attach' '-t' '=claude-swarm'\n", script);
+
+            // exec, not a call: the window's shell becomes tmux rather than
+            // waiting behind it.
+            Assert.Contains("exec '/opt/homebrew/bin/tmux'", script);
+
+            // The cd is for after the attach ends — detach or exit drops the
+            // window to a shell, and the useful place to land is the directory
+            // whose orb was clicked.
+            Assert.Contains("cd '/Users/warren/Source/Claude-Buddy' || exit 1\n", script);
+        }
+
+        // No socket recorded means the default server, which `attach` finds on
+        // its own. TmuxArgs already answers this and is reused rather than
+        // re-decided, so the two can never disagree about when -S is passed.
+        [Theory]
+        [InlineData("")]
+        [InlineData(null)]
+        public void WithNoSocketTheAttachDoesNotPinAServer(string? socket)
+        {
+            var script = TerminalScripts.TmuxAttachScript(
+                "/usr/bin/tmux", socket, "claude-swarm", "/tmp");
+
+            Assert.DoesNotContain("-S", script);
+            Assert.EndsWith("unset TMUX; exec '/usr/bin/tmux' 'attach' '-t' '=claude-swarm'\n", script);
+        }
+
+        // `cd ''` fails, and `|| exit 1` would then take the attach with it —
+        // the one thing the script exists to do. A session with no cwd recorded
+        // still gets its terminal.
+        [Theory]
+        [InlineData("")]
+        [InlineData(null)]
+        public void WithNoCwdTheScriptIsJustTheAttach(string? cwd)
+        {
+            var script = TerminalScripts.TmuxAttachScript(
+                "/usr/bin/tmux", "/tmp/s", "claude-swarm", cwd);
+
+            Assert.DoesNotContain("cd ", script);
+            Assert.Equal(
+                "#!/bin/sh\nunset TMUX; exec '/usr/bin/tmux' '-S' '/tmp/s' 'attach' '-t' '=claude-swarm'\n",
+                script);
+        }
+
+        // A directory with an apostrophe in it, end to end — the case the
+        // quoting rule above exists for, asserted where it is actually used.
+        [Fact]
+        public void AnAwkwardDirectoryStillArrivesAsOneWord()
+        {
+            var script = TerminalScripts.TmuxAttachScript(
+                "/usr/bin/tmux", null, "claude-swarm", "/Users/warren/warren's stuff");
+
+            Assert.Contains("cd '/Users/warren/warren'\\''s stuff' || exit 1", script);
+        }
+
+        // A session name carries the same hazards a path does — the relay's is
+        // generated from an account directory — so it goes through the same
+        // quoting rather than being trusted because it looks tame.
+        [Fact]
+        public void AnAwkwardSessionNameStillArrivesAsOneWord()
+        {
+            var script = TerminalScripts.TmuxAttachScript(
+                "/usr/bin/tmux", null, "warren's session", "/tmp");
+
+            Assert.Contains("'-t' '=warren'\\''s session'", script);
+        }
+
+        // The relay's own shape, which is the name that must never be attached to
+        // by accident and the one whose prefix hazard "=" exists for.
+        [Fact]
+        public void TheRelayShapedNameIsTargetedExactly()
+        {
+            var script = TerminalScripts.TmuxAttachScript(
+                "/usr/bin/tmux", "/tmp/tmux-501/claude-swarm-78137",
+                "claude-buddy-rc--claude-warrens-mbp", "/tmp");
+
+            Assert.Contains("'-t' '=claude-buddy-rc--claude-warrens-mbp'", script);
+        }
+
+        // The untargeted form cannot come back. The signature makes it
+        // unexpressible, and even an empty session still emits a `-t` — which
+        // fails loudly with "can't find session" rather than silently attaching to
+        // whatever the server happened to have used last.
+        [Fact]
+        public void AnEmptySessionStillEmitsATargetRatherThanNone()
+        {
+            var script = TerminalScripts.TmuxAttachScript("/usr/bin/tmux", null, "", "/tmp");
+
+            Assert.Contains("'-t'", script);
+            Assert.DoesNotContain("'attach'\n", script);
+        }
+
+        // --- TmuxAttachCommand: the same attach as a pane ---------------------
+
+        // The socket arm arrives beside the user now, which needs the attach as a
+        // command rather than as a script. Warren's own words at the round-13
+        // fork: "Splits in beside you showing what THAT agent is doing."
+        [Fact]
+        public void TheAttachCommandCarriesTheSocketAndTheExactTarget()
+        {
+            var command = TerminalScripts.TmuxAttachCommand(
+                "/opt/homebrew/bin/tmux", "/tmp/tmux-501/claude-swarm-78137", "claude-swarm");
+
+            Assert.Contains("'-S' '/tmp/tmux-501/claude-swarm-78137'", command);
+            Assert.EndsWith("'attach' '-t' '=claude-swarm'", command);
+        }
+
+        // TMUX is cleared, and it earns that twice: the pane this runs in belongs
+        // to the user's own server, so it inherits a TMUX pointing at *that*
+        // server while the command attaches to a different one — every tmux
+        // command typed in the new pane afterwards would talk to the wrong
+        // server. It also makes the nested-session guard moot rather than
+        // depending on a reading of when tmux applies it.
+        [Fact]
+        public void TheAttachCommandClearsTmuxBeforeAttaching()
+        {
+            var command = TerminalScripts.TmuxAttachCommand("/usr/bin/tmux", null, "s");
+
+            Assert.StartsWith("unset TMUX; exec ", command);
+        }
+
+        // The script is the same command with a shebang and an optional cd, so
+        // the two can never disagree about the target or the quoting.
+        [Fact]
+        public void TheScriptIsTheCommandWithAShebang()
+        {
+            var command = TerminalScripts.TmuxAttachCommand("/usr/bin/tmux", "/tmp/s", "claude-swarm");
+            var script = TerminalScripts.TmuxAttachScript("/usr/bin/tmux", "/tmp/s", "claude-swarm", null);
+
+            Assert.Equal("#!/bin/sh\n" + command + "\n", script);
+        }
+
         // --- LeafOf: naming a Windows Terminal tab after its directory ---
 
         [Theory]
@@ -322,6 +496,326 @@ namespace ClaudeBuddy.Tests
             }
 
             return count;
+        }
+
+        // --- ChooseClient -----------------------------------------------------
+
+        // The two-client state that exposed this, as a fixture: iTerm with two
+        // tmux clients, one on the session holding the target pane and one on
+        // another session. With a single client attached the distinction does not
+        // exist, which is why "any client" survived until a machine had two — and
+        // two clients are two windows of the same application, so choosing wrong
+        // brings the wrong window to the front.
+        private static TerminalScripts.TmuxClient Client(
+            string tty, string session, string activity = "1000", bool control = false) =>
+            new(tty, session, activity, control);
+
+        // Already looking at the right session: that one, and no switch. Switching
+        // it would be a no-op at best; switching a *different* client onto the
+        // session would drag that one off whatever it was showing.
+        [Fact]
+        public void AClientAlreadyOnTheTargetSessionIsChosenAndNotSwitched()
+        {
+            var choice = TerminalScripts.ChooseClient(
+                new[]
+                {
+                    Client("/dev/ttys009", "1", activity: "2000"),
+                    Client("/dev/ttys002", "0", activity: "1000"),
+                },
+                targetSession: "0");
+
+            Assert.Equal("/dev/ttys002", choice!.Value.Client.Tty);
+            Assert.False(choice.Value.NeedsSwitch);
+        }
+
+        // ...even when the other client is the more recently active one, which is
+        // the case that matters: recency only decides between clients that are all
+        // equally wrong, and a client already on the session is right.
+        [Fact]
+        public void BeingOnTheSessionBeatsBeingMoreRecentlyActive()
+        {
+            var choice = TerminalScripts.ChooseClient(
+                new[]
+                {
+                    Client("/dev/ttys002", "0", activity: "1000"),
+                    Client("/dev/ttys009", "1", activity: "9999"),
+                },
+                targetSession: "0");
+
+            Assert.Equal("/dev/ttys002", choice!.Value.Client.Tty);
+            Assert.False(choice.Value.NeedsSwitch);
+        }
+
+        // Nobody on the session: the most recently active client, switched. A
+        // person with several terminals open is working in the one they touched
+        // last, so moving that one is the least surprising way to show them
+        // something.
+        [Fact]
+        public void WithNobodyOnTheSessionTheMostRecentClientIsSwitched()
+        {
+            var choice = TerminalScripts.ChooseClient(
+                new[]
+                {
+                    Client("/dev/ttys009", "1", activity: "1787874871"),
+                    Client("/dev/ttys002", "2", activity: "1787875071"),
+                },
+                targetSession: "0");
+
+            Assert.Equal("/dev/ttys002", choice!.Value.Client.Tty);
+            Assert.True(choice.Value.NeedsSwitch);
+        }
+
+        // Two on the session: the more recently active of those, still no switch.
+        [Fact]
+        public void AmongSeveralOnTheSessionTheMostRecentWins()
+        {
+            var choice = TerminalScripts.ChooseClient(
+                new[]
+                {
+                    Client("/dev/ttys002", "0", activity: "1000"),
+                    Client("/dev/ttys009", "0", activity: "2000"),
+                },
+                targetSession: "0");
+
+            Assert.Equal("/dev/ttys009", choice!.Value.Client.Tty);
+            Assert.False(choice.Value.NeedsSwitch);
+        }
+
+        // Nothing attached at all: no client to choose, and the caller must not
+        // invent one. Also a client row with no tty, which `list-clients` can
+        // produce and which nothing downstream could aim at.
+        [Fact]
+        public void WithNoUsableClientThereIsNoChoice()
+        {
+            Assert.Null(TerminalScripts.ChooseClient(
+                Array.Empty<TerminalScripts.TmuxClient>(), "0"));
+
+            Assert.Null(TerminalScripts.ChooseClient(new[] { Client("", "0") }, "0"));
+        }
+
+        // Control mode travels with the choice, because the caller has to know:
+        // an iTerm2 `-CC` client's tty belongs to a hidden control tab rather than
+        // to any window worth looking at, so the per-tty selection is skipped for
+        // it and the app is activated instead.
+        [Fact]
+        public void ControlModeTravelsWithTheChosenClient()
+        {
+            var choice = TerminalScripts.ChooseClient(
+                new[] { Client("/dev/ttys002", "0", control: true) }, "0");
+
+            Assert.True(choice!.Value.Client.ControlMode);
+        }
+
+        // --- MostRecentClient / ParseClients / PaneTargetForSession -----------
+
+        // The client a person is most likely sitting at. PlaceInTmux used to take
+        // whichever line `list-clients` printed first, which is the same "any
+        // client" mistake round eleven found one file away — and with two clients
+        // attached it decided which window a pane got split into.
+        [Fact]
+        public void TheMostRecentlyActiveClientIsTheOneTheUserIsAt()
+        {
+            var chosen = TerminalScripts.MostRecentClient(new[]
+            {
+                Client("/dev/ttys002", "0", activity: "1787874871"),
+                Client("/dev/ttys009", "1", activity: "1787875071"),
+            });
+
+            Assert.Equal("/dev/ttys009", chosen!.Value.Tty);
+        }
+
+        [Fact]
+        public void AClientWithNoTtyIsNeverTheOne()
+        {
+            // Later activity, and unusable: nothing downstream can aim at a client
+            // with no tty.
+            var chosen = TerminalScripts.MostRecentClient(new[]
+            {
+                Client("/dev/ttys002", "0", activity: "1000"),
+                Client("", "1", activity: "9999"),
+            });
+
+            Assert.Equal("/dev/ttys002", chosen!.Value.Tty);
+            Assert.Null(TerminalScripts.MostRecentClient(Array.Empty<TerminalScripts.TmuxClient>()));
+        }
+
+        // One format and one parse, shared by both listings — a field added to one
+        // used to be read out of position by the other.
+        [Fact]
+        public void AClientListingIsReadBackFieldForField()
+        {
+            var clients = TerminalScripts.ParseClients(
+                "/dev/ttys002\t0\t1787875071\t0\n/dev/ttys009\t1\t1787874871\t1\n");
+
+            Assert.Equal(2, clients.Count);
+            Assert.Equal("/dev/ttys002", clients[0].Tty);
+            Assert.Equal("0", clients[0].Session);
+            Assert.Equal("1787875071", clients[0].Activity);
+            Assert.False(clients[0].ControlMode);
+            Assert.True(clients[1].ControlMode);
+        }
+
+        [Fact]
+        public void AShortOrEmptyClientRowIsSkippedRatherThanGuessed()
+        {
+            var clients = TerminalScripts.ParseClients("\n/dev/ttys002\n/dev/ttys009\t1\n");
+
+            // One field is not a client row; two is the minimum that names a
+            // session, and the optional tail defaults rather than throwing.
+            Assert.Single(clients);
+            Assert.Equal("", clients[0].Activity);
+            Assert.False(clients[0].ControlMode);
+        }
+
+        // The measured one. `display-message -t <session>` takes a target *pane*,
+        // so a bare name is read as a window index in the current session and
+        // answers about the wrong session without erroring — on a server whose
+        // sessions are tmux's default "0" and "1", asking about "1" answered
+        // "0:1". The trailing colon makes it a pane target and "=" makes the match
+        // exact, which is what RemoteControlBridge.TmuxNames already builds and
+        // explains for the same two reasons.
+        [Fact]
+        public void ASessionIsNamedAsAPaneTargetNotABareName()
+        {
+            Assert.Equal("=1:", TerminalScripts.PaneTargetForSession("1"));
+            Assert.Equal("=claude-swarm:", TerminalScripts.PaneTargetForSession("claude-swarm"));
+        }
+
+        // --- PlacementFor -----------------------------------------------------
+
+        // Round 6a in three cases. "It's taking me to a different tmux window -
+        // not this one": every previous answer moved the user, and the complaint
+        // was never about the destination.
+        [Fact]
+        public void AResolvedActiveWindowMeansSplitBesideTheUser()
+        {
+            Assert.Equal(
+                TerminalScripts.AttachPlacement.BesideTheUser,
+                TerminalScripts.PlacementFor("warren", "warren:3"));
+        }
+
+        // Attached somewhere, but the second lookup failed. A new window in their
+        // own session is still inside the thing they use to move around, which is
+        // what this app did before 6a — a consolation prize, not a wrong answer.
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        public void AClientWithNoResolvableWindowGetsAWindowOfItsOwn(string? activeWindow)
+        {
+            Assert.Equal(
+                TerminalScripts.AttachPlacement.ItsOwnTmuxWindow,
+                TerminalScripts.PlacementFor("warren", activeWindow));
+        }
+
+        // No client attached anywhere: a window created in a detached server is
+        // the same nowhere the orb already pointed at, so neither tmux answer
+        // applies and a terminal of its own is the only one left. Asserted for a
+        // resolved window too, which cannot really happen — the window lookup is
+        // asked of a session a client is on — because the rule must not depend on
+        // that staying true.
+        [Theory]
+        [InlineData(null, null)]
+        [InlineData("", null)]
+        [InlineData(null, "warren:3")]
+        public void NothingAttachedMeansATerminalOfItsOwn(string? session, string? activeWindow)
+        {
+            Assert.Equal(
+                TerminalScripts.AttachPlacement.ATerminalWindow,
+                TerminalScripts.PlacementFor(session, activeWindow));
+        }
+
+        // --- TmuxSplitArgs / TmuxNewWindowArgs --------------------------------
+
+        // The command is the last element and arrives untouched. tmux hands that
+        // element to `sh -c`, so anything this builder did to it would be a
+        // syntax error in a pane that just appeared — see the `sh -n` cases in
+        // tests/IntegrationTests/TmuxAttachScriptTests.
+        [Fact]
+        public void TheSplitPutsTheCommandLastAndUnaltered()
+        {
+            const string command = "'/usr/bin/claude' attach '0e043819'";
+
+            var args = TerminalScripts.TmuxSplitArgs(null, "warren:3", "/tmp/x", command);
+
+            Assert.Equal(command, args[^1]);
+        }
+
+        // -h so the conversation lands beside their work rather than under it, and
+        // -P -F '#{pane_id}' so the new pane's id comes back for the caller to
+        // focus — the same contract new-window already had, and the reason neither
+        // builder selects or raises anything itself.
+        [Fact]
+        public void TheSplitAsksForAHorizontalPaneAndItsId()
+        {
+            var args = TerminalScripts.TmuxSplitArgs(null, "warren:3", "/tmp/x", "cmd");
+
+            Assert.Equal("split-window", args[0]);
+            Assert.Contains("-h", args);
+            Assert.Contains("-P", args);
+            Assert.Contains("#{pane_id}", args);
+
+            // Targeted at the window, not the session: that is the whole
+            // difference between landing beside the user and landing wherever
+            // their session last had current.
+            var target = Array.IndexOf(args, "-t");
+            Assert.Equal("warren:3", args[target + 1]);
+        }
+
+        // `-c ''` fails and would take the split with it, which is the same trap
+        // TmuxAttachScript's `cd` guard exists for. Omitted, not passed empty.
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        public void NoCwdMeansNoDashC(string? cwd)
+        {
+            Assert.DoesNotContain("-c", TerminalScripts.TmuxSplitArgs(null, "warren:3", cwd, "cmd"));
+            Assert.DoesNotContain("-c", TerminalScripts.TmuxNewWindowArgs(null, "warren", cwd, "cmd"));
+        }
+
+        [Fact]
+        public void ACwdIsPassedThroughDashC()
+        {
+            var args = TerminalScripts.TmuxSplitArgs(null, "warren:3", "/tmp/x", "cmd");
+            var at = Array.IndexOf(args, "-c");
+
+            Assert.True(at > 0);
+            Assert.Equal("/tmp/x", args[at + 1]);
+        }
+
+        // "<session>:" with the colon. Bare, tmux reads the target as a *window*
+        // and refuses with "index N in use" the moment that index is taken; the
+        // trailing colon names the session and lets it pick the next free index.
+        // That was a real failure, which is why it is asserted rather than left to
+        // a comment beside an argument list.
+        [Fact]
+        public void TheNewWindowTargetsTheSessionWithItsColon()
+        {
+            var args = TerminalScripts.TmuxNewWindowArgs(null, "warren", "/tmp/x", "cmd");
+
+            Assert.Equal("new-window", args[0]);
+
+            var target = Array.IndexOf(args, "-t");
+            Assert.Equal("warren:", args[target + 1]);
+        }
+
+        // Both go through TmuxArgs, so both pin the socket when there is one and
+        // pass nothing when there is not — the rule that keeps a swarm socket's
+        // pane from being looked for on the default server.
+        [Fact]
+        public void BothBuildersPinTheSocketWhenGivenOne()
+        {
+            var split = TerminalScripts.TmuxSplitArgs(
+                "/tmp/tmux-501/claude-swarm-1", "warren:3", "/tmp/x", "cmd");
+
+            Assert.Equal("-S", split[0]);
+            Assert.Equal("/tmp/tmux-501/claude-swarm-1", split[1]);
+            Assert.Equal("split-window", split[2]);
+
+            var window = TerminalScripts.TmuxNewWindowArgs(
+                "/tmp/tmux-501/claude-swarm-1", "warren", "/tmp/x", "cmd");
+
+            Assert.Equal("-S", window[0]);
+            Assert.Equal("new-window", window[2]);
         }
     }
 }

@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace ClaudeBuddy
 {
     // The text that gets handed to `osascript`, and the small pure decisions
@@ -37,6 +39,370 @@ namespace ClaudeBuddy
             full[1] = socket;
             args.CopyTo(full, 2);
             return full;
+        }
+
+        // One argument, safe to hand to `sh -c`.
+        //
+        // Single-quoted, with any embedded quote closed and reopened the shell
+        // way, so a directory with a space or an apostrophe still arrives as one
+        // word. AgentTeamViewer has carried two inline copies of this rule since
+        // `claude attach` was wired up; this is the same rule stated where it can
+        // be tested, and the builder below is the first caller.
+        internal static string ShellQuote(string value) =>
+            "'" + value.Replace("'", "'\\''") + "'";
+
+        // One tmux client, as `list-clients` describes it.
+        internal readonly record struct TmuxClient(
+            string Tty, string Session, string Activity, bool ControlMode);
+
+        // Which client to bring the user to, and whether it has to be switched
+        // first.
+        internal readonly record struct ClientChoice(TmuxClient Client, bool NeedsSwitch);
+
+        // Choose the client — never "any client".
+        //
+        // With one client attached the distinction does not exist, which is why it
+        // survived this long. With two it decides everything: two clients are two
+        // terminal windows of the same application, and every step downstream is
+        // aimed by the chosen client's tty — the switch-client, the app bundle
+        // lookup, and the per-tty window-and-tab selection that brings the right
+        // *window* forward rather than merely the right app. Choose wrong and the
+        // user watches the wrong window come to the front, which is
+        // indistinguishable from the app ignoring them.
+        //
+        // Two arms, in this order:
+        //
+        // 1. A client already attached to the session holding the target pane.
+        //    That one, and **no switch-client at all** — it is already looking at
+        //    the right session, so switching it would be a no-op at best and
+        //    yanking a second client off its own session at worst.
+        // 2. Otherwise the most recently active client, switched to the target
+        //    session. Most-recent because a person with several terminals open is
+        //    working in the one they touched last, and moving *that* one is the
+        //    least surprising way to show them something.
+        //
+        // Ties within an arm break the same way, and `client_activity` is a unix
+        // timestamp, so an ordinal string comparison is right for equal-width
+        // integers and does not care about the format.
+        //
+        // Pure and named because it was inline in six hundred lines of subprocess
+        // calls, where the only way to ask which client it would pick was to have
+        // two of them attached and click an orb — which is how "any client" went
+        // unnoticed until a machine had two.
+        internal static ClientChoice? ChooseClient(
+            IReadOnlyList<TmuxClient> clients, string targetSession)
+        {
+            var onSession = new List<TmuxClient>();
+            var elsewhere = new List<TmuxClient>();
+
+            foreach (var client in clients)
+            {
+                (string.Equals(client.Session, targetSession, StringComparison.Ordinal)
+                    ? onSession
+                    : elsewhere).Add(client);
+            }
+
+            if (MostRecentClient(onSession) is { } here) return new ClientChoice(here, false);
+
+            return MostRecentClient(elsewhere) is { } there
+                ? new ClientChoice(there, NeedsSwitch: true)
+                : null;
+        }
+
+        // The client a person is most likely sitting at: the one touched last.
+        //
+        // Its own function because two callers want it and one of them is not
+        // choosing between sessions at all. PlaceInTmux asks "where is the user"
+        // in order to split a pane beside them, and it used to answer that by
+        // taking the *first line* `list-clients` happened to print — the same
+        // "any client" mistake round eleven found in ResolveClient, surviving one
+        // file away because the two picked their client by different code.
+        //
+        // Clients with no tty are skipped: nothing downstream can aim at one, and
+        // `list-clients` can produce them.
+        //
+        // `client_activity` is a unix timestamp, so an ordinal string comparison
+        // is right for equal-width integers and does not care about the format.
+        internal static TmuxClient? MostRecentClient(IEnumerable<TmuxClient> clients)
+        {
+            TmuxClient? best = null;
+
+            foreach (var client in clients)
+            {
+                if (string.IsNullOrEmpty(client.Tty)) continue;
+
+                if (best is null
+                    || string.CompareOrdinal(client.Activity, best.Value.Activity) > 0)
+                {
+                    best = client;
+                }
+            }
+
+            return best;
+        }
+
+        // The `-F` every client listing asks for, and the parse that reads it
+        // back. One pair, because two call sites were building the format string
+        // and splitting the tabs separately, and a field added to one would have
+        // been read out of position by the other.
+        internal const string ClientListFormat =
+            "#{client_tty}\t#{client_session}\t#{client_activity}\t#{client_control_mode}";
+
+        internal static List<TmuxClient> ParseClients(string listing)
+        {
+            var clients = new List<TmuxClient>();
+
+            foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split('\t');
+                if (parts.Length < 2) continue;
+
+                clients.Add(new TmuxClient(
+                    Tty: parts[0].Trim(),
+                    Session: parts[1].Trim(),
+                    Activity: parts.Length > 2 ? parts[2].Trim() : "",
+                    ControlMode: parts.Length > 3 && parts[3].Trim() == "1"));
+            }
+
+            return clients;
+        }
+
+        // How to name a session when asking a command that wants a *pane*.
+        //
+        // Measured, because the obvious form is silently wrong and this cost a
+        // round to find. `display-message -p -t <session>` does not take a
+        // target-session — it takes a target-pane — so a bare name is parsed as a
+        // *window index in the current session*. On a server whose sessions are
+        // called "0" and "1", which is tmux's own default naming, asking about
+        // session "1" answered `0:1`: the right-looking answer for the wrong
+        // session, with no error. Both clients on that machine therefore resolved
+        // to the same window, and a pane split "beside the user" could land in
+        // somebody else's session.
+        //
+        //     -t "1"    -> 0:1     wrong, silently
+        //     -t "=1"   -> :       empty
+        //     -t "1:"   -> 1:1     right
+        //     -t "=1:"  -> 1:1     right, and exact
+        //
+        // The trailing colon makes it a pane target — "that session's active
+        // pane" — and "=" forces an exact match rather than a prefix one. Which
+        // is exactly what RemoteControlBridge.TmuxNames already builds and
+        // explains as its PaneTarget, for the same two measured reasons. This is
+        // the third call site on this branch found not to be using a rule the
+        // codebase had already written down.
+        internal static string PaneTargetForSession(string session) => "=" + session + ":";
+
+        // Where a fresh `claude attach` should be put.
+        //
+        // The whole of round 6a, and it came out of one sentence: "it's taking me
+        // to a different tmux window - not this one." Every previous answer moved
+        // the *user* — a new tmux window, a new terminal window, a switch-client —
+        // and the complaint was never that the destination was wrong. It was that
+        // being moved is wrong. So the session comes to them instead: a pane
+        // split into the window they are already looking at.
+        //
+        // Three answers, in descending order of how little they disturb:
+        //
+        // - BesideTheUser: they are attached to tmux and we know which window
+        //   their client is showing. Split it. Nothing moves, and "this one"
+        //   stays this one.
+        // - ItsOwnTmuxWindow: they are attached somewhere but the window could
+        //   not be resolved. A new window in their session is still inside the
+        //   thing they use to move around, which is what this app chose before
+        //   6a and remains the right consolation prize.
+        // - ATerminalWindow: nothing is attached to their tmux at all, so there
+        //   is no screen to split or to make a window on — a window created in a
+        //   detached server is the same nowhere the orb already pointed at.
+        //
+        // Pure, and split out from PlaceInTmux for the reason ClickRouting was
+        // split out of TerminalFocuser: the old form of this decision was three
+        // early returns interleaved with the subprocesses that answered them, so
+        // the only way to ask what it did was to click an orb and watch.
+        internal enum AttachPlacement
+        {
+            BesideTheUser,
+            ItsOwnTmuxWindow,
+            ATerminalWindow
+        }
+
+        // attachedSession is the first session name `list-clients` gave back, or
+        // empty for a server with no client anywhere. activeWindow is
+        // "<session>:<index>" for the window that client is showing, or empty when
+        // that second question could not be answered — it is a separate lookup and
+        // it can fail on its own, which is exactly the middle case above.
+        internal static AttachPlacement PlacementFor(string? attachedSession, string? activeWindow)
+        {
+            if (string.IsNullOrEmpty(attachedSession)) return AttachPlacement.ATerminalWindow;
+
+            return string.IsNullOrEmpty(activeWindow)
+                ? AttachPlacement.ItsOwnTmuxWindow
+                : AttachPlacement.BesideTheUser;
+        }
+
+        // `split-window` into the window the user is looking at.
+        //
+        // -h so the conversation lands beside their work rather than under it: a
+        // chat is read in lines, and half the height of a terminal is fewer lines
+        // than half its width is columns.
+        //
+        // -P -F '#{pane_id}' so the new pane's id comes back on stdout, which is
+        // what the caller hands to the ordinary pane-focusing path — the same
+        // contract new-window already had, and the reason neither of these
+        // selects or raises anything itself.
+        //
+        // -c is omitted rather than passed empty when no cwd was recorded: `-c ''`
+        // fails and would take the split with it, which is the same trap
+        // TmuxAttachScript's `cd` guard documents one screen down.
+        internal static string[] TmuxSplitArgs(
+            string? socket, string target, string? cwd, string command)
+        {
+            var args = new List<string> { "split-window", "-h", "-t", target };
+
+            if (!string.IsNullOrEmpty(cwd))
+            {
+                args.Add("-c");
+                args.Add(cwd);
+            }
+
+            args.Add("-P");
+            args.Add("-F");
+            args.Add("#{pane_id}");
+            args.Add(command);
+
+            return TmuxArgs(socket, args.ToArray());
+        }
+
+        // A new window in the user's own session, for when their active window
+        // could not be resolved.
+        //
+        // "<session>:" with the colon, not the bare name. Bare, tmux reads the
+        // target as a *window* and refuses with "index N in use" the moment that
+        // index is taken; the trailing colon names the session and lets it pick
+        // the next free index. That was a real failure, and stating it here rather
+        // than in a comment beside an argument list is the point of extracting
+        // this at all.
+        internal static string[] TmuxNewWindowArgs(
+            string? socket, string session, string? cwd, string command)
+        {
+            var args = new List<string> { "new-window", "-t", session + ":" };
+
+            if (!string.IsNullOrEmpty(cwd))
+            {
+                args.Add("-c");
+                args.Add(cwd);
+            }
+
+            args.Add("-P");
+            args.Add("-F");
+            args.Add("#{pane_id}");
+            args.Add(command);
+
+            return TmuxArgs(socket, args.ToArray());
+        }
+
+        // The shell script that puts a terminal onto an existing tmux server.
+        //
+        // For a session whose pane is alive in a server nothing is attached to —
+        // an agent-team member in a detached `claude-swarm-<pid>` socket, which
+        // is the shape the user reported as an orb that "does nothing".
+        //
+        // **The target is mandatory, and this used to be a plain `attach`.** The
+        // reasoning for leaving it off was that the caller has already run
+        // select-window and select-pane against the pane, so the client lands on
+        // the right teammate rather than on whatever the session last had
+        // current. That is true, and it is true about the wrong thing: the selects
+        // aim *within* a session, while an untargeted attach chooses *which
+        // session*, and tmux chooses the most recently used one.
+        //
+        // Correct for a server with one session, silently wrong for a server with
+        // two — and the swarm server has two, because this app's own
+        // remote-control relay cohabits it. The relay is the busier of the pair by
+        // a wide margin, so an untargeted attach effectively always landed there:
+        // measured, `claude-buddy-rc--…` last active at 1787877105 against
+        // `claude-swarm` at 1787874827. The user saw an iTerm tab open, land in
+        // the relay, and vanish within a beat.
+        //
+        // So the session is a required parameter rather than an optional one. An
+        // untargeted attach is not a degraded answer here, it is an attach to
+        // whatever happened to be busy — which on this server is plumbing — and a
+        // signature that cannot express it is the only reliable way to keep it
+        // from coming back.
+        //
+        // "=" forces an exact match, the same rule and the same reason as
+        // TmuxNames' targets: tmux resolves a target by prefix, and this server
+        // holds names where one could be a prefix of another. Verified that
+        // attach accepts the form, since not every tmux command does — `attach -t
+        // '=claude-swarm'` reaches "open terminal failed: not a terminal", so the
+        // target resolved and only the missing tty stopped it, while
+        // `-t '=no-such-session'` answers "can't find session". (`show-options
+        // -t` rejects the "=" form outright, which is why this was worth checking
+        // rather than assuming.)
+        //
+        // A script file rather than AppleScript's `do script`, for the reason
+        // AgentTeamViewer.AttachSession records: `do script` is Terminal.app's
+        // own vocabulary, while `open -a <app> <executable file>` is understood
+        // by every terminal this app names, so one path covers all of them.
+        //
+        // An absolute tmux path, never a bare `tmux` resolved by a login shell:
+        // `zsh -lc` skips .zshrc, which is where a PATH addition for Homebrew
+        // normally lives, so a bare name silently fails whenever the app was
+        // launched from Finder. See ClaudeBinary, and the identical note in
+        // AgentTeamViewer.
+        //
+        // The `cd` is for after the attach ends rather than for the attach
+        // itself: detach or exit and the window drops to a shell, and the useful
+        // place to land is the directory whose orb was clicked. Skipped when no
+        // cwd was recorded, because `cd ''` fails and would take the attach with
+        // it — the one thing this script exists to do.
+        internal static string TmuxAttachScript(
+            string tmuxBinary, string? socket, string session, string? cwd)
+        {
+            // Built with a loop rather than a LINQ chain, which is not a style
+            // preference: everything else in this file is plain string building,
+            // and a deferred Select/Prepend puts a compiler-generated state
+            // machine on the line, which reads in a coverage report as a branch
+            // nothing took while the line itself is plainly executed.
+            var script = "#!/bin/sh\n";
+            if (!string.IsNullOrEmpty(cwd)) script += "cd " + ShellQuote(cwd) + " || exit 1\n";
+
+            return script + TmuxAttachCommand(tmuxBinary, socket, session) + "\n";
+        }
+
+        // The same attach as one shell command, for the arrival that is a *pane*
+        // rather than a window.
+        //
+        // Warren's own words at the round-thirteen fork, choosing between the two:
+        // "Splits in beside you showing what THAT agent is doing." So the socket
+        // arm arrives the way the background arm already does — the content comes
+        // to him — and a separate terminal window is the fallback for when there
+        // is no tmux to split.
+        //
+        // `unset TMUX` first, and it earns its place twice over. The pane this
+        // runs in belongs to the user's own tmux server, so it inherits a TMUX
+        // pointing at *that* server while the command attaches to a different
+        // one; leaving it set means every tmux command typed in the new pane
+        // afterwards talks to the wrong server. It also sidesteps the
+        // nested-session guard entirely rather than depending on a reading of
+        // when tmux applies it — a distinction this branch has been caught by
+        // before, and one that costs nothing to be immune to.
+        //
+        // No `exec` wrapper here: both callers supply their own context, and the
+        // script's `exec` is what makes the terminal window's shell *become* tmux
+        // rather than wait behind it.
+        internal static string TmuxAttachCommand(string tmuxBinary, string? socket, string session)
+        {
+            // Built with a loop rather than a LINQ chain, which is not a style
+            // preference: everything else in this file is plain string building,
+            // and a deferred Select/Prepend puts a compiler-generated state
+            // machine on the line, which reads in a coverage report as a branch
+            // nothing took while the line itself is plainly executed.
+            var parts = new List<string> { ShellQuote(tmuxBinary) };
+            foreach (var arg in TmuxArgs(socket, "attach", "-t", "=" + session))
+            {
+                parts.Add(ShellQuote(arg));
+            }
+
+            return "unset TMUX; exec " + string.Join(" ", parts);
         }
 
         // The last path segment, used to name a Windows Terminal tab after the

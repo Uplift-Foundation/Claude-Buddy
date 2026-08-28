@@ -181,4 +181,76 @@ public class MirrorRoutingTests
         Assert.DoesNotContain('.', name);
         Assert.DoesNotContain(':', name);
     }
+
+    // --- IsOwnRelayName / IsOwnRelayCwd --------------------------------------
+
+    // The prefix, and only the prefix. A relay's full name carries the account
+    // directory and the machine name, and both change — a user switches profile,
+    // renames their Mac, or a build runs with the test tag set — so the relay
+    // still running from before stops matching the name this app would launch
+    // with today. Matching the live tag would stop recognising it, and an
+    // unrecognised relay is the phantom orb TmuxNames' comment records having
+    // measured, arriving from the other side.
+    [Fact]
+    public void EveryRelayThisAppHasEverLaunchedIsRecognised()
+    {
+        // What it launches today.
+        Assert.True(RemoteControlBridge.IsOwnRelayName(
+            "claude-buddy-rc--claude-warrens-mbp"));
+
+        // A different account directory, a different machine, and a build with
+        // the test tag set — all names this app has launched and none of them the
+        // current one.
+        Assert.True(RemoteControlBridge.IsOwnRelayName(
+            "claude-buddy-rc--claude-board-some-other-mac"));
+        Assert.True(RemoteControlBridge.IsOwnRelayName(
+            "claude-buddy-rc--claude-t1-warrens-mbp"));
+
+        // Case is not part of the identity: tmux and the bridge's own listing
+        // have disagreed about it before, which is why the existing comparison
+        // was already ordinal-ignore-case.
+        Assert.True(RemoteControlBridge.IsOwnRelayName("CLAUDE-BUDDY-RC-anything"));
+    }
+
+    // And the distinction that has to survive: a person's own remote-control
+    // session is not this app's plumbing and keeps its orb. `claude-buddy-rc-` is
+    // this app's namespace — RelayCwd generates it and nobody types it — which is
+    // what makes the prefix able to draw this line at all.
+    [Theory]
+    [InlineData("job-hunter")]
+    [InlineData("warrenthompson-9b")]          // the measured non-prefixed shape
+    [InlineData("claude-buddy")]               // close, and not it
+    [InlineData("my-claude-buddy-rc-copy")]    // contains it, does not start with it
+    [InlineData("")]
+    [InlineData(null)]
+    public void SomebodyElsesSessionIsNotOurRelay(string? name)
+    {
+        Assert.False(RemoteControlBridge.IsOwnRelayName(name));
+    }
+
+    // Asked of a status file, which is where the local scan meets it. The cwd's
+    // last segment *is* the relay name by construction — RelayCwd runs every relay
+    // from a directory named after itself, precisely so the name is recoverable —
+    // so this is the same key, already on disk, costing no `ps`.
+    [Fact]
+    public void ARelaysStatusFileIsRecognisedByItsCwd()
+    {
+        Assert.True(RemoteControlBridge.IsOwnRelayCwd(
+            "/Users/w/Library/Application Support/ClaudeBuddy/rc-cwd/claude-buddy-rc--claude-warrens-mbp"));
+
+        // A trailing separator must not turn the leaf into an empty string, which
+        // would then match nothing and quietly give the relay its orb back.
+        Assert.True(RemoteControlBridge.IsOwnRelayCwd(
+            "/Users/w/rc-cwd/claude-buddy-rc--claude-warrens-mbp/"));
+    }
+
+    [Theory]
+    [InlineData("/Users/warren/Source/Claude-Buddy")]
+    [InlineData("/Users/warren")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void AnOrdinarySessionsCwdIsNotARelays(string? cwd)
+    {
+        Assert.False(RemoteControlBridge.IsOwnRelayCwd(cwd));
+    }
 }

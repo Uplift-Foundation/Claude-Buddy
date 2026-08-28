@@ -25,8 +25,13 @@ generates once there's enough conversation to summarize, else the working
 directory's name. A `/rename` wins even if Claude Code has since re-titled
 the session, and the letter changes over as soon as a name appears — so two
 sessions in one repo stop looking identical. Hover for the name and the full
-path; the right-click menu leads with both (plus reset that session to idle /
-exit Claude Buddy entirely).
+path; the right-click menu leads with both, then offers to reset that session
+to idle, **dismiss the orb** (removes it from screen by deleting its status
+file — the session itself carries on, and its next hook event puts the orb
+back), **end the session** (sends its `claude` process a polite terminate;
+deliberate, irreversible, and never automatic), or exit Claude Buddy entirely.
+The last two only appear for a session this app can actually act on: a local
+CLI session for dismiss, and one whose pid was recorded for end.
 
 Turn on **Two-letter initials** in Settings for a wider glyph: one letter
 from each of the first two words of that same name (`Menu UX` → `Mu`), or
@@ -117,6 +122,12 @@ agent hasn't run `/color` itself; it is not the automatic accent described
 above, which really is nowhere on disk.
 Sessions that aren't in a team are completely unaffected: no arrow, full-size
 orb, nothing read that wasn't already being read.
+
+A team member whose lead has gone is **dimmed** rather than drawn as though it
+were still part of something: its arrow has nowhere to point, and a full-bright
+orb in a group whose lead has ended says the team is still running. It stays
+clickable, and clicking it still goes somewhere — see **Background jobs and
+parked sessions** below for what "dimmed" means and what the click does.
 
 Team orbs obey **"Keep orbs for"** like everything else. An agent that has
 finished its work goes quiet, and a quiet session fires no hooks, so its file
@@ -326,8 +337,11 @@ surface, since with zero sessions there are no orbs to right-click:
   tracked, so the icon and menu stay live. Remembered across relaunches, along
   with everything else in the settings window.
 - **Reset all sessions to idle** — the bulk version of an orb's
-  right-click reset, for clearing out orbs left behind by Ctrl+C'd sessions
-  (see the pruning note below).
+  right-click reset, for an orb whose process is alive but whose colour is
+  stuck. It used to be the tool for clearing up after Ctrl+C'd sessions as
+  well; that part is now largely automatic, because a session whose process
+  has gone loses its orb on the next scan and its leftover file a few minutes
+  later (rules 3 and 5 under pruning below).
 - **Settings…** — a small preferences window, grouped the way macOS groups
   its own: **Orbs** (show them at all, and **"Keep orbs for"** — 1 minute
   through 4 hours, or **Forever**, covered under pruning below), **Orb
@@ -740,7 +754,7 @@ containing `{"state": "...", "cwd": "...", "title": "...", "color": "...", ...}`
 `ClaudeBuddyHook.sh` (bash, macOS). No network calls, no polling of Claude
 Code itself, no persistent process beyond the hook calls themselves.
 
-An orb goes away when any of four things happens.
+An orb goes away when any of five things happens.
 
 1. **Its `SessionEnd` hook fires** — a clean exit like `/exit` — which deletes
    the status file outright.
@@ -773,6 +787,30 @@ An orb goes away when any of four things happens.
    is what keeps a Ctrl+C'd prompt — or a `/clear`ed one — from sitting on
    screen forever.
 
+5. **You dismissed it** — right-click → "Dismiss this orb", which deletes the
+   status file the way rule 1 does. Not permanent by nature: the session is
+   untouched, so its next hook event writes the file again and the orb comes
+   back. That is the point of it being separate from "End this session", which
+   stops the process and takes the orb with it through rule 3.
+
+**The app also deletes status files it is sure are finished with.** Until
+recently nothing did, apart from the `SessionEnd` hook — so a Ctrl+C'd session's
+file stayed in the temp directory for good, and a finished background job's
+stayed *and could never be caught*, because the pooled worker behind it is kept
+alive on purpose and so its pid answers forever. Directories with dozens of them
+were normal. Every scan now looks for the two facts that mean a session is
+genuinely over — **its process has exited**, or **the daemon says its job is
+done** — and deletes the file about ten minutes after it first sees one.
+
+The ten minutes is a grace period, not a delay for tidiness: the evidence can be
+briefly wrong (a pid that could not be read for a moment, a job reported done
+just before it is resumed), and the clock restarts the instant the evidence goes
+away. Nothing else counts as evidence — not a quiet session, not one whose orb
+was pruned by "Keep orbs for", not one nothing could be clicked through to. Those
+are statements about what this app can *see*, and a status file is the only place
+a live session's terminal coordinates and colour live. If the app does delete one
+it should not have, the session's next hook event writes it back.
+
 Right-click → "Reset this session to idle" is still there for a session whose
 process is alive but whose orb is stuck amber.
 
@@ -790,6 +828,44 @@ Settings window (see below) all reach every WSL distro's *default* Linux user
 automatically. A second Linux user account inside the same distro is the one
 combination left unwired, since that needs hooks added inside *their* account
 specifically — the "By hand" section further down still covers that case.
+
+## Background jobs and parked sessions
+
+Claude Code can run work with nobody sitting in front of it: a background job
+(`claude bg-...`, or one dispatched from `claude agents`) runs inside a pooled
+worker with no terminal of its own. Those sessions fire the same hooks as any
+other, so they have always had orbs — and until recently they were drawn
+identically to a session someone was typing in. Fifteen orbs breathing away on a
+machine whose owner considered it idle is what prompted this section.
+
+Three things now say what they are.
+
+- **A gear badge (⚙)**, bottom-right, the same slot the `⇄` badge uses for a
+  session on another machine. It marks a background job whether or not anything
+  is happening in it: the badge says what a session *is*, and that does not
+  change while it runs.
+- **Dimming.** A job sitting between turns — its worker alive and resumable,
+  nothing in flight — is drawn at reduced opacity and stops breathing. So is a
+  team member whose lead has gone. The orb keeps its colour and its letters, so
+  you can still find it; it just stops claiming to be busy. Work resuming
+  restores it on the next scan, which is about two seconds.
+- **Clicking one opens it.** There is no window to jump to, so the click runs
+  `claude attach` on that session in a terminal instead. A team member whose
+  pane is alive in a tmux server nothing is attached to gets a terminal attached
+  to that server, landing on its pane. Both are macOS only for now.
+
+Where "between turns" comes from: `claude agents --json`, which the app already
+asks about once per scan at most, and only when something on the machine could
+be a background session — a machine running nothing but terminal sessions never
+pays for the question. The daemon's answer is cached for about ten seconds, so
+an orb can take that long to go dim; going *bright* again is immediate, because
+the session's own status file reports the new state instantly and the app
+believes the fresher of the two. An orb that is late to dim says nothing is
+happening a few seconds after it stopped; an orb that was late to brighten would
+be a lie about work you are watching happen.
+
+Nothing here hides an orb. A parked job is real, resumable and worth clicking,
+and how long a quiet session stays on screen is what **"Keep orbs for"** is for.
 
 ## Chatting with a session from its orb
 
@@ -886,9 +962,34 @@ wakes each agent on a timer to do background work, and it does that in the
 agent's *own main session* — so on a gateway with several agents, that many orbs
 go active together every few minutes with nobody on the other end. Without the
 heart they read as somebody waiting for you; with it, the motion says the thing
-on the other end is a clock. **Show heartbeat sessions** turns those orbs off
-entirely if you would rather not have them, and the agents keep their colours in
-any channel they are in either way.
+on the other end is a clock.
+
+**Heartbeat sessions** and **Cron sessions** each decide what those timer-driven
+orbs do, and there are three answers rather than two:
+
+| | |
+| --- | --- |
+| **Hidden** | No orb at all. |
+| **With the chats** | An orb, gathered into the same shape as everything else when you press the arrange button. The default, and what the app has always done. |
+| **Own shape** | An orb, gathered into a shape of its own, drawn beside your conversations rather than among them. |
+
+Set both to *Own shape* and the arrange button draws three patterns side by side
+— your chats, the heartbeats, the crons — each with its own entry in Settings
+picking from the same six shapes. Leave both alone and it is one shape, exactly
+as before. The agents keep their colours in any channel they are in whichever you
+pick.
+
+The shapes sit beside each other rather than anywhere you place them
+individually: each gets a share of the screen in proportion to how many orbs it
+is holding, they are drawn as one group centred on wherever you last dragged the
+arrangement, and dragging it moves all of them together. Two shapes cannot be
+drawn on top of each other, which is the reason it works that way rather than by
+giving each shape its own position to lose.
+
+An upgrade changes nothing on screen. If you had turned the old **Show heartbeat
+sessions** switch off, that becomes *Hidden*; on — or never touched — becomes
+*With the chats*. Crons had no setting before this and always joined the one
+shape, which is what *With the chats* means.
 
 The heart marks **where a heartbeat lands**, not which individual turns were
 one — the gateway does not report heartbeats at all, and its own Control UI
