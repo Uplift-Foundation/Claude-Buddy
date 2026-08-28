@@ -552,6 +552,25 @@ namespace ClaudeBuddy
             foreach (var account in toStart) _ = StartAsync(account);
         }
 
+        // The one relay start that is not a person's gesture on this machine.
+        //
+        // Every other path to EnsureStarted is someone asking — the tray item,
+        // the settings button, opening a remote chat — because a relay spends
+        // the account's quota. A machine that *serves* its sessions to other
+        // Buddies unattended has nobody there to ask, which is the whole reason
+        // it is unattended; remoteControlServeOnLaunch is that machine saying
+        // "treat the app starting as me asking". Guarded here rather than at
+        // the call site so the meaning lives next to EnsureStarted, whose other
+        // callers all mean "someone asked just now".
+        // Excluded from coverage for EnsureStarted's own reason: with the
+        // setting on, this starts a real Claude Code session in tmux.
+        [ExcludeFromCodeCoverage]
+        public static void ServeOnLaunch()
+        {
+            if (!ClaudeBuddySettings.RemoteControlServeOnLaunch) return;
+            EnsureStarted();
+        }
+
         // Deletes scratch directories no configured account owns.
         //
         // Each relay's private TMPDIR collects a Node compile cache — about

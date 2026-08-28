@@ -412,6 +412,11 @@ namespace ClaudeBuddy
             RemoteControlSessions.ProvideLocalSessions(() =>
                 _statuses.Select(pair => (pair.Key, pair.Value)).ToList());
 
+            // A machine that serves its sessions to other Buddies unattended
+            // asks for the relay itself, once, at startup. Why that is opt-in —
+            // and what it costs — is on ServeOnLaunch itself.
+            RemoteControlSessions.ServeOnLaunch();
+
             _debounce.Tick += (_, _) =>
             {
                 _debounce.Stop();

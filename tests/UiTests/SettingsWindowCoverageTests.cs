@@ -511,6 +511,7 @@ public class SettingsWindowCoverageTests
         ClaudeBuddySettings.SetRemoteControlProfileDirs(
             new[] { ClaudeBuddySettings.DefaultRemoteControlProfileDir });
         ClaudeBuddySettings.RemoteControlIdleMinutes = ClaudeBuddySettings.DefaultRemoteControlIdle;
+        ClaudeBuddySettings.RemoteControlServeOnLaunch = false;
     }
 
     [AvaloniaFact]
@@ -549,8 +550,9 @@ public class SettingsWindowCoverageTests
             // exclusion.
             var rows = window.RemoteControlRows();
 
-            // Switch, accounts, idle picker, status note, start button.
-            Assert.Equal(5, rows.Length);
+            // Switch, accounts, idle picker, serve-on-launch switch, status
+            // note, start button.
+            Assert.Equal(6, rows.Length);
         }
         finally
         {

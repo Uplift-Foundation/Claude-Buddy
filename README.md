@@ -1062,8 +1062,16 @@ Turn it on in **Settings → Other machines**, then:
   profiles** first.
 - **Stop the relay after** — how long it may sit unused before shutting down. It
   starts again by itself the next time you open or send to a remote session.
+- **Start the relay when Claude Buddy starts** — for the machine nobody is
+  sitting at. The live view below is *served* by the Buddy on the other
+  machine, and until this switch existed that Buddy's relay could only be
+  started by a hand on that machine — a headless Mac in a cupboard could never
+  serve its sessions unattended. Switch it on there (usually together with
+  **Stop the relay after: Never**), and the relay comes up with the app. Both
+  are plain keys in `settings.json`, so an SSH session and an app relaunch is
+  enough to manage a machine you can't see.
 
-Nothing starts merely because the switch is on. Use **Connect to other
+Nothing else starts merely because the switch is on. Use **Connect to other
 machines** in the tray menu, or the button in Settings, or just open a remote
 session's chat — any of those brings the relay up, and orbs for the sessions it
 can see appear a few seconds later, badged `⇄`.
