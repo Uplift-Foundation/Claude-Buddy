@@ -171,4 +171,22 @@ public class TmuxAttachScriptTests
         AssertParses(TerminalScripts.TmuxAttachScript(
             "/usr/bin/tmux", "/tmp/tmux-501/default", "warren's session", "/tmp"));
     }
+
+    // The command form, which tmux hands to `sh -c` when it splits the pane. Same
+    // hazard as the script one level down: `unset TMUX; exec …` is a compound
+    // command, and getting the separator or the quoting wrong turns a pane that
+    // should hold a conversation into one holding a syntax error.
+    [UnixFact]
+    public void TheAttachCommandParses()
+    {
+        AssertParses("#!/bin/sh\n" + TerminalScripts.TmuxAttachCommand(
+            "/opt/homebrew/bin/tmux", "/tmp/tmux-501/claude-swarm-78137", "claude-swarm") + "\n");
+    }
+
+    [UnixFact]
+    public void TheAttachCommandWithAnAwkwardSessionNameParses()
+    {
+        AssertParses("#!/bin/sh\n" + TerminalScripts.TmuxAttachCommand(
+            "/usr/bin/tmux", "/tmp/warren's sockets/s", "warren's session") + "\n");
+    }
 }

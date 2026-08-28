@@ -122,7 +122,7 @@ namespace ClaudeBuddy.Tests
                 "/usr/bin/tmux", socket, "claude-swarm", "/tmp");
 
             Assert.DoesNotContain("-S", script);
-            Assert.EndsWith("exec '/usr/bin/tmux' 'attach' '-t' '=claude-swarm'\n", script);
+            Assert.EndsWith("unset TMUX; exec '/usr/bin/tmux' 'attach' '-t' '=claude-swarm'\n", script);
         }
 
         // `cd ''` fails, and `|| exit 1` would then take the attach with it —
@@ -138,7 +138,7 @@ namespace ClaudeBuddy.Tests
 
             Assert.DoesNotContain("cd ", script);
             Assert.Equal(
-                "#!/bin/sh\nexec '/usr/bin/tmux' '-S' '/tmp/s' 'attach' '-t' '=claude-swarm'\n",
+                "#!/bin/sh\nunset TMUX; exec '/usr/bin/tmux' '-S' '/tmp/s' 'attach' '-t' '=claude-swarm'\n",
                 script);
         }
 
@@ -188,6 +188,46 @@ namespace ClaudeBuddy.Tests
 
             Assert.Contains("'-t'", script);
             Assert.DoesNotContain("'attach'\n", script);
+        }
+
+        // --- TmuxAttachCommand: the same attach as a pane ---------------------
+
+        // The socket arm arrives beside the user now, which needs the attach as a
+        // command rather than as a script. Warren's own words at the round-13
+        // fork: "Splits in beside you showing what THAT agent is doing."
+        [Fact]
+        public void TheAttachCommandCarriesTheSocketAndTheExactTarget()
+        {
+            var command = TerminalScripts.TmuxAttachCommand(
+                "/opt/homebrew/bin/tmux", "/tmp/tmux-501/claude-swarm-78137", "claude-swarm");
+
+            Assert.Contains("'-S' '/tmp/tmux-501/claude-swarm-78137'", command);
+            Assert.EndsWith("'attach' '-t' '=claude-swarm'", command);
+        }
+
+        // TMUX is cleared, and it earns that twice: the pane this runs in belongs
+        // to the user's own server, so it inherits a TMUX pointing at *that*
+        // server while the command attaches to a different one — every tmux
+        // command typed in the new pane afterwards would talk to the wrong
+        // server. It also makes the nested-session guard moot rather than
+        // depending on a reading of when tmux applies it.
+        [Fact]
+        public void TheAttachCommandClearsTmuxBeforeAttaching()
+        {
+            var command = TerminalScripts.TmuxAttachCommand("/usr/bin/tmux", null, "s");
+
+            Assert.StartsWith("unset TMUX; exec ", command);
+        }
+
+        // The script is the same command with a shebang and an optional cd, so
+        // the two can never disagree about the target or the quoting.
+        [Fact]
+        public void TheScriptIsTheCommandWithAShebang()
+        {
+            var command = TerminalScripts.TmuxAttachCommand("/usr/bin/tmux", "/tmp/s", "claude-swarm");
+            var script = TerminalScripts.TmuxAttachScript("/usr/bin/tmux", "/tmp/s", "claude-swarm", null);
+
+            Assert.Equal("#!/bin/sh\n" + command + "\n", script);
         }
 
         // --- LeafOf: naming a Windows Terminal tab after its directory ---

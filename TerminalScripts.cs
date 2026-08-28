@@ -362,18 +362,47 @@ namespace ClaudeBuddy
             // and a deferred Select/Prepend puts a compiler-generated state
             // machine on the line, which reads in a coverage report as a branch
             // nothing took while the line itself is plainly executed.
+            var script = "#!/bin/sh\n";
+            if (!string.IsNullOrEmpty(cwd)) script += "cd " + ShellQuote(cwd) + " || exit 1\n";
+
+            return script + TmuxAttachCommand(tmuxBinary, socket, session) + "\n";
+        }
+
+        // The same attach as one shell command, for the arrival that is a *pane*
+        // rather than a window.
+        //
+        // Warren's own words at the round-thirteen fork, choosing between the two:
+        // "Splits in beside you showing what THAT agent is doing." So the socket
+        // arm arrives the way the background arm already does — the content comes
+        // to him — and a separate terminal window is the fallback for when there
+        // is no tmux to split.
+        //
+        // `unset TMUX` first, and it earns its place twice over. The pane this
+        // runs in belongs to the user's own tmux server, so it inherits a TMUX
+        // pointing at *that* server while the command attaches to a different
+        // one; leaving it set means every tmux command typed in the new pane
+        // afterwards talks to the wrong server. It also sidesteps the
+        // nested-session guard entirely rather than depending on a reading of
+        // when tmux applies it — a distinction this branch has been caught by
+        // before, and one that costs nothing to be immune to.
+        //
+        // No `exec` wrapper here: both callers supply their own context, and the
+        // script's `exec` is what makes the terminal window's shell *become* tmux
+        // rather than wait behind it.
+        internal static string TmuxAttachCommand(string tmuxBinary, string? socket, string session)
+        {
+            // Built with a loop rather than a LINQ chain, which is not a style
+            // preference: everything else in this file is plain string building,
+            // and a deferred Select/Prepend puts a compiler-generated state
+            // machine on the line, which reads in a coverage report as a branch
+            // nothing took while the line itself is plainly executed.
             var parts = new List<string> { ShellQuote(tmuxBinary) };
             foreach (var arg in TmuxArgs(socket, "attach", "-t", "=" + session))
             {
                 parts.Add(ShellQuote(arg));
             }
 
-            var attach = string.Join(" ", parts);
-
-            var script = "#!/bin/sh\n";
-            if (!string.IsNullOrEmpty(cwd)) script += "cd " + ShellQuote(cwd) + " || exit 1\n";
-
-            return script + "exec " + attach + "\n";
+            return "unset TMUX; exec " + string.Join(" ", parts);
         }
 
         // The last path segment, used to name a Windows Terminal tab after the

@@ -801,12 +801,12 @@ namespace ClaudeBuddy
         //
         // Excluded from coverage: writes a script and opens a terminal on it.
         [ExcludeFromCodeCoverage]
-        public static bool AttachTmuxSocket(
+        public static string? AttachTmuxSocket(
             string tmuxBinary, string? socket, string pane, string cwd)
         {
-            if (!OperatingSystem.IsMacOS()) return false;
-            if (string.IsNullOrEmpty(tmuxBinary)) return false;
-            if (string.IsNullOrEmpty(pane)) return false;
+            if (!OperatingSystem.IsMacOS()) return null;
+            if (string.IsNullOrEmpty(tmuxBinary)) return null;
+            if (string.IsNullOrEmpty(pane)) return null;
 
             // Which session that pane is in, because a server can hold more than
             // one and an untargeted attach picks the busiest — see
@@ -823,11 +823,27 @@ namespace ClaudeBuddy
             if (!TryRun(tmuxBinary, out var found, TerminalScripts.TmuxArgs(
                     socket, "display-message", "-p", "-t", pane, "#{session_name}")))
             {
-                return false;
+                return null;
             }
 
-            if (FirstLine(found) is not { Length: > 0 } session) return false;
+            if (FirstLine(found) is not { Length: > 0 } session) return null;
 
+            // Beside the user first, which is the arrival every other answer on
+            // this ladder already gives. Warren chose it explicitly at the
+            // round-thirteen fork — "Splits in beside you showing what THAT agent
+            // is doing" — and it is the same rule round 6a settled for the
+            // background arm: the content comes to the user, nothing yanks. The
+            // command is targeted exactly as round 14 made it, so the pane lands
+            // in the clicked session and not in whichever the server used last.
+            //
+            // Returns the pane so the caller focuses it through the ordinary tail,
+            // the same contract AttachSession has and for the same reason.
+            var command = TerminalScripts.TmuxAttachCommand(tmuxBinary, socket, session);
+
+            if (PlaceInTmux(command, cwd) is { Length: > 0 } beside) return beside;
+
+            // No tmux of the user's own to split into. A terminal window of its
+            // own is what is left, and it keeps the shape it already had.
             try
             {
                 System.IO.Directory.CreateDirectory(ClaudeBuddySettings.Directory);
@@ -847,13 +863,17 @@ namespace ClaudeBuddy
                 psi.ArgumentList.Add(TerminalApp());
                 psi.ArgumentList.Add(script);
                 Process.Start(psi);
-                return true;
+
+                // Null rather than a pane: this went into a window of its own, so
+                // there is nothing for the caller to select. Same contract as
+                // AttachSession's own terminal fallback.
+                return null;
             }
             catch
             {
                 // Same contract as everything else on this path: failing to open
                 // a window is a click that did nothing, never a crash.
-                return false;
+                return null;
             }
         }
 
