@@ -230,6 +230,69 @@ public class BackgroundJobsTests
 
     // --- two cases carried over from CB-3's coverage work ---
     //
+    // A job claude.ai remote control has connected to. The daemon re-points
+    // the row at the relay's session — the same shape as a resume — but unlike
+    // a resume the original conversation is still live, still writing its
+    // status file, and still the thing the user is talking to; the relay is a
+    // viewport this app itself opened, and the scan hides its file as plumbing
+    // (IsOwnRelayCwd). Without the short-id fallback for this one row shape,
+    // connecting remote control made the conversation's orb vanish mid-turn:
+    // the job's only row named a session the scan suppresses, and the real
+    // session read as not-a-job. Fixture trimmed from the real listing on the
+    // machine that exhibited it — job aff9cfe4 re-pointed at relay a16ff9fb.
+    private const string RemoteControlledListing = """
+    [
+      {
+        "pid": 62300,
+        "id": "aff9cfe4",
+        "cwd": "/Users/w/Library/Caches/ClaudeBuddy/rc-cwd/claude-buddy-rc--claude-warrens-mbp",
+        "kind": "background",
+        "sessionId": "a16ff9fb-2916-4861-ac20-bdc383935ccd",
+        "name": "Claude desktop app multiple profiles bug",
+        "status": "idle",
+        "state": "working"
+      }
+    ]
+    """;
+
+    [Fact]
+    public void RemoteControlledJobStaysLiveUnderItsOriginalSession()
+    {
+        var states = BackgroundJobs.Parse(RemoteControlledListing);
+
+        Assert.True(BackgroundJobs.IsLive(states, "aff9cfe4-6b77-486d-ae43-35fe1fefbc61"));
+        Assert.Equal(JobPhase.Working,
+            BackgroundJobs.Phase(states, "aff9cfe4-6b77-486d-ae43-35fe1fefbc61"));
+    }
+
+    // The relay's own session is in the map too, deliberately — the scan drops
+    // its file by cwd before liveness is ever asked, and a second copy of that
+    // rule here would be one more thing to keep in step.
+    [Fact]
+    public void TheRelaySessionItselfAlsoReadsAsLive()
+    {
+        Assert.True(BackgroundJobs.IsLive(
+            BackgroundJobs.Parse(RemoteControlledListing),
+            "a16ff9fb-2916-4861-ac20-bdc383935ccd"));
+    }
+
+    // The guard the resumed-job fix warned about, re-checked against the new
+    // arm: a row whose cwd is NOT this app's relay scratch still stores nothing
+    // under its short id, so the earlier session of an ordinarily resumed job
+    // stays not-live. EarlierSessionOfAResumedJobIsNotLive pins the same thing
+    // against the shared fixture; this one pins it against a working row alone.
+    [Fact]
+    public void AnOrdinaryResumedRowStillDisownsItsEarlierSession()
+    {
+        const string listing = """
+        [{"id":"5f6960b2","cwd":"/Users/w/Source/Claude-Buddy",
+          "sessionId":"53bd5d2c-0000-0000-0000-000000000000","state":"working"}]
+        """;
+
+        Assert.False(BackgroundJobs.IsLive(
+            BackgroundJobs.Parse(listing), "5f6960b2-b8a3-4d46-b507-d6f520c47a81"));
+    }
+
     // The rest of this file arrived with the resumed-job fix and tests that
     // behaviour, which is the important half. These two are about tolerance
     // rather than correctness, and both were written before that fix landed —

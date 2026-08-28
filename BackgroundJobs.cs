@@ -304,6 +304,32 @@ namespace ClaudeBuddy
                 var state = Text(entry, "state") ?? "";
 
                 map[Text(entry, "sessionId") is { Length: > 0 } sessionId ? sessionId : jobId] = state;
+
+                // A row whose current session is this app's own remote-control
+                // relay counts for its short id as well. The rule above — never
+                // store the short id beside a named session — exists because a
+                // resumed job's earlier sessions are conversations the work has
+                // moved on from, and matching them would resurrect their orbs.
+                // A relay is not that: it is a viewport this app itself opened
+                // over the job (claude.ai remote control resumes the job into
+                // the relay's session, so the row re-points at it), the scan
+                // suppresses the relay's own file as plumbing (IsOwnRelayCwd,
+                // same test), and the original conversation is still live and
+                // still writing its status file. Without this, connecting
+                // remote control to a background job made its orb vanish: the
+                // job's one row named a session the scan hides, and the session
+                // the user was actually talking to missed the lookup and read
+                // as not-a-job. Observed live — job aff9cfe4 re-pointed at
+                // relay session a16ff9fb, and the chat being steered through
+                // that relay lost its orb mid-conversation.
+                //
+                // The row's cwd is the relay's by construction (RelayCwd runs
+                // every relay from a directory named after itself), so the test
+                // is the same pure string check the scan already keys on.
+                if (RemoteControlBridge.IsOwnRelayCwd(Text(entry, "cwd")))
+                {
+                    map.TryAdd(jobId, state);
+                }
             }
 
             return map;
