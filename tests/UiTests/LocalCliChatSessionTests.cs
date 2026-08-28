@@ -58,6 +58,48 @@ public class LocalCliChatSessionTests : IDisposable
             Title = "",
         });
 
+    // --- the attach affordance ----------------------------------------------
+
+    // Whether the panel offers to put this session in a terminal. The rule is
+    // ClickRouting's and is covered per case there; what this pins is that the
+    // session asks it, with its *own* status — which is the wiring that would
+    // fail silently, since a session that always answered false would simply
+    // show no button and look like a session that could be typed into.
+    [AvaloniaFact]
+    public void ABackgroundSessionOffersAnAttachAndSaysWhatItWants()
+    {
+        var session = new LocalCliChatSession("s1", new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            Shape = LocalSessionShape.Background,
+            Presence = OrbPresence.NeedsInput,
+            SessionPid = Environment.ProcessId,
+            State = "idle",
+        });
+
+        Assert.True(session.CanOpenElsewhere);
+        Assert.Equal("Needs input — attach to reply", session.ComposerHint);
+    }
+
+    // An ordinary session in a tmux pane: nothing to attach, and the box says
+    // what it has always said. A button on every panel would be a mark that
+    // distinguishes nothing, which is the argument the orb's badges are held to.
+    [AvaloniaFact]
+    public void AnOrdinarySessionOffersNothingElsewhere()
+    {
+        var session = new LocalCliChatSession("s1", new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            Shape = LocalSessionShape.Terminal,
+            SessionPid = Environment.ProcessId,
+            TmuxPane = "%7",
+            TmuxSocket = "/tmp/tmux-501/default",
+            State = "idle",
+        });
+
+        Assert.False(session.CanOpenElsewhere);
+    }
+
     // The read runs on a worker and posts its result back, so the loop has to be
     // pumped until it lands. Bounded rather than a bare spin: a test that hangs
     // tells you far less than one that fails.

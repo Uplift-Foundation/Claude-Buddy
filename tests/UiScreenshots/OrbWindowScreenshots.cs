@@ -116,6 +116,98 @@ public class OrbWindowScreenshots
         ScreenshotHelper.Capture(orb, "orb-window-heartbeat-team-member.png");
     }
 
+    // The two CB-13 scenarios, and the pair is the point: these are the only
+    // captures in this suite where the *difference between them* is the whole
+    // review. A parked job and a working one differ in one channel — opacity —
+    // and nothing else, so a reviewer comparing the two images is looking at
+    // exactly what the ticket claims to have changed. One image alone would show
+    // a dim orb with no evidence that anything else stayed put.
+    // The whole presence vocabulary, one capture per look, so the PR comment shows
+    // them side by side. That is the point of these four rather than one: each is
+    // the others with a single channel changed, and what a reviewer has to judge
+    // is whether the differences read at a glance across a screen.
+    private static SessionStatus BackgroundStatus(OrbPresence presence, string state = "idle")
+    {
+        var status = PlainStatus();
+        status.State = state;
+        status.Kind = SessionKind.Background;
+        status.Shape = LocalSessionShape.Background;
+        status.Presence = presence;
+        return status;
+    }
+
+    [AvaloniaFact]
+    public void AWorkingBackgroundJobWearsTheGearAtFullOpacity()
+    {
+        // The reference the other three are read against: the badge says what the
+        // session is, and full opacity says something is happening in it.
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(BackgroundStatus(OrbPresence.Present, state: "generating"));
+
+        ScreenshotHelper.Capture(orb, "orb-window-background-job-working.png");
+    }
+
+    [AvaloniaFact]
+    public void AJobNeedingInputIsDimmedAndMarked()
+    {
+        // Dim because it is not competing with live work; marked because the
+        // daemon calls this "needs input" and several of them are holding a
+        // question, which is the opposite of what dimming alone says.
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(BackgroundStatus(OrbPresence.NeedsInput));
+
+        ScreenshotHelper.Capture(orb, "orb-window-background-job-needs-input.png");
+    }
+
+    [AvaloniaFact]
+    public void AFinishedJobIsDimmedAndMarkedDifferently()
+    {
+        // The same dimming with the opposite instruction on it. It stays only as
+        // long as its status file does, so this is a look with a ten-minute life.
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(BackgroundStatus(OrbPresence.Finished));
+
+        ScreenshotHelper.Capture(orb, "orb-window-background-job-finished.png");
+    }
+
+    [AvaloniaFact]
+    public void AParkedJobAcknowledgingAClickWearsAHalo()
+    {
+        // The click that deliberately does nothing, saying so. Round eight exists
+        // because round seven worked and nobody could tell: doing nothing is the
+        // right answer to a click on a session already on screen, and it is
+        // indistinguishable from the broken clicks this whole ticket is about
+        // unless the orb answers.
+        //
+        // Captured mid-flight rather than at rest, because at rest there is
+        // nothing to see — the halo is 280ms of growing and fading. Two ticks in,
+        // the glow is wider than the orb and part-faded, which is the whole point:
+        // it reads as a ripple leaving the orb rather than as the orb changing
+        // state. Scale is deliberately untouched, since that channel is the breath
+        // and this says nothing about what the session is doing.
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(BackgroundStatus(OrbPresence.NeedsInput));
+
+        orb.Acknowledge();
+        orb.TickAcknowledgement();
+        orb.TickAcknowledgement();
+
+        ScreenshotHelper.Capture(orb, "orb-window-acknowledging-a-click.png");
+    }
+
+    [AvaloniaFact]
+    public void AParkedJobSomebodyIsAttachedToLooksOrdinary()
+    {
+        // A parked job with a `claude attach` client sitting in it. The daemon
+        // still says "blocked" and the status file still says nothing, so this
+        // *is* the parked look with one input changed — which is exactly what the
+        // user hit: they attached to all three and the orbs stayed grey.
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(BackgroundStatus(OrbPresence.Present));
+
+        ScreenshotHelper.Capture(orb, "orb-window-background-job-attached.png");
+    }
+
     [AvaloniaFact]
     public void KnownColorNameSetsTheOrbsAccentColor()
     {

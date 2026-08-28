@@ -315,8 +315,11 @@ namespace ClaudeBuddy
             // prefix — could never have found anything. RemoteControlBridge.RelayCwd
             // has the measurement and the fix, which is to run the relay from a
             // directory named after itself.
-            public bool IsOwnRelay =>
-                Name.StartsWith("claude-buddy-rc-", StringComparison.OrdinalIgnoreCase);
+            // One prefix test, in RemoteControlBridge beside the constant that
+            // builds the name. It used to be a second copy of the literal here,
+            // and the two decide whether a relay becomes an orb — the local scan
+            // now asks the same question of a status file's cwd.
+            public bool IsOwnRelay => RemoteControlBridge.IsOwnRelayName(Name);
 
             // A session that has gone away. Worth an orb only if it is actually
             // there — "offline" is the state a peer's registration sits in after
