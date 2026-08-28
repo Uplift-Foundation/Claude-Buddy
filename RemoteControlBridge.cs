@@ -454,6 +454,27 @@ namespace ClaudeBuddy
                         var file = Directory.EnumerateFiles(dir, "*.txt").FirstOrDefault();
                         if (file is not null && Adopt(file)) return true;
                     }
+
+                    // claude 2.1.251 stopped handing the private TMPDIR through
+                    // to its hooks: the session comes up, the hook fires, and
+                    // the status file lands in the machine's *real* temp
+                    // directory while the private one stays empty — measured on
+                    // a real machine with both directories watched side by side
+                    // (CB-25), the pane showing "/remote-control is active" as
+                    // the timeout tore the healthy session down. So the shared
+                    // directory is watched as well, and the relay's own file is
+                    // recognised there by IsOwnStatus. The private directory
+                    // stays first: under older claudes it is still where the
+                    // file arrives, and a file there needs no identity check.
+                    var shared = Path.Combine(Path.GetTempPath(), "claude_buddy");
+                    if (Directory.Exists(shared))
+                    {
+                        foreach (var candidate in Directory.EnumerateFiles(shared, "*.txt"))
+                        {
+                            if (IsOwnStatus(TryReadStatus(candidate)) && Adopt(candidate))
+                                return true;
+                        }
+                    }
                 }
                 catch
                 {
@@ -477,6 +498,36 @@ namespace ClaudeBuddy
             return false;
         }
 
+        // Read a status file that may be mid-write, or answer null. Split from
+        // Adopt so the shared-directory scan above can ask whose a file is
+        // without committing to it.
+        internal static SessionStatus? TryReadStatus(string statusFile)
+        {
+            try
+            {
+                using var stream = File.Open(
+                    statusFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                return JsonSerializer.Deserialize<SessionStatus>(stream);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // Whether a status file found in the *shared* directory is this relay's
+        // own. The leaf of the recorded cwd is the relay's name — RelayCwd
+        // exists precisely so that name is readable from outside the process —
+        // and it is the same identity the orb scan's own-relay drop keys on, so
+        // the two always agree about which session is plumbing. The transcript
+        // check mirrors Adopt's: a file without one is a session not worth
+        // adopting yet, whoever it belongs to.
+        internal bool IsOwnStatus(SessionStatus? status) =>
+            status is not null
+            && !string.IsNullOrWhiteSpace(status.TranscriptPath)
+            && string.Equals(
+                TerminalScripts.LeafOf(status.Cwd), _tmuxSessionName, StringComparison.Ordinal);
+
         // internal: reads a status file the hook wrote and nothing else. The
         // fields it picks out are what every later tmux call is aimed at, so a
         // wrong one sends keystrokes to the wrong pane.
@@ -484,8 +535,7 @@ namespace ClaudeBuddy
         {
             try
             {
-                using var stream = File.Open(statusFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                var status = JsonSerializer.Deserialize<SessionStatus>(stream);
+                var status = TryReadStatus(statusFile);
                 if (status is null || string.IsNullOrWhiteSpace(status.TranscriptPath)) return false;
 
                 lock (_gate)
