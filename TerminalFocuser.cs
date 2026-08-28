@@ -218,7 +218,8 @@ namespace ClaudeBuddy
                     // finding no client — so a plain attach lands on the right
                     // pane rather than on whatever the session last had current.
                     AgentTeamViewer.AttachTmuxSocket(
-                        ResolveTmuxBinary(status.TmuxBin) ?? "", status.TmuxSocket, status.Cwd);
+                        ResolveTmuxBinary(status.TmuxBin) ?? "", status.TmuxSocket,
+                        status.TmuxPane, status.Cwd);
                     break;
 
                 case ClickFallback.None:

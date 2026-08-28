@@ -778,10 +778,32 @@ namespace ClaudeBuddy
         //
         // Excluded from coverage: writes a script and opens a terminal on it.
         [ExcludeFromCodeCoverage]
-        public static bool AttachTmuxSocket(string tmuxBinary, string? socket, string cwd)
+        public static bool AttachTmuxSocket(
+            string tmuxBinary, string? socket, string pane, string cwd)
         {
             if (!OperatingSystem.IsMacOS()) return false;
             if (string.IsNullOrEmpty(tmuxBinary)) return false;
+            if (string.IsNullOrEmpty(pane)) return false;
+
+            // Which session that pane is in, because a server can hold more than
+            // one and an untargeted attach picks the busiest — see
+            // TerminalScripts.TmuxAttachScript for what that cost. Asked here
+            // rather than threaded down from FocusTmux, which already knows the
+            // answer, because this method is one tmux query away from opening a
+            // terminal and the alternative is a parameter carried through two
+            // layers that exist for other reasons.
+            //
+            // Refused rather than guessed when it cannot be answered. An attach
+            // with no target is not a lesser version of this; it is an attach to
+            // whatever happened to be busy, which on the server this matters for
+            // is the app's own relay.
+            if (!TryRun(tmuxBinary, out var found, TerminalScripts.TmuxArgs(
+                    socket, "display-message", "-p", "-t", pane, "#{session_name}")))
+            {
+                return false;
+            }
+
+            if (FirstLine(found) is not { Length: > 0 } session) return false;
 
             try
             {
@@ -792,7 +814,8 @@ namespace ClaudeBuddy
                 // deciding what the first window runs.
                 var script = Path.Combine(ClaudeBuddySettings.Directory, "attach-tmux-socket.sh");
 
-                File.WriteAllText(script, TerminalScripts.TmuxAttachScript(tmuxBinary, socket, cwd));
+                File.WriteAllText(script,
+                    TerminalScripts.TmuxAttachScript(tmuxBinary, socket, session, cwd));
                 File.SetUnixFileMode(script,
                     UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 

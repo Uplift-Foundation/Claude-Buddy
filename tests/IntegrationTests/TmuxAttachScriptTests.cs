@@ -68,7 +68,7 @@ public class TmuxAttachScriptTests
     {
         AssertParses(TerminalScripts.TmuxAttachScript(
             "/opt/homebrew/bin/tmux", "/tmp/tmux-501/claude-swarm-88341",
-            "/Users/warren/Source/Claude-Buddy"));
+            "claude-swarm", "/Users/warren/Source/Claude-Buddy"));
     }
 
     // The case the quoting rule exists for, and the one a structural assertion
@@ -79,7 +79,8 @@ public class TmuxAttachScriptTests
     public void ADirectoryWithAnApostropheParses()
     {
         AssertParses(TerminalScripts.TmuxAttachScript(
-            "/usr/bin/tmux", "/tmp/tmux-501/default", "/Users/warren/warren's stuff"));
+            "/usr/bin/tmux", "/tmp/tmux-501/default", "claude-swarm",
+            "/Users/warren/warren's stuff"));
     }
 
     // Spaces, double quotes, a dollar sign and a backtick — every character that
@@ -90,7 +91,7 @@ public class TmuxAttachScriptTests
     public void ADirectoryFullOfShellMetacharactersParses()
     {
         AssertParses(TerminalScripts.TmuxAttachScript(
-            "/usr/bin/tmux", "/tmp/tmux-501/default",
+            "/usr/bin/tmux", "/tmp/tmux-501/default", "claude-swarm",
             "/Users/warren/a \"quoted\" $HOME `whoami` dir"));
     }
 
@@ -100,7 +101,7 @@ public class TmuxAttachScriptTests
     public void AnAwkwardSocketPathParses()
     {
         AssertParses(TerminalScripts.TmuxAttachScript(
-            "/usr/bin/tmux", "/tmp/warren's sockets/claude-swarm-1", "/tmp"));
+            "/usr/bin/tmux", "/tmp/warren's sockets/claude-swarm-1", "claude-swarm", "/tmp"));
     }
 
     // No cwd, so no `cd` line at all: the guard against `cd ''` failing and
@@ -108,7 +109,7 @@ public class TmuxAttachScriptTests
     [UnixFact]
     public void TheScriptWithNoCdParses()
     {
-        AssertParses(TerminalScripts.TmuxAttachScript("/usr/bin/tmux", null, null));
+        AssertParses(TerminalScripts.TmuxAttachScript("/usr/bin/tmux", null, "claude-swarm", null));
     }
 
     // --- the split-window command -------------------------------------------
@@ -158,5 +159,16 @@ public class TmuxAttachScriptTests
         AssertCommandParses(TerminalScripts.TmuxNewWindowArgs(
             null, "warren", "/Users/warren/project",
             "'/Users/warren/.local/bin/claude' attach '0e043819'"));
+    }
+
+    // A session name with an apostrophe, which is the hazard the target inherits
+    // from the cwd: the relay's name is generated from an account directory, so
+    // nothing guarantees it is tame. An unterminated quote here would break the
+    // attach the whole script exists to run, and `sh -n` is what catches it.
+    [UnixFact]
+    public void ASessionNameWithAnApostropheParses()
+    {
+        AssertParses(TerminalScripts.TmuxAttachScript(
+            "/usr/bin/tmux", "/tmp/tmux-501/default", "warren's session", "/tmp"));
     }
 }

@@ -82,7 +82,7 @@ namespace ClaudeBuddy.Tests
         {
             var script = TerminalScripts.TmuxAttachScript(
                 "/opt/homebrew/bin/tmux", "/tmp/tmux-501/claude-swarm-88341",
-                "/Users/warren/Source/Claude-Buddy");
+                "claude-swarm", "/Users/warren/Source/Claude-Buddy");
 
             Assert.StartsWith("#!/bin/sh\n", script);
 
@@ -91,10 +91,14 @@ namespace ClaudeBuddy.Tests
             // server would show somebody else's session.
             Assert.Contains("'-S' '/tmp/tmux-501/claude-swarm-88341'", script);
 
-            // A plain attach, with no target: the caller has already run
-            // select-window and select-pane against the pane it wants, so this
-            // lands on the right teammate.
-            Assert.EndsWith("'attach'\n", script);
+            // And the session, targeted, with "=" for an exact match. This used
+            // to be a plain `attach`, on the reasoning that select-window and
+            // select-pane had already aimed the client — which is true about the
+            // window and says nothing about *which session*, and tmux picks the
+            // most recently used one. The swarm server holds two, because this
+            // app's own remote-control relay cohabits it, and the relay is always
+            // the busier: every click landed there and the tab closed on its own.
+            Assert.EndsWith("'attach' '-t' '=claude-swarm'\n", script);
 
             // exec, not a call: the window's shell becomes tmux rather than
             // waiting behind it.
@@ -114,10 +118,11 @@ namespace ClaudeBuddy.Tests
         [InlineData(null)]
         public void WithNoSocketTheAttachDoesNotPinAServer(string? socket)
         {
-            var script = TerminalScripts.TmuxAttachScript("/usr/bin/tmux", socket, "/tmp");
+            var script = TerminalScripts.TmuxAttachScript(
+                "/usr/bin/tmux", socket, "claude-swarm", "/tmp");
 
             Assert.DoesNotContain("-S", script);
-            Assert.EndsWith("exec '/usr/bin/tmux' 'attach'\n", script);
+            Assert.EndsWith("exec '/usr/bin/tmux' 'attach' '-t' '=claude-swarm'\n", script);
         }
 
         // `cd ''` fails, and `|| exit 1` would then take the attach with it —
@@ -128,10 +133,13 @@ namespace ClaudeBuddy.Tests
         [InlineData(null)]
         public void WithNoCwdTheScriptIsJustTheAttach(string? cwd)
         {
-            var script = TerminalScripts.TmuxAttachScript("/usr/bin/tmux", "/tmp/s", cwd);
+            var script = TerminalScripts.TmuxAttachScript(
+                "/usr/bin/tmux", "/tmp/s", "claude-swarm", cwd);
 
             Assert.DoesNotContain("cd ", script);
-            Assert.Equal("#!/bin/sh\nexec '/usr/bin/tmux' '-S' '/tmp/s' 'attach'\n", script);
+            Assert.Equal(
+                "#!/bin/sh\nexec '/usr/bin/tmux' '-S' '/tmp/s' 'attach' '-t' '=claude-swarm'\n",
+                script);
         }
 
         // A directory with an apostrophe in it, end to end — the case the
@@ -140,9 +148,46 @@ namespace ClaudeBuddy.Tests
         public void AnAwkwardDirectoryStillArrivesAsOneWord()
         {
             var script = TerminalScripts.TmuxAttachScript(
-                "/usr/bin/tmux", null, "/Users/warren/warren's stuff");
+                "/usr/bin/tmux", null, "claude-swarm", "/Users/warren/warren's stuff");
 
             Assert.Contains("cd '/Users/warren/warren'\\''s stuff' || exit 1", script);
+        }
+
+        // A session name carries the same hazards a path does — the relay's is
+        // generated from an account directory — so it goes through the same
+        // quoting rather than being trusted because it looks tame.
+        [Fact]
+        public void AnAwkwardSessionNameStillArrivesAsOneWord()
+        {
+            var script = TerminalScripts.TmuxAttachScript(
+                "/usr/bin/tmux", null, "warren's session", "/tmp");
+
+            Assert.Contains("'-t' '=warren'\\''s session'", script);
+        }
+
+        // The relay's own shape, which is the name that must never be attached to
+        // by accident and the one whose prefix hazard "=" exists for.
+        [Fact]
+        public void TheRelayShapedNameIsTargetedExactly()
+        {
+            var script = TerminalScripts.TmuxAttachScript(
+                "/usr/bin/tmux", "/tmp/tmux-501/claude-swarm-78137",
+                "claude-buddy-rc--claude-warrens-mbp", "/tmp");
+
+            Assert.Contains("'-t' '=claude-buddy-rc--claude-warrens-mbp'", script);
+        }
+
+        // The untargeted form cannot come back. The signature makes it
+        // unexpressible, and even an empty session still emits a `-t` — which
+        // fails loudly with "can't find session" rather than silently attaching to
+        // whatever the server happened to have used last.
+        [Fact]
+        public void AnEmptySessionStillEmitsATargetRatherThanNone()
+        {
+            var script = TerminalScripts.TmuxAttachScript("/usr/bin/tmux", null, "", "/tmp");
+
+            Assert.Contains("'-t'", script);
+            Assert.DoesNotContain("'attach'\n", script);
         }
 
         // --- LeafOf: naming a Windows Terminal tab after its directory ---
