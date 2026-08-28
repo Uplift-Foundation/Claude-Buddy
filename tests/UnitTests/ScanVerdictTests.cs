@@ -530,22 +530,63 @@ public class ScanVerdictTests
         var inATerminal = UnpromptedJob();
         inATerminal.TermProgram = "iTerm.app";
 
-        var withATty = UnpromptedJob();
-        withATty.Tty = "/dev/ttys004";
-
         var inTmux = UnpromptedJob();
         inTmux.TmuxPane = "%4";
 
         var onWindows = UnpromptedJob();
         onWindows.TermPid = 9182;
 
-        foreach (var reachable in new[] { inATerminal, withATty, inTmux, onWindows })
+        foreach (var reachable in new[] { inATerminal, inTmux, onWindows })
         {
             Assert.Equal(
                 SessionManager.ScanVerdict.Keep,
                 Reachability(reachable, phase: JobPhase.Parked,
                              transcriptExists: TranscriptIsGone));
         }
+    }
+
+    [Fact]
+    public void ATtyAloneIsNotATerminalForThisRule()
+    {
+        // A deliberate reversal: this case used to sit in the list above. The
+        // daemon runs every background worker under a pty host, so its sessions
+        // all record a real /dev/ttysNN that no window anywhere shows — and the
+        // old "and no tty" clause waved every one of them through. Seen live as
+        // session de995bd9: idle, untitled, tty ttys006, no transcript anywhere,
+        // not in the daemon's own listing, drawn as a blank orb whose chat
+        // could only ever open empty. A tty alone already doesn't count as a
+        // terminal for KnowsATerminal; now this rule agrees with it.
+        var withATty = UnpromptedJob();
+        withATty.Tty = "/dev/ttys006";
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.NothingToShow,
+            Reachability(withATty, phase: JobPhase.Parked,
+                         transcriptExists: TranscriptIsGone));
+
+        // NotAJob too — the live phantom was absent from the listing, which is
+        // precisely why no phase-shaped rule could have caught it.
+        Assert.Equal(
+            SessionManager.ScanVerdict.NothingToShow,
+            Reachability(withATty, phase: JobPhase.NotAJob,
+                         transcriptExists: TranscriptIsGone));
+    }
+
+    [Fact]
+    public void ATtyOnlySessionKeepsItsOrbOnceItsTranscriptExists()
+    {
+        // What protects a session in a terminal that sets no TERM_PROGRAM —
+        // ssh in from another machine, an emulator that doesn't announce
+        // itself — is its conversation, not its tty. Its transcript appears
+        // within the first exchange, so the cost of the reversal above is an
+        // orb arriving a scan or two late, not an orb that never arrives.
+        var withATty = UnpromptedJob();
+        withATty.Tty = "/dev/ttys004";
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(withATty, phase: JobPhase.NotAJob,
+                         transcriptExists: TranscriptIsThere));
     }
 
     [Fact]

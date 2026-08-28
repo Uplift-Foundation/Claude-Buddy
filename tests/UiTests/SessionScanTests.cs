@@ -982,6 +982,76 @@ public class SessionScanTests
         Assert.Contains("has-a-transcript", OrbIds(Scan(scratch)));
     }
 
+    // --- a transcript that is not where the status file says ---
+
+    // The respawned-worker shape, end to end. The daemon relaunches a finished
+    // job's worker from the job's original directory, so the hook records a
+    // transcript_path computed from that directory while the conversation lives
+    // in the projects directory keyed by where the session actually ran. On a
+    // real machine that was job b0633b77: a 3.6MB transcript, an orb wearing
+    // fallback letters, and a chat panel that opened blank forever.
+    //
+    // Every seam is handed over: the listing (this session has no terminal, so
+    // the scan asks the daemon about it), the attach scan (same trigger), and
+    // the hunt (the real one walks this machine's own projects directories).
+    [AvaloniaFact]
+    public void AMislocatedTranscriptIsReFoundBeforeAnythingReadsThePath()
+    {
+        using var scratch = new Scratch();
+
+        var real = scratch.WriteTranscript("done-job",
+            "{\"type\":\"custom-title\",\"customTitle\":\"blank-orbs\"}");
+
+        scratch.Write("done-job", tty: "/dev/ttys009", termProgram: "", title: "",
+                      transcriptPath: scratch.MissingTranscript("done-job"));
+
+        var manager = new SessionManager(
+            scratch.Dir,
+            () => new Dictionary<string, string> { ["done-job"] = "done" },
+            () => new HashSet<string>(),
+            id => id == "done-job" ? real : null);
+        manager.ScanAndUpdate();
+
+        // The finished job keeps its dimmed orb — the repair is what satisfies
+        // the nothing-to-show rule that would otherwise have dropped it...
+        Assert.Contains("done-job", OrbIds(manager));
+
+        var status = manager.StatusFor("done-job");
+        Assert.NotNull(status);
+
+        // ...the chat panel receives the corrected path through the same status
+        // object, so its tail lands on the real conversation...
+        Assert.Equal(real, status!.TranscriptPath);
+
+        // ...and the identity read used it too: the orb wears the name the
+        // session was given rather than letters derived from a directory.
+        Assert.Equal("blank-orbs", status.Title);
+    }
+
+    [AvaloniaFact]
+    public void AWorkerWithNoConversationAnywhereGetsNoOrbDespiteItsPty()
+    {
+        // The other phantom the same screenshot held: the daemon runs every
+        // background worker under a pty host, so a never-prompted one records a
+        // real /dev/ttysNN with no window behind it, no transcript anywhere,
+        // and no row in the daemon's listing. Session de995bd9 live: untitled,
+        // idle, tty ttys006, drawn as a blank orb whose chat said "No pane to
+        // type into". The tty must not count as a terminal here.
+        using var scratch = new Scratch();
+
+        scratch.Write("phantom", tty: "/dev/ttys006", termProgram: "", title: "",
+                      transcriptPath: scratch.MissingTranscript("phantom"));
+
+        var manager = new SessionManager(
+            scratch.Dir,
+            () => new Dictionary<string, string>(),
+            () => new HashSet<string>(),
+            _ => null);
+        manager.ScanAndUpdate();
+
+        Assert.DoesNotContain("phantom", OrbIds(manager));
+    }
+
     // --- untitled siblings do not share a slot (CB-10) ---
 
     [AvaloniaFact]
