@@ -114,6 +114,24 @@ namespace ClaudeBuddy
             && string.IsNullOrEmpty(status.TmuxPane)
             && status.TermPid == 0;
 
+        // Whether this session's *own* hook recorded the tmux pane it is running
+        // in — as opposed to a pane something else put there on its behalf.
+        //
+        // The two are already distinguishable and the distinction is deliberate:
+        // AgentTeamViewer.TryAdopt fills a terminal-less session's coordinates in
+        // from the `claude agents` viewer watching it, and leaves TmuxBin empty on
+        // purpose, "because it records where the *hook* found tmux, and this
+        // didn't come from a hook". So a pane with a tmux binary beside it is the
+        // session saying where it is; a pane without one is this app's guess about
+        // where somebody is watching it.
+        //
+        // That difference decides a click. A session that recorded its own pane
+        // has *told* us where its conversation is, and no rule that infers a
+        // location — a shape classification, a shared title — should outrank a
+        // statement.
+        internal static bool RecordedItsOwnPane(SessionStatus status) =>
+            !string.IsNullOrEmpty(status.TmuxPane) && !string.IsNullOrEmpty(status.TmuxBin);
+
         // Whether *somewhere* would reach this session — the question the chat
         // panel asks, where the click asks "what should this gesture do".
         //
@@ -228,6 +246,32 @@ namespace ClaudeBuddy
             // covers a session the first cannot: a hook older than the session_pid
             // field may not be a job at all, and nothing can enumerate it, so its
             // own name is the only handle on it.
+            // Its own pane, measured alive and with nobody attached to its server,
+            // outranks everything below — including the background answer, which
+            // used to come first and is the reason a teammate's click never
+            // reached the socket path built for it.
+            //
+            // A teammate is classified Background whenever the daemon's listing
+            // names it, because ShapeOf gives the job phase priority "first and
+            // unconditionally". So a teammate with a live pane of its own answered
+            // AttachBackground, which is the arm the title scan lives in — and a
+            // teammate inherits its lead's title by construction, so that scan
+            // matched the *lead's* viewer and the click landed in the lead's
+            // window. Measured beats classified: FocusTmux has just been to this
+            // session's own server and confirmed the pane is there with no screen
+            // on it, which is the strongest thing anything here knows.
+            //
+            // Gated on the pane being the session's own, which is what keeps
+            // round six's reason for the old order intact. That reason was real: a
+            // parked job adopted into a `claude agents` viewer pane would send a
+            // click to a dashboard if the viewer's server happened to be detached.
+            // An adopted pane carries no tmux binary — see RecordedItsOwnPane —
+            // so it does not qualify here and keeps its old place in the order.
+            if (paneAliveButDetached && RecordedItsOwnPane(status))
+            {
+                return ClickFallback.AttachSocket;
+            }
+
             if (claudeCode && named
                 && (status.Shape == LocalSessionShape.Background || status.SessionPid <= 0))
             {
