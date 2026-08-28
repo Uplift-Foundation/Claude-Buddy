@@ -51,6 +51,73 @@ namespace ClaudeBuddy
         internal static string ShellQuote(string value) =>
             "'" + value.Replace("'", "'\\''") + "'";
 
+        // One tmux client, as `list-clients` describes it.
+        internal readonly record struct TmuxClient(
+            string Tty, string Session, string Activity, bool ControlMode);
+
+        // Which client to bring the user to, and whether it has to be switched
+        // first.
+        internal readonly record struct ClientChoice(TmuxClient Client, bool NeedsSwitch);
+
+        // Choose the client — never "any client".
+        //
+        // With one client attached the distinction does not exist, which is why it
+        // survived this long. With two it decides everything: two clients are two
+        // terminal windows of the same application, and every step downstream is
+        // aimed by the chosen client's tty — the switch-client, the app bundle
+        // lookup, and the per-tty window-and-tab selection that brings the right
+        // *window* forward rather than merely the right app. Choose wrong and the
+        // user watches the wrong window come to the front, which is
+        // indistinguishable from the app ignoring them.
+        //
+        // Two arms, in this order:
+        //
+        // 1. A client already attached to the session holding the target pane.
+        //    That one, and **no switch-client at all** — it is already looking at
+        //    the right session, so switching it would be a no-op at best and
+        //    yanking a second client off its own session at worst.
+        // 2. Otherwise the most recently active client, switched to the target
+        //    session. Most-recent because a person with several terminals open is
+        //    working in the one they touched last, and moving *that* one is the
+        //    least surprising way to show them something.
+        //
+        // Ties within an arm break the same way, and `client_activity` is a unix
+        // timestamp, so an ordinal string comparison is right for equal-width
+        // integers and does not care about the format.
+        //
+        // Pure and named because it was inline in six hundred lines of subprocess
+        // calls, where the only way to ask which client it would pick was to have
+        // two of them attached and click an orb — which is how "any client" went
+        // unnoticed until a machine had two.
+        internal static ClientChoice? ChooseClient(
+            IReadOnlyList<TmuxClient> clients, string targetSession)
+        {
+            TmuxClient? onSession = null, other = null;
+
+            foreach (var client in clients)
+            {
+                if (string.IsNullOrEmpty(client.Tty)) continue;
+
+                if (string.Equals(client.Session, targetSession, StringComparison.Ordinal))
+                {
+                    if (onSession is null
+                        || string.CompareOrdinal(client.Activity, onSession.Value.Activity) > 0)
+                    {
+                        onSession = client;
+                    }
+                }
+                else if (other is null
+                         || string.CompareOrdinal(client.Activity, other.Value.Activity) > 0)
+                {
+                    other = client;
+                }
+            }
+
+            if (onSession is not null) return new ClientChoice(onSession.Value, NeedsSwitch: false);
+
+            return other is null ? null : new ClientChoice(other.Value, NeedsSwitch: true);
+        }
+
         // Where a fresh `claude attach` should be put.
         //
         // The whole of round 6a, and it came out of one sentence: "it's taking me

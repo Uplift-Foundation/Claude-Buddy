@@ -711,42 +711,38 @@ namespace ClaudeBuddy
                 return null;
             }
 
-            (string Tty, bool ControlMode)? onSession = null, anyClient = null;
-            string? onSessionBest = null, anyClientBest = null;
+            var clients = new List<TerminalScripts.TmuxClient>();
 
             foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
             {
                 var parts = line.Split('\t');
                 if (parts.Length < 2) continue;
 
-                var tty = parts[0].Trim();
-                if (tty.Length == 0) continue;
-
-                // client_activity is a unix timestamp; string-compare is fine
-                // for equal-width integers and avoids caring about the format.
-                var activity = parts.Length > 2 ? parts[2].Trim() : "";
-                var candidate = (tty, parts.Length > 3 && parts[3].Trim() == "1");
-
-                if (parts[1].Trim() == sessionName)
-                {
-                    if (onSession is null || activity.CompareTo(onSessionBest) > 0)
-                    {
-                        onSession = candidate;
-                        onSessionBest = activity;
-                    }
-                }
-                else if (anyClient is null || activity.CompareTo(anyClientBest) > 0)
-                {
-                    anyClient = candidate;
-                    anyClientBest = activity;
-                }
+                clients.Add(new TerminalScripts.TmuxClient(
+                    Tty: parts[0].Trim(),
+                    Session: parts[1].Trim(),
+                    Activity: parts.Length > 2 ? parts[2].Trim() : "",
+                    ControlMode: parts.Length > 3 && parts[3].Trim() == "1"));
             }
 
-            if (onSession is not null) return onSession;
-            if (anyClient is null) return null;
+            // Which one, decided where it can be read and tested — see
+            // TerminalScripts.ChooseClient. Everything below is aimed by the
+            // client this returns: the switch, the app lookup, and the per-tty
+            // window selection. With one client attached none of that mattered;
+            // with two, choosing wrong brings the wrong window of the same
+            // application to the front.
+            if (TerminalScripts.ChooseClient(clients, sessionName) is not { } choice) return null;
 
-            TryRun(tmux, out _, TmuxArgs(status, "switch-client", "-c", anyClient.Value.Tty, "-t", sessionName));
-            return anyClient;
+            // Only when it is not already there. A client on the target session
+            // needs no switch, and switching a *second* client onto it would drag
+            // that one off whatever its own user was looking at.
+            if (choice.NeedsSwitch)
+            {
+                TryRun(tmux, out _, TmuxArgs(status,
+                    "switch-client", "-c", choice.Client.Tty, "-t", sessionName));
+            }
+
+            return (choice.Client.Tty, choice.Client.ControlMode);
         }
 
         // Walks up from whatever is running on a tty until it hits a process

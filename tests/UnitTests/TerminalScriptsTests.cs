@@ -413,6 +413,114 @@ namespace ClaudeBuddy.Tests
             return count;
         }
 
+        // --- ChooseClient -----------------------------------------------------
+
+        // The two-client state that exposed this, as a fixture: iTerm with two
+        // tmux clients, one on the session holding the target pane and one on
+        // another session. With a single client attached the distinction does not
+        // exist, which is why "any client" survived until a machine had two — and
+        // two clients are two windows of the same application, so choosing wrong
+        // brings the wrong window to the front.
+        private static TerminalScripts.TmuxClient Client(
+            string tty, string session, string activity = "1000", bool control = false) =>
+            new(tty, session, activity, control);
+
+        // Already looking at the right session: that one, and no switch. Switching
+        // it would be a no-op at best; switching a *different* client onto the
+        // session would drag that one off whatever it was showing.
+        [Fact]
+        public void AClientAlreadyOnTheTargetSessionIsChosenAndNotSwitched()
+        {
+            var choice = TerminalScripts.ChooseClient(
+                new[]
+                {
+                    Client("/dev/ttys009", "1", activity: "2000"),
+                    Client("/dev/ttys002", "0", activity: "1000"),
+                },
+                targetSession: "0");
+
+            Assert.Equal("/dev/ttys002", choice!.Value.Client.Tty);
+            Assert.False(choice.Value.NeedsSwitch);
+        }
+
+        // ...even when the other client is the more recently active one, which is
+        // the case that matters: recency only decides between clients that are all
+        // equally wrong, and a client already on the session is right.
+        [Fact]
+        public void BeingOnTheSessionBeatsBeingMoreRecentlyActive()
+        {
+            var choice = TerminalScripts.ChooseClient(
+                new[]
+                {
+                    Client("/dev/ttys002", "0", activity: "1000"),
+                    Client("/dev/ttys009", "1", activity: "9999"),
+                },
+                targetSession: "0");
+
+            Assert.Equal("/dev/ttys002", choice!.Value.Client.Tty);
+            Assert.False(choice.Value.NeedsSwitch);
+        }
+
+        // Nobody on the session: the most recently active client, switched. A
+        // person with several terminals open is working in the one they touched
+        // last, so moving that one is the least surprising way to show them
+        // something.
+        [Fact]
+        public void WithNobodyOnTheSessionTheMostRecentClientIsSwitched()
+        {
+            var choice = TerminalScripts.ChooseClient(
+                new[]
+                {
+                    Client("/dev/ttys009", "1", activity: "1787874871"),
+                    Client("/dev/ttys002", "2", activity: "1787875071"),
+                },
+                targetSession: "0");
+
+            Assert.Equal("/dev/ttys002", choice!.Value.Client.Tty);
+            Assert.True(choice.Value.NeedsSwitch);
+        }
+
+        // Two on the session: the more recently active of those, still no switch.
+        [Fact]
+        public void AmongSeveralOnTheSessionTheMostRecentWins()
+        {
+            var choice = TerminalScripts.ChooseClient(
+                new[]
+                {
+                    Client("/dev/ttys002", "0", activity: "1000"),
+                    Client("/dev/ttys009", "0", activity: "2000"),
+                },
+                targetSession: "0");
+
+            Assert.Equal("/dev/ttys009", choice!.Value.Client.Tty);
+            Assert.False(choice.Value.NeedsSwitch);
+        }
+
+        // Nothing attached at all: no client to choose, and the caller must not
+        // invent one. Also a client row with no tty, which `list-clients` can
+        // produce and which nothing downstream could aim at.
+        [Fact]
+        public void WithNoUsableClientThereIsNoChoice()
+        {
+            Assert.Null(TerminalScripts.ChooseClient(
+                Array.Empty<TerminalScripts.TmuxClient>(), "0"));
+
+            Assert.Null(TerminalScripts.ChooseClient(new[] { Client("", "0") }, "0"));
+        }
+
+        // Control mode travels with the choice, because the caller has to know:
+        // an iTerm2 `-CC` client's tty belongs to a hidden control tab rather than
+        // to any window worth looking at, so the per-tty selection is skipped for
+        // it and the app is activated instead.
+        [Fact]
+        public void ControlModeTravelsWithTheChosenClient()
+        {
+            var choice = TerminalScripts.ChooseClient(
+                new[] { Client("/dev/ttys002", "0", control: true) }, "0");
+
+            Assert.True(choice!.Value.Client.ControlMode);
+        }
+
         // --- PlacementFor -----------------------------------------------------
 
         // Round 6a in three cases. "It's taking me to a different tmux window -
