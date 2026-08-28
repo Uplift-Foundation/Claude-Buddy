@@ -963,6 +963,26 @@ namespace ClaudeBuddy
                 // were not running.
                 if (!EnabledFor(status.Source)) continue;
 
+                // This app's own remote-control relay is plumbing, not a
+                // conversation, and it was drawing itself a grey orb with an empty
+                // chat behind it. A relay is a Claude Code session like any other
+                // — its hook fires and it writes a status file — so nothing before
+                // this branch distinguished it, and it hid inside the dead-orb
+                // noise the earlier rounds cleared out.
+                //
+                // Dropped here rather than later, for exactly the reason the CLI
+                // switch above is: everything downstream — the pid grouping, the
+                // team links, the tray, the sweep, and the right-click menu with
+                // End and Dismiss on it — then behaves as though the relay were
+                // not running, which is the truth as far as the user is concerned.
+                // Suppressing the orb further down would have left a session the
+                // menu could still be pointed at.
+                //
+                // The same prefix test the bridge and the mirror already key on —
+                // see RemoteControlBridge.IsOwnRelayCwd for why it is the prefix
+                // and not the live tag, and why the cwd rather than argv.
+                if (RemoteControlBridge.IsOwnRelayCwd(status.Cwd)) continue;
+
                 found.Add(new ScanEntry(Path.GetFileNameWithoutExtension(file), status, written));
             }
 
