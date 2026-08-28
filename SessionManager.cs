@@ -797,14 +797,35 @@ namespace ClaudeBuddy
         // watched through, and JudgeReachability below then dropped them for
         // having no terminal. One orb vanished on this machine before the cause
         // was obvious.
+        // The isLiveJob arm is gone, and the reason is a two-line trace from a
+        // real machine. Adoption grafts a viewer pane onto a session by cwd
+        // match, and with every live background job eligible, a parked job in
+        // the same directory as the user's own viewer adopted the pane the
+        // user was sitting in: FocusCore then "focused" it, returned true, and
+        // the click on that orb did visibly nothing — the dead background
+        // click this whole branch was opened for, wearing its last disguise.
+        //
+        //   Focus id=ed54b99d… shape=Background pane='%2' bin='' tty='ttys008'
+        //     FocusCore -> True, detached=False
+        //
+        // bin='' is TryAdopt's own signature: an adopted pane is the app's
+        // guess about where somebody is watching, not the session's recorded
+        // location, and a guess must not answer a click. The arm existed to
+        // rescue background orbs from the no-terminal rule before the phase
+        // exemptions did that properly (see RuledOutAsAJob below); its orb-
+        // rescue job is superseded and its click behaviour was the bug.
+        //
+        // What remains is the case adoption was built for: a lead whose
+        // agents are on screen gets the viewer's pane, so clicking the lead
+        // lands on the roster that shows its work. Plus the legacy pid-less
+        // arm, for hooks older than the session_pid field.
         internal static bool WantsAgentViewer(
             string sessionId, SessionStatus status,
-            ISet<string> leadsWithLiveAgents, Func<string, bool> isLiveJob) =>
+            ISet<string> leadsWithLiveAgents) =>
             status.Source == SessionSource.ClaudeCode
             && !KnowsATerminal(status)
             && (leadsWithLiveAgents.Contains(sessionId)
-                || status.SessionPid <= 0
-                || isLiveJob(sessionId));
+                || status.SessionPid <= 0);
 
         // Whether an orb for this session would go anywhere when it was
         // clicked. Asked after adoption above, which is what can give a
@@ -1303,7 +1324,7 @@ namespace ClaudeBuddy
                     continue;   // removed in the pass below
                 }
 
-                if (WantsAgentViewer(sessionId, status, leadsWithLiveAgents, isLiveJob))
+                if (WantsAgentViewer(sessionId, status, leadsWithLiveAgents))
                 {
                     AgentTeamViewer.TryAdopt(status);
                 }

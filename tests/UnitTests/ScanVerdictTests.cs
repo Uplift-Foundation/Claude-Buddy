@@ -24,8 +24,6 @@ public class ScanVerdictTests
 {
     private static readonly Func<int, bool> AllAlive = _ => true;
     private static readonly Func<int, bool> AllDead = _ => false;
-    private static readonly Func<string, bool> NoLiveJobs = _ => false;
-    private static readonly Func<string, bool> EveryIdIsALiveJob = _ => true;
 
     private static readonly HashSet<string> Nothing = new(StringComparer.Ordinal);
 
@@ -182,7 +180,7 @@ public class ScanVerdictTests
     public void AnOrdinarySessionWithATerminalIsNeverSentHuntingForAViewer()
     {
         Assert.False(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(), Nothing, EveryIdIsALiveJob));
+            "session-1", Healthy(), Nothing));
     }
 
     [Fact]
@@ -195,7 +193,7 @@ public class ScanVerdictTests
         var leads = new HashSet<string>(StringComparer.Ordinal) { "session-1" };
 
         Assert.True(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(termProgram: ""), leads, NoLiveJobs));
+            "session-1", Healthy(termProgram: ""), leads));
     }
 
     [Fact]
@@ -205,23 +203,33 @@ public class ScanVerdictTests
         // still gets its viewer looked for. isLiveJob is the failing one to
         // show the arm stands on its own.
         Assert.True(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(pid: 0, termProgram: ""), Nothing, NoLiveJobs));
+            "session-1", Healthy(pid: 0, termProgram: ""), Nothing));
     }
 
     [Fact]
-    public void ALiveBackgroundJobWithARecordedPidStillHunts()
+    public void ALiveBackgroundJobThatIsNotALeadDoesNotHunt()
     {
-        // This is the regression the source comment calls "not subtle": once
-        // the hook started recording a background agent's own pid, the old
-        // `pid <= 0` proxy stopped matching, adoption stopped running for every
-        // background agent, and JudgeReachability then dropped them all for
-        // having no terminal.
-        Assert.True(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(termProgram: ""), Nothing, EveryIdIsALiveJob));
-
-        // And the same session, once the daemon says it is not a job, does not.
+        // The reverse of what this test used to assert, and the reversal is
+        // the root cause of the dead background click. Adoption matches a
+        // viewer pane by cwd, so a parked job in the same directory as the
+        // user's own viewer adopted the very pane the user was sitting in —
+        // FocusCore then focused it, returned true, and the click on that
+        // job's orb visibly did nothing. Traced live:
+        //
+        //   Focus id=ed54b99d… shape=Background pane='%2' bin='' tty='ttys008'
+        //     FocusCore -> True, detached=False
+        //
+        // The rescue this arm performed — keeping background orbs past the
+        // no-terminal rule — is done properly by the phase exemptions now
+        // (RuledOutAsAJob), so a live job that is not a lead has nothing to
+        // gain from adoption and everything to lose.
         Assert.False(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(termProgram: ""), Nothing, NoLiveJobs));
+            "session-1", Healthy(termProgram: ""), Nothing));
+
+        // A lead with live agents still hunts — the case adoption exists for.
+        var leads = new HashSet<string>(StringComparer.Ordinal) { "session-1" };
+        Assert.True(SessionManager.WantsAgentViewer(
+            "session-1", Healthy(termProgram: ""), leads));
     }
 
     [Theory]
@@ -235,7 +243,7 @@ public class ScanVerdictTests
         // it the tmux pane of unrelated local work — a click that looks like it
         // worked and goes somewhere else entirely.
         Assert.False(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(source, pid: 0, termProgram: ""), Nothing, EveryIdIsALiveJob));
+            "session-1", Healthy(source, pid: 0, termProgram: ""), Nothing));
     }
 
     [Fact]
@@ -248,7 +256,7 @@ public class ScanVerdictTests
         Assert.False(SessionManager.KnowsATerminal(new SessionStatus { Tty = "/dev/ttys004" }));
 
         Assert.True(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(pid: 0, termProgram: ""), Nothing, NoLiveJobs));
+            "session-1", Healthy(pid: 0, termProgram: ""), Nothing));
     }
 
     [Theory]
