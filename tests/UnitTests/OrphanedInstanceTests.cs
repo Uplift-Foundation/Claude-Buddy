@@ -134,6 +134,73 @@ public class OrphanedInstanceTests
             Instance(9, null, bundle), Root, DefaultFolder));
     }
 
+    // ---- Windows-shaped paths ---------------------------------------------
+
+    // On a real Windows machine the rule never fires — BundlePath is null, per
+    // ClaudeInstance — but the integration suite feeds it the host-native
+    // layout ClaudeDesktopBundles actually writes, so the parse has to hold
+    // for a drive-rooted path too. Pinned here as well so each CI leg verifies
+    // the other platform's shapes: the rule is a function of nothing but its
+    // arguments, and these cases are what keep it that way.
+    private const string WinRoot = @"C:\Users\x\AppData\Local\ClaudeBuddy\bundles";
+
+    [Fact]
+    public void ADriveRootedCloneParsesTheSameAsAPosixOne()
+    {
+        Assert.Equal(
+            "Claude-Board",
+            ClaudeDesktopManager.OrphanedCloneFolder(
+                Instance(1, null, WinRoot + @"\Claude-Board\Claude.app"),
+                WinRoot, DefaultFolder));
+    }
+
+    [Fact]
+    public void MixedSeparatorsDoNotChangeTheAnswer()
+    {
+        // Windows APIs accept either separator and .NET emits whichever the
+        // caller concatenated, so a real path can arrive wearing both at once.
+        Assert.Equal(
+            "Claude-Board",
+            ClaudeDesktopManager.OrphanedCloneFolder(
+                Instance(1, null, WinRoot + "/Claude-Board/Claude.app"),
+                WinRoot, DefaultFolder));
+    }
+
+    [Fact]
+    public void ADifferentDriveIsADifferentRoot()
+    {
+        Assert.Null(ClaudeDesktopManager.OrphanedCloneFolder(
+            Instance(1, null, @"D:" + WinRoot[2..] + @"\Claude-Board\Claude.app"),
+            WinRoot, DefaultFolder));
+    }
+
+    // A drive letter names the same volume whatever its case; every other
+    // component keeps the ordinal comparison the POSIX cases already pin.
+    [Fact]
+    public void TheDriveLetterIsTheOnePartComparedWithoutCase()
+    {
+        Assert.Equal(
+            "Claude-Board",
+            ClaudeDesktopManager.OrphanedCloneFolder(
+                Instance(1, null, "c:" + WinRoot[2..] + @"\Claude-Board\Claude.app"),
+                WinRoot, DefaultFolder));
+    }
+
+    // The Windows counterparts of "no room above it": a drive-relative path
+    // ("C:Claude.app" is relative to C:'s current directory, a thing only cmd
+    // remembers), a ".." that climbs above the drive root, and a bare drive.
+    [Theory]
+    [InlineData(@"C:Claude.app")]
+    [InlineData(@"C:\..\Claude.app")]
+    [InlineData(@"C:")]
+    [InlineData(WinRoot + @"\.\Claude.app")]
+    [InlineData(WinRoot + @"\\Claude.app")]
+    public void AWindowsPathWithNoRoomAboveItIsNotAClone(string bundle)
+    {
+        Assert.Null(ClaudeDesktopManager.OrphanedCloneFolder(
+            Instance(9, null, bundle), WinRoot, DefaultFolder));
+    }
+
     // ---- MapOrphans ------------------------------------------------------
 
     [Fact]

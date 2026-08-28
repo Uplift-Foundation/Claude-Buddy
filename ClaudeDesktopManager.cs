@@ -664,21 +664,22 @@ namespace ClaudeBuddy
             // failed silently in Compose rather than visibly here. Found by the
             // test that went looking for the last uncovered branch.
             //
-            // Segments, not Path.GetFullPath: proc_pidpath only ever hands over
-            // a POSIX path, and GetFullPath answers for the platform the
-            // *process* is on — on Windows it reroots "/Users/…" onto the
-            // current drive and flips the separators, which failed every one of
-            // these decisions on the windows-latest CI leg while the mac leg
-            // stayed green. Walking '/' components keeps the rule pure *and*
-            // platform-independent, so the suite means the same thing on both
-            // legs. Symlinks stay unresolved for the same reason as before:
-            // resolving them would put a filesystem call in a rule that runs
-            // for every process on every scan, against a root that has not been
+            // Segments, not Path.GetFullPath: GetFullPath answers for the
+            // platform the *process* is on — on Windows it reroots "/Users/…"
+            // onto the current drive and flips the separators, which failed
+            // every one of these decisions on the windows-latest CI leg while
+            // the mac leg stayed green. Walking components by hand keeps the
+            // rule pure *and* a function of nothing but its arguments, so the
+            // same string gets the same answer on both legs — which is what
+            // lets the mac leg verify the Windows-shaped cases and vice versa.
+            // Symlinks stay unresolved for the same reason as before: resolving
+            // them would put a filesystem call in a rule that runs for every
+            // process on every scan, against a root that has not been
             // symlink-resolved either.
-            var segments = PosixSegments(bundle);
+            var segments = PathSegments(bundle);
             if (segments is null) return null;
 
-            var root = PosixSegments(bundleRoot);
+            var root = PathSegments(bundleRoot);
             if (root is null) return null;
 
             // A clone lives at exactly <root>/<folder>/<bundle>. Anything
@@ -694,23 +695,49 @@ namespace ClaudeBuddy
             return string.Equals(folder, defaultFolder, StringComparison.Ordinal) ? null : folder;
         }
 
-        // A POSIX path split into its real components: empty and "." segments
-        // dropped, ".." folded into its parent, null for a relative path or one
-        // that climbs above "/". No Path.* call anywhere, so the answer is the
-        // same on whichever platform the tests happen to run on.
-        private static List<string>? PosixSegments(string path)
+        // An absolute path split into its real components, with the root kept
+        // as the first one: "/" for a POSIX path, "C:" for a drive-rooted
+        // Windows path. Empty and "." segments are dropped, ".." folds into
+        // its parent, and null answers a relative path, a drive-relative one
+        // ("C:foo"), or one that climbs above its root. Both separators count
+        // as separators wherever the string runs: on a real machine the rule
+        // only ever sees proc_pidpath's POSIX strings — BundlePath is null on
+        // Windows — but the integration tests feed it the host-native paths
+        // ClaudeDesktopBundles actually writes, and that round trip is the
+        // half of the contract a layout change would break. No Path.* call
+        // anywhere, so the answer is the same on whichever platform the tests
+        // happen to run on; keeping the root as a segment is what makes the
+        // prefix comparison refuse a bundle on one root and a bundle root on
+        // another.
+        private static List<string>? PathSegments(string path)
         {
-            if (path.Length == 0 || path[0] != '/') return null;
+            string rest;
+            List<string> segments;
 
-            var segments = new List<string>();
+            if (path.Length > 0 && (path[0] == '/' || path[0] == '\\'))
+            {
+                segments = new List<string> { "/" };
+                rest = path;
+            }
+            else if (path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':')
+            {
+                if (path.Length > 2 && path[2] != '/' && path[2] != '\\') return null;
 
-            foreach (var segment in path.Split('/'))
+                segments = new List<string> { char.ToUpperInvariant(path[0]) + ":" };
+                rest = path[2..];
+            }
+            else
+            {
+                return null;
+            }
+
+            foreach (var segment in rest.Split('/', '\\'))
             {
                 if (segment.Length == 0 || segment == ".") continue;
 
                 if (segment == "..")
                 {
-                    if (segments.Count == 0) return null;
+                    if (segments.Count <= 1) return null;
                     segments.RemoveAt(segments.Count - 1);
                     continue;
                 }
