@@ -94,7 +94,7 @@ namespace ClaudeBuddy
             "claudeCodeEnabled", "codexEnabled",
             "clickAction", "doubleClickAction", "tripleClickAction",
             "remoteControlEnabled", "remoteControlProfileDir", "remoteControlProfileDirs",
-            "remoteControlIdleMinutes"
+            "remoteControlIdleMinutes", "remoteControlServeOnLaunch"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -385,6 +385,14 @@ namespace ClaudeBuddy
             // linger. Zero means never idle-stop, which is honest but expensive
             // and is not the default.
             public int RemoteControlIdleMinutes { get; set; } = DefaultRemoteControlIdle;
+
+            // Ask the relay up when the app starts, instead of waiting for a
+            // hand on this machine. Exists for one shape of machine: a headless
+            // one whose sessions other Buddies mirror — nobody is there to
+            // press "Connect to other machines". Off by default for the same
+            // reason the idle stop above exists: a relay is a live session
+            // spending the user's quota, so keeping one has to be chosen.
+            public bool RemoteControlServeOnLaunch { get; set; }
 
             // A command of the user's own to speak with, replacing every built-in
             // engine. Null means "use the built-in ones".
@@ -777,6 +785,12 @@ namespace ClaudeBuddy
             }
         }
 
+        public static bool RemoteControlServeOnLaunch
+        {
+            get { Load(); lock (Gate) return _model.RemoteControlServeOnLaunch; }
+            set { Load(); lock (Gate) _model.RemoteControlServeOnLaunch = value; Save(); }
+        }
+
         public static bool OpenClawReplyEnabled
         {
             get { Load(); lock (Gate) return _model.OpenClawReplyEnabled; }
@@ -1153,6 +1167,8 @@ namespace ClaudeBuddy
                         RemoteControlProfileDir = Text(root["remoteControlProfileDir"]),
                         RemoteControlIdleMinutes =
                             root["remoteControlIdleMinutes"]?.GetValue<int>() ?? DefaultRemoteControlIdle,
+                        RemoteControlServeOnLaunch =
+                            root["remoteControlServeOnLaunch"]?.GetValue<bool>() ?? false,
                         ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
@@ -1528,6 +1544,7 @@ namespace ClaudeBuddy
                         ["remoteControlProfileDir"] = _model.RemoteControlProfileDir,
                         ["remoteControlProfileDirs"] = remoteProfileDirs,
                         ["remoteControlIdleMinutes"] = _model.RemoteControlIdleMinutes,
+                        ["remoteControlServeOnLaunch"] = _model.RemoteControlServeOnLaunch,
                         ["claudeCodeChatEnabled"] = _model.ClaudeCodeChatEnabled,
                         ["claudeCodeReplyEnabled"] = _model.ClaudeCodeReplyEnabled,
                         ["codexChatEnabled"] = _model.CodexChatEnabled,
