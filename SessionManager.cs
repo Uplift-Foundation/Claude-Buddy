@@ -270,7 +270,8 @@ namespace ClaudeBuddy
         internal SessionManager(
             string statusDir,
             Func<Dictionary<string, string>?>? jobListing,
-            Func<HashSet<string>?>? attachClients = null)
+            Func<HashSet<string>?>? attachClients = null,
+            Func<string, string?>? transcriptHunt = null)
         {
             _statusDir = statusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
@@ -280,9 +281,18 @@ namespace ClaudeBuddy
             // zero-argument Func. The scan wants the cached form, which is the
             // default, so the lambda says so explicitly.
             _attachClients = attachClients ?? (() => AgentTeamViewer.AttachedJobIds());
+            // Wrapped for the same optional-parameter reason: FindTranscriptFor
+            // takes a home override the scan never passes.
+            _transcriptHunt = transcriptHunt ?? (id => TranscriptReader.FindTranscriptFor(id));
         }
 
         private readonly Func<Dictionary<string, string>?> _jobListing;
+
+        // How a transcript that is not where the status file says is re-found —
+        // TranscriptReader.FindTranscriptFor, behind a seam because the real one
+        // walks this machine's own projects directories. The memo deciding when
+        // it is worth calling again is TranscriptHunts.
+        private readonly Func<string, string?> _transcriptHunt;
 
         // Every `claude attach` client running on this machine, for the rule that
         // un-dims a parked session somebody is sitting in. A seam for the same
@@ -555,6 +565,39 @@ namespace ClaudeBuddy
             if (string.IsNullOrEmpty(status.Color) && !string.IsNullOrEmpty(identity.Color))
                 status.Color = identity.Color;
         }
+
+        // Whether a status file's transcript_path is a claim worth re-checking:
+        // it names a file, and the file is not there.
+        //
+        // That happens for real, and not only in the first moments of a session.
+        // The daemon respawns a finished job's worker from the job's *original*
+        // directory, and Claude Code computes the hook's transcript_path from
+        // the cwd it launched with — while the conversation itself lives in the
+        // projects directory keyed by wherever the session actually ran. Seen
+        // live: job b0633b77 ran in a worktree, its respawned worker's status
+        // file pointed at the parent checkout's projects dir, and the file
+        // there had never existed. Every consumer of the path — the identity
+        // read, the nothing-to-show rule, the chat panel — then agreed the
+        // conversation was gone, and a 3.6MB transcript rendered as a blank
+        // panel.
+        //
+        // Claude Code only: the hunt walks Claude Code's own config roots, so
+        // for a Codex session it is a directory walk that can only answer
+        // nothing. An *empty* path is not repaired here — that is the shape the
+        // chat panel already hunts for itself, and the rules that read the path
+        // treat empty as "unknown", which is already the right reading.
+        internal static bool WantsTranscriptRepair(SessionStatus status, Func<string, bool> exists) =>
+            status.Source == SessionSource.ClaudeCode
+            && !string.IsNullOrEmpty(status.TranscriptPath)
+            && !exists(status.TranscriptPath);
+
+        private readonly TranscriptHunts _transcriptHunts = new();
+
+        // File.Exists as a delegate, once. The repair asks it twice per file in
+        // the scan loop, and a method group converted at a call site compiles
+        // to a hidden per-site cache with a null-check branch in it — a branch
+        // no test can pin both arms of on purpose. One named field, no branch.
+        private static readonly Func<string, bool> FileExists = File.Exists;
 
         internal static SessionSource SourceOf(SessionStatus status) =>
             string.Equals(status.Cli, "codex", StringComparison.OrdinalIgnoreCase)
@@ -942,7 +985,17 @@ namespace ClaudeBuddy
             //
             // - A session with a terminal is never touched. It may have no
             //   transcript yet, but the click still lands, so the orb still
-            //   earns its place.
+            //   earns its place. A tty alone is not a terminal here, exactly as
+            //   KnowsATerminal already says it isn't: the daemon runs every
+            //   background worker under a pty host, so its sessions all record
+            //   a real /dev/ttysNN that no window anywhere is showing. This
+            //   rule shipped with an extra "and no tty" clause anyway, and the
+            //   pty host is what that clause turned into a hole — every worker
+            //   the daemon parks or pre-warms sailed through on its pty, and a
+            //   never-prompted one sat on screen as an untitled orb whose chat
+            //   could only ever open blank. Seen live as session de995bd9:
+            //   idle, no name, tty ttys006, no transcript anywhere, absent from
+            //   the daemon's own listing.
             // - A lead with live agents is exempt for the same reason it is
             //   exempt below: agents drawn on screen pointing at nothing is a
             //   worse lie than an orb whose chat is thin.
@@ -960,10 +1013,16 @@ namespace ClaudeBuddy
             // The cost is that a background job's orb appears a scan or two
             // late — the status file is written before the first transcript row
             // — and a job sitting unprompted stays hidden until it is prompted.
-            // Both are the intended reading of "nothing to show".
+            // Both are the intended reading of "nothing to show". A session in
+            // a terminal that sets no TERM_PROGRAM — ssh in from elsewhere, an
+            // emulator that doesn't announce itself — now pays the same scan or
+            // two of lateness, because its file is tty-only and this rule can
+            // no longer tell it from a daemon worker until its transcript
+            // appears. It appears within the first exchange, and the trade is a
+            // brand-new session's orb arriving late against a phantom's never
+            // leaving.
             if (status.IsLocalCli
                 && !KnowsATerminal(status)
-                && string.IsNullOrEmpty(status.Tty)
                 && !leadsWithLiveAgents.Contains(sessionId)
                 && !string.IsNullOrEmpty(status.TranscriptPath)
                 && !transcriptExists(status.TranscriptPath))
@@ -1099,7 +1158,25 @@ namespace ClaudeBuddy
 
                 if (status is null) continue;
 
+                var sessionId = Path.GetFileNameWithoutExtension(file);
+
                 status.Source = SourceOf(status);
+
+                // A transcript that is not where the hook said gets re-found by
+                // session id, before anything reads the path: the identity read
+                // below, the nothing-to-show rule, and the chat panel all
+                // receive this same status object, and all of them believing a
+                // wrong path is exactly the blank-orb bug — see
+                // WantsTranscriptRepair for the respawned-job shape that
+                // produces one. In memory only, deliberately: the file is the
+                // hook's record of what Claude Code said, and the next event
+                // will rewrite it anyway.
+                if (WantsTranscriptRepair(status, FileExists))
+                {
+                    var hunted = _transcriptHunts.Locate(
+                        sessionId, now, _transcriptHunt, FileExists);
+                    if (hunted is not null) status.TranscriptPath = hunted;
+                }
 
                 // A name the status file never caught, read from the transcript
                 // it already names. Costs nothing for a session that has one.
@@ -1135,7 +1212,7 @@ namespace ClaudeBuddy
                 // and not the live tag, and why the cwd rather than argv.
                 if (RemoteControlBridge.IsOwnRelayCwd(status.Cwd)) continue;
 
-                found.Add(new ScanEntry(Path.GetFileNameWithoutExtension(file), status, written));
+                found.Add(new ScanEntry(sessionId, status, written));
             }
 
             // The gateway's sessions join the same list the status files
