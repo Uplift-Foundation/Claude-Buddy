@@ -265,15 +265,27 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal static string[] TailLines(string path)
         {
-            try { return ReadTail(path); }
+            try { return ReadTail(path, TailBytes); }
             catch { return Array.Empty<string>(); }
         }
 
-        private static string[] ReadTail(string path)
+        // The same window, sized by the caller. TranscriptHandoff asks a
+        // different question of a different amount — its comment says why its
+        // window is smaller and why that is safe for *its* question — and what
+        // matters here is that both read through one implementation, so "drop
+        // the torn first line" cannot drift into two differently-wrong copies.
+        [ExcludeFromCodeCoverage]
+        internal static string[] TailLines(string path, int tailBytes)
+        {
+            try { return ReadTail(path, tailBytes); }
+            catch { return Array.Empty<string>(); }
+        }
+
+        private static string[] ReadTail(string path, int tailBytes)
         {
             {
                 using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                long start = Math.Max(0, fs.Length - TailBytes);
+                long start = Math.Max(0, fs.Length - tailBytes);
                 fs.Seek(start, SeekOrigin.Begin);
 
                 using var reader = new StreamReader(fs);
