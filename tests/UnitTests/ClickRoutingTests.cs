@@ -32,7 +32,12 @@ public class ClickRoutingTests
         string termProgram = "",
         string termId = "",
         string tmuxPane = "",
-        int termPid = 0) =>
+        int termPid = 0,
+        // Empty by default, which is what an *adopted* pane looks like: TryAdopt
+        // fills coordinates in from a `claude agents` viewer and deliberately
+        // leaves the binary out, because it records where the hook found tmux and
+        // an adopted pane did not come from a hook.
+        string tmuxBin = "") =>
         new()
         {
             Source = source,
@@ -43,6 +48,7 @@ public class ClickRoutingTests
             TermId = termId,
             TmuxPane = tmuxPane,
             TermPid = termPid,
+            TmuxBin = tmuxBin,
         };
 
     private static ClickFallback Fallback(
@@ -410,5 +416,76 @@ public class ClickRoutingTests
 
         Assert.Equal(ClickFallback.AttachSocket, fallback);
         Assert.False(ClickRouting.LeadMayAnswer(fallback));
+    }
+
+    // --- a session's own pane outranks the roster ----------------------------
+
+    private const string Tmux = "/opt/homebrew/bin/tmux";
+
+    // The two clicks side by side, in the shape that produced the report: a lead
+    // and its teammates all carry the same title, because every member inherits
+    // the team session's. What separates them is that the teammates recorded panes
+    // of their own and the lead recorded nothing at all.
+    [Fact]
+    public void ATeammateGoesToItsOwnPaneWhileItsLeadGoesToTheRoster()
+    {
+        // The teammate: a live pane on its own swarm server with nobody attached,
+        // and classified Background because the daemon's listing names it — which
+        // is exactly the combination that used to send it to the lead's window.
+        var teammate = Status(
+            shape: LocalSessionShape.Background,
+            tty: "ttys013", termProgram: "tmux", tmuxPane: "%21", tmuxBin: Tmux);
+
+        Assert.Equal(ClickFallback.AttachSocket, Fallback(teammate, detached: true));
+
+        // The lead: a background session with no coordinates of its own. Untouched
+        // by this round — still the roster's business, still the arm the title
+        // scan lives in.
+        var lead = Status(shape: LocalSessionShape.Background);
+
+        Assert.Equal(ClickFallback.AttachBackground, Fallback(lead, detached: false));
+    }
+
+    // Round six's reason for putting the background answer first was real: a
+    // parked job adopted into a `claude agents` viewer pane would send a click to
+    // a dashboard if that viewer's server happened to be detached. An adopted pane
+    // carries no tmux binary, so it does not qualify and keeps its old place.
+    [Fact]
+    public void AnAdoptedViewerPaneDoesNotOutrankTheRoster()
+    {
+        var adopted = Status(
+            shape: LocalSessionShape.Background,
+            tty: "ttys013", termProgram: "tmux", tmuxPane: "%7");   // no tmuxBin
+
+        Assert.Equal(ClickFallback.AttachBackground, Fallback(adopted, detached: true));
+    }
+
+    // A pane that is not alive answers nothing here — the rule is about a pane
+    // measured present with no screen on it, not about having recorded one.
+    [Fact]
+    public void ARecordedPaneThatIsNotAliveDoesNotOutrankTheRoster()
+    {
+        var teammate = Status(
+            shape: LocalSessionShape.Background,
+            tty: "ttys013", termProgram: "tmux", tmuxPane: "%21", tmuxBin: Tmux);
+
+        Assert.Equal(ClickFallback.AttachBackground, Fallback(teammate, detached: false));
+    }
+
+    // --- RecordedItsOwnPane --------------------------------------------------
+
+    [Fact]
+    public void OnlyAHookRecordedPaneCountsAsTheSessionsOwn()
+    {
+        Assert.True(ClickRouting.RecordedItsOwnPane(Status(tmuxPane: "%21", tmuxBin: Tmux)));
+
+        // Adopted: a pane, no binary.
+        Assert.False(ClickRouting.RecordedItsOwnPane(Status(tmuxPane: "%21")));
+
+        // A binary and no pane is a session that simply is not in tmux; the hook
+        // records where it found tmux either way.
+        Assert.False(ClickRouting.RecordedItsOwnPane(Status(tmuxBin: Tmux)));
+
+        Assert.False(ClickRouting.RecordedItsOwnPane(Status()));
     }
 }

@@ -168,8 +168,25 @@ namespace ClaudeBuddy
                     // pane in a *detached* server, which by definition nobody is
                     // looking at, and the roster is a destination the user named
                     // outright from a menu.
-                    var (verdict, showing) = AgentTeamViewer.ViewingPane(
-                        status.Title, paneClaimsByOthers);
+                    // ...but not for a session that recorded a pane of its own.
+                    //
+                    // The scan finds a pane by *title*, which is a guess at where a
+                    // conversation is being displayed. For a session that told us
+                    // its own pane the guess cannot outrank the statement, and for
+                    // a teammate the guess is provably undecidable: a teammate
+                    // inherits its lead's title, so the lead's viewer pane and the
+                    // teammate's own are indistinguishable by the only thing this
+                    // scan reads. Answering that click with the lead's window is
+                    // what round thirteen was reported for.
+                    //
+                    // Belt to the ordering above, which already sends such a
+                    // session to its own pane. This is the brace: a recorded pane
+                    // that is *not* currently alive falls past that rule, and this
+                    // stops the title scan picking up the pieces with somebody
+                    // else's window.
+                    var (verdict, showing) = ClickRouting.RecordedItsOwnPane(status)
+                        ? (SessionPresence.ViewerVerdict.NoneFound, (SessionPresence.ViewerPane?)null)
+                        : AgentTeamViewer.ViewingPane(status.Title, paneClaimsByOthers);
 
                     // One branch for both found verdicts, because both mean the
                     // same thing to the destination — see
