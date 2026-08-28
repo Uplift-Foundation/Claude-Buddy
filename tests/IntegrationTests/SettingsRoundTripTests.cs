@@ -339,6 +339,7 @@ public class SettingsRoundTripTests
         ClaudeBuddySettings.RemoteControlEnabled = true;
         ClaudeBuddySettings.RemoteControlProfileDir = ".claude-board";
         ClaudeBuddySettings.RemoteControlIdleMinutes = 25;
+        ClaudeBuddySettings.RemoteControlServeOnLaunch = true;
 
         // Back from disk, not from the in-memory model the setters just wrote.
         PointSettingsAt(dir);
@@ -346,6 +347,7 @@ public class SettingsRoundTripTests
         Assert.True(ClaudeBuddySettings.RemoteControlEnabled);
         Assert.Equal(".claude-board", ClaudeBuddySettings.RemoteControlProfileDir);
         Assert.Equal(25, ClaudeBuddySettings.RemoteControlIdleMinutes);
+        Assert.True(ClaudeBuddySettings.RemoteControlServeOnLaunch);
     }
 
     [Fact]
@@ -366,6 +368,10 @@ public class SettingsRoundTripTests
         Assert.Equal(
             ClaudeBuddySettings.DefaultRemoteControlIdle,
             ClaudeBuddySettings.RemoteControlIdleMinutes);
+
+        // Also off by default, for the same reason as the switch above: it
+        // makes every app launch start a quota-spending relay.
+        Assert.False(ClaudeBuddySettings.RemoteControlServeOnLaunch);
     }
 
     // A negative idle would read as "already expired" to every comparison
