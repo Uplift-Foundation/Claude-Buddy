@@ -230,11 +230,39 @@ namespace ClaudeBuddy
         //
         // For a session whose pane is alive in a server nothing is attached to —
         // an agent-team member in a detached `claude-swarm-<pid>` socket, which
-        // is the shape the user reported as an orb that "does nothing". A plain
-        // `attach` is all that is needed: the caller has already run
-        // select-window and select-pane against that pane, so the client lands on
+        // is the shape the user reported as an orb that "does nothing".
+        //
+        // **The target is mandatory, and this used to be a plain `attach`.** The
+        // reasoning for leaving it off was that the caller has already run
+        // select-window and select-pane against the pane, so the client lands on
         // the right teammate rather than on whatever the session last had
-        // current.
+        // current. That is true, and it is true about the wrong thing: the selects
+        // aim *within* a session, while an untargeted attach chooses *which
+        // session*, and tmux chooses the most recently used one.
+        //
+        // Correct for a server with one session, silently wrong for a server with
+        // two — and the swarm server has two, because this app's own
+        // remote-control relay cohabits it. The relay is the busier of the pair by
+        // a wide margin, so an untargeted attach effectively always landed there:
+        // measured, `claude-buddy-rc--…` last active at 1787877105 against
+        // `claude-swarm` at 1787874827. The user saw an iTerm tab open, land in
+        // the relay, and vanish within a beat.
+        //
+        // So the session is a required parameter rather than an optional one. An
+        // untargeted attach is not a degraded answer here, it is an attach to
+        // whatever happened to be busy — which on this server is plumbing — and a
+        // signature that cannot express it is the only reliable way to keep it
+        // from coming back.
+        //
+        // "=" forces an exact match, the same rule and the same reason as
+        // TmuxNames' targets: tmux resolves a target by prefix, and this server
+        // holds names where one could be a prefix of another. Verified that
+        // attach accepts the form, since not every tmux command does — `attach -t
+        // '=claude-swarm'` reaches "open terminal failed: not a terminal", so the
+        // target resolved and only the missing tty stopped it, while
+        // `-t '=no-such-session'` answers "can't find session". (`show-options
+        // -t` rejects the "=" form outright, which is why this was worth checking
+        // rather than assuming.)
         //
         // A script file rather than AppleScript's `do script`, for the reason
         // AgentTeamViewer.AttachSession records: `do script` is Terminal.app's
@@ -252,7 +280,8 @@ namespace ClaudeBuddy
         // place to land is the directory whose orb was clicked. Skipped when no
         // cwd was recorded, because `cd ''` fails and would take the attach with
         // it — the one thing this script exists to do.
-        internal static string TmuxAttachScript(string tmuxBinary, string? socket, string? cwd)
+        internal static string TmuxAttachScript(
+            string tmuxBinary, string? socket, string session, string? cwd)
         {
             // Built with a loop rather than a LINQ chain, which is not a style
             // preference: everything else in this file is plain string building,
@@ -260,7 +289,10 @@ namespace ClaudeBuddy
             // machine on the line, which reads in a coverage report as a branch
             // nothing took while the line itself is plainly executed.
             var parts = new List<string> { ShellQuote(tmuxBinary) };
-            foreach (var arg in TmuxArgs(socket, "attach")) parts.Add(ShellQuote(arg));
+            foreach (var arg in TmuxArgs(socket, "attach", "-t", "=" + session))
+            {
+                parts.Add(ShellQuote(arg));
+            }
 
             var attach = string.Join(" ", parts);
 
