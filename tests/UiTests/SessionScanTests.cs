@@ -1940,4 +1940,55 @@ public class SessionScanTests
 
         Manager(scratch).AcknowledgeClickOn(sessionId);
     }
+
+    // --- this app's own relay gets no orb ------------------------------------
+
+    // The relay is a Claude Code session like any other — its hook fires, it
+    // writes a status file — so the scan drew it a grey orb with an empty chat
+    // behind it. Correct and useless: it is plumbing, not a conversation, and it
+    // hid inside the dead-orb noise the earlier rounds cleared out.
+    //
+    // Asserted at the scan, which is where it is dropped, and that placement is
+    // the point rather than an implementation detail: nothing downstream ever
+    // learns the session exists, so there is no orb to click, no tray row, and no
+    // right-click menu with End and Dismiss on it to be pointed at something the
+    // user did not start.
+    [AvaloniaFact]
+    public void ThisAppsOwnRelayIsNotGivenAnOrb()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("ordinary", cwd: "/Users/warren/Source/Claude-Buddy");
+        scratch.Write("relay", cwd: "/Users/w/rc-cwd/claude-buddy-rc--claude-warrens-mbp");
+
+        var ids = OrbIds(Scan(scratch));
+
+        Assert.Contains("ordinary", ids);
+        Assert.DoesNotContain("relay", ids);
+    }
+
+    // Every relay this app has ever launched, not only the one whose name it
+    // would build today: a different account directory or a renamed Mac changes
+    // the tail of the name, and the still-running relay from before must not
+    // reappear as an orb. That is the prefix's whole job — see
+    // RemoteControlBridge.IsOwnRelayName.
+    [AvaloniaFact]
+    public void ARelayFromAnEarlierProfileOrMachineIsAlsoSuppressed()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("stale", cwd: "/Users/w/rc-cwd/claude-buddy-rc--claude-board-some-other-mac");
+
+        Assert.Empty(OrbIds(Scan(scratch)));
+    }
+
+    // And the line that has to hold: a person's own remote-control session is not
+    // this app's plumbing, and silently hiding it would be worse than the orb this
+    // round removes.
+    [AvaloniaFact]
+    public void SomebodyElsesRemoteSessionKeepsItsOrb()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("theirs", cwd: "/Users/warren/Source/job-hunter");
+
+        Assert.Contains("theirs", OrbIds(Scan(scratch)));
+    }
 }
