@@ -658,35 +658,67 @@ namespace ClaudeBuddy
 
             // Normalise before taking it apart. The path arrives from another
             // process through proc_pidpath rather than from PathFor, and
-            // decomposing it by hand reads any "." or ".." component as a
+            // decomposing it naively reads any "." or ".." component as a
             // directory name: "<root>/./Claude.app" was answered with a profile
             // called ".", which is a name no profile has and so would have
             // failed silently in Compose rather than visibly here. Found by the
             // test that went looking for the last uncovered branch.
             //
-            // GetFullPath, not Canonicalise: this must stay pure. Resolving
-            // symlinks would put a filesystem call in a rule that runs for every
-            // process on every scan, and the caller compares against a root that
-            // has not been symlink-resolved either.
-            var full = SafeFullPath(bundle);
-            if (full is null) return null;
+            // Segments, not Path.GetFullPath: proc_pidpath only ever hands over
+            // a POSIX path, and GetFullPath answers for the platform the
+            // *process* is on — on Windows it reroots "/Users/…" onto the
+            // current drive and flips the separators, which failed every one of
+            // these decisions on the windows-latest CI leg while the mac leg
+            // stayed green. Walking '/' components keeps the rule pure *and*
+            // platform-independent, so the suite means the same thing on both
+            // legs. Symlinks stay unresolved for the same reason as before:
+            // resolving them would put a filesystem call in a rule that runs
+            // for every process on every scan, against a root that has not been
+            // symlink-resolved either.
+            var segments = PosixSegments(bundle);
+            if (segments is null) return null;
 
-            var directory = Path.GetDirectoryName(full.TrimEnd('/'));
-            if (directory is null) return null;
+            var root = PosixSegments(bundleRoot);
+            if (root is null) return null;
 
-            var parent = Path.GetDirectoryName(directory);
-            if (parent is null) return null;
+            // A clone lives at exactly <root>/<folder>/<bundle>. Anything
+            // shallower, deeper, or rooted elsewhere is not one.
+            if (segments.Count != root.Count + 2) return null;
 
-            if (!string.Equals(
-                    parent.TrimEnd('/'), bundleRoot.TrimEnd('/'), StringComparison.Ordinal))
+            for (var i = 0; i < root.Count; i++)
             {
-                return null;
+                if (!string.Equals(segments[i], root[i], StringComparison.Ordinal)) return null;
             }
 
-            var folder = Path.GetFileName(directory);
-            if (folder.Length == 0) return null;
-
+            var folder = segments[root.Count];
             return string.Equals(folder, defaultFolder, StringComparison.Ordinal) ? null : folder;
+        }
+
+        // A POSIX path split into its real components: empty and "." segments
+        // dropped, ".." folded into its parent, null for a relative path or one
+        // that climbs above "/". No Path.* call anywhere, so the answer is the
+        // same on whichever platform the tests happen to run on.
+        private static List<string>? PosixSegments(string path)
+        {
+            if (path.Length == 0 || path[0] != '/') return null;
+
+            var segments = new List<string>();
+
+            foreach (var segment in path.Split('/'))
+            {
+                if (segment.Length == 0 || segment == ".") continue;
+
+                if (segment == "..")
+                {
+                    if (segments.Count == 0) return null;
+                    segments.RemoveAt(segments.Count - 1);
+                    continue;
+                }
+
+                segments.Add(segment);
+            }
+
+            return segments;
         }
 
         // Profile folder -> the first pid found orphaned onto Default from that
