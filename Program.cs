@@ -22,6 +22,18 @@ namespace ClaudeBuddy
         [STAThread]
         public static void Main(string[] args)
         {
+            // The serve path first, before the screen-lock wait below, because
+            // it needs nothing that wait exists to protect: a relay is tmux,
+            // files and subprocesses, with no display anywhere in it. A machine
+            // that serves its sessions to other Buddies unattended is exactly a
+            // machine whose screen may never unlock — headless, in a cupboard —
+            // and parking the relay behind the wait meant it never served at
+            // all (CB-24). Does nothing unless remoteControlServeOnLaunch is
+            // on; and if this early start fails, SessionManager.Start makes the
+            // same call again once the UI is up, because EnsureStarted retries
+            // a failed relay.
+            RemoteControlSessions.ServeOnLaunch();
+
             // Avalonia's macOS render timer is a CVDisplayLink, and
             // CVDisplayLinkStart fails with -6661 (kCVReturnInvalidDisplay) while
             // the screen is locked, which killed startup outright. A Login Item
