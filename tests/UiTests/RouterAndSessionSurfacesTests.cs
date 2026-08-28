@@ -80,14 +80,31 @@ public class RouterAndSessionSurfacesTests : IDisposable
     }
 
     // And with nothing provided at all — the state every process is in until
-    // SessionManager starts — the answer is an empty list rather than a null
-    // reference on whatever background task asked.
+    // SessionManager starts, and permanently on a headless machine whose
+    // screen never unlocks — the answer comes from the headless scan rather
+    // than being empty (CB-24: an empty roster here was exactly why a served
+    // machine's panels stayed messaging channels). Asserted through a swapped
+    // fallback because the real one reads this machine's own status directory,
+    // which is why this test used to flake into real sessions the moment the
+    // contract changed.
     [AvaloniaFact]
-    public void WithNoProviderTheAnswerIsNoSessionsRatherThanNothing()
+    public void WithNoProviderTheAnswerComesFromTheHeadlessScan()
     {
         RemoteControlSessions.ForgetLocalSessionsForTests();
+        var was = RemoteControlSessions.HeadlessFallback;
+        try
+        {
+            RemoteControlSessions.HeadlessFallback = () =>
+                new List<(string, SessionStatus)> { ("headless", new SessionStatus()) };
 
-        Assert.Empty(RemoteControlSessions.LocalSessions());
+            Assert.Equal(
+                "headless",
+                Assert.Single(RemoteControlSessions.LocalSessions()).SessionId);
+        }
+        finally
+        {
+            RemoteControlSessions.HeadlessFallback = was;
+        }
     }
 
     // ---- a frame this version does not recognise ---------------------------

@@ -79,15 +79,25 @@ namespace ClaudeBuddy
             _localSessions = provider;
 
         // Named rather than written as a lambda at the one place a relay is
-        // built, because the empty fallback is a real answer with a real
-        // consequence: it is what a far machine's roster request is answered
-        // with before SessionManager has started, and "no sessions" has to be
-        // that rather than a null reference on a background task.
+        // built, because the fallback is a real answer with a real consequence:
+        // it is what a far machine's roster request is answered with before
+        // SessionManager has started. That used to be "no sessions", which was
+        // wrong in exactly the case the serve-on-launch setting exists for — a
+        // headless machine whose screen never unlocks never starts
+        // SessionManager at all (CB-24), so its relay answered every HELLO with
+        // an empty roster and the far panel silently stayed a messaging
+        // channel. Now the answer comes from the same scan rules, composed
+        // without the UI — see SessionManager.HeadlessSnapshot.
         //
         // A relay is only built with a live bridge behind it, so this is also
         // the only way to ask what the provider currently says.
         internal static IReadOnlyList<(string SessionId, SessionStatus Status)> LocalSessions() =>
-            _localSessions?.Invoke() ?? Array.Empty<(string, SessionStatus)>();
+            _localSessions?.Invoke() ?? HeadlessFallback();
+
+        // Swappable because the real fallback reads this machine's actual
+        // status directory, which a unit test has no business depending on.
+        internal static Func<IReadOnlyList<(string SessionId, SessionStatus Status)>>
+            HeadlessFallback = () => SessionManager.HeadlessSnapshot();
 
         internal static void ForgetLocalSessionsForTests() => _localSessions = null;
 
