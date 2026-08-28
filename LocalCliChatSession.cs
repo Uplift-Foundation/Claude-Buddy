@@ -110,13 +110,21 @@ namespace ClaudeBuddy
         // before that — see Pump.
         private bool _loaded;
 
-        public LocalCliChatSession(string sessionId, SessionStatus status)
+        // findTranscript is a seam for the same reason SessionManager's
+        // transcriptHunt is: the real one walks this machine's own projects
+        // directories, and the decision worth testing is when Start falls back
+        // to it, not what the walk finds.
+        public LocalCliChatSession(string sessionId, SessionStatus status,
+                                   Func<string, string?>? findTranscript = null)
         {
             SessionId = sessionId;
             _status = status;
             _format = CliChatFormat.For(status.Source);
             DisplayName = status.Title ?? "";
+            _findTranscript = findTranscript ?? (id => TranscriptReader.FindTranscriptFor(id));
         }
+
+        private readonly Func<string, string?> _findTranscript;
 
         public string SessionId { get; }
 
@@ -182,8 +190,17 @@ namespace ClaudeBuddy
         {
             if (_started) return;
 
+            // The hunt runs when the recorded path is missing as well as when
+            // there is none. A recorded path can be wrong, not just late: a
+            // respawned background worker's hook records a path computed from
+            // the directory it relaunched in, while the conversation lives in
+            // the projects directory keyed by where the session actually ran —
+            // see SessionManager.WantsTranscriptRepair. Without the fallback,
+            // File.Exists below said no on every status update, forever, and a
+            // finished job's panel opened blank over a 3.6MB transcript.
             var path = _status.TranscriptPath;
-            if (string.IsNullOrEmpty(path)) path = TranscriptReader.FindTranscriptFor(SessionId);
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                path = _findTranscript(SessionId);
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
 
             _started = true;
