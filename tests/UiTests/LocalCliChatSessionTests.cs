@@ -1083,4 +1083,81 @@ public class LocalCliChatSessionTests : IDisposable
 
         session.AnswerElsewhere();
     }
+
+    // --- a recorded transcript path that is wrong, not just late ---------------
+
+    // The daemon respawns a finished job's worker from the job's original
+    // directory, so the hook records a transcript_path computed from that
+    // directory while the conversation lives in the projects directory keyed by
+    // where the session actually ran. Job b0633b77 on a real machine: 3.6MB of
+    // transcript, and a panel that opened blank forever, because Start treated
+    // "recorded but missing" as final and never hunted.
+    [AvaloniaFact]
+    public void AMissingRecordedPathFallsBackToTheHunt()
+    {
+        var real = Transcript(User("u1", "why is this orb chat blank?"),
+                              Assistant("a1", "Found it — the recorded path was wrong."));
+        var recorded = Path.Combine(_root, "never-written-here.jsonl");
+
+        var session = new LocalCliChatSession("s1", new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            TranscriptPath = recorded,
+            State = "idle",
+            Title = "",
+        }, findTranscript: id => id == "s1" ? real : null);
+
+        session.Start();
+        PumpUntil(() => session.History.Count > 0, "the hunted transcript to load");
+
+        Assert.Contains(session.History,
+            t => t.Text.Contains("the recorded path was wrong", StringComparison.Ordinal));
+    }
+
+    // The other direction: a path that exists is never second-guessed. A hunt
+    // that ran anyway could shadow the hook's own record with a stale sibling's
+    // file, which is a worse wrong than the one being fixed.
+    [AvaloniaFact]
+    public void ARecordedPathThatExistsIsNeverHuntedPast()
+    {
+        var real = Transcript(User("u1", "hello"), Assistant("a1", "hi"));
+        var hunted = false;
+
+        var session = new LocalCliChatSession("s1", new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            TranscriptPath = real,
+            State = "idle",
+            Title = "",
+        }, findTranscript: _ => { hunted = true; return null; });
+
+        session.Start();
+        PumpUntil(() => session.History.Count > 0, "the recorded transcript to load");
+
+        Assert.False(hunted);
+    }
+
+    // And when the hunt finds nothing either, Start stays unstarted rather than
+    // wedging: the next status update asks again, which is how a transcript
+    // that appears late has always been picked up.
+    [AvaloniaFact]
+    public void AHuntThatFindsNothingLeavesStartRetryable()
+    {
+        var recorded = Path.Combine(_root, "never-written-here.jsonl");
+        var hunts = 0;
+
+        var session = new LocalCliChatSession("s1", new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            TranscriptPath = recorded,
+            State = "idle",
+            Title = "",
+        }, findTranscript: _ => { hunts++; return null; });
+
+        session.Start();
+        session.Start();
+
+        Assert.Equal(2, hunts);
+        Assert.Empty(session.History);
+    }
 }
