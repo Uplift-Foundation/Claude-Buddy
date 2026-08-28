@@ -1299,6 +1299,14 @@ namespace ClaudeBuddy
                 "The relay shuts down once you stop using it, and starts again by itself the "
                 + "next time you open or send to a remote session."));
 
+            rows.Add(Row("Start the relay when Claude Buddy starts",
+                Switch(ClaudeBuddySettings.RemoteControlServeOnLaunch, OnServeOnLaunchToggled),
+                "For a machine that serves its sessions to other Buddies unattended — nobody "
+                + "there to press the button below when another machine wants its chats. Takes "
+                + "effect at the next launch; pair it with \"Stop the relay after: Never\" if "
+                + "the relay should stay up. Costs usage while the relay runs, like everything "
+                + "else in this section."));
+
             // Shares the OpenClaw ticker's TextBlock slot deliberately — see
             // OnStatusTick, which now reports whichever of the two is switched
             // on. Both being on at once is possible but rare, and a second
@@ -1334,6 +1342,17 @@ namespace ClaudeBuddy
         // rows around it.
         [ExcludeFromCodeCoverage]
         private void OnStartTheRelayNowClicked() => RemoteControlSessions.EnsureStarted();
+
+        // Only the setting is written here: the start itself stays a deliberate
+        // act, and "Start the relay now" in the same section is already the
+        // immediate version of it. Wiring EnsureStarted into this switch would
+        // also make it the one switch no headless test could flip — see the
+        // "never click" note in SettingsWindowCoverageTests.
+        internal void OnServeOnLaunchToggled(bool on)
+        {
+            ClaudeBuddySettings.RemoteControlServeOnLaunch = on;
+            Rebuild();
+        }
 
         // Every config directory a relay could sign into, each with a tick.
         //
