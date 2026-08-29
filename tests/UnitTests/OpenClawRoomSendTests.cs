@@ -288,6 +288,40 @@ public class OpenClawRoomSendTests : IDisposable
         }
     }
 
+    // --- the room's own path, end to end ---
+
+    // A send that actually works, through OpenClawRoomChatSession rather than
+    // straight into SendToRoomAsync. Everything else about the room is asserted
+    // with no gateway behind it, which reaches every failure and none of the
+    // success — so the one thing left unchecked was that a room that *can* send
+    // leaves no explanation behind. A note under a message that went through
+    // would be worse than no note at all.
+    [Fact]
+    public async Task ARoomThatCanSendSendsAndSaysNothing()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+        var (socket, gateway) = await ConnectedAsync();
+        using (gateway)
+        {
+            var carrier = Carrier();
+            carrier.HasMore = false;
+
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:900", "#lobby");
+            room.SetMembers(new[] { (carrier, "Quill", "#7f7") });
+
+            await room.SendAsync("anyone about?");
+
+            // Your message, and nothing explaining itself under it.
+            Assert.Contains(room.History, t => t.Mine && t.Text == "anyone about?");
+            Assert.DoesNotContain(room.History, t => t.Role == ChatRole.System);
+
+            // ...and it really went out, both halves of it.
+            Assert.Equal(new[] { "send", "chat.send" }, Sent(socket).Select(r => r.Method));
+        }
+    }
+
     // No connection at all, which is what the app looks like between reconnects.
     [Fact]
     public async Task WithNoGatewayNothingIsSentAndItSaysSo()
