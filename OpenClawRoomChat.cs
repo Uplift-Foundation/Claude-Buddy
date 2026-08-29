@@ -405,23 +405,35 @@ namespace ClaudeBuddy
             // for sitting outside a window drawn by how far the members' backlogs
             // happen to reach.
             //
-            // A sent message is dropped once the gateway's own copy of it turns
-            // up in the merge, matched the way every other duplicate in this file
-            // is — on the words alone, because the copy that comes back is
-            // timestamped by the gateway and this one was timestamped here.
+            // A sent message is *dropped from this list*, not merely skipped,
+            // once the gateway's own copy of it turns up in the merge — matched
+            // the way every other duplicate in this file is, on the words alone,
+            // because the copy that comes back is timestamped by the gateway and
+            // this one was timestamped here.
+            //
+            // Removing rather than skipping is the fix to a leak the first
+            // version had. This list is capped, and a skipped entry went on
+            // occupying a slot in it forever while contributing nothing to any
+            // rebuild — so a busy room quietly filled the cap with messages that
+            // had already arrived, and the thirty-second one evicted a *note*
+            // that was still the only record of why something had failed. The
+            // fact that an entry is finished with is computed right here; using
+            // it to prune costs nothing beyond saying so.
+            //
+            // It does mean a sent message reverts to the members' copy for good,
+            // so if the carrier later drops out of the room the message goes
+            // with it. That is what happens to every other message in a room —
+            // all of them are the members' — and keeping this one pinned would
+            // make it the exception rather than the rule.
+            //
             // Notes are never matched against anything: nothing else in the
             // conversation is a System turn, so there is nothing they could
-            // duplicate.
-            foreach (var local in _local)
-            {
-                if (local.Mine
-                    && merged.Any(t => t.Mine && Normalise(t.Text) == Normalise(local.Text)))
-                {
-                    continue;
-                }
+            // duplicate, and nothing that would ever prune them but the cap.
+            _local.RemoveAll(local =>
+                local.Mine
+                && merged.Any(t => t.Mine && Normalise(t.Text) == Normalise(local.Text)));
 
-                merged.Add(local);
-            }
+            merged.AddRange(_local);
 
             merged.Sort((a, b) => a.At.CompareTo(b.At));
 
