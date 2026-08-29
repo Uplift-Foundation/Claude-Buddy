@@ -825,11 +825,12 @@ namespace ClaudeBuddy
             // The CLI process that wrote the file has exited.
             ProcessGone,
 
-            // The conversation was handed to a background job mid-turn and
-            // nothing has happened in this session since — see
-            // TranscriptHandoff. The fork wears the conversation now, badge,
-            // title and all; this file is what the handoff left behind, and no
-            // hook will ever rewrite it.
+            // The conversation was handed to a background job — either
+            // mid-turn (see TranscriptHandoff) or from an idle window by
+            // opening agents mode (see SessionPark) — and this session is not
+            // the one showing it any more. The fork wears the conversation now,
+            // badge, title and all; this file is what the handoff left behind,
+            // and no hook will ever rewrite it.
             Backgrounded,
 
             // Quiet for longer than the user's "Keep orbs for" allows.
@@ -1043,7 +1044,8 @@ namespace ClaudeBuddy
 
                 Func<bool> handedToBackground = () =>
                     SessionPresence.CouldBeABackgroundedHusk(status, phase)
-                    && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
+                    && (SessionPark.IsParked(status.SessionPid, entry.SessionId)
+                        || TranscriptHandoff.EndsBackgrounded(status.TranscriptPath));
 
                 // **Orb lifetime is a display preference and does not belong in
                 // an answer to another machine.** Its own definition says "how
@@ -1747,16 +1749,27 @@ namespace ClaudeBuddy
                     ? BackgroundJobs.Phase(Jobs(), sessionId)
                     : JobPhase.Unknown;
 
-                // Whether this file is the husk a backgrounded turn leaves
-                // behind — a closure so that only a session the earlier rules
-                // kept ever pays the stat, gated in
+                // Whether this file is the husk a handoff to a background job
+                // leaves behind — a closure so that only a session the earlier
+                // rules kept ever pays the stat, gated in
                 // SessionPresence.CouldBeABackgroundedHusk (which is also what
                 // keeps the fork itself, listed by the daemon as a live job,
-                // from reading its own inherited marker), answered from the
-                // transcript by TranscriptHandoff behind its own cache.
+                // from reading its own inherited marker).
+                //
+                // Two sources, asked cheapest-and-surest first. SessionPark
+                // reads Claude Code's own session record, which names the job
+                // that took the conversation and is cleared when the window
+                // gets it back — it is the fact rather than a trace of it, and
+                // it is the only one of the two that catches an *idle*
+                // conversation forked by opening agents mode, which writes no
+                // transcript marker at all (CB-30). TranscriptHandoff stays
+                // because it answers for a case the record cannot: a session
+                // whose process is gone leaves no record to read, and its
+                // transcript still says what happened.
                 Func<bool> handedToBackground = () =>
                     SessionPresence.CouldBeABackgroundedHusk(status, phase)
-                    && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
+                    && (SessionPark.IsParked(status.SessionPid, sessionId)
+                        || TranscriptHandoff.EndsBackgrounded(status.TranscriptPath));
 
                 // Two verdicts rather than one, with the viewer hunt sitting
                 // between them, because the order is load-bearing in both

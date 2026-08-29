@@ -64,6 +64,37 @@ public class HeadlessSnapshotTests
         }
     }
 
+    // A session with a live pid but no session record on this machine — which
+    // is every session in this suite, since the pids are invented — must come
+    // back kept. SessionPark is consulted before TranscriptHandoff in the
+    // composition above, so a rule that answered "parked" on a missing record
+    // would empty this whole file rather than fail one case.
+    [Fact]
+    public void AnInventedPidWithNoSessionRecordIsNotTreatedAsParked()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "abc123", new SessionStatus
+            {
+                State = "idle",
+                Title = "job-hunter",
+                Cwd = "/tmp/somewhere",
+                SessionPid = 999999,
+                TranscriptPath = "/tmp/nonexistent/abc123.jsonl"
+            });
+
+            var kept = SessionManager.HeadlessSnapshot(
+                dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow);
+
+            Assert.Single(kept);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void DropsThisAppsOwnRelay()
     {
