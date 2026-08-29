@@ -700,7 +700,16 @@ namespace ClaudeBuddy
         // turn in a member's transcript is somebody else's message arriving, so
         // counting those would make "who spoke last" mean "who was spoken to
         // last", which is the same answer for every member in the room.
-        private static DateTimeOffset? LastSpoke(OpenClawChatSession chat)
+        //
+        // internal rather than private, and the reason is worth stating because
+        // it was found the hard way. PickCarrier is pure and exhaustively
+        // covered — but it is covered with timestamps handed straight to it,
+        // and this is the function that *produces* those timestamps. With this
+        // private, every test of the carrier rule reached it through SendAsync
+        // with empty member histories, so the loop below never ran with more
+        // than nothing in it and "newest" was verified nowhere. The half of the
+        // fix that decides which agent receives the message rested on it.
+        internal static DateTimeOffset? LastSpoke(OpenClawChatSession chat)
         {
             DateTimeOffset? latest = null;
 

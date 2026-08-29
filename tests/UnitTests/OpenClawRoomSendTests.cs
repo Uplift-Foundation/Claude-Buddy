@@ -288,6 +288,151 @@ public class OpenClawRoomSendTests : IDisposable
         }
     }
 
+    // --- which member the room actually hands it to ---
+
+    private static readonly DateTimeOffset T0 = new(2026, 8, 24, 12, 0, 0, TimeSpan.Zero);
+
+    private static OpenClawChatSession Member(string agent, string account)
+    {
+        var chat = new OpenClawChatSession(
+            $"openclaw:agent:{agent}:discord:channel:900",
+            $"agent:{agent}:discord:channel:900",
+            agent);
+
+        chat.Delivery = new OpenClawSessions.Delivery("discord", "channel:900", account);
+        chat.HasMore = false;
+        return chat;
+    }
+
+    private static void Spoke(OpenClawChatSession chat, params int[] minutes) =>
+        chat.SetHistory(minutes
+            .Select(m => new HistoryTurn(
+                ChatRole.Assistant, "minute " + m, null, "", T0.AddMinutes(m), null, null))
+            .ToList());
+
+    // The session key on the chat.send is the room's answer to "which agent
+    // should receive this", and it is the only place that answer is observable.
+    private static string CarriedBy(FakeGatewaySocket socket) =>
+        Sent(socket).Single(r => r.Method == "chat.send")
+                    .Params.GetProperty("sessionKey").GetString()!;
+
+    // The most recent speaker carries it, over a member that sorts first by key
+    // and has not spoken. First-by-key was the old rule and survives only as the
+    // tiebreak; this is the case that separates the two.
+    [Fact]
+    public async Task TheRecentSpeakerCarriesItOverTheFirstByKey()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+        var (socket, gateway) = await ConnectedAsync();
+        using (gateway)
+        {
+            // "agent:aster:…" sorts before "agent:quill:…", and has said nothing.
+            var aster = Member("aster", "asterbot");
+            var quill = Member("quill", "quillbot");
+            Spoke(quill, 30);
+
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:900", "#lobby");
+            room.SetMembers(new[] { (aster, "Aster", "#7f7"), (quill, "Quill", "#77f") });
+
+            await room.SendAsync("anyone about?");
+
+            Assert.Equal("agent:quill:discord:channel:900", CarriedBy(socket));
+        }
+    }
+
+    // ...and the answer swaps when the histories do.
+    //
+    // This is the case that proves the timestamp is *read*. Every other carrier
+    // test would pass against an implementation that ignored history entirely
+    // and picked by key, or by list order, or by anything else stable — because
+    // a stable wrong answer looks exactly like a stable right one until the
+    // input moves underneath it and the output does not follow.
+    [Fact]
+    public async Task TheAnswerFollowsTheTranscriptsRatherThanTheKeys()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+        var (socket, gateway) = await ConnectedAsync();
+        using (gateway)
+        {
+            // The same two members, in the same order, with the speaking swapped.
+            var aster = Member("aster", "asterbot");
+            var quill = Member("quill", "quillbot");
+            Spoke(aster, 30);
+
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:900", "#lobby");
+            room.SetMembers(new[] { (aster, "Aster", "#7f7"), (quill, "Quill", "#77f") });
+
+            await room.SendAsync("anyone about?");
+
+            Assert.Equal("agent:aster:discord:channel:900", CarriedBy(socket));
+        }
+    }
+
+    // Several turns each, and it is the newest of them that decides — not the
+    // count, and not whichever the transcript happens to end with. Aster has
+    // said more and more recently *within its own history*; Quill's single
+    // newest turn is later than any of them.
+    [Fact]
+    public async Task ItIsTheNewestTurnThatDecidesNotTheBusiestMember()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+        var (socket, gateway) = await ConnectedAsync();
+        using (gateway)
+        {
+            var aster = Member("aster", "asterbot");
+            var quill = Member("quill", "quillbot");
+            Spoke(aster, 5, 20, 35);
+            Spoke(quill, 40);
+
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:900", "#lobby");
+            room.SetMembers(new[] { (aster, "Aster", "#7f7"), (quill, "Quill", "#77f") });
+
+            await room.SendAsync("anyone about?");
+
+            Assert.Equal("agent:quill:discord:channel:900", CarriedBy(socket));
+        }
+    }
+
+    // A member that has only been spoken to has not spoken. Without this the
+    // rule would read "who was addressed last", which is the same answer for
+    // everybody in a channel and so no answer at all — and it would hand the
+    // send to whichever member happened to sort first, silently.
+    [Fact]
+    public async Task BeingSpokenToDoesNotWinAMemberTheSend()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+        var (socket, gateway) = await ConnectedAsync();
+        using (gateway)
+        {
+            var aster = Member("aster", "asterbot");
+            var quill = Member("quill", "quillbot");
+
+            // Aster's transcript ends with the newest turn in the room — but it
+            // is a user turn, somebody else's message arriving.
+            aster.SetHistory(new[]
+            {
+                new HistoryTurn(ChatRole.User, "aster, are you there?", null, "",
+                    T0.AddMinutes(50), null, null),
+            });
+            Spoke(quill, 10);
+
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:900", "#lobby");
+            room.SetMembers(new[] { (aster, "Aster", "#7f7"), (quill, "Quill", "#77f") });
+
+            await room.SendAsync("anyone about?");
+
+            Assert.Equal("agent:quill:discord:channel:900", CarriedBy(socket));
+        }
+    }
+
     // --- the room's own path, end to end ---
 
     // A send that actually works, through OpenClawRoomChatSession rather than
@@ -319,6 +464,68 @@ public class OpenClawRoomSendTests : IDisposable
 
             // ...and it really went out, both halves of it.
             Assert.Equal(new[] { "send", "chat.send" }, Sent(socket).Select(r => r.Method));
+        }
+    }
+
+    // The room's own list must not be eaten by messages that have already
+    // arrived.
+    //
+    // `_local` holds two different things — the room's System notes and the
+    // messages you have sent — under one cap. A sent message used to be
+    // *skipped* in the merge once the gateway's copy turned up and left in the
+    // list forever, contributing nothing to any rebuild while still occupying a
+    // slot. So a busy room filled the cap with finished entries and the
+    // thirty-second one evicted a note that was still the only record of why
+    // something had failed.
+    //
+    // Here rather than beside the room's other cases because it needs sends that
+    // *succeed*: a failing send writes a note of its own, forty of those fill
+    // the cap legitimately, and the test would then be watching the cap work
+    // rather than the leak. That is how this case failed when I first wrote it
+    // in the wrong file, and it is worth recording — notes are never pruned, so
+    // a room with more than thirty-two failures in it really does lose its
+    // oldest, and that is the cap doing its job rather than a bug.
+    [Fact]
+    public async Task ArrivedMessagesDoNotEvictTheNoteExplainingAnEarlierFailure()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.OpenClawReplyEnabled = false;
+
+        var (_, gateway) = await ConnectedAsync();
+        using (gateway)
+        {
+            var quill = Member("quill", "quillbot");
+            var room = new OpenClawRoomChatSession("openclaw:room:discord:900", "#lobby");
+            room.SetMembers(new[] { (quill, "Quill", "#7f7") });
+
+            // One note, written while replying was off, and nothing else.
+            await room.SendAsync("the one that never went");
+            Assert.Contains(room.History, t => t.Text.Contains("Replying is off"));
+
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            // Forty successful sends — more than the cap — each of which the
+            // gateway records and hands back, as a real conversation would.
+            var echoed = new List<HistoryTurn>();
+            for (var i = 0; i < 40; i++)
+            {
+                await room.SendAsync("sent " + i);
+
+                echoed.Add(new HistoryTurn(
+                    ChatRole.User, "sent " + i, null, "", T0.AddMinutes(i), null, null, true));
+                quill.SetHistory(echoed);
+                quill.HasMore = false;
+                room.Rebuild();
+            }
+
+            // Still there. Before the prune it had been evicted by entries that
+            // were no longer contributing anything to any rebuild.
+            Assert.Contains(room.History, t => t.Text.Contains("Replying is off"));
+
+            // ...and each sent message appears once, from the gateway's copy,
+            // rather than twice.
+            Assert.Single(room.History, t => t.Text == "sent 39");
+            Assert.Single(room.History, t => t.Text == "sent 0");
         }
     }
 
