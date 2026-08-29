@@ -128,8 +128,8 @@ public class OrbWindowSpeakTests
             var chat = (OpenClawChatSession)OpenClawSessions.ChatFor(sessionId, "Zara")!;
             chat.SetHistory(new[]
             {
-                (ChatRole.Assistant, "hello from the agent", (string?)null, "",
-                 DateTimeOffset.UtcNow, (string?)null, (string?)null),
+                new HistoryTurn(ChatRole.Assistant, "hello from the agent", null, "",
+                    DateTimeOffset.UtcNow, null, null),
             });
 
             var orb = new OrbWindow(sessionId);

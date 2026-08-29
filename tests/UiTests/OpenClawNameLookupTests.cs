@@ -181,9 +181,9 @@ public class OpenClawNameLookupTests
     {
         var session = new OpenClawChatSession("openclaw:agent:zara:main", "zara", "Zara");
         session.SetHistory(turns
-            .Select(t => (t.Role, t.Text, (string?)null, "",
+            .Select(t => new HistoryTurn(t.Role, t.Text, null, "",
                           new DateTimeOffset(2026, 8, 24, 12, 0, 0, TimeSpan.Zero),
-                          (string?)null, (string?)null))
+                          null, null))
             .ToList());
         return session;
     }

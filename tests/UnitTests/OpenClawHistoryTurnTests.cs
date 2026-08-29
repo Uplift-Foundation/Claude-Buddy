@@ -25,9 +25,7 @@ public class OpenClawHistoryTurnTests
     private static JsonElement Messages(string json) =>
         JsonDocument.Parse(json).RootElement;
 
-    private static System.Collections.Generic.List<(ChatRole Role, string Text,
-        string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker,
-        string? SpeakerColor)> Turns(string json) =>
+    private static System.Collections.Generic.List<HistoryTurn> Turns(string json) =>
         OpenClawSessions.TurnsFromHistory(Messages(json));
 
     // ---- the two role shapes --------------------------------------------
@@ -321,5 +319,163 @@ public class OpenClawHistoryTurnTests
         Assert.Empty(Turns("""[{"role":"user","content":42}]"""));
         Assert.Empty(Turns("""[{"role":"user","content":true}]"""));
         Assert.Empty(Turns("""[{"role":"user","content":null}]"""));
+    }
+
+    // ---- who sent it, from __openclaw -------------------------------------
+
+    // Five shapes, all of them taken from what a live gateway actually returns
+    // and every value in them replaced. The structure is what these fixtures
+    // are for; the ids, names and sentences are invented, because this
+    // repository is public and the gateway is a Discord server with real people
+    // in it.
+
+    // Shape one: the operator typing in Discord. The gateway states it, and
+    // stating it is the only unambiguous signal of the five.
+    [Fact]
+    public void AMessageTheOwnerSentInDiscordIsMine()
+    {
+        var turns = Turns("""
+        [{"role":"user","content":"what did the overnight run say?",
+          "timestamp":1787000000000,
+          "__openclaw":{"senderIsOwner":true,"senderId":"100000000000000001",
+                        "senderName":"quillfeather","senderUsername":"quillfeather",
+                        "seq":1}}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.True(turn.Mine);
+        Assert.Equal(ChatRole.User, turn.Role);
+        Assert.Null(turn.Speaker);
+    }
+
+    // Shape two: the operator typing here. No sender fields at all, and a
+    // top-level idempotency key ending ":user" — which is the gateway's own
+    // stamp on a message it accepted from this client.
+    [Fact]
+    public void AMessageThisAppSentIsMineByItsIdempotencyKey()
+    {
+        var turns = Turns("""
+        [{"role":"user","content":"anyone free to look at the build?",
+          "timestamp":1787000001000,
+          "idempotencyKey":"3f1c8ad2-59b7-4e06-9c31-8ab7205de164:user",
+          "__openclaw":{"id":"7a4d19e0-0c52-4b8e-a6d3-91f0c4ba7d58",
+                        "idempotencyKey":"3f1c8ad2-59b7-4e06-9c31-8ab7205de164:user",
+                        "seq":2}}]
+        """);
+
+        Assert.True(Assert.Single(turns).Mine);
+    }
+
+    // Shape three: our own mirror as the *other* agents in the room received it
+    // — prefixed, and attributed to whichever bot account carried it. Yours
+    // despite the name, and shown without the prefix, so it matches the copy in
+    // the carrier's own transcript rather than being drawn beside it.
+    [Fact]
+    public void OurOwnMirrorComesBackAsMineWithThePrefixOff()
+    {
+        var turns = Turns("""
+        [{"role":"user","content":"**(via Claude Buddy)** anyone free to look at the build?",
+          "timestamp":1787000001100,
+          "__openclaw":{"senderIsOwner":false,"senderId":"100000000000000002",
+                        "senderName":"Quillbot","senderUsername":"Quillbot","seq":3}}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.True(turn.Mine);
+        Assert.Equal("anyone free to look at the build?", turn.Text);
+        Assert.Null(turn.Speaker);
+    }
+
+    // Shape four: another agent's message relayed through the channel. Named,
+    // which the ticket did not expect — the relay carries the bot's Discord
+    // display name, so this is attributable rather than anonymous.
+    [Fact]
+    public void ARelayedAgentsMessageIsNamed()
+    {
+        var turns = Turns("""
+        [{"role":"user","content":"Build is green on both legs.",
+          "timestamp":1787000002000,
+          "__openclaw":{"senderIsOwner":false,"senderId":"100000000000000003",
+                        "senderName":"Thistle","senderUsername":"Thistle","seq":4}}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.False(turn.Mine);
+        Assert.Equal("Thistle", turn.Speaker);
+    }
+
+    // ...and with no colour, deliberately. senderName is a Discord display name
+    // and the colours in this app are keyed by agent id; there is no map
+    // between them the gateway offers. An uncoloured chip falls back to
+    // initials, where a borrowed colour would say two different speakers were
+    // the same one.
+    [Fact]
+    public void ARelayedAgentGetsNoColourBecauseADisplayNameIsNotAnAgentId()
+    {
+        var turns = Turns("""
+        [{"role":"user","content":"Build is green on both legs.",
+          "__openclaw":{"senderIsOwner":false,"senderName":"Thistle"}}]
+        """);
+
+        Assert.Null(Assert.Single(turns).SpeakerColor);
+    }
+
+    // Shape five: an inter-session message. No sender fields, and a machine
+    // header Readable already turns into the message plus the agent behind it —
+    // so the classification falls through to Unknown and leaves that better
+    // answer alone. Readable's answer is an agent *id*, which is why this one
+    // keeps its colour where the relayed shape above does not.
+    [Fact]
+    public void AnInterSessionMessageKeepsTheSpeakerReadableFound()
+    {
+        var turns = Turns("""
+        [{"role":"user","content":"[Inter-session message] sourceSession=agent:thornwood:discord:direct:100000000000000004 sourceChannel=discord sourceTool=sessions_send isUser=false can you take the release notes?"}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.False(turn.Mine);
+        Assert.Equal("can you take the release notes?", turn.Text);
+        Assert.NotNull(turn.Speaker);
+    }
+
+    // The whole rule degrading to what this app did before it existed. A page
+    // with no `__openclaw` anywhere claims nothing about anybody — which is the
+    // safety net if the gateway's undocumented internals move, and the reason
+    // every existing case in this file above still passes unchanged.
+    [Fact]
+    public void AMessageWithNoMetadataClaimsNothing()
+    {
+        var turns = Turns("""[{"role":"user","content":"morning"}]""");
+
+        var turn = Assert.Single(turns);
+        Assert.False(turn.Mine);
+        Assert.Null(turn.Speaker);
+    }
+
+    // A mirror with nothing after its prefix is nothing, and is dropped rather
+    // than drawn as an empty bubble. Reachable because the prefix comes off
+    // before the emptiness test, which is the order that makes it possible at
+    // all — a message that is only addressing has no content.
+    [Fact]
+    public void AMirrorCarryingOnlyItsPrefixIsNotATurn()
+    {
+        Assert.Empty(Turns("""[{"role":"user","content":"**(via Claude Buddy)**   "}]"""));
+    }
+
+    // An assistant turn is never asked. It is the agent whose transcript this
+    // is — the fact the whole room merge is built on — so a sender block on one
+    // changes nothing, and an idempotency key on one must not be read as yours.
+    [Fact]
+    public void AnAssistantTurnIsNeverClassifiedAsYours()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","content":[{"type":"text","text":"On it."}],
+          "idempotencyKey":"cli-assistant:9d0b6e37-4a15-42fc-b8e0-51c7ad38f962",
+          "__openclaw":{"senderIsOwner":true,"senderName":"quillfeather"}}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.False(turn.Mine);
+        Assert.Null(turn.Speaker);
     }
 }
