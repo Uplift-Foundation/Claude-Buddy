@@ -161,6 +161,76 @@ public class MirrorRoundTripTests : IDisposable
         Assert.Contains("said while the screen was locked", Assert.Single(delta.Turns).Text);
     }
 
+    // The handover window, from the side that has to stand down (CB-28).
+    //
+    // For one round at the moment the dispatcher arrives, the serve pump and the
+    // mirror DispatcherTimer both exist: EnsureTimer disposes the pump before it
+    // creates the timers, but disposing a timer does not reach inside a round
+    // already running. Two rounds on one relay would both read from the same
+    // transcript offset and route the same lines twice, so a message could reach
+    // a panel twice. The shared gate is what stops it, and this is where "the
+    // caller actually asks" can be proved rather than read.
+    [Fact]
+    public async Task AServeTickStandsDownWhileTheOtherPumpHoldsTheGate()
+    {
+        var path = WriteTranscript("handover.jsonl", Conversation(6));
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        await harness.Client.OpenAsync("job-hunter");
+        Assert.Single(harness.Windows);
+
+        File.AppendAllText(path, Row("assistant", "later", "said mid-handover") + "\n");
+
+        Assert.True(RemoteControlSessions.PumpGate.TryEnter());
+        try
+        {
+            // The mirror timer's round is in flight. This round is declined
+            // rather than queued or run late — the pump's own timer is what
+            // brings it back.
+            Assert.False(await RemoteControlSessions.ServeOneAsync(
+                new RemoteControlBridge(".claude"), harness.Server, harness.Client));
+
+            Assert.Empty(harness.Deltas);
+        }
+        finally
+        {
+            RemoteControlSessions.PumpGate.Exit();
+        }
+
+        // ...and nothing was lost by standing down: the next round delivers the
+        // rows the declined one would have.
+        Assert.True(await RemoteControlSessions.ServeOneAsync(
+            new RemoteControlBridge(".claude"), harness.Server, harness.Client));
+
+        var delta = Assert.Single(harness.Deltas);
+        Assert.Contains("said mid-handover", Assert.Single(delta.Turns).Text);
+    }
+
+    // A gate that is not released is worse than no gate: it stops the machine
+    // serving permanently, silently, on the one machine nobody is watching. So
+    // the `finally` is asserted through the failure that would exercise it.
+    [Fact]
+    public async Task AServeTickLeavesTheGateFreeEvenWhenAHalfThrows()
+    {
+        var path = WriteTranscript("throwing-gate.jsonl", Conversation(4));
+
+        var harness = new Harness(_dir) { AgentsThrow = true };
+        harness.AddSession("job-hunter", path);
+
+        Assert.True(await RemoteControlSessions.ServeOneAsync(
+            new RemoteControlBridge(".claude"), harness.Server, harness.Client));
+
+        Assert.False(RemoteControlSessions.PumpGate.Busy);
+
+        // And the next round can still get in, which is the thing that actually
+        // matters about the previous line.
+        Assert.True(await RemoteControlSessions.ServeOneAsync(
+            new RemoteControlBridge(".claude"), harness.Server, harness.Client));
+    }
+
     // A relay with neither half built yet — the window between the bridge
     // starting and StartAsync putting a server and client on it. Nothing to
     // tick, and specifically not a null dereference in the loop that is meant to
