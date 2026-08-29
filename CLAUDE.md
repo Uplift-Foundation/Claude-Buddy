@@ -317,6 +317,30 @@ System Settings — and that failure is invisible. Same reason the bundle id is
 never renamed casually; the comment at the top of `tools/build-macos-app.sh`
 has the full story.
 
+**Local Network consent works the same way, and breaks on every upgrade.**
+Replacing `/Applications/Claude Buddy.app` gives the bundle a new CDHash, macOS
+re-evaluates Local Network access against it, and the grant does not carry over
+— so anything on the LAN, OpenClaw's gateway most of all, starts failing with
+`EHOSTUNREACH`. Nothing prompts loudly enough to notice: this is a menu-bar app
+with no Dock icon and no window.
+
+What makes it expensive is that **every obvious check agrees with the wrong
+answer.** `ping`, `nc`, `curl` and `ssh` are Apple-signed and exempt from the
+gate, so they all report the host perfectly reachable while the app cannot open
+a socket to it — and `nc -z` will additionally claim success against ports that
+refuse an honest connect. Reach for the app's own transport instead:
+
+```bash
+dotnet run --project tools/openclaw-probe -- sessions
+```
+
+Note the probe is itself subject to the gate, because `dotnet` is a third-party
+binary. **A failing probe alongside a working app is expected, not a
+contradiction** — it says the terminal lacks the grant, not that the app does.
+`OpenClawGateway.ExplainConnectFailure` now appends a hint naming the settings
+pane, so the app says this itself rather than only reporting the errno. CB-38
+has the full diagnosis.
+
 `<Version>` in `ClaudeBuddy.csproj` is the single source of truth for the
 shipped version — the packaging scripts and the release workflow parse it out of
 there.
