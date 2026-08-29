@@ -309,6 +309,34 @@ namespace ClaudeBuddy
         // by OpenClawSessionKind.RoomOf.
         private static Dictionary<string, List<string>> _roomMembers = new(StringComparer.Ordinal);
 
+        // Where every session the gateway listed delivers, by gateway key —
+        // including the ones no orb is drawn for.
+        //
+        // Beside _roomMembers rather than folded into it, and recorded in the
+        // same place for the same reason: the snapshot answers "which orbs are
+        // worth showing" and this answers "where does this conversation
+        // deliver", and a session filtered out for being quiet still has an
+        // address. Reading the address off the snapshot is what CB-27 was —
+        // a room whose members had all gone quiet had nowhere to post, so the
+        // message went privately to one agent and nobody in the channel saw it.
+        //
+        // Two rejected alternatives, both of which look adequate:
+        //
+        //   * Deriving it from the room key. "discord:<id>" gives the channel
+        //     and the recipient, and that is genuinely enough to post — but not
+        //     the accountId, and the accountId is the whole reason a room send
+        //     does not double up. The gateway suppresses a bot's own channel
+        //     post from that bot's own sessions, so a mirror sent under the
+        //     carrier's account is the one thing that reaches the carrier
+        //     exactly once.
+        //   * Taking whichever member happens to be in the snapshot. That is
+        //     recency-dependent, which *is* the bug.
+        //
+        // Replaced whole per poll, like the snapshot: a session the gateway has
+        // stopped listing has no address any more, and holding the last one
+        // known would be inventing a destination.
+        private static Dictionary<string, Delivery?> _deliveries = new(StringComparer.Ordinal);
+
         public static IReadOnlyList<string> MembersOfRoom(string roomKey)
         {
             lock (Gate)
@@ -359,8 +387,6 @@ namespace ClaudeBuddy
         // id; the gateway knows it without the prefix.
         public static IRemoteChatSession? ChatFor(string sessionId, string displayName)
         {
-            var delivery = _snapshot.FirstOrDefault(s => "openclaw:" + s.Key == sessionId)?.Delivery;
-
             if (!ClaudeBuddySettings.OpenClawEnabled) return null;
 
             const string Prefix = "openclaw:";
@@ -370,13 +396,38 @@ namespace ClaudeBuddy
 
             lock (Gate)
             {
+                // The delivery map first, the snapshot second.
+                //
+                // The map holds every session the gateway listed; the snapshot
+                // holds the ones whose orbs are worth drawing. A member of a
+                // channel that has been quiet for longer than the window is in
+                // the first and not the second, and reading only the second is
+                // what left it with no address — the mirror silently skipped,
+                // the message delivered privately to one agent, and nothing in
+                // the channel to show for it.
+                //
+                // The snapshot is still consulted, because SetSnapshotForTests
+                // is the seam a test publishes sessions through and a fallback
+                // that reached nothing would make those tests pass by accident.
+                var delivery = _deliveries.TryGetValue(key, out var known)
+                    ? known
+                    : _snapshot.FirstOrDefault(s => "openclaw:" + s.Key == sessionId)?.Delivery;
+
                 if (!Chats.TryGetValue(key, out var chat))
                 {
                     chat = new OpenClawChatSession(sessionId, key, displayName);
                     Chats[key] = chat;
                 }
 
-                chat.Delivery = delivery;
+                // Assigned only when there is one, never cleared.
+                //
+                // The same rule, for the same reason, as ChatSpeaker.Resolve:
+                // knowing an address and then not knowing it is a gap in what we
+                // have been told — a poll that lost the race, a reconnect that
+                // emptied the tables — and never news that the conversation
+                // stopped living anywhere. A panel reopened in that window used
+                // to have its mirror turned off for the rest of the run.
+                if (delivery is not null) chat.Delivery = delivery;
 
                 if (!string.IsNullOrWhiteSpace(displayName))
                 {
@@ -801,6 +852,7 @@ namespace ClaudeBuddy
             var result = new List<Session>();
 
             var roomMembers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            var deliveries = new Dictionary<string, Delivery?>(StringComparer.Ordinal);
 
             // Every agent the gateway knows of, filtered or not, so that a
             // colour is reserved for one whose orb isn't drawn — their messages
@@ -843,6 +895,13 @@ namespace ClaudeBuddy
 
                     members.Add(key);
                 }
+
+                // ...and where it delivers, on the same terms and for the same
+                // reason. Every session, not only a channel's: a DM whose orb
+                // the recency filter dropped is still a conversation with an
+                // address, and the mirror on an ordinary send has been quietly
+                // skipping exactly those.
+                deliveries[key] = DeliveryFor(s);
 
                 everyAgent.Add(AgentIdOf(key) ?? key);
 
@@ -902,6 +961,7 @@ namespace ClaudeBuddy
             {
                 _roomMembers = roomMembers;
                 _roomColours = roomColours;
+                _deliveries = deliveries;
             }
 
             return (result, list.GetArrayLength());
