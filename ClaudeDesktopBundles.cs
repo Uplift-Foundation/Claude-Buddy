@@ -65,11 +65,62 @@ namespace ClaudeBuddy
         public static bool Exists(string profileFolder) =>
             OperatingSystem.IsMacOS() && Directory.Exists(PathFor(profileFolder));
 
+        // What Ensure() should do with a clone that is already on disk.
+        internal enum CloneAction
+        {
+            // Already correct: right version, right colour, icon actually on.
+            Reuse,
+
+            // The bundle is fine, only its icon is missing or the wrong colour.
+            // Repaint it where it stands.
+            Repaint,
+
+            // Re-clone from the installed bundle.
+            Rebuild,
+        }
+
+        // The three conditions used to be one `&&`, so *any* of them failing
+        // took the rebuild path — and that is what silently downgraded Claude
+        // Desktop on this machine for three days.
+        //
+        // Squirrel installs an update into whichever bundle is running, which
+        // for every tinted profile is a clone, and it installs by swapping the
+        // whole Claude.app directory: the old bundle is moved out to a temp
+        // directory and the freshly downloaded one is moved in. The custom icon
+        // does not survive that, because it lives in "Icon\r" at the *bundle
+        // root* rather than under Contents/ — the very placement that keeps the
+        // code signature intact is what puts it outside what Squirrel carries
+        // over. So a successful self-update always lands a clone that is newer
+        // than /Applications and has no icon.
+        //
+        // Under the old single condition, ColourMatches() then answered false
+        // and the next launch deleted that clone and re-cloned from
+        // /Applications — which is *older*, because Squirrel updated the clone
+        // and never touched /Applications. IsStaleVersion, written precisely to
+        // refuse a downgrade, was never consulted: the `&&` had already decided.
+        // The result was a sawtooth that ran for days, visible in the app's own
+        // log as
+        //
+        //   [updater] Install of 1.40609.0 has failed to apply 3 time(s)
+        //   [updater] Version changed since last launch: 1.40609.0 → 1.37937.0
+        //
+        // and as 100 ShipIt install requests that each "completed successfully"
+        // while the user stayed pinned to 1.37937.0.
+        //
+        // Splitting the answer three ways is the fix: only a clone that is
+        // genuinely *behind* the installed bundle is worth rebuilding, and a
+        // missing icon — the normal aftermath of an update — is repaired in
+        // place, which is both correct and cheaper than a re-clone.
+        internal static CloneAction PlanFor(bool exists, bool stale, bool colourMatches) =>
+            !exists || stale ? CloneAction.Rebuild
+            : colourMatches ? CloneAction.Reuse
+            : CloneAction.Repaint;
+
         // Returns the clone's path, creating or refreshing it as needed, or null
         // if anything went wrong — callers fall back to launching the real bundle,
         // so a failure here costs the colour and nothing else.
         // Excluded from coverage: copies a real .app bundle on disk and shells out
-        // to codesign.
+        // to codesign. The rule it applies is PlanFor, which is pure and covered.
         [ExcludeFromCodeCoverage]
         public static string? Ensure(string profileFolder, string sourceApp, Color tint)
         {
@@ -78,23 +129,37 @@ namespace ClaudeBuddy
             try
             {
                 var clone = PathFor(profileFolder);
+                var exists = Directory.Exists(clone);
 
-                if (Directory.Exists(clone)
-                    && !IsStale(clone, sourceApp)
-                    && ColourMatches(profileFolder, tint))
+                switch (PlanFor(
+                            exists,
+                            exists && IsStale(clone, sourceApp),
+                            exists && ColourMatches(profileFolder, tint)))
                 {
-                    return clone;
+                    case CloneAction.Reuse:
+                        return clone;
+
+                    // The icon is written into the bundle root and nothing under
+                    // Contents/ is touched, so this leaves the CDHash — and with
+                    // it the keychain ACL and every TCC grant — exactly as the
+                    // update left it. Tint from the clone rather than from
+                    // sourceApp: the clone is the bundle being launched, and
+                    // after a self-update it is the newer of the two, so its own
+                    // artwork is the artwork the user is about to see.
+                    case CloneAction.Repaint:
+                        ApplyTintedIcon(clone, profileFolder, tint);
+                        return clone;
                 }
 
                 Directory.CreateDirectory(DirectoryFor(profileFolder));
-                if (Directory.Exists(clone)) DeleteDirectory(clone);
+                if (exists) DeleteDirectory(clone);
 
                 // -c asks for a clonefile(2) copy; without it this would really
                 // copy 753 MB.
                 if (!Run("/bin/cp", "-Rc", sourceApp, clone)) return null;
                 if (!Directory.Exists(clone)) return null;
 
-                ApplyTintedIcon(clone, sourceApp, profileFolder, tint);
+                ApplyTintedIcon(clone, profileFolder, tint);
                 return clone;
             }
             catch
@@ -246,15 +311,21 @@ namespace ClaudeBuddy
         // Excluded from coverage: unpacks an .icns with iconutil and writes it
         // back into a bundle; the pixel maths it calls is WriteTinted, which is
         // tested.
+        //
+        // Reads its artwork out of the clone rather than the installed bundle.
+        // In the fresh-clone path the two are byte-identical, so nothing
+        // changes; in the repaint path the clone is the bundle Squirrel has
+        // just updated, and taking the icon from /Applications there would
+        // paint the *old* release's artwork onto the new one.
         [ExcludeFromCodeCoverage]
-        private static void ApplyTintedIcon(string clone, string sourceApp, string profileFolder, Color tint)
+        private static void ApplyTintedIcon(string clone, string profileFolder, Color tint)
         {
             var work = DirectoryFor(profileFolder);
-            var iconFile = PlistValue(Path.Combine(sourceApp, "Contents", "Info.plist"), "CFBundleIconFile")
+            var iconFile = PlistValue(Path.Combine(clone, "Contents", "Info.plist"), "CFBundleIconFile")
                            ?? "electron";
             if (!iconFile.EndsWith(".icns", StringComparison.OrdinalIgnoreCase)) iconFile += ".icns";
 
-            var source = Path.Combine(sourceApp, "Contents", "Resources", iconFile);
+            var source = Path.Combine(clone, "Contents", "Resources", iconFile);
             if (!File.Exists(source)) return;
 
             var flat = Path.Combine(work, "icon-source.png");
