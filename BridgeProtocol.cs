@@ -452,13 +452,42 @@ namespace ClaudeBuddy
         // writing: sometimes abridged, sometimes reworded, always a second
         // draft. Delivering those put paraphrases in the chat panel beside the
         // messages they paraphrased.
+        //
+        // The exception is a message the session never got to answer as a turn
+        // of its own. A message handed to a relay whose model is already
+        // mid-turn is queued rather than delivered, and Claude Code then folds
+        // it into the running turn — writing an `attachment` row of
+        // `attachment.type == "queued_command"` holding the text, followed by
+        // `queue-operation`/`remove` with `reason: "absorbed_mid_turn"`. There
+        // is no `user` row at all, so the rule above dropped it. Route coins
+        // AbsorbedRow for that shape, because the row's own type ("attachment")
+        // covers half a dozen unrelated things and says nothing about where the
+        // text came from.
+        //
+        // Safe to trust for the same reason a user row is: the prompt is the
+        // verbatim text the session was handed, not something a model wrote
+        // about it. That is not an assumption — the roster frames this was
+        // found on carry a SHA-256 of their own payload, and the ones recovered
+        // from a queued_command attachment verify against it byte for byte.
+        //
+        // It is also not a rare path. A relay is mid-turn most of the time,
+        // because Buddy's own poll keeps it working; on the machine this was
+        // diagnosed on, *every* cross-session message it had ever received was
+        // absorbed this way and therefore lost. See CB-41.
         public static IReadOnlyList<InboundMessage> ParseInboundMessagesFrom(string rowType, string rowText)
         {
-            if (!string.Equals(rowType, "user", StringComparison.Ordinal))
+            if (!string.Equals(rowType, "user", StringComparison.Ordinal)
+                && !string.Equals(rowType, AbsorbedRow, StringComparison.Ordinal))
                 return Array.Empty<InboundMessage>();
 
             return ParseInboundMessages(rowText);
         }
+
+        // The row type Route uses for a queued command absorbed into a turn
+        // already running. Named after the attachment that carries it rather
+        // than after the queue operation that retires it, since the attachment
+        // is the row the text actually lives in.
+        public const string AbsorbedRow = "queued_command";
 
         // Null when the text holds no such tag, which is the common case: most
         // rows in the bridge's transcript are its own turns.
