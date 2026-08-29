@@ -1047,6 +1047,20 @@ waiting until you do. Seeing what your agents are doing and being able to make
 them do things are different powers, which is why the second one is asked for
 separately rather than coming along with the first.
 
+**If the status row says `can't reach the gateway: No route to host`, check
+macOS's Local Network permission before you check your network.** macOS grants
+local network access per app *identity*, and installing an upgrade replaces the
+app bundle — so the permission does not survive the update, and Claude Buddy
+silently loses the ability to reach a gateway that is running perfectly well.
+Open **System Settings → Privacy & Security → Local Network** and make sure
+Claude Buddy is switched on. The app now says so in that row itself, but the
+underlying error still reads like a network fault, which is why it is worth
+naming here.
+
+Testing it from a terminal will mislead you: `ping`, `nc`, `curl` and `ssh` are
+all built into macOS and exempt from that permission, so they will report the
+gateway reachable while the app cannot open a socket to it at all.
+
 Two things worth knowing if you are wiring this up yourself: the connection uses
 its own TLS stack (BouncyCastle) because the gateway requires TLS 1.3 and .NET
 on macOS cannot speak it, and the certificate is trusted by fingerprint on first
