@@ -4,6 +4,30 @@ using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
+    // One turn as the history parser hands it over: what TurnsFromHistory reads
+    // out of a page of chat.history, and what SetHistory and PrependHistory put
+    // into a transcript.
+    //
+    // A record rather than the seven-field tuple this was. The tuple was
+    // tolerable while it was three fields and stopped being so at seven — every
+    // producer and consumer restated the whole shape in its own signature, so
+    // the shape appeared eight times in two files plus once in each test's
+    // helper, and adding a field meant editing all of them before anything
+    // compiled again. Named members also read at the call site: `turn.Speaker`
+    // says what `t.Item6` does not.
+    //
+    // A struct because it is a value and is treated as one — a page is a few
+    // hundred of these, each copied into a ChatTurn immediately, and nothing
+    // ever holds on to one.
+    internal readonly record struct HistoryTurn(
+        ChatRole Role,
+        string Text,
+        string? ImageUrl,
+        string ImageAlt,
+        DateTimeOffset At,
+        string? Speaker,
+        string? SpeakerColor);
+
     // One OpenClaw session, as something the chat panel can talk to.
     //
     // Reading works today. **Sending does not**, and says so rather than
@@ -249,8 +273,7 @@ namespace ClaudeBuddy
         // raising its own event, because the panel has to put the scroll
         // position back afterwards — content appearing above where you are
         // reading would otherwise throw you down the page.
-        public void PrependHistory(
-            IReadOnlyList<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> turns)
+        public void PrependHistory(IReadOnlyList<HistoryTurn> turns)
         {
             if (turns.Count == 0) return;
 
@@ -272,8 +295,7 @@ namespace ClaudeBuddy
 
         public event Action<int>? HistoryPrepended;
 
-        public void SetHistory(
-            IReadOnlyList<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> turns)
+        public void SetHistory(IReadOnlyList<HistoryTurn> turns)
         {
             if (turns.Count == 0) return;
 
@@ -282,17 +304,17 @@ namespace ClaudeBuddy
             _streamingKind = null;
             HasMore = true;
 
-            foreach (var (role, text, imageUrl, imageAlt, at, speaker, speakerColor) in turns)
+            foreach (var turn in turns)
             {
                 _history.Add(new ChatTurn
                 {
-                    Role = role,
-                    Text = text,
-                    ImageUrl = imageUrl,
-                    ImageAlt = imageAlt,
-                    At = at,
-                    Speaker = speaker,
-                    SpeakerColor = speakerColor,
+                    Role = turn.Role,
+                    Text = turn.Text,
+                    ImageUrl = turn.ImageUrl,
+                    ImageAlt = turn.ImageAlt,
+                    At = turn.At,
+                    Speaker = turn.Speaker,
+                    SpeakerColor = turn.SpeakerColor,
                     IsComplete = true
                 });
             }

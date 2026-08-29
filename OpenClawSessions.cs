@@ -1226,11 +1226,9 @@ namespace ClaudeBuddy
         // here controls, so it is the half that has to be tested against
         // fixtures — the same reasoning that keeps ChatTranscript and
         // CodexTranscript pure.
-        internal static List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt,
-            DateTimeOffset At, string? Speaker, string? SpeakerColor)> TurnsFromHistory(
-            JsonElement messages)
+        internal static List<HistoryTurn> TurnsFromHistory(JsonElement messages)
         {
-            var turns = new List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)>();
+            var turns = new List<HistoryTurn>();
 
             foreach (var message in messages.EnumerateArray())
             {
@@ -1260,9 +1258,10 @@ namespace ClaudeBuddy
                         if (string.IsNullOrWhiteSpace(url)) continue;
 
                         var ms2 = Num(message, "timestamp");
-                        turns.Add((role, "", url!, Str(block, "alt") ?? "", ms2 <= 0
-                            ? DateTimeOffset.Now
-                            : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
+                        turns.Add(new HistoryTurn(role, "", url!, Str(block, "alt") ?? "",
+                            ms2 <= 0
+                                ? DateTimeOffset.Now
+                                : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
                             null, null));
                     }
                 }
@@ -1291,7 +1290,7 @@ namespace ClaudeBuddy
                     ? DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime()
                     : DateTimeOffset.Now;
 
-                turns.Add((role, text.Trim(), null, "", at,
+                turns.Add(new HistoryTurn(role, text.Trim(), null, "", at,
                     speakerId is null ? null : AgentNameOf(speakerId),
                     speakerId is null ? null : ColourForAgent(speakerId)));
             }
@@ -1622,7 +1621,7 @@ namespace ClaudeBuddy
         // half means a chat.history request over a live socket, which is the
         // reason FetchHistoryPageAsync below is excluded too.
         [ExcludeFromCodeCoverage]
-        private static async Task<(List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> Turns, int Messages)?>
+        private static async Task<(List<HistoryTurn> Turns, int Messages)?>
             FetchPageAsync(OpenClawChatSession chat, int offset, CancellationToken ct)
         {
             OpenClawGateway? gateway;
@@ -1642,9 +1641,7 @@ namespace ClaudeBuddy
         // fetched is not a reason to refuse the conversation, because the panel
         // still works forward from whatever happens next.
         [ExcludeFromCodeCoverage]
-        private static async Task<(List<(ChatRole Role, string Text, string? ImageUrl,
-            string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> Turns,
-            int Count)?> FetchHistoryPageAsync(
+        private static async Task<(List<HistoryTurn> Turns, int Count)?> FetchHistoryPageAsync(
             OpenClawGateway gateway, OpenClawChatSession chat, int offset, CancellationToken ct)
         {
             try

@@ -31,8 +31,8 @@ public class OpenClawRoomRebuildTests
         params (ChatRole Role, string Text, int Minute)[] turns)
     {
         session.SetHistory(turns
-            .Select(t => (t.Role, t.Text, (string?)null, "", T0.AddMinutes(t.Minute),
-                          (string?)null, (string?)null))
+            .Select(t => new HistoryTurn(t.Role, t.Text, null, "", T0.AddMinutes(t.Minute),
+                          null, null))
             .ToList());
     }
 
@@ -138,8 +138,7 @@ public class OpenClawRoomRebuildTests
         // Prepending is what a fetched page does.
         zara.PrependHistory(new[]
         {
-            (ChatRole.Assistant, "older", (string?)null, "", T0.AddMinutes(1),
-             (string?)null, (string?)null),
+            new HistoryTurn(ChatRole.Assistant, "older", null, "", T0.AddMinutes(1), null, null),
         }.ToList());
 
         Dispatcher.UIThread.RunJobs();

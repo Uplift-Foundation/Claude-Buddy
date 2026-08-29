@@ -37,8 +37,8 @@ namespace ClaudeBuddy.Tests
             params (ChatRole Role, string Text, int Minute)[] turns)
         {
             session.SetHistory(turns
-                .Select(t => (t.Role, t.Text, (string?)null, "", T0.AddMinutes(t.Minute),
-                              (string?)null, (string?)null))
+                .Select(t => new HistoryTurn(t.Role, t.Text, null, "", T0.AddMinutes(t.Minute),
+                              null, null))
                 .ToList());
         }
 

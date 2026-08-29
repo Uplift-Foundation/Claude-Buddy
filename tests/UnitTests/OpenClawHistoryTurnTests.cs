@@ -25,9 +25,7 @@ public class OpenClawHistoryTurnTests
     private static JsonElement Messages(string json) =>
         JsonDocument.Parse(json).RootElement;
 
-    private static System.Collections.Generic.List<(ChatRole Role, string Text,
-        string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker,
-        string? SpeakerColor)> Turns(string json) =>
+    private static System.Collections.Generic.List<HistoryTurn> Turns(string json) =>
         OpenClawSessions.TurnsFromHistory(Messages(json));
 
     // ---- the two role shapes --------------------------------------------
