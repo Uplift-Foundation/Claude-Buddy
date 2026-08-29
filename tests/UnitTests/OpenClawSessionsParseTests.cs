@@ -434,6 +434,47 @@ namespace ClaudeBuddy.Tests
             Assert.Equal("channel:902", again.Delivery!.To);
         }
 
+        // The other arm of the same rule: a session the delivery map has never
+        // heard of falls back to the published snapshot.
+        //
+        // Worth a case because the fallback is not dead weight. SetSnapshotForTests
+        // is the seam every other test publishes sessions through, and a lookup
+        // that reached only the map would make all of them pass for the wrong
+        // reason — they would be asserting against a chat whose Delivery had
+        // silently become null. The comment on the line says so; this is the half
+        // of it that was unverified.
+        [Fact]
+        public void ASessionTheMapHasNotSeenFallsBackToTheSnapshot()
+        {
+            // A poll that knows about somebody else entirely, so the map is
+            // populated and simply does not contain the key asked for next.
+            Parse($$"""
+                {"sessions":[
+                  {"key":"agent:aster:discord:channel:903","lastActivityAt":{{JustNow}},
+                   "deliveryContext":{"channel":"discord","to":"channel:903","accountId":"asterbot"}
+                  }
+                ]}
+                """);
+
+            OpenClawSessions.SetSnapshotForTests(new[]
+            {
+                new OpenClawSessions.Session(
+                    "agent:quill:discord:channel:904", "Quill — #lobby", "discord", "idle",
+                    Now, new OpenClawSessions.Delivery("discord", "channel:904", "quillbot"),
+                    SessionKind.Channel, false),
+            });
+
+            ClaudeBuddySettings.OpenClawEnabled = true;
+            var chat = (OpenClawChatSession)OpenClawSessions.ChatFor(
+                "openclaw:agent:quill:discord:channel:904", "Quill")!;
+
+            Assert.NotNull(chat.Delivery);
+            Assert.Equal("channel:904", chat.Delivery!.To);
+            Assert.Equal("quillbot", chat.Delivery.AccountId);
+
+            OpenClawSessions.SetSnapshotForTests(Array.Empty<OpenClawSessions.Session>());
+        }
+
         // Every agent gets a colour reserved whether its orb is drawn or not, for
         // the same reason: its messages still appear in a room, and an uncoloured
         // bubble in a coloured conversation reads as a failure rather than an

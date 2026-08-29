@@ -931,6 +931,79 @@ namespace ClaudeBuddy.Tests
                 Array.Empty<(bool, DateTimeOffset?, string)>()));
         }
 
+        // --- who spoke last, from a real transcript ---
+
+        // The function that *produces* the timestamps PickCarrier orders by.
+        //
+        // Covered separately because covering PickCarrier is not covering this:
+        // every carrier case above hands timestamps straight in, and every
+        // SendAsync case builds members with no history at all — so the loop in
+        // here only ever ran over an empty list and "newest" was asserted
+        // nowhere. This is the half of the fix that decides which agent actually
+        // receives the message.
+
+        // Several turns, and the newest wins — not the first walked past, and
+        // not the last. Deliberately out of order in the transcript, because a
+        // loop that returned either end would pass with them sorted.
+        [Fact]
+        public void TheNewestThingAMemberSaidIsWhatCounts()
+        {
+            var quill = Member("quill");
+            Give(quill,
+                (ChatRole.Assistant, "starting", 3),
+                (ChatRole.Assistant, "still going", 40),
+                (ChatRole.Assistant, "nearly there", 12));
+
+            Assert.Equal(T0.AddMinutes(40), OpenClawRoomChatSession.LastSpoke(quill));
+        }
+
+        // ...and with the newest first in the list, so neither end of the walk
+        // is the answer by accident.
+        [Fact]
+        public void TheOrderTheTurnsAreStoredInDoesNotDecideIt()
+        {
+            var quill = Member("quill");
+            Give(quill,
+                (ChatRole.Assistant, "nearly there", 40),
+                (ChatRole.Assistant, "starting", 3),
+                (ChatRole.Assistant, "still going", 12));
+
+            Assert.Equal(T0.AddMinutes(40), OpenClawRoomChatSession.LastSpoke(quill));
+        }
+
+        // A user turn in a member's transcript is somebody else's message
+        // arriving, not that member speaking. Counting those would make "who
+        // spoke last" mean "who was spoken to last", which is the same answer
+        // for every member in the room and so no answer at all.
+        [Fact]
+        public void BeingSpokenToIsNotSpeaking()
+        {
+            var quill = Member("quill");
+            Give(quill,
+                (ChatRole.Assistant, "on it", 5),
+                (ChatRole.User, "any update?", 50));
+
+            Assert.Equal(T0.AddMinutes(5), OpenClawRoomChatSession.LastSpoke(quill));
+        }
+
+        // A member that has only ever been spoken to has not spoken, which is
+        // null rather than "a long time ago" — the distinction PickCarrier's
+        // Compare exists for.
+        [Fact]
+        public void AMemberThatHasOnlyListenedHasNotSpoken()
+        {
+            var quill = Member("quill");
+            Give(quill, (ChatRole.User, "anyone about?", 1));
+
+            Assert.Null(OpenClawRoomChatSession.LastSpoke(quill));
+        }
+
+        [Fact]
+        public void AMemberWithNoTranscriptAtAllHasNotSpoken()
+        {
+            Assert.Null(OpenClawRoomChatSession.LastSpoke(Member("quill")));
+        }
+
         // --- what a failure says ---
 
         // Three sentences, because there are three different truths and the
@@ -1111,6 +1184,35 @@ namespace ClaudeBuddy.Tests
             // ...and it is the gateway's copy that survived, timestamped by the
             // gateway rather than by this window.
             Assert.Equal(T0.AddMinutes(3), mine.At);
+        }
+
+        // The dedupe predicate walks past turns that are not yours without
+        // matching them. Obvious, and uncovered until now because every case
+        // that reached it had nothing else in the room to walk past — so the
+        // arm that says "this merged turn is somebody else's, keep looking" had
+        // never been taken.
+        [Fact]
+        public async Task SomebodyElsesIdenticalWordsDoNotRetireYourOwnMessage()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
+
+            // An agent that happens to have said the same words, attributed to
+            // it in pass one — which is not your message coming back.
+            Give(quill, (ChatRole.Assistant, "anyone about?", 1));
+
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("anyone about?");
+            room.Rebuild();
+
+            // Both survive: Quill's, attributed, and yours.
+            Assert.Contains(room.History, t => t.Speaker == "Quill" && !t.Mine);
+            Assert.Contains(room.History, t => t.Mine);
         }
 
         // The room's own list is bounded like every other transcript here. Small
