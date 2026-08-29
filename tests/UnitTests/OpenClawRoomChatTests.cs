@@ -1285,25 +1285,58 @@ namespace ClaudeBuddy.Tests
             Assert.Contains(notes, n => n.Text.Contains("no member of this channel"));
         }
 
-        // The room's own list is bounded like every other transcript here. Small
-        // on purpose — these are only ever the last few things this window did —
-        // and a room left open for a long afternoon of failed sends must not
-        // accumulate them without limit.
+        // The room's own list is bounded, and this asserts what falls off rather
+        // than only that something does.
+        //
+        // It replaces a case that had quietly stopped testing anything. That one
+        // sent forty messages with replying switched off, which used to leave
+        // forty notes and overflow the cap — and once notes coalesce, forty
+        // identical ones are a single note. It kept one entry and passed
+        // `1 <= 32` while proving nothing at all. Measured, not guessed: the old
+        // assertion was replaced with a failing probe and it reported "kept 1".
+        //
+        // Two of this branch's own commits between them closed every route to
+        // the eviction: the note coalescing killed this one, and the `_local`
+        // prune killed the other, since a sent message whose gateway copy has
+        // arrived no longer occupies a slot. Neither left the line unreached in
+        // the way a read-through would notice — they left it reachable only in a
+        // state no test now produces, which is the same failure mode that hid
+        // LastSpoke's comparison and is worth recognising twice.
+        //
+        // **The environment is the opposite of the leak case's, deliberately.**
+        // ArrivedMessagesDoNotEvictTheNoteExplainingAnEarlierFailure needs sends
+        // that *succeed*, so the gateway's copies come back and prune. This one
+        // needs sends that *fail*, so nothing is ever pruned and the entries
+        // accumulate. Moving either into the other's file makes it silently
+        // stop testing its own subject — which has now happened once in each
+        // direction on this branch.
         [Fact]
-        public async Task TheRoomsOwnTurnsAreBounded()
+        public async Task TheOldestEntryIsWhatFallsOffWhenTheListOverflows()
         {
             ClaudeBuddySettings.ReloadForTests();
-            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
 
             var quill = Member("quill");
             quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
+
             var room = Room((quill, "Quill", "#ff0000"));
 
-            for (var i = 0; i < 40; i++) await room.SendAsync("attempt " + i);
+            // No gateway, so every send fails: each leaves your message *and* a
+            // note, two entries a time and nothing to prune them. Distinct texts,
+            // because identical adjacent notes coalesce — and the notes here are
+            // never adjacent, each having its own message above it.
+            for (var i = 0; i < 20; i++) await room.SendAsync("sent " + i);
 
             room.Rebuild();
 
-            Assert.True(room.History.Count <= 32, $"kept {room.History.Count}");
+            // Forty entries into a list that holds thirty-two.
+            Assert.Equal(32, room.History.Count);
+
+            // The oldest went, the newest stayed. Asserting both, because a cap
+            // that trimmed the wrong end would also leave thirty-two.
+            Assert.DoesNotContain(room.History, t => t.Text == "sent 0");
+            Assert.Contains(room.History, t => t.Text == "sent 19");
         }
 
         // ...and so does the message you typed, until the gateway's own copy of
