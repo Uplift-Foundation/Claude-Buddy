@@ -41,6 +41,18 @@ namespace ClaudeBuddy
         private static DispatcherTimer? _poll;
         private static DateTime _lastUse = DateTime.MinValue;
 
+        // What drives a relay while there is no dispatcher to drive it from.
+        // See ServePump for the whole of why, and ServeTickAsync below for what
+        // one round does. Null once the UI is up: EnsureTimer disposes it,
+        // because from that point the two DispatcherTimers are doing strictly
+        // more than this can.
+        private static ServePump? _servePump;
+
+        // Fast, because it is free — the same reasoning as MirrorPumpEvery next
+        // door, and a shade slower because this one runs when the mirror halves
+        // are idle as well as when they are not.
+        private static readonly TimeSpan ServePumpEvery = TimeSpan.FromSeconds(2);
+
         private sealed class Relay
         {
             public RemoteControlBridge? Bridge;
@@ -579,6 +591,106 @@ namespace ClaudeBuddy
         {
             if (!ClaudeBuddySettings.RemoteControlServeOnLaunch) return;
             EnsureStarted();
+
+            // The only call site, and deliberately so: this is the one path that
+            // brings a relay up with no dispatcher behind it. Every other route
+            // to EnsureStarted is a hand on this machine, which means a window,
+            // which means the UI thread is already running its own timers.
+            EnsureServePump();
+        }
+
+        // Excluded from coverage: starts a real repeating timer over whatever
+        // relays are live. Both rules it relies on — Start being idempotent, and
+        // a tick neither overlapping nor being killed by a throw — are ServePump's
+        // and are covered there; what one round *does* is ServeTickAsync's, and
+        // is covered against relays with no bridge behind them.
+        [ExcludeFromCodeCoverage]
+        internal static void EnsureServePump()
+        {
+            lock (Gate)
+            {
+                _servePump ??= new ServePump(ServeTickAsync, ServePumpEvery);
+                _servePump.Start();
+            }
+        }
+
+        // Handing over. Called from EnsureTimer, which only ever runs on the UI
+        // thread, so reaching it *is* the proof that a dispatcher now exists —
+        // which is the only thing this pump was standing in for.
+        internal static void StopServePump()
+        {
+            ServePump? pump;
+            lock (Gate)
+            {
+                pump = _servePump;
+                _servePump = null;
+            }
+
+            pump?.Dispose();
+        }
+
+        // Whether the stand-in is still needed, as a question rather than a
+        // field, so the handover can be asserted from either side.
+        internal static bool ServePumpRunning
+        {
+            get { lock (Gate) return _servePump?.Running == true; }
+        }
+
+        // One round of serving, with no display and no prompt.
+        //
+        // Draining the transcript is the whole of it: an inbound frame becomes a
+        // MessageReceived, which OnMessage routes to this account's
+        // RemoteMirrorServer, which answers on its own. Nothing here pastes a
+        // prompt, so a machine that nobody is asking about spends nothing to sit
+        // here — the cost of serving is paid by the answer, once, when a request
+        // actually arrives.
+        //
+        // Deliberately *not* the poll: that asks the relay's model for a peer
+        // list, which costs a turn and produces remote orbs for a screen that,
+        // by construction, nobody is looking at. It starts when the dispatcher
+        // does.
+        //
+        // Unlike MirrorTickAsync this does not skip a relay whose halves report
+        // idle. That check is an optimisation there because the poll is draining
+        // the same transcript every twenty seconds anyway; here nothing else is
+        // draining it at all, and an idle server is exactly the state a first
+        // HELLO arrives in.
+        internal static async Task ServeTickAsync()
+        {
+            List<Relay> live;
+            lock (Gate) live = Relays.Values.Where(r => r.Bridge is not null).ToList();
+
+            foreach (var relay in live)
+            {
+                await ServeOneAsync(relay.Bridge!, relay.Server, relay.Client).ConfigureAwait(false);
+            }
+        }
+
+        // One relay's round, split out for the reason the rest of this file
+        // splits things out: Relay is private and holds a live bridge, so the
+        // loop above can only be reached by having one — while what the loop
+        // *does* is three calls and three catches, and those are worth
+        // asserting.
+        //
+        // Each of the three is caught separately and none of them stops the
+        // others. A relay whose pane has gone, or a mirror half that throws on
+        // an expiry, must not take the other accounts' serving down with it:
+        // this runs where nobody is watching, so the failure would be permanent
+        // and silent, which is the whole family of bug this ticket belongs to.
+        internal static async Task ServeOneAsync(
+            RemoteControlBridge bridge, RemoteMirrorServer? server, RemoteMirrorClient? client)
+        {
+            try { bridge.Pump(); } catch { }
+
+            if (server is not null)
+            {
+                try { await server.TickAsync().ConfigureAwait(false); } catch { }
+            }
+
+            if (client is not null)
+            {
+                try { await client.TickAsync().ConfigureAwait(false); } catch { }
+            }
         }
 
         // Deletes scratch directories no configured account owns.
@@ -724,6 +836,12 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static void EnsureTimer()
         {
+            // Reaching here means the dispatcher is running, which is the one
+            // thing the serve pump was covering for. Stopped before the timers
+            // are created rather than after, so the two can never both be
+            // draining one transcript.
+            StopServePump();
+
             if (_poll is not null) return;
 
             _poll = new DispatcherTimer { Interval = PollEvery };

@@ -1109,6 +1109,14 @@ Turn it on in **Settings → Other machines**, then:
   are plain keys in `settings.json`, so an SSH session and an app relaunch is
   enough to manage a machine you can't see.
 
+  **A locked screen is fine, and that took two goes to be true.** The relay
+  starts before the app waits for the screen to unlock, and — since CB-39 — it
+  is also *driven* before then, by a pump that does not belong to the UI thread.
+  Without that second half the relay came up, registered, and answered nothing:
+  from every other machine its orbs looked alive and its panels all said the
+  other machine wasn't running Remote Control. Serving is files and a tmux pane
+  with no display anywhere in it, so it no longer waits for one.
+
 Nothing else starts merely because the switch is on. Use **Connect to other
 machines** in the tray menu, or the button in Settings, or just open a remote
 session's chat — any of those brings the relay up, and orbs for the sessions it
