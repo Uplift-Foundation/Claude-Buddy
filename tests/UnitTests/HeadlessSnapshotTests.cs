@@ -171,6 +171,139 @@ public class HeadlessSnapshotTests
         Assert.Empty(kept);
     }
 
+    // --- the husk, and the two rules agreeing about it ---
+
+    // The row a backgrounded turn leaves in its transcript, and one row of the
+    // housekeeping Claude Code writes after it. Shortened from the captures in
+    // TranscriptHandoffTests, which is where the full fixtures and the reasoning
+    // about each field live; what matters here is only that the tail reads as
+    // handed off, not why.
+    private const string BackgroundingRow =
+        @"{""type"":""system"",""subtype"":""informational"","
+      + @"""content"":""Backgrounding after the current tool finishes…"","
+      + @"""timestamp"":""2026-08-28T17:53:15.295Z"",""level"":""warning""}";
+
+    private const string ConversationRow =
+        @"{""type"":""assistant"",""message"":{""role"":""assistant"","
+      + @"""content"":[{""type"":""text"",""text"":""on it""}]},"
+      + @"""timestamp"":""2026-08-28T17:53:11.000Z""}";
+
+    // A transcript on disk, since the rule this exercises stats and reads a real
+    // file — it is the closure behind the verdict, not the verdict's own logic,
+    // that this is about.
+    private static string WriteTranscript(string dir, params string[] rows)
+    {
+        var path = Path.Combine(dir, Guid.NewGuid().ToString("N") + ".jsonl");
+        File.WriteAllLines(path, rows);
+        return path;
+    }
+
+    // A husk: healthy by every other measure — live process, file written a
+    // moment ago, real title — and handed away according to its own transcript.
+    private static SessionStatus Husk(string transcriptPath) => new()
+    {
+        State = "generating",
+        Title = "job-hunter",
+        Cwd = "/tmp/somewhere",
+        SessionPid = 4242,
+        TranscriptPath = transcriptPath
+    };
+
+    // The verdict the live scan reaches for the same file, built the way
+    // SessionManager builds it: the same closure, over the same status.
+    private static SessionManager.ScanVerdict LiveScanVerdict(
+        string sessionId, SessionStatus status, DateTime written, DateTime now)
+    {
+        status.Source = SessionManager.SourceOf(status);
+
+        var phase = status.Source == SessionSource.ClaudeCode
+            ? BackgroundJobs.Phase(new Dictionary<string, string>(), sessionId)
+            : JobPhase.Unknown;
+
+        Func<bool> handedToBackground = () =>
+            SessionPresence.CouldBeABackgroundedHusk(status, phase)
+            && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
+
+        return SessionManager.JudgeLiveness(
+            sessionId, status, written, now, SessionManager.StaleAfter,
+            new HashSet<string>(), _ => true, handedToBackground);
+    }
+
+    // The two must not disagree, and this is the one thing they can disagree
+    // about.
+    //
+    // HeadlessSnapshot's own comment says it is composed from the same rules as
+    // the live scan, in the same order, "so the two cannot disagree about which
+    // sessions exist" — and every rule but this one is a pure function of the
+    // file. The husk check is the exception: it is a closure, so a caller can
+    // pass one that answers nothing and still compile. That is exactly what
+    // happened. JudgeLiveness gained the parameter on one branch and this call
+    // site arrived on another, the two merged with no textual conflict, and for
+    // three hours `develop` did not build at all.
+    //
+    // Stubbing it with `() => false` is the version of that mistake that *does*
+    // compile, and it is the one this case exists to catch: a far machine would
+    // then be served an orb for a session whose conversation has moved to a
+    // fork — a duplicate wearing the same title, frozen at "generating", that no
+    // hook will ever correct. Which is the bug the husk rule was written for,
+    // reintroduced on the one path it did not cover.
+    [Fact]
+    public void TheHeadlessSnapshotDropsAHuskJustAsTheLiveScanDoes()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            var transcript = WriteTranscript(dir, ConversationRow, BackgroundingRow);
+            var status = Husk(transcript);
+            WriteStatus(dir, "husk1", status);
+
+            var now = DateTime.UtcNow;
+
+            // The live scan's answer for this file.
+            Assert.Equal(
+                SessionManager.ScanVerdict.Backgrounded,
+                LiveScanVerdict("husk1", status, now, now));
+
+            // ...and the headless one's, which must agree.
+            Assert.Empty(SessionManager.HeadlessSnapshot(
+                dir, NoJobs, isRunning: _ => true, nowUtc: now));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // The other direction, so "dropped" above is about the transcript rather
+    // than about anything else this status happens to carry. The same session,
+    // the same live pid, the same recent write — and a transcript whose last
+    // word is conversation, which means the session lived on past whatever the
+    // tail held earlier.
+    [Fact]
+    public void ASessionThatWasNotHandedAwayIsKeptByBoth()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            var transcript = WriteTranscript(dir, BackgroundingRow, ConversationRow);
+            var status = Husk(transcript);
+            WriteStatus(dir, "husk2", status);
+
+            var now = DateTime.UtcNow;
+
+            Assert.Equal(
+                SessionManager.ScanVerdict.Keep,
+                LiveScanVerdict("husk2", status, now, now));
+
+            Assert.Equal("husk2", Assert.Single(SessionManager.HeadlessSnapshot(
+                dir, NoJobs, isRunning: _ => true, nowUtc: now)).SessionId);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void LocalSessionsFallsBackToTheHeadlessSnapshot()
     {
