@@ -229,6 +229,26 @@ public class ChatPanelScreenshots : IDisposable
     //     honesty looks like, and whether it reads as deliberate rather than as
     //     a missing colour is exactly the thing a screenshot settles and a test
     //     cannot.
+    //   * The room's own anonymous voice, drawn when the gateway said nothing
+    //     about who sent a message. This is the *degraded* rendering and it is
+    //     deliberately still here: the whole attribution rule falls back to it
+    //     rather than guessing. In the capture because it is the arm most likely
+    //     to regress without anyone noticing — nothing else in any suite draws
+    //     it, and a change that started attributing these would look like an
+    //     improvement in every test and like the app asserting something false
+    //     on screen.
+    //
+    //     It wears the room's own name on its chip — "#lobby" — which looks
+    //     wrong and is what a real room genuinely draws. Verified against one
+    //     rather than assumed: the panel falls back to the session's sole
+    //     speaker for an unattributed assistant turn, and for a room that
+    //     resolves to the title, because a room has no agent identity behind
+    //     its session key. ChatSpeaker's own comment already admits the title is
+    //     "the wrong one for a room". It predates this branch — ChatSpeaker.cs
+    //     and ChatPanel.axaml.cs are untouched here — and this branch makes it
+    //     rarer rather than worse, since the turns it now attributes properly
+    //     are ones that used to land in exactly this bucket. Captured as it is,
+    //     rather than staged to look better than the app does.
     //   * A failure note, which is what a send with nowhere to go now leaves
     //     behind instead of silence.
     [AvaloniaFact]
@@ -257,6 +277,12 @@ public class ChatPanelScreenshots : IDisposable
                 Text = "Nodes are loaded, so it should be quick.",
                 IsComplete = true,
                 Speaker = "Thistle"
+            },
+            new ChatTurn
+            {
+                Role = ChatRole.Assistant,
+                Text = "Anyone know if the runner picked that up?",
+                IsComplete = true
             },
             new ChatTurn
             {
