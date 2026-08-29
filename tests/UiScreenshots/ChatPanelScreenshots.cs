@@ -202,4 +202,67 @@ public class ChatPanelScreenshots : IDisposable
         ScreenshotHelper.CaptureAlreadyShown(
             ChatPanelTestAccess.Instance!, "chat-panel-undecodable-image.png");
     }
+
+    // A room with everyone in it drawn as themselves — the whole of CB-27 in one
+    // picture, and the reason it is a capture rather than only an assertion.
+    //
+    // Four kinds of turn, and the judgement worth reviewing is whether they read
+    // as four different people at a glance rather than as four grey bubbles:
+    //
+    //   * Yours, in your own blue on the right. Before this, a message you sent
+    //     to a channel came back as an anonymous grey bubble on the left,
+    //     because the copies in the members' transcripts are user-role like
+    //     everybody else's.
+    //   * An agent in the room, in its own colour, matched to the ring on its
+    //     orb.
+    //   * Somebody the gateway named but this app cannot match to an agent — a
+    //     relayed bot, or another person in the channel. Named, and deliberately
+    //     uncoloured: a Discord display name is not an agent id, and a borrowed
+    //     colour would say two speakers were one. The initials chip is what that
+    //     honesty looks like, and whether it reads as deliberate rather than as
+    //     a missing colour is exactly the thing a screenshot settles and a test
+    //     cannot.
+    //   * A failure note, which is what a send with nowhere to go now leaves
+    //     behind instead of silence.
+    [AvaloniaFact]
+    public void ARoomDrawsEveryoneInItAsThemselves()
+    {
+        var fake = NewFake(new[]
+        {
+            new ChatTurn
+            {
+                Role = ChatRole.User,
+                Text = "anyone free to look at the build?",
+                IsComplete = true,
+                Mine = true
+            },
+            new ChatTurn
+            {
+                Role = ChatRole.Assistant,
+                Text = "Taking it now — the arm64 leg is the slow one.",
+                IsComplete = true,
+                Speaker = "Quill",
+                SpeakerColor = "#00AF5F"
+            },
+            new ChatTurn
+            {
+                Role = ChatRole.Assistant,
+                Text = "Nodes are loaded, so it should be quick.",
+                IsComplete = true,
+                Speaker = "Thistle"
+            },
+            new ChatTurn
+            {
+                Role = ChatRole.System,
+                Text = "Couldn't post to #lobby: no member of this channel carries "
+                     + "a delivery address.",
+                IsComplete = true
+            },
+        });
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.CaptureAlreadyShown(
+            ChatPanelTestAccess.Instance!, "chat-panel-room-attribution.png");
+    }
 }
