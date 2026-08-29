@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -222,7 +223,7 @@ namespace ClaudeBuddy
 
                 return new ConnectResult(
                     mismatch ? Outcome.CertificateMismatch : Outcome.Unreachable,
-                    flat);
+                    ExplainConnectFailure(ex, OperatingSystem.IsMacOS()));
             }
 
             _receiveLoop = Task.Run(() => ReceiveLoopAsync(_cts.Token));
@@ -369,6 +370,86 @@ namespace ClaudeBuddy
             return new ConnectResult(outcome, ex.DetailCode is null
                 ? ex.Message
                 : $"{ex.DetailCode}: {ex.Message}");
+        }
+
+        // What a person should be told to check when the socket never opened.
+        //
+        // The raw errno for this failure is "No route to host", and on a LAN
+        // where the gateway is plainly up that sends everybody to look at the
+        // network — which is the one thing that is fine. macOS ties Local
+        // Network access to an app's *code identity*, exactly the way it ties
+        // Automation consent, so installing an upgrade over an existing install
+        // hands the new bundle a new CDHash and silently drops the grant. The
+        // app then gets EHOSTUNREACH for a host it can see, with no prompt
+        // anybody noticed and nothing on screen that points at consent. Claude
+        // Buddy is a menu-bar app with no Dock icon and no window, which is
+        // close to the worst case for a consent alert being seen at all.
+        //
+        // Diagnosing it from the outside is worse than it sounds, because every
+        // obvious check agrees with the wrong answer: `ping`, `nc`, `curl` and
+        // `ssh` are all Apple-signed and therefore exempt from the gate, so they
+        // cheerfully report the gateway reachable while the app cannot open a
+        // socket to it. See CB-38.
+        //
+        // The raw detail is kept and the hint appended rather than substituted.
+        // EHOSTUNREACH really can also mean an unplugged cable or a host that
+        // has gone away, and a message that flatly asserted the wrong one of
+        // those would replace a confusing failure with a misleading one.
+        internal const string LocalNetworkHint =
+            "macOS may be blocking local network access — check "
+            + "System Settings → Privacy & Security → Local Network";
+
+        // `onMacOS` is a parameter rather than a call to OperatingSystem.IsMacOS()
+        // inside, for the same reason OrbGlyph takes the two-letter setting as an
+        // argument: a test that reads the answer off the machine it happens to be
+        // running on can only be written for one CI leg, and this repo runs every
+        // suite on both. Passing it in means the Windows arm is asserted on macOS
+        // and the macOS arm is asserted on Windows.
+        internal static string ExplainConnectFailure(Exception ex, bool onMacOS)
+        {
+            var flat = Flatten(ex);
+
+            return onMacOS && IsHostUnreachable(ex)
+                ? flat + " — " + LocalNetworkHint
+                : flat;
+        }
+
+        // Matched on the socket error rather than on the message text. The text
+        // is the platform's, not ours: it is localised on some systems and has
+        // been reworded between .NET versions, and this is precisely the sort of
+        // string-sniffing the certificate arm above already has to apologise for.
+        // The chain is walked because TcpClient.ConnectAsync's SocketException
+        // arrives at the top today but is wrapped the moment anything is layered
+        // over the connect.
+        internal static bool IsHostUnreachable(Exception ex)
+        {
+            for (Exception? e = ex; e is not null; e = e.InnerException)
+            {
+                if (e is SocketException { SocketErrorCode: SocketError.HostUnreachable })
+                    return true;
+
+                // An AggregateException hides its causes beside InnerException,
+                // not under it, so the walk above would step straight past a
+                // socket failure that arrived through one.
+                //
+                // Written as a nested loop rather than the `is ... && .Any(...)`
+                // one-liner it wants to be, because the two coverage engines do
+                // not agree on how many arms that compound condition has —
+                // coverlet counts four, Microsoft.CodeCoverage six — and since
+                // the MTP suites never execute this method at all, the extra two
+                // arrive as denominator with no possible numerator. That reads
+                // as a permanent 4/6 branch gap on a fully-tested method. The
+                // split is the same logic with an honest number.
+                if (e is AggregateException agg)
+                {
+                    foreach (var inner in agg.InnerExceptions)
+                    {
+                        if (IsHostUnreachable(inner)) return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         internal static string Flatten(Exception ex)
