@@ -742,6 +742,20 @@ public class RemoteControlBridgeRoutingTests : IDisposable
         Assert.Empty(Collect(bridge, Absorbed("a1", "Call the ListAgents tool now.")));
     }
 
+    // Nothing is listening. The pump runs whether or not a panel has
+    // subscribed — a relay drains its transcript to keep its offset current
+    // regardless — so the null arm of the event is an ordinary state rather
+    // than a defensive one, and it must not throw its way out of the pump.
+    [Fact]
+    public void AnAbsorbedMessageWithNobodyListeningIsHarmless()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        // Deliberately not via Collect, which subscribes: that is the whole
+        // point of this case.
+        bridge.Route(Absorbed("a1", Tagged("mac-mini", "into the void")));
+    }
+
     // The uuid dedup covers these the same way it covers a user row: the pump
     // re-reads from the start of the file after a restart.
     [Fact]
