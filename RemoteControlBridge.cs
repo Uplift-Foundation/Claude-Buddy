@@ -817,6 +817,24 @@ namespace ClaudeBuddy
                     ? rt.GetString() ?? ""
                     : "";
 
+                // A message the session was handed while it was already
+                // working. Claude Code queues it, folds it into the running
+                // turn, and writes it here — never as a `user` row — so this is
+                // the only place its text appears. Taken before the `message`
+                // check below because an attachment row has no `message` at
+                // all, which is how these were being dropped: not by the rule
+                // in ParseInboundMessagesFrom, but by never reaching it.
+                //
+                // Deliberately not routed through Deliver: that also offers the
+                // text to whatever request is in flight, and a queued command is
+                // an inbound message rather than a tool result, so satisfying a
+                // pending request with one would answer the wrong question.
+                if (string.Equals(rowType, "attachment", StringComparison.Ordinal))
+                {
+                    DeliverAbsorbed(root);
+                    return;
+                }
+
                 if (!root.TryGetProperty("message", out var message)) return;
                 if (!message.TryGetProperty("content", out var content)) return;
 
@@ -849,6 +867,31 @@ namespace ClaudeBuddy
                     }
                 }
             }
+        }
+
+        // The message inside an absorbed queued command, if that is what this
+        // attachment row is.
+        //
+        // `attachment` is a catch-all row type — token reminders and file
+        // snapshots wear it too — so the nested `attachment.type` is what
+        // actually identifies one, and anything else is left alone.
+        private void DeliverAbsorbed(JsonElement root)
+        {
+            if (!root.TryGetProperty("attachment", out var attachment)) return;
+            if (attachment.ValueKind != JsonValueKind.Object) return;
+
+            if (!attachment.TryGetProperty("type", out var kind)
+                || kind.ValueKind != JsonValueKind.String
+                || !string.Equals(kind.GetString(), BridgeProtocol.AbsorbedRow, StringComparison.Ordinal))
+                return;
+
+            if (!attachment.TryGetProperty("prompt", out var prompt)
+                || prompt.ValueKind != JsonValueKind.String)
+                return;
+
+            foreach (var inbound in BridgeProtocol.ParseInboundMessagesFrom(
+                         BridgeProtocol.AbsorbedRow, prompt.GetString() ?? ""))
+                MessageReceived?.Invoke(inbound);
         }
 
         // A tool_result's content is either a string or the usual array of
