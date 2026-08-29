@@ -294,6 +294,25 @@ namespace ClaudeBuddy
             lock (Gate) _certificateRejected = value;
         }
 
+        // A test seam, the same one and for the same reason as the four above:
+        // the only thing that ever sets _gateway is RunAsync, which is the
+        // supervisor loop and is excluded from coverage because it opens a
+        // WebSocket to a real machine. Without this, everything a *send* does —
+        // which of the two requests goes first, what is on each of them, and
+        // what a failure of either one says — is unreachable for a reason that
+        // has nothing to do with the code.
+        //
+        // Worth having rather than excluding SendToRoomAsync wholesale, which
+        // was the first shape. The claim that fix rests on is that the mirror
+        // carries the carrier's own accountId, and an excluded method is a claim
+        // nothing checks. OpenClawGateway already takes its connector as an
+        // argument for exactly this reason (see its own comment), so a gateway
+        // over an in-memory socket costs nothing new.
+        internal static void SetGatewayForTests(OpenClawGateway? gateway)
+        {
+            lock (Gate) _gateway = gateway;
+        }
+
         // The conversation in a channel, as one thing. memberKeys are the
         // gateway keys of the sessions standing in it — see
         // OpenClawSessionKind.RoomOf for what decides that.
@@ -1336,11 +1355,13 @@ namespace ClaudeBuddy
         // including its failures, and a note written into a member's transcript
         // is invisible in the merge — which drops System turns.
         //
-        // Excluded from coverage: every line of it is a request to a live
-        // gateway or the catch around one. What a test can reach is the
-        // no-gateway arm, which is the first thing it does, and the three
-        // sentences above.
-        [ExcludeFromCodeCoverage]
+        // Not excluded, unlike every other method here that talks to a gateway.
+        // The connection is a constructor argument on OpenClawGateway and
+        // SetGatewayForTests hands one in, so both requests, both failures and
+        // the order between them are all reachable over an in-memory socket —
+        // and the claim this whole fix rests on, that the mirror goes out under
+        // the carrier's own account, is exactly the kind of claim that must not
+        // sit behind an exclusion.
         internal static async Task<string?> SendToRoomAsync(
             OpenClawChatSession carrier, string room, string agent, string text,
             CancellationToken ct)
