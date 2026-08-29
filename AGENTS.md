@@ -166,6 +166,50 @@ latest release experiences today: if the answer is "nothing wrong yet", it's a
 Name the rest of the branch after the change, not the issue number:
 `feature/persist-orb-positions`, not `feature/pr-12`.
 
+## Cutting a release: finish it
+
+**A release is not cut until the tag is pushed.** Not when the branch exists,
+not when the PR is open, not when CI is green — a `release/` branch that stops
+at an approved PR has shipped nothing, and it leaves the repository in the one
+state that looks finished and is not.
+
+That is not hypothetical. 0.4.3-beta was cut because seventeen merged PRs had
+been sitting on `develop` since 0.4.2-beta with no release behind them: users
+were still hitting orb-lifecycle bugs that had been fixed weeks earlier, and the
+heartbeat-and-cron-shapes feature had been reported as *lost* because the only
+build anyone could install did not contain it. Work that is merged but unshipped
+is indistinguishable, from outside, from work that was never done.
+
+So the sequence below runs to the end, in one go, by whoever started it:
+
+1. **Branch** `release/<version>` off `develop`.
+2. **Bump `<Version>`** in `ClaudeBuddy.csproj` — the single source of truth the
+   packaging scripts and `release.yml`'s `check-version` gate both parse.
+3. **Write `.github/release-notes/v<version>.md`**, which the workflow publishes
+   with the tag. Without it the release gets generated notes and a warning.
+4. **Open the PR against `main`** and let CI go green on *both* rids.
+5. **Merge it to `main`.**
+6. **Push the tag** — `git tag -a v<version> <merge-sha> && git push upstream
+   v<version>`. This is the step that actually builds, signs, notarizes and
+   publishes the installers; `release.yml` is tag-driven and nothing before it
+   ships anything.
+7. **Merge `main` back into `develop`**, so the bump and notes are not lost at
+   the next release.
+
+**Do not stop between 4 and 7 to ask whether to proceed.** Cutting a release is
+already the decision to publish one; a second confirmation before the tag buys
+nothing and strands the release at exactly the point this section exists to
+prevent. The one thing worth pausing for is a *red* CI leg, which is a real
+answer to a real question. "Should I merge the release I was asked to cut" is
+not.
+
+Two mechanical notes that look like problems and are not. GitHub refuses an
+approving review on a PR the same account opened, so the review body goes up as
+a comment instead — the written record is the point, not the green tick. And the
+PR against `main` will show every commit since the last release, because `main`
+is a whole train behind; that is the release branch doing its job, not the
+branch having changed all of it.
+
 ## Pull requests
 
 Open every PR **against `develop`** — `feature/` and `bugfix/` both — unless
