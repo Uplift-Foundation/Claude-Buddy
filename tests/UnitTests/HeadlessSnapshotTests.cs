@@ -304,6 +304,39 @@ public class HeadlessSnapshotTests
         }
     }
 
+    // The gate in front of the transcript read, from the other side.
+    //
+    // The two cases above both consult the closure — one ends backgrounded and
+    // one does not. This is the session where it is never consulted at all: no
+    // transcript path, so there is nothing to read and CouldBeABackgroundedHusk
+    // says so before TranscriptHandoff is asked. Worth pinning separately
+    // because it is the arm that keeps a scan from statting a file for every
+    // session that has no transcript to stat, and because "kept" here has to
+    // mean "the question did not arise" rather than "the answer was no".
+    [Fact]
+    public void ASessionWithNoTranscriptIsKeptWithoutTheQuestionBeingAsked()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            var status = Husk(transcriptPath: "");
+            WriteStatus(dir, "notranscript", status);
+
+            var now = DateTime.UtcNow;
+
+            Assert.Equal(
+                SessionManager.ScanVerdict.Keep,
+                LiveScanVerdict("notranscript", status, now, now));
+
+            Assert.Equal("notranscript", Assert.Single(SessionManager.HeadlessSnapshot(
+                dir, NoJobs, isRunning: _ => true, nowUtc: now)).SessionId);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void LocalSessionsFallsBackToTheHeadlessSnapshot()
     {
