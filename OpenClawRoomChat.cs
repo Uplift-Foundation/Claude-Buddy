@@ -771,8 +771,29 @@ namespace ClaudeBuddy
             if (failure is not null) Note(failure);
         }
 
-        private void Note(string text) =>
+        private void Note(string text)
+        {
+            // The same sentence twice in a row says nothing the first one did
+            // not. Three attempts with replying switched off used to leave three
+            // identical notes stacked up, which reads as three different
+            // problems and is one.
+            //
+            // Against the tail of this room's own list, not against the whole of
+            // it. A note that has your message between it and the last identical
+            // one is a note about *that* message, and repeating it there is
+            // correct — the failure happened again, to something new. What is
+            // worth suppressing is only the note with nothing at all between it
+            // and its twin, which is the shape the two early returns produce
+            // because they write a note without a message above it.
+            if (_local.Count > 0
+                && _local[^1] is { Role: ChatRole.System } last
+                && last.Text == text)
+            {
+                return;
+            }
+
             AddLocal(new ChatTurn { Role = ChatRole.System, IsComplete = true, Text = text });
+        }
 
         // Into both lists, deliberately.
         //
