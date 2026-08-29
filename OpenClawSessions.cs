@@ -1238,7 +1238,11 @@ namespace ClaudeBuddy
                     var mirror = new Dictionary<string, object>
                     {
                         ["to"] = delivery.To,
-                        ["message"] = "**(via Claude Buddy)** " + text,
+                        // The same constant the recognizer reads back, not a
+                        // second literal saying the same thing. Two of them is
+                        // how a mirror stops being recognisable as ours — which
+                        // it silently was, for one release.
+                        ["message"] = OpenClawSender.MirrorPrefix + text,
                         ["channel"] = delivery.Channel,
                         ["idempotencyKey"] = Guid.NewGuid().ToString()
                     };
