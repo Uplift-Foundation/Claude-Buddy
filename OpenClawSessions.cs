@@ -1290,9 +1290,60 @@ namespace ClaudeBuddy
                     ? DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime()
                     : DateTimeOffset.Now;
 
+                var speaker = speakerId is null ? null : AgentNameOf(speakerId);
+                var colour = speakerId is null ? null : ColourForAgent(speakerId);
+                var mine = false;
+
+                // Only the user role is in question. An assistant turn is the
+                // agent whose transcript this is — that is the whole reason the
+                // room merge works — and asking who sent it would be asking a
+                // question that has already been answered.
+                //
+                // After Readable rather than before it, and on Readable's
+                // result: an inter-session message reaches here with its machine
+                // header already replaced by what it was actually saying and its
+                // speaker already identified, and running the prefix test
+                // against the raw header would only ever miss.
+                if (role == ChatRole.User)
+                {
+                    var meta = message.TryGetProperty("__openclaw", out var oc)
+                        && oc.ValueKind == JsonValueKind.Object
+                            ? oc
+                            : default;
+
+                    var sender = OpenClawSender.Classify(
+                        Bool(meta, "senderIsOwner"),
+                        Str(meta, "senderName"),
+
+                        // Both places carry it; the message's own copy is asked
+                        // first because __openclaw is the undocumented half and
+                        // the one likelier to move.
+                        Str(message, "idempotencyKey") ?? Str(meta, "idempotencyKey"),
+                        text);
+
+                    text = sender.Text;
+                    mine = sender.Kind == OpenClawSender.SenderKind.Mine;
+
+                    // A name only where Readable did not already find a better
+                    // one. Its answer is an agent *id*, which resolves to the
+                    // name and colour this app draws that agent's orb in;
+                    // senderName is a Discord display name, which does not.
+                    //
+                    // So the colour stays null for a Named sender, deliberately.
+                    // The chip falls back to initials, which is the honest
+                    // answer for somebody we cannot match to an agent — a
+                    // borrowed colour would say two different speakers were the
+                    // same one.
+                    if (speaker is null && sender.Kind == OpenClawSender.SenderKind.Named)
+                    {
+                        speaker = sender.Name;
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(text)) continue;
+
                 turns.Add(new HistoryTurn(role, text.Trim(), null, "", at,
-                    speakerId is null ? null : AgentNameOf(speakerId),
-                    speakerId is null ? null : ColourForAgent(speakerId)));
+                    speaker, colour, mine));
             }
 
             return turns;
@@ -1684,6 +1735,18 @@ namespace ClaudeBuddy
             && e.TryGetProperty(name, out var v)
             && v.ValueKind == JsonValueKind.String
                 ? v.GetString()
+                : null;
+
+        // Null rather than false when absent, because the three answers are
+        // genuinely different here: senderIsOwner true is the gateway saying the
+        // operator sent it, false is the gateway saying somebody else did, and a
+        // missing field is the gateway not saying — which is the case the whole
+        // classification has to keep degrading gracefully to.
+        private static bool? Bool(JsonElement e, string name) =>
+            e.ValueKind == JsonValueKind.Object
+            && e.TryGetProperty(name, out var v)
+            && v.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? v.GetBoolean()
                 : null;
 
         private static long Num(JsonElement e, string name) =>

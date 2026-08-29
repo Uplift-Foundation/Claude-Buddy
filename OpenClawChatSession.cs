@@ -26,7 +26,13 @@ namespace ClaudeBuddy
         string ImageAlt,
         DateTimeOffset At,
         string? Speaker,
-        string? SpeakerColor);
+        string? SpeakerColor,
+
+        // Whether the person at this keyboard said it — see ChatTurn.Mine, whose
+        // value this becomes. Defaulted, because only the OpenClaw history
+        // parser is in a position to answer it and every other producer of a
+        // HistoryTurn would otherwise have to write `false` to say nothing.
+        bool Mine = false);
 
     // One OpenClaw session, as something the chat panel can talk to.
     //
@@ -98,7 +104,14 @@ namespace ClaudeBuddy
             // The user's own turn is added here rather than by the panel, so one
             // thing owns the transcript and a send that fails leaves a message
             // on screen with an explanation under it rather than a ghost.
-            var mine = new ChatTurn { Role = ChatRole.User, Text = text, IsComplete = true };
+            // Mine, said here rather than inferred: this is the one turn in the
+            // app whose author is not in doubt, and marking it keeps it matching
+            // the copy that comes back from the gateway a moment later — which
+            // is what lets a room dedupe the two instead of drawing both.
+            var mine = new ChatTurn
+            {
+                Role = ChatRole.User, Text = text, IsComplete = true, Mine = true
+            };
             Add(mine);
 
             var failure = await SendOrFailureAsync(text);
@@ -286,6 +299,7 @@ namespace ClaudeBuddy
                 At = t.At,
                 Speaker = t.Speaker,
                 SpeakerColor = t.SpeakerColor,
+                Mine = t.Mine,
                 IsComplete = true
             }).ToList();
 
@@ -315,6 +329,7 @@ namespace ClaudeBuddy
                     At = turn.At,
                     Speaker = turn.Speaker,
                     SpeakerColor = turn.SpeakerColor,
+                    Mine = turn.Mine,
                     IsComplete = true
                 });
             }

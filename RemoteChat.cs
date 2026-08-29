@@ -90,6 +90,27 @@ namespace ClaudeBuddy
         // noise.
         public string? Speaker { get; init; }
 
+        // Whether the person at this keyboard said it.
+        //
+        // Separate from the role, because the role cannot carry it. A message in
+        // a channel arrives in every member agent's transcript in the *user*
+        // role whoever sent it, so user-role means "not the agent this
+        // transcript belongs to" and nothing more — which is why a room used to
+        // draw everybody's messages as the room's own neutral voice rather than
+        // asserting one of them was yours.
+        //
+        // The panel needs no rule of its own for this: a turn kept at
+        // ChatRole.User with no Speaker is already what it draws blue and to the
+        // right, so a Mine turn is one and a turn from somebody else carries the
+        // Speaker that takes it back to the left. What this flag adds is
+        // something the *transcript* can be built from — a room deciding which
+        // of several identical-looking user turns to keep in your voice.
+        //
+        // Defaults false, which is the honest answer for every transport that
+        // does not know: a local CLI's transcript, where user-role really does
+        // mean you, sets it nowhere and loses nothing.
+        public bool Mine { get; init; }
+
         // That speaker's colour, as "#RRGGBB" — the same one their orb's ring
         // is drawn in, so the two are recognisably the same agent. Carried
         // rather than looked up because the panel deliberately knows nothing
