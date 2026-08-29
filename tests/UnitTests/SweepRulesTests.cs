@@ -89,6 +89,22 @@ public class SweepRulesTests
         }
     }
 
+    // The third fact, and like the other two it is a statement about the
+    // session: its own transcript records the turn being handed to a
+    // background job, and nothing has happened in it since. The file it
+    // deletes is one no hook will ever write again — the conversation fires
+    // its hooks under the fork's session id now — so without this the husk
+    // outlived the "Keep orbs for = Forever" setting indefinitely.
+    [Fact]
+    public void AHandedOffHuskIsEvidenceWhateverTheDaemonSays()
+    {
+        foreach (var phase in new[] { JobPhase.NotAJob, JobPhase.Unknown })
+        {
+            Assert.True(SessionPresence.EvidenceOfDeath(
+                SessionManager.ScanVerdict.Backgrounded, phase));
+        }
+    }
+
     // --- SweepDue ------------------------------------------------------------
 
     [Fact]

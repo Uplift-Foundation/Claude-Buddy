@@ -754,7 +754,7 @@ containing `{"state": "...", "cwd": "...", "title": "...", "color": "...", ...}`
 `ClaudeBuddyHook.sh` (bash, macOS). No network calls, no polling of Claude
 Code itself, no persistent process beyond the hook calls themselves.
 
-An orb goes away when any of five things happens.
+An orb goes away when any of six things happens.
 
 1. **Its `SessionEnd` hook fires** — a clean exit like `/exit` — which deletes
    the status file outright.
@@ -793,14 +793,38 @@ An orb goes away when any of five things happens.
    back. That is the point of it being separate from "End this session", which
    stops the process and takes the orb with it through rule 3.
 
+6. **Its turn was backgrounded.** Backgrounding a running turn forks the
+   conversation into a background job — the fork takes the title, gets its own
+   session id and its own status file, and wears the gear-badged orb — while
+   the interactive session it forked from never fires another hook: no `Stop`
+   event ends the turn it handed away. Its file freezes on `generating` with a
+   live pid and a real terminal, so rules 2, 3 and 4 all wave it through and
+   the same conversation draws two orbs, one of them a lie no hook will ever
+   correct. Every scan therefore reads the last 32KB of such a session's own
+   transcript, and a handoff marker with nothing conversational after it takes
+   the leftover orb. It comes straight back the moment anyone types in that
+   session again — the transcript grows and the marker stops being the last
+   word — and a transcript that can't be read takes nothing, so the failure
+   direction is a duplicate orb rather than a hidden session. A session the
+   daemon lists as a running job is never asked at all, which is what stops
+   the fork (whose transcript inherits the marker) from reading itself as the
+   leftover.
+
 **The app also deletes status files it is sure are finished with.** Until
 recently nothing did, apart from the `SessionEnd` hook — so a Ctrl+C'd session's
 file stayed in the temp directory for good, and a finished background job's
 stayed *and could never be caught*, because the pooled worker behind it is kept
 alive on purpose and so its pid answers forever. Directories with dozens of them
-were normal. Every scan now looks for the two facts that mean a session is
-genuinely over — **its process has exited**, or **the daemon says its job is
-done** — and deletes the file about ten minutes after it first sees one.
+were normal. Every scan now looks for the three facts that mean a session is
+genuinely over — **its process has exited**, **the daemon says its job is
+done**, or **its own transcript records the turn being handed to a background
+job with nothing having happened since** — and deletes the file about ten
+minutes after it first sees one. The third is the only one of them that deletes
+a file whose process is still alive, and what makes that safe is particular to
+it: the conversation fires its hooks under the fork's session id now, so
+nothing will ever write that file again. If the interactive session is used
+after all, its next hook event writes it back from scratch, exactly as after a
+dismissal.
 
 The ten minutes is a grace period, not a delay for tidiness: the evidence can be
 briefly wrong (a pid that could not be read for a moment, a job reported done
@@ -1670,11 +1694,15 @@ signed build.
   but what matters at runtime is the *alpha* channel of `Assets/tray-*.png`:
   each is a single colour over an alpha mask, which is what makes an exact
   re-tint possible — redrawing the ring in C# instead would change its shape.
-- **When an orb goes away**: `SessionManager.ScanAndUpdate()` has all four rules
+- **When an orb goes away**: `SessionManager.ScanAndUpdate()` has all five rules
   in order — superseded-session-id (`Superseded()`, newest file wins per
   `session_pid`), then process-gone (`ProcessLiveness.IsRunning`, a
   `kill(pid, 0)` on Unix and `Process.GetProcessById` on Windows), then the
-  `waiting` exemption, then the lifetime timer. The scan reads every status file
+  backgrounded-husk test (`TranscriptHandoff.EndsBackgrounded`, gated by
+  `SessionPresence.CouldBeABackgroundedHusk` so only a session the daemon does
+  not vouch for pays the stat), then the `waiting` exemption, then the lifetime
+  timer. The husk test sits *above* the `waiting` exemption deliberately: a husk
+  frozen on `waiting` is not waiting on anyone. The scan reads every status file
   into a `ScanEntry` list *before* judging any of them, because `Superseded`
   needs to compare files against each other; that pre-pass is also where the
   mtime the timer uses comes from, so it's read once per file per scan rather
