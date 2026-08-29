@@ -209,48 +209,185 @@ namespace ClaudeBuddy
             }
         }
 
-        // Excluded from coverage: starts the `claude` CLI as a real subprocess.
-        // The JSON it prints is parsed by Parse below, which is tested against
-        // hand-written listings, so what is excluded here is the launch and
-        // nothing that decides anything.
+        // Every account's listing, merged into one.
+        //
+        // The daemon is **per Claude Code config directory**, and so is
+        // `claude agents`. One invocation therefore answers for one account and
+        // says nothing whatever about the others — not "no jobs", but nothing,
+        // which reads here as a session absent from a listing that was read
+        // successfully, which is to say "not a job at all".
+        //
+        // That is the whole of the misread-background-job bug. A machine with a
+        // second account (`CLAUDE_CONFIG_DIR=~/.claude-board`, the same
+        // arrangement ClaudeCodeProfileDirs already exists to describe) runs two
+        // daemons, and this asked only the first. Every background job under the
+        // second was classified NotAJob, so SessionPresence.ShapeOf fell through
+        // to Terminal and the chat panel told the user to reply in the terminal
+        // — for a job the daemon runs precisely so that no terminal has to hold
+        // it. Observed live: job `e4f5c5e4` ("makayla-case"), `kind: background`,
+        // `state: done` under ~/.claude-board and absent from the default
+        // account's listing altogether, while its process was alive the whole
+        // time in a pty belonging to ~/.claude-board's own daemon.
+        //
+        // The default account is read exactly as it was before — with no
+        // CLAUDE_CONFIG_DIR of this app's own invention — so this can only add
+        // rows to the answer it already gave. Which account this app itself runs
+        // under stays whatever the environment says it is; forcing ~/.claude
+        // here would quietly re-point the read for anyone running the whole app
+        // under a non-default config directory.
+        //
+        // Excluded from coverage: the loop is process launches. What it decides
+        // with the answers is Merge and ExtraAccountDirs below, both pure and
+        // both covered.
         [ExcludeFromCodeCoverage]
         private static Dictionary<string, string>? Read()
         {
+            // Invoked directly, not through a shell. The obvious way to reach a
+            // binary that isn't on this app's PATH is to ask the user's shell to
+            // find it, and that quietly doesn't work: `zsh -lc` reads .zshenv,
+            // .zprofile and .zlogin, but *not* .zshrc, which is only for
+            // interactive shells — and .zshrc is where a PATH addition for
+            // ~/.local/bin normally lives. So the lookup failed with "command
+            // not found" for exactly the launch this was written to survive, and
+            // because a failed read is treated as "don't hide anything", every
+            // finished session and every subagent got an orb again.
+            var claude = ClaudeBinary.Path;
+            if (claude is null) return null;
+
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+            // null first: this app's own environment, which is the account it has
+            // always read and the only one nearly every machine has.
+            var merged = ReadOne(claude, configDir: null);
+
+            foreach (var dir in ExtraAccountDirs(home, ClaudeBuddySettings.ClaudeCodeProfileDirs))
+            {
+                merged = Merge(merged, ReadOne(claude, dir));
+            }
+
+            return merged;
+        }
+
+        // The extra accounts to ask, beyond whichever one this app itself runs
+        // under.
+        //
+        // The same list TranscriptReader and the hook installer already walk —
+        // ~/.claude plus ClaudeCodeProfileDirs — with ~/.claude itself held out,
+        // because Read has already asked it and asking again would be a second
+        // subprocess for an answer already in hand. Held out by *path* rather
+        // than by name, so a list naming ".claude" explicitly — which the
+        // settings UI permits — doesn't double the work.
+        //
+        // Blank entries are skipped rather than resolving to $HOME, which is not
+        // a config directory and whose listing would be some third account's or
+        // nobody's.
+        internal static List<string> ExtraAccountDirs(string home, IReadOnlyList<string> extras)
+        {
+            // OrdinalIgnoreCase for the reason OrbPositions is keyed that way:
+            // Windows paths are, and one account reached under two
+            // capitalizations is still one account.
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                Path.Combine(home, ".claude")
+            };
+
+            var dirs = new List<string>();
+
+            foreach (var extra in extras)
+            {
+                if (string.IsNullOrWhiteSpace(extra)) continue;
+
+                var full = Path.Combine(home, extra.Trim());
+                if (seen.Add(full)) dirs.Add(full);
+            }
+
+            return dirs;
+        }
+
+        // Two accounts' listings as one, or nothing at all.
+        //
+        // A null on either side collapses the whole answer to null, and that is
+        // the point rather than an oversight. null here means "there was no
+        // listing to read", which every rule downstream treats as "change
+        // nothing" — orbs stay, phases stay Unknown. A *partial* listing would
+        // instead be a confident answer about sessions nobody managed to ask
+        // about: the account that answered would be classified correctly, and
+        // the account that didn't would have every one of its jobs read as
+        // not-a-job — precisely the misclassification this change exists to
+        // remove. Better to know nothing for one tick than to be wrong about
+        // half the machine.
+        //
+        // First writer wins on a key collision, which puts the account read
+        // first — this app's own — ahead of the rest. Two accounts cannot share
+        // a session id, so the only reachable collision is between two short job
+        // ids, eight hex characters each, from different daemons. Nothing here
+        // could settle such a tie on the merits; preferring the nearer account
+        // at least makes it the same tie every time.
+        internal static Dictionary<string, string>? Merge(
+            Dictionary<string, string>? first, Dictionary<string, string>? second)
+        {
+            if (first is null || second is null) return null;
+
+            var merged = new Dictionary<string, string>(first, StringComparer.Ordinal);
+            foreach (var pair in second) merged.TryAdd(pair.Key, pair.Value);
+
+            return merged;
+        }
+
+        // One account's listing.
+        //
+        // configDir null means "leave the environment alone", which is how the
+        // default account is read and why this change cannot move it.
+        //
+        // Both pipes are drained before waiting, which the single-account
+        // version did not do — it called ReadToEnd() and then WaitForExit(5000),
+        // and a blocking read makes that timeout unreachable while an undrained
+        // stderr can deadlock a chatty child. That was survivable at one launch
+        // per scan and stops being survivable at one per account, so this now
+        // does what AgentRoster.Read already does, for the reasons stated there.
+        //
+        // Excluded from coverage: starts the `claude` CLI as a real subprocess.
+        // The JSON it prints is parsed by Parse below, which is tested against
+        // hand-written listings, so what is excluded here is the launch, its
+        // timeout, and the kill for a CLI that never answers.
+        [ExcludeFromCodeCoverage]
+        private static Dictionary<string, string>? ReadOne(string claude, string? configDir)
+        {
             try
             {
-                // Invoked directly, not through a shell. The obvious way to
-                // reach a binary that isn't on this app's PATH is to ask the
-                // user's shell to find it, and that quietly doesn't work:
-                // `zsh -lc` reads .zshenv, .zprofile and .zlogin, but *not*
-                // .zshrc, which is only for interactive shells — and .zshrc is
-                // where a PATH addition for ~/.local/bin normally lives. So the
-                // lookup failed with "command not found" for exactly the launch
-                // this was written to survive, and because a failed read is
-                // treated as "don't hide anything", every finished session and
-                // every subagent got an orb again.
-                var claude = ClaudeBinary.Path;
-                if (claude is null) return null;
-
                 // --json is documented as not needing a tty, which is what
                 // makes it usable from a GUI app at all.
                 var psi = new ProcessStartInfo(claude)
                 {
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
                 };
 
                 psi.ArgumentList.Add("agents");
                 psi.ArgumentList.Add("--json");
 
+                if (configDir is not null) psi.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+
                 using var process = Process.Start(psi);
                 if (process is null) return null;
 
-                var output = process.StandardOutput.ReadToEnd();
-                process.WaitForExit(5000);
+                var outTask = process.StandardOutput.ReadToEndAsync();
+                var errTask = process.StandardError.ReadToEndAsync();
+
+                if (!process.WaitForExit(5000))
+                {
+                    try { process.Kill(true); } catch { }
+                    return null;
+                }
+
+                var stdout = outTask.GetAwaiter().GetResult();
+                errTask.GetAwaiter().GetResult();
+
                 if (process.ExitCode != 0) return null;
 
-                return Parse(output);
+                return Parse(stdout);
             }
             catch
             {
