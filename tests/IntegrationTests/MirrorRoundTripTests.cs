@@ -127,6 +127,81 @@ public class MirrorRoundTripTests : IDisposable
         Assert.True(harness.ChunkFrames <= 2, $"the big row was relayed anyway ({harness.ChunkFrames} frames)");
     }
 
+    // --- serving with no dispatcher (CB-39) -------------------------------------
+
+    // The regression itself: a machine whose screen never unlocks has no
+    // dispatcher, so the two DispatcherTimers that drive a relay never run, and
+    // for two hours the relay answered nothing while looking perfectly alive
+    // from every other machine.
+    //
+    // This suite has no Avalonia lifetime in it at all, which is what makes it
+    // the right place to assert the fix: if ServeOneAsync needed the UI thread
+    // for anything, there is nothing here to give it one.
+    [Fact]
+    public async Task AServeTickDeliversAnUpdateWithNoDispatcherAnywhere()
+    {
+        var path = WriteTranscript("headless.jsonl", Conversation(6));
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        await harness.Client.OpenAsync("job-hunter");
+
+        Assert.Single(harness.Windows);
+
+        File.AppendAllText(path, Row("assistant", "later", "said while the screen was locked") + "\n");
+
+        // Exactly what the pump's timer calls, and the only thing standing
+        // between an unattended machine and serving nothing.
+        await RemoteControlSessions.ServeOneAsync(
+            new RemoteControlBridge(".claude"), harness.Server, harness.Client);
+
+        var delta = Assert.Single(harness.Deltas);
+        Assert.Contains("said while the screen was locked", Assert.Single(delta.Turns).Text);
+    }
+
+    // A relay with neither half built yet — the window between the bridge
+    // starting and StartAsync putting a server and client on it. Nothing to
+    // tick, and specifically not a null dereference in the loop that is meant to
+    // be keeping the machine alive.
+    [Fact]
+    public async Task AServeTickOverARelayWithNoMirrorHalvesDoesNothing()
+    {
+        await RemoteControlSessions.ServeOneAsync(new RemoteControlBridge(".claude"), null, null);
+    }
+
+    // One half throwing must cost that half's round and nothing else. The
+    // client is still ticked afterwards, and the next tick still delivers —
+    // because on a serving machine there is nobody to notice a loop that quietly
+    // stopped.
+    [Fact]
+    public async Task AServeTickSurvivesAMirrorHalfThatThrows()
+    {
+        var path = WriteTranscript("throwing.jsonl", Conversation(4));
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        await harness.Client.OpenAsync("job-hunter");
+
+        File.AppendAllText(path, Row("assistant", "later", "arrived during the outage") + "\n");
+
+        harness.AgentsThrow = true;
+        await RemoteControlSessions.ServeOneAsync(
+            new RemoteControlBridge(".claude"), harness.Server, harness.Client);
+
+        Assert.Empty(harness.Deltas);
+
+        harness.AgentsThrow = false;
+        await RemoteControlSessions.ServeOneAsync(
+            new RemoteControlBridge(".claude"), harness.Server, harness.Client);
+
+        var delta = Assert.Single(harness.Deltas);
+        Assert.Contains("arrived during the outage", Assert.Single(delta.Turns).Text);
+    }
+
     // --- keeping up ------------------------------------------------------------
 
     [Fact]
@@ -954,6 +1029,13 @@ public class MirrorRoundTripTests : IDisposable
         private readonly List<AgentRoster.Entry> _agents = new();
         private readonly string _dir;
 
+        // `claude agents --json` failing where the server reads it. In
+        // production that is a subprocess that timed out or a CLI that has been
+        // upgraded out from under a running app — a throw, not an empty list —
+        // and it is the one thing a serve tick has to survive without taking the
+        // other accounts down with it. See ServeOneAsync.
+        public bool AgentsThrow { get; set; }
+
         public Harness(string dir)
         {
             _dir = dir;
@@ -961,7 +1043,9 @@ public class MirrorRoundTripTests : IDisposable
             Server = new RemoteMirrorServer("acct", new RemoteMirrorServer.Seams(
                 SendToClientAsync,
                 () => _sessions,
-                () => _agents,
+                () => AgentsThrow
+                    ? throw new InvalidOperationException("the agent registry did not answer")
+                    : _agents,
                 _ => ReplyEnabled,
                 _ => CanType,
                 (status, text) =>
