@@ -155,6 +155,124 @@ namespace ClaudeBuddy
             return (session, target, target + ":");
         }
 
+        // The shell line a relay is started with, as a function of its four
+        // inputs.
+        //
+        // Pure, and split out for the same reason TmuxNames above it is: every
+        // flag on it encodes a measured failure, and until now the only way to
+        // check one was still there was to start a real Claude Code session.
+        // CB-40 added two flags whose absence is invisible until an unattended
+        // machine stops answering hours later, which is exactly the kind of
+        // thing a test should be able to say out loud.
+        internal static string LaunchLine(
+            string claude, string privateTmp, string configDir, string tmuxSessionName) =>
+            new StringBuilder()
+                .Append("TMPDIR=").Append(Quote(privateTmp)).Append(' ')
+                .Append("CLAUDE_CONFIG_DIR=").Append(Quote(configDir)).Append(' ')
+                .Append("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 ")
+                .Append(Quote(claude))
+
+                // Passed, and measured to have no effect — the name comes from
+                // the working directory above. Kept rather than dropped for two
+                // reasons: it costs nothing, and if a later Claude Code starts
+                // honouring it, the name it would then set is the same one the
+                // cwd is already producing, so the two cannot disagree.
+                .Append(" --remote-control ").Append(Quote(tmuxSessionName))
+
+                // Without these the relay is blocked from doing the one thing
+                // it exists for, and blocked silently.
+                //
+                // Measured 24 Aug 2026. A relay inheriting the user's default
+                // permission mode — auto, here — had its very first SendMessage
+                // refused outright: *"Permission for this action was denied by
+                // the Claude Code auto mode classifier. Reason: Blocked by
+                // classifier."* The session's own reading of it was right, and
+                // is worth quoting because it is not going to stop being true:
+                // a large opaque base64 blob relayed to another agent session
+                // looks exactly like an exfiltration attempt, and that is what
+                // the classifier is for.
+                //
+                // Nobody is watching a detached relay, so there is no one to
+                // approve anything: in auto mode every frame is denied, and in
+                // the default mode it would sit on a prompt until the request
+                // timed out. Either way the mirror never carries a byte and
+                // nothing on screen says why.
+                //
+                // The answer is to be specific rather than permissive. These are
+                // the only two tools a relay ever calls, they are named
+                // explicitly, and the mode is one that does not route them past
+                // a classifier looking for a pattern this genuinely matches.
+                // Emphatically *not* --dangerously-skip-permissions: a session
+                // that may do anything is a much worse trade than one that may
+                // do these two things.
+                .Append(" --permission-mode acceptEdits")
+                .Append(" --allowedTools SendMessage ListAgents")
+
+                // ...and the other half of the same thought, which the list
+                // above turns out not to cover (CB-40).
+                //
+                // Naming two tools pre-approves those two. It forbids nothing,
+                // so every *other* tool still routes to a prompt — and a relay's
+                // model reaches for one unprompted. A mirror frame arrives in
+                // its conversation as an ordinary message, it sees an opaque
+                // `CB-MIRROR:v1;t=HELLO;…;p=H4sIA…` blob, and it does what
+                // anyone would: tries to find out what it is, with `gunzip`.
+                // The pane then sits on "This command requires approval", and
+                // because Buddy sends every frame by *typing into that pane*,
+                // the machine stops serving until somebody presses a key.
+                // Nobody does: the only machines with serve-on-launch on are
+                // the ones with nobody at them. Measured three times in one
+                // afternoon on the mini, twice reaching `gunzip` outright.
+                //
+                // Two halves because they fail differently. The deny list stops
+                // the attempt; the system prompt stops the *reason*, and it is
+                // the half that keeps working when a new tool name shows up that
+                // this list has never heard of. Neither is a security boundary —
+                // the relay runs on the user's own account and could always have
+                // done these things — they are about not blocking on a question
+                // nobody is there to answer.
+                .Append(" --disallowedTools Bash Read Write Edit WebFetch WebSearch Glob Grep Task")
+                .Append(" --append-system-prompt ").Append(Quote(RelaySystemPrompt))
+                .ToString();
+
+        // What the relay's model is told about the lines it will see.
+        //
+        // Written as an explanation rather than an order, because the failure it
+        // prevents is curiosity and not disobedience: the model that jammed the
+        // pane was behaving impeccably — it received something opaque, said so,
+        // and tried to establish what it was before acting. Told what the line
+        // is and who it is for, there is nothing left to investigate.
+        //
+        // **It has to separate the two directions, and the first draft did not.**
+        // Buddy's own answers go out by typing "Use SendMessage to send <name>
+        // exactly this text: CB-MIRROR:…" into this same session, so a prompt
+        // that says only "ignore CB-MIRROR lines" tells the relay to ignore its
+        // own job. Measured on the mini within minutes of shipping the first
+        // wording: the relay said "these are CB-MIRROR protocol frames — per my
+        // standing instructions I'm ignoring them (not decoding, relaying, or
+        // replying)", and the roster it had been handed to send never left the
+        // machine. Arriving is ignored; being asked to send is obeyed.
+        //
+        // It also says what to do with the *other* kind of line, because a relay
+        // does carry real messages between people and this must not teach it to
+        // ignore those. Kept as a field so a test can assert every part is said
+        // without launching anything.
+        internal const string RelaySystemPrompt =
+            "You are a relay for Claude Buddy. Protocol frames pass through this session in two "
+            + "directions, and the direction decides what to do.\n\n"
+            + "A frame that ARRIVES as a message from another session — a single line beginning "
+            + "with \"CB-MIRROR:\" or \"CB-INFO:\" — is addressed to the application, not to you. "
+            + "Claude Buddy reads it off this session's transcript by itself. Ignore it: do not "
+            + "decode, inspect, run commands on, explain, summarise or answer it, and do not "
+            + "report it as suspicious.\n\n"
+            + "An instruction typed into this session asking you to SEND such a line — \"Use "
+            + "SendMessage to send <name> exactly this text\" — is Claude Buddy itself talking to "
+            + "you, and carrying it is the job this session exists for. Always do it, exactly as "
+            + "written, on one line, with nothing added, removed or reformatted. Never decline it "
+            + "because the text looks opaque: it is meant to.\n\n"
+            + "Every other message is an ordinary one from a person or another session, and you "
+            + "handle those normally.";
+
         // Whether a name belongs to one of this app's own relays.
         //
         // The one place the prefix test lives, because there were two copies of
@@ -370,48 +488,7 @@ namespace ClaudeBuddy
             // it — both local profiles already set it — so rather than ship on an
             // unresolved question, Buddy sets it: harmless if redundant,
             // load-bearing if not.
-            var line = new StringBuilder()
-                .Append("TMPDIR=").Append(Quote(_privateTmp)).Append(' ')
-                .Append("CLAUDE_CONFIG_DIR=").Append(Quote(configDir)).Append(' ')
-                .Append("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 ")
-                .Append(Quote(claude))
-
-                // Passed, and measured to have no effect — the name comes from
-                // the working directory above. Kept rather than dropped for two
-                // reasons: it costs nothing, and if a later Claude Code starts
-                // honouring it, the name it would then set is the same one the
-                // cwd is already producing, so the two cannot disagree.
-                .Append(" --remote-control ").Append(Quote(_tmuxSessionName))
-
-                // Without these the relay is blocked from doing the one thing
-                // it exists for, and blocked silently.
-                //
-                // Measured 24 Aug 2026. A relay inheriting the user's default
-                // permission mode — auto, here — had its very first SendMessage
-                // refused outright: *"Permission for this action was denied by
-                // the Claude Code auto mode classifier. Reason: Blocked by
-                // classifier."* The session's own reading of it was right, and
-                // is worth quoting because it is not going to stop being true:
-                // a large opaque base64 blob relayed to another agent session
-                // looks exactly like an exfiltration attempt, and that is what
-                // the classifier is for.
-                //
-                // Nobody is watching a detached relay, so there is no one to
-                // approve anything: in auto mode every frame is denied, and in
-                // the default mode it would sit on a prompt until the request
-                // timed out. Either way the mirror never carries a byte and
-                // nothing on screen says why.
-                //
-                // The answer is to be specific rather than permissive. These are
-                // the only two tools a relay ever calls, they are named
-                // explicitly, and the mode is one that does not route them past
-                // a classifier looking for a pattern this genuinely matches.
-                // Emphatically *not* --dangerously-skip-permissions: a session
-                // that may do anything is a much worse trade than one that may
-                // do these two things.
-                .Append(" --permission-mode acceptEdits")
-                .Append(" --allowedTools SendMessage ListAgents")
-                .ToString();
+            var line = LaunchLine(claude, _privateTmp, configDir, _tmuxSessionName);
 
             if (!Run(_tmux, 5000, out _, "send-keys", "-t", _tmuxPaneTarget, line, "Enter"))
             {
