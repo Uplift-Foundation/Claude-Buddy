@@ -154,6 +154,17 @@ namespace ClaudeBuddy
                     AvatarBox.Bounds.Y + centre.Y)));
             };
             SendButton.PointerPressed += (_, e) => { e.Handled = true; Send(); };
+
+            // Fire and forget, like the click on the orb it shares its
+            // implementation with. Nothing is awaited and nothing about the panel
+            // changes: what the attach produces arrives through the ordinary
+            // scan, which is also what eventually gives this session a pane and
+            // turns the composer into an ordinary one.
+            AttachButton.PointerPressed += (_, e) =>
+            {
+                e.Handled = true;
+                (_session as IRemoteChatElsewhere)?.OpenElsewhere();
+            };
             MicButton.PointerPressed += (_, e) => { e.Handled = true; _owner?.ToggleRecording(); };
             SpeakButton.PointerPressed += (_, e) => { e.Handled = true; SpeakLatest(); };
 
@@ -419,9 +430,27 @@ namespace ClaudeBuddy
             // Read off the orb rather than from the session, so the panel and
             // the badge on the thing that was clicked cannot disagree — the
             // same reason the header takes its colour and letter from there.
+            // The kind, and — for a session that is quiet in a way worth naming —
+            // what it is waiting for. Read off the orb rather than re-derived, so
+            // the chip and the thing that was clicked cannot disagree; the same
+            // reason KindLabel is read from there rather than from the status.
+            //
+            // "needs input" is the daemon's own phrase, so the chip, the orb's
+            // tooltip and `claude agents` all say the same words about the same
+            // session.
             var kind = orb.KindLabel;
+            var presence = orb.PresenceLabel;
+
+            // Gated on the kind, not on either: a presence word without a kind
+            // cannot happen — both marks belong to background sessions, and every
+            // one of those is badged — and a chip that made room for the
+            // impossible case would be a claim about this app that is not true.
             KindChip.IsVisible = kind is not null;
-            KindChipText.Text = kind is null ? "" : $"{orb.KindGlyphText}  {kind}";
+            KindChipText.Text = kind is null
+                ? ""
+                : presence is null
+                    ? $"{orb.KindGlyphText}  {kind}"
+                    : $"{orb.KindGlyphText}  {kind} · {presence}";
 
             ApplyHeartbeat(orb.IsHeartbeat);
 
@@ -442,7 +471,7 @@ namespace ClaudeBuddy
             // The box stays enabled even when sending won't work, and says why
             // on itself instead. A disabled box can't be pasted into or drafted
             // in, and SendAsync explains itself in the transcript anyway.
-            Input.Watermark = (session as IRemoteChatComposer)?.ComposerHint ?? "Message…";
+            ApplyComposerAffordances(session);
             ApplyPrompt();
 
             Reposition();
@@ -459,6 +488,24 @@ namespace ClaudeBuddy
             Dispatcher.UIThread.Post(() => Input.Focus(), DispatcherPriority.Input);
 
             Dispatcher.UIThread.Post(ScrollToEndIfPinned, DispatcherPriority.Loaded);
+        }
+
+        // What the box says, and whether there is a button beside it — one method
+        // because they are two halves of one answer, and reading them from two
+        // places is how they came to disagree in the first place.
+        //
+        // Both are re-read wherever the other was: at bind, and when a panel's
+        // history is replaced wholesale (which is what a remote session
+        // upgrading to a live view looks like). A local session's own transition
+        // — parked, then attached, then typeable — arrives through the scan
+        // rather than through the panel, and shows up here the next time the
+        // panel is opened. Worth stating rather than papering over with a timer:
+        // the attach opens a terminal the user is looking at, so the panel is not
+        // where they are waiting for the answer.
+        private void ApplyComposerAffordances(IRemoteChatSession? session)
+        {
+            Input.Watermark = (session as IRemoteChatComposer)?.ComposerHint ?? "Message…";
+            AttachButton.IsVisible = (session as IRemoteChatElsewhere)?.CanOpenElsewhere ?? false;
         }
 
         // The same decoded frames the orb draws, at a size worth looking at.
@@ -1535,7 +1582,7 @@ namespace ClaudeBuddy
             // description of where a message goes changes with it — from
             // "message this session" to "type into its terminal". Read once at
             // bind, the box would go on describing the panel it used to be.
-            Input.Watermark = (_session as IRemoteChatComposer)?.ComposerHint ?? "Message…";
+            ApplyComposerAffordances(_session);
 
             // Straight to the bottom rather than the pinned-only rule: a
             // transcript that has just been replaced wholesale has no scroll

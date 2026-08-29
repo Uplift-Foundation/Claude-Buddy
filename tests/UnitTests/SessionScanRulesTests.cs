@@ -31,6 +31,76 @@ public class SessionScanRulesTests
         return new SessionManager.ScanEntry(id, status, written);
     }
 
+    // --- SharingAPid --------------------------------------------------------
+
+    // The domain InheritTerminalInfo donates within, and the situation
+    // Superseded exists to resolve, said once. Its consumer is the gate that
+    // decides whether to ask the daemon about a session — and the case it exists
+    // for is the Agent-View-dispatched background session, which does not fork a
+    // process and so lands on a live interactive session's pid.
+    [Fact]
+    public void TwoFilesOnOnePidBothCountAsSharingIt()
+    {
+        var found = new List<SessionManager.ScanEntry>
+        {
+            Entry("interactive", 4321, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 0, 0)),
+            Entry("dispatched", 4321, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 1, 0)),
+            Entry("elsewhere", 4322, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 2, 0)),
+        };
+
+        var shared = SessionManager.SharingAPid(found);
+
+        // Both of them, not just the one that lost the mtime tie-break: the
+        // donation runs in both directions and either file can be the job.
+        Assert.Contains("interactive", shared);
+        Assert.Contains("dispatched", shared);
+        Assert.DoesNotContain("elsewhere", shared);
+    }
+
+    // Keyed by pid *and* source, for the reason Superseded and
+    // InheritTerminalInfo both give: a nested `codex exec` can record the pid of
+    // the Claude Code session that started it, and two CLIs never share a real
+    // process. Treating that pair as one bucket would make an ordinary pair of
+    // sessions look like an Agent View pid.
+    [Fact]
+    public void OnePidAcrossTwoClisIsNotSharing()
+    {
+        var found = new List<SessionManager.ScanEntry>
+        {
+            Entry("claude", 4321, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 0, 0)),
+            Entry("codex", 4321, SessionSource.Codex, new DateTime(2026, 8, 27, 12, 1, 0)),
+        };
+
+        Assert.Empty(SessionManager.SharingAPid(found));
+    }
+
+    // A pid of 0 is a hook older than the session_pid field, not a shared
+    // process. Bucketing those together would say every such file shares a pid
+    // with every other — the same trap Superseded's own comment names, and here
+    // it would make the daemon be asked about all of them.
+    [Fact]
+    public void FilesThatRecordedNoPidShareNothing()
+    {
+        var found = new List<SessionManager.ScanEntry>
+        {
+            Entry("old-a", 0, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 0, 0)),
+            Entry("old-b", 0, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 1, 0)),
+        };
+
+        Assert.Empty(SessionManager.SharingAPid(found));
+    }
+
+    [Fact]
+    public void OneFileOnItsOwnPidSharesNothing()
+    {
+        var found = new List<SessionManager.ScanEntry>
+        {
+            Entry("solo", 4321, SessionSource.ClaudeCode, new DateTime(2026, 8, 27, 12, 0, 0)),
+        };
+
+        Assert.Empty(SessionManager.SharingAPid(found));
+    }
+
     // --- Superseded ---------------------------------------------------------
 
     // None of these care about the daemon's job list, so they all pass a stub
@@ -312,27 +382,83 @@ public class SessionScanRulesTests
     [Fact]
     public void PositionKeyFor_LocalCodexSessionGetsCodexPrefixThatClaudeCodeDoesNot()
     {
-        var codex = new SessionStatus { Source = SessionSource.Codex, Cwd = "/Users/warren/project" };
-        var claude = new SessionStatus { Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/project" };
+        // Titled, because that is the only shape the prefix is observable in
+        // now: an untitled session of either CLI keys on its own id, which is
+        // already unique across the two.
+        var codex = new SessionStatus
+        {
+            Source = SessionSource.Codex, Cwd = "/Users/warren/project", Title = "build"
+        };
+        var claude = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/project", Title = "build"
+        };
 
-        Assert.Equal("codex\n/Users/warren/project", SessionManager.PositionKeyFor(codex, "id-1"));
-        Assert.Equal("/Users/warren/project", SessionManager.PositionKeyFor(claude, "id-2"));
+        Assert.Equal("codex\n/Users/warren/project\nbuild", SessionManager.PositionKeyFor(codex, "id-1"));
+        Assert.Equal("/Users/warren/project\nbuild", SessionManager.PositionKeyFor(claude, "id-2"));
     }
 
     [Fact]
-    public void PositionKeyFor_AppendsTitleWhenPresentAndOmitsItWhenEmpty()
+    public void PositionKeyFor_TitledSessionKeysOnDirectoryAndTitle()
     {
+        // Byte-for-byte what it always was, which is the compatibility point:
+        // every position already saved on a real machine still matches the
+        // session it was saved for.
         var titled = new SessionStatus
         {
             Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/evidence", Title = "job-lawyer"
         };
-        var untitled = new SessionStatus
+
+        Assert.Equal("/Users/warren/evidence\njob-lawyer", SessionManager.PositionKeyFor(titled, "id-1"));
+    }
+
+    [Fact]
+    public void PositionKeyFor_UntitledSessionsInOneDirectoryDoNotShareASlot()
+    {
+        // CB-10. Adding the title separated two *titled* sessions in one folder
+        // and did nothing when the title was empty, so every untitled session
+        // fell back to the same bare-cwd key. Measured: three live untitled
+        // sessions in Documents/GTD/Evidence sharing one key, so
+        // RestoreOrbPosition refused a slot to two of them and three orbs read
+        // as two on screen.
+        var first = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/evidence", Title = ""
+        };
+        var second = new SessionStatus
         {
             Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/evidence", Title = ""
         };
 
-        Assert.Equal("/Users/warren/evidence\njob-lawyer", SessionManager.PositionKeyFor(titled, "id-1"));
-        Assert.Equal("/Users/warren/evidence", SessionManager.PositionKeyFor(untitled, "id-2"));
+        var a = SessionManager.PositionKeyFor(first, "0e043819");
+        var b = SessionManager.PositionKeyFor(second, "0e9677a5");
+
+        Assert.Equal("0e043819", a);
+        Assert.Equal("0e9677a5", b);
+        Assert.NotEqual(a, b);
+
+        // And neither collides with the directory key a titled sibling uses.
+        var titled = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/evidence", Title = "job-lawyer"
+        };
+        Assert.NotEqual(SessionManager.PositionKeyFor(titled, "id-3"), a);
+    }
+
+    [Theory]
+    [InlineData("   ")]
+    [InlineData("\t")]
+    [InlineData(null)]
+    public void PositionKeyFor_ATitleOfNothingButSpaceCountsAsUntitled(string? title)
+    {
+        // The rule trims before deciding, so whitespace can't sneak a session
+        // back into the colliding branch.
+        var status = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode, Cwd = "/Users/warren/evidence", Title = title!
+        };
+
+        Assert.Equal("id-9", SessionManager.PositionKeyFor(status, "id-9"));
     }
 
     [Fact]

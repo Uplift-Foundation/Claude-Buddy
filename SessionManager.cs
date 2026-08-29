@@ -117,6 +117,31 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public bool IsRoom { get; set; }
 
+        // Which shape of local session this is — a terminal, a background job,
+        // or a team member. Derived during the scan from the daemon's job
+        // listing and the Lead above (see SessionPresence.ShapeOf), and
+        // [JsonIgnore] for the reason Source and Kind are: it is the app's
+        // conclusion rather than the hook's, and ResetSessionToIdle writes this
+        // object back over a hook-owned file.
+        //
+        // Terminal for everything that is not a local CLI session, since the
+        // question does not arise for a gateway conversation — and Terminal is
+        // also the shape that changes nothing about how an orb is drawn.
+        [JsonIgnore]
+        public LocalSessionShape Shape { get; set; } = LocalSessionShape.Terminal;
+
+        // What the orb should say about anything being on the other end of this
+        // session: present, quiet, holding a question, or finished. Derived
+        // beside Shape and [JsonIgnore] for the same reason.
+        //
+        // Deliberately not folded into State, which is what the *session* is
+        // doing and is the hook's to write. This is a third axis — the orb's
+        // colour is its identity, its fill is its state, and its opacity and its
+        // marks are its presence — and a parked session's state is a truthful
+        // "idle" that should keep meaning what it means.
+        [JsonIgnore]
+        public OrbPresence Presence { get; set; } = OrbPresence.Present;
+
         // Where the session's terminal lives (macOS hook only; empty on
         // Windows or with an older hook script). See TerminalFocuser.
         [JsonPropertyName("term_program")]
@@ -224,10 +249,75 @@ namespace ClaudeBuddy
         // reads. This overload only makes the same seam nameable, so a test can
         // hand over a scratch directory without reaching for an environment
         // variable that the rest of the process is also reading.
+        // jobListing is the second seam, and the reason it is a constructor
+        // parameter rather than a call is that the real one shells out to
+        // `claude agents --json`. Every rule that consults it is already pure
+        // and covered by being handed a listing (ScanVerdictTests,
+        // SessionPresenceTests); this is what lets a test of the *scan* hand one
+        // over too, instead of asking whatever daemon happens to be running on
+        // the machine — which for this suite would be the user's own, with their
+        // own real background jobs on it.
         internal SessionManager(string statusDir)
+            : this(statusDir, null)
+        {
+        }
+
+        // Two overloads rather than one with a default, because the one-argument
+        // shape is reached by reflection from two test suites (RemoteScanTests,
+        // GatewayScanTests) that look it up by exact signature. A default
+        // parameter would satisfy the compiler and hand both of them a null
+        // constructor at runtime.
+        internal SessionManager(
+            string statusDir,
+            Func<Dictionary<string, string>?>? jobListing,
+            Func<HashSet<string>?>? attachClients = null,
+            Func<string, string?>? transcriptHunt = null)
         {
             _statusDir = statusDir;
+            _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
+            // Wrapped rather than handed over as a method group: AttachedJobIds
+            // grew an optional `fresh` parameter for the click path, and an
+            // optional parameter stops a method group converting to a
+            // zero-argument Func. The scan wants the cached form, which is the
+            // default, so the lambda says so explicitly.
+            _attachClients = attachClients ?? (() => AgentTeamViewer.AttachedJobIds());
+            // Wrapped for the same optional-parameter reason: FindTranscriptFor
+            // takes a home override the scan never passes.
+            _transcriptHunt = transcriptHunt ?? (id => TranscriptReader.FindTranscriptFor(id));
         }
+
+        private readonly Func<Dictionary<string, string>?> _jobListing;
+
+        // How a transcript that is not where the status file says is re-found —
+        // TranscriptReader.FindTranscriptFor, behind a seam because the real one
+        // walks this machine's own projects directories. The memo deciding when
+        // it is worth calling again is TranscriptHunts.
+        private readonly Func<string, string?> _transcriptHunt;
+
+        // Every `claude attach` client running on this machine, for the rule that
+        // un-dims a parked session somebody is sitting in. A seam for the same
+        // reason the listing is one: the real one walks the process table, and a
+        // test of the scan has no business asking what is running on the machine
+        // it happens to be on — least of all on this one, where the answer
+        // includes the user's own attached sessions.
+        private readonly Func<HashSet<string>?> _attachClients;
+
+        // How long a status file has to keep looking dead before the scan
+        // deletes it. See SessionPresence.EvidenceOfDeath for what "dead" is
+        // allowed to mean and why the clock is this process's rather than the
+        // file's mtime.
+        //
+        // Per manager rather than static, so a test that shortens it cannot
+        // change what another test class running beside it does — the same
+        // hazard ClaudeBuddySettings' process-wide statics create for the UI
+        // suites, and cheaper to avoid here than to serialise around.
+        internal TimeSpan SweepGrace { get; set; } = TimeSpan.FromMinutes(10);
+
+        // Session ids whose file has looked dead since a given moment, and the
+        // sweep's whole memory. An id leaves this the moment the evidence goes
+        // away — a resumed job, a pid that answers again — so the grace period
+        // starts over rather than accumulating across the gap.
+        private readonly Dictionary<string, DateTime> _deadSince = new(StringComparer.Ordinal);
 
         private readonly Dictionary<string, OrbWindow> _windows = new();
         private readonly Dictionary<string, SessionStatus> _statuses = new();
@@ -332,6 +422,11 @@ namespace ClaudeBuddy
             RemoteControlSessions.ProvideLocalSessions(() =>
                 _statuses.Select(pair => (pair.Key, pair.Value)).ToList());
 
+            // A machine that serves its sessions to other Buddies unattended
+            // asks for the relay itself, once, at startup. Why that is opt-in —
+            // and what it costs — is on ServeOnLaunch itself.
+            RemoteControlSessions.ServeOnLaunch();
+
             _debounce.Tick += (_, _) =>
             {
                 _debounce.Stop();
@@ -406,6 +501,109 @@ namespace ClaudeBuddy
         // written before this key existed has no "cli" at all and was Claude
         // Code, and a hook from some future version naming something this build
         // has never heard of is still, at worst, a local session in a terminal.
+        // Whether this session's own transcript is worth asking what it is
+        // called. See TranscriptIdentity for the case this exists for — a status
+        // file whose title was caught empty in a one-off race and never
+        // corrected, because the hook only runs when something happens.
+        //
+        // Claude Code only: those three records are its own, and a Codex rollout
+        // contains none of them, so asking would be a tail read per scan that
+        // could only ever answer nothing. Same reason the hook's own branch is
+        // gated on the CLI.
+        //
+        // Asked only when something is actually missing, which is what keeps
+        // this off the path of every healthy session. A title the hook did
+        // record is never second-guessed: it read the same file with the same
+        // precedence, and if the two ever disagreed the status file is the more
+        // recent reading.
+        // The answer for one transcript, remembered against the file's length.
+        //
+        // Keyed on length rather than on a timer, because length is what decides
+        // whether the answer *could* have changed: these records are appended,
+        // never rewritten, so a file that has not grown cannot have gained a
+        // name. A stat per untitled session per scan is nothing; a 256KB tail
+        // read every two seconds for every unnamed session would not be.
+        //
+        // The negative answer is cached the same way as the positive one, which
+        // is the half that matters for cost — a session that genuinely has no
+        // title yet is exactly the one this would otherwise re-read forever.
+        // It still notices the title arriving, because arriving means the file
+        // grew.
+        //
+        // Excluded from coverage: the two file-system calls and the dictionary
+        // around them. What is worth asserting is which sessions get asked
+        // (WantsIdentityFromTranscript), what is done with the answer
+        // (ApplyIdentity) and how a transcript is read (TranscriptIdentity.From)
+        // — all three pure, all three tested. This is the stat and the cache.
+        [ExcludeFromCodeCoverage]
+        private TranscriptIdentity IdentityFor(string path)
+        {
+            long length;
+            try { length = new FileInfo(path).Length; }
+            catch { return TranscriptIdentity.None; }
+
+            if (_identityCache.TryGetValue(path, out var cached) && cached.Length == length)
+                return cached.Identity;
+
+            var identity = TranscriptIdentity.From(TranscriptReader.TailLines(path));
+            _identityCache[path] = (length, identity);
+            return identity;
+        }
+
+        private readonly Dictionary<string, (long Length, TranscriptIdentity Identity)>
+            _identityCache = new(StringComparer.Ordinal);
+
+        internal static bool WantsIdentityFromTranscript(SessionStatus status) =>
+            status.Source == SessionSource.ClaudeCode
+            && !string.IsNullOrEmpty(status.TranscriptPath)
+            && (string.IsNullOrEmpty(status.Title) || string.IsNullOrEmpty(status.Color));
+
+        // Fills in only what the status file is missing, and only from a
+        // non-empty answer. Never an overwrite: a name or colour the hook
+        // recorded stays exactly as it was, so this can never move an orb that
+        // was already right.
+        internal static void ApplyIdentity(SessionStatus status, TranscriptIdentity identity)
+        {
+            if (string.IsNullOrEmpty(status.Title) && !string.IsNullOrEmpty(identity.Title))
+                status.Title = identity.Title;
+
+            if (string.IsNullOrEmpty(status.Color) && !string.IsNullOrEmpty(identity.Color))
+                status.Color = identity.Color;
+        }
+
+        // Whether a status file's transcript_path is a claim worth re-checking:
+        // it names a file, and the file is not there.
+        //
+        // That happens for real, and not only in the first moments of a session.
+        // The daemon respawns a finished job's worker from the job's *original*
+        // directory, and Claude Code computes the hook's transcript_path from
+        // the cwd it launched with — while the conversation itself lives in the
+        // projects directory keyed by wherever the session actually ran. Seen
+        // live: job b0633b77 ran in a worktree, its respawned worker's status
+        // file pointed at the parent checkout's projects dir, and the file
+        // there had never existed. Every consumer of the path — the identity
+        // read, the nothing-to-show rule, the chat panel — then agreed the
+        // conversation was gone, and a 3.6MB transcript rendered as a blank
+        // panel.
+        //
+        // Claude Code only: the hunt walks Claude Code's own config roots, so
+        // for a Codex session it is a directory walk that can only answer
+        // nothing. An *empty* path is not repaired here — that is the shape the
+        // chat panel already hunts for itself, and the rules that read the path
+        // treat empty as "unknown", which is already the right reading.
+        internal static bool WantsTranscriptRepair(SessionStatus status, Func<string, bool> exists) =>
+            status.Source == SessionSource.ClaudeCode
+            && !string.IsNullOrEmpty(status.TranscriptPath)
+            && !exists(status.TranscriptPath);
+
+        private readonly TranscriptHunts _transcriptHunts = new();
+
+        // File.Exists as a delegate, once. The repair asks it twice per file in
+        // the scan loop, and a method group converted at a call site compiles
+        // to a hidden per-site cache with a null-check branch in it — a branch
+        // no test can pin both arms of on purpose. One named field, no branch.
+        private static readonly Func<string, bool> FileExists = File.Exists;
+
         internal static SessionSource SourceOf(SessionStatus status) =>
             string.Equals(status.Cli, "codex", StringComparison.OrdinalIgnoreCase)
                 ? SessionSource.Codex
@@ -567,6 +765,43 @@ namespace ClaudeBuddy
             }
         }
 
+        // Ids whose file shares its (pid, source) with another file in this scan.
+        //
+        // The domain InheritTerminalInfo donates within, and the situation
+        // Superseded exists to resolve — stated once so the rule that consults it
+        // cannot drift from either. Grouped by pid *and* source for the reason
+        // both of those give: a nested `codex exec` can record the pid of the
+        // Claude Code session that started it, and two CLIs never share a real
+        // process.
+        //
+        // A pid of 0 shares nothing. It means a hook older than the session_pid
+        // field, and bucketing those together would say every such file shares a
+        // pid with every other — the same trap Superseded's own comment names.
+        internal static HashSet<string> SharingAPid(List<ScanEntry> found)
+        {
+            var counts = new Dictionary<(int Pid, SessionSource Source), int>();
+            foreach (var entry in found)
+            {
+                if (entry.Status.SessionPid <= 0) continue;
+
+                var key = (entry.Status.SessionPid, entry.Status.Source);
+                counts[key] = counts.GetValueOrDefault(key) + 1;
+            }
+
+            var shared = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entry in found)
+            {
+                if (entry.Status.SessionPid <= 0) continue;
+
+                if (counts[(entry.Status.SessionPid, entry.Status.Source)] > 1)
+                {
+                    shared.Add(entry.SessionId);
+                }
+            }
+
+            return shared;
+        }
+
         // Why a status file gets no orb this scan, or Keep when it does.
         //
         // Named answers rather than a bool, because every one of these five
@@ -585,6 +820,13 @@ namespace ClaudeBuddy
             // The CLI process that wrote the file has exited.
             ProcessGone,
 
+            // The conversation was handed to a background job mid-turn and
+            // nothing has happened in this session since — see
+            // TranscriptHandoff. The fork wears the conversation now, badge,
+            // title and all; this file is what the handoff left behind, and no
+            // hook will ever rewrite it.
+            Backgrounded,
+
             // Quiet for longer than the user's "Keep orbs for" allows.
             Expired,
 
@@ -593,17 +835,31 @@ namespace ClaudeBuddy
 
             // No process named, and the daemon does not know it as a job.
             NotALiveJob,
+
+            // No terminal to jump to and no transcript to read: an orb that
+            // can't be clicked anywhere and whose chat can only ever be blank.
+            NothingToShow,
         }
 
-        // The rules that need nothing but the file, its mtime, and whether its
-        // process is alive.
+        // The rules that need nothing but the file, its mtime, whether its
+        // process is alive, and whether its transcript says the conversation
+        // was handed away.
         //
         // isRunning is passed in for the reason Superseded's isLiveJob is: the
         // real one is a kill(2) against a pid this machine may or may not have,
         // which is not a thing a unit test should be deciding.
+        //
+        // handedToBackground is a closure rather than a bool for the same
+        // reason isRunning is not a bool: it costs a stat (and on a change, a
+        // read) against a transcript on this machine's disk, and a session the
+        // rules above have already dropped must never pay for it. The gates on
+        // when it is even worth asking live in
+        // SessionPresence.CouldBeABackgroundedHusk; the answer itself is
+        // TranscriptHandoff's.
         internal static ScanVerdict JudgeLiveness(
             string sessionId, SessionStatus status, DateTime written, DateTime now,
-            TimeSpan? staleAfter, ISet<string> superseded, Func<int, bool> isRunning)
+            TimeSpan? staleAfter, ISet<string> superseded, Func<int, bool> isRunning,
+            Func<bool> handedToBackground)
         {
             // Dropped here rather than left to the lifetime timer, which is the
             // only other thing that would ever catch it.
@@ -616,6 +872,15 @@ namespace ClaudeBuddy
             // below deliberately never touches; an unanswered prompt whose
             // session was killed used to sit on screen indefinitely.
             if (status.SessionPid > 0 && !isRunning(status.SessionPid)) return ScanVerdict.ProcessGone;
+
+            // A turn the user backgrounded leaves this file behind: frozen at
+            // whatever the hook last wrote — "generating", usually, and
+            // sometimes "waiting" — while the conversation carries on under
+            // the fork's session id and the fork's own orb. Two orbs wearing
+            // one title, one of them a lie that no hook will ever correct,
+            // which is why this outranks the state exemptions below: a husk
+            // frozen at "waiting" is not waiting on anyone.
+            if (handedToBackground()) return ScanVerdict.Backgrounded;
 
             // A session waiting on you (permission prompt / question) never
             // goes stale on its own — no further hook fires until you
@@ -637,6 +902,143 @@ namespace ClaudeBuddy
             }
 
             return ScanVerdict.Keep;
+        }
+
+        // The scan, reduced to what another machine's Buddy needs before this
+        // one has a UI.
+        //
+        // Exists for exactly one caller: RemoteControlSessions.LocalSessions,
+        // in the window between the relay starting to serve (Program.Main,
+        // before the screen-lock wait — see CB-24) and SessionManager.Start
+        // handing over the real provider. A headless machine whose screen never
+        // unlocks lives in that window permanently, so the roster served from
+        // it has to be right rather than a placeholder.
+        //
+        // Composed from the same rules the live scan applies, in the same order
+        // — SourceOf, EnabledFor, the own-relay drop, Superseded, JudgeLiveness
+        // — so the two cannot disagree about which sessions exist. What it
+        // deliberately skips are the live scan's two refinements, transcript
+        // re-hunting and the identity read: both lean on per-instance memos
+        // that belong to the scan loop, so a session in this window serves
+        // under the name and paths its status file already carries, and the
+        // real provider replaces this one the moment the UI starts.
+        //
+        // Every input is a parameter with the real one as its default — the
+        // same pattern, for the same reason, as ClaudeBinary.Locate: a test
+        // hands in a scratch directory and fixed answers, and the machine the
+        // test runs on stops mattering. The default arms themselves shell out
+        // (`claude agents --json`) or read this machine's real temp directory,
+        // so tests always pass all four; those four `??` arms are the named
+        // coverage gap, exactly as the live scan's constructor defaults are.
+        internal static List<(string SessionId, SessionStatus Status)> HeadlessSnapshot(
+            string? statusDir = null,
+            Func<Dictionary<string, string>?>? jobListing = null,
+            Func<int, bool>? isRunning = null,
+            DateTime? nowUtc = null)
+        {
+            statusDir ??= Path.Combine(Path.GetTempPath(), "claude_buddy");
+            var now = nowUtc ?? DateTime.UtcNow;
+
+            IEnumerable<string> files;
+            try
+            {
+                files = Directory.EnumerateFiles(statusDir, "*.txt");
+            }
+            catch
+            {
+                // No directory yet means no sessions yet, which is an answer.
+                return new List<(string, SessionStatus)>();
+            }
+
+            var found = new List<ScanEntry>();
+            foreach (var file in files)
+            {
+                SessionStatus? status;
+                DateTime written;
+                try
+                {
+                    written = File.GetLastWriteTimeUtc(file);
+                    using var stream = new FileStream(
+                        file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    status = System.Text.Json.JsonSerializer.Deserialize<SessionStatus>(stream);
+                }
+                catch
+                {
+                    continue; // mid-write or vanished, same as the live scan
+                }
+
+                if (status is null) continue;
+
+                status.Source = SourceOf(status);
+                if (!EnabledFor(status.Source)) continue;
+                if (RemoteControlBridge.IsOwnRelayCwd(status.Cwd)) continue;
+
+                found.Add(new ScanEntry(
+                    Path.GetFileNameWithoutExtension(file), status, written));
+            }
+
+            var jobs = (jobListing ?? BackgroundJobs.SnapshotForScan)();
+            Func<string, bool> isLiveJob = id => BackgroundJobs.IsLive(jobs, id);
+            var superseded = Superseded(found, isLiveJob);
+            var running = isRunning ?? ProcessLiveness.IsRunning;
+
+            var kept = new List<(string, SessionStatus)>();
+            foreach (var entry in found)
+            {
+                // The husk check, asked the same way the live scan asks it.
+                //
+                // This call site was left behind when JudgeLiveness grew the
+                // parameter, and the two changes met in a merge that had no
+                // textual conflict to report — so develop stopped compiling
+                // with nothing pointing at either branch.
+                //
+                // Answered rather than stubbed with `() => false`, which would
+                // have compiled and been wrong: this method's own comment above
+                // says it is composed from the same rules as the live scan "so
+                // the two cannot disagree about which sessions exist", and a
+                // stub disagrees about exactly one thing — a backgrounded husk,
+                // which the machine asking for this roster would then draw as a
+                // live session that no hook will ever correct. A closure for the
+                // same reason the live scan uses one: only a session the earlier
+                // rules kept ever pays for the stat behind it.
+                //
+                // The live scan gates the phase on `worthAsking` as well as on
+                // the source, and its absence here is deliberate rather than an
+                // omission. `worthAsking` is a whole-scan decision about whether
+                // to *spend the subprocess* that fetches the daemon's listing —
+                // its own comment says so — and this method has already fetched
+                // that listing unconditionally, a few lines up. There is no
+                // subprocess left to gate, so the condition could only suppress
+                // an answer already paid for.
+                //
+                // That leaves one case where the two genuinely differ, and it is
+                // worth stating because the contract above says they cannot.
+                // WorthAskingTheDaemon can be false for a session that *is* a
+                // job — the $TERM_PROGRAM hole its own comment admits to, where
+                // a daemon started inside a terminal passes one down to every
+                // job under it — and there the live scan sees Unknown where this
+                // sees the real phase. The disagreement is in this method's
+                // favour: Unknown passes the husk gate and the real phase
+                // (Working, Parked, Done) does not, so the live scan can read a
+                // live job's inherited marker as a husk where this one cannot.
+                // It is a difference in accuracy, not in the rule, and it can
+                // only ever keep a session this method should keep.
+                var status = entry.Status;
+                var phase = status.Source == SessionSource.ClaudeCode
+                    ? BackgroundJobs.Phase(jobs, entry.SessionId)
+                    : JobPhase.Unknown;
+
+                Func<bool> handedToBackground = () =>
+                    SessionPresence.CouldBeABackgroundedHusk(status, phase)
+                    && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
+
+                var verdict = JudgeLiveness(
+                    entry.SessionId, entry.Status, entry.Written,
+                    now, StaleAfter, superseded, running, handedToBackground);
+                if (verdict == ScanVerdict.Keep) kept.Add((entry.SessionId, entry.Status));
+            }
+
+            return kept;
         }
 
         // Whether this session is one of the shapes that is watched through a
@@ -680,22 +1082,122 @@ namespace ClaudeBuddy
         // watched through, and JudgeReachability below then dropped them for
         // having no terminal. One orb vanished on this machine before the cause
         // was obvious.
+        // The isLiveJob arm is gone, and the reason is a two-line trace from a
+        // real machine. Adoption grafts a viewer pane onto a session by cwd
+        // match, and with every live background job eligible, a parked job in
+        // the same directory as the user's own viewer adopted the pane the
+        // user was sitting in: FocusCore then "focused" it, returned true, and
+        // the click on that orb did visibly nothing — the dead background
+        // click this whole branch was opened for, wearing its last disguise.
+        //
+        //   Focus id=ed54b99d… shape=Background pane='%2' bin='' tty='ttys008'
+        //     FocusCore -> True, detached=False
+        //
+        // bin='' is TryAdopt's own signature: an adopted pane is the app's
+        // guess about where somebody is watching, not the session's recorded
+        // location, and a guess must not answer a click. The arm existed to
+        // rescue background orbs from the no-terminal rule before the phase
+        // exemptions did that properly (see RuledOutAsAJob below); its orb-
+        // rescue job is superseded and its click behaviour was the bug.
+        //
+        // What remains is the case adoption was built for: a lead whose
+        // agents are on screen gets the viewer's pane, so clicking the lead
+        // lands on the roster that shows its work. Plus the legacy pid-less
+        // arm, for hooks older than the session_pid field.
         internal static bool WantsAgentViewer(
             string sessionId, SessionStatus status,
-            ISet<string> leadsWithLiveAgents, Func<string, bool> isLiveJob) =>
+            ISet<string> leadsWithLiveAgents) =>
             status.Source == SessionSource.ClaudeCode
             && !KnowsATerminal(status)
             && (leadsWithLiveAgents.Contains(sessionId)
-                || status.SessionPid <= 0
-                || isLiveJob(sessionId));
+                || status.SessionPid <= 0);
 
         // Whether an orb for this session would go anywhere when it was
         // clicked. Asked after adoption above, which is what can give a
         // background lead a terminal it had none of a moment earlier.
+        // phase is what the daemon said about this session, rather than the
+        // is-it-live bool this used to take. Two reasons, and the first is only
+        // tidiness: the caller has the phase already, so passing a closure that
+        // reduces it to a bool was a second question about the same answer.
+        //
+        // The second is behaviour. "Live" collapsed the two ways a job can be
+        // finished-with — over, and never a job at all — and only one of them
+        // should cost an orb its place on screen. See
+        // SessionPresence.RuledOutAsAJob, which is now what both exemptions below
+        // ask, and which keeps the fail-open direction: a listing that could not
+        // be read rules nothing out.
         internal static ScanVerdict JudgeReachability(
             string sessionId, SessionStatus status,
-            ISet<string> leadsWithLiveAgents, Func<string, bool> isLiveJob)
+            ISet<string> leadsWithLiveAgents, JobPhase phase,
+            Func<string, bool> transcriptExists)
         {
+            // An orb is good for two things: clicking it to reach the session's
+            // terminal, and opening its chat to read the conversation. A session
+            // with neither a terminal nor a transcript has nothing behind it in
+            // either direction — the click goes nowhere and the chat opens
+            // blank, showing an amber "connecting" dot that never turns green
+            // and a composer disabled with "No pane to type into".
+            //
+            // This is what a background job that has not been given a prompt
+            // looks like. Measured on a real machine: job "evidence", `state:
+            // blocked` and `needs: send a prompt to start` in the daemon's own
+            // record, live in `claude agents --json`, forty minutes old, and no
+            // transcript written anywhere under either config root. The
+            // no-terminal rule below would have caught it, but the live-job
+            // exemption there — which exists because a background job has no
+            // terminal *by nature* — waved it through. That exemption is right
+            // about the terminal and says nothing about whether there is a
+            // conversation, which is what this rule adds.
+            //
+            // Deliberately narrow, and it has to be:
+            //
+            // - A session with a terminal is never touched. It may have no
+            //   transcript yet, but the click still lands, so the orb still
+            //   earns its place. A tty alone is not a terminal here, exactly as
+            //   KnowsATerminal already says it isn't: the daemon runs every
+            //   background worker under a pty host, so its sessions all record
+            //   a real /dev/ttysNN that no window anywhere is showing. This
+            //   rule shipped with an extra "and no tty" clause anyway, and the
+            //   pty host is what that clause turned into a hole — every worker
+            //   the daemon parks or pre-warms sailed through on its pty, and a
+            //   never-prompted one sat on screen as an untitled orb whose chat
+            //   could only ever open blank. Seen live as session de995bd9:
+            //   idle, no name, tty ttys006, no transcript anywhere, absent from
+            //   the daemon's own listing.
+            // - A lead with live agents is exempt for the same reason it is
+            //   exempt below: agents drawn on screen pointing at nothing is a
+            //   worse lie than an orb whose chat is thin.
+            // - An *empty* transcript path answers "keep", not "drop". A path
+            //   the hook never recorded means this app does not know where the
+            //   conversation would be, not that there isn't one — Codex's
+            //   transcript_path is nullable, and the chat panel itself falls
+            //   back to hunting the projects directories by session id. Same
+            //   reasoning as BackgroundJobs.IsLive answering true for a listing
+            //   it could not read: the rule only fires on a positive answer,
+            //   because the failure the user cannot see is the one worth being
+            //   careful about. It is also what keeps this O(1) per session per
+            //   scan rather than a deep directory walk every two seconds.
+            //
+            // The cost is that a background job's orb appears a scan or two
+            // late — the status file is written before the first transcript row
+            // — and a job sitting unprompted stays hidden until it is prompted.
+            // Both are the intended reading of "nothing to show". A session in
+            // a terminal that sets no TERM_PROGRAM — ssh in from elsewhere, an
+            // emulator that doesn't announce itself — now pays the same scan or
+            // two of lateness, because its file is tty-only and this rule can
+            // no longer tell it from a daemon worker until its transcript
+            // appears. It appears within the first exchange, and the trade is a
+            // brand-new session's orb arriving late against a phantom's never
+            // leaving.
+            if (status.IsLocalCli
+                && !KnowsATerminal(status)
+                && !leadsWithLiveAgents.Contains(sessionId)
+                && !string.IsNullOrEmpty(status.TranscriptPath)
+                && !transcriptExists(status.TranscriptPath))
+            {
+                return ScanVerdict.NothingToShow;
+            }
+
             // A session with no terminal recorded at all can't be jumped
             // to, so an orb for it is a dead click. This is what headless and
             // bridged invocations look like: no tty, no terminal program, no
@@ -721,7 +1223,8 @@ namespace ClaudeBuddy
                 && string.IsNullOrEmpty(status.TmuxPane)
                 && status.TermPid == 0
                 && !leadsWithLiveAgents.Contains(sessionId)
-                && !(status.Source == SessionSource.ClaudeCode && isLiveJob(sessionId))
+                && !(status.Source == SessionSource.ClaudeCode
+                     && !SessionPresence.RuledOutAsAJob(phase))
                 && status.SessionPid > 0)
             {
                 return ScanVerdict.NoTerminal;
@@ -749,7 +1252,7 @@ namespace ClaudeBuddy
             // back "not a job", which it always would.
             if (status.Source == SessionSource.ClaudeCode
                 && status.SessionPid <= 0
-                && !isLiveJob(sessionId))
+                && SessionPresence.RuledOutAsAJob(phase))
             {
                 return ScanVerdict.NotALiveJob;
             }
@@ -823,7 +1326,30 @@ namespace ClaudeBuddy
 
                 if (status is null) continue;
 
+                var sessionId = Path.GetFileNameWithoutExtension(file);
+
                 status.Source = SourceOf(status);
+
+                // A transcript that is not where the hook said gets re-found by
+                // session id, before anything reads the path: the identity read
+                // below, the nothing-to-show rule, and the chat panel all
+                // receive this same status object, and all of them believing a
+                // wrong path is exactly the blank-orb bug — see
+                // WantsTranscriptRepair for the respawned-job shape that
+                // produces one. In memory only, deliberately: the file is the
+                // hook's record of what Claude Code said, and the next event
+                // will rewrite it anyway.
+                if (WantsTranscriptRepair(status, FileExists))
+                {
+                    var hunted = _transcriptHunts.Locate(
+                        sessionId, now, _transcriptHunt, FileExists);
+                    if (hunted is not null) status.TranscriptPath = hunted;
+                }
+
+                // A name the status file never caught, read from the transcript
+                // it already names. Costs nothing for a session that has one.
+                if (WantsIdentityFromTranscript(status))
+                    ApplyIdentity(status, IdentityFor(status.TranscriptPath!));
 
                 // A CLI switched off is ignored, not unwired. Its hooks keep
                 // writing status files — they are the user's own config, and a
@@ -834,7 +1360,27 @@ namespace ClaudeBuddy
                 // were not running.
                 if (!EnabledFor(status.Source)) continue;
 
-                found.Add(new ScanEntry(Path.GetFileNameWithoutExtension(file), status, written));
+                // This app's own remote-control relay is plumbing, not a
+                // conversation, and it was drawing itself a grey orb with an empty
+                // chat behind it. A relay is a Claude Code session like any other
+                // — its hook fires and it writes a status file — so nothing before
+                // this branch distinguished it, and it hid inside the dead-orb
+                // noise the earlier rounds cleared out.
+                //
+                // Dropped here rather than later, for exactly the reason the CLI
+                // switch above is: everything downstream — the pid grouping, the
+                // team links, the tray, the sweep, and the right-click menu with
+                // End and Dismiss on it — then behaves as though the relay were
+                // not running, which is the truth as far as the user is concerned.
+                // Suppressing the orb further down would have left a session the
+                // menu could still be pointed at.
+                //
+                // The same prefix test the bridge and the mirror already key on —
+                // see RemoteControlBridge.IsOwnRelayCwd for why it is the prefix
+                // and not the live tag, and why the cwd rather than argv.
+                if (RemoteControlBridge.IsOwnRelayCwd(status.Cwd)) continue;
+
+                found.Add(new ScanEntry(sessionId, status, written));
             }
 
             // The gateway's sessions join the same list the status files
@@ -994,18 +1540,93 @@ namespace ClaudeBuddy
                     remote.Seen));
             }
 
+            // Before InheritTerminalInfo, so this describes the files as the
+            // hooks wrote them. It happens to be immune to the donation — pid and
+            // source are not among the fields moved — but this ordering is the one
+            // that needs no argument.
+            var sharingAPid = SharingAPid(found);
+
+            // Whether anything on this machine is worth spending a subprocess on.
+            // Decided over the whole set before any of it is judged, so it cannot
+            // depend on which file the directory happened to enumerate first. The
+            // three shapes are in SessionPresence.WorthAskingTheDaemon.
+            var worthAsking = found.Any(e => SessionPresence.WorthAskingTheDaemon(
+                e.Status, KnowsATerminal(e.Status), sharingAPid.Contains(e.SessionId)));
+
             InheritTerminalInfo(found);
 
-            var superseded = Superseded(found, BackgroundJobs.IsLiveJob);
+            // One listing for the whole pass, where this used to ask three
+            // separate times — and still only if something asks at all.
+            //
+            // The old shape was three calls to BackgroundJobs.IsLiveJob, each
+            // going through a ten-second cache while the scan runs every two —
+            // so the cache could expire between the superseded check and the
+            // reachability one and the same session could be a live job for the
+            // first and not for the second. Nothing visible came of that while
+            // every caller wanted the same bool. It stops being harmless now
+            // that the listing also decides whether an orb is *dimmed*, because
+            // then one pass can keep an orb and describe it wrongly in the same
+            // breath.
+            //
+            // Lazily, though, and that is not a micro-optimisation: fetching it
+            // eagerly runs `claude agents --json` as a subprocess on every pass
+            // for every machine, including one with nothing but ordinary
+            // terminal sessions on it — which the rules below never ask the
+            // daemon about, deliberately (see JudgeReachability's own note that
+            // "an ordinary session never pays for the lookup"). Eager fetching
+            // also broke both scan suites the moment it landed, which is a fair
+            // description of what it would have done to a quiet machine.
+            Dictionary<string, string>? jobs = null;
+            var askedTheDaemon = false;
+
+            Dictionary<string, string>? Jobs()
+            {
+                if (askedTheDaemon) return jobs;
+
+                askedTheDaemon = true;
+                jobs = _jobListing();
+                return jobs;
+            }
+
+            Func<string, bool> isLiveJob = id => BackgroundJobs.IsLive(Jobs(), id);
+
+            // Who is sitting in a job, asked once per pass and only when the
+            // answer could change a rendering — which is to say only when
+            // something here is a background session at all. Cached behind the
+            // seam as well (five seconds, one `ps`), so the cost of the question
+            // is per-machine rather than per-session.
+            //
+            // Null is a scan that could not be done, which is a third answer and
+            // not the same as "nobody is attached" —
+            // SessionPresence.HasAttachClient is where that direction is decided
+            // and why.
+            var attachClients = worthAsking ? _attachClients() : null;
+
+            var superseded = Superseded(found, isLiveJob);
 
             // Sessions that live agents name as their lead. Used for two things
             // below, and for nothing else — in particular *not* to excuse a
             // lead from the lifetime timer, which is the user's setting to make.
             var leadsWithLiveAgents = new HashSet<string>(StringComparer.Ordinal);
+
+            // Every session this scan can actually see: the ids that survived the
+            // superseded tie-break and whose process is still answering. Read by
+            // the orphan rule below — a team member whose lead is not in here and
+            // is not a job the daemon still lists is answering to something that
+            // has gone.
+            //
+            // Folded into the pass that was already walking `found` and already
+            // asking both of those questions, rather than added as a fourth
+            // traversal: this loop costs a kill(2) per entry, and the point of
+            // doing it once is that they agree with each other.
+            var presentIds = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var entry in found)
             {
                 if (superseded.Contains(entry.SessionId)) continue;
                 if (!ProcessLiveness.IsRunning(entry.Status.SessionPid)) continue;
+
+                presentIds.Add(entry.SessionId);
 
                 var agentLead = AgentTeam.LeadOf(entry.Status.SessionPid);
                 if (!string.IsNullOrEmpty(agentLead) && agentLead != entry.SessionId)
@@ -1029,27 +1650,75 @@ namespace ClaudeBuddy
             // consequence is that a team shows the agents that are working,
             // and an arrow disappears with the lead it pointed at.
 
+            // Files this scan has evidence are over — collected here rather than
+            // in the sweep below because the evidence is a by-product of a loop
+            // that is already computing it, and because two of the three places
+            // it can be found are followed immediately by `continue`.
+            var dead = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var (sessionId, status, written) in found)
             {
+                // What the daemon says about this session — read from the pass's
+                // own listing, for every Claude Code session, once anything on
+                // the machine has made that listing worth fetching.
+                //
+                // The gate decides whether to *spend the subprocess*, not whether
+                // to read the answer. Once some session has paid for it a lookup
+                // is a dictionary hit, and asking about everything is what closes
+                // the one hole the gate cannot: the hook interpolates
+                // $TERM_PROGRAM out of its environment, so a daemon started from
+                // inside a terminal passes it down to every job under it, and
+                // those files name a terminal in every field while still being
+                // jobs the daemon knows about.
+                //
+                // On a machine with nothing background-ish on it every session
+                // keeps Unknown, which is the answer that means "nobody asked"
+                // and which no rule below acts on.
+                var phase = worthAsking && status.Source == SessionSource.ClaudeCode
+                    ? BackgroundJobs.Phase(Jobs(), sessionId)
+                    : JobPhase.Unknown;
+
+                // Whether this file is the husk a backgrounded turn leaves
+                // behind — a closure so that only a session the earlier rules
+                // kept ever pays the stat, gated in
+                // SessionPresence.CouldBeABackgroundedHusk (which is also what
+                // keeps the fork itself, listed by the daemon as a live job,
+                // from reading its own inherited marker), answered from the
+                // transcript by TranscriptHandoff behind its own cache.
+                Func<bool> handedToBackground = () =>
+                    SessionPresence.CouldBeABackgroundedHusk(status, phase)
+                    && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
+
                 // Two verdicts rather than one, with the viewer hunt sitting
                 // between them, because the order is load-bearing in both
                 // directions: adoption can hand a background lead the very
                 // terminal JudgeReachability is about to ask for, and it walks
                 // the process table to do it, which is far too expensive to
                 // spend on a session JudgeLiveness has already dropped.
-                if (JudgeLiveness(sessionId, status, written, now, StaleAfter,
-                                  superseded, ProcessLiveness.IsRunning) != ScanVerdict.Keep)
+                var liveness = JudgeLiveness(sessionId, status, written, now, StaleAfter,
+                                             superseded, ProcessLiveness.IsRunning,
+                                             handedToBackground);
+
+                // Asked before the drop below rather than after, and of the
+                // liveness verdict rather than the reachability one, because the
+                // two facts that count as evidence arrive at different points: a
+                // gone process is this verdict, and a finished job is the phase,
+                // whose orb is dropped further down for having no terminal. See
+                // SessionPresence.EvidenceOfDeath for why nothing else counts.
+                if (SessionPresence.EvidenceOfDeath(liveness, phase)) dead.Add(sessionId);
+
+                if (liveness != ScanVerdict.Keep)
                 {
                     continue;   // removed in the pass below
                 }
 
-                if (WantsAgentViewer(sessionId, status, leadsWithLiveAgents, BackgroundJobs.IsLiveJob))
+                if (WantsAgentViewer(sessionId, status, leadsWithLiveAgents))
                 {
                     AgentTeamViewer.TryAdopt(status);
                 }
 
-                if (JudgeReachability(sessionId, status, leadsWithLiveAgents,
-                                      BackgroundJobs.IsLiveJob) != ScanVerdict.Keep)
+                if (JudgeReachability(sessionId, status, leadsWithLiveAgents, phase, File.Exists)
+                        != ScanVerdict.Keep)
                 {
                     continue;   // removed in the pass below
                 }
@@ -1074,6 +1743,38 @@ namespace ClaudeBuddy
                 {
                     status.Lead = membership.Lead == sessionId ? "" : membership.Lead;
                     status.Agent = string.IsNullOrEmpty(status.Lead) ? "" : membership.Name;
+                }
+
+                // What shape of session this is, and whether anything is on the
+                // other end of it. After the team membership above, deliberately:
+                // the orphan rule reads Lead, and Lead is only known once that
+                // block has run.
+                //
+                // Claude Code's alone, because both inputs are: the job listing
+                // is the local daemon's, and agent teams are a Claude Code
+                // concept. Everything else keeps the defaults, which are the
+                // shape and the presence that change nothing about the orb.
+                if (status.Source == SessionSource.ClaudeCode)
+                {
+                    status.Shape = SessionPresence.ShapeOf(status, phase);
+
+                    var hasLead = !string.IsNullOrEmpty(status.Lead);
+                    status.Presence = SessionPresence.PresenceOf(
+                        status.Shape, status.State, phase,
+                        hasLead && presentIds.Contains(status.Lead),
+                        hasLead && isLiveJob(status.Lead),
+                        SessionPresence.HasAttachClient(attachClients, sessionId));
+
+                    // The badge, which says what this session *is*. Assigned
+                    // here rather than in OrbWindow because Kind is the one
+                    // channel every source shares — a gateway session's comes
+                    // from the gateway, a bridged one's from the bridge, and a
+                    // background job's from the daemon — and the orb draws
+                    // whichever it is handed from one switch.
+                    if (status.Shape == LocalSessionShape.Background)
+                    {
+                        status.Kind = SessionKind.Background;
+                    }
                 }
 
                 // The colour Claude Code gave this agent when the team was
@@ -1136,6 +1837,12 @@ namespace ClaudeBuddy
                 if (_chats.Remove(id, out var chat)) chat.Dispose();
             }
 
+            // After the removal pass, so an orb has already gone before its file
+            // does and the two never disagree on screen. Inside the scan rather
+            // than on a timer of its own, which would race this one over the same
+            // directory and the same dictionary.
+            SweepDeadFiles(found, dead, now);
+
             if (setChanged)
             {
                 ReflowPositions();
@@ -1148,6 +1855,87 @@ namespace ClaudeBuddy
             UpdateTeamLinks();
 
             UpdateTray();
+        }
+
+        // Delete the status files of sessions that are demonstrably over.
+        //
+        // Until this existed, nothing but the SessionEnd hook's own `rm -f` ever
+        // removed one — and SessionEnd only fires on a graceful exit. So a
+        // Ctrl+C'd session's file stayed for good, and a finished background
+        // job's stayed *and could never be caught*: its pooled worker is kept
+        // alive on purpose, so the pid answers forever and no liveness rule can
+        // reach it. Six dead-pid files and a file per finished job were sitting
+        // in one real status directory when this was written, and with "Keep orbs
+        // for" set to Forever nothing in the app would ever have removed any of
+        // them. Each one is a session the app has to read, judge and consider
+        // drawing on every tick, and each is a potential orb for a conversation
+        // that ended days ago.
+        //
+        // Three rules keep the delete safe, and all three are worth stating
+        // because the thing on the other side of them is File.Delete:
+        //
+        // - Only file-backed local sessions. A gateway or bridged session has no
+        //   file, and the path this would build from its namespaced key is not
+        //   one this app should be writing to at all.
+        // - Only on evidence — see SessionPresence.EvidenceOfDeath. A superseded
+        //   file is deliberately never swept: its pid is alive by construction,
+        //   and an Agent View pid legitimately hosts several live sessions at
+        //   once, so "not the newest for this pid" says nothing about whether the
+        //   session is over.
+        // - Only after the grace period, timed from when *this process* first
+        //   saw the evidence. Evidence that goes away resets the clock, which is
+        //   what makes a resumed job immune.
+        //
+        // Self-correcting in the one direction it can be wrong: if a session this
+        // deleted a file for turns out to still be running, its next hook event
+        // writes the file again and the orb comes back.
+        //
+        // One consequence of the superseded rule worth stating, because it looks
+        // like a bug from the outside: a terminal that was /cleared several times
+        // and then killed leaves a trail of files on one dead pid, and Superseded
+        // outranks ProcessGone, so only the newest of them is ever evidence. The
+        // trail therefore drains one file per grace period rather than all at
+        // once. Slow, self-healing, and cheaper than teaching the sweep to
+        // second-guess which of several verdicts a file "really" deserved.
+        private void SweepDeadFiles(List<ScanEntry> found, ISet<string> dead, DateTime now)
+        {
+            foreach (var (sessionId, status, _) in found)
+            {
+                if (!status.IsLocalCli) continue;
+
+                if (!dead.Contains(sessionId))
+                {
+                    // Whatever was wrong with it has stopped being wrong. The
+                    // grace period starts over from the next sighting rather
+                    // than carrying on from where it left off, which is what
+                    // stops a job that resumes every few minutes from being
+                    // swept by the accumulated total of its quiet spells.
+                    _deadSince.Remove(sessionId);
+                    continue;
+                }
+
+                if (!_deadSince.TryGetValue(sessionId, out var since))
+                {
+                    _deadSince[sessionId] = now;
+                    continue;
+                }
+
+                if (!SessionPresence.SweepDue(since, now, SweepGrace)) continue;
+
+                DeleteStatusFile(sessionId);
+                _deadSince.Remove(sessionId);
+            }
+
+            // Ids whose file has gone — swept here, deleted by SessionEnd, or
+            // removed by hand — are forgotten too. Without this the dictionary
+            // is a slow leak keyed on every session the app has ever seen die.
+            if (_deadSince.Count == 0) return;
+
+            var present = found.Select(e => e.SessionId).ToHashSet(StringComparer.Ordinal);
+            foreach (var id in _deadSince.Keys.Where(id => !present.Contains(id)).ToList())
+            {
+                _deadSince.Remove(id);
+            }
         }
 
         private void UpdateTray()
@@ -1373,6 +2161,70 @@ namespace ClaudeBuddy
 
         public SessionStatus? StatusFor(string? sessionId) =>
             string.IsNullOrEmpty(sessionId) ? null : _statuses.GetValueOrDefault(sessionId);
+
+        // Make this session's orb acknowledge a click that was answered without
+        // creating anything.
+        //
+        // The chat panel's ⚙ shares its destination with the orb click through
+        // RunFallback, so it has to share the acknowledgment too — otherwise the
+        // one gesture whose success is invisible is invisible from exactly one of
+        // the two places it can be made. The orb click needs no hop like this
+        // because it already has itself; a chat session knows only its id.
+        //
+        // Silent when there is no orb: a session can be typed at from the panel
+        // after its orb has gone, and there is nothing to flash.
+        internal void AcknowledgeClickOn(string? sessionId)
+        {
+            if (string.IsNullOrEmpty(sessionId)) return;
+
+            if (_windows.TryGetValue(sessionId, out var window)) window.Acknowledge();
+        }
+
+        // Every tmux pane some *other* session's status file claims as its own.
+        //
+        // The disambiguator the pane-title viewer scan needs, and it needs it for
+        // one branch only. A conversation title is shared by every member of an
+        // agent team, so several panes can match one session's title — measured on
+        // the machine this was built for, four panes with one identical title for
+        // three sessions. Answering "the user is already looking at it" survives
+        // that, because whatever the matched pane holds the user is reading it.
+        // Answering "go to that pane" does not: focus the wrong same-titled pane
+        // and it silently shows another conversation.
+        //
+        // A pane another session records is exactly the pane most likely to
+        // collide, and excluding it costs nothing: a session that records its own
+        // pane is reached by FocusCore long before any of this, so it never needs
+        // the viewer path and never loses anything by being kept out of another
+        // session's candidates.
+        //
+        // Answered here rather than by the scan itself, for the same reason
+        // StatusFor is handed to TerminalFocuser rather than looked up inside it:
+        // which files exist and what they claim is this class's knowledge, and
+        // AgentTeamViewer deliberately depends on nothing in it.
+        // Returns pane id to the claimant's own conversation title, because a
+        // claim is only worth honouring while it is still true — see
+        // SessionPresence.ClaimStillHolds, which the scan asks with the pane's
+        // *current* title beside this. A claim that outlives the client that made
+        // it pushes a click into making a duplicate, which is the very failure the
+        // exclusion exists to prevent, arriving from the other side.
+        public IReadOnlyDictionary<string, string> PaneClaimsByOthers(string? sessionId)
+        {
+            var claimed = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            foreach (var (id, status) in _statuses)
+            {
+                if (string.Equals(id, sessionId, StringComparison.Ordinal)) continue;
+                if (string.IsNullOrEmpty(status.TmuxPane)) continue;
+
+                // Last writer wins, and it does not matter which: two sessions
+                // claiming one pane means at least one of them is stale, and the
+                // corroboration step is what settles that — not the order this
+                // dictionary happened to be built in.
+                claimed[status.TmuxPane] = status.Title ?? "";
+            }
+
+            return claimed;
+        }
 
         // The orbs that follow this one when it's dragged: the members of the
         // team it leads. Empty for everything else, including a member — a
@@ -1691,8 +2543,33 @@ namespace ClaudeBuddy
             // thing rather than a convenient one: it is what *you* called that
             // session, so an orb follows the name you gave it rather than the
             // folder it happens to share.
+            // An untitled session keys on its own id rather than on the bare
+            // directory, which is what the paragraph above only half fixed.
+            // Adding the title separates two *titled* sessions in one folder and
+            // does nothing at all when the title is empty — every untitled
+            // session in a directory fell back to the same bare-cwd key and
+            // collided exactly as before. Measured on a real machine: three
+            // live untitled sessions in Documents/GTD/Evidence sharing one key,
+            // so RestoreOrbPosition refused a slot to two of them and three
+            // orbs read as two on screen.
+            //
+            // Empty is not a rare case. Claude Code names a session only once it
+            // has something to name it from, so every session is untitled for
+            // its first stretch, and a background job's status file can stay
+            // that way for its whole life.
+            //
+            // The id is per-session rather than per-directory, so an orb dragged
+            // while untitled does not find that position again — a fresh id next
+            // run, and a different key again once the session is finally named.
+            // That is the right way round: an untitled orb's saved slot is
+            // precisely the one that could not be trusted to belong to it, and
+            // landing in the auto-arranged stack is better than landing on top
+            // of a sibling. A titled session's key is byte-for-byte what it was,
+            // so every position already saved on this machine still matches.
             var title = (status.Title ?? "").Trim();
-            return prefix + (title.Length == 0 ? cwd : cwd + "\n" + title);
+            if (title.Length == 0) return sessionId;
+
+            return prefix + cwd + "\n" + title;
         }
 
         internal static string DirectoryKeyFor(SessionStatus status) =>
@@ -1880,6 +2757,84 @@ namespace ClaudeBuddy
             UpdateTray();
         }
 
+        // "Dismiss this orb": take this session off the screen, without touching
+        // the session itself.
+        //
+        // Deleting the status file is the whole of it. The FileSystemWatcher on
+        // the status directory sees the Deleted event and schedules the debounced
+        // rescan, which removes the orb through exactly the path a SessionEnd
+        // hook takes — no direct ScanAndUpdate call from here, because that
+        // method's own comment says why two passes racing over the same
+        // dictionaries on the same thread is not a thing to arrange deliberately.
+        //
+        // Self-correcting by design, and that is the reason this is offered
+        // alongside "End this session" rather than instead of it. A file dismissed
+        // from under a session that is still going is rewritten by that session's
+        // next hook event and the orb comes back — so dismissing is a statement
+        // about the screen, not about the session, and the user does not have to
+        // be sure which one they are looking at before clicking.
+        //
+        // Guarded the way ResetSessionToIdle is, and against the same thing: a
+        // gateway session's orb comes from a socket, so there is nothing on disk
+        // to delete and its namespaced key ("openclaw:agent:main:…") is not a
+        // path this app should be building. See SessionPresence.CanDismiss, which
+        // is also what hides the menu item.
+        public void DismissSession(string sessionId)
+        {
+            if (_statuses.TryGetValue(sessionId, out var known)
+                && !SessionPresence.CanDismiss(known))
+            {
+                return;
+            }
+
+            DeleteStatusFile(sessionId);
+        }
+
+        // One place that knows how a status file is removed, and the only place
+        // that swallows the failure. Both callers want exactly the same thing:
+        // the file gone if it can be, and no complaint if it cannot.
+        //
+        // Nothing is reported because there is nowhere to report it. A file that
+        // vanished under us has already had the effect the caller asked for; one
+        // this process may not delete will simply be found again on the next
+        // scan, which is a better outcome than a message this app has no
+        // vocabulary for.
+        private void DeleteStatusFile(string sessionId)
+        {
+            try
+            {
+                File.Delete(Path.Combine(_statusDir, sessionId + ".txt"));
+            }
+            catch
+            {
+            }
+        }
+
+        // "End this session": stop the process behind it.
+        //
+        // The only irreversible thing in this app, and the only thing in it that
+        // ends work the user might still want — so it is a deliberate click and
+        // never automatic, and it happens exactly once, to exactly one pid. No
+        // sweep, no timer and no rule anywhere else calls this.
+        //
+        // Nothing is removed from screen here. The orb goes when the next scan
+        // sees the pid stop answering (ScanVerdict.ProcessGone), and the file
+        // goes when SessionEnd fires or the sweep catches it — the same two paths
+        // any other ending session takes. Removing the orb optimistically would
+        // mean a session that ignored the signal disappeared from the screen while
+        // carrying on working, which is the failure this whole ticket is about.
+        //
+        // Requires a known session rather than falling back on the id, unlike
+        // Dismiss above: the guard needs a pid, and the only place a pid is is in
+        // the status this scan read.
+        public void EndSession(string sessionId)
+        {
+            if (!_statuses.TryGetValue(sessionId, out var status)) return;
+            if (!SessionPresence.CanEndSession(status)) return;
+
+            SessionTerminator.Terminate(status.SessionPid);
+        }
+
         public void ResetAllSessionsToIdle()
         {
             foreach (var sessionId in _order.ToList())
@@ -1983,10 +2938,34 @@ namespace ClaudeBuddy
                 ClaudeBuddySettings.ArrangeSpacing,
                 ArrangementAnchor(work));
 
-            var placed = OrbArrangement.Compute(allOrbs.Count, leadOf, layout);
+            var heartbeats = ClaudeBuddySettings.OpenClawHeartbeatMode;
+            var crons = ClaudeBuddySettings.OpenClawCronMode;
+
+            var groupOf = new int[allOrbs.Count];
+            for (var i = 0; i < allOrbs.Count; i++)
+            {
+                groupOf[i] = _statuses.TryGetValue(allOrbs[i].SessionId, out var status)
+                    ? OrbClusters.GroupOf(
+                        OrbClusters.Of(status.Heartbeat, status.Kind), heartbeats, crons)
+                    : 0;
+            }
+
+            var placed = OrbArrangement.Compute(allOrbs.Count, leadOf, groupOf, Shapes(), layout);
 
             return allOrbs.Select((orb, i) => (orb, placed[i])).ToList();
         }
+
+        // One shape name per group, in the order OrbClusters.GroupOf indexes
+        // them. Its *length* is what tells OrbArrangement how many bands it may
+        // cut, so the two have to be built together — a group added to
+        // OrbClusters without an entry here would have its orbs quietly folded
+        // back in with the chats, which is a setting that silently does nothing.
+        private static string[] Shapes() => new[]
+        {
+            ClaudeBuddySettings.ArrangeShape,
+            ClaudeBuddySettings.OpenClawHeartbeatShape,
+            ClaudeBuddySettings.OpenClawCronShape
+        };
 
         // Where the shape gets drawn. The first time ever, that's the middle
         // of the work area — same point OrbArrangement used to compute on its

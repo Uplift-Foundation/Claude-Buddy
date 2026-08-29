@@ -38,6 +38,9 @@ public class SettingsWindowCoverageTests
 
     private static IList ItemsOf(ComboBox combo) => (IList)combo.ItemsSource!;
 
+    private static ComboBox ComboIn(Control row) =>
+        row.GetLogicalDescendants().OfType<ComboBox>().Single();
+
     // --- the KeyDown shortcut, without ever calling Close() -----------------
     //
     // Close() on a headless window corrupts a process-wide Avalonia
@@ -241,7 +244,8 @@ public class SettingsWindowCoverageTests
         // makes Restart() inert, which is the property those cases rely on.
         ClaudeBuddySettings.OpenClawHost = "";
 
-        ClaudeBuddySettings.OpenClawShowHeartbeats = true;
+        ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+        ClaudeBuddySettings.OpenClawCronMode = ClusterMode.WithChats;
         ClaudeBuddySettings.OpenClawReplyEnabled = false;
         OpenClawSessions.SetCertificateRejectedForTests(false);
     }
@@ -274,10 +278,11 @@ public class SettingsWindowCoverageTests
 
             var rows = window.OpenClawRows();
 
-            // Switch, host, token, active-within, heartbeat, reply, status
-            // note, reconnect button — in that order, with no certificate row
-            // since none is rejected.
-            Assert.Equal(8, rows.Length);
+            // Switch, host, token, active-within, heartbeat mode, cron mode,
+            // reply, status note, reconnect button — in that order, with no
+            // certificate row since none is rejected, and no shape row for
+            // either timer-driven group since neither is on Own shape.
+            Assert.Equal(9, rows.Length);
         }
         finally
         {
@@ -300,7 +305,7 @@ public class SettingsWindowCoverageTests
             // One more row than the plain-enabled case, and the trust button
             // is never clicked here — it reconnects over a real socket, which
             // is exactly why OnTrustNewCertificateClicked is excluded.
-            Assert.Equal(9, rows.Length);
+            Assert.Equal(10, rows.Length);
 
             var trustButton = rows[^1].GetLogicalDescendants().OfType<Button>().Single();
             Assert.Equal("Trust the new certificate", trustButton.Content);
@@ -312,7 +317,7 @@ public class SettingsWindowCoverageTests
     }
 
     [AvaloniaFact]
-    public void OpenClawHeartbeatAndReplySwitchesEachWriteTheirOwnSetting()
+    public void OpenClawHeartbeatCronAndReplyRowsEachWriteTheirOwnSetting()
     {
         ResetOpenClaw();
         try
@@ -322,17 +327,129 @@ public class SettingsWindowCoverageTests
             var rows = window.OpenClawRows();
 
             // Row 0: enabled switch. 1: host. 2: token. 3: active-within.
-            // 4: heartbeat. 5: reply.
-            var heartbeat = SwitchIn(rows[4]);
-            var reply = SwitchIn(rows[5]);
+            // 4: heartbeat mode. 5: cron mode. 6: reply.
+            var heartbeat = ComboIn(rows[4]);
+            var cron = ComboIn(rows[5]);
+            var reply = SwitchIn(rows[6]);
 
-            heartbeat.IsChecked = false;
-            Assert.False(ClaudeBuddySettings.OpenClawShowHeartbeats);
+            // Index 0 is Hidden, 2 is Own shape — see ClusterModeChoices. Driven
+            // by index rather than by calling the handler, because the mapping
+            // from a combo position to a mode is the part that can be wrong.
+            heartbeat.SelectedIndex = 0;
+            Assert.Equal(ClusterMode.Hidden, ClaudeBuddySettings.OpenClawHeartbeatMode);
+            Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawCronMode);
             Assert.False(ClaudeBuddySettings.OpenClawReplyEnabled);
+
+            cron.SelectedIndex = 2;
+            Assert.Equal(ClusterMode.OwnShape, ClaudeBuddySettings.OpenClawCronMode);
+            Assert.Equal(ClusterMode.Hidden, ClaudeBuddySettings.OpenClawHeartbeatMode);
 
             reply.IsChecked = true;
             Assert.True(ClaudeBuddySettings.OpenClawReplyEnabled);
-            Assert.False(ClaudeBuddySettings.OpenClawShowHeartbeats);
+            Assert.Equal(ClusterMode.Hidden, ClaudeBuddySettings.OpenClawHeartbeatMode);
+            Assert.Equal(ClusterMode.OwnShape, ClaudeBuddySettings.OpenClawCronMode);
+        }
+        finally
+        {
+            ResetOpenClaw();
+        }
+    }
+
+    // A shape row exists exactly when the group it belongs to is on Own shape,
+    // and nowhere else. Worth its own case rather than a row count: a picker for
+    // a group that is hidden is a control that changes nothing, which is worse
+    // than no control, and the row count would still be right if the two shape
+    // rows appeared for the wrong groups.
+    [AvaloniaFact]
+    public void AShapeRowAppearsOnlyForAGroupGivenItsOwnShape()
+    {
+        ResetOpenClaw();
+        try
+        {
+            ClaudeBuddySettings.OpenClawEnabled = true;
+            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.OwnShape;
+            ClaudeBuddySettings.OpenClawCronMode = ClusterMode.Hidden;
+
+            var rows = NewWindow().OpenClawRows();
+
+            // Enabled, host, token, active-within, heartbeat mode, heartbeat
+            // shape, cron mode, reply, note, reconnect.
+            Assert.Equal(10, rows.Length);
+
+            var shape = ComboIn(rows[5]);
+            Assert.Contains("Circle", ItemsOf(shape).Cast<string>());
+
+            shape.SelectedIndex = ItemsOf(shape).Cast<string>().ToList().IndexOf("Star");
+            Assert.Equal("star", ClaudeBuddySettings.OpenClawHeartbeatShape);
+
+            // The cron group is hidden, so no shape picker follows its mode row
+            // — row 6 is that mode row, and row 7 is already the reply switch.
+            // SwitchIn takes the single ToggleButton in a row, so it throws
+            // rather than passes if row 7 turned out to be another combo.
+            Assert.Equal(3, ItemsOf(ComboIn(rows[6])).Count);
+            Assert.NotNull(SwitchIn(rows[7]));
+        }
+        finally
+        {
+            ClaudeBuddySettings.OpenClawHeartbeatShape =
+                ClaudeBuddySettings.DefaultOpenClawHeartbeatShape;
+            ResetOpenClaw();
+        }
+    }
+
+    // Both groups on Own shape: three shapes on screen, and the row order that
+    // makes each picker sit under the group it belongs to.
+    [AvaloniaFact]
+    public void BothGroupsOnOwnShapeGetAShapeRowEach()
+    {
+        ResetOpenClaw();
+        try
+        {
+            ClaudeBuddySettings.OpenClawEnabled = true;
+            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.OwnShape;
+            ClaudeBuddySettings.OpenClawCronMode = ClusterMode.OwnShape;
+
+            var rows = NewWindow().OpenClawRows();
+
+            // …heartbeat mode, heartbeat shape, cron mode, cron shape, reply…
+            Assert.Equal(11, rows.Length);
+
+            var cronShape = ComboIn(rows[7]);
+            cronShape.SelectedIndex = ItemsOf(cronShape).Cast<string>().ToList().IndexOf("Grid");
+
+            Assert.Equal("grid", ClaudeBuddySettings.OpenClawCronShape);
+            Assert.Equal(
+                ClaudeBuddySettings.DefaultOpenClawHeartbeatShape,
+                ClaudeBuddySettings.OpenClawHeartbeatShape);
+        }
+        finally
+        {
+            ClaudeBuddySettings.OpenClawCronShape = ClaudeBuddySettings.DefaultOpenClawCronShape;
+            ResetOpenClaw();
+        }
+    }
+
+    // Re-selecting the answer a group already has must not rebuild the window.
+    // ComboBox raises SelectionChanged while the window is being built — the
+    // handler sets SelectedIndex itself — so a picker that rebuilt on every
+    // event would rebuild during its own construction, and did: the first draft
+    // recursed until the stack ran out.
+    [AvaloniaFact]
+    public void ReselectingTheSameClusterModeChangesNothing()
+    {
+        ResetOpenClaw();
+        try
+        {
+            ClaudeBuddySettings.OpenClawEnabled = true;
+            var rows = NewWindow().OpenClawRows();
+
+            var heartbeat = ComboIn(rows[4]);
+
+            // Index 1 is WithChats, which is what it is already showing.
+            heartbeat.SelectedIndex = 1;
+
+            Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawHeartbeatMode);
+            Assert.Equal(9, rows.Length);
         }
         finally
         {
@@ -394,6 +511,7 @@ public class SettingsWindowCoverageTests
         ClaudeBuddySettings.SetRemoteControlProfileDirs(
             new[] { ClaudeBuddySettings.DefaultRemoteControlProfileDir });
         ClaudeBuddySettings.RemoteControlIdleMinutes = ClaudeBuddySettings.DefaultRemoteControlIdle;
+        ClaudeBuddySettings.RemoteControlServeOnLaunch = false;
     }
 
     [AvaloniaFact]
@@ -432,8 +550,9 @@ public class SettingsWindowCoverageTests
             // exclusion.
             var rows = window.RemoteControlRows();
 
-            // Switch, accounts, idle picker, status note, start button.
-            Assert.Equal(5, rows.Length);
+            // Switch, accounts, idle picker, serve-on-launch switch, status
+            // note, start button.
+            Assert.Equal(6, rows.Length);
         }
         finally
         {

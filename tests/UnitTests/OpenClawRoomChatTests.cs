@@ -1,3 +1,4 @@
+using System.Linq;
 using Xunit;
 
 namespace ClaudeBuddy.Tests
@@ -37,10 +38,27 @@ namespace ClaudeBuddy.Tests
             params (ChatRole Role, string Text, int Minute)[] turns)
         {
             session.SetHistory(turns
-                .Select(t => (t.Role, t.Text, (string?)null, "", T0.AddMinutes(t.Minute),
-                              (string?)null, (string?)null))
+                .Select(t => new HistoryTurn(t.Role, t.Text, null, "", T0.AddMinutes(t.Minute),
+                              null, null))
                 .ToList());
         }
+
+        // The same, for the cases that turn on who the gateway said sent a turn.
+        // Kept separate rather than widening Give: every case above is about the
+        // rules that hold when nothing said, and adding two more slots to their
+        // tuples would bury that.
+        private static void GiveAttributed(
+            OpenClawChatSession session,
+            params (ChatRole Role, string Text, int Minute, bool Mine, string? Speaker)[] turns)
+        {
+            session.SetHistory(turns
+                .Select(t => new HistoryTurn(t.Role, t.Text, null, "", T0.AddMinutes(t.Minute),
+                              t.Speaker, null, t.Mine))
+                .ToList());
+        }
+
+        private static OpenClawSessions.Delivery Address(string account) =>
+            new("discord", "channel:900", account);
 
         // Every member has everything there is, so nothing constrains the
         // window — which keeps a test about attribution from also being a test
@@ -157,6 +175,139 @@ namespace ClaudeBuddy.Tests
             Give(lilibeth, (ChatRole.User, "  Nodes   loaded\n and ready  ", 1));
 
             var room = Room((zara, "Zara", "#7f7"), (lilibeth, "Lilibeth", "#77f"));
+
+            Assert.Single(room.History);
+        }
+
+        // --- attribution the gateway supplied ---
+
+        // Your own message, drawn as yours. Everything above this line is about
+        // the rules that hold when nothing said who — and they still hold, which
+        // is why every one of those cases passes unchanged. This is what happens
+        // when something does.
+        [Fact]
+        public void YourOwnMessageIsDrawnAsYours()
+        {
+            var quill = Member("quill");
+            GiveAttributed(quill, (ChatRole.User, "what is the status", 1, true, null));
+
+            var room = Room((quill, "Quill", "#7f7"));
+
+            var turn = Assert.Single(room.History);
+            Assert.True(turn.Mine);
+            Assert.Equal(ChatRole.User, turn.Role);
+            Assert.Null(turn.Speaker);
+        }
+
+        // The three copies of one message you sent, which is the shape a real
+        // room send leaves behind: the carrier's transcript holds what you
+        // typed, every other member's holds the mirror with its prefix already
+        // taken off by the parser, and this window's own optimistic copy is the
+        // same text again. All three normalise to one string, so one bubble.
+        //
+        // Before the prefix came off, the last two matched nothing and a
+        // successful send drew twice — once plain, once prefixed.
+        [Fact]
+        public void TheCarrierAndMirrorCopiesOfYourMessageAreOneBubble()
+        {
+            var quill = Member("quill");
+            var aster = Member("aster");
+
+            GiveAttributed(quill, (ChatRole.User, "anyone free to look at the build?", 1, true, null));
+            GiveAttributed(aster, (ChatRole.User, "anyone free to look at the build?", 2, true, null));
+
+            var room = Room((quill, "Quill", "#7f7"), (aster, "Aster", "#77f"));
+
+            var turn = Assert.Single(room.History);
+            Assert.True(turn.Mine);
+        }
+
+        // Your message is not an agent's, however closely it happens to match
+        // one. The echo test runs after the Mine test on purpose: a message
+        // swallowed for coincidentally opening the way an agent opened a
+        // paragraph would be your message, gone, with the app having decided
+        // somebody else said it.
+        [Fact]
+        public void YourMessageIsNotSwallowedByAnAgentThatSaidTheSameThing()
+        {
+            var quill = Member("quill");
+            var aster = Member("aster");
+
+            Give(quill, (ChatRole.Assistant, "Rebuilding the index now", 1));
+            GiveAttributed(aster, (ChatRole.User, "Rebuilding the index now", 2, true, null));
+
+            var room = Room((quill, "Quill", "#7f7"), (aster, "Aster", "#77f"));
+
+            Assert.Equal(2, room.History.Count);
+            Assert.Contains(room.History, t => t.Mine);
+        }
+
+        // Somebody the gateway named: an agent relayed through the channel whose
+        // own session is not in this room, or another person in it. Both are
+        // "somebody who is not you", and both are better than the anonymous turn
+        // this used to draw.
+        [Fact]
+        public void ANamedSenderIsAttributedRatherThanDrawnAnonymously()
+        {
+            var quill = Member("quill");
+            GiveAttributed(quill, (ChatRole.User, "Nodes are loaded.", 1, false, "Thistle"));
+
+            var room = Room((quill, "Quill", "#7f7"));
+
+            var turn = Assert.Single(room.History);
+            Assert.Equal("Thistle", turn.Speaker);
+            Assert.False(turn.Mine);
+            Assert.Equal(ChatRole.Assistant, turn.Role);
+        }
+
+        // ...with no colour. It is a Discord display name and the ring colours
+        // are keyed by agent id, so borrowing one would say two different
+        // speakers were the same agent. An initials chip is the honest answer.
+        [Fact]
+        public void ANamedSenderGetsNoBorrowedColour()
+        {
+            var quill = Member("quill");
+            GiveAttributed(quill, (ChatRole.User, "Nodes are loaded.", 1, false, "Thistle"));
+
+            var room = Room((quill, "Quill", "#7f7"));
+
+            Assert.Null(Assert.Single(room.History).SpeakerColor);
+        }
+
+        // A named echo of an agent that *is* in this room is still an echo. The
+        // first pass has already attributed that message in the agent's own
+        // colour, from its own transcript, which is a better answer than the
+        // display name on the copy — so the copy is dropped exactly as it was
+        // before names existed.
+        [Fact]
+        public void ANamedEchoOfAnAgentInThisRoomIsStillDropped()
+        {
+            var quill = Member("quill");
+            var aster = Member("aster");
+
+            Give(quill, (ChatRole.Assistant, "Nodes loaded and ready", 1));
+            GiveAttributed(aster, (ChatRole.User, "Nodes loaded and ready", 1, false, "Quillbot"));
+
+            var room = Room((quill, "Quill", "#7f7"), (aster, "Aster", "#77f"));
+
+            var turn = Assert.Single(room.History);
+            Assert.Equal("Quill", turn.Speaker);
+            Assert.Equal("#7f7", turn.SpeakerColor);
+        }
+
+        // One named person's message reaching every agent in the room is still
+        // one message. The dedupe set is shared with everything else here, which
+        // is what keeps that true without a second rule.
+        [Fact]
+        public void ANamedSendersMessageIsTakenOnceHoweverManyAgentsReceivedIt()
+        {
+            var quill = Member("quill");
+            var aster = Member("aster");
+
+            GiveAttributed(quill, (ChatRole.User, "Morning all.", 1, false, "Thistle"));
+            GiveAttributed(aster, (ChatRole.User, "Morning all.", 2, false, "Thistle"));
+
+            var room = Room((quill, "Quill", "#7f7"), (aster, "Aster", "#77f"));
 
             Assert.Single(room.History);
         }
@@ -642,32 +793,570 @@ namespace ClaudeBuddy.Tests
             Assert.Contains("Nobody is in this channel", note.Text);
         }
 
-        // First by gateway key, deliberately — stable rather than depending on
-        // who happened to speak last. Asserted by giving the room its members in
-        // the wrong order and checking the send still lands in the same
-        // transcript, because "stable" is the whole property and member order
-        // does change between scans.
+        // --- picking the carrier ---
+
+        // Which member carries a room send, as a rule with no gateway, no
+        // transcript and no window behind it. It used to be "first by gateway
+        // key", chosen for stability on the grounds that the choice is not a
+        // routing decision. Half of that survives — the channel post reaches
+        // everyone whoever carries it — and half of it did not: the chat.send
+        // half wakes exactly one agent, and the member that has been talking to
+        // you is a better one to wake than whichever sorts first.
+
+        // Having somewhere to deliver is the only hard requirement, and it is
+        // the one the old rule did not have. A member with no address cannot
+        // post to the channel at all, so the first-by-key member being the one
+        // without an address is precisely how a room send ended up private.
         [Fact]
-        public async Task TheSendAlwaysGoesThroughTheSameMemberWhateverTheOrder()
+        public void ThePickSkipsAMemberWithNowhereToDeliver()
+        {
+            var pick = OpenClawRoomChatSession.PickCarrier(new[]
+            {
+                (false, (DateTimeOffset?)T0.AddMinutes(9), "agent:aster:discord:channel:900"),
+                (true, (DateTimeOffset?)T0.AddMinutes(1), "agent:quill:discord:channel:900"),
+            });
+
+            Assert.Equal(1, pick);
+        }
+
+        // ...including when it is the one that spoke most recently. Recency
+        // orders the members that can post; it does not qualify one that can't.
+        [Fact]
+        public void TheLatestSpeakerIsSkippedIfItCannotPost()
+        {
+            var pick = OpenClawRoomChatSession.PickCarrier(new[]
+            {
+                (true, (DateTimeOffset?)T0.AddMinutes(1), "agent:aster:discord:channel:900"),
+                (false, (DateTimeOffset?)T0.AddMinutes(30), "agent:quill:discord:channel:900"),
+            });
+
+            Assert.Equal(0, pick);
+        }
+
+        // Among members that can post, the one that spoke last.
+        [Fact]
+        public void TheMostRecentSpeakerCarriesIt()
+        {
+            var pick = OpenClawRoomChatSession.PickCarrier(new[]
+            {
+                (true, (DateTimeOffset?)T0.AddMinutes(1), "agent:aster:discord:channel:900"),
+                (true, (DateTimeOffset?)T0.AddMinutes(30), "agent:quill:discord:channel:900"),
+                (true, (DateTimeOffset?)T0.AddMinutes(12), "agent:thorn:discord:channel:900"),
+            });
+
+            Assert.Equal(1, pick);
+        }
+
+        // A member that has never spoken loses to one that has, whatever the
+        // order it was listed in — member order changes between scans and must
+        // not change the answer.
+        [Fact]
+        public void AMemberThatHasNeverSpokenLosesToOneThatHas()
+        {
+            var pick = OpenClawRoomChatSession.PickCarrier(new[]
+            {
+                (true, (DateTimeOffset?)null, "agent:aster:discord:channel:900"),
+                (true, (DateTimeOffset?)T0.AddMinutes(1), "agent:quill:discord:channel:900"),
+            });
+
+            Assert.Equal(1, pick);
+        }
+
+        // With nobody having spoken, the old rule intact: first by gateway key,
+        // so a freshly opened room picks the same member every time rather than
+        // whichever the list happened to arrive in.
+        [Fact]
+        public void WithNobodyHavingSpokenTheKeyDecides()
+        {
+            var pick = OpenClawRoomChatSession.PickCarrier(new[]
+            {
+                (true, (DateTimeOffset?)null, "agent:quill:discord:channel:900"),
+                (true, (DateTimeOffset?)null, "agent:aster:discord:channel:900"),
+            });
+
+            // "agent:aster:…" sorts before "agent:quill:…" whichever order they
+            // were listed in.
+            Assert.Equal(1, pick);
+        }
+
+        // ...and the same when two members last spoke at the same moment, which
+        // is what the key is a tiebreak for.
+        [Fact]
+        public void TwoMembersThatSpokeAtOnceAreSeparatedByTheKey()
+        {
+            var pick = OpenClawRoomChatSession.PickCarrier(new[]
+            {
+                (true, (DateTimeOffset?)T0.AddMinutes(5), "agent:quill:discord:channel:900"),
+                (true, (DateTimeOffset?)T0.AddMinutes(5), "agent:aster:discord:channel:900"),
+            });
+
+            Assert.Equal(1, pick);
+        }
+
+        // Nobody can post. A refusal rather than a fallback: sending through a
+        // member with no address is the silent private delivery this ticket is
+        // about, and -1 is what makes the caller say so out loud.
+        [Fact]
+        public void ARoomWhereNobodyCanPostRefuses()
+        {
+            var pick = OpenClawRoomChatSession.PickCarrier(new[]
+            {
+                (false, (DateTimeOffset?)T0.AddMinutes(1), "agent:aster:discord:channel:900"),
+                (false, (DateTimeOffset?)T0.AddMinutes(2), "agent:quill:discord:channel:900"),
+            });
+
+            Assert.Equal(-1, pick);
+        }
+
+        // A member that has never spoken, listed *after* one that has. The same
+        // answer as the case above and reached down the other side of the
+        // comparison, which is the whole reason both are here: member order
+        // changes between scans, and a rule that only holds in one order is a
+        // rule that holds half the time.
+        [Fact]
+        public void AMemberThatHasNeverSpokenLosesFromEitherPosition()
+        {
+            var pick = OpenClawRoomChatSession.PickCarrier(new[]
+            {
+                (true, (DateTimeOffset?)T0.AddMinutes(1), "agent:quill:discord:channel:900"),
+                (true, (DateTimeOffset?)null, "agent:aster:discord:channel:900"),
+            });
+
+            Assert.Equal(0, pick);
+        }
+
+        [Fact]
+        public void AnEmptyRoomRefusesToo()
+        {
+            Assert.Equal(-1, OpenClawRoomChatSession.PickCarrier(
+                Array.Empty<(bool, DateTimeOffset?, string)>()));
+        }
+
+        // --- who spoke last, from a real transcript ---
+
+        // The function that *produces* the timestamps PickCarrier orders by.
+        //
+        // Covered separately because covering PickCarrier is not covering this:
+        // every carrier case above hands timestamps straight in, and every
+        // SendAsync case builds members with no history at all — so the loop in
+        // here only ever ran over an empty list and "newest" was asserted
+        // nowhere. This is the half of the fix that decides which agent actually
+        // receives the message.
+
+        // Several turns, and the newest wins — not the first walked past, and
+        // not the last. Deliberately out of order in the transcript, because a
+        // loop that returned either end would pass with them sorted.
+        [Fact]
+        public void TheNewestThingAMemberSaidIsWhatCounts()
+        {
+            var quill = Member("quill");
+            Give(quill,
+                (ChatRole.Assistant, "starting", 3),
+                (ChatRole.Assistant, "still going", 40),
+                (ChatRole.Assistant, "nearly there", 12));
+
+            Assert.Equal(T0.AddMinutes(40), OpenClawRoomChatSession.LastSpoke(quill));
+        }
+
+        // ...and with the newest first in the list, so neither end of the walk
+        // is the answer by accident.
+        [Fact]
+        public void TheOrderTheTurnsAreStoredInDoesNotDecideIt()
+        {
+            var quill = Member("quill");
+            Give(quill,
+                (ChatRole.Assistant, "nearly there", 40),
+                (ChatRole.Assistant, "starting", 3),
+                (ChatRole.Assistant, "still going", 12));
+
+            Assert.Equal(T0.AddMinutes(40), OpenClawRoomChatSession.LastSpoke(quill));
+        }
+
+        // A user turn in a member's transcript is somebody else's message
+        // arriving, not that member speaking. Counting those would make "who
+        // spoke last" mean "who was spoken to last", which is the same answer
+        // for every member in the room and so no answer at all.
+        [Fact]
+        public void BeingSpokenToIsNotSpeaking()
+        {
+            var quill = Member("quill");
+            Give(quill,
+                (ChatRole.Assistant, "on it", 5),
+                (ChatRole.User, "any update?", 50));
+
+            Assert.Equal(T0.AddMinutes(5), OpenClawRoomChatSession.LastSpoke(quill));
+        }
+
+        // A member that has only ever been spoken to has not spoken, which is
+        // null rather than "a long time ago" — the distinction PickCarrier's
+        // Compare exists for.
+        [Fact]
+        public void AMemberThatHasOnlyListenedHasNotSpoken()
+        {
+            var quill = Member("quill");
+            Give(quill, (ChatRole.User, "anyone about?", 1));
+
+            Assert.Null(OpenClawRoomChatSession.LastSpoke(quill));
+        }
+
+        [Fact]
+        public void AMemberWithNoTranscriptAtAllHasNotSpoken()
+        {
+            Assert.Null(OpenClawRoomChatSession.LastSpoke(Member("quill")));
+        }
+
+        // --- what a failure says ---
+
+        // Three sentences, because there are three different truths and the
+        // difference is what the person needs. One "couldn't send" covering all
+        // three would have somebody re-type a message that is already in the
+        // channel.
+        [Fact]
+        public void NoAddressSaysNothingWasSentAndWhy()
+        {
+            Assert.Equal(
+                "Couldn't post to #general: no member of this channel carries a delivery address.",
+                OpenClawSessions.NoAddressInRoom("#general"));
+        }
+
+        [Fact]
+        public void AFailedPostSaysNothingWasSent()
+        {
+            Assert.Equal(
+                "Couldn't post to #general: the gateway said no. Nothing was sent.",
+                OpenClawSessions.PostFailed("#general", "the gateway said no"));
+        }
+
+        // The one that must not say "nothing was sent", because something was:
+        // the channel has the message and only the handoff to an agent failed.
+        [Fact]
+        public void AFailedHandoffSaysTheChannelAlreadyHasIt()
+        {
+            var note = OpenClawSessions.HandoffFailed("#general", "Quill", "timed out");
+
+            Assert.Equal("Posted to #general, but couldn't hand it to Quill: timed out.", note);
+            Assert.DoesNotContain("Nothing was sent", note);
+        }
+
+        // --- sending, end to end, with no gateway behind it ---
+
+        // Your own message goes into the *room's* transcript, not into whichever
+        // member's session carried it. It used to go into the carrier's, which
+        // read as the right thing while the room was a view over its members —
+        // but a note about a failure written there is invisible in the merge,
+        // and the message and its explanation belong together.
+        [Fact]
+        public async Task WhatYouTypeAppearsInTheRoomRatherThanInAMembersTranscript()
         {
             ClaudeBuddySettings.ReloadForTests();
             ClaudeBuddySettings.OpenClawReplyEnabled = true;
 
-            var kai = Member("kai");
-            var zara = Member("zara");
-            kai.HasMore = false;
-            zara.HasMore = false;
+            var quill = Member("quill");
+            quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
 
-            var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
-            room.SetMembers([(zara, "Zara", "#ff0000"), (kai, "Kai", "#00ff00")]);
+            var room = Room((quill, "Quill", "#ff0000"));
 
             await room.SendAsync("anyone about?");
 
-            // "agent:kai:…" sorts before "agent:zara:…", so kai carries it even
-            // though zara was listed first. The send itself fails — there is no
-            // gateway — which is what leaves the pair of turns behind.
-            Assert.Contains(kai.History, t => t.Role == ChatRole.User && t.Text == "anyone about?");
-            Assert.DoesNotContain(zara.History, t => t.Role == ChatRole.User);
+            Assert.Contains(room.History, t => t.Role == ChatRole.User && t.Text == "anyone about?");
+            Assert.Empty(quill.History);
+        }
+
+        // ...and it is yours, so the panel draws it in your colour and on your
+        // side. ChatRole.User with no Speaker is exactly what does that.
+        [Fact]
+        public async Task WhatYouTypeIsMarkedAsYours()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
+
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("anyone about?");
+
+            var mine = Assert.Single(room.History, t => t.Text == "anyone about?");
+            Assert.True(mine.Mine);
+            Assert.Equal(ChatRole.User, mine.Role);
+            Assert.Null(mine.Speaker);
+        }
+
+        // The refusal this ticket exists for. Every member is in the channel and
+        // none of them has an address — which is what a room whose members have
+        // all been quiet longer than the recency window looked like — so nothing
+        // is sent, and it says so instead of delivering privately to one agent.
+        [Fact]
+        public async Task ARoomWithNoAddressAnywhereRefusesAndSendsNothing()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var quill = Member("quill");
+            var aster = Member("aster");
+            quill.HasMore = false;
+            aster.HasMore = false;
+
+            var room = Room((quill, "Quill", "#ff0000"), (aster, "Aster", "#00ff00"));
+
+            await room.SendAsync("anyone about?");
+
+            Assert.Contains(room.History, t =>
+                t.Role == ChatRole.System
+                && t.Text == OpenClawSessions.NoAddressInRoom("#general"));
+
+            // Nothing reached either member: no transcript, no send.
+            Assert.Empty(quill.History);
+            Assert.Empty(aster.History);
+        }
+
+        // A member that *can* post, with no gateway to post through. A different
+        // sentence from the one above, and both of them end up in the room.
+        [Fact]
+        public async Task WithNoGatewayTheFailureIsSaidInTheRoom()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
+
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("anyone about?");
+
+            var note = Assert.Single(room.History, t => t.Role == ChatRole.System);
+            Assert.StartsWith("Couldn't post to #general:", note.Text);
+            Assert.Contains("Nothing was sent", note.Text);
+        }
+
+        // A note has to survive the next rebuild, and until now none did.
+        // Rebuild throws the whole transcript away and re-merges from the
+        // members, so the "Replying is off" note this class has always written
+        // lasted only until any member event landed — which is any moment at all
+        // in a busy channel.
+        [Fact]
+        public async Task ANoteSurvivesTheNextRebuild()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("anyone about?");
+            Assert.Contains(room.History, t => t.Text.Contains("Replying is off"));
+
+            room.Rebuild();
+
+            Assert.Contains(room.History, t => t.Text.Contains("Replying is off"));
+        }
+
+        // ...and stops surviving the moment the gateway's own copy of it turns
+        // up, which is what keeps a sent message from being drawn twice — once
+        // optimistically and once for real — for as long as the panel is open.
+        [Fact]
+        public async Task YourMessageGivesWayToTheGatewaysOwnCopyOfIt()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
+
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("anyone about?");
+
+            // The gateway records it and the member's transcript reloads with it
+            // in, which is what happens a second or two after any real send.
+            GiveAttributed(quill, (ChatRole.User, "anyone about?", 3, true, null));
+            room.Rebuild();
+
+            var mine = Assert.Single(room.History, t => t.Text == "anyone about?");
+            Assert.True(mine.Mine);
+
+            // ...and it is the gateway's copy that survived, timestamped by the
+            // gateway rather than by this window.
+            Assert.Equal(T0.AddMinutes(3), mine.At);
+        }
+
+        // The dedupe predicate walks past turns that are not yours without
+        // matching them. Obvious, and uncovered until now because every case
+        // that reached it had nothing else in the room to walk past — so the
+        // arm that says "this merged turn is somebody else's, keep looking" had
+        // never been taken.
+        [Fact]
+        public async Task SomebodyElsesIdenticalWordsDoNotRetireYourOwnMessage()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
+
+            // An agent that happens to have said the same words, attributed to
+            // it in pass one — which is not your message coming back.
+            Give(quill, (ChatRole.Assistant, "anyone about?", 1));
+
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("anyone about?");
+            room.Rebuild();
+
+            // Both survive: Quill's, attributed, and yours.
+            Assert.Contains(room.History, t => t.Speaker == "Quill" && !t.Mine);
+            Assert.Contains(room.History, t => t.Mine);
+        }
+
+        // The same sentence twice in a row says nothing the first one did not.
+        // Three attempts with replying off used to leave three identical notes
+        // stacked, which reads as three separate problems and is one.
+        [Fact]
+        public async Task TheSameNoteTwiceRunningIsSaidOnce()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("first try");
+            await room.SendAsync("second try");
+            await room.SendAsync("third try");
+
+            Assert.Single(room.History, t => t.Role == ChatRole.System);
+        }
+
+        // ...but a note with your own message between it and the last identical
+        // one is a note about *that* message, and belongs there. The failure
+        // happened again, to something new, and suppressing the second one would
+        // leave a message on screen with no explanation under it.
+        [Fact]
+        public async Task ANoteAboutAFreshMessageIsNotSwallowed()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
+
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            // No gateway, so each of these fails the same way — but each has its
+            // own message above it.
+            await room.SendAsync("first try");
+            await room.SendAsync("second try");
+
+            Assert.Equal(2, room.History.Count(t => t.Role == ChatRole.System));
+            Assert.Contains(room.History, t => t.Mine && t.Text == "first try");
+            Assert.Contains(room.History, t => t.Mine && t.Text == "second try");
+        }
+
+        // A different sentence always lands, however recently anything else was
+        // said. Only an exact repeat is suppressed.
+        [Fact]
+        public async Task ADifferentNoteAlwaysLands()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("first try");
+
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            await room.SendAsync("second try");
+
+            var notes = room.History.Where(t => t.Role == ChatRole.System).ToList();
+            Assert.Equal(2, notes.Count);
+            Assert.Contains(notes, n => n.Text.Contains("Replying is off"));
+            Assert.Contains(notes, n => n.Text.Contains("no member of this channel"));
+        }
+
+        // The room's own list is bounded, and this asserts what falls off rather
+        // than only that something does.
+        //
+        // It replaces a case that had quietly stopped testing anything. That one
+        // sent forty messages with replying switched off, which used to leave
+        // forty notes and overflow the cap — and once notes coalesce, forty
+        // identical ones are a single note. It kept one entry and passed
+        // `1 <= 32` while proving nothing at all. Measured, not guessed: the old
+        // assertion was replaced with a failing probe and it reported "kept 1".
+        //
+        // Two of this branch's own commits between them closed every route to
+        // the eviction: the note coalescing killed this one, and the `_local`
+        // prune killed the other, since a sent message whose gateway copy has
+        // arrived no longer occupies a slot. Neither left the line unreached in
+        // the way a read-through would notice — they left it reachable only in a
+        // state no test now produces, which is the same failure mode that hid
+        // LastSpoke's comparison and is worth recognising twice.
+        //
+        // **The environment is the opposite of the leak case's, deliberately.**
+        // ArrivedMessagesDoNotEvictTheNoteExplainingAnEarlierFailure needs sends
+        // that *succeed*, so the gateway's copies come back and prune. This one
+        // needs sends that *fail*, so nothing is ever pruned and the entries
+        // accumulate. Moving either into the other's file makes it silently
+        // stop testing its own subject — which has now happened once in each
+        // direction on this branch.
+        [Fact]
+        public async Task TheOldestEntryIsWhatFallsOffWhenTheListOverflows()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
+
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            // No gateway, so every send fails: each leaves your message *and* a
+            // note, two entries a time and nothing to prune them. Distinct texts,
+            // because identical adjacent notes coalesce — and the notes here are
+            // never adjacent, each having its own message above it.
+            for (var i = 0; i < 20; i++) await room.SendAsync("sent " + i);
+
+            room.Rebuild();
+
+            // Forty entries into a list that holds thirty-two.
+            Assert.Equal(32, room.History.Count);
+
+            // The oldest went, the newest stayed. Asserting both, because a cap
+            // that trimmed the wrong end would also leave thirty-two.
+            Assert.DoesNotContain(room.History, t => t.Text == "sent 0");
+            Assert.Contains(room.History, t => t.Text == "sent 19");
+        }
+
+        // ...and so does the message you typed, until the gateway's own copy of
+        // it turns up.
+        [Fact]
+        public async Task YourMessageSurvivesTheNextRebuild()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
+
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("anyone about?");
+            room.Rebuild();
+
+            Assert.Single(room.History, t => t.Text == "anyone about?");
         }
 
         // --- state and identity ---

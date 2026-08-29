@@ -51,27 +51,120 @@ public class SettingsRoundTripTests
     }
 
     [Fact]
-    public void ShowHeartbeats_DefaultsOnAndRoundTripsBothWays()
+    public void ClusterModes_DefaultToWithChatsAndRoundTripBothWays()
     {
-        // Default-on is load-bearing rather than incidental: these orbs are on
-        // screen today, and an upgrade that removed several of somebody's agents
-        // would read as the gateway having dropped them.
+        // Default-WithChats is load-bearing rather than incidental: these orbs
+        // are on screen today and in the same shape as everything else, and an
+        // upgrade that removed several of somebody's agents — or moved them to
+        // the far side of the screen — would read as the gateway having dropped
+        // them rather than as a new setting having a default.
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
 
-        Assert.True(ClaudeBuddySettings.OpenClawShowHeartbeats);
+        Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawHeartbeatMode);
+        Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawCronMode);
 
-        // False in particular, because false is the value a bug would produce by
-        // accident — a missing key reads as default-true and would hide it.
-        ClaudeBuddySettings.OpenClawShowHeartbeats = false;
+        // Hidden in particular for the heartbeats, because that is the value a
+        // bug would produce by accident: a missing key reads as WithChats, so
+        // only Hidden proves the write happened.
+        ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.Hidden;
+        ClaudeBuddySettings.OpenClawCronMode = ClusterMode.OwnShape;
+        ClaudeBuddySettings.OpenClawCronShape = "star";
 
         var settingsPath = Path.Combine(dir, "settings.json");
         var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
-        Assert.False(root!["openclawShowHeartbeats"]!.GetValue<bool>());
 
-        // And survives a reload, which is what the setting is for.
+        Assert.Equal("hidden", root!["openclawHeartbeatMode"]!.GetValue<string>());
+        Assert.Equal("own", root["openclawCronMode"]!.GetValue<string>());
+        Assert.Equal("star", root["openclawCronShape"]!.GetValue<string>());
+
+        // The legacy boolean is still written, derived from the mode, so a build
+        // that has never heard of openclawHeartbeatMode still honours the one
+        // thing it can understand. See the comment on it in Save().
+        Assert.False(root["openclawShowHeartbeats"]!.GetValue<bool>());
+
+        // And all of it survives a reload, which is what the settings are for.
         PointSettingsAt(dir);
-        Assert.False(ClaudeBuddySettings.OpenClawShowHeartbeats);
+        Assert.Equal(ClusterMode.Hidden, ClaudeBuddySettings.OpenClawHeartbeatMode);
+        Assert.Equal(ClusterMode.OwnShape, ClaudeBuddySettings.OpenClawCronMode);
+        Assert.Equal("star", ClaudeBuddySettings.OpenClawCronShape);
+    }
+
+    [Theory]
+    [InlineData(false, ClusterMode.Hidden)]
+    [InlineData(true, ClusterMode.WithChats)]
+    public void LegacyShowHeartbeatsBoolean_MigratesToAMode(bool shown, ClusterMode expected)
+    {
+        // The upgrade path, written as a real settings.json from the version
+        // before this one rather than by calling the parser: what has to keep
+        // working is a file already on somebody's disk, and the thing that
+        // breaks is Load reaching for a key that isn't there.
+        var dir = NewSettingsDir();
+        var json = new JsonObject
+        {
+            ["version"] = 1,
+            ["openclawEnabled"] = true,
+            ["openclawShowHeartbeats"] = shown
+        };
+        File.WriteAllText(Path.Combine(dir, "settings.json"), json.ToJsonString());
+
+        PointSettingsAt(dir);
+
+        Assert.Equal(expected, ClaudeBuddySettings.OpenClawHeartbeatMode);
+
+        // Crons had no setting at all before this, so there is nothing to
+        // migrate and the default is the behaviour they already had.
+        Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawCronMode);
+    }
+
+    [Fact]
+    public void HeartbeatMode_WinsOverTheLegacyBooleanWhenBothArePresent()
+    {
+        // The file this app writes has both keys in it, and they can disagree —
+        // any older build that saves once will rewrite the boolean without
+        // touching the mode. The mode is the one the user chose in this version,
+        // so it has to be the one that survives; reading the boolean first would
+        // silently undo a choice of Own shape every time an older build ran.
+        var dir = NewSettingsDir();
+        var json = new JsonObject
+        {
+            ["version"] = 1,
+            ["openclawShowHeartbeats"] = true,
+            ["openclawHeartbeatMode"] = "hidden"
+        };
+        File.WriteAllText(Path.Combine(dir, "settings.json"), json.ToJsonString());
+
+        PointSettingsAt(dir);
+
+        Assert.Equal(ClusterMode.Hidden, ClaudeBuddySettings.OpenClawHeartbeatMode);
+    }
+
+    [Fact]
+    public void ClusterModeKeys_SurviveAHandEditedGarbageValue()
+    {
+        // Load wraps the whole model in one catch that replaces it with
+        // defaults, so a value of the wrong *type* reaching GetValue<T>() costs
+        // the user every profile name and dragged orb position in the file. That
+        // is why these read through Text/TryGetValue — see ClusterModeFrom.
+        var dir = NewSettingsDir();
+        var json = new JsonObject
+        {
+            ["version"] = 1,
+            ["twoLetterGlyphs"] = true,
+            ["openclawShowHeartbeats"] = "no thanks",
+            ["openclawHeartbeatMode"] = 7,
+            ["openclawCronMode"] = "sideways"
+        };
+        File.WriteAllText(Path.Combine(dir, "settings.json"), json.ToJsonString());
+
+        PointSettingsAt(dir);
+
+        // Both fall back to the default rather than throwing...
+        Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawHeartbeatMode);
+        Assert.Equal(ClusterMode.WithChats, ClaudeBuddySettings.OpenClawCronMode);
+
+        // ...and, the point of the test, the rest of the file is still there.
+        Assert.True(ClaudeBuddySettings.TwoLetterGlyphs);
     }
 
     [Fact]
@@ -86,7 +179,7 @@ public class SettingsRoundTripTests
         // the interaction between Load and Save that breaks, not the list.
         var dir = NewSettingsDir();
         PointSettingsAt(dir);
-        ClaudeBuddySettings.OpenClawShowHeartbeats = false;
+        ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.Hidden;
 
         PointSettingsAt(dir);
         ClaudeBuddySettings.TwoLetterGlyphs = true;   // any Save at all
@@ -96,9 +189,17 @@ public class SettingsRoundTripTests
 
         Assert.False(root!["openclawShowHeartbeats"]!.GetValue<bool>());
 
-        // One occurrence, not two.
-        var occurrences = text.Split("\"openclawShowHeartbeats\"").Length - 1;
-        Assert.Equal(1, occurrences);
+        // One occurrence each, not two. All four of the new keys as well as the
+        // legacy one, since every one of them is a fresh chance to miss the
+        // KnownKeys entry.
+        foreach (var key in new[]
+                 {
+                     "openclawShowHeartbeats", "openclawHeartbeatMode",
+                     "openclawHeartbeatShape", "openclawCronMode", "openclawCronShape"
+                 })
+        {
+            Assert.Equal(1, text.Split($"\"{key}\"").Length - 1);
+        }
     }
 
     // The single most valuable untested piece of ClaudeBuddySettings.cs, per
@@ -238,6 +339,7 @@ public class SettingsRoundTripTests
         ClaudeBuddySettings.RemoteControlEnabled = true;
         ClaudeBuddySettings.RemoteControlProfileDir = ".claude-board";
         ClaudeBuddySettings.RemoteControlIdleMinutes = 25;
+        ClaudeBuddySettings.RemoteControlServeOnLaunch = true;
 
         // Back from disk, not from the in-memory model the setters just wrote.
         PointSettingsAt(dir);
@@ -245,6 +347,7 @@ public class SettingsRoundTripTests
         Assert.True(ClaudeBuddySettings.RemoteControlEnabled);
         Assert.Equal(".claude-board", ClaudeBuddySettings.RemoteControlProfileDir);
         Assert.Equal(25, ClaudeBuddySettings.RemoteControlIdleMinutes);
+        Assert.True(ClaudeBuddySettings.RemoteControlServeOnLaunch);
     }
 
     [Fact]
@@ -265,6 +368,10 @@ public class SettingsRoundTripTests
         Assert.Equal(
             ClaudeBuddySettings.DefaultRemoteControlIdle,
             ClaudeBuddySettings.RemoteControlIdleMinutes);
+
+        // Also off by default, for the same reason as the switch above: it
+        // makes every app launch start a quota-spending relay.
+        Assert.False(ClaudeBuddySettings.RemoteControlServeOnLaunch);
     }
 
     // A negative idle would read as "already expired" to every comparison

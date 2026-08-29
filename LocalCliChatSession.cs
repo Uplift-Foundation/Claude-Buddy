@@ -41,7 +41,7 @@ namespace ClaudeBuddy
     //    trivially, since the whole turn is all there ever is.
     internal sealed class LocalCliChatSession :
         IRemoteChatSession, IRemoteChatBacklog, IRemoteChatComposer, IRemoteChatPrompts,
-        IRemoteChatImages, IRemoteChatSlashCommands, IDisposable
+        IRemoteChatImages, IRemoteChatSlashCommands, IRemoteChatElsewhere, IDisposable
     {
         // How much of the tail to read when the panel first opens.
         //
@@ -110,13 +110,21 @@ namespace ClaudeBuddy
         // before that — see Pump.
         private bool _loaded;
 
-        public LocalCliChatSession(string sessionId, SessionStatus status)
+        // findTranscript is a seam for the same reason SessionManager's
+        // transcriptHunt is: the real one walks this machine's own projects
+        // directories, and the decision worth testing is when Start falls back
+        // to it, not what the walk finds.
+        public LocalCliChatSession(string sessionId, SessionStatus status,
+                                   Func<string, string?>? findTranscript = null)
         {
             SessionId = sessionId;
             _status = status;
             _format = CliChatFormat.For(status.Source);
             DisplayName = status.Title ?? "";
+            _findTranscript = findTranscript ?? (id => TranscriptReader.FindTranscriptFor(id));
         }
+
+        private readonly Func<string, string?> _findTranscript;
 
         public string SessionId { get; }
 
@@ -182,8 +190,17 @@ namespace ClaudeBuddy
         {
             if (_started) return;
 
+            // The hunt runs when the recorded path is missing as well as when
+            // there is none. A recorded path can be wrong, not just late: a
+            // respawned background worker's hook records a path computed from
+            // the directory it relaunched in, while the conversation lives in
+            // the projects directory keyed by where the session actually ran —
+            // see SessionManager.WantsTranscriptRepair. Without the fallback,
+            // File.Exists below said no on every status update, forever, and a
+            // finished job's panel opened blank over a 3.6MB transcript.
             var path = _status.TranscriptPath;
-            if (string.IsNullOrEmpty(path)) path = TranscriptReader.FindTranscriptFor(SessionId);
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                path = _findTranscript(SessionId);
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
 
             _started = true;
@@ -510,18 +527,99 @@ namespace ClaudeBuddy
         // --- sending ---
 
         public string ComposerHint =>
-            ComposerHintFor(TerminalFocuser.CanSendQuietly(_status), _format.ReplyEnabled());
+            ComposerHintFor(
+                TerminalFocuser.CanSendQuietly(_status), _format.ReplyEnabled(),
+                _status.Shape, _status.Presence);
 
         // Both answers are reachable from a test this way, where they were not
         // before: whether there is a pane to type into depends on a real tmux and
         // a real session, so asking it here and deciding somewhere else is what
         // makes "no pane" something a test can state rather than something the
         // machine happens to be.
-        internal static string ComposerHintFor(bool canSendQuietly, bool replyEnabled)
+        //
+        // shape and presence are here because "no pane" has two quite different
+        // causes and only one of them has anything the user can do about it in
+        // this panel. A terminal session outside tmux can be replied to in its own
+        // terminal, which is what the old wording said — and for a background job
+        // that wording was advice to go somewhere that does not exist, since a
+        // daemon runs it precisely so that no terminal has to. The button beside
+        // the box is the answer for that one, so the box names where it goes.
+        //
+        // The presence word is the daemon's own: it calls a parked job "needs
+        // input", and several of them are literally holding a question. A box that
+        // said only "no pane" was hiding the more interesting half of what was
+        // true — and a job that has *finished* is a third thing again, which
+        // nobody should be typing at, so it says so rather than inviting a reply.
+        internal static string ComposerHintFor(
+            bool canSendQuietly, bool replyEnabled,
+            LocalSessionShape shape, OrbPresence presence)
         {
-            if (!canSendQuietly) return "No pane to type into";
+            if (!canSendQuietly)
+            {
+                if (shape != LocalSessionShape.Background) return "No pane to type into";
+
+                return presence switch
+                {
+                    OrbPresence.NeedsInput => "Needs input — attach to reply",
+                    OrbPresence.Finished => "Finished — attach to read it",
+                    _ => "Attach to reply"
+                };
+            }
+
             return replyEnabled ? "Message…" : "Replying is off";
         }
+
+        // --- attaching ---
+        //
+        // A background job has no pane, so the composer cannot reach it and no
+        // amount of trying will change that where it is. What can change is
+        // where it is: `claude attach` puts it in a terminal, and from there it
+        // is an ordinary session with an ordinary pane.
+        //
+        // The rule is the click path's, asked rather than copied — see
+        // ClickRouting.AttachWouldReach. A panel offering an attach for a session
+        // a click would not attach is two answers to one question.
+        //
+        // What this deliberately is *not*: sending on the user's behalf by
+        // attaching the session into a hidden tmux window, waiting for its prompt
+        // and typing into that. It was considered and turned down here, on three
+        // counts, and none of them is "it would be a lot of work":
+        //
+        // - It rests on an assumption nobody has checked: that `claude attach`
+        //   fires hooks which record the new pane. If it does, this button is
+        //   already the whole feature — the next scan gives the session a pane
+        //   and the composer becomes an ordinary one with no new code. If it
+        //   does not, a send-through-attach has to hold tmux state this app
+        //   invented, which goes stale the moment the user closes that window.
+        //   One live check settles which, and it has not been done.
+        // - Knowing when the attached pane is ready to be typed into means
+        //   reading Claude Code's TUI out of capture-pane and deciding it looks
+        //   like a prompt. That is parsing a format nobody here controls, from a
+        //   fixture written from imagination — the exact mistake this repo has
+        //   already paid for once (see the dialog parser's note in CLAUDE.md,
+        //   which failed on every real dialog).
+        // - It fails in the wrong direction. Text typed into a TUI that is still
+        //   booting is swallowed or mangled, and the panel would have shown the
+        //   sentence as sent. A disabled-looking composer that says why, beside a
+        //   button that visibly opens a terminal, fails where the user can see it.
+        //
+        // So: the honest affordance now, and the send when someone has watched an
+        // attach happen on a real machine and knows which of the two worlds we
+        // are in.
+        public bool CanOpenElsewhere => ClickRouting.AttachWouldReach(_status, SessionId);
+
+        // Excluded from coverage: one line, and it opens or focuses a real window.
+        // What decides whether it is offered is CanOpenElsewhere above, which is
+        // pure both sides of the call, and where it goes is ClickRouting's, which
+        // is pure and covered per case.
+        [ExcludeFromCodeCoverage]
+        public void OpenElsewhere() => TerminalFocuser.Elsewhere(
+            _status, SessionId, SessionManager.Instance?.PaneClaimsByOthers(SessionId),
+            // Through the manager, because a chat session knows its id and not its
+            // orb — and the button must acknowledge for the same reason the click
+            // does, since the two share one destination.
+            acknowledge: () => Avalonia.Threading.Dispatcher.UIThread.Post(
+                () => SessionManager.Instance?.AcknowledgeClickOn(SessionId)));
 
         // A message sent from the panel, waiting for the transcript row it will
         // produce. Held so the two can be reconciled instead of the same
@@ -601,7 +699,7 @@ namespace ClaudeBuddy
 
             if (!TerminalFocuser.CanSendQuietly(_status))
             {
-                Note(NoPaneNote(_status.TmuxPane));
+                Note(NoPaneNote(_status.TmuxPane, _status.Shape));
                 return;
             }
 
@@ -620,11 +718,25 @@ namespace ClaudeBuddy
         // in its own terminal, where a missing tmux binary cannot be worked
         // around at all. Telling someone to go to a terminal that isn't there is
         // the failure this distinction exists to avoid.
-        internal static string NoPaneNote(string? tmuxPane) =>
-            string.IsNullOrEmpty(tmuxPane)
-                ? "This session isn't in a tmux pane, so there is nowhere to type without "
-                + "bringing its terminal forward. Reply in the terminal instead."
-                : "Couldn't find tmux to type with.";
+        internal static string NoPaneNote(string? tmuxPane, LocalSessionShape shape)
+        {
+            if (!string.IsNullOrEmpty(tmuxPane)) return "Couldn't find tmux to type with.";
+
+            // Three problems that all end in "nothing was typed", and the note
+            // has to say which. The third is the one this branch added, and the
+            // sentence it replaces was actively wrong: a background job is run by
+            // a daemon so that no terminal has to hold it, so "reply in the
+            // terminal instead" named a window that does not exist. The attach
+            // button beside the box is what does exist, so the note points at it.
+            if (shape == LocalSessionShape.Background)
+            {
+                return "This is a background job with no terminal of its own. "
+                    + "Attach it (⚙ beside the box) to answer it there.";
+            }
+
+            return "This session isn't in a tmux pane, so there is nowhere to type without "
+                + "bringing its terminal forward. Reply in the terminal instead.";
+        }
 
         // Excluded from coverage: only reachable once CanSendQuietly has said yes,
         // which needs a real tmux binary and a real pane belonging to a live

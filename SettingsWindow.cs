@@ -503,11 +503,26 @@ namespace ClaudeBuddy
             ("Line", "line")
         };
 
-        internal Control ShapePicker()
+        internal Control ShapePicker() => ShapePicker(
+            () => ClaudeBuddySettings.ArrangeShape,
+            v => ClaudeBuddySettings.ArrangeShape = v);
+
+        // Taken over a getter and setter rather than hard-wired to
+        // ArrangeShape, because there are now three shapes to pick — the chats'
+        // and one for each timer-driven group that has been given its own. One
+        // picker for all three keeps the six choices and the unknown-value
+        // handling below in one place; three copies is how one of them ends up
+        // offering five.
+        internal Control ShapePicker(Func<string> get, Action<string> set)
         {
-            var current = ClaudeBuddySettings.ArrangeShape;
+            var current = get();
             var choices = ShapeChoices.ToList();
 
+            // A shape from a newer version, or a hand-edited settings file, is
+            // shown as its own entry under its raw name rather than silently
+            // swapped for the default — the same courtesy ClickPicker extends,
+            // and the difference between "the app forgot my setting" and "the
+            // app does not know that word".
             if (choices.All(c => c.Value != current))
                 choices.Add((current, current));
 
@@ -522,8 +537,49 @@ namespace ClaudeBuddy
                 var index = combo.SelectedIndex;
                 if (index < 0) return;
 
-                ClaudeBuddySettings.ArrangeShape = choices[index].Value;
+                set(choices[index].Value);
                 SessionManager.Instance?.ReapplyArrangement();
+            };
+            return combo;
+        }
+
+        // The three answers a timer-driven group can be given. See OrbClusters
+        // for what each does.
+        //
+        // "With the chats" and not "Shown": the whole point of the setting is
+        // that there are two ways to be shown, and a label that only says
+        // whether an orb exists is the label this replaces.
+        private static readonly (string Label, ClusterMode Value)[] ClusterModeChoices =
+        {
+            ("Hidden", ClusterMode.Hidden),
+            ("With the chats", ClusterMode.WithChats),
+            ("Own shape", ClusterMode.OwnShape)
+        };
+
+        // Rebuilds the window rather than only writing the setting, because the
+        // shape row beside it appears and disappears with the answer — there is
+        // no shape to pick for a group that is hidden or is in somebody else's
+        // shape, and a picker for one is worse than no picker at all. The same
+        // reason OnOpenClawToggled rebuilds.
+        internal Control ClusterModePicker(Func<ClusterMode> get, Action<ClusterMode> set)
+        {
+            var current = get();
+            var choices = ClusterModeChoices.ToList();
+
+            var combo = new ComboBox
+            {
+                ItemsSource = choices.Select(c => c.Label).ToList(),
+                SelectedIndex = choices.FindIndex(c => c.Value == current),
+                MinWidth = 132
+            };
+            combo.SelectionChanged += (_, _) =>
+            {
+                var index = combo.SelectedIndex;
+                if (index < 0) return;
+                if (choices[index].Value == get()) return;
+
+                set(choices[index].Value);
+                Rebuild();
             };
             return combo;
         }
@@ -793,13 +849,41 @@ namespace ClaudeBuddy
                 + "the gateway's own idea of \"recent\" lags badly for Discord chats, so "
                 + "Claude Buddy also counts anything it has watched happen since it started."));
 
-            rows.Add(Row("Show heartbeat sessions",
-                Switch(ClaudeBuddySettings.OpenClawShowHeartbeats, OnOpenClawHeartbeatsToggled),
+            rows.Add(Row("Heartbeat sessions", ClusterModePicker(
+                    () => ClaudeBuddySettings.OpenClawHeartbeatMode,
+                    OnOpenClawHeartbeatModeChanged),
                 "A gateway wakes each agent on a timer to do background work, and it does "
                 + "that in the agent's own main session — so those orbs go active together "
                 + "every few minutes with nobody on the other end. They wear a beating "
-                + "heart. Off hides them; the agents keep their colours in any channel they "
-                + "are in either way."));
+                + "heart. Hidden takes them off the screen; Own shape keeps them, arranged "
+                + "beside your conversations instead of among them. The agents keep their "
+                + "colours in any channel they are in whichever you pick."));
+
+            if (ClaudeBuddySettings.OpenClawHeartbeatMode == ClusterMode.OwnShape)
+            {
+                rows.Add(Row("Heartbeat shape", ShapePicker(
+                        () => ClaudeBuddySettings.OpenClawHeartbeatShape,
+                        v => ClaudeBuddySettings.OpenClawHeartbeatShape = v),
+                    "The pattern the heartbeat orbs arrange into, drawn beside the one your "
+                    + "chats use. Pick something that is not the chats' shape — telling two "
+                    + "hearts apart across a screen is the one thing this cannot help with."));
+            }
+
+            rows.Add(Row("Cron sessions", ClusterModePicker(
+                    () => ClaudeBuddySettings.OpenClawCronMode,
+                    OnOpenClawCronModeChanged),
+                "Jobs somebody scheduled on the gateway, which wake on their own timer with "
+                + "nobody on the other end either. Same three answers as heartbeats above."));
+
+            if (ClaudeBuddySettings.OpenClawCronMode == ClusterMode.OwnShape)
+            {
+                rows.Add(Row("Cron shape", ShapePicker(
+                        () => ClaudeBuddySettings.OpenClawCronShape,
+                        v => ClaudeBuddySettings.OpenClawCronShape = v),
+                    "The pattern the cron orbs arrange into. Set both of these to Own shape "
+                    + "and the arrange button draws three patterns — your chats, the "
+                    + "heartbeats, and these — side by side rather than one."));
+            }
 
             rows.Add(Row("Allow replying to agents",
                 Switch(ClaudeBuddySettings.OpenClawReplyEnabled, OnOpenClawReplyToggled),
@@ -1083,14 +1167,29 @@ namespace ClaudeBuddy
             Rebuild();
         }
 
-        // No Restart() here, unlike the two toggles below it. This changes which
-        // sessions the *next scan* keeps, not what the connection asked the
-        // gateway for, and dropping a working socket to filter a list would take
-        // every gateway orb off the screen for as long as the handshake takes.
-        // The orbs appear or vanish on the next poll instead.
-        internal void OnOpenClawHeartbeatsToggled(bool enabled)
+        // No Restart() in either of these, unlike the two toggles below them.
+        // They change which sessions the *next scan* keeps and which shape their
+        // orbs join, not what the connection asked the gateway for, and dropping
+        // a working socket to filter a list would take every gateway orb off the
+        // screen for as long as the handshake takes. Orbs appear or vanish on the
+        // next poll instead.
+        //
+        // ReapplyArrangement, though, because an orb already on screen changes
+        // *band* the moment this is set rather than on the next poll — nothing
+        // about it has to be rescanned for the app to know it belongs somewhere
+        // else. Waiting for the poll would leave a heartbeat sitting in the
+        // chats' heart for as long as a minute after being told to leave it,
+        // which reads as the setting not working.
+        internal void OnOpenClawHeartbeatModeChanged(ClusterMode mode)
         {
-            ClaudeBuddySettings.OpenClawShowHeartbeats = enabled;
+            ClaudeBuddySettings.OpenClawHeartbeatMode = mode;
+            SessionManager.Instance?.ReapplyArrangement();
+        }
+
+        internal void OnOpenClawCronModeChanged(ClusterMode mode)
+        {
+            ClaudeBuddySettings.OpenClawCronMode = mode;
+            SessionManager.Instance?.ReapplyArrangement();
         }
 
         // Excluded from coverage: reconnects to the gateway, because the scopes
@@ -1200,6 +1299,14 @@ namespace ClaudeBuddy
                 "The relay shuts down once you stop using it, and starts again by itself the "
                 + "next time you open or send to a remote session."));
 
+            rows.Add(Row("Start the relay when Claude Buddy starts",
+                Switch(ClaudeBuddySettings.RemoteControlServeOnLaunch, OnServeOnLaunchToggled),
+                "For a machine that serves its sessions to other Buddies unattended — nobody "
+                + "there to press the button below when another machine wants its chats. Takes "
+                + "effect at the next launch; pair it with \"Stop the relay after: Never\" if "
+                + "the relay should stay up. Costs usage while the relay runs, like everything "
+                + "else in this section."));
+
             // Shares the OpenClaw ticker's TextBlock slot deliberately — see
             // OnStatusTick, which now reports whichever of the two is switched
             // on. Both being on at once is possible but rare, and a second
@@ -1235,6 +1342,17 @@ namespace ClaudeBuddy
         // rows around it.
         [ExcludeFromCodeCoverage]
         private void OnStartTheRelayNowClicked() => RemoteControlSessions.EnsureStarted();
+
+        // Only the setting is written here: the start itself stays a deliberate
+        // act, and "Start the relay now" in the same section is already the
+        // immediate version of it. Wiring EnsureStarted into this switch would
+        // also make it the one switch no headless test could flip — see the
+        // "never click" note in SettingsWindowCoverageTests.
+        internal void OnServeOnLaunchToggled(bool on)
+        {
+            ClaudeBuddySettings.RemoteControlServeOnLaunch = on;
+            Rebuild();
+        }
 
         // Every config directory a relay could sign into, each with a tick.
         //

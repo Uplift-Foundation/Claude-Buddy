@@ -80,6 +80,117 @@ namespace ClaudeBuddy.Tests
                 padding: padding);
         }
 
+        // Same shape, but with the profile selected by Chromium's switch in
+        // argv rather than by the environment variable — which is how every
+        // profile is launched now that Claude Desktop ignores the variable.
+        private static byte[] DesktopWithSwitch(
+            string? switchValue, string? userDataDir = null)
+        {
+            var argv = new List<string> { "/Applications/Claude.app/Contents/MacOS/Claude" };
+            if (switchValue is not null) argv.Add("--user-data-dir=" + switchValue);
+            argv.Add("--no-sandbox");
+
+            var env = new List<string> { "PATH=/usr/bin" };
+            if (userDataDir is not null) env.Add("CLAUDE_USER_DATA_DIR=" + userDataDir);
+            env.Add("LANG=en_US.UTF-8");
+
+            return Buffer(
+                argc: argv.Count,
+                execPath: "/Applications/Claude.app/Contents/MacOS/Claude",
+                argv: argv,
+                env: env);
+        }
+
+        // --- ParseUserDataDir: argv's switch, then the environment block ---
+
+        // The switch is what Chromium acts on, so it is what decides which
+        // profile an instance belongs to. Reading only the environment is how
+        // every cloned instance came back mapped to Default.
+        [Fact]
+        public void UserDataDirIsReadFromTheArgumentSwitch()
+        {
+            var buffer = DesktopWithSwitch("/Users/x/Library/Application Support/Claude-work");
+
+            Assert.Equal(
+                "/Users/x/Library/Application Support/Claude-work",
+                MacOSProcessScan.ParseUserDataDir(buffer, buffer.Length));
+        }
+
+        // Both are passed on every launch. They agree in practice, but the
+        // switch is the one the app obeys, so it is the one to believe.
+        [Fact]
+        public void TheArgumentSwitchWinsOverTheEnvironmentVariable()
+        {
+            var buffer = DesktopWithSwitch("/tmp/from-argv", "/tmp/from-env");
+
+            Assert.Equal("/tmp/from-argv", MacOSProcessScan.ParseUserDataDir(buffer, buffer.Length));
+        }
+
+        // An instance started by a Claude Buddy from before this fix carries
+        // only the variable, and still has to map to its own profile rather
+        // than joining Default.
+        [Fact]
+        public void TheEnvironmentVariableStillAnswersWhenNoSwitchWasPassed()
+        {
+            var buffer = DesktopWithSwitch(null, "/tmp/from-env");
+
+            Assert.Equal("/tmp/from-env", MacOSProcessScan.ParseUserDataDir(buffer, buffer.Length));
+        }
+
+        // "--user-data-dir=" with nothing after it is not a directory. Mapping
+        // the instance to "" would file it under a profile that cannot exist
+        // and hide it from every row in the menu.
+        [Fact]
+        public void AnEmptyArgumentSwitchFallsThroughToTheEnvironment()
+        {
+            var buffer = DesktopWithSwitch("", "/tmp/from-env");
+
+            Assert.Equal("/tmp/from-env", MacOSProcessScan.ParseUserDataDir(buffer, buffer.Length));
+        }
+
+        [Fact]
+        public void AnEmptyArgumentSwitchWithNoEnvironmentIsNull()
+        {
+            var buffer = DesktopWithSwitch("", null);
+
+            Assert.Null(MacOSProcessScan.ParseUserDataDir(buffer, buffer.Length));
+        }
+
+        // A flag whose name merely starts the same way is a different flag.
+        // Chromium has several, and --user-data-dir-suffix landing in this
+        // parser would point a profile row at a directory nobody is using.
+        [Fact]
+        public void AFlagThatOnlyStartsTheSameWayIsIgnored()
+        {
+            var buffer = Buffer(
+                argc: 2,
+                execPath: "/Applications/Claude.app/Contents/MacOS/Claude",
+                argv: new[]
+                {
+                    "/Applications/Claude.app/Contents/MacOS/Claude",
+                    "--user-data-dir-suffix=/tmp/wrong"
+                },
+                env: new[] { "CLAUDE_USER_DATA_DIR=/tmp/right" });
+
+            Assert.Equal("/tmp/right", MacOSProcessScan.ParseUserDataDir(buffer, buffer.Length));
+        }
+
+        // The switch is read out of argv only. The environment block that
+        // follows is full of user-controlled strings, and one of them starting
+        // with the flag's spelling must not be read as the flag — the same rule
+        // ParseArgumentValues already keeps.
+        [Fact]
+        public void AnEnvironmentEntryThatLooksLikeTheSwitchIsNotOne()
+        {
+            var buffer = Buffer(
+                argc: 1,
+                execPath: "/Applications/Claude.app/Contents/MacOS/Claude",
+                argv: new[] { "/Applications/Claude.app/Contents/MacOS/Claude" },
+                env: new[] { "SOMETHING=--user-data-dir=/tmp/wrong" });
+
+            Assert.Null(MacOSProcessScan.ParseUserDataDir(buffer, buffer.Length));
+        }
+
         // --- ParseUserDataDir: the environment block, one named variable ---
 
         [Fact]
@@ -365,6 +476,68 @@ namespace ClaudeBuddy.Tests
             Array.Copy(BitConverter.GetBytes(-5), negative, sizeof(int));
             MacOSProcessScan.ParseEnvironmentValues(negative, negative.Length, new[] { "A" }, into);
             Assert.Empty(into);
+        }
+
+        // ---- a buffer cut in the middle of a token -------------------------
+
+        // The kernel filled the buffer only as far as `length`, and `length`
+        // lands inside the --user-data-dir= argument rather than after it.
+        //
+        // The wrong answer here is a *plausible* one, which is what makes it
+        // worth a fixture. A prefix like "--user-data-dir=/Users/x/Library/App"
+        // still starts with the switch and still has a non-empty value, so
+        // returning it hands the scan a directory that exists nowhere: the
+        // instance vanishes from every profile row and from the duplicate
+        // counter at the same time. Null is the honest answer — the parser does
+        // not know which profile this is — and null is also what maps the
+        // instance to Default, i.e. to "indistinguishable from a Dock launch",
+        // which is exactly what it has become.
+        [Fact]
+        public void AnArgumentTheBufferEndsInsideIsNotAPath()
+        {
+            var directory = "/Users/x/Library/Application Support/Claude-Board";
+            var buffer = Buffer(
+                argc: 2, execPath: "/Applications/Claude.app/Contents/MacOS/Claude",
+                argv: new[] { "Claude", "--user-data-dir=" + directory },
+                env: Array.Empty<string>());
+
+            // Land three bytes short of the token's terminating NUL, which is
+            // what a buffer too small to hold the whole command line gives.
+            var truncated = buffer.Length - 4;
+
+            Assert.Null(MacOSProcessScan.ParseUserDataDir(buffer, truncated));
+        }
+
+        // The same cut one byte later, in the environment block. Same shape,
+        // same reasoning, and a separate case because it is a separate walk —
+        // the argv guard being right says nothing about this one.
+        [Fact]
+        public void AnEnvironmentEntryTheBufferEndsInsideIsNotAPathEither()
+        {
+            var directory = "/Users/x/Library/Application Support/Claude-Board";
+            var buffer = Buffer(
+                argc: 1, execPath: "/Applications/Claude.app/Contents/MacOS/Claude",
+                argv: new[] { "Claude" },
+                env: new[] { "CLAUDE_USER_DATA_DIR=" + directory });
+
+            Assert.Null(MacOSProcessScan.ParseUserDataDir(buffer, buffer.Length - 4));
+        }
+
+        // The guard above must not fire on the ordinary case, which is the
+        // off-by-one it invites: a complete token whose terminating NUL is the
+        // very last byte the kernel wrote. That is a full command line, not a
+        // truncated one, and it has to keep parsing.
+        [Fact]
+        public void AnArgumentEndingExactlyAtTheBufferEndIsStillRead()
+        {
+            var directory = "/Users/x/Library/Application Support/Claude-Board";
+            var buffer = Buffer(
+                argc: 2, execPath: "/Applications/Claude.app/Contents/MacOS/Claude",
+                argv: new[] { "Claude", "--user-data-dir=" + directory },
+                env: Array.Empty<string>());
+
+            Assert.Equal(directory,
+                MacOSProcessScan.ParseUserDataDir(buffer, buffer.Length));
         }
 
         // A buffer the kernel filled only partly, with no terminating empty

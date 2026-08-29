@@ -22,6 +22,10 @@
          that spoke to the gateway its own way could answer a question the app
          would answer differently, which is the one thing it must not do. -->
     <Compile Include="../../ClaudeBuddySettings.cs" />
+    <!-- ClusterMode, which the settings' heartbeat and cron modes are typed as.
+         Pure and window-free, so compiling it in costs nothing. -->
+    <Compile Include="../../OrbClusters.cs" />
+    <Compile Include="../../OpenClawSessionKind.cs" />
     <Compile Include="../../OpenClawIdentity.cs" />
     <Compile Include="../../OpenClawSocket.cs" />
     <Compile Include="../../OpenClawGateway.cs" />
