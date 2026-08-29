@@ -239,6 +239,33 @@ namespace ClaudeBuddy
             return attached ? OrbPresence.Present : OrbPresence.NeedsInput;
         }
 
+        // Whether this status file could be the husk a backgrounded turn leaves
+        // behind — the gate on TranscriptHandoff's transcript read, not the
+        // answer itself. See TranscriptHandoff for the shape of the bug.
+        //
+        // Claude Code only, because backgrounding a turn is its feature; Codex
+        // has no equivalent, and for a gateway or bridged session the transcript
+        // this would read is on another machine or nowhere.
+        //
+        // The phase gate is what keeps the fork itself out. A forked job's
+        // transcript *inherits* the parent's rows, backgrounding marker
+        // included, so for a scan or two after the fork — before its first
+        // answer lands — the job's own tail can end with the inherited marker.
+        // A session the daemon lists as a job is alive by the daemon's own
+        // word, whatever its transcript's tail happens to hold. Unknown passes
+        // the gate deliberately: it is the answer on a machine where nothing
+        // made the listing worth fetching, which is exactly what is left once
+        // the fork finishes and its file is swept — and the husk must stay
+        // hidden then, or the duplicate this rule removes would come back as a
+        // lone stale orb.
+        //
+        // No transcript path means nothing to read, not evidence either way —
+        // the same reading JudgeReachability gives an empty path.
+        internal static bool CouldBeABackgroundedHusk(SessionStatus status, JobPhase phase) =>
+            status.Source == SessionSource.ClaudeCode
+            && phase is JobPhase.NotAJob or JobPhase.Unknown
+            && !string.IsNullOrEmpty(status.TranscriptPath);
+
         // Whether the daemon has *ruled out* this session being a background job.
         //
         // The distinction matters because the answer gates an orb's existence.
@@ -650,9 +677,14 @@ namespace ClaudeBuddy
         // over, as opposed to a reason not to draw its orb today.
         //
         // The distinction is the whole safety of the sweep, because the thing on
-        // the other side of it is File.Delete. Only two facts qualify: the
-        // process that wrote the file has exited, and the daemon says the job it
-        // ran has finished. Both are statements about the session.
+        // the other side of it is File.Delete. Only three facts qualify: the
+        // process that wrote the file has exited, the daemon says the job it
+        // ran has finished, and the session's own transcript says its turn was
+        // handed to a background job with nothing having happened since. All
+        // three are statements about the session — the third is the session's
+        // own record of the handoff, and the file it deletes is one no hook
+        // will ever write again, because the conversation now fires its hooks
+        // under the fork's session id.
         //
         // Every other verdict is a statement about *us* — Expired is the user's
         // display setting, NoTerminal and NotALiveJob are about whether a click
@@ -663,7 +695,9 @@ namespace ClaudeBuddy
         // nothing more until the session's next event: the orb would go, and the
         // session would still be there.
         internal static bool EvidenceOfDeath(SessionManager.ScanVerdict verdict, JobPhase phase) =>
-            verdict == SessionManager.ScanVerdict.ProcessGone || phase == JobPhase.Done;
+            verdict is SessionManager.ScanVerdict.ProcessGone
+                    or SessionManager.ScanVerdict.Backgrounded
+            || phase == JobPhase.Done;
 
         // Whether the grace period has run out on a file that has looked dead
         // since `deadSince`.

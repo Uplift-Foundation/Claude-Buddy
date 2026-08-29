@@ -190,6 +190,50 @@ public class SessionScanTests
         Assert.Equal(SessionSource.Codex, manager.StatusFor("codex-1")!.Source);
     }
 
+    // The row Claude Code appends when a turn is backgrounded, verbatim off the
+    // machine the duplicate "Ub" orbs were photographed on (identifiers
+    // scrubbed) — the rule it drives is covered in TranscriptHandoffTests, and
+    // what this file adds is the plumbing: that a scan over a real status file
+    // naming a real transcript reads it, hides the husk, and lets it back the
+    // moment the conversation moves again.
+    private const string BackgroundingMarker =
+        """{"parentUuid":"1b5cf160-79bf-4e2b-a01f-6511aee6b36b","isSidechain":false,"type":"system","subtype":"informational","content":"Backgrounding after the current tool finishes…","isMeta":false,"timestamp":"2026-08-28T17:53:15.295Z","uuid":"4f19d42a-80a5-4f9e-afe6-f234587acbf5","level":"warning","userType":"external","entrypoint":"cli","cwd":"/Users/w/project","sessionId":"6d3a9d57-10c6-4e9d-bf25-38194fae23c0","version":"2.1.251","gitBranch":"develop"}""";
+
+    [AvaloniaFact]
+    public void ABackgroundedTurnsHuskLosesItsOrbAndGetsItBackIfTheSessionMovesAgain()
+    {
+        // The duplicate-orb shape, end to end. The husk is healthy by every
+        // rule that existed before TranscriptHandoff — live pid, a terminal,
+        // "generating" — and the only thing wrong with it is that its own
+        // transcript ends with the handoff. The control alongside it is a
+        // Codex file for the reason this class's own header gives: a second
+        // ClaudeCode file on this test's pid would read as an Agent View pid
+        // and send the scan to the real daemon.
+        using var scratch = new Scratch();
+
+        var huskTail = scratch.WriteTranscript("husk", BackgroundingMarker);
+        scratch.Write("husk", state: "generating", title: "Unmerged branches and PRs",
+            transcriptPath: huskTail);
+
+        scratch.Write("control", cli: "codex", state: "generating");
+
+        var manager = Scan(scratch);
+
+        Assert.Equal(new[] { "control" }, OrbIds(manager));
+
+        // The self-correcting direction: a user row appended after the marker
+        // means somebody is talking here again, and the next scan must bring
+        // the orb back — the transcript grew, so the cached answer is stale by
+        // its own key. The revived husk is also the negative case: a
+        // ClaudeCode session whose tail is ordinary keeps its orb.
+        File.AppendAllText(huskTail,
+            "{\"type\":\"user\",\"message\":{\"content\":\"back here\"}}\n");
+        manager.ScanAndUpdate();
+
+        Assert.Equal(2, OrbIds(manager).Count);
+        Assert.NotNull(manager.StatusFor("husk"));
+    }
+
     [AvaloniaFact]
     public void DeletingAStatusFileTakesTheOrbTheStatusAndThePlaceInTheStack()
     {

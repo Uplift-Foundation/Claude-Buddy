@@ -961,4 +961,60 @@ public class SessionPresenceTests
         Assert.True(SessionPresence.CanDismiss(pidless));
         Assert.False(SessionPresence.CanEndSession(pidless));
     }
+
+    // --- CouldBeABackgroundedHusk ---------------------------------------------
+    // The gate on TranscriptHandoff's transcript read, not the answer: what it
+    // decides is whether a session's transcript is worth statting at all.
+
+    private static SessionStatus WithTranscript(
+        SessionSource source = SessionSource.ClaudeCode,
+        string transcriptPath = "/Users/w/.claude/projects/-Users-w-project/6d3a9d57.jsonl")
+    {
+        var status = Status(source: source);
+        status.TranscriptPath = transcriptPath;
+        return status;
+    }
+
+    [Fact]
+    public void OnlyASessionTheDaemonDoesNotVouchForCanBeAHusk()
+    {
+        // The husk's own two answers: NotAJob when the listing was read and it
+        // is not on it, Unknown when nothing made the listing worth fetching —
+        // which is what is left once the fork finishes and its file is swept,
+        // and the husk must stay hidden then too.
+        foreach (var phase in new[] { JobPhase.NotAJob, JobPhase.Unknown })
+        {
+            Assert.True(SessionPresence.CouldBeABackgroundedHusk(WithTranscript(), phase));
+        }
+
+        // A session the daemon lists as a job is alive by the daemon's own
+        // word. This is what keeps the fork itself out: its transcript
+        // *inherits* the parent's rows, marker included, so for a scan or two
+        // before its first answer lands the tail alone would misread it.
+        foreach (var phase in new[] { JobPhase.Working, JobPhase.Parked, JobPhase.Done })
+        {
+            Assert.False(SessionPresence.CouldBeABackgroundedHusk(WithTranscript(), phase));
+        }
+    }
+
+    [Theory]
+    [InlineData(SessionSource.Codex)]
+    [InlineData(SessionSource.OpenClaw)]
+    [InlineData(SessionSource.RemoteControl)]
+    public void OnlyClaudeCodeCanLeaveAHusk(SessionSource source)
+    {
+        // Backgrounding a turn is Claude Code's feature; for a gateway or
+        // bridged session the transcript this would read is on another machine
+        // or nowhere, and reading a Codex rollout with Claude Code's needles
+        // would be answering a question nobody asked.
+        Assert.False(SessionPresence.CouldBeABackgroundedHusk(
+            WithTranscript(source), JobPhase.NotAJob));
+    }
+
+    [Fact]
+    public void NoTranscriptPathMeansNothingToReadNotEvidence()
+    {
+        Assert.False(SessionPresence.CouldBeABackgroundedHusk(
+            WithTranscript(transcriptPath: ""), JobPhase.NotAJob));
+    }
 }
