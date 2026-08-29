@@ -985,9 +985,34 @@ namespace ClaudeBuddy
             var kept = new List<(string, SessionStatus)>();
             foreach (var entry in found)
             {
+                // The husk check, asked the same way the live scan asks it.
+                //
+                // This call site was left behind when JudgeLiveness grew the
+                // parameter, and the two changes met in a merge that had no
+                // textual conflict to report — so develop stopped compiling
+                // with nothing pointing at either branch.
+                //
+                // Answered rather than stubbed with `() => false`, which would
+                // have compiled and been wrong: this method's own comment above
+                // says it is composed from the same rules as the live scan "so
+                // the two cannot disagree about which sessions exist", and a
+                // stub disagrees about exactly one thing — a backgrounded husk,
+                // which the machine asking for this roster would then draw as a
+                // live session that no hook will ever correct. A closure for the
+                // same reason the live scan uses one: only a session the earlier
+                // rules kept ever pays for the stat behind it.
+                var status = entry.Status;
+                var phase = status.Source == SessionSource.ClaudeCode
+                    ? BackgroundJobs.Phase(jobs, entry.SessionId)
+                    : JobPhase.Unknown;
+
+                Func<bool> handedToBackground = () =>
+                    SessionPresence.CouldBeABackgroundedHusk(status, phase)
+                    && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
+
                 var verdict = JudgeLiveness(
                     entry.SessionId, entry.Status, entry.Written,
-                    now, StaleAfter, superseded, running);
+                    now, StaleAfter, superseded, running, handedToBackground);
                 if (verdict == ScanVerdict.Keep) kept.Add((entry.SessionId, entry.Status));
             }
 
