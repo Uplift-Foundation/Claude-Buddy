@@ -1,3 +1,4 @@
+using System.Linq;
 using Xunit;
 
 namespace ClaudeBuddy.Tests
@@ -1213,6 +1214,75 @@ namespace ClaudeBuddy.Tests
             // Both survive: Quill's, attributed, and yours.
             Assert.Contains(room.History, t => t.Speaker == "Quill" && !t.Mine);
             Assert.Contains(room.History, t => t.Mine);
+        }
+
+        // The same sentence twice in a row says nothing the first one did not.
+        // Three attempts with replying off used to leave three identical notes
+        // stacked, which reads as three separate problems and is one.
+        [Fact]
+        public async Task TheSameNoteTwiceRunningIsSaidOnce()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("first try");
+            await room.SendAsync("second try");
+            await room.SendAsync("third try");
+
+            Assert.Single(room.History, t => t.Role == ChatRole.System);
+        }
+
+        // ...but a note with your own message between it and the last identical
+        // one is a note about *that* message, and belongs there. The failure
+        // happened again, to something new, and suppressing the second one would
+        // leave a message on screen with no explanation under it.
+        [Fact]
+        public async Task ANoteAboutAFreshMessageIsNotSwallowed()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
+
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            // No gateway, so each of these fails the same way — but each has its
+            // own message above it.
+            await room.SendAsync("first try");
+            await room.SendAsync("second try");
+
+            Assert.Equal(2, room.History.Count(t => t.Role == ChatRole.System));
+            Assert.Contains(room.History, t => t.Mine && t.Text == "first try");
+            Assert.Contains(room.History, t => t.Mine && t.Text == "second try");
+        }
+
+        // A different sentence always lands, however recently anything else was
+        // said. Only an exact repeat is suppressed.
+        [Fact]
+        public async Task ADifferentNoteAlwaysLands()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("first try");
+
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+            await room.SendAsync("second try");
+
+            var notes = room.History.Where(t => t.Role == ChatRole.System).ToList();
+            Assert.Equal(2, notes.Count);
+            Assert.Contains(notes, n => n.Text.Contains("Replying is off"));
+            Assert.Contains(notes, n => n.Text.Contains("no member of this channel"));
         }
 
         // The room's own list is bounded like every other transcript here. Small
