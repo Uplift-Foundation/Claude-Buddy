@@ -55,6 +55,27 @@ public class SettingsWindowRowTests
         Assert.True(read(), "switching back on did not write the setting");
     }
 
+    // The same, for a setting with three values rather than two. Every mode is
+    // written and read back, and the pass ends on the default rather than
+    // wherever the last case left it — ClaudeBuddySettings is process-wide, and
+    // a mode left on Hidden would take heartbeat orbs off the screen for every
+    // test in the collection that runs afterwards.
+    private static void Cycles(
+        Action<SettingsWindow, ClusterMode> handler, Func<ClusterMode> read)
+    {
+        var window = NewWindow();
+
+        foreach (var mode in new[]
+                 {
+                     ClusterMode.Hidden, ClusterMode.OwnShape,
+                     ClusterMode.WithChats, ClusterMode.Hidden, ClusterMode.WithChats
+                 })
+        {
+            handler(window, mode);
+            Assert.Equal(mode, read());
+        }
+    }
+
     [AvaloniaFact]
     public void TheClaudeCodeSwitchWritesItsOwnSetting() => Toggles(
         (w, v) => w.OnClaudeCodeEnabledToggled(v), () => ClaudeBuddySettings.ClaudeCodeEnabled);
@@ -79,10 +100,28 @@ public class SettingsWindowRowTests
     public void TheCodexReplySwitchWritesItsOwnSetting() => Toggles(
         (w, v) => w.OnCodexReplyToggled(v), () => ClaudeBuddySettings.CodexReplyEnabled);
 
+    // Like the colour switch below, this handler must stay a plain setting
+    // write. Its effect belongs to the *next* launch — the immediate version is
+    // the "Start the relay now" button — and a handler that called
+    // EnsureStarted would start a real relay under any test that flipped it.
     [AvaloniaFact]
-    public void TheHeartbeatSwitchWritesItsOwnSetting() => Toggles(
-        (w, v) => w.OnOpenClawHeartbeatsToggled(v),
-        () => ClaudeBuddySettings.OpenClawShowHeartbeats);
+    public void TheServeOnLaunchSwitchOnlyWritesItsSetting() => Toggles(
+        (w, v) => w.OnServeOnLaunchToggled(v),
+        () => ClaudeBuddySettings.RemoteControlServeOnLaunch);
+
+    // Not Toggles(), because these two are no longer switches: three answers
+    // do not fit in a boolean, which is the whole reason the setting changed
+    // shape. The handler is still the production one, driven through every
+    // value rather than only the two a switch could reach.
+    [AvaloniaFact]
+    public void TheHeartbeatModeRowWritesItsOwnSetting() => Cycles(
+        (w, v) => w.OnOpenClawHeartbeatModeChanged(v),
+        () => ClaudeBuddySettings.OpenClawHeartbeatMode);
+
+    [AvaloniaFact]
+    public void TheCronModeRowWritesItsOwnSetting() => Cycles(
+        (w, v) => w.OnOpenClawCronModeChanged(v),
+        () => ClaudeBuddySettings.OpenClawCronMode);
 
     // The colour switch deliberately does *not* re-wire anything, and that is
     // worth a test of its own rather than only a comment. An earlier version
@@ -136,9 +175,15 @@ public class SettingsWindowRowTests
             window.OnCodexEnabledToggled(on);
             window.OnCodexChatToggled(on);
             window.OnCodexReplyToggled(on);
-            window.OnOpenClawHeartbeatsToggled(on);
+            window.OnOpenClawHeartbeatModeChanged(on ? ClusterMode.OwnShape : ClusterMode.Hidden);
+            window.OnOpenClawCronModeChanged(on ? ClusterMode.Hidden : ClusterMode.OwnShape);
             window.OnAutoColorToggled(on);
         }
+
+        // Back to the default, because these two are process-wide and Hidden
+        // takes orbs off the screen for whatever runs next in the collection.
+        window.OnOpenClawHeartbeatModeChanged(ClusterMode.WithChats);
+        window.OnOpenClawCronModeChanged(ClusterMode.WithChats);
 
         // Nothing to assert beyond having got here: a rebuild that threw would
         // have taken the settings window down in the user's face, which is the

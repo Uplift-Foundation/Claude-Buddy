@@ -90,6 +90,27 @@ namespace ClaudeBuddy
         // noise.
         public string? Speaker { get; init; }
 
+        // Whether the person at this keyboard said it.
+        //
+        // Separate from the role, because the role cannot carry it. A message in
+        // a channel arrives in every member agent's transcript in the *user*
+        // role whoever sent it, so user-role means "not the agent this
+        // transcript belongs to" and nothing more — which is why a room used to
+        // draw everybody's messages as the room's own neutral voice rather than
+        // asserting one of them was yours.
+        //
+        // The panel needs no rule of its own for this: a turn kept at
+        // ChatRole.User with no Speaker is already what it draws blue and to the
+        // right, so a Mine turn is one and a turn from somebody else carries the
+        // Speaker that takes it back to the left. What this flag adds is
+        // something the *transcript* can be built from — a room deciding which
+        // of several identical-looking user turns to keep in your voice.
+        //
+        // Defaults false, which is the honest answer for every transport that
+        // does not know: a local CLI's transcript, where user-role really does
+        // mean you, sets it nowhere and loses nothing.
+        public bool Mine { get; init; }
+
         // That speaker's colour, as "#RRGGBB" — the same one their orb's ring
         // is drawn in, so the two are recognisably the same agent. Carried
         // rather than looked up because the panel deliberately knows nothing
@@ -168,6 +189,35 @@ namespace ClaudeBuddy
     public interface IRemoteChatComposer
     {
         string ComposerHint { get; }
+    }
+
+    // A session that cannot be typed into where it is, but can be *opened*
+    // somewhere it can be dealt with.
+    //
+    // One implementation, and the same reason the interfaces above are separate
+    // from IRemoteChatSession rather than on it: a transport with no such answer
+    // simply does not implement this, and the panel offers nothing. A gateway
+    // session has nowhere to be attached to; a background job has exactly one
+    // place, and until this existed the panel's advice for one was "reply in the
+    // terminal instead" — a terminal that does not exist, which is the whole
+    // reason a daemon runs the session.
+    public interface IRemoteChatElsewhere
+    {
+        // Whether the panel should offer it. Decided by the session rather than
+        // by the panel, because the rule is the click path's
+        // (ClickRouting.AttachWouldReach) and the panel has no business holding
+        // a second copy of it.
+        bool CanOpenElsewhere { get; }
+
+        // Fire and forget, like the click it shares its implementation with:
+        // opening a window is not something the panel waits on, and what arrives
+        // afterwards arrives through the ordinary scan.
+        //
+        // Deliberately the same destination as that click rather than a second
+        // one of its own — for a background session, the `claude agents` roster.
+        // One verb, one place: a panel that sent you somewhere else from where
+        // the orb sends you would be two answers to "where is this session".
+        void OpenElsewhere();
     }
 
     // A session where a pasted picture can actually go somewhere.

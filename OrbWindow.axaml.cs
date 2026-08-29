@@ -100,6 +100,11 @@ namespace ClaudeBuddy
         // can run at different rates without fighting over one transform.
         private readonly ScaleTransform _heartScale = new();
 
+        // The halo's own transform, used by nothing but Acknowledge below. Its own
+        // rather than shared with _orbScale because the two say different things:
+        // one is the session's breath, the other is this app answering a click.
+        private readonly ScaleTransform _glowScale = new();
+
         // Flat red rather than a fourth entry in OrbColors: this isn't a
         // session state Claude Code reports, it's purely local UI feedback
         // for "the mic is listening", so it has no reason to be user
@@ -162,6 +167,11 @@ namespace ClaudeBuddy
             Glow.Fill = _glowBrush;
             Orb.RenderTransform = _orbScale;
 
+            // Centred, so the acknowledgment halo expands evenly out of the orb
+            // rather than growing towards one corner.
+            Glow.RenderTransform = _glowScale;
+            Glow.RenderTransformOrigin = RelativePoint.Center;
+
             // Centred, so the beat grows the heart in place rather than pushing
             // it towards the orb's rim.
             HeartGlyph.RenderTransform = _heartScale;
@@ -180,7 +190,31 @@ namespace ClaudeBuddy
 
             // Unlike WPF, Loaded fires *after* the first UpdateFrom here, so
             // honor any state that already arrived instead of stomping it.
-            Loaded += (_, _) => ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
+            Loaded += (_, _) =>
+            {
+                ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
+
+                // ...and then take the breath straight back off a parked orb.
+                //
+                // Every arm of ApplyState calls StartPulse, unconditionally, and
+                // it has no idea about presence — so an orb whose *first* status
+                // was already parked was dimmed by ApplyPresence and then set
+                // breathing again by this handler a moment later. That is the
+                // shape the whole ticket started from ("fifteen breathing orbs on
+                // a machine with nothing running on it"), surviving in the one
+                // window where the order is guaranteed to produce it: the scan
+                // creates the orb, calls UpdateFrom, and shows it, so a session
+                // that is parked when its orb first appears took this path every
+                // single time.
+                //
+                // Re-asserted here rather than by teaching ApplyState about
+                // presence, and the same way StopRecording already hands the orb
+                // back: ApplyState answers "what is this session doing", which is
+                // a different question from "is anyone on the other end of it",
+                // and the two channels are kept separate everywhere else in this
+                // file.
+                if (_presence != OrbPresence.Present) ApplyPresence(_presence, force: true);
+            };
 
             Opened += (_, _) =>
             {
@@ -244,7 +278,18 @@ namespace ClaudeBuddy
                 ? name
                 : $"{status.Agent} · {label}";
 
+            // The presence word goes in the tooltip as well as on the badge,
+            // because a mark says *that* there is something and only a word says
+            // what. "needs input" is the daemon's own phrase for it, so the
+            // tooltip and `claude agents` agree rather than inventing a synonym.
+            var presenceWord = PresenceMarkFor(status.Presence)?.Label;
+
             var tipTitle = string.IsNullOrEmpty(described) ? SessionId : described;
+            if (presenceWord is not null)
+            {
+                tipTitle = tipTitle + " · " + presenceWord;
+            }
+
             var tipPath = string.IsNullOrEmpty(status.Cwd) ? null : status.Cwd;
             ToolTip.SetTip(Root, ThoughtBubble(tipTitle, tipPath));
 
@@ -286,6 +331,15 @@ namespace ClaudeBuddy
             SessionPathItem.IsVisible = !string.IsNullOrEmpty(status.Title)
                                         && !string.IsNullOrEmpty(status.Cwd);
 
+            // Which of the two lifecycle actions this session can be offered.
+            // Asked of SessionPresence rather than decided here, so the menu and
+            // the manager's own guards cannot disagree about what is possible —
+            // an item that is offered and then silently does nothing is worse
+            // than one that is not there.
+            AgentsViewItem.IsVisible = ClickRouting.OffersTheAgentsView(status);
+            DismissItem.IsVisible = SessionPresence.CanDismiss(status);
+            EndSessionItem.IsVisible = SessionPresence.CanEndSession(status);
+
             if (status.State != _lastState)
             {
                 _lastState = status.State;
@@ -299,7 +353,126 @@ namespace ClaudeBuddy
                 // whatever _lastState ends up being once dictation finishes,
                 // so a state change mid-recording isn't lost, just deferred.
             }
+
+            // Last, and after the state block above deliberately: parking is
+            // about stillness, and the state block is the thing that starts
+            // motion. Applied in the other order, an orb that parked and
+            // changed state in one update would be left breathing.
+            ApplyPresence(status.Presence);
         }
+
+        // --- presence ---------------------------------------------------------
+        // A third axis, beside identity and state. The orb's colour says which
+        // session this is, its fill says what that session is doing, and its
+        // opacity and stillness say whether anything is on the other end of it
+        // at all — a background job parked between turns, or a team member whose
+        // lead has gone. See SessionPresence for what counts as either.
+        //
+        // Dimmed and kept, rather than hidden. A parked job is real, resumable
+        // and worth clicking, and the user's own "Keep orbs for" setting is what
+        // decides how long a quiet session stays on screen; hiding one would
+        // trade "why are fifteen orbs breathing" for "where did my job go",
+        // which is the worse of the two questions because nothing on screen
+        // would answer it.
+
+        // Dim enough to read as background at a glance across a screen, light
+        // enough that the letter and the ring are still legible — the orb has to
+        // stay identifiable, because the whole point is that the user can find
+        // the parked job again.
+        private const double ParkedOpacity = 0.45;
+
+        private OrbPresence _presence = OrbPresence.Present;
+
+        // The two things a dimmed orb can be saying, and nothing for the two that
+        // have nothing to add.
+        //
+        // "?" for a job the daemon is holding for you: several of the ones this
+        // was written for are literally questions waiting on an answer, and a
+        // question mark is the one glyph nobody has to be taught. "✓" for a job
+        // that is over — the opposite instruction, and worth being unmistakable
+        // from across a screen, because the difference between "this wants you"
+        // and "this wants nothing ever again" is the whole of why they are two
+        // states rather than one dim one.
+        //
+        // Neither is a *kind*: the gear says what the session is and does not
+        // change while it runs. These are presence, they change under it, and
+        // they live in their own corner for exactly that reason.
+        private static (string Glyph, string Label)? PresenceMarkFor(OrbPresence presence) =>
+            presence switch
+            {
+                OrbPresence.NeedsInput => ("?", "needs input"),
+                OrbPresence.Finished => ("\u2713", "finished"),
+                _ => null
+            };
+
+        // What the chat panel and the tooltip say about presence, or null when
+        // there is nothing to say. Read the same way KindLabel is, so the two
+        // cannot disagree about one orb.
+        public string? PresenceLabel => PresenceMarkFor(_lastStatus?.Presence ?? OrbPresence.Present)?.Label;
+
+        // internal: driven directly by the UI suite, the same trade ApplyState
+        // documents — and worth asserting on its own, because the arms are not
+        // symmetrical.
+        //
+        // Deliberately not folded into ApplyState. That method is gated on the
+        // *state* having changed, and presence does not change it: a parked job's
+        // state is a truthful "idle" both before and after, so the gate would
+        // never fire and nothing would dim. Presence needs its own gate for
+        // exactly that reason.
+        //
+        // force is for a re-assertion the presence itself did not ask for — see
+        // StopRecording, which hands the orb's motion back after dictation and
+        // would otherwise leave a dimmed orb breathing. Same shape as
+        // ApplyAccent's force above and there for the same kind of reason.
+        internal void ApplyPresence(OrbPresence presence, bool force = false)
+        {
+            if (!force && _presence == presence) return;
+            _presence = presence;
+
+            var mark = PresenceMarkFor(presence);
+            if (mark is null)
+            {
+                PresenceBadge.IsVisible = false;
+            }
+            else
+            {
+                PresenceGlyph.Text = mark.Value.Glyph;
+                PresenceBadge.IsVisible = true;
+            }
+
+            if (presence != OrbPresence.Present)
+            {
+                Root.Opacity = ParkedOpacity;
+
+                // Off the shared roster as well as stopped. StopPulse alone
+                // leaves an orb on it when a heart is beating, which no local
+                // session has — but "no local orb has a heartbeat badge" is a
+                // fact about another feature, and a dimmed orb that kept being
+                // ticked would breathe again the moment that changed.
+                StopPulse();
+                Pulsing.Remove(this);
+                return;
+            }
+
+            Root.Opacity = 1.0;
+
+            // Back to whatever it was doing. Guarded exactly as UpdateFrom's
+            // state block is, and for the same two reasons: before Loaded there
+            // is no point (the Loaded handler applies _lastState anyway), and
+            // during dictation the mic owns the orb's colour and motion —
+            // StopRecording is what restores it, and this must not race that.
+            if (IsLoaded && !_recording)
+            {
+                ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
+            }
+        }
+
+        // How this orb is currently drawn. Read by the UI suite, and by nothing in
+        // the app — the answer lives in the status. There used to be an IsParked
+        // bool beside this; it went with the bool it was derived from, since
+        // "dimmed" is now three different statements and a test that only asked
+        // whether an orb was dim could not tell which one it was making.
+        internal OrbPresence Presence => _presence;
 
         // /color identifies *which* session; the fill keeps saying what it's
         // doing. An unknown or missing color name leaves the orb looking the
@@ -382,6 +555,20 @@ namespace ClaudeBuddy
             // learned-without-explaining as this one gets. The label says the
             // machine part, since the glyph can't.
             SessionKind.Remote => ("\u21C4", "another machine"),
+
+            // A gear, for a job the daemon runs with nobody on the other end.
+            // Machinery is the idea, which is as close as this gets to
+            // learned-without-explaining, and it is the one badge that says
+            // something about *this* machine rather than somewhere else.
+            //
+            // Worn by a working background job as well as a parked one. The
+            // badge channel says what a session is, which does not change while
+            // it runs; whether anything is happening in it rides the orb's
+            // opacity — see ApplyPresence. Badging only the parked ones would
+            // smuggle a state into the kind channel, and then two orbs of the
+            // same kind would carry different marks depending on what they were
+            // doing, which is what every other badge here avoids.
+            SessionKind.Background => ("\u2699", "background job"),
             _ => null
         };
 
@@ -482,6 +669,15 @@ namespace ClaudeBuddy
             HeartBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
             HeartGlyph.FontSize = 9 * scale;
             HeartBadge.Margin = new Thickness(0, Math.Max(0, inset), Math.Max(0, inset), 0);
+
+            // And mirrored once more into the corner this one lives in. Same sum
+            // because it is the same circle: a team member's orb is smaller, and
+            // a mark left at the full-size margin would float off its rim.
+            PresenceBadge.Width = PresenceBadge.Height = BadgeSize * scale;
+            PresenceBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
+            PresenceGlyph.FontSize = 9 * scale;
+            PresenceBadge.Margin = new Thickness(Math.Max(0, inset), Math.Max(0, inset), 0, 0);
+
             Glyph.FontSize = BaseGlyphFontSize * scale;
             OrbRadius = 18 * scale;
         }
@@ -861,6 +1057,14 @@ namespace ClaudeBuddy
         private double _pulsePeriodMs = 2200;
         private long _pulseStartedAt;
 
+        // Whether the *breath* is running, as distinct from whether this orb is on
+        // the shared roster. They used to be the same thing and are not any more:
+        // the click acknowledgment below borrows the roster for a quarter of a
+        // second on orbs that are deliberately held still, and a parked orb whose
+        // scale started swelling because it had been added to the ticker would be
+        // saying something about its state that is not true.
+        private bool _breathing;
+
         // Its own clock rather than the orb's, because the orb's period changes
         // with the session's state — and a heart that sped up when the agent
         // started working would be saying something this badge does not know.
@@ -874,6 +1078,7 @@ namespace ClaudeBuddy
             _pulseTo = to;
             _pulsePeriodMs = duration.TotalMilliseconds * 2;
             _pulseStartedAt = Environment.TickCount64;
+            _breathing = true;
 
             if (!Pulsing.Contains(this)) Pulsing.Add(this);
             EnsureTicker();
@@ -912,12 +1117,21 @@ namespace ClaudeBuddy
                 return;
             }
 
-            var phase = (Environment.TickCount64 - _pulseStartedAt) % _pulsePeriodMs / _pulsePeriodMs;
-            var eased = (1 - Math.Cos(phase * 2 * Math.PI)) / 2;   // 0 -> 1 -> 0, smooth at both ends
-            var scale = 1.0 + (_pulseTo - 1.0) * eased;
+            if (_ackStartedAt != 0) TickAcknowledgement();
 
-            _orbScale.ScaleX = scale;
-            _orbScale.ScaleY = scale;
+            // Only when the breath is actually running. An orb that is on the
+            // roster solely to finish an acknowledgment must not start swelling:
+            // scale is the state channel, and a parked orb that breathed for a
+            // quarter of a second would be claiming to have come back to life.
+            if (_breathing)
+            {
+                var phase = (Environment.TickCount64 - _pulseStartedAt) % _pulsePeriodMs / _pulsePeriodMs;
+                var eased = (1 - Math.Cos(phase * 2 * Math.PI)) / 2;   // 0 -> 1 -> 0, smooth at both ends
+                var scale = 1.0 + (_pulseTo - 1.0) * eased;
+
+                _orbScale.ScaleX = scale;
+                _orbScale.ScaleY = scale;
+            }
 
             if (HeartBadge.IsVisible) TickHeart();
         }
@@ -943,6 +1157,8 @@ namespace ClaudeBuddy
 
         private void StopPulse()
         {
+            _breathing = false;
+
             // Stays on the roster while the heart is beating. Every caller
             // currently follows this immediately with a StartPulse, so leaving
             // would be momentary — but a momentary stop is exactly what a
@@ -952,6 +1168,115 @@ namespace ClaudeBuddy
 
             _orbScale.ScaleX = _orbScale.ScaleY = 1.0;
         }
+
+        // --- "handled": the click that deliberately did nothing --------------
+
+        // A single outward halo, once, when a click resolved without creating
+        // anything.
+        //
+        // Round eight exists because round seven worked and nobody could tell.
+        // The click on an orb whose session was already on screen correctly did
+        // nothing at all — verified from outside the app: dispatch fired, the
+        // pane scan matched, no window was created — and the user's verdict was
+        // "still not working", because a silent success is indistinguishable from
+        // the broken clicks the whole ticket is about. Invisible success is
+        // failure, so the orb says it handled the gesture.
+        //
+        // Deliberately *not* the scale channel. Scale is the breath, which is
+        // this app's word for what a session is doing, and a swell on click would
+        // read as the session changing state — the one thing an acknowledgment
+        // must not imply, since nothing about the session changed. The glow's
+        // *size* is otherwise unused (its colour carries state, its scale carries
+        // nothing), so a halo that expands and fades is a free channel and reads
+        // as a ripple leaving the orb rather than as the orb doing something.
+        //
+        // On the shared ticker rather than an Avalonia animation or a timer of its
+        // own, for the reason the breath is: one ticker for every orb, and this
+        // borrows it for a quarter of a second. It is also the only reason
+        // _breathing exists — a parked orb is deliberately off the roster and has
+        // to be able to come back onto it for an acknowledgment without its held
+        // stillness being mistaken for a state change.
+        private const double AckMs = 280;
+        private const double AckHaloTo = 1.45;
+
+        private long _ackStartedAt;
+        private bool _ackBorrowedTheRoster;
+
+        // internal: reached in production from GoToSession's callback, off the
+        // click path, and driven directly by the UI suite for the same reason
+        // ApplyState and ApplyPresence are.
+        internal void Acknowledge()
+        {
+            // The mic owns the orb's colour and motion while it is recording, and
+            // StopRecording is what hands it back. Same guard as ApplyPresence's,
+            // and for the same reason: an acknowledgment that fought that would
+            // leave the orb mid-halo when dictation ended.
+            if (_recording) return;
+
+            _ackStartedAt = Environment.TickCount64;
+
+            if (!Pulsing.Contains(this))
+            {
+                Pulsing.Add(this);
+                _ackBorrowedTheRoster = true;
+            }
+
+            EnsureTicker();
+        }
+
+        // What GoToSession hands the focuser as its acknowledgment callback.
+        //
+        // A named method rather than a lambda at the call site, because the
+        // marshalling is the whole content of it and a lambda body there is
+        // reachable only by a real click resolving through TerminalFocuser — which
+        // this suite must never do, so it would be an uncovered line that looks
+        // like an oversight rather than the seam it is.
+        //
+        // Marshalled because Focus answers from a pool thread and this touches the
+        // orb's own visual tree.
+        internal void AcknowledgeFromAnyThread() => Dispatcher.UIThread.Post(Acknowledge);
+
+        // internal for the same reason TickPulse is: a headless test cannot wait
+        // for real frames, and driving the tick directly is how every other
+        // animation in this file is asserted.
+        internal void TickAcknowledgement()
+        {
+            var progress = (Environment.TickCount64 - _ackStartedAt) / AckMs;
+
+            if (progress >= 1.0)
+            {
+                EndAcknowledgement();
+                return;
+            }
+
+            // Out and away: the halo grows the whole time and fades the whole
+            // time, so the motion has one direction. A swell-and-return would be
+            // the breath's shape at a different speed, which is the confusion this
+            // whole channel exists to avoid.
+            _glowScale.ScaleX = _glowScale.ScaleY = 1.0 + (AckHaloTo - 1.0) * progress;
+            Glow.Opacity = 1.0 - progress;
+        }
+
+        private void EndAcknowledgement()
+        {
+            _ackStartedAt = 0;
+            _glowScale.ScaleX = _glowScale.ScaleY = 1.0;
+            Glow.Opacity = 1.0;
+
+            // Off the roster again if this put it there, following StopPulse's own
+            // rule about the heart: a beating badge keeps the orb on the ticker
+            // whatever else stops.
+            if (_ackBorrowedTheRoster && !_breathing && !HeartBadge.IsVisible)
+            {
+                Pulsing.Remove(this);
+            }
+
+            _ackBorrowedTheRoster = false;
+        }
+
+        // How the acknowledgment is drawn right now, for the UI suite. Nothing in
+        // the app reads it.
+        internal bool IsAcknowledging => _ackStartedAt != 0;
 
         // --- Voice dictation mic ---
         // Hover shows a small flyout window below the orb with action
@@ -1398,6 +1723,14 @@ namespace ClaudeBuddy
             // colour drawn over it.
             ApplyState(string.IsNullOrEmpty(_lastState) ? "idle" : _lastState);
 
+            // ...and back to still, if this orb is parked. The line above puts
+            // it on the pulse roster, which is right for every orb except a
+            // parked one — and ApplyPresence's own gate would decline, since
+            // nothing about the presence changed. Forced rather than reasoned
+            // around: the mic owns the orb's motion while it is recording, and
+            // this is where that ownership is handed back.
+            if (_presence != OrbPresence.Present) ApplyPresence(_presence, force: true);
+
             // The pointer is very likely still over the mic right after a
             // click, but the recording that was forcing the flyout to stay
             // up just ended — re-derive from where the pointer actually is
@@ -1705,12 +2038,31 @@ namespace ClaudeBuddy
         private int _pendingClicks;
         private int _clickCount = 1;
 
+        // How many clicks this orb last resolved, and how many gestures have
+        // reached that point at all. Written here and read by the UI suite, by
+        // nothing in the app.
+        //
+        // It exists because the two ways a click can come to nothing are
+        // indistinguishable from outside, and telling them apart is the whole of
+        // the team-orb bug this was added for: a gesture that was *eaten* before
+        // it ever became a click, and a gesture that arrived here and found
+        // "none" bound to it, both look exactly like an orb that ignored you.
+        // Every other observable is downstream of RunClickAction, so a test that
+        // asserts on one of those is asserting the destination and cannot say
+        // whether the journey started.
+        internal int ResolvedGestures { get; private set; }
+
+        internal int LastResolvedClicks { get; private set; }
+
         internal void OnClicked(int clicks)
         {
             // Beyond three there is nothing to bind, and treating a fourth click
             // as a fresh single would fire the single-click action in the middle
             // of somebody drumming on the orb.
             if (clicks > 3) return;
+
+            ResolvedGestures++;
+            LastResolvedClicks = clicks;
 
             _clickTimer?.Stop();
             _clickTimer = null;
@@ -1788,7 +2140,9 @@ namespace ClaudeBuddy
             TerminalFocuser.Focus(
                 _lastStatus,
                 SessionManager.Instance?.StatusFor(_lastStatus?.Lead),
-                SessionId);
+                SessionId,
+                SessionManager.Instance?.PaneClaimsByOthers(SessionId),
+                acknowledge: AcknowledgeFromAnyThread);
         }
 
         // Put the orb at a position it was dragged to in an earlier run, without
@@ -1808,6 +2162,20 @@ namespace ClaudeBuddy
             ResetPositionItem.IsVisible = pinned;
         }
 
+        // The roster, for a background orb that wants it. Delegates the same way
+        // the two lifecycle handlers below do: the orb knows which session was
+        // right-clicked and nothing else, and every rule about where a gesture
+        // goes lives in ClickRouting with the subprocesses in TerminalFocuser.
+        //
+        // Safe with no status yet — TerminalFocuser.OpenAgentsView returns on
+        // null — which matters because the menu is built before the first
+        // UpdateFrom, and a right-click during that window would otherwise be
+        // the one gesture that could throw.
+        internal void AgentsView_Click(object? sender, RoutedEventArgs e)
+        {
+            TerminalFocuser.OpenAgentsView(_lastStatus);
+        }
+
         internal void ResetIdle_Click(object? sender, RoutedEventArgs e)
         {
             SessionManager.Instance?.ResetSessionToIdle(SessionId);
@@ -1816,6 +2184,20 @@ namespace ClaudeBuddy
         internal void ResetPosition_Click(object? sender, RoutedEventArgs e)
         {
             SessionManager.Instance?.ReturnOrbToStack(SessionId);
+        }
+
+        // Both of these delegate rather than acting, the same way ResetIdle_Click
+        // does: the orb knows which session was right-clicked and nothing else,
+        // and every rule about what may be done to a session lives with the
+        // manager that owns its file and its pid.
+        internal void Dismiss_Click(object? sender, RoutedEventArgs e)
+        {
+            SessionManager.Instance?.DismissSession(SessionId);
+        }
+
+        internal void EndSession_Click(object? sender, RoutedEventArgs e)
+        {
+            SessionManager.Instance?.EndSession(SessionId);
         }
 
         // Excluded from coverage: needs SessionManager.Instance to hand back a

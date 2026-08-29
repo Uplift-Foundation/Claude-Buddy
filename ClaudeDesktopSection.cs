@@ -103,12 +103,29 @@ namespace ClaudeBuddy
             primary.Click += (_, _) => FocusOrLaunch(profile);
             submenu.Add(primary);
 
+            // The same item, retargeted rather than added to. When the profile
+            // itself is down but a window of its is stranded on Default, Quit
+            // has nothing of its own to act on and the stranded window is the
+            // only thing there is to do anything about — so the item takes it,
+            // and says so. Adding a fifth item instead would break the
+            // fixed-length rule three lines above, and for a state that is
+            // usually absent it would make the menu jump precisely when
+            // something is already wrong.
+            //
+            // Never automatic. Quit is a real Apple Event and can be refused by
+            // unsaved work or a live Cowork session, and this window is one the
+            // user may well be typing in — it is signed into their Default
+            // account and working, just not as the profile they asked for.
+            // Deciding that for them is not this app's call.
+            var stranded = !profile.IsRunning && profile.OrphanPid != 0;
             var offerForce = profile.Activity == ProfileActivity.ForceQuitOffered;
-            var quit = new NativeMenuItem(offerForce ? "Force quit" : "Quit")
+            var quit = new NativeMenuItem(
+                stranded ? "Quit the window on Default" : offerForce ? "Force quit" : "Quit")
             {
-                IsEnabled = profile.IsRunning && profile.Activity != ProfileActivity.Quitting
+                IsEnabled = stranded
+                            || profile.IsRunning && profile.Activity != ProfileActivity.Quitting
             };
-            quit.Click += (_, _) => QuitOrForceQuit(profile, offerForce);
+            quit.Click += (_, _) => QuitStrandedOrProfile(profile, stranded, offerForce);
             submenu.Add(quit);
 
             submenu.Add(BuildThemeItem(profile));
@@ -146,9 +163,10 @@ namespace ClaudeBuddy
         }
 
         [ExcludeFromCodeCoverage]
-        private static void QuitOrForceQuit(ProfileView profile, bool offerForce)
+        private static void QuitStrandedOrProfile(ProfileView profile, bool stranded, bool offerForce)
         {
-            if (offerForce) ClaudeDesktopManager.ForceQuit(profile);
+            if (stranded) ClaudeDesktopManager.QuitStranded(profile);
+            else if (offerForce) ClaudeDesktopManager.ForceQuit(profile);
             else ClaudeDesktopManager.Quit(profile);
         }
 
@@ -240,6 +258,23 @@ namespace ClaudeBuddy
             if (suffix.Length == 0 && profile.InstanceCount > 1)
             {
                 suffix = $"   ⚠ {profile.InstanceCount} instances — quit one";
+            }
+
+            // A window wearing this profile's colour while using Default's
+            // account. Claude Desktop's updater is what usually does it — see
+            // ClaudeDesktopManager.OrphanedCloneFolder — but a Dock launch of
+            // the clone looks identical from outside, so the text says what is
+            // true rather than what probably happened. "on Default" is the part
+            // a user can check against the window in front of them; naming the
+            // updater would be a guess, and a wrong one often enough to matter.
+            //
+            // Ranked below the duplicate warning deliberately: two processes on
+            // one directory is corrupting data right now, while this is one
+            // process on the wrong account. Both at once is possible and the
+            // worse one should be the one on screen.
+            if (suffix.Length == 0 && profile.OrphanPid != 0)
+            {
+                suffix = "   ⚠ a window is on Default";
             }
 
             return $"{Truncate(profile.DisplayName)}{suffix}";

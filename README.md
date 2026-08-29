@@ -25,8 +25,13 @@ generates once there's enough conversation to summarize, else the working
 directory's name. A `/rename` wins even if Claude Code has since re-titled
 the session, and the letter changes over as soon as a name appears — so two
 sessions in one repo stop looking identical. Hover for the name and the full
-path; the right-click menu leads with both (plus reset that session to idle /
-exit Claude Buddy entirely).
+path; the right-click menu leads with both, then offers to reset that session
+to idle, **dismiss the orb** (removes it from screen by deleting its status
+file — the session itself carries on, and its next hook event puts the orb
+back), **end the session** (sends its `claude` process a polite terminate;
+deliberate, irreversible, and never automatic), or exit Claude Buddy entirely.
+The last two only appear for a session this app can actually act on: a local
+CLI session for dismiss, and one whose pid was recorded for end.
 
 Turn on **Two-letter initials** in Settings for a wider glyph: one letter
 from each of the first two words of that same name (`Menu UX` → `Mu`), or
@@ -117,6 +122,12 @@ agent hasn't run `/color` itself; it is not the automatic accent described
 above, which really is nowhere on disk.
 Sessions that aren't in a team are completely unaffected: no arrow, full-size
 orb, nothing read that wasn't already being read.
+
+A team member whose lead has gone is **dimmed** rather than drawn as though it
+were still part of something: its arrow has nowhere to point, and a full-bright
+orb in a group whose lead has ended says the team is still running. It stays
+clickable, and clicking it still goes somewhere — see **Background jobs and
+parked sessions** below for what "dimmed" means and what the click does.
 
 Team orbs obey **"Keep orbs for"** like everything else. An agent that has
 finished its work goes quiet, and a quiet session fires no hooks, so its file
@@ -243,20 +254,27 @@ Details worth knowing:
   Items it gets the bare system `PATH`, with no Homebrew in it — so the hook
   records the tmux binary's location, with the usual install paths as
   fallbacks.
-- **The Claude Desktop profile switcher is macOS-only today — but not, as this
-  file previously claimed, impossible on Windows.** There, Claude Desktop installs
-  as an **MSIX package** (`C:\Program Files\WindowsApps\Claude_...`, ACL'd so the
-  payload is readable but not executable). All of the following was measured on a
-  real Windows 11 box:
-  - **The app itself supports profiles.** The Windows build honors
-    `CLAUDE_USER_DATA_DIR` exactly as macOS does — it's the same branch in the
-    same bundle, with no platform guard:
+- **The Claude Desktop profile switcher ships on Windows too.** It was macOS-only
+  when this file first described it, and two revisions of this bullet have since
+  been overtaken — first by the Windows port landing, then by the mechanism
+  changing underneath both platforms. What follows is what is true now; the
+  measurements below were taken on a real Windows 11 box and still stand. There,
+  Claude Desktop installs as an **MSIX package** (`C:\Program
+  Files\WindowsApps\Claude_...`, ACL'd so the payload is readable but not
+  executable).
+  - **The app itself supports profiles**, and the same startup branch is present
+    in the Windows bundle with no platform guard:
     ```js
     if (process.env.CLAUDE_USER_DATA_DIR) {
       const A = process.env.CLAUDE_USER_DATA_DIR;
       app.setPath("userData", A); app.setPath("logs", resolve(A, "Logs"));
     }
     ```
+    Present is not the same as reached: on the builds measured for the section
+    above, setting the variable no longer changes where macOS writes, and this
+    app stopped depending on it on either platform. Note what that branch does
+    with `logs` — moving them was the *variable's* doing, which is why they stay
+    put now.
   - **The environment variable is the wrong lever on Windows.** Package
     activation doesn't inherit the launching process's environment (probe
     directory created, stayed empty), and setting it as a *user* environment
@@ -293,13 +311,14 @@ Details worth knowing:
   - **Icons can't be tinted.** No Dock, and the taskbar icon comes from the signed
     package, so the APFS-clone trick has no analogue.
 
-  What does port cleanly, and what Windows gets today: session orbs, the tray icon
-  and menu, click-to-focus, chat names and colours, the settings window, and
-  persisted settings under `%APPDATA%\ClaudeBuddy`. The profile section simply
-  doesn't appear. One thing that *would* work if the mechanism were ever
-  reachable: profile detection, since Electron's `crashpad-handler` child carries
-  `--user-data-dir=` in its command line and `Win32_Process` exposes `CommandLine`
-  — the equivalent of `KERN_PROCARGS2` on macOS, with no memory reading needed.
+  What Windows gets today: session orbs, the tray icon and menu, click-to-focus,
+  chat names and colours, the settings window, persisted settings under
+  `%APPDATA%\ClaudeBuddy`, **and the profile section** — `LaunchWindows` passes
+  `--user-data-dir` through `ActivateApplication`, and `WindowsProcessScan` reads
+  it back off `Win32_Process.CommandLine`, the equivalent of `KERN_PROCARGS2` on
+  macOS with no memory reading needed. What does *not* port is the tinted Dock
+  icon, for the reason above, and the LaunchServices URL routing, which has no
+  Windows analogue to work around.
 - **WSL + tmux is not covered.** The Windows hook is PowerShell running
   outside the Linux environment, so it never sees `$TMUX`; clicks on those
   orbs behave as they always have (activate the terminal window).
@@ -318,8 +337,11 @@ surface, since with zero sessions there are no orbs to right-click:
   tracked, so the icon and menu stay live. Remembered across relaunches, along
   with everything else in the settings window.
 - **Reset all sessions to idle** — the bulk version of an orb's
-  right-click reset, for clearing out orbs left behind by Ctrl+C'd sessions
-  (see the pruning note below).
+  right-click reset, for an orb whose process is alive but whose colour is
+  stuck. It used to be the tool for clearing up after Ctrl+C'd sessions as
+  well; that part is now largely automatic, because a session whose process
+  has gone loses its orb on the next scan and its leftover file a few minutes
+  later (rules 3 and 5 under pruning below).
 - **Settings…** — a small preferences window, grouped the way macOS groups
   its own: **Orbs** (show them at all, and **"Keep orbs for"** — 1 minute
   through 4 hours, or **Forever**, covered under pruning below), **Orb
@@ -557,8 +579,10 @@ by side, each signed into a different Anthropic account. Claude Desktop signs
 into one account at a time and keeps that login in its user-data directory
 (`Cookies` → `sessionKey`, `config.json` → `oauth:tokenCache`) rather than the
 Keychain, so a second account is a second directory — selected with
-`CLAUDE_USER_DATA_DIR`, which the app honors, and it takes no single-instance
-lock, so the instances genuinely coexist.
+Chromium's `--user-data-dir` switch, and it takes no single-instance lock, so
+the instances genuinely coexist. (`CLAUDE_USER_DATA_DIR` is passed alongside it
+and used to be the whole mechanism; Claude Desktop 1.34493.1 ignores it, which
+is why the switch is now what actually decides. See the notes below.)
 
 Profiles are **discovered from disk**, not configured: any directory in
 `~/Library/Application Support` named `Claude` or `Claude-<something>` that
@@ -626,17 +650,48 @@ Details worth knowing:
   launched instance reads and writes — offering it as a profile would point a
   second Chromium at a directory the running app is already using, and
   concurrent access to one user-data directory corrupts leveldb and SQLite.
-- **Default is launched differently, on purpose** — plain `open -n -b`, with no
-  `CLAUDE_USER_DATA_DIR`. Setting the variable suppresses the app's own
+- **A profile is selected by two things, and only one of them still works.**
+  Every created profile is launched with both `--env
+  CLAUDE_USER_DATA_DIR=<dir>` and `--args --user-data-dir=<dir>`. The variable
+  is what Claude Desktop's own JavaScript reads, and **1.34493.1 ignores it**:
+  an instance launched with it pointed at an empty scratch directory left that
+  directory empty and opened 45 files under `~/Library/Application
+  Support/Claude` instead. Measured with `lsof`, against the installed bundle
+  rather than a tinted clone. That is what "it opens the same profile twice"
+  was — every row launched a second Chromium onto Default, which is also the
+  concurrent-leveldb hazard this feature exists to prevent.
+  `--user-data-dir` is Chromium's own switch, handled inside the Electron
+  framework rather than in Claude Desktop's JavaScript, so it still works;
+  Windows has passed it since the port. Both are sent, so a build honouring
+  either lands in the right place, and `--args` goes last because `open(1)`
+  hands everything after it to the application untouched.
+- **Default is launched differently, on purpose** — plain `open -n -a <path>`,
+  with neither selector. Pointing either at the app's own default directory is
+  not the same thing to it as omitting them: it suppresses the app's own
   resolution of that sidecar directory, so a tray launch could re-trigger the
-  enterprise deployment-mode chooser on an already-configured profile, and it
-  would start a second log history under `Claude/Logs/`. One consequence:
-  Default's logs are at `~/Library/Logs/Claude`, everyone else's are at
-  `<profile>/Logs`, and Reveal logs knows the difference.
+  enterprise deployment-mode chooser on an already-configured profile. (This
+  used to add "and it would start a second log history under `Claude/Logs/`",
+  which was true while the variable was the mechanism and is not true now —
+  see the next bullet.)
+- **Reveal logs picks by recency, because no fixed answer is right.** Logs used
+  to follow the profile — but only because `CLAUDE_USER_DATA_DIR` moved them by
+  hand, in Claude Desktop's own JavaScript. `--user-data-dir` is Chromium's
+  switch and sets userData only, so on a current build every profile's logs stay
+  at `~/Library/Logs/Claude` while the `<profile>/Logs` directory left over from
+  when the variable worked sits there looking correct and weeks stale. Reveal
+  logs therefore opens whichever of the two was *written to* most recently,
+  which needs no opinion about which Desktop build is installed and is the
+  question you were asking anyway.
 - **Running instances are detected by scanning processes, not by tracking the
   ones we launched** — `proc_listallpids` + `proc_pidpath` to find Claude
   Desktop main processes, then `sysctl KERN_PROCARGS2` to read
-  `CLAUDE_USER_DATA_DIR` out of each one's environment. So an instance you
+  `--user-data-dir` off each one's command line, falling back to
+  `CLAUDE_USER_DATA_DIR` in its environment — which is right on a Claude Desktop
+  build that still honours the variable, and a misreport on one that doesn't:
+  there, an instance carrying only the variable is really on Default, and
+  reading it as the profile's hides a second Chromium on Default rather than
+  counting it. Nothing in argv distinguishes the two cases, so this is a known
+  cost of keeping the fallback, not an oversight. So an instance you
   started from the Dock shows up too, and the state survives restarting Claude
   Buddy. (Not `ps eww`: it prints the environment space-separated, and every
   profile path contains a space — `Application Support` — so its output can't
@@ -699,7 +754,7 @@ containing `{"state": "...", "cwd": "...", "title": "...", "color": "...", ...}`
 `ClaudeBuddyHook.sh` (bash, macOS). No network calls, no polling of Claude
 Code itself, no persistent process beyond the hook calls themselves.
 
-An orb goes away when any of four things happens.
+An orb goes away when any of six things happens.
 
 1. **Its `SessionEnd` hook fires** — a clean exit like `/exit` — which deletes
    the status file outright.
@@ -732,6 +787,54 @@ An orb goes away when any of four things happens.
    is what keeps a Ctrl+C'd prompt — or a `/clear`ed one — from sitting on
    screen forever.
 
+5. **You dismissed it** — right-click → "Dismiss this orb", which deletes the
+   status file the way rule 1 does. Not permanent by nature: the session is
+   untouched, so its next hook event writes the file again and the orb comes
+   back. That is the point of it being separate from "End this session", which
+   stops the process and takes the orb with it through rule 3.
+
+6. **Its turn was backgrounded.** Backgrounding a running turn forks the
+   conversation into a background job — the fork takes the title, gets its own
+   session id and its own status file, and wears the gear-badged orb — while
+   the interactive session it forked from never fires another hook: no `Stop`
+   event ends the turn it handed away. Its file freezes on `generating` with a
+   live pid and a real terminal, so rules 2, 3 and 4 all wave it through and
+   the same conversation draws two orbs, one of them a lie no hook will ever
+   correct. Every scan therefore reads the last 32KB of such a session's own
+   transcript, and a handoff marker with nothing conversational after it takes
+   the leftover orb. It comes straight back the moment anyone types in that
+   session again — the transcript grows and the marker stops being the last
+   word — and a transcript that can't be read takes nothing, so the failure
+   direction is a duplicate orb rather than a hidden session. A session the
+   daemon lists as a running job is never asked at all, which is what stops
+   the fork (whose transcript inherits the marker) from reading itself as the
+   leftover.
+
+**The app also deletes status files it is sure are finished with.** Until
+recently nothing did, apart from the `SessionEnd` hook — so a Ctrl+C'd session's
+file stayed in the temp directory for good, and a finished background job's
+stayed *and could never be caught*, because the pooled worker behind it is kept
+alive on purpose and so its pid answers forever. Directories with dozens of them
+were normal. Every scan now looks for the three facts that mean a session is
+genuinely over — **its process has exited**, **the daemon says its job is
+done**, or **its own transcript records the turn being handed to a background
+job with nothing having happened since** — and deletes the file about ten
+minutes after it first sees one. The third is the only one of them that deletes
+a file whose process is still alive, and what makes that safe is particular to
+it: the conversation fires its hooks under the fork's session id now, so
+nothing will ever write that file again. If the interactive session is used
+after all, its next hook event writes it back from scratch, exactly as after a
+dismissal.
+
+The ten minutes is a grace period, not a delay for tidiness: the evidence can be
+briefly wrong (a pid that could not be read for a moment, a job reported done
+just before it is resumed), and the clock restarts the instant the evidence goes
+away. Nothing else counts as evidence — not a quiet session, not one whose orb
+was pruned by "Keep orbs for", not one nothing could be clicked through to. Those
+are statements about what this app can *see*, and a status file is the only place
+a live session's terminal coordinates and colour live. If the app does delete one
+it should not have, the session's next hook event writes it back.
+
 Right-click → "Reset this session to idle" is still there for a session whose
 process is alive but whose orb is stuck amber.
 
@@ -749,6 +852,44 @@ Settings window (see below) all reach every WSL distro's *default* Linux user
 automatically. A second Linux user account inside the same distro is the one
 combination left unwired, since that needs hooks added inside *their* account
 specifically — the "By hand" section further down still covers that case.
+
+## Background jobs and parked sessions
+
+Claude Code can run work with nobody sitting in front of it: a background job
+(`claude bg-...`, or one dispatched from `claude agents`) runs inside a pooled
+worker with no terminal of its own. Those sessions fire the same hooks as any
+other, so they have always had orbs — and until recently they were drawn
+identically to a session someone was typing in. Fifteen orbs breathing away on a
+machine whose owner considered it idle is what prompted this section.
+
+Three things now say what they are.
+
+- **A gear badge (⚙)**, bottom-right, the same slot the `⇄` badge uses for a
+  session on another machine. It marks a background job whether or not anything
+  is happening in it: the badge says what a session *is*, and that does not
+  change while it runs.
+- **Dimming.** A job sitting between turns — its worker alive and resumable,
+  nothing in flight — is drawn at reduced opacity and stops breathing. So is a
+  team member whose lead has gone. The orb keeps its colour and its letters, so
+  you can still find it; it just stops claiming to be busy. Work resuming
+  restores it on the next scan, which is about two seconds.
+- **Clicking one opens it.** There is no window to jump to, so the click runs
+  `claude attach` on that session in a terminal instead. A team member whose
+  pane is alive in a tmux server nothing is attached to gets a terminal attached
+  to that server, landing on its pane. Both are macOS only for now.
+
+Where "between turns" comes from: `claude agents --json`, which the app already
+asks about once per scan at most, and only when something on the machine could
+be a background session — a machine running nothing but terminal sessions never
+pays for the question. The daemon's answer is cached for about ten seconds, so
+an orb can take that long to go dim; going *bright* again is immediate, because
+the session's own status file reports the new state instantly and the app
+believes the fresher of the two. An orb that is late to dim says nothing is
+happening a few seconds after it stopped; an orb that was late to brighten would
+be a lie about work you are watching happen.
+
+Nothing here hides an orb. A parked job is real, resumable and worth clicking,
+and how long a quiet session stays on screen is what **"Keep orbs for"** is for.
 
 ## Chatting with a session from its orb
 
@@ -845,9 +986,34 @@ wakes each agent on a timer to do background work, and it does that in the
 agent's *own main session* — so on a gateway with several agents, that many orbs
 go active together every few minutes with nobody on the other end. Without the
 heart they read as somebody waiting for you; with it, the motion says the thing
-on the other end is a clock. **Show heartbeat sessions** turns those orbs off
-entirely if you would rather not have them, and the agents keep their colours in
-any channel they are in either way.
+on the other end is a clock.
+
+**Heartbeat sessions** and **Cron sessions** each decide what those timer-driven
+orbs do, and there are three answers rather than two:
+
+| | |
+| --- | --- |
+| **Hidden** | No orb at all. |
+| **With the chats** | An orb, gathered into the same shape as everything else when you press the arrange button. The default, and what the app has always done. |
+| **Own shape** | An orb, gathered into a shape of its own, drawn beside your conversations rather than among them. |
+
+Set both to *Own shape* and the arrange button draws three patterns side by side
+— your chats, the heartbeats, the crons — each with its own entry in Settings
+picking from the same six shapes. Leave both alone and it is one shape, exactly
+as before. The agents keep their colours in any channel they are in whichever you
+pick.
+
+The shapes sit beside each other rather than anywhere you place them
+individually: each gets a share of the screen in proportion to how many orbs it
+is holding, they are drawn as one group centred on wherever you last dragged the
+arrangement, and dragging it moves all of them together. Two shapes cannot be
+drawn on top of each other, which is the reason it works that way rather than by
+giving each shape its own position to lose.
+
+An upgrade changes nothing on screen. If you had turned the old **Show heartbeat
+sessions** switch off, that becomes *Hidden*; on — or never touched — becomes
+*With the chats*. Crons had no setting before this and always joined the one
+shape, which is what *With the chats* means.
 
 The heart marks **where a heartbeat lands**, not which individual turns were
 one — the gateway does not report heartbeats at all, and its own Control UI
@@ -920,8 +1086,16 @@ Turn it on in **Settings → Other machines**, then:
   profiles** first.
 - **Stop the relay after** — how long it may sit unused before shutting down. It
   starts again by itself the next time you open or send to a remote session.
+- **Start the relay when Claude Buddy starts** — for the machine nobody is
+  sitting at. The live view below is *served* by the Buddy on the other
+  machine, and until this switch existed that Buddy's relay could only be
+  started by a hand on that machine — a headless Mac in a cupboard could never
+  serve its sessions unattended. Switch it on there (usually together with
+  **Stop the relay after: Never**), and the relay comes up with the app. Both
+  are plain keys in `settings.json`, so an SSH session and an app relaunch is
+  enough to manage a machine you can't see.
 
-Nothing starts merely because the switch is on. Use **Connect to other
+Nothing else starts merely because the switch is on. Use **Connect to other
 machines** in the tray menu, or the button in Settings, or just open a remote
 session's chat — any of those brings the relay up, and orbs for the sessions it
 can see appear a few seconds later, badged `⇄`.
@@ -1520,11 +1694,15 @@ signed build.
   but what matters at runtime is the *alpha* channel of `Assets/tray-*.png`:
   each is a single colour over an alpha mask, which is what makes an exact
   re-tint possible — redrawing the ring in C# instead would change its shape.
-- **When an orb goes away**: `SessionManager.ScanAndUpdate()` has all four rules
+- **When an orb goes away**: `SessionManager.ScanAndUpdate()` has all five rules
   in order — superseded-session-id (`Superseded()`, newest file wins per
   `session_pid`), then process-gone (`ProcessLiveness.IsRunning`, a
   `kill(pid, 0)` on Unix and `Process.GetProcessById` on Windows), then the
-  `waiting` exemption, then the lifetime timer. The scan reads every status file
+  backgrounded-husk test (`TranscriptHandoff.EndsBackgrounded`, gated by
+  `SessionPresence.CouldBeABackgroundedHusk` so only a session the daemon does
+  not vouch for pays the stat), then the `waiting` exemption, then the lifetime
+  timer. The husk test sits *above* the `waiting` exemption deliberately: a husk
+  frozen on `waiting` is not waiting on anyone. The scan reads every status file
   into a `ScanEntry` list *before* judging any of them, because `Superseded`
   needs to compare files against each other; that pre-pass is also where the
   mtime the timer uses comes from, so it's read once per file per scan rather

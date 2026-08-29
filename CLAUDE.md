@@ -125,10 +125,37 @@ comment is what everyone reviews.
 
 The PM agent reviews that comment — **both** rids, since a macOS-only
 implementation shows itself precisely there — and **if it can approve the
-feature as done autonomously, it should**, moving the ticket accordingly.
+feature as done autonomously, it should**: approving the PR itself, and moving
+the ticket accordingly.
 
-If it cannot, it asks a human to pull the branch, install it and approve by
-hand:
+**Approving is the agent's own call, not a checkpoint to hand back.** An agent
+that has read both rids, can point at the tests covering the change and can say
+what it confirmed on a real machine is holding everything a human reviewer would
+be handed — asking a person to look anyway is the "checkpoint out of habit" this
+file already warns against, and it costs a round trip to be told what the agent
+already knew. So approve it:
+
+```bash
+gh pr review <number> --repo Uplift-Foundation/Claude-Buddy --approve --body "..."
+```
+
+The body is the part that matters, and it is the same distinction the rest of
+this file keeps: name both rids, say which suites ran, and separate what was
+confirmed on a machine from what is assumed. "LGTM" from an agent is worth
+nothing to the next person; "routing verified end to end on a real Mac, Windows
+not reproduced and not fixed" is worth the whole review.
+
+GitHub refuses an approving review on a PR the same account opened, which is the
+common case here since one person's token opens and reviews it. That is a
+mechanical limit, not a reason to escalate — post the identical body as a review
+comment instead. The written record is the point, not the green tick.
+
+Approving is not the same as landing it. The ticket moves to Done when the
+change is actually on `develop`, so an approved-but-unmerged PR stays in Testing
+until the merge goes through.
+
+Only where the agent genuinely cannot approve does it ask a human to pull the
+branch, install it and approve by hand:
 
 - **If someone is driving the feature in Claude Code**, ask them in the terminal.
   They are already there and the round trip costs seconds.
@@ -494,6 +521,46 @@ written to disk most obviously (`ClaudeDesktopBundles.WriteTinted`, whose pixel
 maths is tested there for exactly this reason). Leaving it out meant those lines
 were verified and counted nowhere, which is the same invisible-verification
 problem the console suites had.
+
+**Before quoting a number, check the run actually produced one.** Two of the
+three times a coverage figure has been wrong here, it was not wrong about the
+code — the run had not measured what it claimed to, and said so on a line
+nobody read. Both checks below cost seconds and each has already cost hours by
+being skipped.
+
+**`merged N report(s)` is the first line of the output, and it is a
+self-check.** There are exactly four cobertura files, for the reasons above, so
+**anything other than `merged 4` means the number printed underneath it is
+fiction.** Both directions have been seen live, within one afternoon on CB-6:
+
+- `merged 1` — three reports missing, because another agent working in the same
+  clone ran `rm -rf bin obj tests/*/bin tests/*/obj` while this one was
+  measuring. The binaries the report maps against were deleted underneath it.
+- `merged 6` — two stale extras, left in the MTP suites' own `TestResults`
+  directories from an earlier run. `coverage.sh` fishes reports out of there and
+  does not clear it first, so an old one is simply merged in alongside.
+
+**"Quiet tree" means the process table, not the working tree.** `git status`
+being clean proves nothing about what is running; neither does an agent roster
+that looks idle, because an agent between tool calls is indistinguishable from
+one mid-`dotnet test`. Check `pgrep -fl "dotnet|coverage.sh|testhost"` for a
+test host, a `dotnet test` or a second `coverage.sh`, then rebuild clean. **A
+number taken while anything else was building does not leave the session that
+took it.**
+
+The failure this catches is worth recognising by sight, because it does not
+look like a measurement error — it looks like a regression. On CB-6 a phantom
+`56/60 = 93.3%` branch figure was reported as a real drop, sent back to an
+engineer as work, and never reproduced: six later runs all gave `56/56 =
+100%`. What gave it away was reading the lines it named as uncovered. Two were
+**closing braces** and one was a range-slice assignment — none of which can
+hold a branch in the source at all. Branch arms attributed to punctuation is the
+signature of a report mapped against a binary that is stale or no longer there,
+and it is quicker to spot than to re-run.
+
+That is now three documented cases of an unreproducible number in this file,
+and only one of them was the code's fault. The next one will also read as a
+regression. Check `merged 4` and the process table first.
 
 Four things the number does not say, worth remembering before quoting it:
 

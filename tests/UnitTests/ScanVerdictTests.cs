@@ -16,16 +16,16 @@ namespace ClaudeBuddy.Tests;
 // wrong answer here is either an orb that is a dead click or a live session
 // with nothing on screen, and neither announces itself.
 //
-// isRunning and isLiveJob are the two seams: the real ones are a kill(2)
-// against a pid this machine may not have and a shell-out to
-// `claude agents --json`. Passing them in is what makes the rules answerable
-// without either — the same reasoning Superseded's own comment records.
+// isRunning and transcriptExists are the two seams: the real ones are a
+// kill(2) against a pid this machine may not have and a stat(2) against its
+// disk. Passing them in is what makes the rules answerable without either —
+// the same reasoning Superseded's own comment records. The daemon's answer
+// arrives as a JobPhase value rather than a seam: the scan decides it once
+// per pass and hands it in.
 public class ScanVerdictTests
 {
     private static readonly Func<int, bool> AllAlive = _ => true;
     private static readonly Func<int, bool> AllDead = _ => false;
-    private static readonly Func<string, bool> NoLiveJobs = _ => false;
-    private static readonly Func<string, bool> EveryIdIsALiveJob = _ => true;
 
     private static readonly HashSet<string> Nothing = new(StringComparer.Ordinal);
 
@@ -48,23 +48,59 @@ public class ScanVerdictTests
             Tty = "/dev/ttys004",
         };
 
+    // handedToBackground defaults to "the transcript says nothing", so every
+    // case written before the Backgrounded verdict existed still asks what it
+    // was asking — the same convention Reachability's transcriptExists keeps.
     private static SessionManager.ScanVerdict Liveness(
         SessionStatus status,
         TimeSpan? staleAfter = null,
         DateTime? written = null,
         ISet<string>? superseded = null,
-        Func<int, bool>? isRunning = null) =>
+        Func<int, bool>? isRunning = null,
+        Func<bool>? handedToBackground = null) =>
         SessionManager.JudgeLiveness(
             "session-1", status, written ?? Now, Now, staleAfter,
-            superseded ?? Nothing, isRunning ?? AllAlive);
+            superseded ?? Nothing, isRunning ?? AllAlive,
+            handedToBackground ?? (() => false));
 
+    // phase is what the daemon said, where this used to take a closure that
+    // reduced the same answer to a bool. The default is NotAJob — the only answer
+    // that rules a session out — so a test that says nothing about the daemon is
+    // asking the strictest version of each rule.
+    //
+    // transcriptExists defaults to "the transcript is there", so every case
+    // written before the NothingToShow rule existed still asks what it was
+    // asking. A status with no TranscriptPath at all cannot reach that rule
+    // anyway — which is most of them below, and is the conservative half of the
+    // rule rather than an accident of the fixtures.
     private static SessionManager.ScanVerdict Reachability(
         SessionStatus status,
         ISet<string>? leads = null,
-        Func<string, bool>? isLiveJob = null,
-        string sessionId = "session-1") =>
+        JobPhase phase = JobPhase.NotAJob,
+        string sessionId = "session-1",
+        Func<string, bool>? transcriptExists = null) =>
         SessionManager.JudgeReachability(
-            sessionId, status, leads ?? Nothing, isLiveJob ?? NoLiveJobs);
+            sessionId, status, leads ?? Nothing, phase,
+            transcriptExists ?? TranscriptIsThere);
+
+    private static readonly Func<string, bool> TranscriptIsThere = _ => true;
+    private static readonly Func<string, bool> TranscriptIsGone = _ => false;
+
+    // The shape CB-9 was filed for: a background job with no terminal of its
+    // own, live in the daemon's listing, naming a transcript that was never
+    // written. Everything about it is real — this is job "evidence" off a real
+    // machine, `state: blocked`, `needs: send a prompt to start`.
+    private static SessionStatus UnpromptedJob(
+        SessionSource source = SessionSource.ClaudeCode,
+        string transcriptPath =
+            "/Users/x/.claude/projects/-Users-x-Evidence/0e043819.jsonl") =>
+        new()
+        {
+            Source = source,
+            State = "idle",
+            SessionPid = 57319,
+            TranscriptPath = transcriptPath,
+        };
 
     // --- JudgeLiveness -------------------------------------------------------
 
@@ -173,13 +209,75 @@ public class ScanVerdictTests
             Liveness(Healthy(SessionSource.OpenClaw, pid: 0), staleAfter, old));
     }
 
+    // --- JudgeLiveness: the backgrounded husk (see TranscriptHandoff) --------
+
+    [Fact]
+    public void AHandedOffTurnCostsTheHuskItsOrb()
+    {
+        // The duplicate-orb bug in one line: the husk is healthy by every other
+        // measure — live process, real terminal, file written a moment ago —
+        // and the only thing wrong with it is what its own transcript says.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Backgrounded,
+            Liveness(Healthy(state: "generating"), handedToBackground: () => true));
+    }
+
+    [Fact]
+    public void AHuskFrozenAtWaitingIsNotWaitingOnAnyone()
+    {
+        // "waiting" is exempt from the lifetime timer because answering the
+        // prompt is the only thing that unfreezes it — but a husk's prompt
+        // moved to the fork with everything else, so the exemption must not
+        // shelter it. The arm sits above the state exemptions for exactly this.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Backgrounded,
+            Liveness(Healthy(state: "waiting"), staleAfter: TimeSpan.FromMinutes(5),
+                     written: new DateTime(2020, 1, 1),
+                     handedToBackground: () => true));
+    }
+
+    [Fact]
+    public void BackgroundedOutranksExpiredSoTheFileGetsSweptNotJustHidden()
+    {
+        // Both verdicts hide the orb; only Backgrounded is evidence the sweep
+        // may act on (see SessionPresence.EvidenceOfDeath), so the more
+        // specific reading has to be the one reported.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Backgrounded,
+            Liveness(Healthy(state: "generating"), staleAfter: TimeSpan.FromMinutes(5),
+                     written: new DateTime(2020, 1, 1),
+                     handedToBackground: () => true));
+    }
+
+    [Fact]
+    public void ADroppedSessionNeverPaysForTheTranscriptRead()
+    {
+        // The closure costs a stat against the disk, which is why it is a
+        // closure: a session already superseded, or whose process has exited,
+        // is dropped before the question is asked. The counting proves the
+        // laziness rather than assuming it.
+        var asked = 0;
+        Func<bool> counting = () => { asked++; return true; };
+
+        var superseded = new HashSet<string>(StringComparer.Ordinal) { "session-1" };
+        Assert.Equal(
+            SessionManager.ScanVerdict.Superseded,
+            Liveness(Healthy(), superseded: superseded, handedToBackground: counting));
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.ProcessGone,
+            Liveness(Healthy(), isRunning: AllDead, handedToBackground: counting));
+
+        Assert.Equal(0, asked);
+    }
+
     // --- WantsAgentViewer ----------------------------------------------------
 
     [Fact]
     public void AnOrdinarySessionWithATerminalIsNeverSentHuntingForAViewer()
     {
         Assert.False(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(), Nothing, EveryIdIsALiveJob));
+            "session-1", Healthy(), Nothing));
     }
 
     [Fact]
@@ -192,7 +290,7 @@ public class ScanVerdictTests
         var leads = new HashSet<string>(StringComparer.Ordinal) { "session-1" };
 
         Assert.True(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(termProgram: ""), leads, NoLiveJobs));
+            "session-1", Healthy(termProgram: ""), leads));
     }
 
     [Fact]
@@ -202,23 +300,33 @@ public class ScanVerdictTests
         // still gets its viewer looked for. isLiveJob is the failing one to
         // show the arm stands on its own.
         Assert.True(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(pid: 0, termProgram: ""), Nothing, NoLiveJobs));
+            "session-1", Healthy(pid: 0, termProgram: ""), Nothing));
     }
 
     [Fact]
-    public void ALiveBackgroundJobWithARecordedPidStillHunts()
+    public void ALiveBackgroundJobThatIsNotALeadDoesNotHunt()
     {
-        // This is the regression the source comment calls "not subtle": once
-        // the hook started recording a background agent's own pid, the old
-        // `pid <= 0` proxy stopped matching, adoption stopped running for every
-        // background agent, and JudgeReachability then dropped them all for
-        // having no terminal.
-        Assert.True(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(termProgram: ""), Nothing, EveryIdIsALiveJob));
-
-        // And the same session, once the daemon says it is not a job, does not.
+        // The reverse of what this test used to assert, and the reversal is
+        // the root cause of the dead background click. Adoption matches a
+        // viewer pane by cwd, so a parked job in the same directory as the
+        // user's own viewer adopted the very pane the user was sitting in —
+        // FocusCore then focused it, returned true, and the click on that
+        // job's orb visibly did nothing. Traced live:
+        //
+        //   Focus id=ed54b99d… shape=Background pane='%2' bin='' tty='ttys008'
+        //     FocusCore -> True, detached=False
+        //
+        // The rescue this arm performed — keeping background orbs past the
+        // no-terminal rule — is done properly by the phase exemptions now
+        // (RuledOutAsAJob), so a live job that is not a lead has nothing to
+        // gain from adoption and everything to lose.
         Assert.False(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(termProgram: ""), Nothing, NoLiveJobs));
+            "session-1", Healthy(termProgram: ""), Nothing));
+
+        // A lead with live agents still hunts — the case adoption exists for.
+        var leads = new HashSet<string>(StringComparer.Ordinal) { "session-1" };
+        Assert.True(SessionManager.WantsAgentViewer(
+            "session-1", Healthy(termProgram: ""), leads));
     }
 
     [Theory]
@@ -232,7 +340,7 @@ public class ScanVerdictTests
         // it the tmux pane of unrelated local work — a click that looks like it
         // worked and goes somewhere else entirely.
         Assert.False(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(source, pid: 0, termProgram: ""), Nothing, EveryIdIsALiveJob));
+            "session-1", Healthy(source, pid: 0, termProgram: ""), Nothing));
     }
 
     [Fact]
@@ -245,7 +353,7 @@ public class ScanVerdictTests
         Assert.False(SessionManager.KnowsATerminal(new SessionStatus { Tty = "/dev/ttys004" }));
 
         Assert.True(SessionManager.WantsAgentViewer(
-            "session-1", Healthy(pid: 0, termProgram: ""), Nothing, NoLiveJobs));
+            "session-1", Healthy(pid: 0, termProgram: ""), Nothing));
     }
 
     [Theory]
@@ -291,13 +399,13 @@ public class ScanVerdictTests
 
         Assert.Equal(
             SessionManager.ScanVerdict.Keep,
-            Reachability(claude, isLiveJob: EveryIdIsALiveJob));
+            Reachability(claude, phase: JobPhase.Parked));
 
         // Codex has no background jobs to be one of, so the exemption must not
         // reach it however the daemon answers.
         Assert.Equal(
             SessionManager.ScanVerdict.NoTerminal,
-            Reachability(codex, isLiveJob: EveryIdIsALiveJob));
+            Reachability(codex, phase: JobPhase.Parked));
     }
 
     [Theory]
@@ -327,7 +435,7 @@ public class ScanVerdictTests
         Assert.Equal(SessionManager.ScanVerdict.NotALiveJob, Reachability(pidless));
         Assert.Equal(
             SessionManager.ScanVerdict.Keep,
-            Reachability(pidless, isLiveJob: EveryIdIsALiveJob));
+            Reachability(pidless, phase: JobPhase.Parked));
     }
 
     [Fact]
@@ -345,37 +453,281 @@ public class ScanVerdictTests
         Assert.Equal(SessionManager.ScanVerdict.NotALiveJob, Reachability(codex));
         Assert.Equal(
             SessionManager.ScanVerdict.NotALiveJob,
-            Reachability(codex, isLiveJob: EveryIdIsALiveJob));
+            Reachability(codex, phase: JobPhase.Parked));
     }
 
     [Fact]
-    public void APidlessGatewaySessionIsNeverAskedAboutAtAll()
+    public void APidlessGatewaySessionIsKeptWhateverTheDaemonSaidAboutJobs()
     {
-        // A gateway session records no pid, so this rule would ask the local
-        // daemon about a session it has never heard of — once per scan, per
-        // session — and drop the orb when the answer came back "not a job",
-        // which it always would.
-        var asked = new List<string>();
+        // A gateway session records no pid and is not a local job, so both
+        // job-shaped rules have to leave it alone whatever phase they are handed
+        // — the daemon has never heard of it, and the honest answer to "is this a
+        // background job" is that the question does not apply.
+        //
+        // This used to assert that the daemon was not *asked*, by counting calls
+        // to a closure. The closure is gone: the phase is decided once per pass
+        // and handed in, so "who pays for the lookup" is now a property of the
+        // scan rather than of this rule — asserted there, by counting, in
+        // SessionScanTests.AMachineWithNothingBackgroundIshOnItNeverAsksTheDaemon.
         var gateway = new SessionStatus { Source = SessionSource.OpenClaw };
 
+        foreach (var phase in new[] { JobPhase.NotAJob, JobPhase.Unknown, JobPhase.Done })
+        {
+            Assert.Equal(
+                SessionManager.ScanVerdict.Keep,
+                SessionManager.JudgeReachability(
+                    "openclaw:agent:main", gateway, Nothing, phase, TranscriptIsThere));
+        }
+    }
+
+    // A parked background job keeps its orb, through both verdicts. This is the
+    // half of CB-13 that is *not* a change: parking dims an orb and must never
+    // remove one, so the session that started this ticket — a pooled worker
+    // sitting between turns, alive and resumable, with no terminal of its own —
+    // has to survive every rule here exactly as a working job does.
+    //
+    // Worth pinning because the two facts about it are the same two facts that
+    // drop a *finished* job: no terminal, and nothing but the daemon's word to
+    // go on. The only thing separating them is which word the daemon said.
+    [Fact]
+    public void AParkedBackgroundJobKeepsItsOrbJustAsAWorkingOneDoes()
+    {
+        var parked = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            State = "idle",
+            SessionPid = 4321,
+        };
+
+        // "blocked" is live as far as IsLive is concerned — only "done" is not —
+        // so the daemon's answer here is the same true a working job gets.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Liveness(parked, staleAfter: null));
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(parked, phase: JobPhase.Parked));
+    }
+
+    [Fact]
+    public void AnOrdinarySessionIsKeptWhateverTheDaemonSaid()
+    {
+        // A session with a terminal and a live process is not the daemon's
+        // business either way, so no phase can change what happens to it. Which
+        // is also why the scan does not pay for a lookup on its behalf — see
+        // SessionPresence.WorthAskingTheDaemon, and the call-counting test in
+        // SessionScanTests that pins it.
+        foreach (var phase in new[] { JobPhase.NotAJob, JobPhase.Unknown, JobPhase.Done })
+        {
+            Assert.Equal(
+                SessionManager.ScanVerdict.Keep,
+                Reachability(Healthy(), phase: phase));
+        }
+    }
+
+    // The reversal this round made, at the level of the rule that used to drop
+    // it. A `done` job's orb went the instant the daemon said so, and the user
+    // watched one appear and vanish while looking at it — which reads as a fault,
+    // not as a finish. It now survives, to be drawn dimmed and marked as
+    // finished, for as long as its status file exists.
+    [Fact]
+    public void AFinishedJobKeepsItsOrbUntilItsFileGoes()
+    {
+        var done = new SessionStatus { Source = SessionSource.ClaudeCode, SessionPid = 4321 };
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(done, phase: JobPhase.Done));
+
+        // ...where a session the listing genuinely does not name — a subagent, or
+        // a file that outlived its session — still goes, which is the distinction
+        // the whole rule turns on.
+        Assert.Equal(
+            SessionManager.ScanVerdict.NoTerminal,
+            Reachability(done, phase: JobPhase.NotAJob));
+    }
+
+    // And the same for one that recorded no pid at all: a finished job whose file
+    // predates the session_pid field is still a finished job, not a subagent.
+    [Fact]
+    public void AFinishedJobWithNoPidIsAlsoKept()
+    {
+        var pidless = new SessionStatus { Source = SessionSource.ClaudeCode, SessionPid = 0 };
+
+        Assert.Equal(SessionManager.ScanVerdict.Keep, Reachability(pidless, phase: JobPhase.Done));
+        Assert.Equal(
+            SessionManager.ScanVerdict.NotALiveJob,
+            Reachability(pidless, phase: JobPhase.NotAJob));
+    }
+
+    // --- JudgeReachability: nothing to show (CB-9) ----------------------------
+
+    [Fact]
+    public void AnUnpromptedBackgroundJobWithNoTranscriptGetsNoOrb()
+    {
+        // The bug: the live-job exemption on the no-terminal rule waved this
+        // through, so the orb stayed and its chat could only ever open blank.
+        // The exemption is right about the terminal — a background job has none
+        // by nature — and says nothing about whether there is a conversation.
+        Assert.Equal(
+            SessionManager.ScanVerdict.NothingToShow,
+            Reachability(UnpromptedJob(), phase: JobPhase.Parked,
+                         transcriptExists: TranscriptIsGone));
+    }
+
+    [Fact]
+    public void TheSameJobKeepsItsOrbOnceThereIsATranscriptToRead()
+    {
+        // The other half of the same machine's evidence: job "evidence (2)",
+        // identically shaped and identically terminal-less, with 86KB of
+        // transcript being written to it. Its chat works, so its orb stays.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(UnpromptedJob(), phase: JobPhase.Parked,
+                         transcriptExists: TranscriptIsThere));
+    }
+
+    [Fact]
+    public void ATerminalIsEnoughOnItsOwnEvenWithNoTranscript()
+    {
+        // Deliberately narrow: the click still lands, so the orb still earns
+        // its place. A session in a real terminal has no transcript for its
+        // first moment, and flickering its orb would be the worse bug.
+        var inATerminal = UnpromptedJob();
+        inATerminal.TermProgram = "iTerm.app";
+
+        var inTmux = UnpromptedJob();
+        inTmux.TmuxPane = "%4";
+
+        var onWindows = UnpromptedJob();
+        onWindows.TermPid = 9182;
+
+        foreach (var reachable in new[] { inATerminal, inTmux, onWindows })
+        {
+            Assert.Equal(
+                SessionManager.ScanVerdict.Keep,
+                Reachability(reachable, phase: JobPhase.Parked,
+                             transcriptExists: TranscriptIsGone));
+        }
+    }
+
+    [Fact]
+    public void ATtyAloneIsNotATerminalForThisRule()
+    {
+        // A deliberate reversal: this case used to sit in the list above. The
+        // daemon runs every background worker under a pty host, so its sessions
+        // all record a real /dev/ttysNN that no window anywhere shows — and the
+        // old "and no tty" clause waved every one of them through. Seen live as
+        // session de995bd9: idle, untitled, tty ttys006, no transcript anywhere,
+        // not in the daemon's own listing, drawn as a blank orb whose chat
+        // could only ever open empty. A tty alone already doesn't count as a
+        // terminal for KnowsATerminal; now this rule agrees with it.
+        var withATty = UnpromptedJob();
+        withATty.Tty = "/dev/ttys006";
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.NothingToShow,
+            Reachability(withATty, phase: JobPhase.Parked,
+                         transcriptExists: TranscriptIsGone));
+
+        // NotAJob too — the live phantom was absent from the listing, which is
+        // precisely why no phase-shaped rule could have caught it.
+        Assert.Equal(
+            SessionManager.ScanVerdict.NothingToShow,
+            Reachability(withATty, phase: JobPhase.NotAJob,
+                         transcriptExists: TranscriptIsGone));
+    }
+
+    [Fact]
+    public void ATtyOnlySessionKeepsItsOrbOnceItsTranscriptExists()
+    {
+        // What protects a session in a terminal that sets no TERM_PROGRAM —
+        // ssh in from another machine, an emulator that doesn't announce
+        // itself — is its conversation, not its tty. Its transcript appears
+        // within the first exchange, so the cost of the reversal above is an
+        // orb arriving a scan or two late, not an orb that never arrives.
+        var withATty = UnpromptedJob();
+        withATty.Tty = "/dev/ttys004";
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(withATty, phase: JobPhase.NotAJob,
+                         transcriptExists: TranscriptIsThere));
+    }
+
+    [Fact]
+    public void ALeadWithLiveAgentsIsExemptFromThisRuleToo()
+    {
+        // Same reasoning as the no-terminal rule's own exemption: agents drawn
+        // on screen pointing at nothing is a worse lie than a thin chat.
+        var leads = new HashSet<string>(StringComparer.Ordinal) { "session-1" };
+
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(UnpromptedJob(), leads, JobPhase.Parked,
+                         transcriptExists: TranscriptIsGone));
+    }
+
+    [Fact]
+    public void ATranscriptPathTheHookNeverRecordedAnswersKeepNotDrop()
+    {
+        // "Nowhere recorded" means this app does not know where the
+        // conversation would be, not that there isn't one — Codex's
+        // transcript_path is nullable and the chat panel falls back to hunting
+        // the projects directories by session id. Same reasoning as
+        // BackgroundJobs.IsLive answering true for a listing it could not read.
+        //
+        // The disk is not touched at all in that case, which is also what keeps
+        // this O(1) per session per scan.
+        var asked = new List<string>();
+        var noPath = UnpromptedJob(transcriptPath: "");
+
         var verdict = SessionManager.JudgeReachability(
-            "openclaw:agent:main", gateway, Nothing,
-            id => { asked.Add(id); return false; });
+            "session-1", noPath, Nothing, JobPhase.Parked,
+            path => { asked.Add(path); return false; });
 
         Assert.Equal(SessionManager.ScanVerdict.Keep, verdict);
         Assert.Empty(asked);
     }
 
-    [Fact]
-    public void TheDaemonIsNotAskedAboutASessionThatAlreadyKnowsATerminal()
+    [Theory]
+    [InlineData(SessionSource.OpenClaw)]
+    [InlineData(SessionSource.RemoteControl)]
+    public void AGatewaySessionIsNeverDroppedForHavingNoTranscriptOnThisDisk(
+        SessionSource source)
     {
-        // The lookup shells out, so an ordinary session must never pay for it.
-        var asked = new List<string>();
+        // Its transcript is on the machine running the gateway, so asking this
+        // disk about it can only ever answer no. Left ungated this rule alone
+        // would drop every gateway orb, every scan — the same trap the
+        // no-terminal rule above already carries a comment about.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Keep,
+            Reachability(UnpromptedJob(source), transcriptExists: TranscriptIsGone));
+    }
 
-        SessionManager.JudgeReachability(
-            "session-1", Healthy(), Nothing,
-            id => { asked.Add(id); return true; });
+    [Fact]
+    public void NothingToShowIsAnsweredBeforeNoTerminal()
+    {
+        // Both rules fit a session with no terminal and no transcript, and
+        // which one answers is the half a regression shows up in — the enum
+        // exists so that "dropped" is never the whole story. NothingToShow is
+        // the more specific reading and comes first.
+        Assert.Equal(
+            SessionManager.ScanVerdict.NothingToShow,
+            Reachability(UnpromptedJob(), transcriptExists: TranscriptIsGone));
+    }
 
-        Assert.Empty(asked);
+    [Fact]
+    public void ACodexSessionWithNeitherIsDroppedForTheSameReason()
+    {
+        // Codex is exempt from the live-job exemption, not from this rule: it
+        // has no background jobs to be one of, but a Codex session with no
+        // terminal and no transcript is just as inert.
+        Assert.Equal(
+            SessionManager.ScanVerdict.NothingToShow,
+            Reachability(UnpromptedJob(SessionSource.Codex),
+                         phase: JobPhase.Parked,
+                         transcriptExists: TranscriptIsGone));
     }
 }

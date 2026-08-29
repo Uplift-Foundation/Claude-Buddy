@@ -31,7 +31,13 @@ namespace ClaudeBuddy
         // 0 or 1; more than that is the concurrent-access case that corrupts
         // leveldb and SQLite, and the menu says so rather than hiding it behind
         // a single "running" row.
-        int InstanceCount = 1);
+        int InstanceCount = 1,
+        // A process running from *this* profile's tinted clone while sitting on
+        // the Default userData directory, or 0 for none. See
+        // OrphanedCloneFolder: it is a real state the menu could not previously
+        // describe, and the row it belongs on is this one — the profile whose
+        // colour is on screen in the Dock while its row reads "not running".
+        int OrphanPid = 0);
 
     internal sealed record DesktopSnapshot(bool AppInstalled, IReadOnlyList<ProfileView> Profiles);
 
@@ -41,9 +47,11 @@ namespace ClaudeBuddy
     // Claude Desktop signs into one account at a time and keeps that login in
     // its userData directory (Cookies -> sessionKey, config.json ->
     // oauth:tokenCache), not the Keychain — so a second account is a second
-    // userData directory, selected with CLAUDE_USER_DATA_DIR. The app honours
-    // that variable (app.setPath("userData", ...)) and takes no single-instance
-    // lock, so instances genuinely can coexist.
+    // userData directory, selected with Chromium's --user-data-dir switch, and
+    // the app takes no single-instance lock, so instances genuinely can
+    // coexist. CLAUDE_USER_DATA_DIR used to be the whole mechanism and is still
+    // passed alongside; LaunchArguments has the measurement showing why it can
+    // no longer be relied on by itself.
     //
     // Everything here is independent of the session-monitoring side of the app:
     // no SessionStatus, no SessionManager, no OrbWindow. The only seam is
@@ -95,7 +103,13 @@ namespace ClaudeBuddy
             bool Installed,
             string DefaultDirectory,
             IReadOnlyList<(string Name, string Directory)> Profiles,
-            IReadOnlyDictionary<string, InstanceGroup> Running);
+            IReadOnlyDictionary<string, InstanceGroup> Running,
+            // Profile folder -> pid of a process running from that profile's
+            // clone while on Default. Null rather than an empty dictionary only
+            // because a record's primary constructor cannot default to one;
+            // Compose reads it as "none", which is the right answer for a scan
+            // that did not look.
+            IReadOnlyDictionary<string, int>? Orphans = null);
 
         private static readonly Dictionary<string, Transient> Transients = new(StringComparer.Ordinal);
         private static readonly object TransientGate = new();
@@ -169,10 +183,24 @@ namespace ClaudeBuddy
 
             IReadOnlyList<(string Name, string Directory)> profiles =
                 installed ? Discover() : Array.Empty<(string Name, string Directory)>();
-            IReadOnlyDictionary<string, InstanceGroup> running =
-                installed ? MapInstances(ScanProcesses()) : EmptyRunning;
 
-            Adopt(new ScanResult(installed, DefaultDirectory(), profiles, running));
+            // One scan, read twice. MapInstances files each process under the
+            // profile directory it is on; MapOrphans asks the different question
+            // of which clone a selector-less process came *from*. Scanning twice
+            // would also let the two answers disagree about a process that
+            // started or died between them.
+            var instances = installed ? ScanProcesses() : Array.Empty<ClaudeInstance>();
+
+            IReadOnlyDictionary<string, InstanceGroup> running =
+                installed ? MapInstances(instances) : EmptyRunning;
+
+            var defaultDirectory = DefaultDirectory();
+
+            IReadOnlyDictionary<string, int> orphans = installed
+                ? MapOrphans(instances, ClaudeDesktopBundles.Root, Path.GetFileName(defaultDirectory))
+                : EmptyOrphans;
+
+            Adopt(new ScanResult(installed, defaultDirectory, profiles, running, orphans));
         }
 
         // Remember a scan as the current one and publish what it composes to.
@@ -194,6 +222,9 @@ namespace ClaudeBuddy
 
         private static readonly IReadOnlyDictionary<string, InstanceGroup> EmptyRunning =
             new Dictionary<string, InstanceGroup>(StringComparer.Ordinal);
+
+        internal static readonly IReadOnlyDictionary<string, int> EmptyOrphans =
+            new Dictionary<string, int>(StringComparer.Ordinal);
 
         // Recompose from the last scan without re-scanning — for when a click
         // has changed transient state and the menu should say so immediately.
@@ -249,9 +280,14 @@ namespace ClaudeBuddy
                     // stable while the processes are, and without it a profile
                     // going from one instance to two would never repaint the
                     // menu, so the duplicate warning would never appear.
+                    // Whether there is an orphan, never which pid it is: the pid
+                    // is what Quit acts on, but putting it in here would repaint
+                    // the menu every time the updater cycled a process, and the
+                    // rule at the top of this method is that nothing volatile
+                    // goes in the digest.
                     return $"{p.DisplayName}:{(p.IsRunning ? 1 : 0)}:{p.Activity}:{p.Message}"
                            + $":{p.ThemeMode}:{colour}:{(settings.ShowSwatch ? 1 : 0)}"
-                           + $":{p.InstanceCount}";
+                           + $":{p.InstanceCount}:{(p.OrphanPid != 0 ? 1 : 0)}";
                 })
                 .OrderBy(entry => entry, StringComparer.Ordinal));
         }
@@ -262,12 +298,20 @@ namespace ClaudeBuddy
             var defaultDirectory = scan.DefaultDirectory;
             var views = new List<ProfileView>(scan.Profiles.Count);
 
+            var orphans = scan.Orphans ?? EmptyOrphans;
+
             foreach (var (name, directory) in scan.Profiles)
             {
                 var isRunning = scan.Running.TryGetValue(directory, out var group);
                 var (activity, message) = ResolveTransient(directory, isRunning, now);
 
                 var chosenName = ClaudeBuddySettings.For(name).Name;
+
+                // Keyed on the folder rather than the directory: an orphan is
+                // identified by the clone it runs from, and clones are named for
+                // the profile folder (ClaudeDesktopBundles.PathFor), not for the
+                // full profile path.
+                orphans.TryGetValue(name, out var orphanPid);
 
                 views.Add(new ProfileView(
                     chosenName is { Length: > 0 } ? chosenName : DisplayNameFor(name),
@@ -278,7 +322,8 @@ namespace ClaudeBuddy
                     activity,
                     message,
                     ReadThemeMode(directory),
-                    isRunning ? group.Count : 0));
+                    isRunning ? group.Count : 0,
+                    orphanPid));
             }
 
             return new DesktopSnapshot(scan.Installed, views);
@@ -559,6 +604,169 @@ namespace ClaudeBuddy
             return running;
         }
 
+        // ---- orphaned instances --------------------------------------------
+
+        // The profile whose tinted clone this instance is running from, when the
+        // instance carries no userData selector at all — which means it is on
+        // Default. Null when that is not what this process is.
+        //
+        // Claude Desktop's own updater is what produces these. Squirrel
+        // relaunches the bundle it just updated with launchAfterInstallation,
+        // and the process it starts inherits neither --user-data-dir nor
+        // CLAUDE_USER_DATA_DIR, so an instance this app launched correctly onto
+        // a profile silently moves to Default the first time it updates itself.
+        // Observed live: a process running from bundles/Claude-Board/Claude.app
+        // with 39 files open under Application Support/Claude and none under
+        // Claude-Board, alongside a second instance already on Default. That is
+        // the concurrent leveldb/SQLite access this whole feature exists to
+        // prevent, arriving by a route neither the launcher nor the URL router
+        // can reach — Squirrel is upstream, its relaunch is not
+        // argument-injectable, and rewriting an updater inside a signed bundle
+        // would break the identical-CDHash property the clones depend on.
+        //
+        // So it is detected rather than prevented. The combination is evidence
+        // and not a heuristic *for this app's own launches*: every created
+        // profile is launched with both selectors, so no launch here can produce
+        // a selector-less process running from a created profile's clone.
+        //
+        // Default's own clone is the exception that makes this a rule worth
+        // writing down rather than the one sentence the ticket proposed.
+        // LaunchMac gives Default a tinted clone too once a colour is picked for
+        // it, and launches it with *neither* selector on purpose — so
+        // bundles/Claude/Claude.app with no selector is the correct, ordinary
+        // Default instance, and a rule that only asked "clone, and no selector?"
+        // would report the most common configuration on this machine as broken.
+        // Hence defaultFolder, and hence this returning the folder rather than a
+        // bool: the caller needs to know *which* profile's colour is on screen.
+        //
+        // What it cannot distinguish is a user who launched a clone from the
+        // Dock or Spotlight themselves, which produces an identical process.
+        // That is why the menu describes the state rather than blaming the
+        // updater — see ClaudeDesktopSection.ProfileLabel.
+        internal static string? OrphanedCloneFolder(
+            ClaudeInstance instance, string bundleRoot, string defaultFolder)
+        {
+            // A selector of any kind means the launcher put it there, and
+            // MapInstances has already filed it under the right profile.
+            if (instance.UserDataDir is not null) return null;
+
+            // Null on Windows, which has no per-profile bundles at all — see
+            // ClaudeInstance. The feature is therefore macOS-only by data rather
+            // than by a platform guard, which is the honest shape: there is
+            // nothing on Windows for this rule to find.
+            if (instance.BundlePath is not { Length: > 0 } bundle) return null;
+
+            // Normalise before taking it apart. The path arrives from another
+            // process through proc_pidpath rather than from PathFor, and
+            // decomposing it naively reads any "." or ".." component as a
+            // directory name: "<root>/./Claude.app" was answered with a profile
+            // called ".", which is a name no profile has and so would have
+            // failed silently in Compose rather than visibly here. Found by the
+            // test that went looking for the last uncovered branch.
+            //
+            // Segments, not Path.GetFullPath: GetFullPath answers for the
+            // platform the *process* is on — on Windows it reroots "/Users/…"
+            // onto the current drive and flips the separators, which failed
+            // every one of these decisions on the windows-latest CI leg while
+            // the mac leg stayed green. Walking components by hand keeps the
+            // rule pure *and* a function of nothing but its arguments, so the
+            // same string gets the same answer on both legs — which is what
+            // lets the mac leg verify the Windows-shaped cases and vice versa.
+            // Symlinks stay unresolved for the same reason as before: resolving
+            // them would put a filesystem call in a rule that runs for every
+            // process on every scan, against a root that has not been
+            // symlink-resolved either.
+            var segments = PathSegments(bundle);
+            if (segments is null) return null;
+
+            var root = PathSegments(bundleRoot);
+            if (root is null) return null;
+
+            // A clone lives at exactly <root>/<folder>/<bundle>. Anything
+            // shallower, deeper, or rooted elsewhere is not one.
+            if (segments.Count != root.Count + 2) return null;
+
+            for (var i = 0; i < root.Count; i++)
+            {
+                if (!string.Equals(segments[i], root[i], StringComparison.Ordinal)) return null;
+            }
+
+            var folder = segments[root.Count];
+            return string.Equals(folder, defaultFolder, StringComparison.Ordinal) ? null : folder;
+        }
+
+        // An absolute path split into its real components, with the root kept
+        // as the first one: "/" for a POSIX path, "C:" for a drive-rooted
+        // Windows path. Empty and "." segments are dropped, ".." folds into
+        // its parent, and null answers a relative path, a drive-relative one
+        // ("C:foo"), or one that climbs above its root. Both separators count
+        // as separators wherever the string runs: on a real machine the rule
+        // only ever sees proc_pidpath's POSIX strings — BundlePath is null on
+        // Windows — but the integration tests feed it the host-native paths
+        // ClaudeDesktopBundles actually writes, and that round trip is the
+        // half of the contract a layout change would break. No Path.* call
+        // anywhere, so the answer is the same on whichever platform the tests
+        // happen to run on; keeping the root as a segment is what makes the
+        // prefix comparison refuse a bundle on one root and a bundle root on
+        // another.
+        private static List<string>? PathSegments(string path)
+        {
+            string rest;
+            List<string> segments;
+
+            if (path.Length > 0 && (path[0] == '/' || path[0] == '\\'))
+            {
+                segments = new List<string> { "/" };
+                rest = path;
+            }
+            else if (path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':')
+            {
+                if (path.Length > 2 && path[2] != '/' && path[2] != '\\') return null;
+
+                segments = new List<string> { char.ToUpperInvariant(path[0]) + ":" };
+                rest = path[2..];
+            }
+            else
+            {
+                return null;
+            }
+
+            foreach (var segment in rest.Split('/', '\\'))
+            {
+                if (segment.Length == 0 || segment == ".") continue;
+
+                if (segment == "..")
+                {
+                    if (segments.Count <= 1) return null;
+                    segments.RemoveAt(segments.Count - 1);
+                    continue;
+                }
+
+                segments.Add(segment);
+            }
+
+            return segments;
+        }
+
+        // Profile folder -> the first pid found orphaned onto Default from that
+        // profile's clone. First wins, matching MapInstances, so the menu and
+        // anything acting on the pid agree about which process they mean.
+        internal static IReadOnlyDictionary<string, int> MapOrphans(
+            IReadOnlyList<ClaudeInstance> instances, string bundleRoot, string defaultFolder)
+        {
+            var orphans = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            foreach (var instance in instances)
+            {
+                var folder = OrphanedCloneFolder(instance, bundleRoot, defaultFolder);
+                if (folder is null) continue;
+
+                if (!orphans.ContainsKey(folder)) orphans[folder] = instance.Pid;
+            }
+
+            return orphans;
+        }
+
         // ---- url routing ---------------------------------------------------
 
         // The profiles a `claude://` link could be delivered to, each paired
@@ -717,12 +925,21 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static bool LaunchMac(string directory, bool isDefault)
         {
-            // The Default profile is launched *without* the variable.
-            // Setting it suppresses the app's own resolution of its
-            // sidecar config directory, so a tray launch could
-            // re-trigger the deployment-mode chooser on an already
-            // configured profile — and it would start a second log
-            // history under <profile>/Logs.
+            // The Default profile is launched without *either* selector —
+            // see LaunchArguments, which is where that decision actually
+            // lives and where the measurement behind it is written down.
+            // Pointing either one at the app's own default directory
+            // suppresses its own resolution of the sidecar config
+            // directory, so a tray launch could re-trigger the
+            // deployment-mode chooser on an already configured profile.
+            //
+            // This used to add "and it would start a second log history
+            // under <profile>/Logs", which was true when the variable was
+            // the mechanism and is not true now: --user-data-dir sets
+            // Chromium's userData and does not move Electron's log path.
+            // See LogCandidates for what that cost and how Reveal logs
+            // answers it instead.
+
             // A cloned bundle with a tinted icon, so this instance gets
             // its own colour in the Dock. Only for created profiles:
             // Default deliberately stays the bundle you installed, icon
@@ -799,19 +1016,64 @@ namespace ClaudeBuddy
                 // and AppInstalled() has to have been true to get here at all.
                 : new[] { "-n", "-b", BundleId };
 
-            // Default is launched without CLAUDE_USER_DATA_DIR whether or
-            // not it runs from a clone, so the app resolves its own
-            // userData and sidecar config exactly as a Dock launch does.
-            return isDefault
+            // Default is launched without either selector whether or not it
+            // runs from a clone, so the app resolves its own userData and
+            // sidecar config exactly as a Dock launch does.
+            //
+            // Both selectors, on every created profile, because the
+            // environment variable alone has stopped working. Claude Desktop
+            // 1.34493.1 ignores CLAUDE_USER_DATA_DIR: an instance launched
+            // with it set to an empty scratch directory left that directory
+            // empty and opened 45 files under ~/Library/Application
+            // Support/Claude instead — measured with lsof against the
+            // installed bundle, not a clone, so nothing this app does to a
+            // bundle is involved. That is the whole bug users see as "it
+            // opens the same profile twice": every profile row launched a
+            // second Chromium onto Default, which is also the concurrent
+            // leveldb access this feature exists to avoid.
+            //
+            // --user-data-dir is Chromium's own switch, handled in the
+            // Electron framework rather than in Claude Desktop's JavaScript,
+            // which is why it still works — verified the same way, against a
+            // path containing a space, with the profile written where it was
+            // asked for. Windows has passed it since the port; macOS was the
+            // only side still trusting the variable.
+            //
+            // The variable is kept alongside it rather than replaced. Older
+            // Claude Desktop builds do honour it — the app's bundled main
+            // still contains the app.setPath("userData", …) that reads it —
+            // and both point at the same directory, so a build that honours
+            // either lands in the right place. MacOSProcessScan also still
+            // reads it back, though not for the reason it looks like — see the
+            // comment on ParseUserDataDir, which is exact about what that
+            // fallback is right for and what it quietly gets wrong.
+
+            // An empty directory is guarded rather than interpolated. A bare
+            // `--user-data-dir=` is not "no switch" to Chromium — it is the
+            // switch carrying an empty value, which resolves back to the default
+            // directory, i.e. exactly the silent wrong-profile launch this whole
+            // change exists to stop, with nothing on screen to say so. Nothing
+            // produces one today: every directory here comes from a scanned path.
+            // The guard is here because ClaudeDesktopUrlRouter.Arguments already
+            // has it, and two functions that build the same command line drifting
+            // apart is how one of them quietly stops meaning what the other does.
+            return isDefault || directory is not { Length: > 0 }
                 ? open
-                : open.Concat(new[] { "--env", "CLAUDE_USER_DATA_DIR=" + directory }).ToArray();
+                : open.Concat(new[]
+                {
+                    "--env", "CLAUDE_USER_DATA_DIR=" + directory,
+                    // --args must come last: open(1) passes everything after
+                    // it to the application untouched.
+                    "--args", "--user-data-dir=" + directory
+                }).ToArray();
         }
 
         // Default is launched with no arguments at all — passing
         // --user-data-dir pointed at the app's own default directory is not
         // the same thing to Chromium as omitting the flag, and risks
-        // re-triggering the deployment-mode chooser the same way an
-        // unnecessary CLAUDE_USER_DATA_DIR does on macOS (see LaunchMac).
+        // re-triggering the deployment-mode chooser the same way either
+        // selector does on macOS (see LaunchMac, which now omits both rather
+        // than just the variable).
         // A created profile gets the flag pointed at its own directory.
         // Excluded from coverage: see Launch. Calls the shell's activation
         // manager against a real installed AppX package.
@@ -915,6 +1177,70 @@ namespace ClaudeBuddy
                     SetTransient(directory, ProfileActivity.Error, ErrorMs, "allow Automation to quit");
                 }
             });
+        }
+
+        // Quit a window stranded on Default by the updater — the pid in
+        // ProfileView.OrphanPid rather than the one in Pid, which for a stranded
+        // profile is 0 because nothing is on its own directory.
+        //
+        // macOS only, and not by a platform guard: OrphanPid can only ever be
+        // non-zero on a machine with per-profile clones, and only macOS has
+        // those (ClaudeInstance.BundlePath is null on Windows). The check below
+        // is on the pid, so Windows gets the right answer by having nothing to
+        // act on rather than by being asked what platform it is.
+        //
+        // Deliberately not a relaunch. Quitting and relaunching in one click
+        // reads as one action and is two, the second of which can fail on its
+        // own — and the window being quit is a live Claude Desktop signed into
+        // the user's Default account, which may hold unsaved work. Quit, let the
+        // row go back to "not running", and let the user press Launch when they
+        // are ready. The transient goes on the *stranded* profile's row because
+        // that is the row the click came from and the row whose label will stop
+        // warning once it works.
+        //
+        // Excluded from coverage: sends a real Apple Event to another
+        // application, exactly as Quit does. StrandedPid below is the decision.
+        [ExcludeFromCodeCoverage]
+        public static void QuitStranded(ProfileView profile)
+        {
+            var pid = StrandedPid(profile);
+            if (pid <= 0) return;
+
+            var directory = profile.Directory;
+            SetTransient(directory, ProfileActivity.Quitting, QuitWindowMs);
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                // Activate first for the same reason Quit does: an unsaved-work
+                // sheet belongs in front of the user, not behind them.
+                MacOSAppActivation.Activate(pid);
+
+                if (!MacOSAppActivation.Terminate(pid))
+                {
+                    SetTransient(directory, ProfileActivity.Error, ErrorMs, "allow Automation to quit");
+                }
+            });
+        }
+
+        // The pid QuitStranded acts on, or 0 when there is nothing to act on.
+        // Pulled out so the rule is reachable without sending an Apple Event:
+        // acting on the wrong pid here means quitting a window the user did not
+        // point at, which is the one outcome this feature must never produce.
+        internal static int StrandedPid(ProfileView profile)
+        {
+            // No platform check, deliberately. OrphanPid can only ever be
+            // non-zero where per-profile clones exist, and only macOS has those
+            // — OrphanedCloneFolder returns null for the null BundlePath Windows
+            // always reports. Asking OperatingSystem here as well would add an
+            // arm no test on either platform can take, to re-answer a question
+            // the data has already answered.
+
+            // A profile that is running has its own instance, and Quit is the
+            // item for that. Offering both through one pid would make which
+            // window closed depend on scan timing.
+            if (profile.IsRunning) return 0;
+
+            return profile.OrphanPid > 0 ? profile.OrphanPid : 0;
         }
 
         // Claude Desktop can't be made to quit gracefully from outside on this
@@ -1239,39 +1565,172 @@ namespace ClaudeBuddy
             }
         }
 
-        // Where a profile's logs could be, most likely first.
+        // Where a profile's logs could be, best first.
         //
         // Split out of RevealLogs because the *list* is the interesting part and
-        // opening a Finder or Explorer window is not: which directory Electron
-        // writes to depends on whether the instance was launched with an
-        // environment override, and this app deliberately launches Default
-        // without one. Get that wrong and "Reveal logs" opens the wrong
-        // profile's logs, which is worse than opening nothing.
-        internal static IEnumerable<string> LogCandidates(string directory, bool isDefault) =>
-            LogCandidates(directory, isDefault, OperatingSystem.IsWindows());
+        // opening a Finder or Explorer window is not. Get it wrong and "Reveal
+        // logs" opens the wrong profile's logs, which is worse than opening
+        // nothing — and until this branch it did exactly that.
+        //
+        // The rule this replaces said a created profile's logs are at
+        // <profile>/Logs and Default's are at ~/Library/Logs/Claude. That was
+        // true only because the *variable* moved them: Claude Desktop's own
+        // startup did app.setPath("logs", resolve(e, "Logs")) inside the
+        // CLAUDE_USER_DATA_DIR branch, so the logs followed the userData
+        // directory because the JavaScript walked them there by hand.
+        // --user-data-dir does not do that. It is Chromium's switch and it sets
+        // userData only; on macOS Electron's logs path is
+        // ~/Library/Logs/<CFBundleName> and is not derived from userData at
+        // all. Measured: a launch carrying only the switch wrote 30 entries
+        // into a fresh scratch directory and no Logs subdirectory whatsoever.
+        //
+        // So the fix that moved a profile's *data* left its *logs* behind, and
+        // the failure is the quiet kind. A <profile>/Logs directory left over
+        // from when the variable worked still exists, so the old first
+        // candidate still matched, Directory.Exists still passed, and Reveal
+        // logs still opened a directory that looked entirely correct while
+        // being weeks stale. On the machine this was found on:
+        // ~/Library/Application Support/Claude-Board/Logs was last written on
+        // 24 August; ~/Library/Logs/Claude was being written that afternoon.
+        //
+        // Note what the Windows arm already said, which should have given this
+        // away a year ago: there is no Default/created split there *because*
+        // Electron's paths do not follow --user-data-dir. macOS is now the same
+        // — the switch is the same switch — and the only reason it looked
+        // different was the JavaScript that is no longer running.
+        // Held in a field rather than written as a method group at the call
+        // site. A method group there compiles to a lazily-populated delegate
+        // cache — a null check on this line, in code nobody wrote, which no
+        // test can exercise both ways and which would sit in the branch report
+        // for ever needing to be explained. One allocation at type-init costs
+        // nothing and the line then means exactly what it says.
+        private static readonly Func<string, DateTime?> LastWritten = NewestWrite;
+
+        internal static IReadOnlyList<string> LogCandidates(string directory) =>
+            LogCandidates(directory, OperatingSystem.IsWindows(), LastWritten);
 
         // The platform is an argument rather than a question this asks, so both
         // answers are reachable from either machine. The two are genuinely
         // different rules rather than different paths — see the comments below —
         // and a rule that only one CI leg ever executes is a rule nobody reads
-        // until it is wrong.
-        internal static IEnumerable<string> LogCandidates(string directory, bool isDefault, bool windows)
+        // until it is wrong. The clock is an argument for the same reason: the
+        // ordering below is decided by what is on disk, and a test has no
+        // business staging real log files with staged mtimes to ask about it.
+        //
+        // isDefault is gone rather than ignored. It was the whole Default/
+        // created split and there is nothing left for it to select, so keeping
+        // it as an unused parameter would leave the shape of the deleted rule
+        // sitting in the signature for the next person to reconstruct.
+        internal static IReadOnlyList<string> LogCandidates(
+            string directory, bool windows, Func<string, DateTime?> lastWritten)
         {
             if (windows)
             {
                 // Unlike macOS, Electron's userData resolves to the same
                 // directory whether or not --user-data-dir was passed —
                 // Default's userData is just %APPDATA%\Claude — so there's
-                // one candidate rather than a Default/created split.
+                // one candidate rather than a Default/created split. Unchanged
+                // by any of the above; it was already right.
                 return new[] { Path.Combine(directory, "logs") };
             }
 
-            // Only an env-launched instance writes <profile>/Logs; a plain
-            // launch — which is what Default deliberately gets — writes
-            // Electron's default path instead.
-            return isDefault
-                ? new[] { Path.Combine(Home, "Library", "Logs", DefaultProfileFolder), directory }
-                : new[] { Path.Combine(directory, "Logs"), directory };
+            // Both are real answers on some build, and no static ordering is
+            // right on both. Electron's own path is where a current build
+            // writes; <profile>/Logs is where a build that still honours the
+            // variable writes, and this app deliberately keeps sending the
+            // variable for exactly that case. Put the profile first and a
+            // stale leftover wins on a current build — the bug above. Put
+            // Electron's first and Default's logs are offered for Board on an
+            // older one, which is the same mistake pointing the other way.
+            //
+            // So neither is guessed. Whichever was written to more recently is
+            // the one the app is using, which is the question a person opening
+            // the directory was asking in the first place, and it needs no
+            // opinion about which Desktop build is installed.
+            var logs = new[]
+            {
+                Path.Combine(Home, "Library", "Logs", DefaultProfileFolder),
+                Path.Combine(directory, "Logs")
+            };
+
+            // The profile directory is the last resort, and it is kept out of
+            // the recency comparison rather than added to it: Chromium writes
+            // Cookies and Local Storage there constantly, so by mtime it would
+            // win every time and Reveal logs would stop showing logs at all.
+            return ByRecency(logs, lastWritten).Append(directory).ToList();
+        }
+
+        // The candidates that have been written to, most recent first, then the
+        // ones that have not in the order they arrived. Pure, and separate from
+        // the list itself, because "which of these is live" is the part with a
+        // decision in it and it should be answerable without a filesystem.
+        internal static IReadOnlyList<string> ByRecency(
+            IEnumerable<string> candidates, Func<string, DateTime?> lastWritten)
+        {
+            var seen = new List<(string Path, DateTime When, int Order)>();
+            var order = 0;
+            foreach (var candidate in candidates)
+            {
+                seen.Add((candidate, lastWritten(candidate) ?? DateTime.MinValue, order++));
+            }
+
+            // Sorted by hand rather than with OrderByDescending().ThenBy(),
+            // and the incoming index is compared explicitly rather than left to
+            // a stable sort: two directories with no writes at all — the common
+            // state on a machine that has only ever run one profile — must come
+            // back in the order they were built above, because that order is
+            // the tie-break this deliberately still encodes. List.Sort is not
+            // stable, so leaning on stability would have been wrong here even
+            // though LINQ's ordering happens to provide it.
+            seen.Sort(static (left, right) => left.When != right.When
+                ? right.When.CompareTo(left.When)
+                : left.Order.CompareTo(right.Order));
+
+            var ordered = new List<string>(seen.Count);
+            foreach (var entry in seen) ordered.Add(entry.Path);
+            return ordered;
+        }
+
+        // The newest write anywhere in a log directory, or null when it is not
+        // there or cannot be read.
+        //
+        // Not the directory's own timestamp, which is the obvious thing and the
+        // wrong thing: appending to main.log does not touch the directory that
+        // contains it, so a live log directory can carry an mtime from whenever
+        // its files were created. Measured here — ~/Library/Logs/Claude was
+        // stamped 15 August while the log inside it had been written twelve
+        // minutes earlier. Reading the directory's mtime would have preferred
+        // the stale candidate, which is the bug this is fixing.
+        //
+        // Top level only. Log directories are flat, and a recursive walk on a
+        // path the user chose is a stall on a menu click.
+        internal static DateTime? NewestWrite(string directory)
+        {
+            try
+            {
+                if (!Directory.Exists(directory)) return null;
+
+                DateTime? newest = null;
+                foreach (var file in Directory.EnumerateFiles(directory))
+                {
+                    // Compared against MinValue rather than as `newest is null
+                    // || written > newest`. That reads better and generates an
+                    // arm nothing can reach: lifting `>` over a nullable adds a
+                    // HasValue test that the short circuit has already made
+                    // false, so the branch could never be covered and would
+                    // have to be explained away for ever.
+                    var written = File.GetLastWriteTimeUtc(file);
+                    if (written > (newest ?? DateTime.MinValue)) newest = written;
+                }
+
+                // An empty directory still beats one that is not there: it is
+                // evidence the app made it, which a missing path is not.
+                return newest ?? Directory.GetLastWriteTimeUtc(directory);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         // Excluded from coverage: opens a Finder or Explorer window on the
@@ -1283,11 +1742,10 @@ namespace ClaudeBuddy
             if (!SupportedPlatform) return;
 
             var directory = profile.Directory;
-            var isDefault = profile.IsDefault;
 
             Task.Run(() =>
             {
-                foreach (var candidate in LogCandidates(directory, isDefault))
+                foreach (var candidate in LogCandidates(directory))
                 {
                     if (!Directory.Exists(candidate)) continue;
                     OpenFolder(candidate);
