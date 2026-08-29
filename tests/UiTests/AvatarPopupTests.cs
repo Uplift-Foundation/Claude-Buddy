@@ -36,6 +36,32 @@ public class AvatarPopupTests
 
     private static AvatarPopup? Instance => (AvatarPopup?)InstanceField.GetValue(null);
 
+    private static readonly FieldInfo TimerField =
+        typeof(AvatarPopup).GetField("_timer", BindingFlags.NonPublic | BindingFlags.Instance)
+        ?? throw new MissingFieldException("AvatarPopup", "_timer");
+
+    // Takes the real timer out of a test that drives the animation itself.
+    //
+    // Show starts a DispatcherTimer, and Advance was extracted so a test would
+    // not have to wait on it — but the timer was left running alongside, which
+    // is a race the extraction did not close. If ten milliseconds pass between
+    // Show returning and the next dispatcher drain, a tick is already queued and
+    // that drain delivers it, so the portrait is on its *second* frame before
+    // the test has advanced anything and every assertion after that is off by
+    // one. It only happens when something else is loading the machine, which is
+    // why it is a Release failure and a Debug pass.
+    //
+    // Stopped rather than slowed: an interval long enough "not to fire" is a
+    // tolerance, and this suite has already had two flakes fixed by removing
+    // one. With the timer stopped, every frame in the test moves because the
+    // test moved it.
+    //
+    // Reflection rather than a seam on AvatarPopup, the same call this file
+    // already makes for _instance and for the same reason: stopping a timer from
+    // outside is a test's convenience, not something the app has any use for.
+    private static void StopTheRealTimer() =>
+        (TimerField.GetValue(Instance) as DispatcherTimer)?.Stop();
+
     private static void Flush()
     {
         Dispatcher.UIThread.RunJobs();
@@ -214,6 +240,10 @@ public class AvatarPopupTests
 
         var avatar = Avatar(3);
         AvatarPopup.Show(avatar, new PixelPoint(960, 640));
+
+        // Before the first drain, because a drain is what delivers a tick that
+        // is already due. See StopTheRealTimer.
+        StopTheRealTimer();
         Flush();
 
         Assert.Same(avatar.Frames[0], PortraitSource());

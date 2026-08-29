@@ -294,6 +294,25 @@ namespace ClaudeBuddy
             lock (Gate) _certificateRejected = value;
         }
 
+        // A test seam, the same one and for the same reason as the four above:
+        // the only thing that ever sets _gateway is RunAsync, which is the
+        // supervisor loop and is excluded from coverage because it opens a
+        // WebSocket to a real machine. Without this, everything a *send* does —
+        // which of the two requests goes first, what is on each of them, and
+        // what a failure of either one says — is unreachable for a reason that
+        // has nothing to do with the code.
+        //
+        // Worth having rather than excluding SendToRoomAsync wholesale, which
+        // was the first shape. The claim that fix rests on is that the mirror
+        // carries the carrier's own accountId, and an excluded method is a claim
+        // nothing checks. OpenClawGateway already takes its connector as an
+        // argument for exactly this reason (see its own comment), so a gateway
+        // over an in-memory socket costs nothing new.
+        internal static void SetGatewayForTests(OpenClawGateway? gateway)
+        {
+            lock (Gate) _gateway = gateway;
+        }
+
         // The conversation in a channel, as one thing. memberKeys are the
         // gateway keys of the sessions standing in it — see
         // OpenClawSessionKind.RoomOf for what decides that.
@@ -308,6 +327,34 @@ namespace ClaudeBuddy
         // Everyone in a channel, whether or not their orb is on screen. Keyed
         // by OpenClawSessionKind.RoomOf.
         private static Dictionary<string, List<string>> _roomMembers = new(StringComparer.Ordinal);
+
+        // Where every session the gateway listed delivers, by gateway key —
+        // including the ones no orb is drawn for.
+        //
+        // Beside _roomMembers rather than folded into it, and recorded in the
+        // same place for the same reason: the snapshot answers "which orbs are
+        // worth showing" and this answers "where does this conversation
+        // deliver", and a session filtered out for being quiet still has an
+        // address. Reading the address off the snapshot is what CB-27 was —
+        // a room whose members had all gone quiet had nowhere to post, so the
+        // message went privately to one agent and nobody in the channel saw it.
+        //
+        // Two rejected alternatives, both of which look adequate:
+        //
+        //   * Deriving it from the room key. "discord:<id>" gives the channel
+        //     and the recipient, and that is genuinely enough to post — but not
+        //     the accountId, and the accountId is the whole reason a room send
+        //     does not double up. The gateway suppresses a bot's own channel
+        //     post from that bot's own sessions, so a mirror sent under the
+        //     carrier's account is the one thing that reaches the carrier
+        //     exactly once.
+        //   * Taking whichever member happens to be in the snapshot. That is
+        //     recency-dependent, which *is* the bug.
+        //
+        // Replaced whole per poll, like the snapshot: a session the gateway has
+        // stopped listing has no address any more, and holding the last one
+        // known would be inventing a destination.
+        private static Dictionary<string, Delivery?> _deliveries = new(StringComparer.Ordinal);
 
         public static IReadOnlyList<string> MembersOfRoom(string roomKey)
         {
@@ -359,8 +406,6 @@ namespace ClaudeBuddy
         // id; the gateway knows it without the prefix.
         public static IRemoteChatSession? ChatFor(string sessionId, string displayName)
         {
-            var delivery = _snapshot.FirstOrDefault(s => "openclaw:" + s.Key == sessionId)?.Delivery;
-
             if (!ClaudeBuddySettings.OpenClawEnabled) return null;
 
             const string Prefix = "openclaw:";
@@ -370,13 +415,38 @@ namespace ClaudeBuddy
 
             lock (Gate)
             {
+                // The delivery map first, the snapshot second.
+                //
+                // The map holds every session the gateway listed; the snapshot
+                // holds the ones whose orbs are worth drawing. A member of a
+                // channel that has been quiet for longer than the window is in
+                // the first and not the second, and reading only the second is
+                // what left it with no address — the mirror silently skipped,
+                // the message delivered privately to one agent, and nothing in
+                // the channel to show for it.
+                //
+                // The snapshot is still consulted, because SetSnapshotForTests
+                // is the seam a test publishes sessions through and a fallback
+                // that reached nothing would make those tests pass by accident.
+                var delivery = _deliveries.TryGetValue(key, out var known)
+                    ? known
+                    : _snapshot.FirstOrDefault(s => "openclaw:" + s.Key == sessionId)?.Delivery;
+
                 if (!Chats.TryGetValue(key, out var chat))
                 {
                     chat = new OpenClawChatSession(sessionId, key, displayName);
                     Chats[key] = chat;
                 }
 
-                chat.Delivery = delivery;
+                // Assigned only when there is one, never cleared.
+                //
+                // The same rule, for the same reason, as ChatSpeaker.Resolve:
+                // knowing an address and then not knowing it is a gap in what we
+                // have been told — a poll that lost the race, a reconnect that
+                // emptied the tables — and never news that the conversation
+                // stopped living anywhere. A panel reopened in that window used
+                // to have its mirror turned off for the rest of the run.
+                if (delivery is not null) chat.Delivery = delivery;
 
                 if (!string.IsNullOrWhiteSpace(displayName))
                 {
@@ -801,6 +871,7 @@ namespace ClaudeBuddy
             var result = new List<Session>();
 
             var roomMembers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            var deliveries = new Dictionary<string, Delivery?>(StringComparer.Ordinal);
 
             // Every agent the gateway knows of, filtered or not, so that a
             // colour is reserved for one whose orb isn't drawn — their messages
@@ -843,6 +914,13 @@ namespace ClaudeBuddy
 
                     members.Add(key);
                 }
+
+                // ...and where it delivers, on the same terms and for the same
+                // reason. Every session, not only a channel's: a DM whose orb
+                // the recency filter dropped is still a conversation with an
+                // address, and the mirror on an ordinary send has been quietly
+                // skipping exactly those.
+                deliveries[key] = DeliveryFor(s);
 
                 everyAgent.Add(AgentIdOf(key) ?? key);
 
@@ -902,6 +980,7 @@ namespace ClaudeBuddy
             {
                 _roomMembers = roomMembers;
                 _roomColours = roomColours;
+                _deliveries = deliveries;
             }
 
             return (result, list.GetArrayLength());
@@ -1159,7 +1238,11 @@ namespace ClaudeBuddy
                     var mirror = new Dictionary<string, object>
                     {
                         ["to"] = delivery.To,
-                        ["message"] = "**(via Claude Buddy)** " + text,
+                        // The same constant the recognizer reads back, not a
+                        // second literal saying the same thing. Two of them is
+                        // how a mirror stops being recognisable as ours — which
+                        // it silently was, for one release.
+                        ["message"] = OpenClawSender.MirrorPrefix + text,
                         ["channel"] = delivery.Channel,
                         ["idempotencyKey"] = Guid.NewGuid().ToString()
                     };
@@ -1209,6 +1292,135 @@ namespace ClaudeBuddy
             }, ct);
         }
 
+        // --- posting to a room -------------------------------------------
+
+        // The three ways a room send can fail, as the sentence the room writes
+        // into its own transcript.
+        //
+        // Three sentences rather than one, because they are three different
+        // truths and the difference is exactly what the person needs: nothing
+        // was sent, nothing was sent and here is why, or it went to the channel
+        // and only the handoff to an agent failed. A single "couldn't send"
+        // covering all three would leave someone re-typing a message that is
+        // already in the channel.
+        //
+        // Pure and separate from the request that produces them for the reason
+        // OpenClawChatSession.SendOrFailureAsync is: the network half needs a
+        // live gateway and is excluded, and the wording is the half a person
+        // reads and a test can check.
+        //
+        // `room` is the room's display name at runtime — "#general" — because
+        // that is what the person typed into and what they will look for in
+        // Discord. Passed rather than derived: the key is "discord:<id>", which
+        // names nothing anybody recognises.
+        internal static string NoAddressInRoom(string room) =>
+            $"Couldn't post to {room}: no member of this channel carries a delivery address.";
+
+        internal static string PostFailed(string room, string detail) =>
+            $"Couldn't post to {room}: {detail}. Nothing was sent.";
+
+        internal static string HandoffFailed(string room, string agent, string detail) =>
+            $"Posted to {room}, but couldn't hand it to {agent}: {detail}.";
+
+        // Posts a message to a channel and then asks one agent in it to answer.
+        //
+        // Both halves, always, in that order — which is the fix CB-27 asked for
+        // and is worth the reasoning, because each half alone looks sufficient
+        // and neither is:
+        //
+        // A channel post on its own would be read by every agent in the room
+        // except one: the gateway suppresses a bot account's own channel post
+        // from that account's own sessions, so the carrier — the very session we
+        // are about to hand the message to — is the one member deaf to it.
+        //
+        // A `chat.send` on its own is what the bug was. The gateway delivers the
+        // *agent's* side to the channel and assumes your side arrived from there
+        // in the first place, so a message typed here reaches one agent
+        // privately and nobody in the channel ever sees the question.
+        //
+        // The mirror goes under the **carrier's own** accountId, and that is the
+        // load-bearing detail. Under any other account the carrier would receive
+        // the post as an ordinary channel message *and* the chat.send, and
+        // answer twice; under its own, the gateway's self-suppression is what
+        // makes the pair arrive exactly once. Measured on a completed room send:
+        // the carrier saw the chat.send input alone, three other members each
+        // saw the prefixed mirror once, six agents woke and replied within
+        // eleven seconds, and a message mentioning nobody woke one anyway.
+        //
+        // A failed mirror aborts the send, unlike the best-effort mirror on an
+        // ordinary single-session send. There the mirror is a convenience — the
+        // conversation already lives in that DM and the agent's reply is
+        // delivered to it either way. Here it is the whole point: a chat.send
+        // that goes through without it is precisely the silent private delivery
+        // this ticket is about, and doing it anyway would reintroduce the bug on
+        // the one path most likely to hit it.
+        //
+        // Writes to no transcript. The room owns what a room send looks like,
+        // including its failures, and a note written into a member's transcript
+        // is invisible in the merge — which drops System turns.
+        //
+        // Not excluded, unlike every other method here that talks to a gateway.
+        // The connection is a constructor argument on OpenClawGateway and
+        // SetGatewayForTests hands one in, so both requests, both failures and
+        // the order between them are all reachable over an in-memory socket —
+        // and the claim this whole fix rests on, that the mirror goes out under
+        // the carrier's own account, is exactly the kind of claim that must not
+        // sit behind an exclusion.
+        internal static async Task<string?> SendToRoomAsync(
+            OpenClawChatSession carrier, string room, string agent, string text,
+            CancellationToken ct)
+        {
+            OpenClawGateway? gateway;
+            lock (Gate) gateway = _gateway;
+
+            if (gateway is null) return PostFailed(room, "not connected to the gateway");
+
+            var delivery = carrier.Delivery;
+            if (delivery is null) return NoAddressInRoom(room);
+
+            try
+            {
+                var mirror = new Dictionary<string, object>
+                {
+                    ["to"] = delivery.To,
+                    ["message"] = OpenClawSender.MirrorPrefix + text,
+                    ["channel"] = delivery.Channel,
+                    ["idempotencyKey"] = Guid.NewGuid().ToString()
+                };
+
+                if (!string.IsNullOrWhiteSpace(delivery.AccountId))
+                {
+                    mirror["accountId"] = delivery.AccountId!;
+                }
+
+                await gateway.RequestAsync("send", mirror, ct);
+            }
+            catch (Exception ex)
+            {
+                return PostFailed(room, ex.Message);
+            }
+
+            try
+            {
+                await gateway.RequestAsync("chat.send", new Dictionary<string, object>
+                {
+                    ["sessionKey"] = carrier.GatewayKey,
+                    ["message"] = text,
+                    ["deliver"] = true,
+                    ["idempotencyKey"] = Guid.NewGuid().ToString()
+                }, ct);
+            }
+            catch (Exception ex)
+            {
+                // The channel already has it, so this is not "nothing was
+                // sent". Saying so matters: the alternative wording would have
+                // someone post the same message a second time.
+                return HandoffFailed(room, agent, ex.Message);
+            }
+
+            return null;
+        }
+
         // One agent messaging another arrives as a user turn with a machine
         // header glued to the front:
         //
@@ -1226,11 +1438,9 @@ namespace ClaudeBuddy
         // here controls, so it is the half that has to be tested against
         // fixtures — the same reasoning that keeps ChatTranscript and
         // CodexTranscript pure.
-        internal static List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt,
-            DateTimeOffset At, string? Speaker, string? SpeakerColor)> TurnsFromHistory(
-            JsonElement messages)
+        internal static List<HistoryTurn> TurnsFromHistory(JsonElement messages)
         {
-            var turns = new List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)>();
+            var turns = new List<HistoryTurn>();
 
             foreach (var message in messages.EnumerateArray())
             {
@@ -1260,9 +1470,10 @@ namespace ClaudeBuddy
                         if (string.IsNullOrWhiteSpace(url)) continue;
 
                         var ms2 = Num(message, "timestamp");
-                        turns.Add((role, "", url!, Str(block, "alt") ?? "", ms2 <= 0
-                            ? DateTimeOffset.Now
-                            : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
+                        turns.Add(new HistoryTurn(role, "", url!, Str(block, "alt") ?? "",
+                            ms2 <= 0
+                                ? DateTimeOffset.Now
+                                : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
                             null, null));
                     }
                 }
@@ -1291,9 +1502,60 @@ namespace ClaudeBuddy
                     ? DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime()
                     : DateTimeOffset.Now;
 
-                turns.Add((role, text.Trim(), null, "", at,
-                    speakerId is null ? null : AgentNameOf(speakerId),
-                    speakerId is null ? null : ColourForAgent(speakerId)));
+                var speaker = speakerId is null ? null : AgentNameOf(speakerId);
+                var colour = speakerId is null ? null : ColourForAgent(speakerId);
+                var mine = false;
+
+                // Only the user role is in question. An assistant turn is the
+                // agent whose transcript this is — that is the whole reason the
+                // room merge works — and asking who sent it would be asking a
+                // question that has already been answered.
+                //
+                // After Readable rather than before it, and on Readable's
+                // result: an inter-session message reaches here with its machine
+                // header already replaced by what it was actually saying and its
+                // speaker already identified, and running the prefix test
+                // against the raw header would only ever miss.
+                if (role == ChatRole.User)
+                {
+                    var meta = message.TryGetProperty("__openclaw", out var oc)
+                        && oc.ValueKind == JsonValueKind.Object
+                            ? oc
+                            : default;
+
+                    var sender = OpenClawSender.Classify(
+                        Bool(meta, "senderIsOwner"),
+                        Str(meta, "senderName"),
+
+                        // Both places carry it; the message's own copy is asked
+                        // first because __openclaw is the undocumented half and
+                        // the one likelier to move.
+                        Str(message, "idempotencyKey") ?? Str(meta, "idempotencyKey"),
+                        text);
+
+                    text = sender.Text;
+                    mine = sender.Kind == OpenClawSender.SenderKind.Mine;
+
+                    // A name only where Readable did not already find a better
+                    // one. Its answer is an agent *id*, which resolves to the
+                    // name and colour this app draws that agent's orb in;
+                    // senderName is a Discord display name, which does not.
+                    //
+                    // So the colour stays null for a Named sender, deliberately.
+                    // The chip falls back to initials, which is the honest
+                    // answer for somebody we cannot match to an agent — a
+                    // borrowed colour would say two different speakers were the
+                    // same one.
+                    if (speaker is null && sender.Kind == OpenClawSender.SenderKind.Named)
+                    {
+                        speaker = sender.Name;
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(text)) continue;
+
+                turns.Add(new HistoryTurn(role, text.Trim(), null, "", at,
+                    speaker, colour, mine));
             }
 
             return turns;
@@ -1622,7 +1884,7 @@ namespace ClaudeBuddy
         // half means a chat.history request over a live socket, which is the
         // reason FetchHistoryPageAsync below is excluded too.
         [ExcludeFromCodeCoverage]
-        private static async Task<(List<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> Turns, int Messages)?>
+        private static async Task<(List<HistoryTurn> Turns, int Messages)?>
             FetchPageAsync(OpenClawChatSession chat, int offset, CancellationToken ct)
         {
             OpenClawGateway? gateway;
@@ -1642,9 +1904,7 @@ namespace ClaudeBuddy
         // fetched is not a reason to refuse the conversation, because the panel
         // still works forward from whatever happens next.
         [ExcludeFromCodeCoverage]
-        private static async Task<(List<(ChatRole Role, string Text, string? ImageUrl,
-            string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> Turns,
-            int Count)?> FetchHistoryPageAsync(
+        private static async Task<(List<HistoryTurn> Turns, int Count)?> FetchHistoryPageAsync(
             OpenClawGateway gateway, OpenClawChatSession chat, int offset, CancellationToken ct)
         {
             try
@@ -1687,6 +1947,18 @@ namespace ClaudeBuddy
             && e.TryGetProperty(name, out var v)
             && v.ValueKind == JsonValueKind.String
                 ? v.GetString()
+                : null;
+
+        // Null rather than false when absent, because the three answers are
+        // genuinely different here: senderIsOwner true is the gateway saying the
+        // operator sent it, false is the gateway saying somebody else did, and a
+        // missing field is the gateway not saying — which is the case the whole
+        // classification has to keep degrading gracefully to.
+        private static bool? Bool(JsonElement e, string name) =>
+            e.ValueKind == JsonValueKind.Object
+            && e.TryGetProperty(name, out var v)
+            && v.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? v.GetBoolean()
                 : null;
 
         private static long Num(JsonElement e, string name) =>

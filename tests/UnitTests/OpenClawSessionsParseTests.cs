@@ -332,6 +332,149 @@ namespace ClaudeBuddy.Tests
             Assert.Contains("agent:main:discord:channel:1474", members);
         }
 
+        // --- where a session delivers ---
+
+        // The same rule as the two above, applied to the address: a member the
+        // recency filter dropped has no orb and still has somewhere its messages
+        // go. This is CB-27 in one assertion — the delivery was being read off
+        // the snapshot, so a channel whose members had all gone quiet had no
+        // address at all, and a message typed into it went privately to one
+        // agent with nothing in the channel to show for it.
+        [Fact]
+        public void AMemberOutsideTheWindowHasNoOrbAndStillHasAnAddress()
+        {
+            var stale = Ms(Now.AddHours(-5));
+            var (sessions, _) = Parse($$"""
+                {"sessions":[
+                  {"key":"agent:quill:discord:channel:900",
+                   "lastActivityAt":{{stale}},
+                   "deliveryContext":{"channel":"discord","to":"channel:900","accountId":"quillbot"}
+                  }
+                ]}
+                """, withinMinutes: 60);
+
+            Assert.Empty(sessions);
+
+            ClaudeBuddySettings.OpenClawEnabled = true;
+            var chat = (OpenClawChatSession)OpenClawSessions.ChatFor(
+                "openclaw:agent:quill:discord:channel:900", "Quill")!;
+
+            Assert.NotNull(chat.Delivery);
+            Assert.Equal("discord", chat.Delivery!.Channel);
+            Assert.Equal("channel:900", chat.Delivery.To);
+            Assert.Equal("quillbot", chat.Delivery.AccountId);
+        }
+
+        // The accountId in particular, which is the one part of the address that
+        // cannot be reconstructed from the room key. It is what makes the
+        // gateway suppress a bot's own channel post from that bot's own
+        // sessions, so it is what stops a room send reaching the carrier twice.
+        [Fact]
+        public void EveryMemberOfAChannelCarriesItsOwnAccount()
+        {
+            Parse($$"""
+                {"sessions":[
+                  {"key":"agent:quill:discord:channel:901","lastActivityAt":{{JustNow}},
+                   "deliveryContext":{"channel":"discord","to":"channel:901","accountId":"quillbot"}
+                  },
+                  {"key":"agent:thorn:discord:channel:901","lastActivityAt":{{JustNow}},
+                   "deliveryContext":{"channel":"discord","to":"channel:901","accountId":"thornbot"}
+                  }
+                ]}
+                """);
+
+            ClaudeBuddySettings.OpenClawEnabled = true;
+
+            var quill = (OpenClawChatSession)OpenClawSessions.ChatFor(
+                "openclaw:agent:quill:discord:channel:901", "Quill")!;
+            var thorn = (OpenClawChatSession)OpenClawSessions.ChatFor(
+                "openclaw:agent:thorn:discord:channel:901", "Thorn")!;
+
+            Assert.Equal("quillbot", quill.Delivery!.AccountId);
+            Assert.Equal("thornbot", thorn.Delivery!.AccountId);
+        }
+
+        // A known address is never replaced by not knowing one.
+        //
+        // The same rule, for the same reason, as ChatSpeaker.Resolve: a poll
+        // that lost a race, or a gateway that stopped listing a session for a
+        // moment, is a gap in what we were told rather than news that the
+        // conversation stopped living anywhere. Without this, a panel reopened
+        // in that window had its mirror switched off for the rest of the run —
+        // and a mirror that silently does not happen is precisely the failure
+        // this ticket is about.
+        [Fact]
+        public void AKnownAddressSurvivesAPollThatNoLongerCarriesOne()
+        {
+            Parse($$"""
+                {"sessions":[
+                  {"key":"agent:quill:discord:channel:902","lastActivityAt":{{JustNow}},
+                   "deliveryContext":{"channel":"discord","to":"channel:902","accountId":"quillbot"}
+                  }
+                ]}
+                """);
+
+            ClaudeBuddySettings.OpenClawEnabled = true;
+            var chat = (OpenClawChatSession)OpenClawSessions.ChatFor(
+                "openclaw:agent:quill:discord:channel:902", "Quill")!;
+            Assert.NotNull(chat.Delivery);
+
+            // The same session, now with nothing to say about where it delivers.
+            Parse($$"""
+                {"sessions":[
+                  {"key":"agent:quill:discord:channel:902","lastActivityAt":{{JustNow}}}
+                ]}
+                """);
+
+            var again = (OpenClawChatSession)OpenClawSessions.ChatFor(
+                "openclaw:agent:quill:discord:channel:902", "Quill")!;
+
+            Assert.Same(chat, again);
+            Assert.NotNull(again.Delivery);
+            Assert.Equal("channel:902", again.Delivery!.To);
+        }
+
+        // The other arm of the same rule: a session the delivery map has never
+        // heard of falls back to the published snapshot.
+        //
+        // Worth a case because the fallback is not dead weight. SetSnapshotForTests
+        // is the seam every other test publishes sessions through, and a lookup
+        // that reached only the map would make all of them pass for the wrong
+        // reason — they would be asserting against a chat whose Delivery had
+        // silently become null. The comment on the line says so; this is the half
+        // of it that was unverified.
+        [Fact]
+        public void ASessionTheMapHasNotSeenFallsBackToTheSnapshot()
+        {
+            // A poll that knows about somebody else entirely, so the map is
+            // populated and simply does not contain the key asked for next.
+            Parse($$"""
+                {"sessions":[
+                  {"key":"agent:aster:discord:channel:903","lastActivityAt":{{JustNow}},
+                   "deliveryContext":{"channel":"discord","to":"channel:903","accountId":"asterbot"}
+                  }
+                ]}
+                """);
+
+            OpenClawSessions.SetSnapshotForTests(new[]
+            {
+                new OpenClawSessions.Session(
+                    "agent:quill:discord:channel:904", "Quill — #lobby", "discord", "idle",
+                    Now, new OpenClawSessions.Delivery("discord", "channel:904", "quillbot"),
+                    SessionKind.Channel, false),
+            });
+
+            ClaudeBuddySettings.OpenClawEnabled = true;
+            var chat = (OpenClawChatSession)OpenClawSessions.ChatFor(
+                "openclaw:agent:quill:discord:channel:904", "Quill")!;
+
+            Assert.NotNull(chat.Delivery);
+            Assert.Equal("channel:904", chat.Delivery!.To);
+            Assert.Equal("quillbot", chat.Delivery.AccountId);
+
+            OpenClawSessions.SetSnapshotForTests(Array.Empty<OpenClawSessions.Session>());
+        }
+
         // Every agent gets a colour reserved whether its orb is drawn or not, for
         // the same reason: its messages still appear in a room, and an uncoloured
         // bubble in a coloured conversation reads as a failure rather than an

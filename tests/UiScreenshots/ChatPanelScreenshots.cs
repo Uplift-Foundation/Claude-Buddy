@@ -12,11 +12,18 @@ public class ChatPanelScreenshots : IDisposable
 {
     private readonly List<string> _sessionIdsToClean = new();
 
-    private FakeChatSession NewFake(IEnumerable<ChatTurn>? history = null)
+    // displayName defaults to the placeholder every capture before this one
+    // used, so none of them changes. It is worth overriding wherever the
+    // *picture* names the conversation somewhere else: a header reading "Fake
+    // Session" above a note about "#lobby" is two different answers to "what am
+    // I looking at" inside the one artifact reviewers actually open, and the
+    // fake's name costs nothing to set.
+    private FakeChatSession NewFake(
+        IEnumerable<ChatTurn>? history = null, string displayName = "Fake Session")
     {
         var id = "screenshot-" + Guid.NewGuid();
         _sessionIdsToClean.Add(id);
-        return new FakeChatSession(history) { SessionId = id, DisplayName = "Fake Session" };
+        return new FakeChatSession(history) { SessionId = id, DisplayName = displayName };
     }
 
     // Deliberately never closed — same reason as tests/UiTests's ChatPanelTests:
@@ -201,5 +208,94 @@ public class ChatPanelScreenshots : IDisposable
 
         ScreenshotHelper.CaptureAlreadyShown(
             ChatPanelTestAccess.Instance!, "chat-panel-undecodable-image.png");
+    }
+
+    // A room with everyone in it drawn as themselves — the whole of CB-27 in one
+    // picture, and the reason it is a capture rather than only an assertion.
+    //
+    // Four kinds of turn, and the judgement worth reviewing is whether they read
+    // as four different people at a glance rather than as four grey bubbles:
+    //
+    //   * Yours, in your own blue on the right. Before this, a message you sent
+    //     to a channel came back as an anonymous grey bubble on the left,
+    //     because the copies in the members' transcripts are user-role like
+    //     everybody else's.
+    //   * An agent in the room, in its own colour, matched to the ring on its
+    //     orb.
+    //   * Somebody the gateway named but this app cannot match to an agent — a
+    //     relayed bot, or another person in the channel. Named, and deliberately
+    //     uncoloured: a Discord display name is not an agent id, and a borrowed
+    //     colour would say two speakers were one. The initials chip is what that
+    //     honesty looks like, and whether it reads as deliberate rather than as
+    //     a missing colour is exactly the thing a screenshot settles and a test
+    //     cannot.
+    //   * The room's own anonymous voice, drawn when the gateway said nothing
+    //     about who sent a message. This is the *degraded* rendering and it is
+    //     deliberately still here: the whole attribution rule falls back to it
+    //     rather than guessing. In the capture because it is the arm most likely
+    //     to regress without anyone noticing — nothing else in any suite draws
+    //     it, and a change that started attributing these would look like an
+    //     improvement in every test and like the app asserting something false
+    //     on screen.
+    //
+    //     It wears the room's own name on its chip — "#lobby" — which looks
+    //     wrong and is what a real room genuinely draws. Verified against one
+    //     rather than assumed: the panel falls back to the session's sole
+    //     speaker for an unattributed assistant turn, and for a room that
+    //     resolves to the title, because a room has no agent identity behind
+    //     its session key. ChatSpeaker's own comment already admits the title is
+    //     "the wrong one for a room". It predates this branch — ChatSpeaker.cs
+    //     and ChatPanel.axaml.cs are untouched here — and this branch makes it
+    //     rarer rather than worse, since the turns it now attributes properly
+    //     are ones that used to land in exactly this bucket. Captured as it is,
+    //     rather than staged to look better than the app does.
+    //   * A failure note, which is what a send with nowhere to go now leaves
+    //     behind instead of silence.
+    [AvaloniaFact]
+    public void ARoomDrawsEveryoneInItAsThemselves()
+    {
+        var fake = NewFake(new[]
+        {
+            new ChatTurn
+            {
+                Role = ChatRole.User,
+                Text = "anyone free to look at the build?",
+                IsComplete = true,
+                Mine = true
+            },
+            new ChatTurn
+            {
+                Role = ChatRole.Assistant,
+                Text = "Taking it now — the arm64 leg is the slow one.",
+                IsComplete = true,
+                Speaker = "Quill",
+                SpeakerColor = "#00AF5F"
+            },
+            new ChatTurn
+            {
+                Role = ChatRole.Assistant,
+                Text = "Nodes are loaded, so it should be quick.",
+                IsComplete = true,
+                Speaker = "Thistle"
+            },
+            new ChatTurn
+            {
+                Role = ChatRole.Assistant,
+                Text = "Anyone know if the runner picked that up?",
+                IsComplete = true
+            },
+            new ChatTurn
+            {
+                Role = ChatRole.System,
+                Text = "Couldn't post to #lobby: no member of this channel carries "
+                     + "a delivery address.",
+                IsComplete = true
+            },
+        }, displayName: "#lobby");
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.CaptureAlreadyShown(
+            ChatPanelTestAccess.Instance!, "chat-panel-room-attribution.png");
     }
 }

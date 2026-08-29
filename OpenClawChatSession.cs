@@ -4,6 +4,36 @@ using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
+    // One turn as the history parser hands it over: what TurnsFromHistory reads
+    // out of a page of chat.history, and what SetHistory and PrependHistory put
+    // into a transcript.
+    //
+    // A record rather than the seven-field tuple this was. The tuple was
+    // tolerable while it was three fields and stopped being so at seven — every
+    // producer and consumer restated the whole shape in its own signature, so
+    // the shape appeared eight times in two files plus once in each test's
+    // helper, and adding a field meant editing all of them before anything
+    // compiled again. Named members also read at the call site: `turn.Speaker`
+    // says what `t.Item6` does not.
+    //
+    // A struct because it is a value and is treated as one — a page is a few
+    // hundred of these, each copied into a ChatTurn immediately, and nothing
+    // ever holds on to one.
+    internal readonly record struct HistoryTurn(
+        ChatRole Role,
+        string Text,
+        string? ImageUrl,
+        string ImageAlt,
+        DateTimeOffset At,
+        string? Speaker,
+        string? SpeakerColor,
+
+        // Whether the person at this keyboard said it — see ChatTurn.Mine, whose
+        // value this becomes. Defaulted, because only the OpenClaw history
+        // parser is in a position to answer it and every other producer of a
+        // HistoryTurn would otherwise have to write `false` to say nothing.
+        bool Mine = false);
+
     // One OpenClaw session, as something the chat panel can talk to.
     //
     // Reading works today. **Sending does not**, and says so rather than
@@ -74,7 +104,14 @@ namespace ClaudeBuddy
             // The user's own turn is added here rather than by the panel, so one
             // thing owns the transcript and a send that fails leaves a message
             // on screen with an explanation under it rather than a ghost.
-            var mine = new ChatTurn { Role = ChatRole.User, Text = text, IsComplete = true };
+            // Mine, said here rather than inferred: this is the one turn in the
+            // app whose author is not in doubt, and marking it keeps it matching
+            // the copy that comes back from the gateway a moment later — which
+            // is what lets a room dedupe the two instead of drawing both.
+            var mine = new ChatTurn
+            {
+                Role = ChatRole.User, Text = text, IsComplete = true, Mine = true
+            };
             Add(mine);
 
             var failure = await SendOrFailureAsync(text);
@@ -249,8 +286,7 @@ namespace ClaudeBuddy
         // raising its own event, because the panel has to put the scroll
         // position back afterwards — content appearing above where you are
         // reading would otherwise throw you down the page.
-        public void PrependHistory(
-            IReadOnlyList<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> turns)
+        public void PrependHistory(IReadOnlyList<HistoryTurn> turns)
         {
             if (turns.Count == 0) return;
 
@@ -263,6 +299,7 @@ namespace ClaudeBuddy
                 At = t.At,
                 Speaker = t.Speaker,
                 SpeakerColor = t.SpeakerColor,
+                Mine = t.Mine,
                 IsComplete = true
             }).ToList();
 
@@ -272,8 +309,7 @@ namespace ClaudeBuddy
 
         public event Action<int>? HistoryPrepended;
 
-        public void SetHistory(
-            IReadOnlyList<(ChatRole Role, string Text, string? ImageUrl, string ImageAlt, DateTimeOffset At, string? Speaker, string? SpeakerColor)> turns)
+        public void SetHistory(IReadOnlyList<HistoryTurn> turns)
         {
             if (turns.Count == 0) return;
 
@@ -282,17 +318,18 @@ namespace ClaudeBuddy
             _streamingKind = null;
             HasMore = true;
 
-            foreach (var (role, text, imageUrl, imageAlt, at, speaker, speakerColor) in turns)
+            foreach (var turn in turns)
             {
                 _history.Add(new ChatTurn
                 {
-                    Role = role,
-                    Text = text,
-                    ImageUrl = imageUrl,
-                    ImageAlt = imageAlt,
-                    At = at,
-                    Speaker = speaker,
-                    SpeakerColor = speakerColor,
+                    Role = turn.Role,
+                    Text = turn.Text,
+                    ImageUrl = turn.ImageUrl,
+                    ImageAlt = turn.ImageAlt,
+                    At = turn.At,
+                    Speaker = turn.Speaker,
+                    SpeakerColor = turn.SpeakerColor,
+                    Mine = turn.Mine,
                     IsComplete = true
                 });
             }
