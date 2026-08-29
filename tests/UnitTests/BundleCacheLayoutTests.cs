@@ -345,6 +345,64 @@ public class BundleCacheLayoutTests : IDisposable
         Assert.True(ClaudeDesktopBundles.IconApplied);
     }
 
+    // ---- PlanFor ---------------------------------------------------------
+    //
+    // The rule that decides what Ensure() does with a clone already on disk.
+    // It used to be one `&&` over these same three facts, which meant a missing
+    // icon was answered with a full re-clone from /Applications — and since
+    // Squirrel updates the *clone* and never /Applications, that re-clone was a
+    // downgrade. These cases exist to keep the three answers distinct.
+
+    [Fact]
+    public void NothingOnDiskIsRebuilt()
+    {
+        Assert.Equal(
+            ClaudeDesktopBundles.CloneAction.Rebuild,
+            ClaudeDesktopBundles.PlanFor(exists: false, stale: false, colourMatches: false));
+    }
+
+    [Fact]
+    public void ACorrectCloneIsLeftAlone()
+    {
+        Assert.Equal(
+            ClaudeDesktopBundles.CloneAction.Reuse,
+            ClaudeDesktopBundles.PlanFor(exists: true, stale: false, colourMatches: true));
+    }
+
+    // A clone genuinely behind the installed bundle is the one case a rebuild
+    // is right for: it is the only direction that is an upgrade.
+    [Fact]
+    public void ACloneBehindTheInstalledBundleIsRebuilt()
+    {
+        Assert.Equal(
+            ClaudeDesktopBundles.CloneAction.Rebuild,
+            ClaudeDesktopBundles.PlanFor(exists: true, stale: true, colourMatches: true));
+    }
+
+    // The regression this whole change exists for. A clone that Squirrel has
+    // just self-updated is newer than /Applications and has lost its "Icon\r"
+    // to the bundle swap — exists, not stale, colour does not match. Answering
+    // Rebuild there threw away the update and pinned the user to the older
+    // version; the app's own log recorded it as
+    // "Version changed since last launch: 1.40609.0 -> 1.37937.0".
+    [Fact]
+    public void AnUpdatedCloneWithNoIconIsRepaintedNotRebuilt()
+    {
+        Assert.Equal(
+            ClaudeDesktopBundles.CloneAction.Repaint,
+            ClaudeDesktopBundles.PlanFor(exists: true, stale: false, colourMatches: false));
+    }
+
+    // Staleness outranks the colour: a clone that is both behind and wrongly
+    // coloured needs the newer bundle, and rebuilding repaints it anyway.
+    [Fact]
+    public void StalenessOutranksTheColour()
+    {
+        Assert.Equal(
+            ClaudeDesktopBundles.CloneAction.Rebuild,
+            ClaudeDesktopBundles.PlanFor(exists: true, stale: true, colourMatches: false));
+    }
+
     // The file macOS actually looks at for a custom Finder icon: "Icon"
     // followed by a carriage return, at the bundle root rather than inside
     // Contents/, which is what keeps the code signature intact.
