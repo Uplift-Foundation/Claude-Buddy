@@ -126,4 +126,42 @@ public class RelaySystemPromptTests
     {
         Assert.Contains("Every other message", RemoteControlBridge.RelaySystemPrompt);
     }
+
+    // The half the first wording got wrong, and the reason this case exists at
+    // all: Buddy's own answers leave by asking the relay to SendMessage a
+    // CB-MIRROR line, so a prompt that says only "ignore CB-MIRROR" tells the
+    // relay to ignore its own job. Measured on the mini — "per my standing
+    // instructions I'm ignoring them (not decoding, relaying, or replying)" —
+    // with the roster it had been handed sitting unsent.
+    [Fact]
+    public void Tells_it_to_send_a_frame_when_the_app_asks_it_to()
+    {
+        var prompt = RemoteControlBridge.RelaySystemPrompt;
+
+        Assert.Contains("Use SendMessage to send", prompt);
+        Assert.Contains("Always do it", prompt);
+        Assert.Contains("Never decline it", prompt);
+    }
+
+    // Both directions named, so the rule is about where a frame came from
+    // rather than about the string it starts with.
+    [Fact]
+    public void Separates_a_frame_arriving_from_a_frame_being_sent()
+    {
+        var prompt = RemoteControlBridge.RelaySystemPrompt;
+
+        Assert.Contains("ARRIVES", prompt);
+        Assert.Contains("SEND", prompt);
+    }
+
+    // The exact sentence Buddy types, quoted in the prompt so the two cannot
+    // drift apart unnoticed.
+    [Fact]
+    public void Quotes_the_sentence_the_bridge_actually_types()
+    {
+        var typed = BridgeProtocol.SendFramePrompt("some-relay", "CB-MIRROR:v1;t=OK;id=1");
+
+        Assert.Contains("Use SendMessage to send", typed);
+        Assert.Contains("Use SendMessage to send", RemoteControlBridge.RelaySystemPrompt);
+    }
 }
