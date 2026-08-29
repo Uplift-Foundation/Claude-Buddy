@@ -394,14 +394,24 @@ namespace ClaudeBuddy
         // typed turn so the refusal reads as "this did not go" rather than the
         // message vanishing.
         //
-        // Its two failure notes are worth reading even though they are not
-        // measured. "Couldn't send" carries the exception; "Couldn't reach" is
-        // deliberately vague about WHICH link failed, because from here they are
-        // indistinguishable — the bridge may not have started, its login may have
-        // expired, or the model may not have called the tool — and naming one
-        // would be a guess presented as a fact.
-        [ExcludeFromCodeCoverage]
-        private async Task SendThroughRelayAsync(string text)
+        // Its two failure notes: "Couldn't send" carries the exception;
+        // "Couldn't reach" is deliberately vague about WHICH link failed,
+        // because from here they are indistinguishable — the bridge may not have
+        // started, its login may have expired, or the model may not have called
+        // the tool — and naming one would be a guess presented as a fact.
+        //
+        // No longer excluded from coverage. It used to be, on the grounds that
+        // no arrangement of settings made the send inert; CB-43 gave
+        // RemoteControlSessions.SendToAsync a test seam, because this is now the
+        // *fallback* for a mirrored send and a fallback nothing can exercise is
+        // not a fallback anyone should rely on. An exclusion that has stopped
+        // being true is worse than none, since it reads as a claim that the code
+        // still cannot be reached.
+        //
+        // Answers whether the message actually left, so a caller that is falling
+        // back to it can tell the user which of the two things happened rather
+        // than asserting the cheerful one.
+        private async Task<bool> SendThroughRelayAsync(string text)
         {
             string? id;
             try
@@ -415,7 +425,7 @@ namespace ClaudeBuddy
             catch (Exception ex)
             {
                 Note("Couldn't send: " + ex.Message);
-                return;
+                return false;
             }
 
             if (id is null)
@@ -426,12 +436,13 @@ namespace ClaudeBuddy
                 // the tool. Naming one would be a guess presented as a fact.
                 Note($"Couldn't reach {_remoteName}. The relay session may not be running — "
                    + "check Settings, or try again to restart it.");
-                return;
+                return false;
             }
 
             // No "sent" confirmation on screen. The message is already there as
             // the user's own turn, and a receipt under every line would be noise
             // — the reply, when it comes, is the confirmation that matters.
+            return true;
         }
 
         // The live-view send: typed into the far session's terminal by the Buddy
@@ -460,10 +471,63 @@ namespace ClaudeBuddy
             var error = await client.SendInputAsync(_remoteName, text).ConfigureAwait(true);
             if (error is null) return;
 
+            // No pane to type into is a missing mechanism, not a refusal, and
+            // the messaging channel this panel used before it upgraded still
+            // works. Refusing here made a live view *cost* the user the ability
+            // to send — strictly worse than not having mirrored at all — and on
+            // a headless machine, where a session runs in a plain tty rather
+            // than under tmux, that is the ordinary case and not an edge one.
+            //
+            // Deliberately only this code. ErrReplyOff is the far machine's
+            // owner having switched replying off, and RemoteMirrorServer's own
+            // header says what that means: "a request arriving over a wire does
+            // not change it". The relay channel puts text into that session
+            // too, so falling back there would route around a stated decision
+            // rather than around an absent capability. One is a locked door and
+            // the other is a missing one.
+            if (FallsBackToMessaging(error))
+            {
+                if (await SendThroughRelayAsync(text).ConfigureAwait(true))
+                {
+                    // _pending stays set on purpose: the far session receives
+                    // this as a cross-session message, so it comes back through
+                    // the mirrored transcript and has to reconcile rather than
+                    // render twice. See Reconcile, which knows both shapes.
+                    Note(SentAsMessageNote(_remoteName));
+                    return;
+                }
+
+                // SendThroughRelayAsync has already said why. Adding the typing
+                // refusal on top would name a second cause for one failure.
+                _pending = null;
+                return;
+            }
+
             _pending = null;
 
             Note(TypingRefusal(error, _remoteName));
         }
+
+        // Which refusals the messaging channel is allowed to answer.
+        //
+        // A rule rather than an inline comparison so every code can be asserted
+        // against it by name — the interesting content of this function is the
+        // four codes it says *no* to, and an inline `==` leaves that untested.
+        internal static bool FallsBackToMessaging(string? errCode) =>
+            string.Equals(errCode, MirrorProtocol.ErrNoPane, StringComparison.Ordinal);
+
+        // Said when a mirrored panel had to send the long way round.
+        //
+        // Worth saying rather than falling back silently: the two channels are
+        // not equivalent from where the user sits. Typing goes through the
+        // session's own input line, which is what makes a slash command run;
+        // a message is handed to the model as text, so "/color blue" over this
+        // channel is a sentence about a command rather than the command. Saying
+        // nothing would leave someone retyping a slash command that cannot work.
+        internal static string SentAsMessageNote(string remoteName) =>
+            $"Sent as a message rather than typed: {remoteName} isn't in a tmux pane on the other "
+          + "machine, so there is no input line to type into. It will still see this and reply. "
+          + "Slash commands won't run this way — they arrive as text.";
 
         // What a refused keystroke says, as a function of the code that came
         // back rather than as a switch buried in the send.
@@ -481,6 +545,13 @@ namespace ClaudeBuddy
                     $"{remoteName}'s machine has replying to sessions switched off, so nothing was typed. "
                     + "That is its own setting, and it has to be turned on over there.",
 
+                // No longer reached from a mirrored send: CB-43 routes this code
+                // to the messaging channel instead (see FallsBackToMessaging),
+                // so what a user sees for a pane-less session is
+                // SentAsMessageNote. Kept because this is a general mapping from
+                // code to wording rather than one call site's switch, and the
+                // generic arm below would be a worse answer for a caller that
+                // does hand it this code.
                 MirrorProtocol.ErrNoPane =>
                     $"{remoteName} isn't in a tmux pane on the other machine, so there is nowhere to "
                     + "type without bringing its terminal forward.",
@@ -535,7 +606,7 @@ namespace ClaudeBuddy
 
             if (ReferenceEquals(incoming, _pending)) return false;
             if (incoming.Role != ChatRole.User) return false;
-            if (!string.Equals(incoming.Text.Trim(), _pendingText, StringComparison.Ordinal)) return false;
+            if (!Echoes(incoming.Text)) return false;
 
             // Keep the transcript's own text: it is what that session actually
             // received, which is the thing this panel exists to show.
@@ -545,6 +616,36 @@ namespace ClaudeBuddy
             settled.Text = incoming.Text;
             TurnUpdated?.Invoke(settled);
             return true;
+        }
+
+        // Whether a turn arriving from the far transcript is the message this
+        // panel just sent, coming back.
+        //
+        // Two shapes, because there are two ways it can have got there. A typed
+        // message went in through the session's own input line, so the
+        // transcript holds exactly what was typed. A message sent through the
+        // relay channel — the CB-43 fallback — was *handed* to that session, so
+        // its transcript holds the whole `<cross-session-message …>` tag with
+        // the text inside it, and an exact match would miss it and render the
+        // message twice.
+        //
+        // Matched on the tag's parsed body rather than by looking for the text
+        // anywhere in the row: a far session that merely quoted the same
+        // sentence back would otherwise be swallowed as an echo, which is the
+        // failure mode worth avoiding here — a message silently disappearing
+        // reads as a bug in the panel, not in the matching.
+        private bool Echoes(string incomingText)
+        {
+            if (string.Equals(incomingText.Trim(), _pendingText, StringComparison.Ordinal))
+                return true;
+
+            foreach (var carried in BridgeProtocol.ParseInboundMessages(incomingText))
+            {
+                if (string.Equals(carried.Body.Trim(), _pendingText, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
         }
 
         // --- inbound (messaging mode) ---------------------------------------------

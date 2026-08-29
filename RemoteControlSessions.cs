@@ -490,6 +490,7 @@ namespace ClaudeBuddy
             // deliberately never disposed, so without clearing it every session
             // any earlier test built stays subscribed for the rest of the run.
             MirrorChanged = null;
+            SendOverrideForTests = null;
 
             Now = () => DateTime.UtcNow;
         }
@@ -1164,10 +1165,22 @@ namespace ClaudeBuddy
         // account that session belongs to. Null when there is no relay to send
         // it through, which the caller shows as a system line rather than
         // swallowing.
+        // Stands in for the send in tests.
+        //
+        // Added for CB-43, whose whole subject is what happens *after* a send is
+        // attempted: without it the fallback below could only be reached by
+        // starting a live relay on somebody's account, which is the same reason
+        // this method is excluded from coverage in the first place. Cleared by
+        // ResetForTests, the way UseMirrorClientForTests is.
+        internal static Func<string, string, string, Task<string?>>? SendOverrideForTests;
+
         // Excluded from coverage: sends a message through a live relay.
         [ExcludeFromCodeCoverage]
         public static async Task<string?> SendToAsync(string account, string remoteName, string text)
         {
+            if (SendOverrideForTests is { } instead)
+                return await instead(account, remoteName, text).ConfigureAwait(false);
+
             EnsureStarted();
 
             RemoteControlBridge? bridge;
