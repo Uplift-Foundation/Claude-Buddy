@@ -1269,6 +1269,133 @@ namespace ClaudeBuddy
             }, ct);
         }
 
+        // --- posting to a room -------------------------------------------
+
+        // The three ways a room send can fail, as the sentence the room writes
+        // into its own transcript.
+        //
+        // Three sentences rather than one, because they are three different
+        // truths and the difference is exactly what the person needs: nothing
+        // was sent, nothing was sent and here is why, or it went to the channel
+        // and only the handoff to an agent failed. A single "couldn't send"
+        // covering all three would leave someone re-typing a message that is
+        // already in the channel.
+        //
+        // Pure and separate from the request that produces them for the reason
+        // OpenClawChatSession.SendOrFailureAsync is: the network half needs a
+        // live gateway and is excluded, and the wording is the half a person
+        // reads and a test can check.
+        //
+        // `room` is the room's display name at runtime — "#general" — because
+        // that is what the person typed into and what they will look for in
+        // Discord. Passed rather than derived: the key is "discord:<id>", which
+        // names nothing anybody recognises.
+        internal static string NoAddressInRoom(string room) =>
+            $"Couldn't post to {room}: no member of this channel carries a delivery address.";
+
+        internal static string PostFailed(string room, string detail) =>
+            $"Couldn't post to {room}: {detail}. Nothing was sent.";
+
+        internal static string HandoffFailed(string room, string agent, string detail) =>
+            $"Posted to {room}, but couldn't hand it to {agent}: {detail}.";
+
+        // Posts a message to a channel and then asks one agent in it to answer.
+        //
+        // Both halves, always, in that order — which is the fix CB-27 asked for
+        // and is worth the reasoning, because each half alone looks sufficient
+        // and neither is:
+        //
+        // A channel post on its own would be read by every agent in the room
+        // except one: the gateway suppresses a bot account's own channel post
+        // from that account's own sessions, so the carrier — the very session we
+        // are about to hand the message to — is the one member deaf to it.
+        //
+        // A `chat.send` on its own is what the bug was. The gateway delivers the
+        // *agent's* side to the channel and assumes your side arrived from there
+        // in the first place, so a message typed here reaches one agent
+        // privately and nobody in the channel ever sees the question.
+        //
+        // The mirror goes under the **carrier's own** accountId, and that is the
+        // load-bearing detail. Under any other account the carrier would receive
+        // the post as an ordinary channel message *and* the chat.send, and
+        // answer twice; under its own, the gateway's self-suppression is what
+        // makes the pair arrive exactly once. Measured on a completed room send:
+        // the carrier saw the chat.send input alone, three other members each
+        // saw the prefixed mirror once, six agents woke and replied within
+        // eleven seconds, and a message mentioning nobody woke one anyway.
+        //
+        // A failed mirror aborts the send, unlike the best-effort mirror on an
+        // ordinary single-session send. There the mirror is a convenience — the
+        // conversation already lives in that DM and the agent's reply is
+        // delivered to it either way. Here it is the whole point: a chat.send
+        // that goes through without it is precisely the silent private delivery
+        // this ticket is about, and doing it anyway would reintroduce the bug on
+        // the one path most likely to hit it.
+        //
+        // Writes to no transcript. The room owns what a room send looks like,
+        // including its failures, and a note written into a member's transcript
+        // is invisible in the merge — which drops System turns.
+        //
+        // Excluded from coverage: every line of it is a request to a live
+        // gateway or the catch around one. What a test can reach is the
+        // no-gateway arm, which is the first thing it does, and the three
+        // sentences above.
+        [ExcludeFromCodeCoverage]
+        internal static async Task<string?> SendToRoomAsync(
+            OpenClawChatSession carrier, string room, string agent, string text,
+            CancellationToken ct)
+        {
+            OpenClawGateway? gateway;
+            lock (Gate) gateway = _gateway;
+
+            if (gateway is null) return PostFailed(room, "not connected to the gateway");
+
+            var delivery = carrier.Delivery;
+            if (delivery is null) return NoAddressInRoom(room);
+
+            try
+            {
+                var mirror = new Dictionary<string, object>
+                {
+                    ["to"] = delivery.To,
+                    ["message"] = OpenClawSender.MirrorPrefix + text,
+                    ["channel"] = delivery.Channel,
+                    ["idempotencyKey"] = Guid.NewGuid().ToString()
+                };
+
+                if (!string.IsNullOrWhiteSpace(delivery.AccountId))
+                {
+                    mirror["accountId"] = delivery.AccountId!;
+                }
+
+                await gateway.RequestAsync("send", mirror, ct);
+            }
+            catch (Exception ex)
+            {
+                return PostFailed(room, ex.Message);
+            }
+
+            try
+            {
+                await gateway.RequestAsync("chat.send", new Dictionary<string, object>
+                {
+                    ["sessionKey"] = carrier.GatewayKey,
+                    ["message"] = text,
+                    ["deliver"] = true,
+                    ["idempotencyKey"] = Guid.NewGuid().ToString()
+                }, ct);
+            }
+            catch (Exception ex)
+            {
+                // The channel already has it, so this is not "nothing was
+                // sent". Saying so matters: the alternative wording would have
+                // someone post the same message a second time.
+                return HandoffFailed(room, agent, ex.Message);
+            }
+
+            return null;
+        }
+
         // One agent messaging another arrives as a user turn with a machine
         // header glued to the front:
         //
