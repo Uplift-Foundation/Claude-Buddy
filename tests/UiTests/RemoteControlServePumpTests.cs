@@ -88,4 +88,32 @@ public class RemoteControlServePumpTests : IDisposable
 
         Assert.True(RemoteControlSessions.ServePumpRunning);
     }
+
+    // The other side of the shared gate (CB-28). ServeOneAsync declining while
+    // the mirror round holds it is IntegrationTests' to assert; this is the
+    // mirror round declining while the serve pump holds it, which can only be
+    // asserted on the thread the mirror round actually runs on.
+    //
+    // The second assertion is the one with teeth: a decliner that released the
+    // gate on its way out — a `finally` written one line too high — would hand
+    // the transcript to the very round it was standing down for.
+    [AvaloniaFact]
+    public async Task Mirror_round_stands_down_while_the_serve_pump_holds_the_gate()
+    {
+        Assert.True(RemoteControlSessions.PumpGate.TryEnter());
+
+        try
+        {
+            await RemoteControlSessions.MirrorTickAsync();
+            Assert.True(RemoteControlSessions.PumpGate.Busy);
+        }
+        finally
+        {
+            RemoteControlSessions.PumpGate.Exit();
+        }
+
+        // A round that does get in leaves the gate free behind it.
+        await RemoteControlSessions.MirrorTickAsync();
+        Assert.False(RemoteControlSessions.PumpGate.Busy);
+    }
 }

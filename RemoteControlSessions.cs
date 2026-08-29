@@ -677,20 +677,38 @@ namespace ClaudeBuddy
         // an expiry, must not take the other accounts' serving down with it:
         // this runs where nobody is watching, so the failure would be permanent
         // and silent, which is the whole family of bug this ticket belongs to.
-        internal static async Task ServeOneAsync(
+        //
+        // Takes PumpGate for the same reason MirrorTickAsync does, and it is the
+        // same gate: at the handover these two overlap by one round (CB-28's
+        // review), and two rounds draining one transcript both start from the
+        // same offset and route the same lines twice. Returns false when it
+        // declined because the other pump held it — never an error, since
+        // whichever timer called this comes back around.
+        internal static async Task<bool> ServeOneAsync(
             RemoteControlBridge bridge, RemoteMirrorServer? server, RemoteMirrorClient? client)
         {
-            try { bridge.Pump(); } catch { }
+            if (!PumpGate.TryEnter()) return false;
 
-            if (server is not null)
+            try
             {
-                try { await server.TickAsync().ConfigureAwait(false); } catch { }
+                try { bridge.Pump(); } catch { }
+
+                if (server is not null)
+                {
+                    try { await server.TickAsync().ConfigureAwait(false); } catch { }
+                }
+
+                if (client is not null)
+                {
+                    try { await client.TickAsync().ConfigureAwait(false); } catch { }
+                }
+            }
+            finally
+            {
+                PumpGate.Exit();
             }
 
-            if (client is not null)
-            {
-                try { await client.TickAsync().ConfigureAwait(false); } catch { }
-            }
+            return true;
         }
 
         // Deletes scratch directories no configured account owns.
@@ -837,9 +855,17 @@ namespace ClaudeBuddy
         private static void EnsureTimer()
         {
             // Reaching here means the dispatcher is running, which is the one
-            // thing the serve pump was covering for. Stopped before the timers
-            // are created rather than after, so the two can never both be
-            // draining one transcript.
+            // thing the serve pump was covering for.
+            //
+            // Stopped before the timers are created rather than after, which
+            // narrows the overlap but does not close it: disposing a timer does
+            // not reach inside a round already running, so a serve tick still
+            // inside bridge.Pump() when the mirror timer first fires 1.5s later
+            // would be a second pump on the same transcript. What actually
+            // closes it is PumpGate, which both rounds take — this line is why
+            // there is at most one such round, and the gate is why that round
+            // cannot collide. The earlier version of this comment claimed the
+            // ordering alone was enough; it never was.
             StopServePump();
 
             if (_poll is not null) return;
@@ -885,18 +911,30 @@ namespace ClaudeBuddy
             _mirrorPump.Start();
         }
 
-        private static bool _mirrorTicking;
+        // The one guard both pumps take, so that "only one round at a time" is a
+        // single rule rather than two that agree by luck. Internal so a test can
+        // hold it and watch a round decline — the only way to prove from outside
+        // that a caller actually asks.
+        //
+        // It replaced a plain bool here. The bool was sound while MirrorTickAsync
+        // was the only caller and the UI thread the only thread; it stopped being
+        // sound when ServeOneAsync started calling it from the pool. See TickGate.
+        internal static readonly TickGate PumpGate = new();
 
         // Excluded from coverage: one round of the pump above, reading files
         // belonging to live relays and ticking a mirror server and client that
         // only exist when one is running.
         [ExcludeFromCodeCoverage]
-        private static async Task MirrorTickAsync()
+        // Internal rather than private only so a UI test can watch it decline
+        // while the serve pump holds the gate — the assertion that the two
+        // pumps really do share one, which is otherwise a claim about code
+        // nobody can call.
+        internal static async Task MirrorTickAsync()
         {
             // Ticks can overlap when a file read is slow, and two pumps racing
-            // on one relay would read the same bytes twice.
-            if (_mirrorTicking) return;
-            _mirrorTicking = true;
+            // on one relay would read the same bytes twice. Shared with
+            // ServeOneAsync, which is the other pump.
+            if (!PumpGate.TryEnter()) return;
 
             try
             {
@@ -923,7 +961,7 @@ namespace ClaudeBuddy
             }
             finally
             {
-                _mirrorTicking = false;
+                PumpGate.Exit();
             }
         }
 
