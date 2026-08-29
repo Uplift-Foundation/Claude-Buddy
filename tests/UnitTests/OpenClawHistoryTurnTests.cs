@@ -452,6 +452,16 @@ public class OpenClawHistoryTurnTests
         Assert.Null(turn.Speaker);
     }
 
+    // A mirror with nothing after its prefix is nothing, and is dropped rather
+    // than drawn as an empty bubble. Reachable because the prefix comes off
+    // before the emptiness test, which is the order that makes it possible at
+    // all — a message that is only addressing has no content.
+    [Fact]
+    public void AMirrorCarryingOnlyItsPrefixIsNotATurn()
+    {
+        Assert.Empty(Turns("""[{"role":"user","content":"**(via Claude Buddy)**   "}]"""));
+    }
+
     // An assistant turn is never asked. It is the agent whose transcript this
     // is — the fact the whole room merge is built on — so a sender block on one
     // changes nothing, and an idempotency key on one must not be read as yours.

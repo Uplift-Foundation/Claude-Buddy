@@ -907,6 +907,23 @@ namespace ClaudeBuddy.Tests
             Assert.Equal(-1, pick);
         }
 
+        // A member that has never spoken, listed *after* one that has. The same
+        // answer as the case above and reached down the other side of the
+        // comparison, which is the whole reason both are here: member order
+        // changes between scans, and a rule that only holds in one order is a
+        // rule that holds half the time.
+        [Fact]
+        public void AMemberThatHasNeverSpokenLosesFromEitherPosition()
+        {
+            var pick = OpenClawRoomChatSession.PickCarrier(new[]
+            {
+                (true, (DateTimeOffset?)T0.AddMinutes(1), "agent:quill:discord:channel:900"),
+                (true, (DateTimeOffset?)null, "agent:aster:discord:channel:900"),
+            });
+
+            Assert.Equal(0, pick);
+        }
+
         [Fact]
         public void AnEmptyRoomRefusesToo()
         {
@@ -1064,6 +1081,57 @@ namespace ClaudeBuddy.Tests
             room.Rebuild();
 
             Assert.Contains(room.History, t => t.Text.Contains("Replying is off"));
+        }
+
+        // ...and stops surviving the moment the gateway's own copy of it turns
+        // up, which is what keeps a sent message from being drawn twice — once
+        // optimistically and once for real — for as long as the panel is open.
+        [Fact]
+        public async Task YourMessageGivesWayToTheGatewaysOwnCopyOfIt()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = true;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            quill.Delivery = Address("quillbot");
+
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            await room.SendAsync("anyone about?");
+
+            // The gateway records it and the member's transcript reloads with it
+            // in, which is what happens a second or two after any real send.
+            GiveAttributed(quill, (ChatRole.User, "anyone about?", 3, true, null));
+            room.Rebuild();
+
+            var mine = Assert.Single(room.History, t => t.Text == "anyone about?");
+            Assert.True(mine.Mine);
+
+            // ...and it is the gateway's copy that survived, timestamped by the
+            // gateway rather than by this window.
+            Assert.Equal(T0.AddMinutes(3), mine.At);
+        }
+
+        // The room's own list is bounded like every other transcript here. Small
+        // on purpose — these are only ever the last few things this window did —
+        // and a room left open for a long afternoon of failed sends must not
+        // accumulate them without limit.
+        [Fact]
+        public async Task TheRoomsOwnTurnsAreBounded()
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.OpenClawReplyEnabled = false;
+
+            var quill = Member("quill");
+            quill.HasMore = false;
+            var room = Room((quill, "Quill", "#ff0000"));
+
+            for (var i = 0; i < 40; i++) await room.SendAsync("attempt " + i);
+
+            room.Rebuild();
+
+            Assert.True(room.History.Count <= 32, $"kept {room.History.Count}");
         }
 
         // ...and so does the message you typed, until the gateway's own copy of
