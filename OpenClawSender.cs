@@ -100,9 +100,19 @@ namespace ClaudeBuddy
             // wearing an agent's name, and trusting the name would draw your own
             // words as somebody else's.
             //
-            // Safe to treat as yours: nothing else ever writes this prefix, and
-            // the only thing Claude Buddy mirrors is a message the person at the
-            // keyboard just typed.
+            // Nothing else is *expected* to write this prefix, and the only
+            // thing Claude Buddy mirrors is a message the person at the keyboard
+            // just typed. Expected, not guaranteed: anyone in the channel can
+            // type those characters, and if they do their words are drawn as the
+            // operator's — blue and right-aligned — beating an explicit
+            // senderIsOwner of false. That is accepted rather than unnoticed.
+            //
+            // Accepted because the alternative is worse and commoner. Trusting
+            // senderName over the prefix would draw the operator's own mirrored
+            // words as an agent's, which happens on every room send rather than
+            // only when somebody sets out to spoof one; and the harm here is
+            // display-only, inside the operator's own panel. A misattributed
+            // bubble grants nothing, sends nothing, and moves no message.
             if (text.StartsWith(MirrorPrefix, StringComparison.Ordinal))
             {
                 return new Sender(SenderKind.Mine, null, text[MirrorPrefix.Length..]);
