@@ -38,14 +38,47 @@ public class MirrorRoutingTests
     [InlineData("system")]
     [InlineData("summary")]
     [InlineData("")]
+    // "attachment" is the row type the transcript actually writes for an
+    // absorbed queued command, and it is deliberately *not* the one accepted
+    // below. It is a catch-all — token reminders and file snapshots wear it too
+    // — so trusting it would deliver whatever text any of those happened to
+    // carry. Route identifies the one shape that qualifies and passes
+    // AbsorbedRow; the raw row type never qualifies on its own.
+    [InlineData("attachment")]
     public void NoOtherKindOfRowCarriesAMessageHoweverMuchItLooksLikeOne(string rowType) =>
         Assert.Empty(BridgeProtocol.ParseInboundMessagesFrom(rowType, RealCrossSessionRow));
+
+    // CB-41. A message handed to a relay that is already mid-turn never becomes
+    // a user row at all: Claude Code queues it, folds it into the running turn,
+    // and writes it as a queued_command attachment. The rule above dropped every
+    // one of those — on the machine this was found on, *every* cross-session
+    // message it had ever received arrived that way, so the live view never
+    // opened once.
+    //
+    // Trustworthy for the same reason a user row is: the prompt is the verbatim
+    // text the session was handed, not a model's account of it. The roster
+    // frames it was found on carry a SHA-256 of their own payload and verify
+    // byte for byte after the trip.
+    [Fact]
+    public void AMessageAbsorbedIntoARunningTurnStillCarriesIt()
+    {
+        var only = Assert.Single(
+            BridgeProtocol.ParseInboundMessagesFrom(BridgeProtocol.AbsorbedRow, RealCrossSessionRow));
+
+        Assert.Equal("job-hunter", only.FromName);
+        Assert.Equal("avatar.internal", only.Body);
+    }
 
     // Case-sensitively "user", because the transcript's own vocabulary is fixed
     // and a near-miss here would start delivering narration again.
     [Fact]
     public void TheRowTypeIsMatchedExactly() =>
         Assert.Empty(BridgeProtocol.ParseInboundMessagesFrom("User", RealCrossSessionRow));
+
+    // Same rule, same reason, for the row type added alongside it.
+    [Fact]
+    public void TheAbsorbedRowTypeIsMatchedExactlyToo() =>
+        Assert.Empty(BridgeProtocol.ParseInboundMessagesFrom("Queued_Command", RealCrossSessionRow));
 
     [Fact]
     public void AUserRowWithNothingInItCarriesNothing() =>
