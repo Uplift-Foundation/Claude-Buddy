@@ -985,9 +985,56 @@ namespace ClaudeBuddy
             var kept = new List<(string, SessionStatus)>();
             foreach (var entry in found)
             {
+                // The husk check, asked the same way the live scan asks it.
+                //
+                // This call site was left behind when JudgeLiveness grew the
+                // parameter, and the two changes met in a merge that had no
+                // textual conflict to report — so develop stopped compiling
+                // with nothing pointing at either branch.
+                //
+                // Answered rather than stubbed with `() => false`, which would
+                // have compiled and been wrong: this method's own comment above
+                // says it is composed from the same rules as the live scan "so
+                // the two cannot disagree about which sessions exist", and a
+                // stub disagrees about exactly one thing — a backgrounded husk,
+                // which the machine asking for this roster would then draw as a
+                // live session that no hook will ever correct. A closure for the
+                // same reason the live scan uses one: only a session the earlier
+                // rules kept ever pays for the stat behind it.
+                //
+                // The live scan gates the phase on `worthAsking` as well as on
+                // the source, and its absence here is deliberate rather than an
+                // omission. `worthAsking` is a whole-scan decision about whether
+                // to *spend the subprocess* that fetches the daemon's listing —
+                // its own comment says so — and this method has already fetched
+                // that listing unconditionally, a few lines up. There is no
+                // subprocess left to gate, so the condition could only suppress
+                // an answer already paid for.
+                //
+                // That leaves one case where the two genuinely differ, and it is
+                // worth stating because the contract above says they cannot.
+                // WorthAskingTheDaemon can be false for a session that *is* a
+                // job — the $TERM_PROGRAM hole its own comment admits to, where
+                // a daemon started inside a terminal passes one down to every
+                // job under it — and there the live scan sees Unknown where this
+                // sees the real phase. The disagreement is in this method's
+                // favour: Unknown passes the husk gate and the real phase
+                // (Working, Parked, Done) does not, so the live scan can read a
+                // live job's inherited marker as a husk where this one cannot.
+                // It is a difference in accuracy, not in the rule, and it can
+                // only ever keep a session this method should keep.
+                var status = entry.Status;
+                var phase = status.Source == SessionSource.ClaudeCode
+                    ? BackgroundJobs.Phase(jobs, entry.SessionId)
+                    : JobPhase.Unknown;
+
+                Func<bool> handedToBackground = () =>
+                    SessionPresence.CouldBeABackgroundedHusk(status, phase)
+                    && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
+
                 var verdict = JudgeLiveness(
                     entry.SessionId, entry.Status, entry.Written,
-                    now, StaleAfter, superseded, running);
+                    now, StaleAfter, superseded, running, handedToBackground);
                 if (verdict == ScanVerdict.Keep) kept.Add((entry.SessionId, entry.Status));
             }
 
