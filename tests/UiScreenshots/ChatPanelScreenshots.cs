@@ -12,11 +12,18 @@ public class ChatPanelScreenshots : IDisposable
 {
     private readonly List<string> _sessionIdsToClean = new();
 
-    private FakeChatSession NewFake(IEnumerable<ChatTurn>? history = null)
+    // displayName defaults to the placeholder every capture before this one
+    // used, so none of them changes. It is worth overriding wherever the
+    // *picture* names the conversation somewhere else: a header reading "Fake
+    // Session" above a note about "#lobby" is two different answers to "what am
+    // I looking at" inside the one artifact reviewers actually open, and the
+    // fake's name costs nothing to set.
+    private FakeChatSession NewFake(
+        IEnumerable<ChatTurn>? history = null, string displayName = "Fake Session")
     {
         var id = "screenshot-" + Guid.NewGuid();
         _sessionIdsToClean.Add(id);
-        return new FakeChatSession(history) { SessionId = id, DisplayName = "Fake Session" };
+        return new FakeChatSession(history) { SessionId = id, DisplayName = displayName };
     }
 
     // Deliberately never closed — same reason as tests/UiTests's ChatPanelTests:
@@ -258,7 +265,7 @@ public class ChatPanelScreenshots : IDisposable
                      + "a delivery address.",
                 IsComplete = true
             },
-        });
+        }, displayName: "#lobby");
 
         ChatPanel.OpenFor(NewOrb(), fake);
         ScreenshotHelper.Flush();
