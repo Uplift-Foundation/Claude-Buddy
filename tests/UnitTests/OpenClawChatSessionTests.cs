@@ -287,11 +287,10 @@ namespace ClaudeBuddy.Tests
 
         // --- history replacement and paging ---
 
-        private static IReadOnlyList<(ChatRole, string, string?, string, DateTimeOffset, string?, string?)>
-            Turns(params string[] texts) =>
-            texts.Select(t => (
-                ChatRole.Assistant, t, (string?)null, "", DateTimeOffset.UnixEpoch,
-                (string?)"main", (string?)"#7f7")).ToList();
+        private static IReadOnlyList<HistoryTurn> Turns(params string[] texts) =>
+            texts.Select(t => new HistoryTurn(
+                ChatRole.Assistant, t, null, "", DateTimeOffset.UnixEpoch,
+                "main", "#7f7")).ToList();
 
         [Fact]
         public void SettingHistoryReplacesEverythingAndSaysSo()
