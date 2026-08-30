@@ -39,20 +39,28 @@ public class OpenClawGatewayTests
         new("gw.local", 4443, gatewayToken,
             (_, _, _, _) => Task.FromResult(
                 new OpenClawSocket.Connection(socket, Stream.Null, fingerprint)),
-            // Generous on purpose, and raised from two seconds.
+            // Generous on purpose, and raised from two seconds — but read the
+            // second half of this before trusting it.
             //
             // Nothing here talks to a network: the socket is a fake answering
             // from memory, so a correct implementation replies immediately and
-            // the size of this timeout costs nothing. What it did cost was
-            // reliability — two seconds is missable when the machine is busy
-            // with other suites, and this class failed intermittently four
-            // times in one session that way, always as "Connected vs
-            // Unreachable" or an empty scope list. That reads as a protocol bug
-            // and is a scheduling one.
+            // the size of this timeout costs nothing. Two seconds was missable
+            // when the machine was busy with other suites, and this class failed
+            // intermittently four times in one session that way. Raising it
+            // measurably helped: reproduced within three attempts before, zero
+            // in eight after.
             //
-            // A genuine hang still fails, just thirty seconds later. The one
-            // test that is actually *about* a timeout passes its own 50ms and is
-            // unaffected by this default.
+            // **It did not fix everything, and the residue is the interesting
+            // part.** CI then failed here again at *exactly* thirty seconds,
+            // which is not slowness — a busy machine does not lose half a
+            // minute. That is a genuine hang in the handshake, rarer than the
+            // scheduling misses and a different fault entirely. See CB-68.
+            //
+            // So this timeout now does something more useful than being
+            // generous: it separates the two. A failure at thirty seconds is a
+            // hang worth chasing; before, every failure looked alike. The one
+            // test actually *about* a timeout passes its own 50ms and is
+            // unaffected.
             challengeTimeout ?? TimeSpan.FromSeconds(30),
             requestTimeout ?? TimeSpan.FromSeconds(30));
 
