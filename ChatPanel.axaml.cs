@@ -111,6 +111,8 @@ namespace ClaudeBuddy
             _defaultWidth = Width;
             _defaultHeight = Height;
 
+            _bubbleMenu = BuildBubbleMenu();
+
             Turns.ItemsSource = _turns;
             Attachments.ItemsSource = _pendingImages;
 
@@ -1295,7 +1297,7 @@ namespace ClaudeBuddy
             // would be hundreds of identical two-item menus. Avalonia sets
             // Target to whichever control opened it, which is the only thing
             // the two items need to know.
-            block.ContextFlyout = BubbleMenu;
+            block.ContextFlyout = _bubbleMenu;
         }
 
         // Right-click on a message: copy what is selected, or the message
@@ -1309,9 +1311,12 @@ namespace ClaudeBuddy
         // the whole thing, and it hands back the original Markdown rather than
         // the rendering, which is what anyone pasting it into a terminal or an
         // editor actually wants.
-        private MenuFlyout BubbleMenu => _bubbleMenu ??= BuildBubbleMenu();
-
-        private MenuFlyout? _bubbleMenu;
+        // Built once with the panel rather than on first use. Lazy would save
+        // a two-item menu on a panel nobody right-clicks, and cost a null to
+        // reason about on every path that asks whether it is open — including
+        // the deactivate guard, which runs whether or not a bubble was ever
+        // drawn.
+        private readonly MenuFlyout _bubbleMenu;
 
         private MenuFlyout BuildBubbleMenu()
         {
@@ -1325,7 +1330,7 @@ namespace ClaudeBuddy
             var copyAll = new MenuItem { Header = "Copy message" };
             copyAll.Click += (_, _) =>
             {
-                var text = MessageTextOf(_bubbleMenu?.Target as SelectableTextBlock);
+                var text = MessageTextOf(_bubbleMenu.Target as SelectableTextBlock);
                 if (!string.IsNullOrEmpty(text)) _ = CopyToClipboardAsync(text!);
             };
 
@@ -1363,7 +1368,7 @@ namespace ClaudeBuddy
         // platform, so opening one deactivates the panel, and hiding the panel
         // out from under a menu the user just opened would be a strange answer
         // to a right-click.
-        private bool ContextMenuIsOpen => _bubbleMenu?.IsOpen == true;
+        private bool ContextMenuIsOpen => _bubbleMenu.IsOpen;
 
         // Everything except the block a drag has just started in.
         //
@@ -1915,7 +1920,7 @@ namespace ClaudeBuddy
             private readonly ChatTurn _turn;
             private readonly Speaker? _soleSpeaker;
             private readonly Color? _defaultBubble;
-            private readonly Action<SelectableTextBlock>? _adopt;
+            private readonly Action<SelectableTextBlock> _adopt;
 
             // soleSpeaker is who is talking when the transcript does not say.
             // A room stamps every turn with its speaker because there are
@@ -1928,7 +1933,7 @@ namespace ClaudeBuddy
             // bubble. Passed in rather than reached for through the singleton,
             // so a TurnView built by a test is a TurnView and not half a window.
             public TurnView(ChatTurn turn, Color? defaultBubble, Speaker? soleSpeaker,
-                Action<SelectableTextBlock>? adopt = null)
+                Action<SelectableTextBlock> adopt)
             {
                 _turn = turn;
                 _defaultBubble = defaultBubble;
@@ -2043,7 +2048,7 @@ namespace ClaudeBuddy
                 // more than one bubble — that only one may hold a selection,
                 // and that they share a single context menu — and neither is a
                 // TurnView's to enforce from inside one row.
-                _adopt?.Invoke(block);
+                _adopt(block);
 
                 return block;
             }
