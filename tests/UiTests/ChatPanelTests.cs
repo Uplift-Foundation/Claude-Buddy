@@ -1097,4 +1097,44 @@ public class ChatPanelTests : IDisposable
         Flush();
         Assert.False(box.IsVisible);
     }
+
+    // --- which machine, not just "another" -----------------------------------
+
+    // "another machine" is true and is not an answer.
+    //
+    // Somebody running two of them cannot act on it, which is what prompted
+    // this. The machine *replaces* the generic word rather than being appended:
+    // "another machine · avatar" says the same thing twice and the header has
+    // no room for it.
+    [Theory]
+    [InlineData("avatar", "\u21C4  avatar")]
+    [InlineData("warrens-mbp", "\u21C4  warrens-mbp")]
+    public void TheChipNamesTheMachineWhenItIsKnown(string machine, string expected) =>
+        Assert.Equal(expected, ChatPanel.KindChipLabel(
+            "\u21C4", "another machine", presence: null, machine: machine));
+
+    // And keeps the vague wording when it is not, which is the ordinary case
+    // for the first second a panel is open — the roster has not answered yet.
+    // Naming no machine beats naming a guessed one.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void TheChipFallsBackToTheGenericWordWhenTheMachineIsUnknown(string? machine) =>
+        Assert.Equal("\u21C4  another machine", ChatPanel.KindChipLabel(
+            "\u21C4", "another machine", presence: null, machine: machine));
+
+    // The presence half is untouched by any of this: it answers a different
+    // question, and a background session still says what it is waiting for.
+    [Fact]
+    public void TheChipKeepsPresenceBesideTheMachine() =>
+        Assert.Equal("\u21C4  avatar \u00B7 needs input", ChatPanel.KindChipLabel(
+            "\u21C4", "another machine", "needs input", "avatar"));
+
+    // No kind means no chip at all, machine or not — the chip is gated on the
+    // kind, and a machine name floating alone would be a claim about a session
+    // this app does not badge.
+    [Fact]
+    public void NoKindMeansNoChipEvenWithAMachine() =>
+        Assert.Equal("", ChatPanel.KindChipLabel("\u21C4", null, null, "avatar"));
 }

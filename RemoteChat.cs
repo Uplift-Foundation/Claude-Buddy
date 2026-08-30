@@ -220,6 +220,28 @@ namespace ClaudeBuddy
         void OpenElsewhere();
     }
 
+    // A conversation that is somewhere else, and can say where.
+    //
+    // The panel used to badge these "another machine", which is true and is not
+    // an answer: somebody with two of them cannot act on it. The name is already
+    // on the wire — a relay is called `claude-buddy-rc--claude-board-avatar` and
+    // the tail is the machine — so this costs nothing to send and works against
+    // a far Buddy of any version.
+    //
+    // Optional like the rest, and for the same reason: a local session's machine
+    // is *this* one, which is not worth a chip, and a gateway conversation has
+    // no machine at all.
+    public interface IRemoteChatMachine
+    {
+        // Null until the roster has answered, which a panel can open before. The
+        // caller keeps the vaguer wording rather than guessing — naming the
+        // wrong machine is worse than not naming one.
+        string? MachineName { get; }
+
+        // Raised when it becomes known, since the panel is usually open first.
+        event Action? MachineChanged;
+    }
+
     // A session that can be waiting on something slow enough to need saying so.
     //
     // Optional for the same reason as the interfaces above: a local CLI session
