@@ -258,13 +258,5 @@ namespace ClaudeBuddy
         }
 
         private static bool _installed;
-
-        // Only for tests: lets a suite assert Install's idempotence without
-        // leaving the handlers attached for the rest of the run.
-        internal static bool InstalledForTests
-        {
-            get => _installed;
-            set => _installed = value;
-        }
     }
 }

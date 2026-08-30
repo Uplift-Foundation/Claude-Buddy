@@ -122,4 +122,57 @@ public class CrashLogFormatTests
             entry.Split('\n').Skip(1).Where(l => l.Length > 0),
             line => Assert.StartsWith(" ", line));
     }
+
+    // --- where it writes -----------------------------------------------------
+
+    [Fact]
+    public void Writes_where_the_platform_keeps_logs_when_nothing_overrides_it()
+    {
+        // Read-only, and worth pinning: the default path is what the README
+        // tells people to look at, and it is the one thing here no test on a
+        // scratch directory can check. macOS keeps logs in ~/Library/Logs;
+        // Windows keeps them under %LOCALAPPDATA%.
+        var was = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", null);
+
+            var expected = OperatingSystem.IsWindows()
+                ? Path.Combine("ClaudeBuddy", "Logs")
+                : Path.Combine("Library", "Logs", "ClaudeBuddy");
+
+            Assert.EndsWith(expected, CrashLog.Directory);
+            Assert.EndsWith("crash.log", CrashLog.Path_);
+            Assert.EndsWith("crash.log.1", CrashLog.PreviousPath);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", was);
+        }
+    }
+
+    [Fact]
+    public void Prefers_the_scratch_directory_a_test_or_a_user_points_it_at()
+    {
+        var was = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR");
+
+        try
+        {
+            var scratch = Path.Combine(Path.GetTempPath(), "cb-log-seam");
+            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", scratch);
+
+            Assert.Equal(scratch, CrashLog.Directory);
+
+            // An empty value is not an override — it is a variable somebody
+            // exported and left blank, and treating it as "write to the current
+            // directory" would scatter crash logs wherever Buddy was launched.
+            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", "");
+            Assert.NotEqual("", CrashLog.Directory);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", was);
+        }
+    }
 }

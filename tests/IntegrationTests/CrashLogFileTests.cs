@@ -90,6 +90,22 @@ public class CrashLogFileTests : IDisposable
     }
 
     [Fact]
+    public void Writes_the_entry_even_when_the_rotation_cannot_happen()
+    {
+        // A directory where the previous generation belongs, so File.Move
+        // cannot do its job. Contrived as a cause, ordinary as an effect: a
+        // rotation that fails must cost the rotation and not the entry, because
+        // the entry is the thing somebody is going to read.
+        Directory.CreateDirectory(_dir);
+        Directory.CreateDirectory(CrashLog.PreviousPath);
+        File.WriteAllText(CrashLog.Path_, new string('x', (int)CrashLog.MaxBytes + 1));
+
+        CrashLog.Record("AppDomain.UnhandledException", new InvalidOperationException("written anyway"));
+
+        Assert.Contains("written anyway", File.ReadAllText(CrashLog.Path_));
+    }
+
+    [Fact]
     public void Says_nothing_and_throws_nothing_when_it_cannot_write_at_all()
     {
         // The rule this whole class exists for: a crash logger that throws turns
