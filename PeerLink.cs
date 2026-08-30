@@ -48,6 +48,21 @@ namespace ClaudeBuddy
 
         private TcpListener? _listener;
         private CancellationTokenSource? _stopping;
+        private int _boundPort;
+
+        // The port actually being listened on, which is not always the one that
+        // was asked for: passing 0 lets the OS choose.
+        //
+        // Exposed because the alternative — a caller probing for a free port and
+        // then asking for it — has a race in it. Between the probe closing and
+        // the listener opening, anything else on the machine can take that port,
+        // which is a flake that appears only under load and reads as a network
+        // failure. Discovery announces this value, so a chosen port is as usable
+        // as a fixed one.
+        internal int BoundPort
+        {
+            get { lock (_gate) return _boundPort; }
+        }
 
         internal PeerLink(Seams seams) => _seams = seams;
 
@@ -195,6 +210,7 @@ namespace ClaudeBuddy
                 // EHOSTUNREACH rather than here as anything at all.
                 _listener = new TcpListener(IPAddress.Any, port);
                 _listener.Start();
+                _boundPort = ((IPEndPoint)_listener.LocalEndpoint).Port;
             }
 
             _ = AcceptLoopAsync(_stopping!.Token);
