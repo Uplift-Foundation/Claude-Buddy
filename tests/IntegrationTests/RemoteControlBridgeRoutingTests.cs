@@ -874,4 +874,69 @@ public class RemoteControlBridgeRoutingTests : IDisposable
         Assert.DoesNotContain("hop-chain", only.Body);
         Assert.DoesNotContain("cross-session-message", only.Body);
     }
+
+    // --- CB-45: the address a send actually types into the pane ----------------
+
+    private static BridgeProtocol.RemoteAgent Peer(
+        string name, string peerRef, string status = "idle") =>
+        new(name, peerRef, "Remote Control", status);
+
+    // The bridge holds the peer list its own poll last reported, so a send does
+    // not have to be handed one. Covered here rather than only as a rule,
+    // because the wiring is the part that was missing: AddressFor could be
+    // perfect and every send still go out bare.
+    [Fact]
+    public void TheBridgeAddressesADuplicatedNameByRef()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        bridge.SetPeersForTests(new[] { Peer("job-hunter", "2548f2"), Peer("job-hunter", "462b2e") });
+
+        Assert.Equal("job-hunter [2548f2]", bridge.Address("job-hunter"));
+    }
+
+    [Fact]
+    public void TheBridgeLeavesAUniqueNameAlone()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        bridge.SetPeersForTests(new[] { Peer("job-hunter", "94f106") });
+
+        Assert.Equal("job-hunter", bridge.Address("job-hunter"));
+    }
+
+    // A bridge that has never polled has no evidence of ambiguity.
+    [Fact]
+    public void ABridgeThatHasNotPolledSendsTheBareName()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        Assert.Equal("job-hunter", bridge.Address("job-hunter"));
+    }
+
+    // What the pane actually receives. Both send paths build their prompt from
+    // the address rather than the name, and the whole point is the text typed
+    // into the relay — so it is asserted as text.
+    //
+    // The frame prompt matters most: a mirror answer is what queues up behind a
+    // picker, so a wedge here stops the machine serving every other session too.
+    [Fact]
+    public void BothSendPromptsCarryTheDisambiguatedAddress()
+    {
+        var address = BridgeProtocol.AddressFor(
+            "job-hunter",
+            new[] { Peer("job-hunter", "2548f2"), Peer("job-hunter", "462b2e") });
+
+        Assert.Contains(
+            "send job-hunter [2548f2] exactly this text",
+            BridgeProtocol.SendMessagePrompt(address, "how is the build?"));
+
+        Assert.Contains(
+            "send job-hunter [2548f2] exactly this text",
+            BridgeProtocol.SendFramePrompt(address, "CB-MIRROR:v1;t=HELLO;id=abc123;"));
+
+        Assert.Contains(
+            "job-hunter [2548f2]",
+            BridgeProtocol.CapabilitiesQueryPrompt(address));
+    }
 }
