@@ -107,6 +107,43 @@ namespace ClaudeBuddy
         public const int InitialBytes = 128 * 1024;
         public const int PageBytes = 128 * 1024;
 
+        // How long a client waits for a fetch that carries a transcript back.
+        //
+        // **Measured, not chosen.** A fetch's reply is a chunk of base64 that
+        // the far relay's model has to emit token by token as tool input, and
+        // on 29 Aug a single-chunk window off the mini took `7m 15s` — 435
+        // seconds — from the frame arriving to SendMessage returning. The
+        // window then reached this machine intact: 23 chunks, zero bad hashes,
+        // the right byte range. It was thrown away on arrival, because the
+        // request that asked for it had been given 180 seconds and had expired
+        // eight minutes earlier. Nothing was broken on the wire; the deadline
+        // was simply shorter than the answer.
+        //
+        // **CB-46's fix is what exposed it, and the two have to be read
+        // together.** RequestAsync pushes its deadline out on every
+        // *intermediate* chunk, so a long transfer renews itself for as long as
+        // it is making progress. ReadFor now shrinks a tail until it fits in a
+        // single chunk — and a single-chunk transfer has no intermediate chunk,
+        // so it never renews. Shrinking the payload removed the only signal
+        // keeping the wait alive, and the smallest transfers became the ones
+        // most likely to be abandoned. That is worth stating plainly because
+        // the two changes look unrelated and are not.
+        //
+        // 600 seconds is 435 plus room for a relay that is already mid-turn on
+        // something else when the fetch lands. It is a ceiling on a wait that
+        // is nearly always far shorter, not a target.
+        public const int FetchTimeoutSeconds = 600;
+
+        // Sending, by contrast, keeps the shorter wait, and the asymmetry is
+        // deliberate. An INPUT's reply is a bare OK — a few dozen characters,
+        // one quick turn — so a slow one means the relay is busy, not that the
+        // answer is long. Typing into a panel already falls back to an ordinary
+        // message when the relay does not acknowledge in time, and the user is
+        // told so; making them wait ten minutes to find that out would be worse
+        // than the fallback it delays. A fetch has no such fallback: the panel
+        // either gets the transcript or shows nothing.
+        public const int InputTimeoutSeconds = 180;
+
         // How long a subscription lives without being renewed, and how often a
         // client renews one it still wants. The gap between them is slack for a
         // relay having a slow turn: a watch that lapses costs a re-request, not

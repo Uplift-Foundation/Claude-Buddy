@@ -67,6 +67,24 @@ namespace ClaudeBuddy
         // "checking…" forever.
         private readonly HashSet<string> _answeredNo = new(StringComparer.OrdinalIgnoreCase);
 
+        // Names with a HELLO already on the wire.
+        //
+        // **Without this the wait for an answer manufactures the queue that
+        // stops the answer arriving.** Discovery runs off the poll — every 20
+        // seconds, or every 5 while anything is working — and asks about every
+        // name not yet in the roster. A name only enters the roster when a reply
+        // lands, so for as long as the far relay is slow, each tick sent another
+        // HELLO: measured on the mini as a backlog of 166 roster requests queued
+        // ahead of the window that had been asked for, each one costing a model
+        // turn to answer. The busier the relay got, the harder it was asked.
+        //
+        // Silence still is not "no" — a request that genuinely fails clears its
+        // name here and the next poll asks again, which is the retry the comment
+        // in DiscoverAsync describes and is worth keeping. What is dropped is
+        // only the *duplicate*: asking a second time for something already being
+        // answered, which can never arrive sooner and always arrives slower.
+        private readonly HashSet<string> _asking = new(StringComparer.OrdinalIgnoreCase);
+
         public event Action? RosterUpdated;
 
         internal MirrorState StateFor(string name)
@@ -137,15 +155,32 @@ namespace ClaudeBuddy
                     // refreshed by asking again when a panel opens — and
                     // re-asking every poll would spend a model turn per tick for
                     // an answer that has not changed.
-                    ask = wantedNames.Where(n => !_roster.ContainsKey(n)).ToList();
+                    ask = wantedNames
+                        .Where(n => !_roster.ContainsKey(n) && !_asking.Contains(n))
+                        .ToList();
+
+                    foreach (var n in ask) _asking.Add(n);
                 }
 
                 if (ask.Count == 0) continue;
 
-                var reply = await RequestAsync(
-                    relay, MirrorProtocol.Hello, new Dictionary<string, string> { ["pv"] = "1" },
-                    MirrorProtocol.PackRows(ask), TimeSpan.FromSeconds(120))
-                    .ConfigureAwait(false);
+                Reply reply;
+
+                try
+                {
+                    reply = await RequestAsync(
+                        relay, MirrorProtocol.Hello, new Dictionary<string, string> { ["pv"] = "1" },
+                        MirrorProtocol.PackRows(ask), TimeSpan.FromSeconds(120))
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    // Released however it ended, including a throw. A name left
+                    // marked as being asked about would never be asked again,
+                    // which trades a flood for a silence and is the worse of the
+                    // two failures: the flood was at least still trying.
+                    lock (_gate) foreach (var n in ask) _asking.Remove(n);
+                }
 
                 if (!reply.Ok || reply.Payload is null)
                 {
@@ -308,7 +343,7 @@ namespace ClaudeBuddy
                     ["n"] = MirrorProtocol.Encode(name),
                     ["w"] = "tail"
                 },
-                null, TimeSpan.FromSeconds(180))
+                null, TimeSpan.FromSeconds(MirrorProtocol.FetchTimeoutSeconds))
                 .ConfigureAwait(false);
 
             lock (_gate)
@@ -384,7 +419,7 @@ namespace ClaudeBuddy
                     ["from"] = from.ToString(),
                     ["to"] = to.ToString()
                 },
-                null, TimeSpan.FromSeconds(180))
+                null, TimeSpan.FromSeconds(MirrorProtocol.FetchTimeoutSeconds))
                 .ConfigureAwait(false);
 
             if (!reply.Ok || reply.Payload is null) return null;
@@ -485,7 +520,7 @@ namespace ClaudeBuddy
                 relay, MirrorProtocol.Input,
                 new Dictionary<string, string> { ["n"] = MirrorProtocol.Encode(name) },
                 System.Text.Encoding.UTF8.GetBytes(text),
-                TimeSpan.FromSeconds(180))
+                TimeSpan.FromSeconds(MirrorProtocol.InputTimeoutSeconds))
                 .ConfigureAwait(false);
 
             if (reply.Ok) return null;
