@@ -271,6 +271,64 @@ public class RemoteMirrorChatSessionTests : IDisposable
         Assert.Contains("over there", last.Text);
     }
 
+    // --- CB-52: a relay waiting on a prompt nobody will answer -----------------
+
+    // The panel is where the person most in need of this answer is sitting:
+    // staring at a view that will never paint, because the relay on *their own*
+    // machine is stuck on a keypress. "Close and reopen to try again" sends them
+    // round the loop that produced it.
+    [AvaloniaFact]
+    public async Task AMirrorThatFailedBecauseTheRelayIsStuckSaysSoAndWhatToPress()
+    {
+        Wire("a", "b");
+        _mangle = true;
+
+        RemoteControlSessions.SetRelayForTests(
+            Account, "1 remote session",
+            stall: "waiting for an answer (a prompt this app does not recognise) — "
+                 + "press Escape in that relay's terminal to clear it");
+
+        var session = await OpenAsync(expectMirror: false);
+
+        var last = session.History[^1];
+
+        Assert.Equal(ChatRole.System, last.Role);
+        Assert.Contains("press Escape", last.Text);
+        Assert.DoesNotContain("try again", last.Text);
+    }
+
+    // And when nothing says the relay is stuck, the integrity wording stays
+    // exactly as it was — a stall that is merely unknown must not be reported as
+    // one, or every ordinary failure starts telling people to press keys.
+    [AvaloniaFact]
+    public async Task AMirrorThatFailedForSomeOtherReasonStillSaysWhatItAlwaysDid()
+    {
+        Wire("a", "b");
+        _mangle = true;
+
+        var session = await OpenAsync(expectMirror: false);
+
+        var last = session.History[^1];
+
+        Assert.Contains("Couldn't verify", last.Text);
+        Assert.DoesNotContain("press Escape", last.Text);
+    }
+
+    // The other surface, and the one a user checks when nothing is working at
+    // all. The count and the stall are both true and both survive.
+    [AvaloniaFact]
+    public void TheSettingsStatusLineSaysWhenARelayIsWaiting()
+    {
+        RemoteControlSessions.SetRelayForTests(
+            Account, "3 remote sessions",
+            stall: "waiting for an answer (a tool-permission prompt) — press Escape");
+
+        var said = RemoteControlSessions.StatusText;
+
+        Assert.Contains("3 remote sessions", said);
+        Assert.Contains("press Escape", said);
+    }
+
     // --- CB-46: upgraded, but nothing painted yet ------------------------------
 
     // The state the user was actually left in, and the reason his panel showed

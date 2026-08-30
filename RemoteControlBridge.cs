@@ -823,7 +823,23 @@ namespace ClaudeBuddy
                 var pumping = PumpUntilAsync(waiter.Task, cts.Token);
 
                 var done = await Task.WhenAny(waiter.Task, pumping).ConfigureAwait(false);
-                return done == waiter.Task ? waiter.Task.Result : null;
+
+                if (done == waiter.Task)
+                {
+                    // Answering is proof it was not stuck, so a stall recorded
+                    // by an earlier timeout is cleared rather than left to
+                    // haunt the Settings row after somebody pressed Escape.
+                    Stall = null;
+                    return waiter.Task.Result;
+                }
+
+                // A request that went unanswered is exactly the moment to ask
+                // whether the pane is *waiting* rather than *working* — the two
+                // are indistinguishable from out here, and treating the second
+                // as the first is how four separate causes each went unnoticed
+                // until somebody read the pane over ssh.
+                NoteStall();
+                return null;
             }
             finally
             {
@@ -835,6 +851,21 @@ namespace ClaudeBuddy
 
                 _turn.Release();
             }
+        }
+
+        // Why this relay is not answering, when the pane says so. Null while it
+        // is merely busy, which is the ordinary case and must stay
+        // distinguishable from this one.
+        public BridgeProtocol.RelayStall? Stall { get; private set; }
+
+        // Excluded from coverage: reads a live tmux pane. What it does with the
+        // text is BridgeProtocol.ReadStall, which is pure and covered against
+        // captured panes.
+        [ExcludeFromCodeCoverage]
+        private void NoteStall()
+        {
+            try { Stall = BridgeProtocol.ReadStall(CapturePane()); }
+            catch { /* a pane that cannot be read tells us nothing either way */ }
         }
 
         // Excluded from coverage: polls a live transcript file until a request
