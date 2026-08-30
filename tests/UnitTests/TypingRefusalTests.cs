@@ -220,6 +220,53 @@ public class TypingRefusalTests
         Assert.DoesNotContain("Checking whether", said);
     }
 
+    // --- the counter that runs while nothing appears to happen ---------------
+
+    // Seconds all the way to a minute, then minutes and seconds.
+    //
+    // The measured waits are three to four minutes, so a counter showing only
+    // whole minutes would sit unchanged for sixty seconds at exactly the moment
+    // somebody is deciding whether it has hung — which is the whole failure this
+    // indicator exists to prevent.
+    [Theory]
+    [InlineData(0, "0s")]
+    [InlineData(9, "9s")]
+    [InlineData(59, "59s")]
+    [InlineData(60, "1m 0s")]
+    [InlineData(75, "1m 15s")]
+    [InlineData(192, "3m 12s")]
+    [InlineData(247, "4m 7s")]
+    public void TheWaitLabelCountsInWholeSecondsAndThenMinutes(int seconds, string expected)
+    {
+        var said = RemoteControlChatSession.WaitLabel(
+            TimeSpan.FromSeconds(seconds), "its conversation");
+
+        Assert.Contains(expected, said);
+        Assert.Contains("its conversation", said);
+    }
+
+    // A clock that has gone backwards is a machine problem, not a reason to
+    // print "-3s" at somebody. Clamped rather than guarded at the call site so
+    // there is one answer to this and it is here.
+    [Fact]
+    public void TheWaitLabelDoesNotCountBackwards()
+    {
+        var said = RemoteControlChatSession.WaitLabel(
+            TimeSpan.FromSeconds(-5), "its conversation");
+
+        Assert.Contains("0s", said);
+        Assert.DoesNotContain("-", said);
+    }
+
+    // The hint is what stops an ordinary three-minute wait reading as a fault,
+    // so it has to name a duration and it has to match what was measured.
+    [Fact]
+    public void TheWaitHintSaysHowLongTheseActuallyTake()
+    {
+        Assert.Contains("minutes", RemoteControlChatSession.WaitHint);
+        Assert.DoesNotContain("second", RemoteControlChatSession.WaitHint);
+    }
+
     // And specifically not the singular it used to promise.
     //
     // A wait quoted as one minute and measured at seven reads as a hang, which
