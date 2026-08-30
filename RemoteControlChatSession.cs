@@ -487,7 +487,14 @@ namespace ClaudeBuddy
             // the other is a missing one.
             if (FallsBackToMessaging(error))
             {
-                if (await SendThroughRelayAsync(text).ConfigureAwait(true))
+                // Awaited into a local rather than tested inline: an await
+                // inside the condition splits the method across the state
+                // machine and the coverage engines cannot map either arm back
+                // to this line, which reads as untested branching on a decision
+                // that is very much tested.
+                var sent = await SendThroughRelayAsync(text).ConfigureAwait(true);
+
+                if (sent)
                 {
                     // _pending stays set on purpose: the far session receives
                     // this as a cross-session message, so it comes back through
