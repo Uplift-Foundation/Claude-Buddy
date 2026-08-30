@@ -214,7 +214,19 @@ namespace ClaudeBuddy
             // cases this is: nobody paired, nobody reachable, or everybody
             // already connected. Guessing between those from silence is what
             // cost this ticket an hour.
-            MirrorLog.Say("peer-dial-tick",
+            // SayOnce, keyed on nothing — the *detail* is the state, so any
+            // change in it prints immediately and a steady state restates every
+            // five minutes.
+            //
+            // Both properties are needed and they pull against each other. CB-61
+            // was about a loop that had gone silent and could not be
+            // distinguished from one that was running; this line exists to
+            // answer that. But an unchanging heartbeat every ten seconds is
+            // 8,640 lines a day into a 1MB log, which answers it by destroying
+            // everything else. A machine connecting, a peer appearing, a pairing
+            // landing — each changes the counts and lands at once, which is the
+            // only time anybody is reading this.
+            MirrorLog.SayOnce("peer-dial-tick",
                 $"seen={seen.Count} paired={paired.Count} "
                 + $"connected={host.Link.ConnectedMachines().Count} dialling={worth.Count}");
 
