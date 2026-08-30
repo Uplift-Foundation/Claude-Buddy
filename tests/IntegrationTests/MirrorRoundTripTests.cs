@@ -347,14 +347,115 @@ public class MirrorRoundTripTests : IDisposable
         Assert.NotEqual(first.Gen, second.Gen);
     }
 
+    // --- CB-46: a first paint that can actually arrive --------------------------
+
+    // The headline claim, and the one the user's empty panel came down to.
+    //
+    // Every chunk is a model emitting ~8KB of base64 as tool input, so
+    // throughput is one chunk per model turn — measured at close to two minutes
+    // on a real relay. A 512KB opening window came out as two chunks, which is a
+    // four-minute first paint against a three-minute request timeout: the reply
+    // could not exist before the request expired, and the panel showed nothing
+    // for hours.
+    //
+    // So an opening window is one chunk, and it is asserted on a transcript far
+    // bigger than one — because a rule that only holds for small files is not
+    // the rule that was needed.
+    [Fact]
+    public async Task ALargeTranscriptOpensInASingleChunk()
+    {
+        var path = WriteTranscript("huge.jsonl", Rows(MirrorProtocol.InitialBytes * 8));
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        harness.ForgetFramesSoFar();
+
+        Assert.True(await harness.Client.OpenAsync("job-hunter"));
+
+        Assert.Equal(1, harness.ChunkFrames);
+
+        // And it is a real conversation, not an empty window bought by cutting
+        // until nothing was left — which would satisfy the frame count while
+        // reproducing the bug.
+        Assert.NotEmpty(Assert.Single(harness.Windows).Turns);
+    }
+
+    // The newest end, specifically. Someone opening a panel is looking for what
+    // just happened, so what survives the shrink is the tail rather than an
+    // arbitrary slice.
+    [Fact]
+    public async Task WhatSurvivesIsTheNewestPartOfTheConversation()
+    {
+        var rows = Rows(MirrorProtocol.InitialBytes * 8);
+        rows.Add(Row("assistant", "last", "the most recent thing said"));
+
+        var path = WriteTranscript("newest.jsonl", rows);
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        Assert.True(await harness.Client.OpenAsync("job-hunter"));
+
+        var window = Assert.Single(harness.Windows);
+
+        Assert.Contains("the most recent thing said", window.Turns[^1].Text);
+    }
+
+    // Growing is what makes the noise case work, and the noise case is most of a
+    // real transcript. A stretch of rows no panel shows contributes no turns and
+    // therefore no payload, so a window can cover it for free — where a fixed
+    // byte window that landed inside one would paint a single message and call
+    // it the conversation.
+    [Fact]
+    public async Task AStretchOfRowsNobodySeesDoesNotCostTheConversation()
+    {
+        var rows = new List<string> { Row("user", "u1", "the question") };
+
+        // Comfortably more than the old fixed window, all of it invisible.
+        for (var i = 0; i < 40; i++)
+            rows.Add("{\"type\":\"file-history-snapshot\",\"uuid\":\"h" + i + "\",\"blob\":\""
+                     + new string('x', 20_000) + "\"}");
+
+        rows.Add(Row("assistant", "a1", "the answer"));
+
+        var path = WriteTranscript("buried.jsonl", rows);
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        Assert.True(await harness.Client.OpenAsync("job-hunter"));
+
+        var turns = Assert.Single(harness.Windows).Turns;
+
+        // Both ends of the conversation, from opposite sides of 800KB of noise.
+        Assert.Equal(2, turns.Count);
+        Assert.Contains("the question", turns[0].Text);
+        Assert.Contains("the answer", turns[1].Text);
+    }
+
     // --- paging back ------------------------------------------------------------
 
     [Fact]
     public async Task ScrollingBackReadsTheOlderBytesAndStopsAtTheStart()
     {
-        // Comfortably more than one initial window, so there is genuinely
-        // something behind the tail.
-        var rows = Rows(MirrorProtocol.InitialBytes * 2);
+        // Comfortably more than one *window*, and since CB-46 that is no longer
+        // the same thing as more than InitialBytes. The opening window is now
+        // searched for rather than fixed: the server grows it while the turns
+        // still fit in one chunk, because the wire moves one chunk per model
+        // turn and a bigger window costs nothing when the extra bytes compress
+        // away. These rows are two hundred repeated characters each, so they
+        // compress to almost nothing and the old fixture — twice InitialBytes —
+        // now arrives whole, with no backlog behind it and nothing for this test
+        // to page through.
+        //
+        // Sized against the real constraint instead. Big enough that its turns
+        // cannot fit one chunk however well they compress, and small enough that
+        // the loop below can still reach the start of the file.
+        var rows = Rows(MirrorProtocol.InitialBytes * 8);
         var path = WriteTranscript("deep.jsonl", rows);
 
         var harness = new Harness(_dir);
@@ -367,7 +468,7 @@ public class MirrorRoundTripTests : IDisposable
 
         var seen = new List<MirrorProtocol.MirrorTurn>(Assert.Single(harness.Windows).Turns);
 
-        for (var page = 0; page < 10 && harness.Client.HasMore("job-hunter"); page++)
+        for (var page = 0; page < 40 && harness.Client.HasMore("job-hunter"); page++)
         {
             var older = await harness.Client.LoadOlderAsync("job-hunter");
             if (older is null) break;
@@ -1068,6 +1169,10 @@ public class MirrorRoundTripTests : IDisposable
         public List<string> ToClient { get; } = new();
 
         public int ChunkFrames { get; private set; }
+
+        // The handshake pays for its own roster chunk, and a test about the
+        // *window* should not have to subtract it.
+        public void ForgetFramesSoFar() => ChunkFrames = 0;
         public int Resends { get; private set; }
 
         public bool ReplyEnabled { get; init; } = true;
