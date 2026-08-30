@@ -345,4 +345,55 @@ public class RemoteControlTransitionTests : IDisposable
 
         Assert.False(RemoteControlSessions.IdleExpired());
     }
+
+    // ---- putting a stopped relay back ---------------------------------------
+
+    // A relay that stops on a headless machine has nothing to restart it.
+    //
+    // EnsureStarted runs at launch and from user gestures; PollAsync retires a
+    // relay that stops answering. After that the poll finds no bridge and
+    // returns immediately, every tick, for ever. With somebody at the machine
+    // that is invisible — the next orb click starts a new one. With nobody
+    // there, the machine goes dark and stays dark.
+    //
+    // Measured on job-hunter-mac-mini: four transfers served, then silence from
+    // 16:19 mid-fetch — not even its own ListAgents poll — still silent
+    // thirteen minutes later with Buddy alive at 0% CPU. Restarting Buddy fixed
+    // it in seconds. From the far end: a panel that works, then times out, and
+    // keeps timing out.
+    [Fact]
+    public void ARelayWithNoBridgeIsWorthAnotherGo() =>
+        Assert.True(RemoteControlSessions.ShouldRevive(
+            hasBridge: false, DateTime.UtcNow, lastAttempt: null));
+
+    // A relay that is up is not a problem to solve. This is the arm that keeps
+    // the check free on the overwhelmingly common tick.
+    [Fact]
+    public void ALiveRelayIsLeftAlone() =>
+        Assert.False(RemoteControlSessions.ShouldRevive(
+            hasBridge: true, DateTime.UtcNow, lastAttempt: null));
+
+    // Backed off, because a relay that cannot start would otherwise be started
+    // again every tick — each attempt a real Claude Code session, and each one
+    // costing the user. Dark for a minute beats a restart loop.
+    [Fact]
+    public void ARelayTriedAMomentAgoWaits()
+    {
+        var now = DateTime.UtcNow;
+
+        Assert.False(RemoteControlSessions.ShouldRevive(
+            hasBridge: false, now, lastAttempt: now - TimeSpan.FromSeconds(5)));
+    }
+
+    // And the backoff has to lift, or one failed attempt silences the machine
+    // as thoroughly as the bug did.
+    [Fact]
+    public void ARelayTriedLongEnoughAgoIsTriedAgain()
+    {
+        var now = DateTime.UtcNow;
+
+        Assert.True(RemoteControlSessions.ShouldRevive(
+            hasBridge: false, now,
+            lastAttempt: now - RemoteControlSessions.ReviveEvery - TimeSpan.FromSeconds(1)));
+    }
 }
