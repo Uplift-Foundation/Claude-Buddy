@@ -81,6 +81,10 @@ namespace ClaudeBuddy
         // it is ongoing and rare enough not to bury anything.
         internal const int RepeatEvery = 30;
 
+        // Far more than any real machine has peers or sessions, and small enough
+        // that forgetting the lot costs nothing.
+        internal const int MostRepeatsRemembered = 500;
+
         // Whether a repeating line should be written this time.
         //
         // **The mini made this necessary within a minute of being deployed.** It
@@ -107,6 +111,14 @@ namespace ClaudeBuddy
 
             lock (Gate)
             {
+                // Keys are per machine and per session name, so a long-running
+                // Buddy accumulates one entry for every session it has ever been
+                // asked about. Small, and unbounded — which in a process that
+                // stays up for weeks is a leak rather than a rounding error.
+                // Cleared wholesale rather than evicted cleverly: the cost of
+                // being wrong is one extra line in a log.
+                if (Repeats.Count > MostRepeatsRemembered) Repeats.Clear();
+
                 Repeats.TryGetValue(what, out var last);
 
                 worth = WorthSaying(last.Detail, last.Since, detail);
