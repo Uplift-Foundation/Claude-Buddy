@@ -165,9 +165,24 @@ public class SettingsWindowScreenshots
 
             Assert.NotNull(anchor);
 
+            // **Found by what it contains, not by how big it is.** The
+            // measure-based search the other two scenarios use — first ancestor
+            // over 60 by 200 — is a guess about layout, and the guess lands on a
+            // different control per platform: the first capture of this card
+            // came back as the whole card on macOS and as one row on Windows,
+            // which makes the two rids look like a platform gate when there
+            // isn't one. Since the whole reason this scenario exists is to let a
+            // reviewer compare the two, an anchor that picks differently on each
+            // defeats it entirely.
+            //
+            // The card is by construction the nearest ancestor holding both the
+            // first row and the last, so ask for that instead. It is the same
+            // control on any platform and at any font size.
             var card = anchor!.GetLogicalAncestors().OfType<Control>()
-                .FirstOrDefault(control =>
-                    control.Bounds.Height > 60 && control.Bounds.Width > 200)
+                .FirstOrDefault(control => control.GetLogicalDescendants()
+                    .OfType<TextBlock>()
+                    .Any(block => block.Text is not null
+                        && block.Text.StartsWith("No other machines yet")))
                 ?? (Control)anchor;
 
             ScreenshotHelper.CaptureControl(card, "settings-peer-link-group.png");
