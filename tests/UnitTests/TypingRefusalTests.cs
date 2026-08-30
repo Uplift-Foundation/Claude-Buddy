@@ -210,13 +210,29 @@ public class TypingRefusalTests
     // an hour earlier — a working transfer got reported as "no live view" twice
     // on the strength of it.
     [Fact]
-    public void TheFetchingNoteSaysSomethingIsHappeningAndThatItTakesAMinute()
+    public void TheFetchingNoteSaysSomethingIsHappeningAndThatItTakesMinutes()
     {
         var said = RemoteControlChatSession.FetchingNote(Remote);
 
         Assert.Contains(Remote, said);
         Assert.Contains("fetching its conversation", said);
-        Assert.Contains("take a minute", said);
+        Assert.Contains("several minutes", said);
         Assert.DoesNotContain("Checking whether", said);
+    }
+
+    // And specifically not the singular it used to promise.
+    //
+    // A wait quoted as one minute and measured at seven reads as a hang, which
+    // is the failure this note exists to prevent — so understating it is worse
+    // than saying nothing. Asserted separately from the wording above because
+    // this is the part that was actually wrong, and a future edit that reaches
+    // for "a minute" again should fail on the reason rather than on the phrasing.
+    [Fact]
+    public void TheFetchingNoteDoesNotPromiseAMinuteItCannotKeep()
+    {
+        var said = RemoteControlChatSession.FetchingNote(Remote);
+
+        Assert.DoesNotContain("take a minute", said);
+        Assert.DoesNotContain("a minute:", said);
     }
 }
