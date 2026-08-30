@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RollForward>LatestMajor</RollForward>
+    <AssemblyName>MirrorProbe</AssemblyName>
+    <RootNamespace>ClaudeBuddy</RootNamespace>
+    <!-- Matches ClaudeBuddy.csproj, which publishes self-contained: the SDK
+         refuses to let a framework-dependent executable reference a
+         self-contained one. The RID comes from the command line the same way
+         the app's does, and dotnet run infers the host's. -->
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The shipped client, referenced rather than reimplemented, for the same
+         reason openclaw-probe compiles in the shipped transport: a probe that
+         spoke the protocol its own way could answer a question the app would
+         answer differently, which is the one thing it must not do. The deadline
+         under test lives in MirrorProtocol and the pending-request bookkeeping
+         in RemoteMirrorClient, so both are the real ones.
+
+         A ProjectReference rather than <Compile Include>, which is the same call
+         the three test suites make and for the same reason: RemoteMirrorClient
+         reaches the transcript parsers, the chat types and RemoteControlBridge,
+         and pulling those in file by file would compile most of the app a second
+         time. RemoteMirrorClient is internal, so ClaudeBuddy.csproj grants this
+         assembly InternalsVisibleTo alongside the test ones. -->
+    <ProjectReference Include="../../ClaudeBuddy.csproj" />
+  </ItemGroup>
+
+</Project>
