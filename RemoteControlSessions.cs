@@ -1075,6 +1075,22 @@ namespace ClaudeBuddy
             // arrived while nobody was asking anything gets noticed at all.
             bridge.Pump();
 
+            // Nothing below this line while somebody is waiting on that relay.
+            //
+            // Pump above is the half that matters during a wait: it reads what
+            // has already arrived and costs the relay nothing. ListAgents below
+            // costs it a whole model turn, and a relay only has one at a time.
+            // Polling through a fetch does not slow it down a little — it can
+            // stop it happening at all, because the poll comes round again
+            // before the relay has finished answering the last one and the
+            // user's frame never reaches the front of the queue. Measured: a
+            // FETCH not typed for eight minutes, by which time its deadline had
+            // gone. See RemoteMirrorClient.Waiting.
+            //
+            // Skipping a poll costs a peer list that is a few seconds stale,
+            // which is what the next tick fixes anyway.
+            if (MirrorClientFor(account)?.Waiting == true) return;
+
             IReadOnlyList<BridgeProtocol.RemoteAgent>? agents;
             try
             {
