@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
@@ -298,4 +299,58 @@ public class ChatPanelScreenshots : IDisposable
         ScreenshotHelper.CaptureAlreadyShown(
             ChatPanelTestAccess.Instance!, "chat-panel-room-attribution.png");
     }
+
+    // Where a long transcript sits when you open it, which every capture above
+    // is silent about — they all hold a handful of turns and so never overflow
+    // the panel at all.
+    //
+    // Worth a picture rather than only the assertions in tests/UiTests'
+    // ChatPanelScrollTests, because the fault it covers was reported by eye and
+    // is read back by eye: the numbers in an offset-versus-extent assertion say
+    // the scroll viewer is at its end, and the image says the newest message is
+    // the one you are looking at. It is also the one part of this fix whose
+    // behaviour is worth confirming per platform — the two-priority yield it
+    // depends on is dispatcher and layout timing, and the capture runs on both
+    // runners.
+    //
+    // Staged the way the report describes rather than on a fresh panel: a first
+    // session read part way up, then a second one opened over it. The panel is a
+    // process-wide singleton, so the offset left behind by the first is exactly
+    // what the second used to inherit.
+    [AvaloniaFact]
+    public void ALongTranscriptOpensOnItsNewestTurn()
+    {
+        var read = NewFake(LongTranscript("an earlier conversation"));
+        ChatPanel.OpenFor(NewOrb(), read);
+        ScreenshotHelper.Flush();
+
+        // Part way up the first transcript, where reading back through it
+        // leaves you.
+        ChatPanelTestAccess.Instance!.Scroll.Offset = new Vector(0, 300);
+        ScreenshotHelper.Flush();
+
+        var opened = NewFake(LongTranscript("this conversation"), displayName: "Long Session");
+        ChatPanel.OpenFor(NewOrb(), opened);
+
+        // Several, because the scroll deliberately settles across two dispatcher
+        // priorities with a measure between them, and a capture taken before it
+        // has finished is a picture of the bug rather than of the fix.
+        for (var i = 0; i < 8; i++) ScreenshotHelper.Flush();
+
+        ScreenshotHelper.CaptureAlreadyShown(
+            ChatPanelTestAccess.Instance!, "chat-panel-opens-at-newest-turn.png");
+    }
+
+    // Numbered, and with the last turn saying so, because the whole point of the
+    // image is which end of the transcript is on screen — and "some chat
+    // bubbles" looks the same at either end.
+    private static List<ChatTurn> LongTranscript(string what) =>
+        Enumerable.Range(0, 60).Select(i => new ChatTurn
+        {
+            Role = i % 2 == 0 ? ChatRole.User : ChatRole.Assistant,
+            Text = i == 59
+                ? $"Message 60 of {what} — the newest turn, and the one you should be looking at."
+                : $"Message {i + 1} of {what}, somewhere above the fold.",
+            IsComplete = true,
+        }).ToList();
 }
