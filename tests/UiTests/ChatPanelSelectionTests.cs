@@ -334,6 +334,44 @@ public class ChatPanelSelectionTests : IDisposable
         Assert.Equal(source, await ClipboardSettlesOn(panel, source));
     }
 
+    // "Copy message" after the message it was opened on has been rebuilt.
+    //
+    // Not a contrived case: a streaming reply replaces its body per delta, so a
+    // menu left open across one is pointing at a control the transcript no
+    // longer contains. There is no message to copy at that point, and the right
+    // answer is to leave the clipboard alone rather than to copy the words the
+    // reply used to say.
+    [AvaloniaFact]
+    public async Task CopyMessageOnARebuiltTurnTakesNothing()
+    {
+        var fake = Open(new ChatTurn { Role = ChatRole.Assistant, Text = "half a th" });
+        var panel = ChatPanelTestAccess.Instance!;
+
+        var stale = BubbleSaying(panel, "half a th");
+        var menu = (MenuFlyout)stale.ContextFlyout!;
+        var items = menu.ItemsSource!.Cast<MenuItem>().ToList();
+
+        menu.ShowAt(stale);
+        Flush();
+
+        fake.History[0].Text = "half a thought, completed";
+        FlushRender();
+
+        await panel.Clipboard!.SetTextAsync("untouched");
+        items[1].RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+
+        for (var i = 0; i < 10; i++)
+        {
+            Flush();
+            await Task.Delay(10);
+        }
+
+        Assert.Equal("untouched", await panel.Clipboard!.TryGetTextAsync());
+
+        menu.Hide();
+        Flush();
+    }
+
     // "Copy" with nothing selected has nothing to take, so it is offered
     // greyed rather than silently doing nothing.
     [AvaloniaFact]
