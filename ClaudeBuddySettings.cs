@@ -80,7 +80,7 @@ namespace ClaudeBuddy
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions",
-            "chatPanelSizes", "arrangeAnchor",
+            "chatPanelSizes", "arrangeAnchor", "chatTextScale",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
             // Still written, though nothing reads it into the model any more —
@@ -519,6 +519,10 @@ namespace ClaudeBuddy
             public string ArrangeShape { get; set; } = DefaultArrangeShape;
             public double ArrangeSpacing { get; set; } = DefaultArrangeSpacing;
 
+            // How much bigger or smaller than shipped the chat panel draws its
+            // text. A multiplier, not a point size — see ChatZoom.
+            public double ChatTextScale { get; set; } = ChatZoom.Default;
+
             // Where the arranged shape is centred on screen — physical pixels,
             // same space as OrbPlacement above. Null means "never arranged
             // yet"; SessionManager fills it in with the screen's centre the
@@ -894,6 +898,16 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.ArrangeSpacing = value; Save(); }
         }
 
+        // The chat panel's text size, as a multiplier over what it ships at.
+        // Clamped in the setter rather than trusted, so the one thing that can
+        // never happen is a panel drawn at a size nothing on screen can undo —
+        // the keyboard gesture and the settings slider both go through here.
+        public static double ChatTextScale
+        {
+            get { Load(); lock (Gate) return ChatZoom.Clamp(_model.ChatTextScale); }
+            set { Load(); lock (Gate) _model.ChatTextScale = ChatZoom.Clamp(value); Save(); }
+        }
+
         public static OrbPlacement? ArrangeAnchor
         {
             get { Load(); lock (Gate) return _model.ArrangeAnchor; }
@@ -1182,6 +1196,13 @@ namespace ClaudeBuddy
                         TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
                         ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
                         ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing,
+
+                        // Clamped on the way in as well as on the way out: this
+                        // file is editable by hand and a 40x scale is a chat
+                        // panel with one word in it and no way back to the
+                        // setting that caused it.
+                        ChatTextScale = ChatZoom.Clamp(
+                            root["chatTextScale"]?.GetValue<double>() ?? ChatZoom.Default),
 
                         // speakVoice was declared on the model and written by its
                         // property from the start, but never read here and never
@@ -1558,6 +1579,7 @@ namespace ClaudeBuddy
                         ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
                         ["arrangeShape"] = _model.ArrangeShape,
                         ["arrangeSpacing"] = _model.ArrangeSpacing,
+                        ["chatTextScale"] = _model.ChatTextScale,
                         // Null when never chosen, like the colours below rather
                         // than a copy of the current default — so changing which
                         // voice ships as the default still reaches everyone who
