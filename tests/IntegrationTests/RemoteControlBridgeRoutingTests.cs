@@ -939,4 +939,21 @@ public class RemoteControlBridgeRoutingTests : IDisposable
             "job-hunter [2548f2]",
             BridgeProtocol.CapabilitiesQueryPrompt(address));
     }
+
+    // --- CB-52: a bridge nobody has asked anything is not stalled -------------
+
+    // The default has to be "nothing says it is stuck", not "stuck". A relay
+    // reports a stall only after a request of its own has gone unanswered and
+    // the pane confirmed it, so a fresh bridge — and one that has simply never
+    // been asked — must read as clean. Getting this backwards would put "press
+    // Escape in that terminal" under every panel on the machine from the moment
+    // Buddy started, which is worse than the silence it replaces: advice that is
+    // usually wrong stops being read at all.
+    [Fact]
+    public void AFreshBridgeReportsNoStall()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        Assert.Null(bridge.Stall);
+    }
 }
