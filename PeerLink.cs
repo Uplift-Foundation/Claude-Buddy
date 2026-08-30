@@ -385,7 +385,10 @@ namespace ClaudeBuddy
             }
             catch (Exception ex)
             {
-                MirrorLog.Say("peer-connect-failed",
+                // SayOnce, not Say: a machine that cannot be dialled cannot be
+                // dialled every ten seconds either, and the identical line
+                // repeated forever is what evicts the history worth reading.
+                MirrorLog.SayOnce($"peer-connect-failed:{machine}",
                     $"to={machine} {OpenClawGateway.ExplainConnectFailure(ex, OperatingSystem.IsMacOS())}");
                 return false;
             }

@@ -212,7 +212,11 @@ namespace ClaudeBuddy
                 {
                     // On macOS this is where a missing Local Network grant
                     // surfaces, and it looks like an ordinary network error.
-                    MirrorLog.Say("discovery-announce-failed",
+                    // Announcing fails every interval on a machine with no
+                    // Local Network grant — a headless Mac, most of all, where
+                    // there is nobody to give it one. Said once and restated
+                    // periodically rather than every tick.
+                    MirrorLog.SayOnce("discovery-announce-failed",
                         OpenClawGateway.ExplainConnectFailure(ex, OperatingSystem.IsMacOS()));
                 }
 
