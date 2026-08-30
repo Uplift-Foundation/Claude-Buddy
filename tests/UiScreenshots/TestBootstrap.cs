@@ -35,6 +35,14 @@ internal static class TestBootstrap
 
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", scratch);
 
+        // ...and no test in this assembly may start a real relay: that is a live
+        // Claude Code session in tmux, on the developer's own account, holding a
+        // relay name the installed app also wants. Set here rather than trusted
+        // to call discipline because CB-42 proved the discipline was already
+        // broken and nobody could tell — the call was dormant only because the
+        // relay it started always failed. See RemoteControlSessions.StartsBlocked.
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_NO_RELAY", "1");
+
         ClaudeBuddySettings.ReloadForTests();
     }
 }
