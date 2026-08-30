@@ -651,6 +651,63 @@ public class MirrorEdgeCaseTests : IDisposable
         Assert.Contains("range-1", sent);
     }
 
+    // The case that will actually be live: a machine running this code asking a
+    // machine that is not.
+    //
+    // The window sizing is the *server's* half, so until the far Buddy is
+    // updated it keeps building the old oversized window and sending it over
+    // several chunks. The client half still has to make that arrive, and this is
+    // what does it: the wait is reset by each verified chunk, so a transfer that
+    // takes far longer than one timeout completes as long as it keeps making
+    // progress. Under the old flat deadline the request expired mid-transfer and
+    // the remaining chunks arrived as replies to nothing — which is precisely
+    // how a four-minute window died against a three-minute timeout.
+    //
+    // Deliberately asserted with a timeout SHORTER than the transfer: that is
+    // the whole claim, and a test whose timeout could have covered it anyway
+    // would prove nothing.
+    [Fact]
+    public async Task ATransferSlowerThanTheTimeoutStillArrivesIfItKeepsMakingProgress()
+    {
+        AddSession(IncompressibleTranscript());
+        await Handshake();
+
+        // Each frame takes 40ms to cross, and the whole transfer is many frames
+        // — comfortably more than the 150ms any single wait allows.
+        _chunkDelayMs = 40;
+        _client.TimeoutOverrideForTests = TimeSpan.FromMilliseconds(150);
+        _windows.Clear();
+
+        var started = DateTime.UtcNow;
+
+        Assert.True(
+            await _client.OpenAsync(Name),
+            "a transfer that keeps delivering verified chunks must not be timed out");
+
+        Assert.True(
+            DateTime.UtcNow - started > TimeSpan.FromMilliseconds(150),
+            "this transfer should have outlasted a single timeout, or it proves nothing");
+
+        Assert.Single(_windows);
+    }
+
+    // And silence still ends it. Extending on progress would be worthless if it
+    // also extended on nothing — a far side that stops halfway has to become a
+    // failure the panel can report rather than a wait nobody ever leaves.
+    [Fact]
+    public async Task ATransferThatGoesQuietStillTimesOut()
+    {
+        AddSession(IncompressibleTranscript());
+        await Handshake();
+
+        _client.TimeoutOverrideForTests = TimeSpan.FromMilliseconds(150);
+        _refuseAfter = 2;
+        _windows.Clear();
+
+        Assert.False(await _client.OpenAsync(Name));
+        Assert.Empty(_windows);
+    }
+
     // The real wiring, constructed. Nothing here runs a process — the point is
     // that every delegate is present and the two that read settings read the
     // right ones, since a null in this record would be a crash the first time
@@ -811,6 +868,10 @@ public class MirrorEdgeCaseTests : IDisposable
         MirrorProtocol.TryParseFrame(MirrorProtocol.BuildFrame(
             type, id, fields.ToDictionary(f => f.Key, f => f.Value)))!;
 
+    // Milliseconds to stall each frame on its way to the client, so a transfer
+    // takes real time and the gaps between chunks can be reasoned about.
+    private int _chunkDelayMs;
+
     // Holds FETCH frames at the door until a test lets them through, so a
     // request can be genuinely in flight while something else asks for the same
     // thing. Without it "concurrent" is a guess about scheduling.
@@ -832,6 +893,8 @@ public class MirrorEdgeCaseTests : IDisposable
     {
         _toClient.Add(line);
         if (_dropEverything) return true;
+
+        if (_chunkDelayMs > 0) await Task.Delay(_chunkDelayMs);
 
         // A relay that stops accepting part-way through a transfer.
         if (_refuseAfter >= 0 && ++_sent > _refuseAfter) return false;
