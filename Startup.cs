@@ -55,11 +55,14 @@ namespace ClaudeBuddy
         // it is a static field read.
         internal static void ClaimUiThread() => _ = Dispatcher.UIThread;
 
-        // Main's body, with the four things it does passed in.
+        // Main's body, with the things it does passed in.
         //
         // The point is the sequence, which is the fix: the claim has to happen
         // before anything that could post from another thread, and everything
-        // Buddy starts before the UI is up can. `serveOnLaunch` brings up a
+        // Buddy starts before the UI is up can. Writing crashes down comes
+        // before even that, because the first thing worth recording is a failure
+        // in the startup below it — the two crashes that prompted all of this
+        // happened inside `startUi` and left nothing behind (CB-44). `serveOnLaunch` brings up a
         // relay whose continuations land on the pool; `waitForUnlock` then holds
         // this thread for up to two hours, which is all the time those
         // continuations need. Starting the UI last is the shape that already
@@ -70,11 +73,13 @@ namespace ClaudeBuddy
         // and a lifetime that owns the process until it exits — while the order
         // is the part that broke and the part a test can hold on to.
         internal static void Run(
+            Action installCrashLog,
             Action claimUiThread,
             Action serveOnLaunch,
             Action waitForUnlock,
             Action startUi)
         {
+            installCrashLog();
             claimUiThread();
             serveOnLaunch();
             waitForUnlock();
