@@ -1647,6 +1647,33 @@ Apple Events for click-to-focus. Removing any of them still notarizes cleanly
 but breaks the app at runtime, so they can only be validated by running a
 signed build.
 
+## When it crashes
+
+Buddy writes unhandled exceptions to a file, on by default and with nothing to
+switch on:
+
+| | |
+| --- | --- |
+| macOS | `~/Library/Logs/ClaudeBuddy/crash.log` |
+| Windows | `%LOCALAPPDATA%\ClaudeBuddy\Logs\crash.log` |
+
+One entry per crash, newest last, each starting with `===` and a timestamp, and
+naming which of three paths caught it — a throw nothing caught
+(`AppDomain.UnhandledException`), a faulted task nobody awaited
+(`TaskScheduler.UnobservedTaskException`), or a throw inside a UI callback
+(`Dispatcher.UnhandledException`). The file rolls over to `crash.log.1` at
+256 KB, and one previous generation is kept.
+
+It exists because the alternative was a macOS `.ips` crash report, whose managed
+frames are unsymbolicated addresses: when Buddy aborted twice on an unattended
+Mac mini, identifying the exception took two crash reports, a read of Avalonia's
+source and a purpose-built probe. It is not telemetry — nothing is sent
+anywhere, and deleting the file is always safe.
+
+If Buddy vanished and that file is empty, the process did not die of a managed
+exception: look at Console.app's crash reports instead, and at whether something
+outside the app (a launchd agent, an installer replacing the bundle) stopped it.
+
 ## Notes / things you might want to tweak
 
 - **Chat names and colors**: both hook scripts pull the newest
