@@ -74,10 +74,9 @@ namespace ClaudeBuddy
         // renews a watch is the ordinary case, not a rare one. The old transport
         // had the same problem and solved it the same way — one relay, one turn
         // at a time.
-        private sealed class Connected(Stream stream, string machine, string pin) : IDisposable
+        private sealed class Connected(Stream stream, string pin) : IDisposable
         {
             public Stream Stream { get; } = stream;
-            public string Machine { get; } = machine;
             public string Pin { get; } = pin;
             public SemaphoreSlim Writing { get; } = new(1, 1);
 
@@ -166,6 +165,36 @@ namespace ClaudeBuddy
                     }
 
                     MirrorLog.Say("peer-in", $"from={machine} t={message.Type} id={message.Id}");
+
+                    // The greeting is the link's own business and never reaches
+                    // the mirror. It is also the only message that can change
+                    // what this connection is called, which is why the loop
+                    // carries `machine` in a local it is allowed to reassign
+                    // rather than reading it back out of the dictionary.
+                    if (message.Type == PeerProtocol.Hello)
+                    {
+                        var named = await GreetedAsync(machine, message).ConfigureAwait(false);
+                        if (named is null) break;
+
+                        machine = named;
+                        continue;
+                    }
+
+                    // The answer to our own greeting, which is where a pairing
+                    // becomes mutual: we have had their certificate since the
+                    // handshake, and this is them saying the code was right.
+                    if (message.Type == PeerProtocol.Ok && PairingWith(machine))
+                    {
+                        RememberFromGreeting(machine);
+                        continue;
+                    }
+
+                    if (message.Type == PeerProtocol.Err && PairingWith(machine))
+                    {
+                        MirrorLog.Say("peer-pair-refused", $"by={machine} code={message.Code}");
+                        Drop(machine);
+                        break;
+                    }
 
                     try
                     {
@@ -263,7 +292,7 @@ namespace ClaudeBuddy
                 // Which machine this is comes from `hello`, so the connection is
                 // held unnamed until then; the pin is what will be checked
                 // against the name it claims.
-                Adopt("(inbound)", tls, offered ?? "", ct);
+                Adopt(Unnamed(), tls, offered ?? "", ct);
             }
             catch (Exception ex)
             {
@@ -274,7 +303,8 @@ namespace ClaudeBuddy
 
         [ExcludeFromCodeCoverage]
         internal async Task<bool> ConnectAsync(
-            string machine, string host, int port = DefaultPort, CancellationToken ct = default)
+            string machine, string host, int port = DefaultPort, CancellationToken ct = default,
+            string? pairingCode = null)
         {
             if (IsConnected(machine)) return true;
 
@@ -303,7 +333,16 @@ namespace ClaudeBuddy
                     ? ""
                     : PeerIdentity.PinOf(X509CertificateLoader.LoadCertificate(tls.RemoteCertificate.GetRawCertData()));
 
-                if (!Accepts(_seams.KnownPeer(machine), offered))
+                var pairing = !string.IsNullOrEmpty(pairingCode);
+
+                // A pairing dial is the one case where an unpinned certificate
+                // is allowed through, and it is not a hole: the pin is still
+                // recorded, it is simply recorded *now* instead of having been
+                // recorded before. What authorises it is the code, and the far
+                // machine checks that before answering — so a dial with a wrong
+                // code gets an `err` and the connection closes without either
+                // side having remembered anything.
+                if (!pairing && !Accepts(_seams.KnownPeer(machine), offered))
                 {
                     MirrorLog.Say("peer-refused", $"to={machine} pin-not-trusted");
                     tls.Dispose();
@@ -311,7 +350,19 @@ namespace ClaudeBuddy
                     return false;
                 }
 
+                if (pairing) lock (_gate) _pairingWith.Add(machine);
+
                 Adopt(machine, tls, offered, ct);
+
+                // Said immediately rather than lazily, because until this
+                // arrives the far side has a connection it cannot name — and an
+                // unnamed connection is one the mirror would attribute every
+                // session on to a machine called "(inbound)".
+                await SendAsync(machine, PeerProtocol.Message(
+                    PeerProtocol.Hello, PeerProtocol.NewId(),
+                    name: Environment.MachineName, code: pairingCode))
+                    .ConfigureAwait(false);
+
                 return true;
             }
             catch (Exception ex)
@@ -332,9 +383,13 @@ namespace ClaudeBuddy
         // loopback test, which is the only thing that could have caught it: it
         // is invisible over a MemoryStream, where the stream ends immediately.
         [ExcludeFromCodeCoverage]
-        private void Adopt(string machine, Stream stream, string pin, CancellationToken ct)
+        // Internal rather than private so a test can put a MemoryStream under a
+        // name and then watch what closing it does. Rename-then-close is
+        // precisely the sequence that was broken, and it is unreachable from
+        // outside without this.
+        internal void Adopt(string machine, Stream stream, string pin, CancellationToken ct)
         {
-            var peer = new Connected(stream, machine, pin);
+            var peer = new Connected(stream, pin);
 
             lock (_gate)
             {
@@ -342,9 +397,52 @@ namespace ClaudeBuddy
                 _peers[machine] = peer;
             }
 
+            // **Dropped by identity, not by the name it had when it opened.**
+            // A connection that arrives unnamed is renamed the moment `hello`
+            // says who it is, so a continuation closing over the *old* name
+            // removes an entry that is no longer there and leaves the renamed
+            // one listed as connected forever. Nothing then redials it —
+            // WorthDialling skips anything already connected — so the link goes
+            // quiet and stays quiet, looking healthy the whole time.
+            //
+            // That is the exact failure the relay spent six tickets on, and it
+            // would have arrived here the day inbound connections started being
+            // named. Following the instance costs a scan of a dictionary that
+            // holds one entry per machine.
             _ = PumpAsync(machine, stream, ct)
-                .ContinueWith(_ => Drop(machine), TaskScheduler.Default);
+                .ContinueWith(_ => Forget(peer), TaskScheduler.Default);
         }
+
+        // Removes whichever name currently holds this connection.
+        private void Forget(Connected peer)
+        {
+            string? name = null;
+
+            lock (_gate)
+            {
+                foreach (var held in _peers)
+                {
+                    if (!ReferenceEquals(held.Value, peer)) continue;
+
+                    name = held.Key;
+                    break;
+                }
+
+                if (name is not null) _peers.Remove(name);
+            }
+
+            MirrorLog.Say("peer-dropped", $"machine={name ?? "(already gone)"}");
+            peer.Dispose();
+        }
+
+        // A name no inbound connection can collide on.
+        //
+        // It used to be the literal "(inbound)", which is one name for every
+        // connection that has not said who it is yet — so two machines dialling
+        // at once, or one machine reconnecting before its old connection had
+        // been reaped, silently disposed each other's stream. Rare, and
+        // indistinguishable from a network drop when it happened.
+        internal static string Unnamed() => "(inbound " + PeerProtocol.NewId() + ")";
 
         // --- the decision ------------------------------------------------------------
 
@@ -357,6 +455,175 @@ namespace ClaudeBuddy
         // the *link's* use of it can be exercised on its own.
         internal static bool Accepts(PeerIdentity.Peer? known, string offeredPin) =>
             PeerIdentity.Trusts(known, offeredPin);
+
+        // What a greeting earns.
+        internal enum Greeting
+        {
+            // Already paired, and the certificate matches what was pinned.
+            Trusted,
+
+            // Not paired, but the person at this machine has a pairing window
+            // open and the code offered is the one on their screen.
+            Paired,
+
+            // Neither. The connection is closed rather than answered.
+            Refused,
+        }
+
+        // The one security decision on this transport, in one pure function.
+        //
+        // Everything else about the link is plumbing that fails loudly. This
+        // fails *quietly* if it is wrong — a machine that should not have been
+        // let in reads exactly like one that should, and what it gets is every
+        // transcript on this disk. So it is a function with a truth table rather
+        // than a chain of ifs inside a socket handler, and every row of it is a
+        // test.
+        //
+        // The order matters and is deliberate:
+        //
+        // - **No certificate is refused first.** An empty pin cannot be trusted
+        //   and must not be pairable either, or a pairing window would accept
+        //   anonymous connections outright.
+        // - **A pinned match needs no code.** This is the ordinary case, every
+        //   reconnect after the first.
+        // - **A correct code pairs, even for a machine already known under a
+        //   different pin.** That is a reinstall, and refusing it would leave
+        //   the only recovery being to hand-edit a JSON file. The user typed a
+        //   code off the other screen; that is the whole authority pairing has.
+        // - **Everything else is refused**, including a matching code offered
+        //   when no window is open — CodeMatches already says no to a null
+        //   expectation, and this states it rather than relying on it.
+        internal static Greeting Judge(
+            PeerIdentity.Peer? known, string? offeredPin, string? openCode, string? offeredCode)
+        {
+            if (string.IsNullOrWhiteSpace(offeredPin)) return Greeting.Refused;
+            if (PeerIdentity.Trusts(known, offeredPin)) return Greeting.Trusted;
+            if (string.IsNullOrEmpty(openCode)) return Greeting.Refused;
+
+            return PeerIdentity.CodeMatches(openCode, offeredCode)
+                ? Greeting.Paired
+                : Greeting.Refused;
+        }
+
+        // --- greeting ---------------------------------------------------------------
+
+        // Answers a `hello`, and names the connection it arrived on.
+        //
+        // Returns the name to carry from here on, or null when the connection
+        // has been refused and closed. Excluded from coverage: it is the
+        // plumbing around Judge, which is where the decision lives and which is
+        // tested on its own — everything here is a dictionary lookup, a write,
+        // and a rename.
+        [ExcludeFromCodeCoverage]
+        private async Task<string?> GreetedAsync(string machine, PeerProtocol.PeerMessage hello)
+        {
+            var claimed = hello.Name;
+
+            if (string.IsNullOrWhiteSpace(claimed))
+            {
+                MirrorLog.Say("peer-greeting-nameless", $"from={machine}");
+                Drop(machine);
+                return null;
+            }
+
+            string pin;
+            string? open;
+
+            lock (_gate)
+            {
+                pin = _peers.TryGetValue(machine, out var peer) ? peer.Pin : "";
+                open = _openCode;
+            }
+
+            var verdict = Judge(_seams.KnownPeer(claimed), pin, open, hello.Code);
+
+            if (verdict == Greeting.Refused)
+            {
+                MirrorLog.Say("peer-greeting-refused", $"from={claimed}");
+
+                await SendAsync(machine, PeerProtocol.Message(
+                    PeerProtocol.Err, hello.Id, code: PeerProtocol.ErrUntrusted))
+                    .ConfigureAwait(false);
+
+                Drop(machine);
+                return null;
+            }
+
+            if (verdict == Greeting.Paired)
+            {
+                // One window, one pairing. Leaving it open would turn a code
+                // read out once into a standing invitation.
+                lock (_gate) _openCode = null;
+
+                PeerIdentity.Remember(new PeerIdentity.Peer(pin, claimed));
+                MirrorLog.Say("peer-paired", $"with={claimed}");
+            }
+
+            Rename(machine, claimed);
+
+            await SendAsync(claimed, PeerProtocol.Message(
+                PeerProtocol.Ok, hello.Id, name: Environment.MachineName))
+                .ConfigureAwait(false);
+
+            return claimed;
+        }
+
+        // Machines we have greeted with a code and not yet heard back from.
+        private readonly HashSet<string> _pairingWith = new(StringComparer.OrdinalIgnoreCase);
+
+        private bool PairingWith(string machine)
+        {
+            lock (_gate) return _pairingWith.Contains(machine);
+        }
+
+        // Excluded from coverage: one write to the identity file, on a path that
+        // needs a real TLS handshake to have produced a pin.
+        [ExcludeFromCodeCoverage]
+        private void RememberFromGreeting(string machine)
+        {
+            string pin;
+
+            lock (_gate)
+            {
+                _pairingWith.Remove(machine);
+                pin = _peers.TryGetValue(machine, out var peer) ? peer.Pin : "";
+            }
+
+            if (string.IsNullOrWhiteSpace(pin)) return;
+
+            PeerIdentity.Remember(new PeerIdentity.Peer(pin, machine));
+            MirrorLog.Say("peer-paired", $"with={machine} (we asked)");
+        }
+
+        // --- pairing window ---------------------------------------------------------
+
+        private string? _openCode;
+
+        // Opens this machine to one pairing, and returns the code to read out.
+        //
+        // No expiry timer, deliberately: the window is closed by the pairing
+        // completing or by the user closing the settings pane, both of which are
+        // events this already sees. A timer would add a way for the window to
+        // still be open with nothing on screen saying so, which is the one state
+        // that would matter.
+        internal string OpenForPairing()
+        {
+            var code = PeerIdentity.NewPairingCode();
+            lock (_gate) _openCode = code;
+
+            MirrorLog.Say("peer-pairing-open", "window opened");
+            return code;
+        }
+
+        internal void ClosePairing()
+        {
+            lock (_gate) _openCode = null;
+        }
+
+        internal bool PairingOpen
+        {
+            get { lock (_gate) return _openCode is not null; }
+        }
 
         internal void Drop(string machine)
         {
@@ -378,8 +645,13 @@ namespace ClaudeBuddy
             {
                 if (!_peers.Remove(from, out var peer)) return;
 
-                if (_peers.Remove(to, out var replaced)) replaced.Dispose();
-                _peers[to] = new Connected(peer.Stream, to, peer.Pin);
+                // The same object under a new key, deliberately: Forget finds a
+                // closing connection by identity, and a copy would leave it
+                // unable to find this one at all.
+                if (_peers.Remove(to, out var replaced) && !ReferenceEquals(replaced, peer))
+                    replaced.Dispose();
+
+                _peers[to] = peer;
             }
         }
 

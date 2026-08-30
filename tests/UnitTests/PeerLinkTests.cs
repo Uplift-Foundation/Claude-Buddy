@@ -44,7 +44,7 @@ public class PeerLinkTests
         var link = Link(got);
 
         using var stream = await StreamOf(
-            PeerProtocol.Message(PeerProtocol.Hello, "a"),
+            PeerProtocol.Message(PeerProtocol.Window, "a"),
             PeerProtocol.Message(PeerProtocol.Fetch, "b"),
             PeerProtocol.Message(PeerProtocol.Ok, "c"));
 
@@ -53,6 +53,34 @@ public class PeerLinkTests
         Assert.Equal(3, got.Count);
         Assert.Equal(new[] { "a", "b", "c" }, got.Select(g => g.Item2.Id));
         Assert.All(got, g => Assert.Equal("avatar", g.Item1));
+    }
+
+    // `hello` used to be one of the messages above, and it is now deliberately
+    // not: the greeting is the link's own business.
+    //
+    // **This is the assertion the change needed, not a weakening of the one
+    // above.** A greeting that reached the mirror would be a frame the mirror
+    // has no handler for — harmless — but it would also mean the link had not
+    // read it, and the link is what has to read it: the name in a greeting is
+    // the only thing that says which machine an inbound connection belongs to,
+    // and the pin check hangs off it.
+    //
+    // A nameless one ends the connection, which is why nothing after it
+    // arrives. That is the refusal path, and a test that let it look like a
+    // delivery would be hiding it.
+    [Fact]
+    public async Task AGreetingIsTheLinksOwnBusinessAndNeverReachesTheMirror()
+    {
+        var got = new List<(string, PeerProtocol.PeerMessage)>();
+        var link = Link(got);
+
+        using var stream = await StreamOf(
+            PeerProtocol.Message(PeerProtocol.Hello, "greeting"),
+            PeerProtocol.Message(PeerProtocol.Fetch, "after"));
+
+        await link.PumpAsync("avatar", stream, CancellationToken.None);
+
+        Assert.Empty(got);
     }
 
     // A clean hangup ends the loop without complaint. It is how every ordinary
@@ -101,7 +129,7 @@ public class PeerLinkTests
             : Task.CompletedTask);
 
         using var stream = await StreamOf(
-            PeerProtocol.Message(PeerProtocol.Hello, "before"),
+            PeerProtocol.Message(PeerProtocol.Window, "before"),
             PeerProtocol.Message(PeerProtocol.Fetch, "throws"),
             PeerProtocol.Message(PeerProtocol.Ok, "after"));
 

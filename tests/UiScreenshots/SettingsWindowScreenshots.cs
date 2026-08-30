@@ -129,4 +129,67 @@ public class SettingsWindowScreenshots
             ClaudeBuddySettings.RemoteControlEnabled = wasEnabled;
         }
     }
+
+    // The direct link's card, switched on, so the pairing controls are in frame.
+    //
+    // **Unlike every other scenario in this file, this one has no platform
+    // gate — and that is the thing to look at when comparing the two rids.**
+    // The relay card above is macOS-only because it lives in tmux; this is a
+    // socket, and the whole reason it uses SslStream rather than the gateway's
+    // hand-rolled TLS is that it behaves identically on Windows. So the two
+    // captures should show the *same* card. A Windows rid that shows a
+    // "macOS-only" note here, or nothing at all, is the regression this exists
+    // to make visible, and no unit test can show it.
+    [AvaloniaFact]
+    public void PeerLinkGroupShowsThePairingControls()
+    {
+        var wasEnabled = ClaudeBuddySettings.PeerLinkEnabled;
+        try
+        {
+            ClaudeBuddySettings.PeerLinkEnabled = true;
+
+            var ctor = typeof(SettingsWindow).GetConstructor(
+                BindingFlags.NonPublic | BindingFlags.Instance,
+                types: Type.EmptyTypes)
+                ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+            var window = (Avalonia.Controls.Window)ctor.Invoke(null);
+
+            window.Show();
+            ScreenshotHelper.Flush();
+
+            var anchor = window.GetLogicalDescendants()
+                .OfType<TextBlock>()
+                .FirstOrDefault(block =>
+                    block.Text == "Let another machine pair with this one");
+
+            Assert.NotNull(anchor);
+
+            // **Found by what it contains, not by how big it is.** The
+            // measure-based search the other two scenarios use — first ancestor
+            // over 60 by 200 — is a guess about layout, and the guess lands on a
+            // different control per platform: the first capture of this card
+            // came back as the whole card on macOS and as one row on Windows,
+            // which makes the two rids look like a platform gate when there
+            // isn't one. Since the whole reason this scenario exists is to let a
+            // reviewer compare the two, an anchor that picks differently on each
+            // defeats it entirely.
+            //
+            // The card is by construction the nearest ancestor holding both the
+            // first row and the last, so ask for that instead. It is the same
+            // control on any platform and at any font size.
+            var card = anchor!.GetLogicalAncestors().OfType<Control>()
+                .FirstOrDefault(control => control.GetLogicalDescendants()
+                    .OfType<TextBlock>()
+                    .Any(block => block.Text is not null
+                        && block.Text.StartsWith("No other machines yet")))
+                ?? (Control)anchor;
+
+            ScreenshotHelper.CaptureControl(card, "settings-peer-link-group.png");
+        }
+        finally
+        {
+            ClaudeBuddySettings.PeerLinkEnabled = wasEnabled;
+        }
+    }
 }

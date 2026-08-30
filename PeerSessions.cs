@@ -185,6 +185,130 @@ namespace ClaudeBuddy
             }
         }
 
+        // --- pairing ----------------------------------------------------------------
+
+        // Everything the settings pane needs to pair two machines, in the four
+        // calls it takes: show a code, dial with one, list what is out there,
+        // and forget one.
+        //
+        // Deliberately thin. The decisions live in PeerLink.Judge and
+        // PeerIdentity, which are pure and tested; this layer exists so the
+        // window never touches a link or an identity file directly.
+
+        // Opens this machine to one pairing and returns the code to read out.
+        [ExcludeFromCodeCoverage]
+        internal static string? OpenForPairing() => Host?.Link.OpenForPairing();
+
+        [ExcludeFromCodeCoverage]
+        internal static void ClosePairing() => Host?.Link.ClosePairing();
+
+        // Dials a machine we have seen announcing itself, offering a code read
+        // off its screen. True only means the connection opened and the
+        // greeting went out — the far side answers `ok` or `err`, and a refusal
+        // arrives on the connection rather than from here.
+        [ExcludeFromCodeCoverage]
+        internal static async Task<bool> PairAsync(PeerDiscovery.Seen peer, string code)
+        {
+            var host = Host;
+            if (host is null) return false;
+
+            // Any existing connection to this machine is on a certificate we
+            // may be about to replace, and the greeting is only sent by a fresh
+            // dial. Dropping first is what makes re-pairing after a reinstall
+            // work rather than silently doing nothing.
+            host.Link.Drop(peer.Machine);
+
+            return await host.Link
+                .ConnectAsync(peer.Machine, peer.Address, peer.Port, pairingCode: code)
+                .ConfigureAwait(false);
+        }
+
+        // The announcement a machine name came from, which is where its address
+        // and port live. Null for a paired machine that is not currently on the
+        // network — which is exactly why pairing needs it and forgetting does
+        // not.
+        [ExcludeFromCodeCoverage]
+        internal static PeerDiscovery.Seen? SeenFor(string machine)
+        {
+            PeerDiscovery? discovery;
+            lock (Gate) discovery = _discovery;
+
+            return discovery?.Peers()
+                .FirstOrDefault(p => string.Equals(
+                    p.Machine, machine, StringComparison.OrdinalIgnoreCase));
+        }
+
+        [ExcludeFromCodeCoverage]
+        internal static void Unpair(string machine)
+        {
+            Host?.Link.Drop(machine);
+            PeerIdentity.Forget(machine);
+        }
+
+        // What the settings pane lists: everything seen announcing, plus
+        // everything paired, whether or not it is currently reachable.
+        //
+        // Pure, because "which of these do I show and in what state" is a rule
+        // and not a socket read. A paired machine that has gone quiet still has
+        // a row — it is the row that says the machine is off, which is a
+        // different answer from having nothing to say about it.
+        internal sealed record Listed(string Machine, bool Paired, bool Connected, bool Seen);
+
+        internal static IReadOnlyList<Listed> Listing(
+            IReadOnlyList<PeerDiscovery.Seen> seen,
+            IEnumerable<string> paired,
+            Func<string, bool> connected)
+        {
+            var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var peer in seen) names.Add(peer.Machine);
+            foreach (var machine in paired) names.Add(machine);
+
+            var announcing = seen
+                .Select(p => p.Machine)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var known = paired.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            return names
+                .Select(name => new Listed(
+                    name, known.Contains(name), connected(name), announcing.Contains(name)))
+                .ToList();
+        }
+
+        [ExcludeFromCodeCoverage]
+        internal static IReadOnlyList<Listed> Listing()
+        {
+            PeerMirrorHost? host;
+            PeerDiscovery? discovery;
+
+            lock (Gate)
+            {
+                host = _host;
+                discovery = _discovery;
+            }
+
+            return Listing(
+                discovery?.Peers() ?? Array.Empty<PeerDiscovery.Seen>(),
+                PeerIdentity.Peers().Keys,
+                machine => host?.Link.IsConnected(machine) ?? false);
+        }
+
+        // What one row says about itself.
+        //
+        // Four states rather than two, because "paired and unreachable" and
+        // "here but not paired" are different problems with different next
+        // steps, and collapsing them is the whole complaint about the transport
+        // this replaces.
+        internal static string RowStatus(Listed row) =>
+            row switch
+            {
+                { Connected: true } => "Connected",
+                { Paired: true, Seen: true } => "Paired — connecting…",
+                { Paired: true } => "Paired — not on this network",
+                _ => "Found — not paired",
+            };
+
         // What the settings window shows, and the tray beside it.
         //
         // Deliberately says which of the three states it is in rather than

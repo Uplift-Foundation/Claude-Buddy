@@ -58,6 +58,11 @@ namespace ClaudeBuddy
         public const string ErrUnsupported = "unsupported";
         public const string ErrVersion = "version";
 
+        // The greeting was refused: not paired, and no pairing window open with
+        // a matching code. Distinct from the others because it is the only one
+        // that means "and the connection is now closed" — see PeerLink.Judge.
+        public const string ErrUntrusted = "untrusted";
+
         // --- the message --------------------------------------------------------
 
         // One message, with its payload left as raw JSON.
