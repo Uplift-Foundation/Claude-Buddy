@@ -291,6 +291,11 @@ namespace ClaudeBuddy
 
             root.Children.Add(Group("Orb colours", Card(OrbColourRows())));
 
+            // Between the orbs and the voice, because that is where the chat
+            // panel sits in the app: it is what an orb opens, and the thing
+            // the voice types into.
+            root.Children.Add(Group("Chat panel", Card(ChatRows())));
+
             root.Children.Add(Group("Voice", Card(VoiceRows())));
 
             // One section per agent, each starting with whether it is tracked
@@ -593,6 +598,43 @@ namespace ClaudeBuddy
                 Row("Spacing", SpacingSlider(),
                     "How far apart the orbs sit inside the shape. Drag to see them move in real time.")
             };
+        }
+
+        // internal for the same reason the rows above are: a test drives the
+        // slider directly rather than hunting for it through whichever theme
+        // template happened to load.
+        internal Control[] ChatRows() => new[]
+        {
+            Row("Text size", TextSizeSlider(),
+                "How big the chat panel draws a conversation. "
+                + (OperatingSystem.IsMacOS()
+                    ? "Cmd+ and Cmd- do the same thing from the panel itself, and Cmd+0 puts it back."
+                    : "Ctrl+ and Ctrl- do the same thing from the panel itself, and Ctrl+0 puts it back."))
+        };
+
+        internal Control TextSizeSlider()
+        {
+            // Over rungs, not over multipliers — ChatZoom.IndexOf explains why
+            // the two have to agree.
+            var slider = new Slider
+            {
+                Minimum = 0,
+                Maximum = ChatZoom.Steps.Length - 1,
+                Value = ChatZoom.IndexOf(ClaudeBuddySettings.ChatTextScale),
+                MinWidth = 160,
+                SmallChange = 1,
+                LargeChange = 1,
+                TickFrequency = 1,
+                IsSnapToTickEnabled = true
+            };
+            slider.PropertyChanged += (_, e) =>
+            {
+                if (e.Property != Slider.ValueProperty) return;
+
+                ClaudeBuddySettings.ChatTextScale = ChatZoom.At((int)Math.Round(slider.Value));
+                ChatPanel.ReapplyTextScale();
+            };
+            return slider;
         }
 
         internal Control SpacingSlider()

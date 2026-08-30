@@ -146,6 +146,31 @@ public class ChatPanelHistoryTests : IDisposable
     {
         var session = new SucceedingBacklogSession();
         session.Seed(2);
+
+        // Nothing older to fetch, which is the only thing that makes the two
+        // rows below a fact rather than a coin toss.
+        //
+        // This test is about ReplaceWith rebuilding the transcript; the backlog
+        // is somebody else's test, two methods up. But the fake defaults to
+        // having more, and the panel decides whether to ask for it by
+        // comparing layout against layout — the ScrollChanged handler loads the
+        // page before whenever the scroll's extent runs more than eight pixels
+        // past its viewport near the top. Two seeded turns sit almost exactly
+        // one viewport tall at the shipped height, so which side of that
+        // comparison they land on comes down to font metrics: green on three
+        // developer machines, red on both CI runners, where the fonts are not
+        // the same ones.
+        //
+        // Sizing the window bigger was tried first and is not enough — the load
+        // is kicked off by the layout pass that OpenFor itself triggers, before
+        // a test has any chance to resize anything. Saying there is nothing to
+        // load is the fix that does not depend on when layout happens.
+        //
+        // Worth spelling out because the failure does not read as geometry at
+        // all: seven rows where two were seeded, which looks exactly like
+        // history replacement being broken.
+        session.HasMore = false;
+
         _toClean.Add(session.SessionId);
 
         ChatPanel.OpenFor(NewOrb(), session);
