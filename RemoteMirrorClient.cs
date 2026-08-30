@@ -308,7 +308,7 @@ namespace ClaudeBuddy
                     ["n"] = MirrorProtocol.Encode(name),
                     ["w"] = "tail"
                 },
-                null, TimeSpan.FromSeconds(180))
+                null, TimeSpan.FromSeconds(MirrorProtocol.FetchTimeoutSeconds))
                 .ConfigureAwait(false);
 
             lock (_gate)
@@ -384,7 +384,7 @@ namespace ClaudeBuddy
                     ["from"] = from.ToString(),
                     ["to"] = to.ToString()
                 },
-                null, TimeSpan.FromSeconds(180))
+                null, TimeSpan.FromSeconds(MirrorProtocol.FetchTimeoutSeconds))
                 .ConfigureAwait(false);
 
             if (!reply.Ok || reply.Payload is null) return null;
@@ -485,7 +485,7 @@ namespace ClaudeBuddy
                 relay, MirrorProtocol.Input,
                 new Dictionary<string, string> { ["n"] = MirrorProtocol.Encode(name) },
                 System.Text.Encoding.UTF8.GetBytes(text),
-                TimeSpan.FromSeconds(180))
+                TimeSpan.FromSeconds(MirrorProtocol.InputTimeoutSeconds))
                 .ConfigureAwait(false);
 
             if (reply.Ok) return null;

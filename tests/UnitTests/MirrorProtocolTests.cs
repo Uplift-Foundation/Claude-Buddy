@@ -603,6 +603,59 @@ public class MirrorProtocolTests
     public void SplittingRefusesAChunkSizeThatWouldNeverTerminate() =>
         Assert.Throws<ArgumentOutOfRangeException>(() => MirrorProtocol.Split(new byte[4], 0));
 
+    // --- how long a client is willing to wait ---------------------------------
+
+    // The numbers below are a measurement, so these tests assert the measurement
+    // rather than the literal. Asserting `== 600` would pass for any reason at
+    // all, including somebody lowering the constant back under what the wire was
+    // observed to need; asserting that it clears a turn which actually happened
+    // fails for exactly the reason worth failing for.
+
+    // 435 seconds: one single-chunk window off the mini on 29 Aug 2026, timed by
+    // the relay itself as `Brewed for 7m 15s`. The window arrived intact — 23
+    // chunks, no bad hashes — and was discarded, because the fetch that asked
+    // for it had been given 180.
+    private const int MeasuredSingleChunkTurnSeconds = 435;
+
+    [Fact]
+    public void AFetchOutlivesASingleChunkTurnThatWasActuallyMeasured()
+    {
+        Assert.True(
+            MirrorProtocol.FetchTimeoutSeconds > MeasuredSingleChunkTurnSeconds,
+            $"a fetch waits {MirrorProtocol.FetchTimeoutSeconds}s, but a single "
+            + $"chunk has been measured at {MeasuredSingleChunkTurnSeconds}s — a "
+            + "reply that arrives correct and complete would be thrown away");
+    }
+
+    [Fact]
+    public void AFetchWaitsLongerThanASend()
+    {
+        // The asymmetry is the point rather than an oversight: a fetch's reply is
+        // a whole transcript the far model must retype, a send's reply is a bare
+        // OK. Typing falls back to an ordinary message when the relay does not
+        // answer; fetching has no fallback, so only fetching gets the long wait.
+        Assert.True(MirrorProtocol.FetchTimeoutSeconds > MirrorProtocol.InputTimeoutSeconds);
+    }
+
+    [Fact]
+    public void ASendStillGivesUpSoonEnoughToFallBack()
+    {
+        // A send that cannot be acknowledged should reach its fallback while the
+        // user is still looking at the panel. Ten minutes of silence would be
+        // worse than the message it delays.
+        Assert.InRange(MirrorProtocol.InputTimeoutSeconds, 60, 300);
+    }
+
+    [Fact]
+    public void AWatchLapsesLongBeforeAFetchGivesUp()
+    {
+        // A subscription is cheap to re-establish and a transfer is not, so the
+        // watch TTL must not become what limits a slow window: a fetch in
+        // progress outlives several renewal cycles by design.
+        Assert.True(MirrorProtocol.FetchTimeoutSeconds > MirrorProtocol.WatchTtlSeconds);
+        Assert.True(MirrorProtocol.WatchRenewSeconds < MirrorProtocol.WatchTtlSeconds);
+    }
+
     // --- helpers ------------------------------------------------------------------
 
     // Builds the frames a real transfer would send, parsed back the way a client

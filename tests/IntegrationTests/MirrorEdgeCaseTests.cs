@@ -700,6 +700,39 @@ public class MirrorEdgeCaseTests : IDisposable
             + "or the wait is still a flat deadline");
     }
 
+    // The complement, and the case that was actually failing in the field.
+    //
+    // A single-chunk transfer has no intermediate chunk, so there is nothing to
+    // reset the wait on: the deadline it starts with is the whole of the wait it
+    // ever gets. That makes CB-46's shrink-until-it-fits and the extension above
+    // interact in a way neither one predicts on its own — shrinking a window to
+    // one chunk removes the very signal that was keeping long transfers alive,
+    // so the *smallest* transfers became the ones most likely to be abandoned.
+    //
+    // Measured on 29 Aug 2026: a one-chunk window off the mini took `7m 15s` to
+    // emit, arrived complete and verified, and was dropped because the fetch had
+    // been given three minutes. Nothing on the wire was wrong. The deadline was
+    // just shorter than the answer, and no renewal was ever going to come.
+    //
+    // So this asserts the absence deliberately, rather than leaving it implied:
+    // if a future change ever does start extending single-chunk waits, the
+    // reasoning behind MirrorProtocol.FetchTimeoutSeconds stops being load-
+    // bearing and should be revisited rather than silently kept.
+    [Fact]
+    public async Task ASingleChunkTransferGetsNoExtensionSoItsFirstDeadlineIsAllItHas()
+    {
+        AddSession();                       // small enough to fit one chunk
+        await Handshake();
+
+        var before = _client.TimeoutExtensionsForTests;
+        _windows.Clear();
+
+        Assert.True(await _client.OpenAsync(Name));
+        Assert.Single(_windows);
+
+        Assert.Equal(before, _client.TimeoutExtensionsForTests);
+    }
+
     // And silence still ends it. Extending on progress would be worthless if it
     // also extended on nothing — a far side that stops halfway has to become a
     // failure the panel can report rather than a wait nobody ever leaves.
