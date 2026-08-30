@@ -65,6 +65,13 @@ namespace ClaudeBuddy
             public bool Starting;
             public string State = "starting";
             public string? Warning;
+
+            // Why this relay is not answering, when the pane says so. Separate
+            // from Warning because they are different kinds of fact: a warning
+            // is something that will bite later, a stall is something that has
+            // already stopped the machine serving and names the keypress that
+            // clears it.
+            public string? Stall;
             public bool Polled;
             public IReadOnlyList<Remote> Sessions = Array.Empty<Remote>();
 
@@ -205,7 +212,7 @@ namespace ClaudeBuddy
         // test assemblies InternalsVisibleTo names.
         internal static void SetRelayForTests(
             string account, string state, string? warning = null, bool polled = false,
-            IReadOnlyList<Remote>? sessions = null)
+            IReadOnlyList<Remote>? sessions = null, string? stall = null)
         {
             lock (Gate)
             {
@@ -217,6 +224,7 @@ namespace ClaudeBuddy
 
                 relay.State = state;
                 relay.Warning = warning;
+                relay.Stall = stall;
                 relay.Polled = polled;
                 relay.Sessions = sessions ?? Array.Empty<Remote>();
             }
@@ -315,11 +323,12 @@ namespace ClaudeBuddy
                     if (Relays.Count == 1)
                     {
                         var only = Relays.Values.First();
-                        return Compose(only.State, only.Warning);
+                        return Compose(only.State, only.Warning, only.Stall);
                     }
 
                     return string.Join("  ·  ",
-                        Relays.Select(pair => $"{pair.Key}: {Compose(pair.Value.State, pair.Value.Warning)}"));
+                        Relays.Select(pair =>
+                            $"{pair.Key}: {Compose(pair.Value.State, pair.Value.Warning, pair.Value.Stall)}"));
                 }
             }
         }
@@ -330,10 +339,21 @@ namespace ClaudeBuddy
         // login-expiry notice starts three days out. "Your login expires in 3
         // days" is useful; being unable to tell whether it also found anything
         // is not.
-        internal static string Compose(string state, string? warning)
+        // The stall joins on the same terms and for the same reason. It is the
+        // most actionable of the three — it names a keypress — but it does not
+        // replace the count either: "3 remote sessions" and "none of them can be
+        // reached right now" are both true and a reader needs both to know what
+        // they have lost.
+        internal static string Compose(string state, string? warning, string? stall = null)
         {
-            if (warning is null) return state;
-            return state is "off" or "starting" ? warning : $"{state} · {warning}";
+            var text = Join(state, stall);
+            return Join(text, warning);
+        }
+
+        private static string Join(string state, string? extra)
+        {
+            if (extra is null) return state;
+            return state is "off" or "starting" ? extra : $"{state} · {extra}";
         }
 
         // True once every relay that is up has completed a poll. Lets a caller
@@ -437,6 +457,15 @@ namespace ClaudeBuddy
             return client?.StateFor(name)
                    ?? new RemoteMirrorClient.MirrorState(
                        RemoteMirrorClient.MirrorAvailability.Unknown, null);
+        }
+
+        // Why an account's relay is not answering, for a panel that is waiting on
+        // it. Null when nothing says it is stuck, which includes "we have not
+        // looked yet" — an absent answer must not read as a clean bill of
+        // health.
+        internal static string? StallFor(string account)
+        {
+            lock (Gate) return Relays.TryGetValue(account, out var relay) ? relay.Stall : null;
         }
 
         internal static RemoteMirrorClient? MirrorClientFor(string account)
@@ -1078,6 +1107,7 @@ namespace ClaudeBuddy
                     relay.Sessions = remotes;
                     relay.Polled = true;
                     relay.Warning = bridge.Warning;
+                    relay.Stall = bridge.Stall?.Describe();
                     relay.State = remotes.Count switch
                     {
                         0 => "no remote sessions found",

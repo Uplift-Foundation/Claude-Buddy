@@ -391,4 +391,132 @@ public class MirrorRoutingTests
     [Fact]
     public void AnEmptyNameIsNotDecorated() =>
         Assert.Equal("", BridgeProtocol.AddressFor("", new[] { Peer("", "aa11bb"), Peer("", "bb22cc") }));
+
+    // --- CB-52: a relay that is waiting rather than working --------------------
+
+    // The picker that actually stalled the mini's relay, copied from the pane.
+    // Every frame Buddy sends is typed into that pane, so this did not fail one
+    // send — it stopped the machine serving until somebody pressed Escape.
+    private const string PickerPane = """
+          2. [2548f2]
+             Remote Control session on another machine, active 22s ago.
+          3. [462b2e]
+             Remote Control session on another machine, active 29s ago.
+          4. All three
+             Send the identical line to each of the three sessions.
+          5. Type something.
+          6. Chat about this
+        Enter to select · ↑/↓ to navigate · Esc to cancel
+        """;
+
+    [Fact]
+    public void APickerLeftOnScreenIsReportedAsAStall()
+    {
+        var stall = Assert.NotNull(BridgeProtocol.ReadStall(PickerPane));
+
+        Assert.Contains("Escape", stall.Advice);
+        Assert.Contains("waiting", stall.Describe());
+    }
+
+    // Not a select list at all, which is why the generic footer test cannot be
+    // the only one: this stalls a relay while drawing nothing that looks like a
+    // prompt, and it was the one nothing in the app would ever have noticed —
+    // it was fixed by hand on two accounts.
+    [Fact]
+    public void AHeldMessageIsReportedWithTheSettingThatClearsIt()
+    {
+        var stall = Assert.NotNull(BridgeProtocol.ReadStall(
+            "  ⏵ message from job-hunter not delivered to Claude (1 held)"));
+
+        Assert.Contains("crossSessionInbound", stall.Advice);
+        Assert.Contains("accept", stall.Advice);
+    }
+
+    // First-run setup, and the advice has to differ: Escape does not finish a
+    // wizard, and telling someone to press it would send them round the loop
+    // that produced the problem.
+    [Theory]
+    [InlineData("Not logged in · Please run /login")]
+    [InlineData("  7. Light mode (ANSI colors only)")]
+    [InlineData("Choose the text style that looks best with your terminal")]
+    public void FirstRunSetupSaysToFinishSetupRatherThanToPressEscape(string pane)
+    {
+        var stall = Assert.NotNull(BridgeProtocol.ReadStall(pane));
+
+        Assert.DoesNotContain("Escape", stall.Advice);
+        Assert.Contains("finish setup", stall.Advice);
+    }
+
+    [Fact]
+    public void AToolPermissionPromptIsNamedAsOne()
+    {
+        var stall = Assert.NotNull(BridgeProtocol.ReadStall(
+            "Bash command\n  gunzip\n\nDo you want to proceed?\n  1. Yes\n  2. No"));
+
+        Assert.Contains("tool-permission", stall.Kind);
+        Assert.Contains("Escape", stall.Advice);
+    }
+
+    // The whole point of the guard, and the reason it is not a fifth special
+    // case. An unrecognised prompt is still reported as a prompt, with the one
+    // instruction that clears all of them — because there will be a fifth shape
+    // and the alternative is the silence this replaces.
+    [Fact]
+    public void AnUnrecognisedPromptIsStillReportedAsOne()
+    {
+        var stall = Assert.NotNull(BridgeProtocol.ReadStall(
+            "Some future question nobody has written a rule for\n"
+            + "  1. One\n  2. Two\nEnter to select · Esc to cancel"));
+
+        Assert.Contains("does not recognise", stall.Kind);
+        Assert.Contains("Escape", stall.Advice);
+    }
+
+    // A relay that is merely busy must stay distinguishable from one that is
+    // stuck: reporting a working relay as stalled would send someone to press
+    // Escape in a pane that is mid-answer, which is how you break a transfer
+    // that was about to land.
+    [Theory]
+    [InlineData("")]
+    [InlineData("Envisioning… 1m 59s · ↓ 1.1k tokens")]
+    [InlineData("  /remote-control is active · Continue here, on your phone")]
+    [InlineData("> Use SendMessage to send job-hunter exactly this text")]
+    public void ARelayThatIsWorkingIsNotReportedAsStalled(string pane) =>
+        Assert.Null(BridgeProtocol.ReadStall(pane));
+
+    // --- what the Settings row says -------------------------------------------
+
+    // The stall joins the count rather than replacing it. Both are true, and a
+    // reader needs both to know what they have lost — the same lesson the
+    // warning already taught this function.
+    [Fact]
+    public void TheStatusLineKeepsTheCountAlongsideTheStall()
+    {
+        var said = RemoteControlSessions.Compose("3 remote sessions", null, "waiting for an answer");
+
+        Assert.Contains("3 remote sessions", said);
+        Assert.Contains("waiting for an answer", said);
+    }
+
+    // A relay that has not started has no count worth keeping, so the stall is
+    // the whole answer rather than an appendix to "starting".
+    [Fact]
+    public void AStallReplacesAStateThatSaysNothing() =>
+        Assert.Equal("waiting", RemoteControlSessions.Compose("starting", null, "waiting"));
+
+    // All three facts survive together.
+    [Fact]
+    public void AStallAndAWarningBothSurvive()
+    {
+        var said = RemoteControlSessions.Compose("1 remote session", "login expires", "waiting");
+
+        Assert.Contains("1 remote session", said);
+        Assert.Contains("waiting", said);
+        Assert.Contains("login expires", said);
+    }
+
+    // Nothing wrong is still the plain state, unchanged from before this existed.
+    [Fact]
+    public void NoStallLeavesTheStateExactlyAsItWas() =>
+        Assert.Equal("2 remote sessions", RemoteControlSessions.Compose("2 remote sessions", null));
 }

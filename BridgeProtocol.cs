@@ -687,6 +687,104 @@ namespace ClaudeBuddy
             return new BridgeHealth(RcActive.IsMatch(paneText), warning);
         }
 
+        // --- a relay that is waiting rather than working -------------------------
+
+        // Why a relay has stopped serving, when the reason is a prompt nobody
+        // will ever answer.
+        //
+        // Every frame Buddy sends is typed into the relay's pane, so anything
+        // that raises a prompt there does not fail one send — it stops the
+        // machine serving, and every later frame queues behind it. Four separate
+        // causes were found and fixed in one day (CB-40's tool permission,
+        // CB-45's peer-name picker, CB-42's first-run wizard, and a held
+        // cross-session message that was only ever fixed by hand), and every one
+        // was found by a person reading a tmux pane over ssh. No user will do
+        // that, and there will be a fifth.
+        //
+        // So the general signature is what is matched first and the known causes
+        // second. Claude Code draws every one of these as the same select list
+        // with the same footer, which is what makes one guard possible instead
+        // of a fifth special case: an unrecognised prompt is still reported as a
+        // prompt, with the one instruction that clears all of them.
+        public readonly record struct RelayStall(string Kind, string Advice)
+        {
+            public string Describe() => $"waiting for an answer ({Kind}) — {Advice}";
+        }
+
+        // The footer Claude Code draws under any select list. Matched on the
+        // pieces rather than the whole line because the separators and their
+        // spacing are cosmetic and have already changed once.
+        private static readonly Regex SelectFooter = new(
+            @"(Esc to cancel|↑/↓ to navigate|Enter to select)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // A message the far side is holding rather than delivering, because the
+        // sender's permission mode differs from the receiver's. Not a select
+        // list at all, which is exactly why the generic test cannot be the only
+        // one: this one stalls a relay while drawing nothing that looks like a
+        // prompt.
+        private static readonly Regex HeldMessage = new(
+            @"not delivered to Claude|crossSessionInbound",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // First-run state: a config context nobody onboarded. Also not a select
+        // footer in the /login case, and the advice differs — Escape does not
+        // finish a wizard.
+        private static readonly Regex FirstRun = new(
+            @"Not logged in|run /login|Choose the text style|Light mode \(ANSI",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // A tool the relay's own model reached for. Kept narrow: "Do you want"
+        // is Claude Code's own permission wording, and matching anything looser
+        // would call a relay stalled because a transcript happened to quote it.
+        private static readonly Regex ToolPermission = new(
+            @"Do you want to (proceed|allow)|Allow this tool|permission to use",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // Why this relay is not answering, or null if nothing about the pane
+        // says it is stuck.
+        //
+        // Ordered most specific first, so the report names a cause when it can.
+        // The generic arm is the point of the whole function though: it is what
+        // catches the fifth shape, and "something is waiting, press Escape" is a
+        // far better answer than the silence this replaces.
+        public static RelayStall? ReadStall(string paneText)
+        {
+            if (string.IsNullOrEmpty(paneText)) return null;
+
+            if (HeldMessage.IsMatch(paneText))
+            {
+                return new RelayStall(
+                    "a message it is holding rather than delivering",
+                    "set crossSessionInbound to \"accept\" in that account's settings.json on the "
+                    + "other machine");
+            }
+
+            if (FirstRun.IsMatch(paneText))
+            {
+                return new RelayStall(
+                    "first-run setup it never got past",
+                    "open a terminal on that machine and finish setup — or sign in — for that "
+                    + "account, once");
+            }
+
+            if (ToolPermission.IsMatch(paneText))
+            {
+                return new RelayStall(
+                    "a tool-permission prompt",
+                    "press Escape in that relay's terminal to clear it");
+            }
+
+            if (SelectFooter.IsMatch(paneText))
+            {
+                return new RelayStall(
+                    "a prompt this app does not recognise",
+                    "press Escape in that relay's terminal to clear it");
+            }
+
+            return null;
+        }
+
         // Banner lines carry a " · run /login to renew" tail that is an
         // instruction to whoever is looking at the terminal, not to us.
         private static string Tidy(string warning)
