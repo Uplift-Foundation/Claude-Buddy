@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.VisualTree;
 
 namespace ClaudeBuddy.Tests;
 
@@ -297,5 +298,64 @@ public class ChatPanelScreenshots : IDisposable
         ScreenshotHelper.Flush();
         ScreenshotHelper.CaptureAlreadyShown(
             ChatPanelTestAccess.Instance!, "chat-panel-room-attribution.png");
+    }
+
+    // A passage held selected in a reply.
+    //
+    // Captured because the selection is the whole feature and the only part of
+    // it a reviewer cannot check any other way: the tests can prove the right
+    // characters end up on the clipboard, but not that the highlight can
+    // actually be read. That is a judgement about one colour sitting on a
+    // tinted bubble, and it is the reason SelectionFill is a translucent white
+    // rather than the solid system highlight — which is exactly the kind of
+    // choice a picture settles and a passing assertion does not.
+    [AvaloniaFact]
+    public void ASelectedPassageIsHighlightedInTheReply()
+    {
+        var fake = NewFake(new[]
+        {
+            new ChatTurn
+            {
+                Role = ChatRole.User,
+                Text = "where does the hook write its status files?",
+                IsComplete = true,
+            },
+            new ChatTurn
+            {
+                Role = ChatRole.Assistant,
+                Text = "They go to `$TMPDIR/claude-buddy`, one file per session.\n\n"
+                     + "Drag across any of this to select it, then copy.",
+                IsComplete = true,
+            },
+        });
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        ScreenshotHelper.Flush();
+
+        // The selection a person would have made by dragging. Set directly
+        // rather than synthesized, because a headless drag would be testing
+        // Avalonia's hit-testing rather than this app's rendering — and it is
+        // the rendering the capture exists to show.
+        var panel = ChatPanelTestAccess.Instance!;
+        var line = panel.FindControl<ItemsControl>("Turns")!
+            .GetVisualDescendants()
+            .OfType<SelectableTextBlock>()
+            .First(b => Text(b).StartsWith("They go to", StringComparison.Ordinal));
+
+        line.SelectionStart = "They go to ".Length;
+        line.SelectionEnd = "They go to $TMPDIR/claude-buddy".Length;
+
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.CaptureAlreadyShown(panel, "chat-panel-selected-text.png");
+    }
+
+    // A styled line keeps its words in Inlines and leaves Text null.
+    private static string Text(TextBlock block)
+    {
+        if (!string.IsNullOrEmpty(block.Text)) return block.Text!;
+        if (block.Inlines is null) return "";
+
+        return string.Concat(
+            block.Inlines.OfType<Avalonia.Controls.Documents.Run>().Select(r => r.Text));
     }
 }
