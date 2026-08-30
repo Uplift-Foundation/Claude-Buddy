@@ -797,6 +797,44 @@ public class MirrorEdgeCaseTests : IDisposable
         Assert.Equal(2, _hellos);
     }
 
+    // What the poll asks before it takes the relay's only turn.
+    //
+    // A relay carries one frame per model turn, and Buddy polls the same relay
+    // for ListAgents every tick. At the fast cadence the poll comes round again
+    // before the last answer is finished, so a FETCH somebody is waiting on can
+    // sit unsent behind an unbroken run of polls. Measured on 30 Aug 2026: a
+    // FETCH not typed for eight minutes, by which time its own deadline had
+    // gone — the far machine then answered correctly and was ignored for being
+    // late. Identical ending to CB-54, completely different cause, which is
+    // precisely why it read as CB-54 not being fixed.
+    //
+    // RemoteControlSessions.PollAsync reads this and skips ListAgents while it
+    // is true. Asserted here rather than there because the poll itself types
+    // into a live relay and is excluded from coverage; this is the decision it
+    // is built on, and it is testable with no relay at all.
+    [Fact]
+    public async Task TheClientSaysItIsWaitingOnlyWhileARequestIsInFlight()
+    {
+        AddSession();
+        await Handshake();
+
+        Assert.False(_client.Waiting);
+
+        _holdFetch = new TaskCompletionSource();
+
+        var fetching = _client.OpenAsync(Name);
+
+        // Parked mid-send, which is the whole window the poll must stay out of.
+        Assert.True(_client.Waiting);
+
+        _holdFetch.SetResult();
+        await fetching;
+
+        // And it has to clear, or one stuck request silences the peer list for
+        // good — trading a starved fetch for a frozen roster.
+        Assert.False(_client.Waiting);
+    }
+
     // And silence still ends it. Extending on progress would be worthless if it
     // also extended on nothing — a far side that stops halfway has to become a
     // failure the panel can report rather than a wait nobody ever leaves.

@@ -607,6 +607,31 @@ namespace ClaudeBuddy
 
         private readonly Dictionary<string, Pending> _pending = new(StringComparer.Ordinal);
 
+        // Whether this client is waiting on an answer right now.
+        //
+        // **Exposed so the poll can get out of the way.** A relay carries one
+        // frame per model turn, and Buddy's own poll asks it for ListAgents on
+        // every tick — every 20 seconds, or every 5 while anything is working.
+        // A ListAgents answer was measured at about 6 seconds on a real relay,
+        // so at the fast cadence the relay is never idle, and a FETCH the user
+        // is actually waiting for queues behind an unbroken run of polls.
+        //
+        // Measured on 30 Aug 2026: a panel opened, and its FETCH was not typed
+        // into the relay for roughly eight minutes, by which time the client's
+        // deadline had already burned. The far machine then answered correctly
+        // and the reply was dropped for arriving too late — the same ending as
+        // CB-54 and a completely different cause, which is exactly why it was
+        // mistaken for CB-54 not being fixed.
+        //
+        // The poll is refreshing a peer list that changes rarely; the fetch is
+        // the thing somebody is looking at. When the two compete for the same
+        // relay, the fetch wins. Bounded by construction: every pending request
+        // carries a deadline, so this cannot stay true for longer than one.
+        internal bool Waiting
+        {
+            get { lock (_gate) return _pending.Count > 0; }
+        }
+
         // Transfers arriving unbidden — the deltas a subscription pushes. Keyed
         // by the transfer's own id, which is fresh each time, and matched back
         // to a feed by the `sub` field it carries.
