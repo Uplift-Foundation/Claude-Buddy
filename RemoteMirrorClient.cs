@@ -587,6 +587,25 @@ namespace ClaudeBuddy
         // two minutes of a CI run.
         internal TimeSpan? TimeoutOverrideForTests { get; set; }
 
+        // How many times a wait has been pushed out by a verified chunk
+        // arriving.
+        //
+        // For tests, and it exists because the obvious assertion cannot be made
+        // honestly. The idle timeout's claim is "progress resets the wait", and
+        // the tempting way to check that is to run a transfer slower than one
+        // interval and time it — which is a wall-clock claim a loaded CI runner
+        // will not honour, and it duly went red on macOS while passing on
+        // Windows. Widening the window would only move the failure; a sleep
+        // would be the same mistake this repository has already fixed four
+        // times.
+        //
+        // Counting the resets asserts the same mechanism with no clock in it at
+        // all: the deadline is pushed out once per intermediate chunk,
+        // unconditionally, so the count is a property of the transfer's shape
+        // rather than of how fast the machine happened to be. A flat deadline
+        // scores zero, which is exactly the regression worth catching.
+        internal int TimeoutExtensionsForTests { get; private set; }
+
         private async Task<Reply> RequestAsync(
             string relay, string type,
             IReadOnlyDictionary<string, string>? fields, byte[]? payload,
@@ -716,7 +735,12 @@ namespace ClaudeBuddy
                         // one model turn at a time, so the wait starts again
                         // rather than counting down towards a cut-off the
                         // transfer was never going to meet.
-                        lock (_gate) pending.Deadline = DateTime.UtcNow + pending.Grace;
+                        lock (_gate)
+                        {
+                            pending.Deadline = DateTime.UtcNow + pending.Grace;
+                            TimeoutExtensionsForTests++;
+                        }
+
                         return;
 
                     case MirrorProtocol.AssemblyState.Complete:
