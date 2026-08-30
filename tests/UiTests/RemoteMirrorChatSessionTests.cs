@@ -364,6 +364,33 @@ public class RemoteMirrorChatSessionTests : IDisposable
             Turns(session).Where(t => t.Role == ChatRole.User).Select(t => t.Text));
     }
 
+    // A different machine's message, arriving while this panel is still waiting
+    // for its own to come back. It carries the same kind of tag, so it reaches
+    // the body comparison rather than being turned away by the shape — and it
+    // must not be swallowed as the echo, which would silently delete somebody
+    // else's message from the panel.
+    [AvaloniaFact]
+    public async Task SomebodyElsesTaggedMessageIsNotMistakenForTheEchoEither()
+    {
+        Wire("a", "b");
+        _canType = false;
+
+        var session = await OpenAsync();
+        await session.SendAsync("run the tests");
+
+        Append(UserRowEncoded("other",
+            "Another Claude session sent a message:\n"
+            + "<cross-session-message from=\"bridge:session_01ZZZZ\" "
+            + "hop-chain=\"deadbeefdeadbeefdeadbeef\" from-name=\"someone-else\" "
+            + "from-mode=\"prompting\">\ndeploy the thing\n</cross-session-message>"));
+
+        await _server.TickAsync();
+
+        // Both are on screen: ours still pending, theirs added.
+        Assert.Contains(Turns(session), t => t.Text.Contains("run the tests"));
+        Assert.Contains(Turns(session), t => t.Text.Contains("deploy the thing"));
+    }
+
     // When the long way round fails too, the panel says why once. The relay's
     // own failure is the cause; adding the typing refusal on top would name a
     // second cause for one failure.
