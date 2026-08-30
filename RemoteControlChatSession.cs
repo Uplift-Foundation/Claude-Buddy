@@ -209,10 +209,19 @@ namespace ClaudeBuddy
 
         // Named for the same reason the refusals are: a line a user reads while
         // nothing appears to be happening has to say that something is.
+        // **"A minute" was wrong, and understating it is the same bug in a
+        // quieter form.** The first version said the wait could take a minute,
+        // which was a guess; a single window off the mini was then timed at
+        // `7m 15s`, because each piece is base64 the far relay's *model* has to
+        // retype exactly. A user told to expect one minute and left waiting
+        // seven concludes it has hung — which is how a transfer that was working
+        // perfectly got reported as broken, twice, on the strength of a wording.
+        // So it says minutes, and says why, rather than promising a number this
+        // wire has never met. See CB-54.
         internal static string FetchingNote(string remoteName) =>
             $"Found a live view of {remoteName} — fetching its conversation from the other machine. "
-          + "This can take a minute: the transcript comes across in pieces, and each one waits its "
-          + "turn on the relay.";
+          + "This can take several minutes: the transcript comes across in pieces, and each one "
+          + "waits its turn on the relay, which retypes it by hand.";
 
         private void SayNoLiveView()
         {
