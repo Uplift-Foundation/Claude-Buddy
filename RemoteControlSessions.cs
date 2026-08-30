@@ -542,11 +542,37 @@ namespace ClaudeBuddy
         // marks them all as wanted either way. Every entry point that means "a
         // person is looking at remote sessions" calls this — the tray item,
         // opening a remote chat, sending to one.
+        // Whether starting a real relay is forbidden in this process.
+        //
+        // A test suite must never start one: it is a live Claude Code session in
+        // a tmux pane, on the developer's own account, spending quota and
+        // holding a machine-wide relay name that the installed app also wants.
+        // Three suites already say so in comments and route around the calls
+        // that would do it — and CB-42 showed a comment is not a mechanism.
+        // `RemoteScanTests` opens a remote chat panel, which counts as asking
+        // for the bridge (SessionManager.RemoteChatFor), and had been calling
+        // EnsureStarted all along. It was harmless only because the relay could
+        // not start: the default account was being launched into a config
+        // context nobody had onboarded, so it died in a first-run wizard every
+        // time. Fixing that turned a dormant call into a real relay on every
+        // developer machine — and left CI green, because a GitHub runner has no
+        // `claude` installed to start.
+        //
+        // An environment variable rather than a property a test sets, so it is
+        // in place before any code in the assembly runs — the same shape and
+        // the same reason as CLAUDE_BUDDY_SETTINGS_DIR, which each suite's
+        // [ModuleInitializer] sets for exactly this class of accident. Read on
+        // every call rather than cached, so the opt-in live-bridge tests can
+        // clear it for their own duration.
+        internal static bool StartsBlocked =>
+            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_NO_RELAY") == "1";
+
         // Excluded from coverage: starts a relay, which launches a real Claude
         // Code session in tmux.
         [ExcludeFromCodeCoverage]
         public static void EnsureStarted()
         {
+            if (StartsBlocked) return;
             if (!ClaudeBuddySettings.RemoteControlEnabled) return;
             if (!RemoteControlBridge.IsSupported) return;
 

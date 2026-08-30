@@ -164,11 +164,19 @@ namespace ClaudeBuddy
         // CB-40 added two flags whose absence is invisible until an unattended
         // machine stops answering hours later, which is exactly the kind of
         // thing a test should be able to say out loud.
+        //
+        // configDir is null for the default account, and then the assignment is
+        // left off the line entirely rather than written out with the default
+        // path in it. Those two are not the same thing — see ClaudeProfile,
+        // which has the measurement — and the difference is a relay that never
+        // gets past first-run setup (CB-42).
         internal static string LaunchLine(
-            string claude, string privateTmp, string configDir, string tmuxSessionName) =>
+            string claude, string privateTmp, string? configDir, string tmuxSessionName) =>
             new StringBuilder()
                 .Append("TMPDIR=").Append(Quote(privateTmp)).Append(' ')
-                .Append("CLAUDE_CONFIG_DIR=").Append(Quote(configDir)).Append(' ')
+                .Append(configDir is null
+                    ? string.Empty
+                    : "CLAUDE_CONFIG_DIR=" + Quote(configDir) + " ")
                 .Append("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 ")
                 .Append(Quote(claude))
 
@@ -466,7 +474,11 @@ namespace ClaudeBuddy
             if (_privateTmp is null) return false;
 
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var configDir = Path.Combine(home, _profileDir);
+
+            // Null for the default account, which is the point: naming its
+            // directory explicitly puts the session in a context that has never
+            // been onboarded. ClaudeProfile has the whole story.
+            var configDir = ClaudeProfile.ConfigDirFor(home, _profileDir);
 
             // Run from a directory named after the relay, because that name is
             // the only thing anything else can recognise it by. See RelayCwd,
@@ -508,6 +520,23 @@ namespace ClaudeBuddy
             // attached is running and useless — so it is confirmed separately
             // rather than assumed from a live process.
             await WaitForRemoteControlAsync().ConfigureAwait(false);
+
+            // A session can come up far enough to write a status file and still
+            // be unable to run a turn — logged out is the case that has actually
+            // happened, where every prompt Buddy types is answered "Not logged
+            // in · Please run /login". Left running, that is a relay that
+            // registers, draws no orbs, answers no mirror, and says nothing
+            // about why. Failed with a reason, it is one line in the settings
+            // row and a fix that takes ten seconds.
+            //
+            // Only when the pane actually said what is wrong. Without a reason
+            // this stays as tolerant as it has always been: RC not yet seen on a
+            // live session is a slow start, not a failure.
+            if (StartFailure is not null)
+            {
+                Stop();
+                return false;
+            }
 
             return IsRunning;
         }
@@ -640,9 +669,24 @@ namespace ClaudeBuddy
 
             while (Environment.TickCount64 < deadline)
             {
-                var health = BridgeProtocol.ReadHealth(CapturePane());
+                var pane = CapturePane();
+
+                var health = BridgeProtocol.ReadHealth(pane);
                 Warning = health.Warning;
                 if (health.RemoteControlActive) return;
+
+                // The same read WaitForStatusFileAsync does, for the same
+                // reason, at the one point it could not reach: a session that
+                // got as far as writing a status file and then stopped on a
+                // question. Waiting out the remaining 45 seconds and reporting
+                // "failed to start" is true and useless, and the pane is already
+                // in hand.
+                var blocked = BridgeProtocol.ReadSetupBlock(pane);
+                if (blocked is not null)
+                {
+                    StartFailure = blocked;
+                    return;
+                }
 
                 await Task.Delay(ReadyPollMs).ConfigureAwait(false);
             }
