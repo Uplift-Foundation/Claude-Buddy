@@ -24,12 +24,13 @@ public class StartupOrderTests
         var order = new List<string>();
 
         Startup.Run(
+            installCrashLog: () => order.Add("log"),
             claimUiThread: () => order.Add("claim"),
             serveOnLaunch: () => order.Add("serve"),
             waitForUnlock: () => order.Add("wait"),
             startUi: () => order.Add("ui"));
 
-        Assert.Equal(new[] { "claim", "serve", "wait", "ui" }, order);
+        Assert.Equal(new[] { "log", "claim", "serve", "wait", "ui" }, order);
     }
 
     [Fact]
@@ -41,6 +42,7 @@ public class StartupOrderTests
         var order = new List<string>();
 
         Startup.Run(
+            installCrashLog: () => { },
             claimUiThread: () => order.Add("claim"),
             serveOnLaunch: () => order.Add("serve"),
             waitForUnlock: () => { },
@@ -59,6 +61,7 @@ public class StartupOrderTests
         var order = new List<string>();
 
         Startup.Run(
+            installCrashLog: () => { },
             claimUiThread: () => { },
             serveOnLaunch: () => { },
             waitForUnlock: () => order.Add("wait"),
@@ -68,14 +71,34 @@ public class StartupOrderTests
     }
 
     [Fact]
+    public void Installs_crash_logging_before_anything_that_could_crash()
+    {
+        // The ordering CB-44 is about. Both crashes it was filed for happened
+        // in the last step, and left nothing on disk because nothing had
+        // subscribed by then — so this is first, ahead of even the UI-thread
+        // claim, which is itself a thing that can throw.
+        var order = new List<string>();
+
+        Startup.Run(
+            installCrashLog: () => order.Add("log"),
+            claimUiThread: () => order.Add("claim"),
+            serveOnLaunch: () => { },
+            waitForUnlock: () => { },
+            startUi: () => order.Add("ui"));
+
+        Assert.Equal("log", order[0]);
+    }
+
+    [Fact]
     public void Runs_each_step_exactly_once()
     {
         var counts = new Dictionary<string, int>
         {
-            ["claim"] = 0, ["serve"] = 0, ["wait"] = 0, ["ui"] = 0
+            ["log"] = 0, ["claim"] = 0, ["serve"] = 0, ["wait"] = 0, ["ui"] = 0
         };
 
         Startup.Run(
+            installCrashLog: () => counts["log"]++,
             claimUiThread: () => counts["claim"]++,
             serveOnLaunch: () => counts["serve"]++,
             waitForUnlock: () => counts["wait"]++,
@@ -95,6 +118,7 @@ public class StartupOrderTests
         var reached = false;
 
         Assert.Throws<InvalidOperationException>(() => Startup.Run(
+            installCrashLog: () => { },
             claimUiThread: () => { },
             serveOnLaunch: () => throw new InvalidOperationException("relay"),
             waitForUnlock: () => reached = true,

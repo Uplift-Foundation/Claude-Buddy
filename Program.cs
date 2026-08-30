@@ -27,6 +27,13 @@ namespace ClaudeBuddy
             // reading one static property earns a step of its own. What each
             // step is *for* is here, next to the thing it calls.
             Startup.Run(
+                // Write an unhandled exception down before anything can throw
+                // one. Buddy aborted twice on the mini on 28 Aug with nothing on
+                // disk to say why, and the .ips reports could not name the
+                // exception; CrashLog exists so the next one costs a `cat`
+                // rather than a probe (CB-44).
+                installCrashLog: CrashLog.Install,
+
                 // Claim Avalonia's UI thread for this thread while it is
                 // certain to be free, which is the only moment it is:
                 // everything after this line either starts something that
