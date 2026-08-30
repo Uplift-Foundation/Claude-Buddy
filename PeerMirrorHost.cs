@@ -40,6 +40,43 @@ namespace ClaudeBuddy
 
         internal PeerLink Link => _link;
 
+        // The client a panel talks to, when the link is what is carrying the
+        // mirror. Null until Serve has built one.
+        internal RemoteMirrorClient? Client
+        {
+            get { lock (_gate) return _client; }
+        }
+
+        // Builds both halves over this link.
+        //
+        // **Not account-scoped, and that is a simplification worth naming.** A
+        // relay is one hidden Claude Code session per account, because Remote
+        // Control only reaches sessions signed into the same account — so the
+        // relay path needs a client and a server per account and cannot avoid
+        // it. A socket has no account: this machine talks to that machine, and
+        // which Anthropic login either of them uses is not the socket's
+        // business. One pair serves every session on the far side.
+        //
+        // The account string below is therefore a label rather than a scope. It
+        // is still passed because RemoteMirrorServer's local seams use it to
+        // read this machine's own agent roster, which *is* per-account.
+        internal void Serve(
+            string account,
+            Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> localSessions)
+        {
+            lock (_gate)
+            {
+                if (_client is not null) return;
+
+                _client = new RemoteMirrorClient(
+                    account, new RemoteMirrorClient.Seams(SendFrameAsync));
+
+                var seams = RemoteMirrorServer.RealSeams(account, SendFrameAsync, localSessions);
+
+                _server = new RemoteMirrorServer(account, seams with { PeerAllowed = MayAsk });
+            }
+        }
+
         internal void Bind(RemoteMirrorClient client, RemoteMirrorServer server)
         {
             lock (_gate)

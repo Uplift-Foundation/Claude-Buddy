@@ -523,7 +523,9 @@ namespace ClaudeBuddy
             var mine = new ChatTurn { Role = ChatRole.User, Text = text, IsComplete = true };
             Add(mine);
 
-            if (!ClaudeBuddySettings.RemoteControlEnabled)
+            if (!CanReachRemotes(
+                    ClaudeBuddySettings.RemoteControlEnabled,
+                    ClaudeBuddySettings.PeerLinkEnabled))
             {
                 Note(RemoteControlOffNote);
                 return;
@@ -543,6 +545,18 @@ namespace ClaudeBuddy
         // to turn on is a dead end for whoever reads it.
         internal const string RemoteControlOffNote =
             "Remote sessions are switched off. Turn on \"Show sessions from other machines\" in Settings.";
+
+        // Whether there is any way at all to reach the far machine.
+        //
+        // **Either transport will do, and asking only about the relay was wrong
+        // the moment there were two.** The panel is already open on a session
+        // the link found, so refusing to send because the *relay* is off would
+        // refuse on the strength of a switch that has nothing to do with how
+        // this session got here — and that switch is precisely the one a user is
+        // told to turn off, the relay being the expensive one.
+        //
+        // Pure so both arms are a test rather than a settings file.
+        internal static bool CanReachRemotes(bool relayOn, bool linkOn) => relayOn || linkOn;
 
         // Excluded from coverage: SendToAsync starts the relay if it is not up —
         // a live Claude Code session in a tmux pane on another machine, which
