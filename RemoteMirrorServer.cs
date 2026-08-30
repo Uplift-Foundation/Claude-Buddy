@@ -319,7 +319,12 @@ namespace ClaudeBuddy
                     // status file Buddy has for a session the registry does not
                     // list, are different problems — and both arrive here as an
                     // empty roster and a panel with nothing in it.
-                    MirrorLog.Say("hello-unresolved", $"name={name}");
+                    // Keyed per name and said once: a peer asks every ten
+                    // seconds, so a session the registry knows and Buddy has
+                    // never seen a status file for would otherwise write a line
+                    // per name per tick, forever, for a condition that is not
+                    // changing.
+                    MirrorLog.SayOnce($"hello-unresolved:{name}", $"name={name}");
                     continue;
                 }
 
