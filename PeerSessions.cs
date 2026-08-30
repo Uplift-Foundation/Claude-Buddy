@@ -134,6 +134,12 @@ namespace ClaudeBuddy
 
             if (host is null || discovery is null) return;
 
+            // Before dialling, because a machine with no screen has to be able
+            // to *accept* a pairing, and this is the only thing that opens its
+            // window. One interval — ten seconds — between writing the file and
+            // the window being open.
+            HonourPairingFile(host);
+
             var worth = WorthDialling(
                 discovery.Peers(),
                 machine => PeerIdentity.PeerFor(machine) is not null,
@@ -183,6 +189,91 @@ namespace ClaudeBuddy
             {
                 MirrorLog.Say("peer-roster-failed", $"{ex.GetType().Name}: {ex.Message}");
             }
+        }
+
+        // --- pairing without a screen -------------------------------------------------
+
+        // The file that opens a pairing window on a machine nobody is sitting at.
+        //
+        // **This is not a convenience, it is the only way some machines can be
+        // paired at all.** Pairing is a button in Settings and a code read off
+        // the screen; a Mac mini serving its sessions headless has neither, and
+        // that machine is the whole reason this feature exists. Without this,
+        // the one deployment the direct link is *for* is the one deployment that
+        // cannot join.
+        //
+        // The shape is borrowed rather than invented: MirrorLog already turns
+        // itself on with a marker file in this directory, for exactly this
+        // machine and exactly this reason — an env var does not reach a process
+        // that launchd started. Same directory, same idea, one file.
+        //
+        //     ssh mini
+        //     echo 123456 > "~/Library/Application Support/ClaudeBuddy/pair-open"
+        //
+        // Then pair from the machine that does have a screen. The file is read
+        // once and deleted, and the window it opens lapses on its own — so a
+        // file forgotten on disk is not a standing invitation, which is the one
+        // thing a mechanism like this must not become.
+        internal const string PairingFileName = "pair-open";
+
+        // Whether a file's contents are a code worth opening a window for.
+        //
+        // Pure, and strict about it: this is the only place in the app where a
+        // pairing window opens without a person having clicked anything, so what
+        // it accepts is the security of the headless path. Six digits, trimmed
+        // of the newline `echo` adds, and nothing else — a file holding a stray
+        // shell error or a half-written line opens nothing.
+        internal static string? CodeInFile(string? contents) =>
+            contents is not null
+            && contents.Trim() is { Length: 6 } code
+            && code.All(char.IsAsciiDigit)
+                ? code
+                : null;
+
+        [ExcludeFromCodeCoverage]
+        internal static string PairingFilePath() =>
+            Path.Combine(ClaudeBuddySettings.Directory, PairingFileName);
+
+        // Reads the file, opens the window, and deletes the file.
+        //
+        // Deleted rather than left in place, and deleted whether or not the
+        // contents were usable: a file that stayed would re-open the window on
+        // every tick, which would defeat the lapse entirely and make the code
+        // permanent. One file, one window.
+        //
+        // Excluded from coverage: reads and deletes a real file. What it accepts
+        // is CodeInFile and how long the window then lasts is PeerLink.StillOpen,
+        // both pure and both tested.
+        [ExcludeFromCodeCoverage]
+        private static void HonourPairingFile(PeerMirrorHost host)
+        {
+            var path = PairingFilePath();
+
+            string? contents;
+
+            try
+            {
+                if (!File.Exists(path)) return;
+
+                contents = File.ReadAllText(path);
+                File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                MirrorLog.Say("peer-pair-file-failed", $"{ex.GetType().Name}: {ex.Message}");
+                return;
+            }
+
+            var code = CodeInFile(contents);
+
+            if (code is null)
+            {
+                MirrorLog.Say("peer-pair-file-ignored", "not six digits");
+                return;
+            }
+
+            host.Link.OpenForPairing(code);
+            MirrorLog.Say("peer-pair-file", "window opened from " + PairingFileName);
         }
 
         // --- pairing ----------------------------------------------------------------
@@ -236,6 +327,92 @@ namespace ClaudeBuddy
             return discovery?.Peers()
                 .FirstOrDefault(p => string.Equals(
                     p.Machine, machine, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // What someone typed into "add a machine by address".
+        //
+        // **The fallback the plan called for, and today it stopped being
+        // hypothetical.** Discovery is UDP multicast, and multicast is the first
+        // thing a network gets wrong: a guest VLAN, a VPN, two subnets, an AP
+        // that does not forward it. It is also the first thing macOS Local
+        // Network consent blocks — measured on this machine, where a third-party
+        // binary got EHOSTUNREACH opening plain TCP to a host that `ssh` reaches
+        // from the same shell. A feature whose only way in is discovery is a
+        // feature that fails with no way forward.
+        //
+        // Host or host:port; the port defaults to the one discovery would have
+        // announced. Pure, and null for anything that is not a plausible
+        // address — a typo should say so in the window rather than spend a
+        // connection and come back "refused", which reads as the pairing having
+        // failed.
+        internal static (string Host, int Port)? Address(string? typed, int fallbackPort)
+        {
+            var text = typed?.Trim();
+            if (string.IsNullOrEmpty(text)) return null;
+
+            string host;
+            var port = fallbackPort;
+
+            // Three shapes, told apart by counting colons rather than by
+            // reaching for the last one.
+            //
+            // Counting is what an IPv6 literal forces. `fe80::1` has several
+            // colons and no port; a last-colon rule truncates it to `fe80::`
+            // and the dial then fails as an unreachable host, which reads as a
+            // network problem rather than as a parse. The bracketed form is the
+            // only way to write v6 *with* a port, and it needs its own arm — an
+            // earlier version of this claimed the last-colon rule covered it and
+            // it did not.
+            var colons = text.Count(c => c == ':');
+
+            if (text.StartsWith('[') && text.Contains("]:", StringComparison.Ordinal))
+            {
+                var close = text.IndexOf("]:", StringComparison.Ordinal);
+
+                host = text[1..close];
+                if (!int.TryParse(text[(close + 2)..], out port)) return null;
+            }
+            else if (colons == 1)
+            {
+                // Exactly one colon is always host:port. Not "sometimes a
+                // hostname that happens to contain a colon" — a colon is not
+                // legal in a host name — so `mini:` is a half-typed address and
+                // has to be refused rather than dialled as a host called
+                // "mini:".
+                var mark = text.IndexOf(':');
+
+                host = text[..mark];
+                if (!int.TryParse(text[(mark + 1)..], out port)) return null;
+            }
+            else
+            {
+                // No colons, or several: a bare name, a v4 address, or a v6
+                // literal with no port.
+                host = text.StartsWith('[') && text.EndsWith(']') ? text[1..^1] : text;
+            }
+
+            if (port is < 1 or > 65535) return null;
+            if (host.Length == 0 || host.Any(char.IsWhiteSpace)) return null;
+
+            return (host, port);
+        }
+
+        // Dials an address nobody announced.
+        //
+        // The machine is filed under the address until the far end says what it
+        // is called — see PeerLink.Settle. That is why this needs no name from
+        // the user: asking for one would be asking them to guess a value the
+        // protocol already carries, and a wrong guess would file the pairing
+        // under a name the far machine never uses.
+        [ExcludeFromCodeCoverage]
+        internal static async Task<bool> PairAtAsync(string host, int port, string code)
+        {
+            var link = Host?.Link;
+            if (link is null) return false;
+
+            return await link
+                .ConnectAsync(host, host, port, pairingCode: code, nameIsProvisional: true)
+                .ConfigureAwait(false);
         }
 
         [ExcludeFromCodeCoverage]
