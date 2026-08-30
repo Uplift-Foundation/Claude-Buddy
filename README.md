@@ -1039,6 +1039,23 @@ the same way dragged orb positions are — by the agent rather than by the
 session, since Claude Code mints a new session id every conversation and a size
 saved under one would never be found again.
 
+**Cmd+ and Cmd- change the text size, and Cmd+0 puts it back** — Ctrl on
+Windows, the way every other app on each platform spells the same gesture. It
+works while the caret is in the composer, which is where it usually is, and it
+moves the whole conversation together: bubbles, headings, code blocks, the
+speaker chips, the timestamps, the box you type into, and a permission prompt
+standing between them. The window's own header and buttons stay where they
+are, the same way Messages scales messages and not its toolbar.
+
+Unlike the panel size, **the text size is one setting for every agent**, not one
+per agent — it is a preference about your eyes rather than about a
+conversation. It lives in `chatTextScale` in `settings.json` as a multiplier
+over the shipped size, runs from 0.8x to 2x in eight steps, and there is a
+**Text size** slider under **Chat panel** in settings for anyone who never tries
+the keyboard. A hand-edited value outside that range is pinned back into it on
+read, so a mistyped `40` cannot leave you with a panel too large to find the
+setting that caused it.
+
 Replying is a **second switch**, off by default: **Allow replying to agents**.
 Turning it on asks the gateway for write permission as well as read, which it
 treats as a new pairing — so approve the device again there

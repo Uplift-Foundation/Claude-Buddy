@@ -21,4 +21,28 @@ internal static class ChatPanelTestAccess
         ?? throw new MissingFieldException("ChatPanel", "_instance");
 
     public static ChatPanel? Instance => (ChatPanel?)InstanceField.GetValue(null);
+
+    // Puts the field back to what it was, for the one thing reading it cannot
+    // reach: a static hook's behaviour when no panel has ever been built.
+    // That branch is real — the settings window can be open before any orb has
+    // been clicked — but by the time any test in this assembly runs, the
+    // singleton has usually been constructed by an earlier one, so the
+    // no-panel case can only be arranged rather than waited for.
+    //
+    // Every caller restores what it took in a finally. Leaving a live panel
+    // detached from the field would not fail here, it would fail in whichever
+    // class ran next, which is the worst shape a test-only seam can have.
+    public static IDisposable WithNoPanel()
+    {
+        var held = Instance;
+        InstanceField.SetValue(null, null);
+        return new Restore(() => InstanceField.SetValue(null, held));
+    }
+
+    private sealed class Restore : IDisposable
+    {
+        private readonly Action _undo;
+        public Restore(Action undo) => _undo = undo;
+        public void Dispose() => _undo();
+    }
 }

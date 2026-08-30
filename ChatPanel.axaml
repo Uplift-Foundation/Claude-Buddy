@@ -188,29 +188,29 @@
                                              without reading it, which a column
                                              of similar names in similar hues
                                              is not. -->
-                                        <Border Width="16" Height="16"
-                                                CornerRadius="8"
+                                        <Border Width="{Binding ChipSize}" Height="{Binding ChipSize}"
+                                                CornerRadius="{Binding ChipCorners}"
                                                 VerticalAlignment="Center"
                                                 ClipToBounds="True"
                                                 IsVisible="{Binding HasSpeakerAvatar}">
                                             <Image Source="{Binding SpeakerAvatar}"
-                                                   Width="16" Height="16"
+                                                   Width="{Binding ChipSize}" Height="{Binding ChipSize}"
                                                    Stretch="UniformToFill"/>
                                         </Border>
-                                        <Border Width="16" Height="16"
-                                                CornerRadius="8"
+                                        <Border Width="{Binding ChipSize}" Height="{Binding ChipSize}"
+                                                CornerRadius="{Binding ChipCorners}"
                                                 VerticalAlignment="Center"
                                                 IsVisible="{Binding HasSpeakerInitials}"
                                                 Background="{Binding SpeakerChip}">
                                             <TextBlock Text="{Binding SpeakerInitials}"
-                                                       FontSize="8" FontWeight="Bold"
+                                                       FontSize="{Binding ChipTextSize}" FontWeight="Bold"
                                                        HorizontalAlignment="Center"
                                                        VerticalAlignment="Center"
                                                        Foreground="{Binding SpeakerChipInk}"/>
                                         </Border>
                                         <TextBlock Text="{Binding SpeakerName}"
                                                    IsVisible="{Binding ShowSpeakerName}"
-                                                   FontSize="9.5" FontWeight="SemiBold"
+                                                   FontSize="{Binding SpeakerNameSize}" FontWeight="SemiBold"
                                                    VerticalAlignment="Center"
                                                    Foreground="{Binding SpeakerInk}"/>
                                     </StackPanel>
@@ -243,7 +243,7 @@
                                                IsVisible="{Binding ShowTime}"
                                                HorizontalAlignment="Right"
                                                Margin="0,1,0,0"
-                                               FontSize="8.5" Opacity="0.5"
+                                               FontSize="{Binding TimeSize}" Opacity="0.5"
                                                Foreground="{Binding Ink}"/>
                                 </StackPanel>
                             </Border>
@@ -287,8 +287,14 @@
                                         BorderBrush="#40FFFFFF" BorderThickness="1"
                                         CornerRadius="6" Padding="7,4" Cursor="Hand"
                                         PointerPressed="PromptOption_PointerPressed">
+                                    <!-- No FontSize of its own: it inherits
+                                         PromptOptions', which ApplyTextScale
+                                         sets. A template has no handle a
+                                         resize can reach, and the option's own
+                                         view model belongs to the parser
+                                         rather than to this window. -->
                                     <TextBlock Text="{Binding Label}" TextWrapping="Wrap"
-                                               FontSize="11" Foreground="#EEFFFFFF"/>
+                                               Foreground="#EEFFFFFF"/>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
