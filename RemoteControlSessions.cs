@@ -1052,10 +1052,87 @@ namespace ClaudeBuddy
 
             foreach (var account in unwanted) Stop(account, "no longer selected");
 
+            // A machine that is meant to be serving puts its own relay back.
+            //
+            // **Nothing else was ever going to.** EnsureStarted runs at launch
+            // and from user gestures, and PollAsync retires a relay that stops
+            // answering — `Stop(account, "relay stopped")`. After that the poll
+            // finds no bridge and returns immediately, every tick, for ever. On
+            // a machine with somebody at it that is invisible: the next click on
+            // an orb starts a new relay. On a headless one there is no next
+            // click, so the machine simply goes dark and stays dark.
+            //
+            // Measured on job-hunter-mac-mini: served four transfers happily,
+            // went silent at 16:19 mid-fetch — no relay writes at all, not even
+            // its own ListAgents poll — and was still silent thirteen minutes
+            // later with Buddy alive and using no CPU. Restarting Buddy brought
+            // it back within seconds. From the far end that is a panel that
+            // works, then times out, then keeps timing out.
+            //
+            // Gated on serve-on-launch because that setting is exactly the
+            // statement "this machine serves whether or not anyone is here",
+            // and it is the case that has no other way back. A machine with a
+            // user gets its relay back from the gesture that wants it.
+            //
+            // Below the idle check on purpose: a relay stopped for idleness
+            // must stay stopped, and this only ever sees relays that stopped
+            // for some other reason.
+            if (ClaudeBuddySettings.RemoteControlServeOnLaunch) ReviveStoppedRelays(wanted);
+
             List<string> live;
             lock (Gate) live = Relays.Where(p => p.Value.Bridge is not null).Select(p => p.Key).ToList();
 
             foreach (var account in live) await PollAsync(account).ConfigureAwait(false);
+        }
+
+        // When a stopped relay was last given another go, per account. A
+        // dictionary rather than a field because the accounts fail
+        // independently — one relay wedged is no reason to hold the other's
+        // retry back.
+        private static readonly Dictionary<string, DateTime> RevivedAt =
+            new(StringComparer.Ordinal);
+
+        // Slow enough that a relay which cannot start is not restarted in a
+        // loop, spending quota on a session that dies each time; fast enough
+        // that a machine nobody is looking at is dark for a minute rather than
+        // until somebody notices.
+        internal static readonly TimeSpan ReviveEvery = TimeSpan.FromMinutes(1);
+
+        // Whether it is worth trying this account again.
+        //
+        // Pure so the rule is testable without a relay, a bridge or a clock —
+        // the same reason IdleExpired was split. The three arms are the whole of
+        // it: a live bridge needs nothing, a never-tried account goes now, and
+        // one tried recently waits.
+        internal static bool ShouldRevive(bool hasBridge, DateTime now, DateTime? lastAttempt) =>
+            !hasBridge && (lastAttempt is not { } last || now - last >= ReviveEvery);
+
+        // Excluded from coverage: starts a real relay, which spends quota on a
+        // live Claude Code session. The decision above is what is tested.
+        [ExcludeFromCodeCoverage]
+        private static void ReviveStoppedRelays(IReadOnlyList<string> wanted)
+        {
+            var now = DateTime.UtcNow;
+            var any = false;
+
+            lock (Gate)
+            {
+                foreach (var account in wanted)
+                {
+                    var hasBridge = Relays.TryGetValue(account, out var relay)
+                                    && relay.Bridge is not null;
+
+                    RevivedAt.TryGetValue(account, out var last);
+
+                    if (!ShouldRevive(hasBridge, now, last == default ? null : last)) continue;
+
+                    RevivedAt[account] = now;
+                    any = true;
+                }
+            }
+
+            // Outside the lock: EnsureStarted takes it, and it starts processes.
+            if (any) EnsureStarted();
         }
 
         // Re-asks one account's relay for its peers and republishes.
