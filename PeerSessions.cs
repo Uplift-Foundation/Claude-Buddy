@@ -39,18 +39,49 @@ namespace ClaudeBuddy
             get { lock (Gate) return _host is not null; }
         }
 
-        // Which machines are worth trying: paired, seen announcing, and not
-        // already connected.
+        // Which machines are worth trying, and where to try them.
         //
-        // Pure so the rule is testable without a socket or a settings file. The
-        // three arms are the whole of it, and the middle one is the reason
-        // discovery exists — a paired machine we have never heard from has no
-        // address to dial.
+        // **The version this replaces only dialled machines it could currently
+        // hear announcing, and that was wrong in exactly the case the fallback
+        // exists for.** A machine added by address lives on a network that does
+        // not carry the announcements — that is why it had to be added by hand —
+        // so after a restart it was never dialled again, however plainly its
+        // address was sitting in the identity file. Found by deploying to two
+        // real machines and watching nothing happen: the log said "listening"
+        // and then nothing at all, because there was nothing in the list.
+        //
+        // A live announcement still wins where there is one. It carries the
+        // address the machine has *now*, and a stored one is only where it was
+        // when we last paired — a DHCP lease outlives neither.
+        //
+        // Pure so the rule is testable without a socket or a settings file.
         internal static List<PeerDiscovery.Seen> WorthDialling(
             IReadOnlyList<PeerDiscovery.Seen> seen,
-            Func<string, bool> paired,
-            Func<string, bool> connected) =>
-            seen.Where(p => paired(p.Machine) && !connected(p.Machine)).ToList();
+            IReadOnlyDictionary<string, PeerIdentity.Peer> paired,
+            Func<string, bool> connected)
+        {
+            var announcing = seen.ToDictionary(p => p.Machine, StringComparer.OrdinalIgnoreCase);
+            var worth = new List<PeerDiscovery.Seen>();
+
+            foreach (var (name, peer) in paired)
+            {
+                if (connected(name)) continue;
+
+                if (announcing.TryGetValue(name, out var heard))
+                {
+                    worth.Add(heard);
+                    continue;
+                }
+
+                var stored = Address(peer.Address, PeerLink.DefaultPort);
+                if (stored is null) continue;
+
+                worth.Add(new PeerDiscovery.Seen(
+                    name, stored.Value.Host, stored.Value.Port, peer.Pin, DateTime.MinValue));
+            }
+
+            return worth;
+        }
 
         [ExcludeFromCodeCoverage]
         internal static void Start()
@@ -73,7 +104,12 @@ namespace ClaudeBuddy
             // the app starts must find a client rather than a null.
             var account = ClaudeBuddySettings.DefaultRemoteControlProfileDir;
 
-            host.Serve(account, RemoteControlSessions.LocalSessions);
+            // Every configured account, not just the first. See
+            // RemoteMirrorServer.AllAccountSeams — a socket is not account
+            // scoped, and reading one roster made that claim untrue.
+            host.Serve(
+                ClaudeBuddySettings.RemoteControlProfileDirs,
+                RemoteControlSessions.LocalSessions);
 
             // A roster landing is what puts an orb on screen and what tells an
             // open panel to look again. Both, in that order: the panel reads the
@@ -120,8 +156,34 @@ namespace ClaudeBuddy
         // Avalonia dispatcher does not pump. That is not hypothetical — it is
         // exactly the state the mini was found in, and the reason ServePump
         // exists at all (CB-39, CB-61).
+        // Excluded from coverage: every line of it reaches a socket or the
+        // identity file. What it decides is WorthDialling, which is pure.
+        //
+        // **Wrapped, and noisy about it, because the version without either was
+        // undiagnosable.** The timer discards this task — `_ = DialAsync()` —
+        // so anything thrown inside it went nowhere at all: no log, no crash,
+        // no tick. Deployed to two machines, the log said "listening" and then
+        // stopped, and there was no way to tell a tick that found nothing from a
+        // tick that never ran from a tick that threw on its first line.
+        //
+        // That is the same lesson CB-61 already paid for on the serve path, and
+        // it arrived here because this code was written after that one and did
+        // not copy it.
         [ExcludeFromCodeCoverage]
         private static async Task DialAsync()
+        {
+            try
+            {
+                await DialOnceAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                MirrorLog.Say("peer-dial-tick-threw", $"{ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static async Task DialOnceAsync()
         {
             PeerMirrorHost? host;
             PeerDiscovery? discovery;
@@ -132,7 +194,11 @@ namespace ClaudeBuddy
                 discovery = _discovery;
             }
 
-            if (host is null || discovery is null) return;
+            if (host is null || discovery is null)
+            {
+                MirrorLog.Say("peer-dial-tick", "no host yet");
+                return;
+            }
 
             // Before dialling, because a machine with no screen has to be able
             // to *accept* a pairing, and this is the only thing that opens its
@@ -140,10 +206,17 @@ namespace ClaudeBuddy
             // the window being open.
             HonourPairingFile(host);
 
-            var worth = WorthDialling(
-                discovery.Peers(),
-                machine => PeerIdentity.PeerFor(machine) is not null,
-                host.Link.IsConnected);
+            var seen = discovery.Peers();
+            var paired = PeerIdentity.Peers();
+            var worth = WorthDialling(seen, paired, host.Link.IsConnected);
+
+            // One line a tick, saying which of the three "nothing happened"
+            // cases this is: nobody paired, nobody reachable, or everybody
+            // already connected. Guessing between those from silence is what
+            // cost this ticket an hour.
+            MirrorLog.Say("peer-dial-tick",
+                $"seen={seen.Count} paired={paired.Count} "
+                + $"connected={host.Link.ConnectedMachines().Count} dialling={worth.Count}");
 
             foreach (var peer in worth)
             {
@@ -183,7 +256,7 @@ namespace ClaudeBuddy
 
             try
             {
-                await client.DiscoverAsync(connected, Array.Empty<string>()).ConfigureAwait(false);
+                await client.AskWhatTheyHaveAsync(connected).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

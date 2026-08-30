@@ -15,13 +15,26 @@ public class PeerSessionsTests
     private static PeerDiscovery.Seen Seen(string machine) =>
         new(machine, "192.168.0.9", 7677, "pin", DateTime.UtcNow);
 
+    // Paired, with no address on file: the ordinary case, where discovery is
+    // what supplies the address.
+    private static IReadOnlyDictionary<string, PeerIdentity.Peer> Paired(params string[] names) =>
+        names.ToDictionary(n => n, n => new PeerIdentity.Peer("pin", n),
+            StringComparer.OrdinalIgnoreCase);
+
+    private static IReadOnlyDictionary<string, PeerIdentity.Peer> PairedAt(
+        string name, string? address) =>
+        new Dictionary<string, PeerIdentity.Peer>(StringComparer.OrdinalIgnoreCase)
+        {
+            [name] = new PeerIdentity.Peer("pin", name, address)
+        };
+
     // --- who is worth dialling -------------------------------------------------
 
     [Fact]
     public void APairedMachineWeCanSeeAndAreNotTalkingToIsDialled()
     {
         var worth = PeerSessions.WorthDialling(
-            new[] { Seen("avatar") }, paired: _ => true, connected: _ => false);
+            new[] { Seen("avatar") }, Paired("avatar"), connected: _ => false);
 
         Assert.Equal(new[] { "avatar" }, worth.Select(p => p.Machine));
     }
@@ -32,7 +45,7 @@ public class PeerSessionsTests
     [Fact]
     public void AMachineWeHaveNotPairedWithIsLeftAlone() =>
         Assert.Empty(PeerSessions.WorthDialling(
-            new[] { Seen("stranger") }, paired: _ => false, connected: _ => false));
+            new[] { Seen("stranger") }, Paired(), connected: _ => false));
 
     // One connection between two machines, not one per attempt. The link carries
     // both directions once established, so a second would be waste at best and a
@@ -40,21 +53,75 @@ public class PeerSessionsTests
     [Fact]
     public void AMachineWeAreAlreadyTalkingToIsNotDialledAgain() =>
         Assert.Empty(PeerSessions.WorthDialling(
-            new[] { Seen("avatar") }, paired: _ => true, connected: _ => true));
+            new[] { Seen("avatar") }, Paired("avatar"), connected: _ => true));
 
-    // A paired machine we have never heard from has no address to dial, which is
-    // the reason discovery exists at all.
+    // A paired machine with no announcement and no address on file cannot be
+    // dialled, because there is nowhere to dial.
     [Fact]
-    public void NothingSeenMeansNothingToDial() =>
+    public void NothingHeardAndNothingStoredMeansNothingToDial() =>
         Assert.Empty(PeerSessions.WorthDialling(
-            Array.Empty<PeerDiscovery.Seen>(), paired: _ => true, connected: _ => false));
+            Array.Empty<PeerDiscovery.Seen>(), Paired("avatar"), connected: _ => false));
+
+    // **The case that shipped broken.** A machine added by address lives on a
+    // network that does not carry the announcements — that is the whole reason
+    // it had to be added by hand — so requiring one meant it paired once and was
+    // never dialled again, with its address sitting in the identity file the
+    // entire time. Found by deploying to two real machines and watching the log
+    // say "listening" and then nothing at all.
+    [Fact]
+    public void APairedMachineWithAStoredAddressIsDialledEvenWhenSilent()
+    {
+        var worth = PeerSessions.WorthDialling(
+            Array.Empty<PeerDiscovery.Seen>(),
+            PairedAt("avatar", "192.168.0.127:7677"),
+            connected: _ => false);
+
+        var peer = Assert.Single(worth);
+
+        Assert.Equal("avatar", peer.Machine);
+        Assert.Equal("192.168.0.127", peer.Address);
+        Assert.Equal(7677, peer.Port);
+    }
+
+    [Fact]
+    public void AStoredAddressWithNoPortUsesTheOneEverybodyExpects()
+    {
+        var peer = Assert.Single(PeerSessions.WorthDialling(
+            Array.Empty<PeerDiscovery.Seen>(),
+            PairedAt("avatar", "192.168.0.127"),
+            connected: _ => false));
+
+        Assert.Equal(PeerLink.DefaultPort, peer.Port);
+    }
+
+    [Fact]
+    public void AStoredAddressThatMakesNoSenseIsSkippedRatherThanDialled() =>
+        Assert.Empty(PeerSessions.WorthDialling(
+            Array.Empty<PeerDiscovery.Seen>(),
+            PairedAt("avatar", "not a host"),
+            connected: _ => false));
+
+    // A live announcement wins, because it says where the machine is *now*. A
+    // stored address is only where it was when we paired, and a DHCP lease
+    // outlives neither.
+    [Fact]
+    public void AnAnnouncementBeatsAStoredAddress()
+    {
+        var peer = Assert.Single(PeerSessions.WorthDialling(
+            new[] { Seen("avatar") },
+            PairedAt("avatar", "10.0.0.1:9999"),
+            connected: _ => false));
+
+        Assert.Equal("192.168.0.9", peer.Address);
+        Assert.Equal(7677, peer.Port);
+    }
 
     [Fact]
     public void OnlyTheOnesThatQualifyAreDialled()
     {
         var worth = PeerSessions.WorthDialling(
-            new[] { Seen("paired-and-free"), Seen("paired-and-busy"), Seen("stranger") },
-            paired: m => m.StartsWith("paired"),
+            new[] { Seen("paired-and-busy"), Seen("paired-and-free"), Seen("stranger") },
+            Paired("paired-and-busy", "paired-and-free"),
             connected: m => m.EndsWith("busy"));
 
         Assert.Equal(new[] { "paired-and-free" }, worth.Select(p => p.Machine));

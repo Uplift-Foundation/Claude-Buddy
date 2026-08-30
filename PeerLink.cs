@@ -74,10 +74,17 @@ namespace ClaudeBuddy
         // renews a watch is the ordinary case, not a rare one. The old transport
         // had the same problem and solved it the same way — one relay, one turn
         // at a time.
-        private sealed class Connected(Stream stream, string pin) : IDisposable
+        private sealed class Connected(Stream stream, string pin, string? endpoint = null)
+            : IDisposable
         {
             public Stream Stream { get; } = stream;
             public string Pin { get; } = pin;
+
+            // Where we dialled, as "host:port", when we dialled. Null on a
+            // connection that came to us — the source port of an inbound socket
+            // is not the port that machine listens on, so guessing one would
+            // record an address that never works.
+            public string? Endpoint { get; } = endpoint;
             public SemaphoreSlim Writing { get; } = new(1, 1);
 
             public void Dispose()
@@ -363,7 +370,7 @@ namespace ClaudeBuddy
                     if (nameIsProvisional) _provisional.Add(machine);
                 }
 
-                Adopt(machine, tls, offered, ct);
+                Adopt(machine, tls, offered, ct, endpoint: host + ":" + port);
 
                 // Said immediately rather than lazily, because until this
                 // arrives the far side has a connection it cannot name — and an
@@ -398,9 +405,11 @@ namespace ClaudeBuddy
         // name and then watch what closing it does. Rename-then-close is
         // precisely the sequence that was broken, and it is unreachable from
         // outside without this.
-        internal void Adopt(string machine, Stream stream, string pin, CancellationToken ct)
+        internal void Adopt(
+            string machine, Stream stream, string pin, CancellationToken ct,
+            string? endpoint = null)
         {
-            var peer = new Connected(stream, pin);
+            var peer = new Connected(stream, pin, endpoint);
 
             lock (_gate)
             {
@@ -663,17 +672,27 @@ namespace ClaudeBuddy
         private void RememberFromGreeting(string machine)
         {
             string pin;
+            string? endpoint;
 
             lock (_gate)
             {
                 _pairingWith.Remove(machine);
-                pin = _peers.TryGetValue(machine, out var peer) ? peer.Pin : "";
+
+                var known = _peers.TryGetValue(machine, out var peer) ? peer : null;
+
+                pin = known?.Pin ?? "";
+                endpoint = known?.Endpoint;
             }
 
             if (string.IsNullOrWhiteSpace(pin)) return;
 
-            PeerIdentity.Remember(new PeerIdentity.Peer(pin, machine));
-            MirrorLog.Say("peer-paired", $"with={machine} (we asked)");
+            // The address is recorded here and nowhere else, and it is the whole
+            // reason a machine on an odd network stays reachable after the first
+            // time. Without it a peer added by address pairs once and is never
+            // dialled again — the reconnect loop only knows about machines it
+            // can hear announcing, which on that network is precisely none.
+            PeerIdentity.Remember(new PeerIdentity.Peer(pin, machine, endpoint));
+            MirrorLog.Say("peer-paired", $"with={machine} at={endpoint ?? "(unknown)"}");
         }
 
         // --- pairing window ---------------------------------------------------------
