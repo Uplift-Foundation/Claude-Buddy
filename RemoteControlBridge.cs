@@ -661,7 +661,41 @@ namespace ClaudeBuddy
                 BridgeProtocol.LooksLikeAgentList)
                 .ConfigureAwait(false);
 
-            return raw is null ? null : BridgeProtocol.ParseAgents(raw);
+            if (raw is null) return null;
+
+            var peers = BridgeProtocol.ParseAgents(raw);
+
+            // Kept so the send paths below can address a peer unambiguously.
+            // Cached here rather than passed in by the caller because all three
+            // of them take a bare name, and a list threaded through three call
+            // sites is three chances to forget it — this is the one place the
+            // list is already known to be fresh.
+            lock (_gate) _peers = peers;
+
+            return peers;
+        }
+
+        // The last peer list this relay reported, for addressing. Null until the
+        // first poll, which is why AddressFor treats null as "send it bare":
+        // before anything has been listed there is no evidence of ambiguity, and
+        // inventing a ref would be worse than the name that has always worked.
+        private IReadOnlyList<BridgeProtocol.RemoteAgent>? _peers;
+
+        // Excluded from coverage only in the sense that its inputs come from a
+        // live poll; the rule it defers to is pure and covered directly.
+        internal string Address(string peerName)
+        {
+            IReadOnlyList<BridgeProtocol.RemoteAgent>? peers;
+            lock (_gate) peers = _peers;
+
+            return BridgeProtocol.AddressFor(peerName, peers);
+        }
+
+        // For tests: seeds the peer list a send would address against, without a
+        // live relay to poll.
+        internal void SetPeersForTests(IReadOnlyList<BridgeProtocol.RemoteAgent>? peers)
+        {
+            lock (_gate) _peers = peers;
         }
 
         // Hands a message to a session on another machine. The returned id is the
@@ -672,7 +706,7 @@ namespace ClaudeBuddy
         public async Task<string?> SendToAsync(string peerName, string text)
         {
             var raw = await AskAsync(
-                BridgeProtocol.SendMessagePrompt(peerName, text),
+                BridgeProtocol.SendMessagePrompt(Address(peerName), text),
                 BridgeProtocol.LooksLikeSendReceipt)
                 .ConfigureAwait(false);
 
@@ -694,7 +728,7 @@ namespace ClaudeBuddy
         public async Task<bool> SendFrameToAsync(string peerName, string frame)
         {
             var raw = await AskAsync(
-                BridgeProtocol.SendFramePrompt(peerName, frame),
+                BridgeProtocol.SendFramePrompt(Address(peerName), frame),
                 t => t.Contains("msg_id", StringComparison.Ordinal))
                 .ConfigureAwait(false);
 
@@ -709,7 +743,7 @@ namespace ClaudeBuddy
         public async Task<bool> AskCapabilitiesAsync(string peerName)
         {
             var raw = await AskAsync(
-                BridgeProtocol.CapabilitiesQueryPrompt(peerName),
+                BridgeProtocol.CapabilitiesQueryPrompt(Address(peerName)),
                 BridgeProtocol.LooksLikeSendReceipt)
                 .ConfigureAwait(false);
 
