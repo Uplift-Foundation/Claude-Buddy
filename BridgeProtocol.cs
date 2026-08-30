@@ -278,6 +278,60 @@ namespace ClaudeBuddy
             return null;
         }
 
+        // How to address a peer so SendMessage cannot come back asking which one.
+        //
+        // Buddy sends every frame and every message by typing a prompt into the
+        // relay's pane, and nobody is sitting there. So anything that raises a
+        // prompt *in that pane* does not merely fail — it stops the machine
+        // serving, because every later frame queues behind it, including mirror
+        // answers for completely unrelated sessions. CB-40 was that failure with
+        // a tool permission; this is the same failure with Buddy's own outbound
+        // message as the cause. A bare name that matches two live sessions makes
+        // SendMessage render a "which one?" picker and wait.
+        //
+        // The ref is the answer and it is already in the row: SendMessage
+        // documents "name [ref]" as the way to disambiguate, and RemoteAgent has
+        // carried Ref all along.
+        //
+        // Bare when the name is unique, which is nearly always, and which keeps
+        // the address identical to what has always been sent — a ref is only
+        // resolvable while it is listed, so spending one where it is not needed
+        // would trade a rare failure for a new one.
+        //
+        // Offline rows are not competition. A registration outlives its process,
+        // and one live session wearing three stale registrations of its own is
+        // exactly the case this was found on, so counting the dead ones would
+        // make a name look ambiguous that is not.
+        //
+        // When two genuinely live sessions share a name, the first is chosen
+        // rather than the send being refused. That can pick the wrong one — but
+        // Buddy's orb for that name was already ambiguous, since a name is all
+        // an orb has, so the user clicking it had no way to mean one over the
+        // other either. Refusing would leave that session permanently unusable;
+        // guessing reaches a real session, and neither one wedges the relay for
+        // every *other* session on the machine, which is what happens today.
+        public static string AddressFor(string peerName, IReadOnlyList<RemoteAgent>? peers)
+        {
+            if (peers is null || string.IsNullOrEmpty(peerName)) return peerName;
+
+            RemoteAgent? first = null;
+            var live = 0;
+
+            foreach (var peer in peers)
+            {
+                if (!peer.Name.Equals(peerName, StringComparison.OrdinalIgnoreCase)) continue;
+                if (peer.IsOffline) continue;
+
+                live++;
+                first ??= peer;
+            }
+
+            if (live < 2) return peerName;
+            if (first is not { } chosen || string.IsNullOrWhiteSpace(chosen.Ref)) return peerName;
+
+            return $"{peerName} [{chosen.Ref}]";
+        }
+
         // --- the peer list ---
 
         // One row of ListAgents' output. Kind is kept as the raw label rather

@@ -286,4 +286,109 @@ public class MirrorRoutingTests
     {
         Assert.False(RemoteControlBridge.IsOwnRelayCwd(cwd));
     }
+
+    // --- CB-45: addressing a peer so SendMessage cannot stop to ask -------------
+
+    private static BridgeProtocol.RemoteAgent Peer(
+        string name, string peerRef, string status = "idle") =>
+        new(name, peerRef, "Remote Control", status);
+
+    // The ordinary case, and the one that must not change. A ref is only
+    // resolvable while it is listed, so spending one where the bare name already
+    // works would trade a rare failure for a new one.
+    [Fact]
+    public void AUniqueNameIsAddressedBare()
+    {
+        var peers = new[] { Peer("job-hunter", "94f106"), Peer("someone-else", "aa11bb") };
+
+        Assert.Equal("job-hunter", BridgeProtocol.AddressFor("job-hunter", peers));
+    }
+
+    // The bug. Two live sessions wearing one name make SendMessage render a
+    // "which one?" picker in the relay's pane and wait — and because Buddy sends
+    // every frame by typing into that pane, everything behind it stops too.
+    [Fact]
+    public void ADuplicatedNameIsAddressedByItsRef()
+    {
+        var peers = new[] { Peer("job-hunter", "2548f2"), Peer("job-hunter", "462b2e") };
+
+        Assert.Equal("job-hunter [2548f2]", BridgeProtocol.AddressFor("job-hunter", peers));
+    }
+
+    // The case it was actually found on: one live session wearing several stale
+    // registrations of its own. A registration outlives its process, so counting
+    // the dead ones would make a name look ambiguous when only one thing can
+    // answer to it.
+    [Fact]
+    public void OfflineRegistrationsAreNotCompetitionForTheName()
+    {
+        var peers = new[]
+        {
+            Peer("job-hunter", "2548f2"),
+            Peer("job-hunter", "462b2e", "offline"),
+            Peer("job-hunter", "889aa1", "offline")
+        };
+
+        Assert.Equal("job-hunter", BridgeProtocol.AddressFor("job-hunter", peers));
+    }
+
+    // Deterministic rather than arbitrary: the first live row wins, so the same
+    // peer list always produces the same address and a retry goes where the
+    // first attempt did.
+    [Fact]
+    public void ThreeLiveNamesakesPickTheFirstEveryTime()
+    {
+        var peers = new[]
+        {
+            Peer("job-hunter", "111111"),
+            Peer("job-hunter", "222222"),
+            Peer("job-hunter", "333333")
+        };
+
+        Assert.Equal("job-hunter [111111]", BridgeProtocol.AddressFor("job-hunter", peers));
+        Assert.Equal("job-hunter [111111]", BridgeProtocol.AddressFor("job-hunter", peers));
+    }
+
+    // Names are matched the way every other comparison in this file matches
+    // them, because ListAgents is not the only thing that writes one.
+    [Fact]
+    public void TheNameIsMatchedWithoutRegardToCase()
+    {
+        var peers = new[] { Peer("Job-Hunter", "2548f2"), Peer("job-hunter", "462b2e") };
+
+        Assert.Equal("job-hunter [2548f2]", BridgeProtocol.AddressFor("job-hunter", peers));
+    }
+
+    // Nothing to disambiguate with. Sending the bare name may still stop on the
+    // picker, but inventing an address that resolves to nothing would fail every
+    // time instead of sometimes — and a row with no ref is a shape this code has
+    // never seen rather than one it can reason about.
+    [Fact]
+    public void ANamesakeWithNoRefIsStillAddressedBare()
+    {
+        var peers = new[] { Peer("job-hunter", ""), Peer("job-hunter", "462b2e") };
+
+        Assert.Equal("job-hunter", BridgeProtocol.AddressFor("job-hunter", peers));
+    }
+
+    // Before the first poll there is no evidence of ambiguity, and a name that
+    // has always worked is a better guess than a ref nobody has listed.
+    [Theory]
+    [InlineData("job-hunter")]
+    [InlineData("")]
+    public void WithNoPeerListTheNameIsSentAsItIs(string name) =>
+        Assert.Equal(name, BridgeProtocol.AddressFor(name, null));
+
+    // A name nothing in the list answers to is left alone rather than guessed at.
+    [Fact]
+    public void ANameNobodyClaimsIsSentAsItIs()
+    {
+        var peers = new[] { Peer("someone-else", "aa11bb") };
+
+        Assert.Equal("job-hunter", BridgeProtocol.AddressFor("job-hunter", peers));
+    }
+
+    [Fact]
+    public void AnEmptyNameIsNotDecorated() =>
+        Assert.Equal("", BridgeProtocol.AddressFor("", new[] { Peer("", "aa11bb"), Peer("", "bb22cc") }));
 }
