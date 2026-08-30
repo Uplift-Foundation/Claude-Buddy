@@ -103,6 +103,11 @@ public class RemoteControlChatSessionTests
         //
         // The state this test needs is part of the test, so it is set here.
         ClaudeBuddySettings.RemoteControlEnabled = false;
+        // Both transports, because "off" is now two switches. A test that
+        // turns one off and leaves the other to whatever the last test set
+        // is asserting about a state it did not arrange — and settings here
+        // persist through ReloadForTests, since the setter writes the file.
+        ClaudeBuddySettings.PeerLinkEnabled = false;
 
         await session.SendAsync("run the tests");
 

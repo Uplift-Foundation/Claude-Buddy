@@ -81,8 +81,11 @@ public class PeerLinkLoopbackTests
 
         Assert.True(client.IsConnected("loopback"));
 
+        // Not a `hello`, which the link now consumes itself: the greeting is
+        // what names an inbound connection, so it never reaches Deliver. Using
+        // one here would have asserted that a refusal looked like a delivery.
         Assert.True(
-            await client.SendAsync("loopback", PeerProtocol.Message(PeerProtocol.Hello, "over-tls")),
+            await client.SendAsync("loopback", PeerProtocol.Message(PeerProtocol.Window, "over-tls")),
             "the message was not accepted for sending");
 
         // Waited for rather than slept on: the far side reads on its own task,
@@ -91,8 +94,16 @@ public class PeerLinkLoopbackTests
         await reachedServer.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         var received = Assert.Single(onServer);
-        Assert.Equal(PeerProtocol.Hello, received.Type);
+        Assert.Equal(PeerProtocol.Window, received.Type);
         Assert.Equal("over-tls", received.Id);
+
+        // The greeting did its job: the listener's side of this connection is
+        // filed under the machine that dialled rather than under the
+        // placeholder it was accepted as. Without it the mirror would attribute
+        // every session on the far machine to a peer called "(inbound …)".
+        Assert.True(
+            server.IsConnected(Environment.MachineName),
+            "the greeting did not name the inbound connection");
     }
 
     // The payload that motivated the whole change: a transcript-sized message,

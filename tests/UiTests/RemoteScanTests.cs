@@ -318,6 +318,11 @@ public class RemoteScanTests
             Assert.NotEmpty(Orbs(manager));
 
             ClaudeBuddySettings.RemoteControlEnabled = false;
+        // Both transports, because "off" is now two switches. A test that
+        // turns one off and leaves the other to whatever the last test set
+        // is asserting about a state it did not arrange — and settings here
+        // persist through ReloadForTests, since the setter writes the file.
+        ClaudeBuddySettings.PeerLinkEnabled = false;
             manager.ScanAndUpdate();
 
             Assert.Empty(Orbs(manager));
