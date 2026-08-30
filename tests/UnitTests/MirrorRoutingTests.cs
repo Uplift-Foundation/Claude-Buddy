@@ -519,4 +519,60 @@ public class MirrorRoutingTests
     [Fact]
     public void NoStallLeavesTheStateExactlyAsItWas() =>
         Assert.Equal("2 remote sessions", RemoteControlSessions.Compose("2 remote sessions", null));
+
+    // --- reading the machine back out of a relay's name ----------------------
+
+    // The panel said "another machine" and not which one, which is true and is
+    // not an answer for somebody who has two. The name is already on the wire:
+    // a relay is called `claude-buddy-rc-<account>-<machine>`, so the tail is
+    // the machine and nothing new has to be sent to learn it.
+    [Theory]
+    [InlineData("claude-buddy-rc--claude-board-avatar", ".claude-board", "avatar")]
+    [InlineData("claude-buddy-rc--claude-warrens-mbp", ".claude", "warrens-mbp")]
+    [InlineData("claude-buddy-rc--claude-board-warrens-mbp", ".claude-board", "warrens-mbp")]
+    public void TheMachineIsReadBackOutOfTheRelayName(
+        string relay, string account, string expected) =>
+        Assert.Equal(expected, RemoteControlBridge.MachineFromRelayName(relay, account));
+
+    // Round-trips against the builder rather than only against fixtures, which
+    // is the property that actually has to hold: these two are inverses and
+    // live next to each other so they cannot drift apart unnoticed.
+    [Fact]
+    public void WhatTheNameBuilderPutsInIsWhatThisTakesOut()
+    {
+        var machine = RemoteControlBridge.MachineTag("Warrens-MacBook-Pro.local");
+        var relay = "claude-buddy-rc--claude-board-" + machine;
+
+        Assert.Equal(machine, RemoteControlBridge.MachineFromRelayName(relay, ".claude-board"));
+    }
+
+    // Null rather than a guess, in every shape that is not one of ours. Naming
+    // the wrong machine is worse than not naming one — the caller keeps saying
+    // "another machine", which is vague but never false.
+    //
+    // A *wrong account* is deliberately not in this list, and finding that out
+    // is why it is worth saying: `.claude` is a prefix of `.claude-board`, so
+    // asking about a `.claude-board` relay while passing `.claude` answers
+    // "board-avatar" — wrong, and shaped exactly like a right answer. It cannot
+    // be detected from the string, so the precondition is the contract instead
+    // (see MachineFromRelayName), and callers satisfy it by taking both from
+    // the same account's client. The case below asserts the parse, not a
+    // defence that does not exist.
+    [Theory]
+    [InlineData(null, ".claude")]
+    [InlineData("", ".claude")]
+    [InlineData("something-else-entirely", ".claude")]
+    [InlineData("claude-buddy-rc--claude-", ".claude")]
+    public void AnUnrecognisableRelayNameNamesNoMachine(string? relay, string account) =>
+        Assert.Null(RemoteControlBridge.MachineFromRelayName(relay, account));
+
+    // The ambiguity itself, pinned so it is a known shape rather than a
+    // surprise: this is what a mismatched account produces, and the comment on
+    // MachineFromRelayName is the reason it is allowed to.
+    [Fact]
+    public void AMismatchedAccountParsesIntoSomethingWrongAndCannotBeDetected() =>
+        Assert.Equal(
+            "board-avatar",
+            RemoteControlBridge.MachineFromRelayName(
+                "claude-buddy-rc--claude-board-avatar", ".claude"));
 }

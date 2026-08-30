@@ -1318,6 +1318,46 @@ namespace ClaudeBuddy
         // the overload below, which takes the name and is covered including the
         // empty case this hands it when the read throws.
         [ExcludeFromCodeCoverage]
+        // The far machine's name, read back out of the relay that serves it.
+        //
+        // The inverse of the name built above, and deliberately kept beside it:
+        // the two have to agree, and a parser written anywhere else would drift
+        // the first time the format changes.
+        //
+        // This exists because the panel could say a conversation was on "another
+        // machine" and not which one, and a person with two of them cannot act
+        // on that. The name is already on the wire — a relay is called
+        // `claude-buddy-rc--claude-board-avatar`, and the tail of that is the
+        // machine — so nothing new has to be sent and no far Buddy has to be
+        // updated to answer.
+        //
+        // Null rather than a guess when the name is not one of ours or carries
+        // no tail: "another machine" is a worse answer than naming the wrong
+        // one, so a caller that gets null keeps the vaguer wording.
+        //
+        // **Must be given the account the relay actually belongs to, and cannot
+        // check that for itself.** One account's name is a prefix of another's
+        // the moment somebody has `.claude` and `.claude-board` — the same
+        // ambiguity the tmux targets carry, and the reason those are all exact
+        // matches. Asked about `claude-buddy-rc--claude-board-avatar` while
+        // passing `.claude`, this answers "board-avatar", which is wrong and
+        // indistinguishable from right. Callers hold both from the same place:
+        // the relay comes from that account's own client (RelayFor), so the two
+        // correspond by construction. Nothing here can recover if they do not.
+        internal static string? MachineFromRelayName(string? relayName, string? profileDir)
+        {
+            if (string.IsNullOrWhiteSpace(relayName) || profileDir is null) return null;
+
+            var safe = profileDir.Replace('.', '-').Replace(':', '-');
+            var prefix = TmuxSessionPrefix + safe + "-";
+
+            if (!relayName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return null;
+
+            var machine = relayName[prefix.Length..];
+
+            return string.IsNullOrWhiteSpace(machine) ? null : machine;
+        }
+
         internal static string MachineTag()
         {
             string name;

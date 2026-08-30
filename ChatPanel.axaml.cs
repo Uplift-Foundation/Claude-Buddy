@@ -385,6 +385,8 @@ namespace ClaudeBuddy
             if (_session is IRemoteChatFetchWait waited) waited.WaitChanged -= OnWaitChanged;
             HideWait();
 
+            if (_session is IRemoteChatMachine wasNamed) wasNamed.MachineChanged -= OnMachineChanged;
+
             // A remote session can take a turn back — its "working…" line comes
             // off once the answer lands. Subscribed on the concrete type rather
             // than through an interface: nothing else in this app has ever needed
@@ -473,6 +475,11 @@ namespace ClaudeBuddy
                 HideWait();
             }
 
+            // The roster usually answers after the panel is already open, so the
+            // machine's name arrives late and the chip has to be redrawn when it
+            // does.
+            if (session is IRemoteChatMachine named) named.MachineChanged += OnMachineChanged;
+
             // "Zara — wtvamp" is built as name plus place, so it splits back
             // into the two lines the header now has. A name with no place (an
             // agent's own main session) simply leaves the second line empty.
@@ -498,11 +505,9 @@ namespace ClaudeBuddy
             // one of those is badged — and a chip that made room for the
             // impossible case would be a claim about this app that is not true.
             KindChip.IsVisible = kind is not null;
-            KindChipText.Text = kind is null
-                ? ""
-                : presence is null
-                    ? $"{orb.KindGlyphText}  {kind}"
-                    : $"{orb.KindGlyphText}  {kind} · {presence}";
+            KindChipText.Text = KindChipLabel(
+                orb.KindGlyphText, kind, presence,
+                (_session as IRemoteChatMachine)?.MachineName);
 
             ApplyHeartbeat(orb.IsHeartbeat);
 
@@ -1926,6 +1931,45 @@ namespace ClaudeBuddy
         }
 
         private void OnPromptChanged() => ApplyPrompt();
+
+        // The far machine's name arrives on the roster, which normally lands
+        // after the panel is already open — so the chip is redrawn rather than
+        // only being set once at Bind.
+        private void OnMachineChanged()
+        {
+            if (_owner is null) return;
+
+            KindChipText.Text = KindChipLabel(
+                _owner.KindGlyphText, _owner.KindLabel, _owner.PresenceLabel,
+                (_session as IRemoteChatMachine)?.MachineName);
+        }
+
+        // What the chip says, including which machine when that is known.
+        //
+        // "another machine" is true and is not an answer: somebody with two of
+        // them cannot act on it, which is what prompted this. The machine name
+        // replaces the generic word rather than being appended to it — "⇄
+        // another machine · avatar" says the same thing twice and is longer than
+        // the header has room for.
+        //
+        // Falls back the moment the name is unknown, which is the ordinary case
+        // for the first second a panel is open: the roster has not answered yet,
+        // and naming no machine beats naming a guessed one.
+        //
+        // Pure and static so the wording is a unit test rather than a
+        // screenshot. See CB-59.
+        internal static string KindChipLabel(
+            string glyph, string? kind, string? presence, string? machine)
+        {
+            if (kind is null) return "";
+
+            var what = string.IsNullOrWhiteSpace(machine) ? kind : machine;
+
+            return presence is null
+                ? $"{glyph}  {what}"
+                : $"{glyph}  {what} · {presence}";
+        }
+
 
         // --- the wait, while it is happening --------------------------------
 

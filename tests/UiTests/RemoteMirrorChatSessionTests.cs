@@ -147,6 +147,32 @@ public class RemoteMirrorChatSessionTests : IDisposable
         Assert.Contains(Name, session.ComposerHint);
     }
 
+    // And it has to stop saying "terminal" when there is no terminal.
+    //
+    // **A live view is not a typable one, and keying the hint on mirroring alone
+    // conflated them.** The roster has always carried HasPane — its own comment
+    // says "a panel that offered a send it cannot deliver would be lying in the
+    // one place it matters" — and the hint ignored it.
+    //
+    // Seen on a real pair: the composer read "Type into job-hunter-mac-mini's
+    // terminal" with the line directly above it reading "Sent as a message
+    // rather than typed … there is no input line to type into." Both on screen
+    // at once, one of them false. On a headless machine, where sessions run in a
+    // plain tty rather than under tmux, this is the ordinary case.
+    [AvaloniaFact]
+    public async Task TheComposerSaysMessagingWhenThereIsNoPaneToTypeInto()
+    {
+        _canType = false;
+
+        Wire("a", "b");
+
+        var session = await OpenAsync();
+
+        Assert.Contains("Message", session.ComposerHint);
+        Assert.DoesNotContain("terminal", session.ComposerHint);
+        Assert.Contains(Name, session.ComposerHint);
+    }
+
     // A live view is a real transcript, so it can be paged back into — which is
     // exactly what the messaging channel could not do.
     [AvaloniaFact]
