@@ -19,18 +19,42 @@ using ClaudeBuddy;
 // reported as broken the next morning.
 //
 //   dotnet run --project tools/mirror-probe -- <session-name> [far-relay] [near-relay]
+//   dotnet run --project tools/mirror-probe -- <session-name> --send "<text>"
 //
-// Read-only: it sends HELLO and FETCH, never INPUT, so it cannot type into
-// anyone's session.
+// Read-only unless --send is given, and that asymmetry is deliberate: fetching
+// asks a question, while sending types into somebody's live session, where a
+// stray line is not a test artefact but an instruction a working agent will act
+// on. So the send path is never on by default and never inferred.
+//
+// With --send it sends, then fetches, and reports whether the line came back
+// inside the far session's own transcript. That last part is the only evidence
+// worth having — INPUT's reply is a bare OK, which says the far Buddy accepted
+// the frame, not that the text reached the CLI's input line.
 //
 // **Run it with Claude Buddy quit.** The probe drives the relay pane by pasting
 // into it, and so does Buddy; both doing it at once interleaves two prompts in
 // one composer and corrupts both. The relay itself is a tmux session that
 // outlives the app, which is what makes this possible at all.
 
-var wanted = args.Length > 0 ? args[0] : "job-hunter-mac-mini";
-var farRelay = args.Length > 1 ? args[1] : "claude-buddy-rc--claude-board-avatar";
-var nearRelay = args.Length > 2 ? args[2] : "claude-buddy-rc--claude-board-warrens-mbp";
+// --send is pulled out first so the positional arguments keep their meaning
+// whether or not it is there.
+string? sendText = null;
+var rest = new List<string>();
+
+for (var i = 0; i < args.Length; i++)
+{
+    if (args[i] == "--send" && i + 1 < args.Length)
+    {
+        sendText = args[++i];
+        continue;
+    }
+
+    rest.Add(args[i]);
+}
+
+var wanted = rest.Count > 0 ? rest[0] : "job-hunter-mac-mini";
+var farRelay = rest.Count > 1 ? rest[1] : "claude-buddy-rc--claude-board-avatar";
+var nearRelay = rest.Count > 2 ? rest[2] : "claude-buddy-rc--claude-board-warrens-mbp";
 
 var tmux = new[] { "/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux" }
     .FirstOrDefault(File.Exists);
@@ -150,6 +174,81 @@ if (state.Availability != RemoteMirrorClient.MirrorAvailability.Available)
     return 2;
 }
 
+// --- sending, when asked -----------------------------------------------------
+
+// Off unless --send says otherwise, and that default is the point: this types
+// into somebody's live session, where a stray line is not a test artefact but an
+// instruction a working agent will act on. Fetching can be run against anything
+// without asking; sending cannot.
+//
+// The ack is not the interesting part. INPUT answers with a bare OK, which says
+// the far Buddy accepted the frame — not that the text reached the CLI's input
+// line, which is a second hop through a different mechanism (it is typed into
+// that terminal, the same way /color is made to work). So the fetch below is
+// what actually proves it: the sent line has to come back inside the far
+// session's own transcript.
+if (sendText is not null)
+{
+    Console.WriteLine();
+    Console.WriteLine($"sending to {wanted}: {sendText}");
+    began = DateTime.UtcNow;
+
+    var err = await client.SendInputAsync(wanted, sendText);
+    var sent = (DateTime.UtcNow - began).TotalSeconds;
+
+    Console.WriteLine(err is null
+        ? $"  typed in after {sent:F0}s (deadline is {MirrorProtocol.InputTimeoutSeconds}s)"
+        : $"  INPUT refused after {sent:F0}s: {err}");
+
+    // The panel does not stop here, and neither does this.
+    //
+    // "No pane" is a missing mechanism rather than a refusal: on a headless
+    // machine the session runs in a plain tty with no tmux pane to type into,
+    // which RemoteControlChatSession's own comment calls "the ordinary case and
+    // not an edge one". The panel falls back to the messaging channel it used
+    // before it upgraded to a mirror. Only that one code falls back —
+    // `reply-off` is the far machine's owner having switched replying off, and
+    // routing around it would route around a stated decision. A locked door and
+    // a missing one.
+    //
+    // The predicate is the app's, called by name rather than reproduced, so this
+    // cannot drift from what the panel actually does. The *send* underneath it
+    // is reconstructed: the panel calls RemoteControlSessions.SendToAsync, which
+    // needs the whole bridge, so this pastes the prompt that bridge would paste —
+    // BridgeProtocol.SendMessagePrompt, the app's own wording. That is the one
+    // seam here that is a reconstruction rather than the shipped path, and it is
+    // named as such.
+    if (err is not null)
+    {
+        if (!RemoteControlChatSession.FallsBackToMessaging(err))
+        {
+            Console.WriteLine("  and that code does not fall back — nothing further to try.");
+            stop.Cancel();
+            return 4;
+        }
+
+        Console.WriteLine("  falling back to the messaging channel, as the panel does...");
+
+        var viaRelay = BridgeProtocol.SendMessagePrompt(wanted, sendText);
+
+        if (!Tmux(tmux, out _, "set-buffer", "-b", "mirror-probe", "--", viaRelay)
+            || !Tmux(tmux, out _, "paste-buffer", "-b", "mirror-probe", "-t", pane, "-p", "-d")
+            || !Tmux(tmux, out _, "send-keys", "-t", pane, "Enter"))
+        {
+            Console.WriteLine("  couldn't paste into the relay pane");
+            stop.Cancel();
+            return 4;
+        }
+
+        Console.WriteLine("  handed to the relay; it still has to be carried and typed.");
+
+        // One relay turn to carry it, before asking for a window that could
+        // contain it. Without this the fetch races the send and the transcript
+        // read is simply too early to prove anything either way.
+        await Task.Delay(TimeSpan.FromSeconds(90));
+    }
+}
+
 Console.WriteLine();
 Console.WriteLine($"fetching {wanted} (this takes minutes: the far relay retypes it by hand)...");
 began = DateTime.UtcNow;
@@ -160,6 +259,8 @@ var took = (DateTime.UtcNow - began).TotalSeconds;
 Console.WriteLine();
 Console.WriteLine($"OpenAsync returned {ok} after {took:F0}s "
                 + $"(deadline is {MirrorProtocol.FetchTimeoutSeconds}s)");
+
+var landed = false;
 
 if (painted.Task.IsCompleted)
 {
@@ -173,10 +274,28 @@ if (painted.Task.IsCompleted)
         if (text.Length > 150) text = text[..150] + "...";
         Console.WriteLine($"  [{turn.Role}] {text}");
     }
+
+    // Read back out of the far machine's own transcript, which is the only
+    // evidence that survives every hop: accepted by the far Buddy, typed into
+    // that CLI's input line, and recorded by the CLI as a turn. An OK proves
+    // only the first of those.
+    if (sendText is not null)
+    {
+        landed = rows.Turns.Any(t => t.Text.Contains(sendText, StringComparison.Ordinal));
+
+        Console.WriteLine();
+        Console.WriteLine(landed
+            ? $"ROUND TRIP: the sent line is in {wanted}'s own transcript."
+            : $"NOT FOUND: {wanted} accepted the frame but its transcript does not "
+            + "contain the line yet. A window is a snapshot — it may have been built "
+            + "before the CLI wrote the turn. Re-run without --send to look again.");
+    }
 }
 
 stop.Cancel();
-return ok ? 0 : 3;
+
+if (!ok) return 3;
+return sendText is not null && !landed ? 5 : 0;
 
 // --- plumbing ----------------------------------------------------------------
 
