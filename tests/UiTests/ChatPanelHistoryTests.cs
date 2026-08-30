@@ -146,33 +146,37 @@ public class ChatPanelHistoryTests : IDisposable
     {
         var session = new SucceedingBacklogSession();
         session.Seed(2);
+
+        // Nothing older to fetch, which is the only thing that makes the two
+        // rows below a fact rather than a coin toss.
+        //
+        // This test is about ReplaceWith rebuilding the transcript; the backlog
+        // is somebody else's test, two methods up. But the fake defaults to
+        // having more, and the panel decides whether to ask for it by
+        // comparing layout against layout — the ScrollChanged handler loads the
+        // page before whenever the scroll's extent runs more than eight pixels
+        // past its viewport near the top. Two seeded turns sit almost exactly
+        // one viewport tall at the shipped height, so which side of that
+        // comparison they land on comes down to font metrics: green on three
+        // developer machines, red on both CI runners, where the fonts are not
+        // the same ones.
+        //
+        // Sizing the window bigger was tried first and is not enough — the load
+        // is kicked off by the layout pass that OpenFor itself triggers, before
+        // a test has any chance to resize anything. Saying there is nothing to
+        // load is the fix that does not depend on when layout happens.
+        //
+        // Worth spelling out because the failure does not read as geometry at
+        // all: seven rows where two were seeded, which looks exactly like
+        // history replacement being broken.
+        session.HasMore = false;
+
         _toClean.Add(session.SessionId);
 
         ChatPanel.OpenFor(NewOrb(), session);
-
-        // Sized deliberately, and taller than the shipped 420, the way the
-        // backlog test above pins its own window — for the same reason and then
-        // one more.
-        //
-        // This session has more to give, and whether the panel asks for it is
-        // decided by layout: the ScrollChanged handler loads the page before
-        // when the extent runs more than eight pixels past the viewport. At the
-        // shipped height two turns sit almost exactly one viewport tall, so
-        // which side of that comparison they land on is a few pixels of font
-        // metrics — green on three developer machines, red on both CI runners,
-        // where the fonts are not the same ones. Pinning to 420 would only make
-        // the coin toss reproducible; 600 puts two turns comfortably inside the
-        // viewport, so the trigger cannot fire at all.
-        //
-        // That matters because the failure does not look like a geometry
-        // problem. It reports seven rows where two were seeded — two plus one
-        // unrequested page of five — which reads as history replacement being
-        // broken, which is the one thing this test is actually about.
-        var panel = ChatPanelTestAccess.Instance!;
-        panel.Width = 340;
-        panel.Height = 600;
         FlushRender();
 
+        var panel = ChatPanelTestAccess.Instance!;
         Assert.Equal(2, RenderedRows(panel).Count);
 
         session.ReplaceWith(new[]
