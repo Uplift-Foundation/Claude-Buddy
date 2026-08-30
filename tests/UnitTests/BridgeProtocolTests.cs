@@ -285,6 +285,34 @@ public class BridgeProtocolTests
         Assert.Contains("trust", reason);
     }
 
+    // CB-42's other half. A relay launched into a context nobody has signed
+    // into runs, holds its pane, and answers every prompt with this — measured
+    // on the user's MacBook, where the whole of the relay's answer to ListAgents
+    // was "Not logged in · Please run /login".
+    [Theory]
+    [InlineData("Not logged in · Please run /login")]
+    [InlineData("  Not logged in\n  Please run /login to continue")]
+    [InlineData("Invalid API key · Please run /login")]
+    public void ReadSetupBlock_RecognisesASessionThatIsNotLoggedIn(string pane)
+    {
+        var reason = BridgeProtocol.ReadSetupBlock(pane);
+
+        Assert.NotNull(reason);
+        Assert.Contains("not logged in", reason);
+        Assert.Contains("Run `claude` in a terminal", reason);
+    }
+
+    // ...and the line that must NOT be read that way, which is why the match is
+    // narrow. This is a working relay with an expiring credential: ReadHealth
+    // already surfaces it as a warning, and blocking on it would refuse to start
+    // a session that works perfectly for another three days.
+    [Fact]
+    public void ReadSetupBlock_IgnoresTheExpiringLoginBanner()
+    {
+        Assert.Null(BridgeProtocol.ReadSetupBlock(
+            "⚠ Your login expires in 3 days · run /login to renew"));
+    }
+
     // A healthy session must not be mistaken for a blocked one, or the relay
     // would refuse to start for everybody.
     [Fact]

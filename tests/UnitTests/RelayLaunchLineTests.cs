@@ -94,6 +94,59 @@ public class RelayLaunchLineTests
         // scan — the hook writes its status file under it.
         Assert.StartsWith("TMPDIR=", line);
     }
+
+    // --- which account the relay comes up as (CB-42) -------------------------
+
+    // The bug in one assertion. Writing CLAUDE_CONFIG_DIR=$HOME/.claude is not
+    // the same as writing nothing: Claude Code reads
+    // $HOME/.claude/.claude.json when told and $HOME/.claude.json when not, and
+    // on the machine this was measured on only the second had ever been
+    // onboarded — so the relay came up in a first-run wizard and stayed there.
+    [Fact]
+    public void Leaves_the_config_dir_off_entirely_for_the_default_account()
+    {
+        var line = RemoteControlBridge.LaunchLine(
+            "/usr/local/bin/claude",
+            "/tmp/scratch",
+            configDir: null,
+            "claude-buddy-rc--claude-machine");
+
+        Assert.DoesNotContain("CLAUDE_CONFIG_DIR", line);
+
+        // Everything else it carries is unchanged — this is one assignment
+        // dropped, not a different launch line.
+        Assert.StartsWith("TMPDIR='/tmp/scratch' CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 ", line);
+        Assert.Contains("--allowedTools SendMessage ListAgents", line);
+        Assert.Contains("--disallowedTools", line);
+        Assert.Contains("--append-system-prompt", line);
+    }
+
+    // ...and the case the variable exists for is untouched: without it every
+    // account's relay would read the same registry, which is what made
+    // per-account relays possible in the first place.
+    [Fact]
+    public void Still_names_the_context_for_a_second_account()
+    {
+        Assert.Contains("CLAUDE_CONFIG_DIR='/Users/someone/.claude-board'", Line());
+    }
+
+    // The two lines differ by exactly that assignment and nothing else, which is
+    // the claim the two tests above make separately and neither can make alone.
+    [Fact]
+    public void Differs_from_the_second_account_line_by_one_assignment()
+    {
+        var named = RemoteControlBridge.LaunchLine(
+            "/usr/local/bin/claude", "/tmp/scratch",
+            "/Users/someone/.claude-board", "claude-buddy-rc--claude-machine");
+
+        var silent = RemoteControlBridge.LaunchLine(
+            "/usr/local/bin/claude", "/tmp/scratch",
+            configDir: null, "claude-buddy-rc--claude-machine");
+
+        Assert.Equal(
+            named.Replace("CLAUDE_CONFIG_DIR='/Users/someone/.claude-board' ", string.Empty),
+            silent);
+    }
 }
 
 // What the relay is told, as prose rather than as a flag.
