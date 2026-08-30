@@ -47,6 +47,15 @@ namespace ClaudeBuddy
             get { lock (_gate) return _client; }
         }
 
+        // The serving half, exposed for the same reason as the asking one: both
+        // have a TickAsync that has to be driven by a clock rather than by the
+        // arrival of bytes, or a deadline never lapses and a watch quietly
+        // expires. See RemoteControlSessions.MirrorTickAsync.
+        internal RemoteMirrorServer? Server
+        {
+            get { lock (_gate) return _server; }
+        }
+
         // Builds both halves over this link.
         //
         // **Not account-scoped, and that is a simplification worth naming.** A

@@ -252,13 +252,19 @@ namespace ClaudeBuddy
             }
         }
 
-        // Who is allowed to ask, deferring to the transport when it has an
-        // opinion. See Seams.PeerAllowed for why this is not a constant.
+        // Who is allowed to ask.
+        //
+        // **The default is now "nobody", and that is the right way round.** It
+        // used to fall back to a name test — anything called `claude-buddy-rc-…`
+        // was another Buddy's relay — which was a guess dressed as a check: a
+        // name is not a credential, and anyone on the account could pick one.
+        // The transport answers this properly now, because a peer has completed
+        // a TLS handshake with a certificate somebody pinned by typing a code.
+        //
+        // A server built with no PeerAllowed serves nothing, which is what a
+        // half-wired server should do.
         private bool MayAsk(string fromPeer) =>
-            _seams.PeerAllowed?.Invoke(fromPeer) ?? IsRelayName(fromPeer);
-
-        internal static bool IsRelayName(string name) =>
-            name.StartsWith("claude-buddy-rc-", StringComparison.OrdinalIgnoreCase);
+            _seams.PeerAllowed?.Invoke(fromPeer) ?? false;
 
         // What of this machine the asker can see.
         //

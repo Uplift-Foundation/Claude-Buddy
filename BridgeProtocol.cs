@@ -377,7 +377,7 @@ namespace ClaudeBuddy
             // builds the name. It used to be a second copy of the literal here,
             // and the two decide whether a relay becomes an orb — the local scan
             // now asks the same question of a status file's cwd.
-            public bool IsOwnRelay => RemoteControlBridge.IsOwnRelayName(Name);
+            public bool IsOwnRelay => MachineNames.IsRelayName(Name);
 
             // A session that has gone away. Worth an orb only if it is actually
             // there — "offline" is the state a peer's registration sits in after

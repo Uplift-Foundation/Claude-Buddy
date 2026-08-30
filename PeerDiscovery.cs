@@ -182,7 +182,7 @@ namespace ClaudeBuddy
 
                     var peer = Read(
                         got.Buffer, got.RemoteEndPoint.Address.ToString(),
-                        RemoteControlBridge.MachineTag(), DateTime.UtcNow);
+                        MachineNames.Tag(), DateTime.UtcNow);
 
                     if (peer is null) continue;
                     if (Note(peer)) Changed?.Invoke();
@@ -203,7 +203,7 @@ namespace ClaudeBuddy
             {
                 try
                 {
-                    var say = Say(RemoteControlBridge.MachineTag(), listenPort, PeerIdentity.OwnPin());
+                    var say = Say(MachineNames.Tag(), listenPort, PeerIdentity.OwnPin());
                     await _socket!.SendAsync(say, new IPEndPoint(Group, GroupPort), ct)
                         .ConfigureAwait(false);
                 }

@@ -54,7 +54,7 @@ namespace ClaudeBuddy
                 // relay.
                 serveOnLaunch: () =>
                 {
-                    RemoteControlSessions.ServeOnLaunch();
+                    
 
                     // The peer link starts here for exactly the reasons above,
                     // and rather more sharply. It is a socket and a UDP
