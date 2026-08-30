@@ -202,9 +202,15 @@ public class PeerGreetingTests
         // One literal "(inbound)" for every connection that has not said who it
         // is meant two machines dialling at once silently disposed each other's
         // stream — rare, and indistinguishable from a network drop.
+        //
+        // Held open rather than backed by a MemoryStream. A MemoryStream ends
+        // the moment it is read, the pump exits, and the connection is forgotten
+        // — so the count this asserts was a race against the reaper rather than
+        // a statement about collisions, and it lost. Widening the assertion
+        // would have hidden the thing it exists to check.
         using var link = Link();
-        using var first = new MemoryStream(new byte[] { 0 });
-        using var second = new MemoryStream(new byte[] { 0 });
+        using var first = new HeldOpen();
+        using var second = new HeldOpen();
 
         var a = PeerLink.Unnamed();
         var b = PeerLink.Unnamed();
@@ -215,6 +221,45 @@ public class PeerGreetingTests
         link.Adopt(b, second, TheirPin, CancellationToken.None);
 
         Assert.Equal(2, link.ConnectedMachines().Count);
+    }
+
+    // A stream that never delivers a byte and never ends, which is what an idle
+    // socket looks like. Only ReadAsync is reached — the pump does nothing else
+    // with a connection it is waiting on.
+    private sealed class HeldOpen : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            new(Task.Delay(Timeout.Infinite, cancellationToken)
+                .ContinueWith(_ => 0, TaskScheduler.Default));
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        // Nothing to release, and deliberately safe to call twice: the link
+        // disposes the stream when it drops the connection and the test's
+        // `using` disposes it again on the way out. A stream that threw the
+        // second time would fail the test for a reason that has nothing to do
+        // with what it asserts.
+        protected override void Dispose(bool disposing) => base.Dispose(disposing);
     }
 
     // Polls rather than sleeps: the pump exits on its own thread, and a fixed

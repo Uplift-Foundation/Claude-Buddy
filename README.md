@@ -1259,6 +1259,32 @@ Both machines still need Claude Buddy running, but the far one no longer needs
 Remote Control on, or a Claude account at all: this path never asks a model for
 anything.
 
+**A Mac with no screen can serve, but cannot start a conversation.** macOS gates
+the machine that *opens* a local connection, not the one that accepts it — and a
+headless Mac has nobody to approve the prompt, so it never gets the grant. What
+that looks like, measured on a real one:
+
+```
+peer-connect-failed to=your-laptop   No route to host — macOS may be blocking
+  local network access — check System Settings → Privacy & Security → Local Network
+discovery-announce-failed            No route to host — …
+```
+
+Both of those are the *same* missing grant. The second is the one that misleads:
+a headless Mac cannot send its announcements either, so it never appears in
+anyone's list however healthy it is — which reads as the network not carrying
+multicast rather than as a permission.
+
+It still works, because none of that is needed in the direction that matters:
+
+- Pair from the machine **with** a screen, using the `pair-open` file above.
+- Add the headless one **by address**, not by waiting for it to appear.
+- The machine with a screen keeps the connection up. The headless one answers on
+  it, in both directions, because one connection carries both.
+
+If you want the headless machine to dial as well, screen-share into it once and
+approve Local Network access there; it is a one-time prompt like any other.
+
 **If a machine never appears**, the likeliest cause on macOS is that Local
 Network access was refused or lost. It is tied to the app's code signature and
 **does not survive an upgrade**, and the symptom is a connection error that

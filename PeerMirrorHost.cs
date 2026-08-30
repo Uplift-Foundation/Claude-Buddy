@@ -61,19 +61,22 @@ namespace ClaudeBuddy
         // is still passed because RemoteMirrorServer's local seams use it to
         // read this machine's own agent roster, which *is* per-account.
         internal void Serve(
-            string account,
+            IReadOnlyList<string> accounts,
             Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> localSessions)
         {
+            var label = accounts.Count > 0 ? accounts[0] : ".claude";
+
             lock (_gate)
             {
                 if (_client is not null) return;
 
                 _client = new RemoteMirrorClient(
-                    account, new RemoteMirrorClient.Seams(SendFrameAsync));
+                    label, new RemoteMirrorClient.Seams(SendFrameAsync));
 
-                var seams = RemoteMirrorServer.RealSeams(account, SendFrameAsync, localSessions);
+                var seams = RemoteMirrorServer.AllAccountSeams(
+                    accounts, SendFrameAsync, localSessions);
 
-                _server = new RemoteMirrorServer(account, seams with { PeerAllowed = MayAsk });
+                _server = new RemoteMirrorServer(label, seams with { PeerAllowed = MayAsk });
             }
         }
 
