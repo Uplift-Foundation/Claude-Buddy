@@ -40,7 +40,22 @@ namespace ClaudeBuddy
             Func<IReadOnlyList<AgentRoster.Entry>> Agents,
             Func<SessionSource, bool> ReplyEnabled,
             Func<SessionStatus, bool> CanType,
-            Func<SessionStatus, string, Task<bool>> TypeInto);
+            Func<SessionStatus, string, Task<bool>> TypeInto,
+
+            // Whether this peer is allowed to ask anything at all.
+            //
+            // **A seam because the answer depends on the transport, and the
+            // hard-coded version was a second copy of a string.** Over the relay
+            // it meant "the name starts with the prefix RemoteControlBridge
+            // builds" — a guard rather than a boundary, since the account is
+            // shared and anything on it could wear that name. Over a direct link
+            // it means something much stronger: this peer completed a TLS
+            // handshake presenting a certificate we pinned when a person typed a
+            // pairing code.
+            //
+            // Null keeps the old prefix test, so nothing that has not been moved
+            // across yet changes behaviour.
+            Func<string, bool>? PeerAllowed = null);
 
         private readonly string _account;
         private readonly Seams _seams;
@@ -123,7 +138,7 @@ namespace ClaudeBuddy
             // is a guard rather than a boundary, and it is cheap enough to keep
             // for the one thing it does catch — a person on the same account
             // typing something that happens to look like a frame.
-            if (!IsRelayName(fromPeer))
+            if (!MayAsk(fromPeer))
             {
                 MirrorLog.Say("serve-refused", $"t={frame.Type} from={fromPeer} not-a-relay-name");
                 return;
@@ -158,6 +173,11 @@ namespace ClaudeBuddy
                     break;
             }
         }
+
+        // Who is allowed to ask, deferring to the transport when it has an
+        // opinion. See Seams.PeerAllowed for why this is not a constant.
+        private bool MayAsk(string fromPeer) =>
+            _seams.PeerAllowed?.Invoke(fromPeer) ?? IsRelayName(fromPeer);
 
         internal static bool IsRelayName(string name) =>
             name.StartsWith("claude-buddy-rc-", StringComparison.OrdinalIgnoreCase);

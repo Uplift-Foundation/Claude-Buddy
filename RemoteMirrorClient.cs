@@ -135,6 +135,27 @@ namespace ClaudeBuddy
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
+            await DiscoverAsync(relays, wantedNames).ConfigureAwait(false);
+        }
+
+        // The same discovery, told directly who to ask.
+        //
+        // **Split out because the peer list is transport-shaped and discovery is
+        // not.** The overload above takes BridgeProtocol.RemoteAgent and filters
+        // it by IsOwnRelay/IsOffline/IsRemoteControl — three properties that
+        // only mean anything when the far Buddy is reachable as a *session on a
+        // relay*. A direct connection has no such list: it knows the machines it
+        // is connected to, which is already the answer that filter was working
+        // towards.
+        //
+        // Everything below this line is identical for both, which is the point:
+        // asking a far Buddy what it has does not depend on how the question
+        // travels.
+        public async Task DiscoverAsync(
+            IReadOnlyList<string> relays, IReadOnlyList<string> wantedNames)
+        {
+            if (wantedNames.Count == 0) return;
+
             if (relays.Count == 0)
             {
                 // No Buddy over there. Every name asked about is settled as
