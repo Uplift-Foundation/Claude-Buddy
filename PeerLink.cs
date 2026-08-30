@@ -180,12 +180,19 @@ namespace ClaudeBuddy
                         continue;
                     }
 
-                    // The answer to our own greeting, which is where a pairing
-                    // becomes mutual: we have had their certificate since the
-                    // handshake, and this is them saying the code was right.
-                    if (message.Type == PeerProtocol.Ok && PairingWith(machine))
+                    // The answer to our own greeting: it names the far machine,
+                    // and if we were pairing it is them saying the code was
+                    // right.
+                    //
+                    // The name matters even when we thought we knew it. A dial
+                    // by address does not know one — there is nothing to know
+                    // until the far end speaks — so it files the connection
+                    // under the address and this is what corrects it. Without
+                    // that, a machine added by hand would appear on screen as
+                    // "192.168.0.127".
+                    if (message.Type == PeerProtocol.Ok && IsGreetingAnswer(machine, message))
                     {
-                        RememberFromGreeting(machine);
+                        machine = Settle(machine, message.Name);
                         continue;
                     }
 
@@ -304,7 +311,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal async Task<bool> ConnectAsync(
             string machine, string host, int port = DefaultPort, CancellationToken ct = default,
-            string? pairingCode = null)
+            string? pairingCode = null, bool nameIsProvisional = false)
         {
             if (IsConnected(machine)) return true;
 
@@ -350,7 +357,11 @@ namespace ClaudeBuddy
                     return false;
                 }
 
-                if (pairing) lock (_gate) _pairingWith.Add(machine);
+                lock (_gate)
+                {
+                    if (pairing) _pairingWith.Add(machine);
+                    if (nameIsProvisional) _provisional.Add(machine);
+                }
 
                 Adopt(machine, tls, offered, ct);
 
@@ -527,13 +538,12 @@ namespace ClaudeBuddy
             }
 
             string pin;
-            string? open;
 
-            lock (_gate)
-            {
-                pin = _peers.TryGetValue(machine, out var peer) ? peer.Pin : "";
-                open = _openCode;
-            }
+            lock (_gate) pin = _peers.TryGetValue(machine, out var peer) ? peer.Pin : "";
+
+            // Through OpenCode, not off the field: a lapsed window has to read
+            // as no window at all, which is the whole point of having one.
+            var open = OpenCode();
 
             var verdict = Judge(_seams.KnownPeer(claimed), pin, open, hello.Code);
 
@@ -552,8 +562,10 @@ namespace ClaudeBuddy
             if (verdict == Greeting.Paired)
             {
                 // One window, one pairing. Leaving it open would turn a code
-                // read out once into a standing invitation.
-                lock (_gate) _openCode = null;
+                // read out once into a standing invitation — which the expiry
+                // above now also guards, but this is the stronger statement and
+                // does not wait five minutes to be true.
+                ClosePairing();
 
                 PeerIdentity.Remember(new PeerIdentity.Peer(pin, claimed));
                 MirrorLog.Say("peer-paired", $"with={claimed}");
@@ -568,8 +580,77 @@ namespace ClaudeBuddy
             return claimed;
         }
 
+        // Whether an `ok` is the answer to the greeting we sent.
+        //
+        // Named rather than inlined because the two arms are different
+        // questions. A connection whose name we made up is waiting to be told
+        // the real one; a pairing is waiting to be confirmed. Treating every
+        // `ok` as ours would swallow acknowledgements the mirror may later want.
+        private bool IsGreetingAnswer(string machine, PeerProtocol.PeerMessage message) =>
+            (Provisional(machine) && !string.IsNullOrWhiteSpace(message.Name))
+            || PairingWith(machine);
+
+        // Whether we are filing this connection under a name we invented.
+        //
+        // **Only these get renamed, and the alternative was worse than it
+        // looked.** The first cut renamed on any named `ok`, which is correct in
+        // the abstract and wrong in practice: a caller that dialled a machine
+        // under a label — a test, or anything holding a name it chose — finds
+        // its connection gone from under it a few milliseconds later, and every
+        // send by that name fails with "no link". It showed up as two different
+        // integration tests failing on two different runs, which is what a race
+        // looks like before you find it.
+        //
+        // Renaming is only *needed* where the dialled name was never real: an
+        // add-by-address dial has an IP and nothing else, and the far end is the
+        // only thing that knows what that machine is called.
+        private bool Provisional(string machine)
+        {
+            lock (_gate) return _provisional.Contains(machine);
+        }
+
+        // Files the connection under the name the far end gave, and records the
+        // pairing if we were making one.
+        //
+        // Excluded from coverage: the rename and the identity write both need a
+        // live connection behind them. Returns the name to carry from here on,
+        // the same contract GreetedAsync has.
+        [ExcludeFromCodeCoverage]
+        private string Settle(string machine, string? theirName)
+        {
+            var named = Provisional(machine) && !string.IsNullOrWhiteSpace(theirName)
+                ? theirName!
+                : machine;
+
+            if (!string.Equals(named, machine, StringComparison.OrdinalIgnoreCase))
+            {
+                Rename(machine, named);
+
+                lock (_gate)
+                {
+                    _provisional.Remove(machine);
+
+                    // The pairing was recorded against the name we dialled with,
+                    // which for an add-by-address was an IP. Move it, or the
+                    // pairing is remembered under something the far machine will
+                    // never call itself and the next reconnect is refused.
+                    if (_pairingWith.Remove(machine)) _pairingWith.Add(named);
+                }
+
+                MirrorLog.Say("peer-named", $"{machine} -> {named}");
+            }
+
+            if (PairingWith(named)) RememberFromGreeting(named);
+
+            return named;
+        }
+
         // Machines we have greeted with a code and not yet heard back from.
         private readonly HashSet<string> _pairingWith = new(StringComparer.OrdinalIgnoreCase);
+
+        // Connections filed under a name we invented, waiting to be told a real
+        // one. Only an add-by-address dial puts anything in here.
+        private readonly HashSet<string> _provisional = new(StringComparer.OrdinalIgnoreCase);
 
         private bool PairingWith(string machine)
         {
@@ -598,31 +679,79 @@ namespace ClaudeBuddy
         // --- pairing window ---------------------------------------------------------
 
         private string? _openCode;
+        private DateTime _openUntil;
+
+        // How long a shown code is good for.
+        //
+        // Five minutes is long enough to read a code off one screen and type it
+        // into another in the next room, and short enough that a code left on
+        // screen over lunch is not an invitation. It is not a guess at how fast
+        // people type — the window reopens with one click.
+        internal static readonly TimeSpan PairingWindowLife = TimeSpan.FromMinutes(5);
+
+        // Injectable for the same reason RemoteMirrorServer.Now is: a window
+        // lapsing has to be assertable without waiting five minutes for it.
+        internal Func<DateTime> Now { get; set; } = () => DateTime.UtcNow;
+
+        // Whether a window is still open, given when it was opened.
+        //
+        // **This exists because the version without it overclaimed.** The first
+        // cut of this had no expiry and a comment saying the window is closed
+        // by "the pairing completing or the user closing the settings pane".
+        // The first half was true. The second was not wired to anything — no
+        // caller of ClosePairing existed anywhere in the app — so a code shown
+        // once stayed valid until Buddy was restarted, which is the standing
+        // invitation that comment claimed to have ruled out.
+        //
+        // Pure so the lapse is a test rather than a five-minute wait, and so
+        // that the rule reads in one place instead of being an inequality
+        // buried in a lock.
+        internal static string? StillOpen(string? code, DateTime until, DateTime now) =>
+            code is not null && now < until ? code : null;
 
         // Opens this machine to one pairing, and returns the code to read out.
-        //
-        // No expiry timer, deliberately: the window is closed by the pairing
-        // completing or by the user closing the settings pane, both of which are
-        // events this already sees. A timer would add a way for the window to
-        // still be open with nothing on screen saying so, which is the one state
-        // that would matter.
-        internal string OpenForPairing()
-        {
-            var code = PeerIdentity.NewPairingCode();
-            lock (_gate) _openCode = code;
+        internal string OpenForPairing() => OpenForPairing(PeerIdentity.NewPairingCode());
 
-            MirrorLog.Say("peer-pairing-open", "window opened");
+        // The same, with the code given rather than generated — which is how a
+        // machine with no screen is paired. See PeerSessions.HonourPairingFile.
+        internal string OpenForPairing(string code)
+        {
+            var until = Now() + PairingWindowLife;
+
+            lock (_gate)
+            {
+                _openCode = code;
+                _openUntil = until;
+            }
+
+            MirrorLog.Say("peer-pairing-open", $"window open for {PairingWindowLife.TotalMinutes:0} min");
             return code;
         }
 
         internal void ClosePairing()
         {
-            lock (_gate) _openCode = null;
+            lock (_gate)
+            {
+                _openCode = null;
+                _openUntil = default;
+            }
         }
 
-        internal bool PairingOpen
+        internal bool PairingOpen => OpenCode() is not null;
+
+        // The code a greeting is judged against, or null once it has lapsed.
+        private string? OpenCode()
         {
-            get { lock (_gate) return _openCode is not null; }
+            string? code;
+            DateTime until;
+
+            lock (_gate)
+            {
+                code = _openCode;
+                until = _openUntil;
+            }
+
+            return StillOpen(code, until, Now());
         }
 
         internal void Drop(string machine)
