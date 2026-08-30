@@ -111,6 +111,8 @@ namespace ClaudeBuddy
             _defaultWidth = Width;
             _defaultHeight = Height;
 
+            _bubbleMenu = BuildBubbleMenu();
+
             Turns.ItemsSource = _turns;
             Attachments.ItemsSource = _pendingImages;
 
@@ -175,6 +177,12 @@ namespace ClaudeBuddy
             Input.AddHandler(KeyDownEvent, OnInputKeyDown, RoutingStrategies.Tunnel);
             Input.TextChanged += (_, _) => UpdateSlashSuggestions();
 
+            // On the window rather than on Input, and ahead of it: a selection
+            // in a bubble has to be copyable no matter which control the
+            // keystroke was aimed at, and the composer would otherwise eat the
+            // gesture whether or not it had anything to copy. See OnCopyKeyDown.
+            AddHandler(KeyDownEvent, OnCopyKeyDown, RoutingStrategies.Tunnel);
+
             KeyDown += OnPanelKeyDown;
 
             Opened += (_, _) =>
@@ -202,6 +210,11 @@ namespace ClaudeBuddy
                 // deactivates the panel, and closing the panel out from under it
                 // would be a strange answer to "show me that picture".
                 if (AvatarPopup.IsOpen) return;
+
+                // Same argument, one control further out: a context menu opened
+                // on a message bubble is its own window too, and closing the
+                // panel behind it would take the menu with it.
+                if (ContextMenuIsOpen) return;
 
                 HideNow();
             }, DispatcherPriority.Background);
@@ -460,7 +473,7 @@ namespace ClaudeBuddy
             OnStateChanged(session.State);
 
             _turns.Clear();
-            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
+            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt));
 
             HideSlashSuggestions();
 
@@ -1225,6 +1238,185 @@ namespace ClaudeBuddy
             return gesture is not null && e.Key == gesture.Key && e.KeyModifiers == gesture.KeyModifiers;
         }
 
+        // Read off TextBox rather than spelled out, exactly as IsPasteGesture
+        // above does, which is also what makes this right on both platforms
+        // without a single OS check: Avalonia resolves the gesture to Cmd+C on
+        // macOS and Ctrl+C on Windows.
+        private static bool IsCopyGesture(KeyEventArgs e)
+        {
+            var gesture = TextBox.CopyGesture;
+            return gesture is not null && e.Key == gesture.Key && e.KeyModifiers == gesture.KeyModifiers;
+        }
+
+        // The copy keystroke, claimed before the composer can swallow it.
+        //
+        // Tunnel and registered on the window, for a reason worth spelling out
+        // because the bug it avoids is silent: Avalonia's TextBox handles the
+        // copy gesture in OnKeyDown and marks it handled *unconditionally* —
+        // even with nothing selected, where it copies nothing at all. The
+        // composer is always the focused control here, so an ordinary bubbling
+        // handler would never run, and a message selection would look copyable
+        // while the clipboard never changed. Getting there first is the only
+        // way. Same reasoning, and the same routing strategy, as the Enter
+        // interception in OnInputKeyDown.
+        private void OnCopyKeyDown(object? sender, KeyEventArgs e)
+        {
+            if (!IsCopyGesture(e)) return;
+
+            var selected = SelectedMessageText();
+            var composerHasSelection = !string.IsNullOrEmpty(Input.SelectedText);
+
+            if (ChatCopy.Decide(composerHasSelection, selected is not null) != ChatCopy.Target.Message)
+                return;
+
+            // Handled only in the one case the panel is actually answering for.
+            // Left alone otherwise, so the composer's own copy — and its own
+            // no-op on an empty selection — behave exactly as they always have.
+            e.Handled = true;
+            _ = CopyToClipboardAsync(selected!);
+        }
+
+        // The selection a person can see in the transcript, if there is one.
+        //
+        // First rather than joined: SelectOnly keeps exactly one bubble
+        // selected at a time, so "first" and "only" are the same block, and
+        // asking for the first is how that invariant gets stated rather than
+        // assumed.
+        private string? SelectedMessageText()
+        {
+            foreach (var turn in _turns)
+            {
+                foreach (var block in turn.Blocks)
+                {
+                    if (!string.IsNullOrEmpty(block.SelectedText)) return block.SelectedText;
+                }
+            }
+
+            return null;
+        }
+
+        // Every rule that spans more than one bubble, applied to a block as
+        // TurnView builds it.
+        private void Adopt(SelectableTextBlock block)
+        {
+            // Only one bubble may hold a selection at a time, so that the copy
+            // gesture is never ambiguous about which of two highlighted
+            // passages it meant. Tunnel, so the previous selection is gone
+            // before SelectableTextBlock's own handler starts the new one.
+            block.AddHandler(
+                InputElement.PointerPressedEvent,
+                (_, _) => SelectOnly(block),
+                RoutingStrategies.Tunnel);
+
+            // One menu shared by every bubble rather than one built per
+            // paragraph: a long transcript is hundreds of paragraphs, and they
+            // would be hundreds of identical two-item menus. Avalonia sets
+            // Target to whichever control opened it, which is the only thing
+            // the two items need to know.
+            block.ContextFlyout = _bubbleMenu;
+        }
+
+        // Right-click on a message: copy what is selected, or the message
+        // whole.
+        //
+        // The second item is not a convenience — it is the answer to the one
+        // real limit of doing this with SelectableTextBlock. A rendered reply
+        // is a stack of controls (a paragraph here, a code block there) and
+        // Avalonia has no selection that spans two of them, so a drag can only
+        // ever take one of those pieces. "Copy message" is how a person gets
+        // the whole thing, and it hands back the original Markdown rather than
+        // the rendering, which is what anyone pasting it into a terminal or an
+        // editor actually wants.
+        // Built once with the panel rather than on first use. Lazy would save
+        // a two-item menu on a panel nobody right-clicks, and cost a null to
+        // reason about on every path that asks whether it is open — including
+        // the deactivate guard, which runs whether or not a bubble was ever
+        // drawn.
+        private readonly MenuFlyout _bubbleMenu;
+
+        private MenuFlyout BuildBubbleMenu()
+        {
+            var copy = new MenuItem { Header = "Copy" };
+            copy.Click += (_, _) =>
+            {
+                var text = SelectedMessageText();
+                if (text is not null) _ = CopyToClipboardAsync(text);
+            };
+
+            var copyAll = new MenuItem { Header = "Copy message" };
+            copyAll.Click += (_, _) =>
+            {
+                var text = MessageTextOf(_bubbleMenu.Target as SelectableTextBlock);
+                if (!string.IsNullOrEmpty(text)) _ = CopyToClipboardAsync(text!);
+            };
+
+            var menu = new MenuFlyout { ItemsSource = new[] { copy, copyAll } };
+
+            // Greyed rather than hidden when there is no selection, so the menu
+            // is the same shape every time it opens and "Copy" is where it was
+            // last time.
+            menu.Opening += (_, _) => copy.IsEnabled = SelectedMessageText() is not null;
+
+            return menu;
+        }
+
+        // The Markdown a bubble was drawn from, found by asking which turn
+        // owns the block the menu opened on.
+        private string? MessageTextOf(SelectableTextBlock? block)
+        {
+            if (block is null) return null;
+
+            foreach (var turn in _turns)
+            {
+                foreach (var candidate in turn.Blocks)
+                {
+                    if (ReferenceEquals(candidate, block)) return turn.Text;
+                }
+            }
+
+            return null;
+        }
+
+        // Whether a bubble's context menu is standing open.
+        //
+        // Asked by the deactivate handler for the same reason it already asks
+        // about the enlarged portrait: a menu is its own window on this
+        // platform, so opening one deactivates the panel, and hiding the panel
+        // out from under a menu the user just opened would be a strange answer
+        // to a right-click.
+        private bool ContextMenuIsOpen => _bubbleMenu.IsOpen;
+
+        // Everything except the block a drag has just started in.
+        //
+        // Avalonia selections are per-control and know nothing about each
+        // other, so without this every paragraph a person had ever dragged
+        // across would stay highlighted and the copy gesture would have to pick
+        // between them.
+        private void SelectOnly(SelectableTextBlock pressed)
+        {
+            foreach (var turn in _turns)
+            {
+                foreach (var block in turn.Blocks)
+                {
+                    if (!ReferenceEquals(block, pressed)) block.ClearSelection();
+                }
+            }
+        }
+
+        // Excluded from coverage for the same reason as TryClipboardText above:
+        // the catch is the platform's clipboard refusing, which a headless
+        // clipboard never does. The decision in front of it — whether this text
+        // is copied at all — is the half worth covering, and is covered.
+        [ExcludeFromCodeCoverage]
+        private async Task CopyToClipboardAsync(string text)
+        {
+            var clipboard = Clipboard;
+            if (clipboard is null) return;
+
+            try { await clipboard.SetTextAsync(text); }
+            catch { }
+        }
+
         // Whether the paste this preempted turns out to be a picture can
         // only be known asynchronously, so the keystroke is always taken
         // first and one of two things is done with it here: a picture
@@ -1565,7 +1757,7 @@ namespace ClaudeBuddy
             // start them downloading again.
             for (var i = 0; i < count && i < _session.History.Count; i++)
             {
-                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble, _soleSpeaker));
+                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble, _soleSpeaker, Adopt));
             }
         }
 
@@ -1588,7 +1780,7 @@ namespace ClaudeBuddy
             if (_session is null) return;
 
             _turns.Clear();
-            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
+            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt));
 
             // Re-read rather than left at what Bind found.
             //
@@ -1609,7 +1801,7 @@ namespace ClaudeBuddy
 
         private void OnTurnAdded(ChatTurn turn)
         {
-            _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
+            _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt));
 
             // Your own turn always brings the view with it; everything else
             // respects where you were reading.
@@ -1781,6 +1973,7 @@ namespace ClaudeBuddy
             private readonly ChatTurn _turn;
             private readonly Speaker? _soleSpeaker;
             private readonly Color? _defaultBubble;
+            private readonly Action<SelectableTextBlock> _adopt;
 
             // soleSpeaker is who is talking when the transcript does not say.
             // A room stamps every turn with its speaker because there are
@@ -1788,11 +1981,17 @@ namespace ClaudeBuddy
             // or a single agent — stamps none, because there is only one and it
             // was obvious to whoever wrote the transport. It is not obvious in
             // the bubbles, which is the whole point of the chip.
-            public TurnView(ChatTurn turn, Color? defaultBubble, Speaker? soleSpeaker)
+            // adopt is how each selectable run of text gets handed to the
+            // panel as it is built, for the rules that span more than one
+            // bubble. Passed in rather than reached for through the singleton,
+            // so a TurnView built by a test is a TurnView and not half a window.
+            public TurnView(ChatTurn turn, Color? defaultBubble, Speaker? soleSpeaker,
+                Action<SelectableTextBlock> adopt)
             {
                 _turn = turn;
                 _defaultBubble = defaultBubble;
                 _soleSpeaker = soleSpeaker;
+                _adopt = adopt;
 
                 turn.PropertyChanged += (_, e) =>
                 {
@@ -1835,6 +2034,13 @@ namespace ClaudeBuddy
 
             private Control BuildBody()
             {
+                // Thrown away with the body they belong to. A streaming turn
+                // rebuilds its body per delta (see the PropertyChanged hook
+                // above), and a list that kept growing across those rebuilds
+                // would have the panel searching controls that are no longer
+                // on screen for a selection the user cannot see.
+                _blocks.Clear();
+
                 var stack = new StackPanel { Spacing = 4 };
 
                 foreach (var block in ChatMarkdown.Parse(_turn.Text))
@@ -1846,6 +2052,58 @@ namespace ClaudeBuddy
                     stack.Children.Add(Line(_turn.Text));
 
                 return stack;
+            }
+
+            // Every selectable run of text in this bubble, in the order it is
+            // drawn. The panel asks for these rather than walking the visual
+            // tree: a turn knows what it built, whereas a tree walk would only
+            // find what has been realised and laid out, which is a different
+            // question with a different answer under a headless renderer.
+            //
+            // Empty until Body has been read, which is correct rather than
+            // merely convenient — a bubble nobody has drawn cannot be holding
+            // a selection.
+            private readonly List<SelectableTextBlock> _blocks = new();
+
+            public IReadOnlyList<SelectableTextBlock> Blocks => _blocks;
+
+            // A paragraph, heading, list item, quote or code block that a
+            // person can drag across and copy out.
+            //
+            // Focusable is off, which is the whole trick and worth stating
+            // plainly: SelectableTextBlock ships Focusable=true, and taking it
+            // at face value would break the rule ChatPanel.axaml sets out —
+            // that the composer is the only focusable thing in the window, so
+            // nothing can pull focus out of it mid-reply. Selection does not
+            // need focus: Avalonia drives it entirely from the pointer handlers
+            // and never calls Focus() itself. What focus *is* needed for is the
+            // copy keystroke, which is why the panel claims that gesture on the
+            // tunnel route instead — see OnCopyKeyDown.
+            private SelectableTextBlock Selectable(
+                string? text = null, FontFamily? font = null, double? size = null, IBrush? ink = null)
+            {
+                var block = new SelectableTextBlock
+                {
+                    TextWrapping = TextWrapping.Wrap,
+                    Focusable = false,
+                    Cursor = TextCursor,
+                    SelectionBrush = SelectionFill
+                };
+
+                if (text is not null) block.Text = text;
+                if (font is not null) block.FontFamily = font;
+                if (size is not null) block.FontSize = size.Value;
+                if (ink is not null) block.Foreground = ink;
+
+                _blocks.Add(block);
+
+                // Handed to the panel to finish: it owns the rules that span
+                // more than one bubble — that only one may hold a selection,
+                // and that they share a single context menu — and neither is a
+                // TurnView's to enforce from inside one row.
+                _adopt(block);
+
+                return block;
             }
 
             private Control BuildBlock(ChatMarkdown.MdBlock block)
@@ -1862,14 +2120,7 @@ namespace ClaudeBuddy
                             CornerRadius = new CornerRadius(4),
                             Padding = new Thickness(6, 4),
                             Margin = new Thickness(0, 1),
-                            Child = new TextBlock
-                            {
-                                Text = block.Text,
-                                TextWrapping = TextWrapping.Wrap,
-                                FontFamily = Mono,
-                                FontSize = Size - 1,
-                                Foreground = CodeInk
-                            }
+                            Child = Selectable(block.Text, Mono, Size - 1, CodeInk)
                         };
 
                     case ChatMarkdown.MdKind.Heading:
@@ -1926,15 +2177,12 @@ namespace ClaudeBuddy
             }
 
             // One line of inline Markdown as a TextBlock of styled runs.
-            private TextBlock Line(string text)
+            private SelectableTextBlock Line(string text)
             {
-                var block = new TextBlock
-                {
-                    TextWrapping = TextWrapping.Wrap,
-                    FontSize = Size,
-                    FontStyle = Style,
-                    Foreground = Ink
-                };
+                var block = Selectable();
+                block.FontSize = Size;
+                block.FontStyle = Style;
+                block.Foreground = Ink;
 
                 var spans = ChatMarkdown.Inline(text);
 
@@ -1984,6 +2232,17 @@ namespace ClaudeBuddy
 
                 return block;
             }
+
+            // An I-beam over text a person can drag across, because nothing else
+            // in this window can be dragged across and the cursor is the only
+            // thing that says so before they try.
+            private static readonly Cursor TextCursor = new(StandardCursorType.Ibeam);
+
+            // Light enough to read the ink through on a coloured bubble, which
+            // a solid system highlight is not — bubbles here are tinted per
+            // agent, so the one selection colour has to sit on any of them.
+            private static readonly IBrush SelectionFill =
+                new SolidColorBrush(Color.Parse("#59FFFFFF"));
 
             private static readonly FontFamily Mono = new("Menlo,SF Mono,Consolas,monospace");
             private static readonly IBrush CodeBackground = new SolidColorBrush(Color.Parse("#33000000"));
