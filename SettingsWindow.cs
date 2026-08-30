@@ -1366,6 +1366,11 @@ namespace ClaudeBuddy
                 "Shows a code. Type it into the other machine's list below, next to this "
                 + "machine's name. The code works once."));
 
+            rows.Add(Row("Add a machine by address", AddByAddress(),
+                "For a machine this one cannot see on its own — a different subnet, a VPN, or "
+                + "a network that does not carry the announcements. Type its address and the "
+                + "code it is showing. Its name fills itself in once it answers."));
+
             var listing = PeerSessions.Listing();
 
             foreach (var machine in listing) rows.Add(PeerRow(machine));
@@ -1435,6 +1440,59 @@ namespace ClaudeBuddy
             }
 
             return Row(machine.Machine, right);
+        }
+
+        // An address and a code, for a machine that never announced itself.
+        //
+        // No name field, deliberately: the far end says what it is called in its
+        // answer to the greeting, and asking a person to guess a value the
+        // protocol already carries only creates a way to get it wrong.
+        internal Control AddByAddress()
+        {
+            var where = new TextBox
+            {
+                Width = 150,
+                Watermark = "192.168.0.10",
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var code = new TextBox
+            {
+                Width = 88,
+                MaxLength = 6,
+                Watermark = "code",
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var add = new Button { Content = "Add" };
+            add.Click += (_, _) => OnAddByAddressClicked(where.Text, code.Text);
+
+            var right = new StackPanel
+            {
+                Orientation = Avalonia.Layout.Orientation.Horizontal,
+                Spacing = 8,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            right.Children.Add(where);
+            right.Children.Add(code);
+            right.Children.Add(add);
+
+            return right;
+        }
+
+        // Excluded from coverage: dials a real address. Both decisions in front
+        // of it — whether the code is worth trying and whether the address
+        // parses — are pure and tested.
+        [ExcludeFromCodeCoverage]
+        private void OnAddByAddressClicked(string? typed, string? code)
+        {
+            if (!PairingWorthTrying(code)) return;
+
+            var address = PeerSessions.Address(typed, PeerLink.DefaultPort);
+            if (address is null) return;
+
+            _ = PeerSessions.PairAtAsync(address.Value.Host, address.Value.Port, code!.Trim());
         }
 
         // The button that opens this machine to one pairing.

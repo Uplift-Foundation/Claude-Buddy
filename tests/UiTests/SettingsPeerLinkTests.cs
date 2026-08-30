@@ -201,6 +201,43 @@ public class SettingsPeerLinkTests : IDisposable
         Assert.Contains("mac-mini", AllText(Assert.IsAssignableFrom<Control>(row)));
     }
 
+    // --- adding a machine nobody announced -----------------------------------
+
+    [AvaloniaFact]
+    public void ThereIsAWayInForAMachineDiscoveryCannotSee()
+    {
+        // The fallback stopped being hypothetical the day a third-party binary
+        // on this machine got EHOSTUNREACH opening plain TCP to a host `ssh`
+        // reaches from the same shell. Discovery is multicast; multicast is the
+        // first thing a network — or macOS Local Network consent — takes away.
+        var rows = WithLink(true).PeerLinkRows();
+        var text = string.Join(" ", rows.Select(r => AllText(Assert.IsAssignableFrom<Control>(r))));
+
+        Assert.Contains("Add a machine by address", text);
+    }
+
+    [AvaloniaFact]
+    public void AddingByAddressAsksForAnAddressAndACodeAndNothingElse()
+    {
+        // Two boxes, not three. The far end says what it is called in its answer
+        // to the greeting, so a name field would only be a way to get it wrong —
+        // and a wrong one files the pairing under a name that machine never uses.
+        var control = Assert.IsAssignableFrom<Control>(WithLink(true).AddByAddress());
+
+        Assert.Equal(2, Descendants<TextBox>(control).Count());
+        Assert.Contains(Descendants<Button>(control), b => (string?)b.Content == "Add");
+    }
+
+    [AvaloniaFact]
+    public void TheAddressBoxShowsWhatAnAddressLooksLike()
+    {
+        var boxes = Descendants<TextBox>(
+            Assert.IsAssignableFrom<Control>(WithLink(true).AddByAddress())).ToList();
+
+        Assert.Contains(boxes, b => b.Watermark is not null && b.Watermark.Contains('.'));
+        Assert.Contains(boxes, b => b.Watermark == "code");
+    }
+
     // --- the code button -----------------------------------------------------
 
     [AvaloniaFact]
