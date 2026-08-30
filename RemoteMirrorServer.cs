@@ -111,6 +111,84 @@ namespace ClaudeBuddy
             Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> localSessions) =>
             LiveSeams(profileDir, sendFrame, localSessions);
 
+        // The same, for a transport that is not account-scoped.
+        //
+        // **A socket has no account, and reading one account's roster made that
+        // comment untrue where it mattered.** A relay signs into one Anthropic
+        // account and can only ever see that account's sessions, so
+        // RealSeams taking one profile dir is not a limitation there — it is the
+        // shape of the thing. A direct link has no such excuse: the machine has
+        // whatever sessions it has, under whatever config dirs the user set up,
+        // and answering for only the first is answering the wrong question.
+        //
+        // Caught on real hardware and nowhere else. The mini's sessions live
+        // under `.claude-board`; the peer server read `.claude`; the two
+        // machines connected in 22 milliseconds and exchanged a roster of
+        // exactly zero entries, with nothing failing anywhere.
+        public static Seams AllAccountSeams(
+            IReadOnlyList<string> profileDirs,
+            Func<string, string, Task<bool>> sendFrame,
+            Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> localSessions)
+        {
+            var one = LiveSeams(
+                profileDirs.Count > 0 ? profileDirs[0] : ".claude", sendFrame, localSessions);
+
+            return one with { Agents = () => AgentsAcross(profileDirs) };
+        }
+
+        // Every account's roster, as one list.
+        //
+        // Excluded from coverage: each call launches `claude agents`. What is
+        // worth asserting is that duplicates collapse, which MergeRosters does
+        // and is pure.
+        [ExcludeFromCodeCoverage]
+        private static IReadOnlyList<AgentRoster.Entry> AgentsAcross(
+            IReadOnlyList<string> profileDirs)
+        {
+            var all = new List<IReadOnlyList<AgentRoster.Entry>>();
+
+            foreach (var dir in profileDirs)
+            {
+                try
+                {
+                    all.Add(AgentRoster.Read(dir));
+                }
+                catch (Exception ex)
+                {
+                    // One account that cannot be read must not take the others
+                    // with it — a profile dir removed from disk but left in
+                    // settings is the ordinary way this happens.
+                    MirrorLog.Say("roster-read-failed", $"dir={dir} {ex.GetType().Name}");
+                }
+            }
+
+            return MergeRosters(all);
+        }
+
+        // Several accounts' rosters, deduplicated by session id.
+        //
+        // By session id rather than by name, because two accounts genuinely can
+        // hold sessions with the same name — the same person naming things the
+        // same way twice is the normal case — while a session id is unique. The
+        // first account to claim an id wins, which makes the order of
+        // profileDirs the tie-break and keeps the answer stable across ticks.
+        internal static IReadOnlyList<AgentRoster.Entry> MergeRosters(
+            IReadOnlyList<IReadOnlyList<AgentRoster.Entry>> rosters)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var merged = new List<AgentRoster.Entry>();
+
+            foreach (var roster in rosters)
+            foreach (var entry in roster)
+            {
+                if (!seen.Add(entry.SessionId)) continue;
+
+                merged.Add(entry);
+            }
+
+            return merged;
+        }
+
         // Excluded from coverage: this is the wiring that makes the seams real,
         // and every delegate in it is one a test must not run — launching
         // `claude agents`, asking tmux whether a pane can be typed into, and
@@ -233,7 +311,17 @@ namespace ClaudeBuddy
             foreach (var name in wanted.Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 var resolved = Resolve(name, agents, sessions);
-                if (resolved is null) continue;
+
+                if (resolved is null)
+                {
+                    // Says which of the two halves failed to line up. An agent
+                    // the registry knows and Buddy has no status file for, and a
+                    // status file Buddy has for a session the registry does not
+                    // list, are different problems — and both arrive here as an
+                    // empty roster and a panel with nothing in it.
+                    MirrorLog.Say("hello-unresolved", $"name={name}");
+                    continue;
+                }
 
                 var status = resolved.Value.Status;
 
@@ -311,29 +399,59 @@ namespace ClaudeBuddy
         private static (string SessionId, SessionStatus Status)? Resolve(
             string name,
             IReadOnlyList<AgentRoster.Entry> agents,
+            IReadOnlyList<(string SessionId, SessionStatus Status)> sessions) =>
+            Pick(name, agents, sessions);
+
+        // Which local session a name refers to, across every account.
+        //
+        // **This used to defer to AgentRoster.Resolve, which refuses a name two
+        // entries share — and that refusal is right for one account and wrong
+        // the moment rosters from several are merged.** Within one account, two
+        // sessions called the same thing genuinely are ambiguous and guessing
+        // between them would type into the wrong terminal. Across accounts they
+        // are usually the *same person's* two logins on one machine, and one of
+        // them is the session Buddy actually holds a status file for. Refusing
+        // there throws away the only answer there was.
+        //
+        // Measured, not imagined: the mini has `job-hunter-mac-mini` under both
+        // `.claude` and `.claude-board`, with different session ids. Every
+        // roster it sent came back empty, and the machine that asked showed no
+        // orbs at all, with nothing in either log saying why until this ticket
+        // added the line that named the dropped session.
+        //
+        // Still refuses when it is genuinely ambiguous — two *different* live
+        // sessions both answering to one name is the case the original rule was
+        // protecting, and it is still protected. What changed is that "one
+        // candidate, one match" is now an answer rather than a tie.
+        //
+        // Pure, so both arms are a test rather than two machines and a log.
+        internal static (string SessionId, SessionStatus Status)? Pick(
+            string name,
+            IReadOnlyList<AgentRoster.Entry> agents,
             IReadOnlyList<(string SessionId, SessionStatus Status)> sessions)
         {
-            var entry = AgentRoster.Resolve(agents, name);
-            if (entry is null) return null;
+            var candidates = agents
+                .Where(a => a.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (candidates.Count == 0) return null;
+
+            var matched = new List<(string SessionId, SessionStatus Status)>();
 
             foreach (var session in sessions)
             {
-                if (string.Equals(session.SessionId, entry.Value.SessionId, StringComparison.OrdinalIgnoreCase))
-                    return session;
+                var hit = candidates.Any(c =>
+                    string.Equals(c.SessionId, session.SessionId, StringComparison.OrdinalIgnoreCase)
+
+                    // The registry knows it and Buddy does not, which happens
+                    // for a session whose hook has not fired yet. Matching on
+                    // pid as well costs nothing and covers it.
+                    || (c.Pid > 0 && c.Pid == session.Status.SessionPid));
+
+                if (hit) matched.Add(session);
             }
 
-            // The registry knows it and Buddy does not, which happens for a
-            // session whose hook has not fired yet. Matching on pid as well
-            // costs nothing and covers it.
-            if (entry.Value.Pid > 0)
-            {
-                foreach (var session in sessions)
-                {
-                    if (session.Status.SessionPid == entry.Value.Pid) return session;
-                }
-            }
-
-            return null;
+            return matched.Count == 1 ? matched[0] : null;
         }
 
         // --- reading a transcript --------------------------------------------

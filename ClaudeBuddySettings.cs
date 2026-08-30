@@ -817,9 +817,28 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.PeerLinkEnabled = value; Save(); }
         }
 
+        // The port to listen on, with 0 meaning "the one everybody expects".
+        //
+        // **Found by deploying, not by reading.** The stored default was 0, and
+        // 0 asks the OS to pick — so a fresh install listened on an ephemeral
+        // port (50816, on the mini) instead of 7677. Discovery announces
+        // whatever it bound, so that half kept working and hid it; the half that
+        // broke is "add a machine by address", whose whole reason for existing
+        // is the case where discovery does *not* work. Its optional `:port`
+        // defaults to PeerLink.DefaultPort, so a user typing an address would
+        // have been dialling 7677 at a machine listening somewhere else, with
+        // nothing anywhere saying so.
+        //
+        // Pure so the mapping is a rule rather than a `??` in a property, and
+        // because 0 still has to mean "let the OS pick" where a test asks for
+        // it explicitly — Listen(0) is what keeps two loopback tests from
+        // colliding.
+        internal static int PortToBind(int stored) =>
+            stored is <= 0 or > 65535 ? PeerLink.DefaultPort : stored;
+
         public static int PeerLinkPort
         {
-            get { Load(); lock (Gate) return _model.PeerLinkPort; }
+            get { Load(); lock (Gate) return PortToBind(_model.PeerLinkPort); }
 
             // Clamped rather than trusted. A port outside the range cannot be
             // bound, and a settings file edited by hand is the ordinary way one
