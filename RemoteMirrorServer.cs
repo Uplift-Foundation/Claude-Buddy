@@ -251,7 +251,8 @@ namespace ClaudeBuddy
                     hasTranscript,
                     _seams.CanType(status),
                     string.IsNullOrWhiteSpace(status.Color) ? null : status.Color,
-                    Commands(status)));
+                    Commands(status),
+                    status.State));
             }
 
             await SendTransferAsync(
@@ -638,14 +639,14 @@ namespace ClaudeBuddy
 
         private void SetWatchOffset(string watcher, string name, long offset)
         {
-            lock (_gate) _pendingOffsets[watcher + " " + name] = offset;
+            lock (_gate) _pendingOffsets[watcher + "\0" + name] = offset;
         }
 
         private long PendingOffset(string watcher, string name)
         {
             lock (_gate)
             {
-                return _pendingOffsets.TryGetValue(watcher + " " + name, out var at) ? at : 0;
+                return _pendingOffsets.TryGetValue(watcher + "\0" + name, out var at) ? at : 0;
             }
         }
 

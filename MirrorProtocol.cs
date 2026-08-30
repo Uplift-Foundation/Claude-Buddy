@@ -436,7 +436,23 @@ namespace ClaudeBuddy
             [property: JsonPropertyName("transcript")] bool HasTranscript,
             [property: JsonPropertyName("pane")] bool HasPane,
             [property: JsonPropertyName("color")] string? Color = null,
-            [property: JsonPropertyName("commands")] IReadOnlyList<string>? Commands = null);
+            [property: JsonPropertyName("commands")] IReadOnlyList<string>? Commands = null,
+
+            // What that session is doing right now, in its own status file's
+            // words — "idle", "working".
+            //
+            // **Added because the orb needs it and the relay used to supply it
+            // from somewhere else.** Over the relay, status came from
+            // `claude agents --json` parsed by the relay's model, and the roster
+            // never had to carry it. A direct link has no such second channel,
+            // so the one answer the far machine sends has to say everything an
+            // orb needs — otherwise a session over the link can be found and
+            // read and typed into, and still sits grey while it works.
+            //
+            // Optional, and absent reads as idle: an older Buddy on the far end
+            // answers without it, and gets an orb that is right about everything
+            // except its pulse rather than no orb at all.
+            [property: JsonPropertyName("status")] string? Status = null);
 
         public const string CliClaudeCode = "claude";
         public const string CliCodex = "codex";
