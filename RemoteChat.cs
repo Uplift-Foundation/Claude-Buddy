@@ -220,6 +220,37 @@ namespace ClaudeBuddy
         void OpenElsewhere();
     }
 
+    // A session that can be waiting on something slow enough to need saying so.
+    //
+    // Optional for the same reason as the interfaces above: a local CLI session
+    // reads a file on this machine and has nothing to wait for, and a gateway
+    // session is one websocket round trip away. Only the mirror has a wait worth
+    // drawing — its opening window is carried by a model retyping base64 by
+    // hand, measured on real machines at 222, 231, 234, 247 and 192 seconds.
+    //
+    // **What it deliberately does not offer is a percentage.** A window that
+    // fits in one chunk is a single round trip: there is no intermediate signal
+    // to report, so a bar that filled at a guessed rate would be inventing
+    // progress rather than showing it, and would then sit at 99% for a minute —
+    // which is worse than an honest spinner, because it makes a working transfer
+    // look stuck. What is real is *elapsed*, and how long these usually take, so
+    // that is what this carries. See CB-58.
+    public interface IRemoteChatFetchWait
+    {
+        // When the current wait began, or null when nothing is in flight. A
+        // clock rather than a bool so the panel can say how long it has been
+        // without keeping its own copy of the answer.
+        DateTimeOffset? WaitingSince { get; }
+
+        // What is being waited for, in the panel's own words.
+        string WaitingFor { get; }
+
+        // Raised when either of the two above changes. Not a property-changed
+        // event: this is the whole of the surface, and one signal for two
+        // properties read together is less to get wrong than two signals.
+        event Action? WaitChanged;
+    }
+
     // A session where a pasted picture can actually go somewhere.
     //
     // Not on IRemoteChatSession itself, for the same reason the three

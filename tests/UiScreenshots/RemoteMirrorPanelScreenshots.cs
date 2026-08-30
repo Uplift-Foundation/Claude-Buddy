@@ -128,9 +128,47 @@ public class RemoteMirrorPanelScreenshots : IDisposable
             ChatPanelTestAccess.Instance!, "chat-panel-remote-integrity-refusal.png");
     }
 
+    // The four minutes nobody could see.
+    //
+    // A mirrored panel's opening window is carried by a model retyping base64 by
+    // hand — 222, 231, 234, 247 and 192 seconds, measured on real machines — and
+    // until CB-58 the panel showed nothing moving for the whole of it. Reported
+    // twice as a hang that was not one.
+    //
+    // Captured at the start of the wait, so the elapsed figure reads near zero:
+    // that is the honest first frame rather than a staged one, and what the
+    // picture is for is the surface — an indeterminate bar, what is being
+    // fetched, and the line saying how long these usually take. There is no
+    // percentage on purpose; a single-chunk transfer has no progress to report,
+    // and an invented one would park at 99% and make a healthy fetch look stuck.
+    [AvaloniaFact]
+    public async Task AMirrorStillFetchingShowsHowLongItHasBeenWaiting()
+    {
+        Wire(
+            ("user", "what is it working on?"),
+            ("assistant", "still reading the transcript across"));
+
+        _swallowFetch = true;
+
+        var session = Open();
+        await _client.DiscoverAsync(Peers, new[] { Name });
+
+        ChatPanel.OpenFor(NewOrb(), session);
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.CaptureAlreadyShown(
+            ChatPanelTestAccess.Instance!, "chat-panel-remote-fetching.png");
+    }
+
     // --- wiring -------------------------------------------------------------------
 
     private bool _mangle;
+
+    // Swallows the FETCH so the request stays pending and the panel keeps
+    // drawing its wait. The real wait is three or four minutes of a model
+    // retyping base64; a screenshot cannot sit through one, and holding the
+    // frame at the door is the same trick MirrorEdgeCaseTests uses to make
+    // "in flight" a fact rather than a race.
+    private bool _swallowFetch;
     private string _path = "";
 
     private RemoteControlChatSession Open()
@@ -195,6 +233,10 @@ public class RemoteMirrorPanelScreenshots : IDisposable
     {
         var frame = MirrorProtocol.TryParseFrame(line);
         if (frame is null) return false;
+
+        // Accepted onto the wire and never answered, which is exactly what a
+        // transfer in progress looks like from this side.
+        if (_swallowFetch && frame.Type == MirrorProtocol.Fetch) return true;
 
         await _server.HandleAsync(NearRelay, frame);
         return true;
