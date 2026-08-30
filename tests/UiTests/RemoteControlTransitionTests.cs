@@ -209,6 +209,50 @@ public class RemoteControlTransitionTests : IDisposable
         Assert.False(RemoteControlSessions.IdleExpired());
     }
 
+    // Somebody watching is somebody using it.
+    //
+    // Touch() is what holds a relay open, and it is called on send and nowhere
+    // else — its own comment says "cheap enough to call on every send", which
+    // was the whole of it. A mirrored panel sends nothing, so a panel that was
+    // open and streaming a far machine's conversation counted as idle and had
+    // its relays retired underneath it.
+    //
+    // Measured overnight on 30 Aug 2026: a panel opened at 00:49 took 27 delta
+    // transfers and stopped dead at 01:36, about thirty minutes after the last
+    // message was *sent* — which is what the timer was really measuring. It was
+    // still showing 1 a.m. content at 8 a.m., because a mirror that has gone
+    // stale looks exactly like one whose far side is quiet.
+    //
+    // Asserted at the extreme on purpose: a month idle and still watching is
+    // still not idle, because the question the setting asks is whether anybody
+    // is there, and somebody is.
+    [Fact]
+    public void AWatchedRelayNeverIdlesOutHoweverLongSinceAnythingWasSent()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+
+        Assert.False(RemoteControlSessions.IdleExpired(
+            watching: true,
+            lastUse: DateTime.UtcNow - TimeSpan.FromDays(30),
+            minutes: 30,
+            now: DateTime.UtcNow));
+    }
+
+    // And the timer still has to work when nobody is looking, or the fix has
+    // simply disabled the setting. This is the same case as the live one below,
+    // stated against the rule rather than the statics.
+    [Fact]
+    public void AnUnwatchedRelayStillExpiresOnTime()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+
+        Assert.True(RemoteControlSessions.IdleExpired(
+            watching: false,
+            lastUse: DateTime.UtcNow - TimeSpan.FromMinutes(31),
+            minutes: 30,
+            now: DateTime.UtcNow));
+    }
+
     [Fact]
     public void ARelayUntouchedForLongerThanTheSettingHasExpired()
     {
