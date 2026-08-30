@@ -169,6 +169,86 @@ namespace ClaudeBuddy
         // Everything below this line is identical for both, which is the point:
         // asking a far Buddy what it has does not depend on how the question
         // travels.
+        // Peers with an open-ended question outstanding, so it is asked once
+        // rather than on every ten-second tick.
+        private readonly HashSet<string> _askingAll = new(StringComparer.OrdinalIgnoreCase);
+
+        // Asks a machine what it has, naming nothing.
+        //
+        // **A separate method because DiscoverAsync cannot express this, and
+        // that gap cost a bring-up.** DiscoverAsync starts `if
+        // (wantedNames.Count == 0) return;` — an empty list means "ask about
+        // nothing", which is right when the caller is working from a list of
+        // sessions it already knows. The server was taught in CB-67 that an
+        // empty payload means "everything you have", and the client had no way
+        // to send that: passing an empty list returned before writing a byte.
+        //
+        // So two machines connected over TLS in 22 milliseconds, greeted each
+        // other, and then sat there — one able to answer a question the other
+        // was structurally unable to ask. Nothing failed and nothing was logged,
+        // because from the client's point of view it had been asked to do
+        // nothing and had done it.
+        //
+        // Open-ended is the only possible *first* question on a direct link:
+        // there is no prior list of session names to work from, so without this
+        // there is no way to learn one.
+        public async Task AskWhatTheyHaveAsync(IReadOnlyList<string> peers)
+        {
+            foreach (var peer in peers)
+            {
+                lock (_gate)
+                {
+                    // Once per peer at a time. The answer names every session
+                    // that machine has, so a second question in flight can only
+                    // duplicate the first.
+                    if (!_askingAll.Add(peer)) continue;
+                }
+
+                Reply reply;
+
+                try
+                {
+                    reply = await RequestAsync(
+                        peer, MirrorProtocol.Hello,
+                        new Dictionary<string, string> { ["pv"] = "1" },
+                        payload: null, TimeSpan.FromSeconds(30))
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    lock (_gate) _askingAll.Remove(peer);
+                }
+
+                if (!reply.Ok || reply.Payload is null) continue;
+
+                var entries = MirrorProtocol.DecodeRoster(reply.Payload);
+                if (entries is null) continue;
+
+                var changed = false;
+
+                lock (_gate)
+                {
+                    foreach (var entry in entries)
+                    {
+                        // Unlike the named ask, nothing is settled as
+                        // unavailable here. A machine that did not mention a
+                        // session is not saying it does not have one — it was
+                        // never asked about anything in particular.
+                        if (!entry.HasTranscript) continue;
+
+                        _roster[entry.Name] = entry;
+                        _servedBy[entry.Name] = peer;
+                        _answeredNo.Remove(entry.Name);
+                        changed = true;
+                    }
+                }
+
+                MirrorLog.Say("roster-all", $"from={peer} entries={entries.Count}");
+
+                if (changed) RosterUpdated?.Invoke();
+            }
+        }
+
         public async Task DiscoverAsync(
             IReadOnlyList<string> relays, IReadOnlyList<string> wantedNames)
         {
