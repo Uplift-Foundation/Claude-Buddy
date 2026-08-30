@@ -22,31 +22,53 @@ namespace ClaudeBuddy
         [STAThread]
         public static void Main(string[] args)
         {
-            // The serve path first, before the screen-lock wait below, because
-            // it needs nothing that wait exists to protect: a relay is tmux,
-            // files and subprocesses, with no display anywhere in it. A machine
-            // that serves its sessions to other Buddies unattended is exactly a
-            // machine whose screen may never unlock — headless, in a cupboard —
-            // and parking the relay behind the wait meant it never served at
-            // all (CB-24). Does nothing unless remoteControlServeOnLaunch is
-            // on; and if this early start fails, SessionManager.Start makes the
-            // same call again once the UI is up, because EnsureStarted retries
-            // a failed relay.
-            RemoteControlSessions.ServeOnLaunch();
+            // The order these four run in is Startup.Run's, and the first of
+            // them is the fix for CB-28 — see Startup.ClaimUiThread for why
+            // reading one static property earns a step of its own. What each
+            // step is *for* is here, next to the thing it calls.
+            Startup.Run(
+                // Write an unhandled exception down before anything can throw
+                // one. Buddy aborted twice on the mini on 28 Aug with nothing on
+                // disk to say why, and the .ips reports could not name the
+                // exception; CrashLog exists so the next one costs a `cat`
+                // rather than a probe (CB-44).
+                installCrashLog: CrashLog.Install,
 
-            // Avalonia's macOS render timer is a CVDisplayLink, and
-            // CVDisplayLinkStart fails with -6661 (kCVReturnInvalidDisplay) while
-            // the screen is locked, which killed startup outright. A Login Item
-            // starts before you type your password, so every reboot hit this and
-            // the app was simply missing afterwards with no visible reason.
-            //
-            // Nothing is lost by waiting: a menu-bar icon on a locked screen is
-            // invisible either way, and sessions that start while locked still
-            // get picked up, because the hook writes status files to disk and
-            // SessionManager reads them on its first scan.
-            MacOSScreenLock.WaitForUnlock(LockWait, LockPoll);
+                // Claim Avalonia's UI thread for this thread while it is
+                // certain to be free, which is the only moment it is:
+                // everything after this line either starts something that
+                // posts to the dispatcher from the thread pool, or holds this
+                // thread for two hours while it does.
+                claimUiThread: Startup.ClaimUiThread,
 
-            BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+                // The serve path before the screen-lock wait below, because it
+                // needs nothing that wait exists to protect: a relay is tmux,
+                // files and subprocesses, with no display anywhere in it. A
+                // machine that serves its sessions to other Buddies unattended
+                // is exactly a machine whose screen may never unlock —
+                // headless, in a cupboard — and parking the relay behind the
+                // wait meant it never served at all (CB-24). Does nothing
+                // unless remoteControlServeOnLaunch is on; and if this early
+                // start fails, SessionManager.Start makes the same call again
+                // once the UI is up, because EnsureStarted retries a failed
+                // relay.
+                serveOnLaunch: RemoteControlSessions.ServeOnLaunch,
+
+                // Avalonia's macOS render timer is a CVDisplayLink, and
+                // CVDisplayLinkStart fails with -6661 (kCVReturnInvalidDisplay)
+                // while the screen is locked, which killed startup outright. A
+                // Login Item starts before you type your password, so every
+                // reboot hit this and the app was simply missing afterwards
+                // with no visible reason.
+                //
+                // Nothing is lost by waiting: a menu-bar icon on a locked
+                // screen is invisible either way, and sessions that start while
+                // locked still get picked up, because the hook writes status
+                // files to disk and SessionManager reads them on its first
+                // scan.
+                waitForUnlock: () => MacOSScreenLock.WaitForUnlock(LockWait, LockPoll),
+
+                startUi: () => BuildAvaloniaApp().StartWithClassicDesktopLifetime(args));
         }
 
         public static AppBuilder BuildAvaloniaApp() =>

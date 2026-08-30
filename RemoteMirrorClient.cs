@@ -231,7 +231,59 @@ namespace ClaudeBuddy
 
         // Opens a mirror for one session: the tail first, then a subscription so
         // what happens next arrives without being asked for.
-        public async Task<bool> OpenAsync(string name)
+        // One outstanding window per session, however many callers ask for it.
+        //
+        // The Loading flag below is not enough on its own, and CB-46 measured
+        // why: it lives on the Feed, and CloseAsync *removes* the Feed. A panel
+        // being rebound — closed and reopened, which clicking between two orbs
+        // does constantly — therefore threw away the only record that a fetch
+        // was already running, and the next PanelOpened started another. Four
+        // distinct FETCHes for one session inside 78 seconds, against a
+        // three-minute timeout, so none of them were retries.
+        //
+        // That is worse than wasted effort. Each one makes the far side build
+        // and queue another whole window, so a relay already minutes deep in
+        // chunk 0 acquires more behind it and the queue grows faster than a
+        // model turn can drain it — the panel gets slower every time somebody
+        // looks at it.
+        //
+        // Keyed outside the Feed so it survives the Feed being removed, and
+        // handed out as the *same task* so a second caller waits on the first
+        // answer rather than starting a second conversation about it.
+        private readonly Dictionary<string, Task<bool>> _opening =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public Task<bool> OpenAsync(string name)
+        {
+            lock (_gate)
+            {
+                if (_opening.TryGetValue(name, out var running)) return running;
+
+                var started = OpenCoreAsync(name);
+
+                // Only track it if it is actually still running: a synchronous
+                // refusal (no roster entry) has already completed here, and
+                // recording that would answer every later caller with the same
+                // stale "no".
+                if (!started.IsCompleted) _opening[name] = started;
+
+                return started;
+            }
+        }
+
+        private async Task<bool> OpenCoreAsync(string name)
+        {
+            try
+            {
+                return await OpenOnceAsync(name).ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (_gate) _opening.Remove(name);
+            }
+        }
+
+        private async Task<bool> OpenOnceAsync(string name)
         {
             string relay;
             string cli;
@@ -503,6 +555,19 @@ namespace ClaudeBuddy
             public required string Relay;
             public required MirrorProtocol.MirrorAssembly Assembly;
             public int Resends;
+
+            // When to give up, and it moves. A flat deadline asks the wrong
+            // question on this wire: a transfer is not late because it is
+            // broken, it is late because every chunk costs a model turn, so a
+            // multi-chunk answer can be arriving perfectly and still miss any
+            // fixed cut-off. Each chunk that verifies buys another full
+            // interval, so what is actually being timed is *silence* rather
+            // than duration — which is the thing that means something has gone
+            // wrong. Bounded regardless, because chunks are finite: `of` says
+            // how many there are and a far side cannot extend this for ever
+            // without sending real, hash-checked payload each time.
+            public DateTime Deadline;
+            public TimeSpan Grace;
         }
 
         private readonly Dictionary<string, Pending> _pending = new(StringComparer.Ordinal);
@@ -539,7 +604,9 @@ namespace ClaudeBuddy
                 {
                     Waiter = waiter,
                     Relay = relay,
-                    Assembly = new MirrorProtocol.MirrorAssembly()
+                    Assembly = new MirrorProtocol.MirrorAssembly(),
+                    Deadline = DateTime.UtcNow + timeout,
+                    Grace = timeout
                 };
             }
 
@@ -552,11 +619,29 @@ namespace ClaudeBuddy
 
                 if (!awaitReply) return new Reply(true, null, null, null, null);
 
-                var done = await Task.WhenAny(waiter.Task, Task.Delay(timeout)).ConfigureAwait(false);
+                // Held rather than looked up each pass. Nothing removes it
+                // before the finally below, so a lookup here can only ever
+                // succeed — and a miss arm that cannot run reads as an untested
+                // branch for ever.
+                Pending mine;
+                lock (_gate) mine = _pending[id];
 
-                return done == waiter.Task
-                    ? waiter.Task.Result
-                    : new Reply(false, null, null, null, "the other machine didn't answer in time");
+                while (true)
+                {
+                    TimeSpan left;
+                    lock (_gate) left = mine.Deadline - DateTime.UtcNow;
+
+                    if (left <= TimeSpan.Zero) break;
+
+                    var done = await Task.WhenAny(waiter.Task, Task.Delay(left)).ConfigureAwait(false);
+                    if (done == waiter.Task) return waiter.Task.Result;
+
+                    // The delay won, but a chunk may have landed while it was
+                    // running and pushed the deadline out. Looping re-reads it
+                    // rather than assuming this wait was the last one.
+                }
+
+                return new Reply(false, null, null, null, "the other machine didn't answer in time");
             }
             finally
             {
@@ -627,6 +712,11 @@ namespace ClaudeBuddy
                 switch (result.State)
                 {
                     case MirrorProtocol.AssemblyState.Incomplete:
+                        // Progress. The far side is working through a transfer
+                        // one model turn at a time, so the wait starts again
+                        // rather than counting down towards a cut-off the
+                        // transfer was never going to meet.
+                        lock (_gate) pending.Deadline = DateTime.UtcNow + pending.Grace;
                         return;
 
                     case MirrorProtocol.AssemblyState.Complete:

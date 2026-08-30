@@ -124,4 +124,99 @@ public class TypingRefusalTests
         Assert.False(RemoteControlChatSession.PendingHasGoneStale(
             now, now + TimeSpan.FromMinutes(2)));
     }
+
+    // --- CB-43: which refusals the messaging channel may answer ----------------
+
+    // The one that falls back. No pane is a missing mechanism, and the panel
+    // had a working channel before it upgraded to a live view — refusing here
+    // made mirroring *cost* the user the ability to send.
+    [Fact]
+    public void NoPaneFallsBackToTheMessagingChannel() =>
+        Assert.True(RemoteControlChatSession.FallsBackToMessaging(MirrorProtocol.ErrNoPane));
+
+    // The ones that must not. ErrReplyOff is the interesting member: it is the
+    // far machine's owner having switched replying off, and the messaging
+    // channel puts text into that session too — so falling back would route
+    // around a stated decision rather than around an absent capability. The
+    // others are not refusals of typing at all and have their own wording.
+    [Theory]
+    [InlineData(MirrorProtocol.ErrReplyOff)]
+    [InlineData(MirrorProtocol.ErrNoSession)]
+    [InlineData(MirrorProtocol.ErrBadHash)]
+    [InlineData(MirrorProtocol.ErrUnsupported)]
+    [InlineData("something-a-newer-machine-invented")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void NothingElseFallsBack(string? errCode) =>
+        Assert.False(RemoteControlChatSession.FallsBackToMessaging(errCode));
+
+    // The note has one job beyond saying the message went: warning that a slash
+    // command will not run this way. Typing goes through the session's input
+    // line, so "/color blue" runs; handed over as a message it is a sentence
+    // about a command, and someone who is not told that retypes it.
+    [Fact]
+    public void TheFallbackNoteSaysSlashCommandsWillNotRun()
+    {
+        var said = RemoteControlChatSession.SentAsMessageNote(Remote);
+
+        Assert.Contains(Remote, said);
+        Assert.Contains("as a message", said);
+        Assert.Contains("Slash commands", said);
+        Assert.Contains("tmux pane", said);
+    }
+
+    // --- CB-46: the rules a first paint depends on -----------------------------
+
+    // The question the server asks before deciding how much transcript to send,
+    // and it is asked of the same encoder and splitter that will carry the
+    // answer — a prediction of that is exactly the thing that has been wrong.
+    [Fact]
+    public void AShortConversationFitsOneChunk()
+    {
+        var turns = new List<MirrorProtocol.MirrorTurn>
+        {
+            new("user", "what did the build say?"),
+            new("assistant", "it passed on both runners")
+        };
+
+        Assert.True(RemoteMirrorServer.FitsOneChunk(turns));
+    }
+
+    // Incompressible, because that is the case a byte count cannot predict: the
+    // ratio between transcript bytes and encoded, compressed turns runs from
+    // twenty to one down to nothing at all, which is why this is measured rather
+    // than assumed.
+    [Fact]
+    public void SomethingThatCannotBeCompressedDoesNotFitOneChunk()
+    {
+        var random = new Random(20260830);
+        var alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+        var noise = new char[8 * MirrorProtocol.ChunkBytes];
+
+        for (var i = 0; i < noise.Length; i++) noise[i] = alphabet[random.Next(alphabet.Length)];
+
+        var turns = new List<MirrorProtocol.MirrorTurn> { new("user", new string(noise)) };
+
+        Assert.False(RemoteMirrorServer.FitsOneChunk(turns));
+    }
+
+    [Fact]
+    public void NothingAtAllFitsOneChunk() =>
+        Assert.True(RemoteMirrorServer.FitsOneChunk(new List<MirrorProtocol.MirrorTurn>()));
+
+    // The line a user reads while nothing appears to be happening. It replaced
+    // the opening "Checking whether a live view … is available", which stayed on
+    // screen for the whole transfer and is the exact sentence that meant failure
+    // an hour earlier — a working transfer got reported as "no live view" twice
+    // on the strength of it.
+    [Fact]
+    public void TheFetchingNoteSaysSomethingIsHappeningAndThatItTakesAMinute()
+    {
+        var said = RemoteControlChatSession.FetchingNote(Remote);
+
+        Assert.Contains(Remote, said);
+        Assert.Contains("fetching its conversation", said);
+        Assert.Contains("take a minute", said);
+        Assert.DoesNotContain("Checking whether", said);
+    }
 }

@@ -1047,6 +1047,20 @@ waiting until you do. Seeing what your agents are doing and being able to make
 them do things are different powers, which is why the second one is asked for
 separately rather than coming along with the first.
 
+**If the status row says `can't reach the gateway: No route to host`, check
+macOS's Local Network permission before you check your network.** macOS grants
+local network access per app *identity*, and installing an upgrade replaces the
+app bundle — so the permission does not survive the update, and Claude Buddy
+silently loses the ability to reach a gateway that is running perfectly well.
+Open **System Settings → Privacy & Security → Local Network** and make sure
+Claude Buddy is switched on. The app now says so in that row itself, but the
+underlying error still reads like a network fault, which is why it is worth
+naming here.
+
+Testing it from a terminal will mislead you: `ping`, `nc`, `curl` and `ssh` are
+all built into macOS and exempt from that permission, so they will report the
+gateway reachable while the app cannot open a socket to it at all.
+
 Two things worth knowing if you are wiring this up yourself: the connection uses
 its own TLS stack (BouncyCastle) because the gateway requires TLS 1.3 and .NET
 on macOS cannot speak it, and the certificate is trusted by fingerprint on first
@@ -1094,6 +1108,14 @@ Turn it on in **Settings → Other machines**, then:
   **Stop the relay after: Never**), and the relay comes up with the app. Both
   are plain keys in `settings.json`, so an SSH session and an app relaunch is
   enough to manage a machine you can't see.
+
+  **A locked screen is fine, and that took two goes to be true.** The relay
+  starts before the app waits for the screen to unlock, and — since CB-39 — it
+  is also *driven* before then, by a pump that does not belong to the UI thread.
+  Without that second half the relay came up, registered, and answered nothing:
+  from every other machine its orbs looked alive and its panels all said the
+  other machine wasn't running Remote Control. Serving is files and a tmux pane
+  with no display anywhere in it, so it no longer waits for one.
 
 Nothing else starts merely because the switch is on. Use **Connect to other
 machines** in the tray menu, or the button in Settings, or just open a remote
@@ -1624,6 +1646,33 @@ memory for CoreCLR, library validation off for the bundled native libs, and
 Apple Events for click-to-focus. Removing any of them still notarizes cleanly
 but breaks the app at runtime, so they can only be validated by running a
 signed build.
+
+## When it crashes
+
+Buddy writes unhandled exceptions to a file, on by default and with nothing to
+switch on:
+
+| | |
+| --- | --- |
+| macOS | `~/Library/Logs/ClaudeBuddy/crash.log` |
+| Windows | `%LOCALAPPDATA%\ClaudeBuddy\Logs\crash.log` |
+
+One entry per crash, newest last, each starting with `===` and a timestamp, and
+naming which of three paths caught it — a throw nothing caught
+(`AppDomain.UnhandledException`), a faulted task nobody awaited
+(`TaskScheduler.UnobservedTaskException`), or a throw inside a UI callback
+(`Dispatcher.UnhandledException`). The file rolls over to `crash.log.1` at
+256 KB, and one previous generation is kept.
+
+It exists because the alternative was a macOS `.ips` crash report, whose managed
+frames are unsymbolicated addresses: when Buddy aborted twice on an unattended
+Mac mini, identifying the exception took two crash reports, a read of Avalonia's
+source and a purpose-built probe. It is not telemetry — nothing is sent
+anywhere, and deleting the file is always safe.
+
+If Buddy vanished and that file is empty, the process did not die of a managed
+exception: look at Console.app's crash reports instead, and at whether something
+outside the app (a launchd agent, an installer replacing the bundle) stopped it.
 
 ## Notes / things you might want to tweak
 

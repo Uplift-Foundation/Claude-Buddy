@@ -500,7 +500,23 @@ namespace ClaudeBuddy
             Activate();
             Dispatcher.UIThread.Post(() => Input.Focus(), DispatcherPriority.Input);
 
-            Dispatcher.UIThread.Post(ScrollToEndIfPinned, DispatcherPriority.Loaded);
+            // Unconditionally, not the pinned-only rule — this used to be
+            // ScrollToEndIfPinned and that is why a panel sometimes opened
+            // halfway up a conversation.
+            //
+            // There is one ChatPanel for every orb (its own comment above says
+            // why: two of them would fight over being the key window), so the
+            // scroll position this instance is carrying belongs to whichever
+            // session you had open last. Asking whether *that* offset is at the
+            // bottom is asking a question about a transcript that is no longer
+            // on screen: scroll up in one chat, click a different orb, and the
+            // answer is "no", so the new chat opens at the old offset with the
+            // newest message somewhere below the fold.
+            //
+            // Same reasoning as OnHistoryReplaced: a transcript that was just
+            // loaded wholesale has no read position worth preserving, and the
+            // newest turn is the one you clicked the orb to read.
+            ScrollToEndAfterLayout();
         }
 
         // What the box says, and whether there is a button beside it — one method
@@ -1625,7 +1641,7 @@ namespace ClaudeBuddy
             // regardless. The autoscroll rule elsewhere deliberately leaves you
             // where you are reading, but a message you just sent landing
             // somewhere off screen reads as it not having sent at all.
-            Dispatcher.UIThread.Post(() => Scroll.ScrollToEnd(), DispatcherPriority.Loaded);
+            ScrollToEndAfterLayout();
 
             // Deliberately not inserting the user's turn here: the session
             // raises TurnAdded for it, so one thing owns the transcript and a
@@ -1780,7 +1796,7 @@ namespace ClaudeBuddy
             // transcript that has just been replaced wholesale has no scroll
             // position worth preserving, and the newest turn is the one you
             // opened the panel to read.
-            Dispatcher.UIThread.Post(() => Scroll.ScrollToEnd(), DispatcherPriority.Loaded);
+            ScrollToEndAfterLayout();
         }
 
         private void OnTurnAdded(ChatTurn turn)
@@ -1791,11 +1807,11 @@ namespace ClaudeBuddy
             // respects where you were reading.
             if (turn.Role == ChatRole.User)
             {
-                Dispatcher.UIThread.Post(() => Scroll.ScrollToEnd(), DispatcherPriority.Loaded);
+                ScrollToEndAfterLayout();
                 return;
             }
 
-            Dispatcher.UIThread.Post(ScrollToEndIfPinned, DispatcherPriority.Loaded);
+            ScrollToEndIfPinned();
         }
 
         private void OnTurnUpdated(ChatTurn turn)
@@ -1803,7 +1819,7 @@ namespace ClaudeBuddy
             // Nothing to do to the collection: the view wraps the same object
             // and forwards its own change notification, so no row is recreated
             // and nothing can steal focus by being re-templated.
-            Dispatcher.UIThread.Post(ScrollToEndIfPinned, DispatcherPriority.Loaded);
+            ScrollToEndIfPinned();
         }
 
         private void OnStateChanged(RemoteChatState state)
@@ -1873,13 +1889,50 @@ namespace ClaudeBuddy
             HideNow();
         }
 
+        // Whether the view is sitting at the bottom — read *now*, on the same
+        // tick as the turn that prompted the question, rather than after a
+        // yield.
+        //
+        // The row that was just added or grown has not been measured yet, so the
+        // extent still describes the transcript you were reading and an offset
+        // at the bottom of it still reads as the bottom. A yield later the new
+        // content has height, the extent has grown past where you are sitting,
+        // and the same position answers "no" — so autoscroll switches itself off
+        // partway through a streaming reply and the panel is left in the middle
+        // of it. That is the intermittent half of the same complaint the bind
+        // path above fixes: it depended on whether measure had happened yet.
+        private bool IsPinnedToBottom =>
+            Scroll.Offset.Y >= Scroll.Extent.Height - Scroll.Viewport.Height - 8;
+
         // Only when already at the bottom, so reading back through a long reply
-        // isn't yanked forward as it grows. DispatcherPriority.Loaded because
-        // the extent isn't updated until the text has re-measured.
+        // isn't yanked forward as it grows.
         private void ScrollToEndIfPinned()
         {
-            var pinned = Scroll.Offset.Y >= Scroll.Extent.Height - Scroll.Viewport.Height - 8;
-            if (pinned) Scroll.ScrollToEnd();
+            if (IsPinnedToBottom) ScrollToEndAfterLayout();
+        }
+
+        // To the newest message, after layout has caught up with the rows that
+        // put it there.
+        //
+        // Twice, at two priorities, for the reason LoadOlderAsync spells out at
+        // length: one yield gets the rows into the visual tree, and the measure
+        // that gives them height happens after that. A single ScrollToEnd() at
+        // Loaded priority — which is what every one of these call sites used to
+        // be — reads the extent the transcript had *before* those rows existed
+        // and lands short of the bottom by however much was added. Loading a
+        // whole transcript at once adds a lot, so "short of the bottom" is not a
+        // few pixels; it is the middle of the conversation.
+        //
+        // The first call is kept rather than only doing the late one: it puts
+        // the view roughly right on the frame the panel appears, so the
+        // correction is a settle rather than a visible jump.
+        private void ScrollToEndAfterLayout()
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                Scroll.ScrollToEnd();
+                Dispatcher.UIThread.Post(() => Scroll.ScrollToEnd(), DispatcherPriority.Background);
+            }, DispatcherPriority.Loaded);
         }
 
         private void HideNow()
