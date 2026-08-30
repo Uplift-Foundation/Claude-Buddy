@@ -123,7 +123,13 @@ namespace ClaudeBuddy
             // is a guard rather than a boundary, and it is cheap enough to keep
             // for the one thing it does catch — a person on the same account
             // typing something that happens to look like a frame.
-            if (!IsRelayName(fromPeer)) return;
+            if (!IsRelayName(fromPeer))
+            {
+                MirrorLog.Say("serve-refused", $"t={frame.Type} from={fromPeer} not-a-relay-name");
+                return;
+            }
+
+            MirrorLog.Say("serve", $"t={frame.Type} id={frame.Id} from={fromPeer}");
 
             switch (frame.Type)
             {
@@ -181,6 +187,9 @@ namespace ClaudeBuddy
             var agents = _seams.Agents();
             var sessions = _seams.LocalSessions();
             var entries = new List<MirrorProtocol.MirrorRosterEntry>();
+
+            MirrorLog.Say("hello",
+                $"asked={wanted.Count} agents={agents.Count} sessions={sessions.Count}");
 
             foreach (var name in wanted.Distinct(StringComparer.OrdinalIgnoreCase))
             {
