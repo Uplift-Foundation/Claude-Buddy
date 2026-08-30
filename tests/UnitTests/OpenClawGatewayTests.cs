@@ -39,8 +39,22 @@ public class OpenClawGatewayTests
         new("gw.local", 4443, gatewayToken,
             (_, _, _, _) => Task.FromResult(
                 new OpenClawSocket.Connection(socket, Stream.Null, fingerprint)),
-            challengeTimeout ?? TimeSpan.FromSeconds(2),
-            requestTimeout ?? TimeSpan.FromSeconds(2));
+            // Generous on purpose, and raised from two seconds.
+            //
+            // Nothing here talks to a network: the socket is a fake answering
+            // from memory, so a correct implementation replies immediately and
+            // the size of this timeout costs nothing. What it did cost was
+            // reliability — two seconds is missable when the machine is busy
+            // with other suites, and this class failed intermittently four
+            // times in one session that way, always as "Connected vs
+            // Unreachable" or an empty scope list. That reads as a protocol bug
+            // and is a scheduling one.
+            //
+            // A genuine hang still fails, just thirty seconds later. The one
+            // test that is actually *about* a timeout passes its own 50ms and is
+            // unaffected by this default.
+            challengeTimeout ?? TimeSpan.FromSeconds(30),
+            requestTimeout ?? TimeSpan.FromSeconds(30));
 
     // A gateway that accepts the connect and grants what was asked for.
     private static FakeGatewaySocket Accepting(

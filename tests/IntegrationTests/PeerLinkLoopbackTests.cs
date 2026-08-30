@@ -69,8 +69,11 @@ public class PeerLinkLoopbackTests
         using var server = Link(onServer, pin, reachedServer);
         using var client = Link(new List<PeerProtocol.PeerMessage>(), pin);
 
-        var port = FreePort();
-        server.Listen(port);
+        // Port 0: the OS picks, and the listener reports what it chose. Probing
+        // for a free port and then asking for it has a race between the probe
+        // closing and the listener opening.
+        server.Listen(0);
+        var port = server.BoundPort;
 
         Assert.True(
             await client.ConnectAsync("loopback", "127.0.0.1", port, Timeout(10)),
@@ -106,8 +109,11 @@ public class PeerLinkLoopbackTests
         using var server = Link(onServer, pin, reachedServer);
         using var client = Link(new List<PeerProtocol.PeerMessage>(), pin);
 
-        var port = FreePort();
-        server.Listen(port);
+        // Port 0: the OS picks, and the listener reports what it chose. Probing
+        // for a free port and then asking for it has a race between the probe
+        // closing and the listener opening.
+        server.Listen(0);
+        var port = server.BoundPort;
 
         Assert.True(await client.ConnectAsync("loopback", "127.0.0.1", port, Timeout(10)));
 
@@ -142,8 +148,11 @@ public class PeerLinkLoopbackTests
             KnownPeer: machine => new PeerIdentity.Peer(new string('0', 64), machine),
             OwnCertificate: () => Cert.Value));
 
-        var port = FreePort();
-        server.Listen(port);
+        // Port 0: the OS picks, and the listener reports what it chose. Probing
+        // for a free port and then asking for it has a race between the probe
+        // closing and the listener opening.
+        server.Listen(0);
+        var port = server.BoundPort;
 
         Assert.False(
             await client.ConnectAsync("loopback", "127.0.0.1", port, Timeout(10)),
@@ -155,15 +164,4 @@ public class PeerLinkLoopbackTests
     private static CancellationToken Timeout(int seconds) =>
         new CancellationTokenSource(TimeSpan.FromSeconds(seconds)).Token;
 
-    // Asked of the OS rather than hard-coded, so two runs of this suite — or a
-    // developer's own running copy of the app — can never collide on a port.
-    private static int FreePort()
-    {
-        var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-
-        return port;
-    }
 }
