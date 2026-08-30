@@ -771,6 +771,8 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         public async Task<bool> SendFrameToAsync(string peerName, string frame)
         {
+            MirrorLog.Say("send-frame", $"to={peerName} len={frame.Length}");
+
             var raw = await AskAsync(
                 BridgeProtocol.SendFramePrompt(Address(peerName), frame),
                 t => t.Contains("msg_id", StringComparison.Ordinal))
