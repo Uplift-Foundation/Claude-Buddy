@@ -370,7 +370,29 @@ public class ChatPanelSelectionTests : IDisposable
 
         menu.Hide();
         Flush();
+
+        // Above, the menu closed with its target and the click found nothing
+        // because Avalonia had already cleared Target — which is one of the two
+        // ways this can happen and the one a person can actually cause. The
+        // other is a target that outlives its turn: a live control that no
+        // bubble owns any more. Reached directly, because there is no gesture
+        // that produces it on demand, and left untested it would be a silent
+        // wrong answer rather than a crash — MessageTextOf would return some
+        // other turn's text if the search ever stopped being an identity match.
+        Assert.Null(MessageTextOf(panel, new SelectableTextBlock { Text = "never adopted" }));
+
+        // ...and the identity match itself, from the same seam, so the negative
+        // above is not the only thing pinning it.
+        Assert.Equal(
+            "half a thought, completed",
+            MessageTextOf(panel, BubbleSaying(panel, "completed")));
     }
+
+    private static string? MessageTextOf(ChatPanel panel, SelectableTextBlock block) =>
+        (string?)typeof(ChatPanel)
+            .GetMethod("MessageTextOf",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(panel, new object?[] { block });
 
     // "Copy" with nothing selected has nothing to take, so it is offered
     // greyed rather than silently doing nothing.
@@ -419,6 +441,20 @@ public class ChatPanelSelectionTests : IDisposable
         Flush();
 
         Assert.False(ContextMenuIsOpen(panel));
+    }
+
+    // A panel with nothing in it has never built a bubble, so it has never
+    // built the menu they share either. The deactivate guard runs on that panel
+    // too — it is asked on every deactivation, including the first one after
+    // opening an empty conversation — so "no menu at all" has to answer the
+    // same as "a menu that is closed" rather than throwing.
+    [AvaloniaFact]
+    public void AnEmptyPanelHasNoContextMenuToBeOpen()
+    {
+        Open();
+
+        Assert.Empty(Bubbles(ChatPanelTestAccess.Instance!));
+        Assert.False(ContextMenuIsOpen(ChatPanelTestAccess.Instance!));
     }
 
     private static bool ContextMenuIsOpen(ChatPanel panel) =>
