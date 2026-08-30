@@ -52,7 +52,20 @@ namespace ClaudeBuddy
                 // start fails, SessionManager.Start makes the same call again
                 // once the UI is up, because EnsureStarted retries a failed
                 // relay.
-                serveOnLaunch: RemoteControlSessions.ServeOnLaunch,
+                serveOnLaunch: () =>
+                {
+                    RemoteControlSessions.ServeOnLaunch();
+
+                    // The peer link starts here for exactly the reasons above,
+                    // and rather more sharply. It is a socket and a UDP
+                    // announcement — no display anywhere in it — and the
+                    // machine it matters most on is the one whose screen never
+                    // unlocks. Parking it behind the screen-lock wait would
+                    // reproduce CB-24 on a transport that has no excuse for it.
+                    //
+                    // Does nothing unless peerLinkEnabled is on.
+                    PeerSessions.Start();
+                },
 
                 // Avalonia's macOS render timer is a CVDisplayLink, and
                 // CVDisplayLinkStart fails with -6661 (kCVReturnInvalidDisplay)
