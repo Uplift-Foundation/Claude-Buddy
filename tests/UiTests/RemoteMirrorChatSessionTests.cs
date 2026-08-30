@@ -38,6 +38,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
     private readonly List<(string Name, string Text)> _messaged = new();
 
     private bool _relayAccepts = true;
+    private bool _relayThrows;
 
     private RemoteMirrorServer _server = null!;
     private RemoteMirrorClient _client = null!;
@@ -67,6 +68,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
 
         RemoteControlSessions.SendOverrideForTests = (_, name, text) =>
         {
+            if (_relayThrows) throw new InvalidOperationException("the relay died mid-send");
             if (!_relayAccepts) return Task.FromResult<string?>(null);
 
             _messaged.Add((name, text));
@@ -321,7 +323,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
         var session = await OpenAsync();
         await session.SendAsync("run the tests");
 
-        Append(UserRow("echo",
+        Append(UserRowEncoded("echo",
             "Another Claude session sent a message:\n"
             + "<cross-session-message from=\"bridge:session_01XkLE\" "
             + "hop-chain=\"009be9b8f8643b328c2352dd\" from-name=\"warrens-mbp\" "
@@ -329,8 +331,17 @@ public class RemoteMirrorChatSessionTests : IDisposable
 
         await _server.TickAsync();
 
-        // Once. The wrapped echo adopted the bubble already on screen.
+        // Once, not twice: the wrapped echo adopted the bubble already there.
         Assert.Single(Turns(session).Where(t => t.Role == ChatRole.User && t.Text.Contains("run the tests")));
+
+        // And it genuinely arrived rather than being skipped — the settled
+        // bubble now carries the transcript's own wording, which is the far
+        // session's version of the message and not the one typed here. Asserted
+        // because without it this case passes when the row never lands at all,
+        // which is how it was first written.
+        var settled = Assert.Single(Turns(session).Where(t => t.Role == ChatRole.User && t.Text.Contains("run the tests")));
+        Assert.Contains("cross-session-message", settled.Text);
+        Assert.Contains("hop-chain", settled.Text);
     }
 
     // A far session that merely quotes the same sentence back is not the echo,
@@ -372,6 +383,28 @@ public class RemoteMirrorChatSessionTests : IDisposable
         Assert.Contains("Couldn't reach", session.History[^1].Text);
         Assert.DoesNotContain(session.History, t => t.Text.Contains("nowhere to type"));
         Assert.DoesNotContain(session.History, t => t.Text.Contains("as a message"));
+    }
+
+    // A relay that throws rather than answering. The send is wrapped in a
+    // try/catch so a dead relay surfaces as a line in the panel rather than an
+    // unobserved exception on a background task, and the message stays on
+    // screen so the failure reads as "this did not go" rather than the text
+    // vanishing as the user watches.
+    [AvaloniaFact]
+    public async Task AFallbackThatThrowsIsReportedRatherThanLosingTheMessage()
+    {
+        Wire("a", "b");
+        _canType = false;
+        _relayThrows = true;
+
+        var session = await OpenAsync();
+        await session.SendAsync("hello");
+
+        Assert.Contains("Couldn't send", session.History[^1].Text);
+        Assert.Contains("the relay died mid-send", session.History[^1].Text);
+
+        // The user's own turn is still there.
+        Assert.Contains(Turns(session), t => t.Role == ChatRole.User && t.Text == "hello");
     }
 
     // The other refusal deliberately does NOT fall back. Replying-off is the far
@@ -1041,6 +1074,19 @@ public class RemoteMirrorChatSessionTests : IDisposable
 
     private static string UserRow(string uuid, string text) =>
         $"{{\"type\":\"user\",\"uuid\":\"{uuid}\",\"message\":{{\"role\":\"user\",\"content\":\"{text}\"}}}}";
+
+    // The same row with its content properly encoded.
+    //
+    // UserRow interpolates raw, which is fine for the one-word bodies every
+    // other case uses and silently wrong for anything carrying a quote or a
+    // newline: the row becomes invalid JSON split across several lines, the
+    // parser skips it, and a test asserting that something did NOT appear twice
+    // then passes because nothing appeared at all. That is exactly how the
+    // cross-session echo case below first passed while covering none of the
+    // code it was written for.
+    private static string UserRowEncoded(string uuid, string text) =>
+        "{\"type\":\"user\",\"uuid\":\"" + uuid + "\",\"message\":{\"role\":\"user\",\"content\":"
+        + System.Text.Json.JsonSerializer.Serialize(text) + "}}";
 
     private static string AssistantRow(string uuid, string text) =>
         $"{{\"type\":\"assistant\",\"uuid\":\"{uuid}\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{text}\"}}]}}}}";
