@@ -619,15 +619,17 @@ namespace ClaudeBuddy
 
                 if (!awaitReply) return new Reply(true, null, null, null, null);
 
+                // Held rather than looked up each pass. Nothing removes it
+                // before the finally below, so a lookup here can only ever
+                // succeed — and a miss arm that cannot run reads as an untested
+                // branch for ever.
+                Pending mine;
+                lock (_gate) mine = _pending[id];
+
                 while (true)
                 {
                     TimeSpan left;
-                    lock (_gate)
-                    {
-                        left = _pending.TryGetValue(id, out var waiting)
-                            ? waiting.Deadline - DateTime.UtcNow
-                            : TimeSpan.Zero;
-                    }
+                    lock (_gate) left = mine.Deadline - DateTime.UtcNow;
 
                     if (left <= TimeSpan.Zero) break;
 
