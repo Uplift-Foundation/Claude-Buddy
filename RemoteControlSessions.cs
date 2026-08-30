@@ -1265,10 +1265,52 @@ namespace ClaudeBuddy
             var minutes = ClaudeBuddySettings.RemoteControlIdleMinutes;
             if (minutes <= ClaudeBuddySettings.RemoteControlIdleNever) return false;
 
+            // Somebody watching is somebody using it.
+            //
+            // Touch() is what holds a relay open, and its own comment says it is
+            // "cheap enough to call on every send" — which is the whole of where
+            // it was called from. Watching a mirrored panel sends nothing, so a
+            // panel that was open and streaming counted as idle and had its
+            // relays retired underneath it. Measured overnight: 27 deltas
+            // delivered, then nothing from 01:36, and the panel still showing
+            // 1 a.m. at 8 a.m.
+            //
+            // Asked of the clients rather than fixed by touching on delivery,
+            // because a delta only arrives when the far session says something.
+            // Touching on delivery would keep a busy far session alive and still
+            // idle out a quiet one, which is the same bug with a smaller window
+            // and a much harder repro — a panel watching a thinking agent is
+            // exactly when this must not happen.
             DateTime last;
             lock (Gate) last = _lastUse;
 
-            return DateTime.UtcNow - last > TimeSpan.FromMinutes(minutes);
+            return IdleExpired(WatchingAnywhere(), last, minutes, DateTime.UtcNow);
+        }
+
+        // The rule itself, with the state read out of it.
+        //
+        // Split so the decision can be tested without relays, clients or a
+        // window behind it — the same reason OrbArrangement and OrbGlyph are
+        // pure. Reaching the watching arm otherwise means standing up a real
+        // mirror client with an open feed inside the UI suite, which is a lot of
+        // machinery to assert one boolean.
+        internal static bool IdleExpired(
+            bool watching, DateTime lastUse, int minutes, DateTime now)
+        {
+            if (minutes <= ClaudeBuddySettings.RemoteControlIdleNever) return false;
+
+            if (watching) return false;
+
+            return now - lastUse > TimeSpan.FromMinutes(minutes);
+        }
+
+        // Whether any account's mirror client has a panel open on a far session.
+        internal static bool WatchingAnywhere()
+        {
+            List<Relay> all;
+            lock (Gate) all = Relays.Values.ToList();
+
+            return all.Any(r => r.Client?.Watching == true);
         }
 
         // Hands text to a session on another machine, through the relay for the
