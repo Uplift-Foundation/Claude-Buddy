@@ -312,8 +312,16 @@ namespace ClaudeBuddy
                 // draft is indistinguishable from the real thing once it is on
                 // screen, and quietly substituting one at the exact moment
                 // integrity failed would be the worst possible time to do it.
-                Note($"Couldn't verify {_remoteName}'s transcript — {why}. Showing nothing rather "
-                   + "than something altered; close and reopen the panel to try again.");
+                // If the relay is stuck on a prompt, that is the real answer and
+                // it names what to do about it. Saying "try again" to somebody
+                // whose relay is waiting on a keypress sends them round the loop
+                // that produced this.
+                var stall = RemoteControlSessions.StallFor(_account);
+
+                Note(stall is null
+                    ? $"Couldn't verify {_remoteName}'s transcript — {why}. Showing nothing rather "
+                      + "than something altered; close and reopen the panel to try again."
+                    : $"Couldn't reach {_remoteName}: this machine's relay session is {stall}");
             });
         }
 
