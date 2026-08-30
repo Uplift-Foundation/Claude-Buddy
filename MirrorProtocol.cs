@@ -83,13 +83,29 @@ namespace ClaudeBuddy
         // is a one-line change once a real ceiling is measured.
         public const int ChunkBytes = 6 * 1024;
 
-        // The tail a panel opens on, and the page it walks back by. Both are
-        // LocalCliChatSession's numbers rather than new ones, because the mirror
-        // is meant to show what that panel would have shown — and those two were
-        // measured against six real transcripts (see its comment) rather than
-        // chosen.
-        public const int InitialBytes = 512 * 1024;
-        public const int PageBytes = 1024 * 1024;
+        // The tail a panel opens on, and the page it walks back by.
+        //
+        // These used to be LocalCliChatSession's numbers — 512KB and 1MB — on
+        // the reasoning that the mirror should show what that panel would have
+        // shown. That reasoning is right about a local file read and does not
+        // survive this wire. Every chunk here is a model emitting ~8KB of base64
+        // as tool input, so throughput is one ChunkBytes per model turn, and a
+        // turn was measured at close to two minutes on a real relay. A 512KB
+        // tail came out as two chunks — a four-minute first paint against a
+        // 180-second request timeout, so the window could not arrive before the
+        // request that asked for it expired, and the panel showed nothing at
+        // all. See CB-46.
+        //
+        // So they are chosen against what the wire can carry rather than what
+        // the panel would like. These are only the *starting* size: the server
+        // shrinks a tail further until it genuinely fits one chunk (see
+        // RemoteMirrorServer.ReadFor), because how many turns a byte range
+        // yields, and how well they compress, varies far too much between
+        // transcripts to be settled by a constant.
+        //
+        // Paging back is what supplies the rest, which is what paging is for.
+        public const int InitialBytes = 128 * 1024;
+        public const int PageBytes = 128 * 1024;
 
         // How long a subscription lives without being renewed, and how often a
         // client renews one it still wants. The gap between them is slack for a

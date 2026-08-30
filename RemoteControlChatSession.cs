@@ -56,6 +56,25 @@ namespace ClaudeBuddy
         private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
 
         private bool _mirroring;
+
+        // Whether the mirror has ever actually put the far transcript on screen.
+        //
+        // Distinct from _mirroring, which only says a live view was *agreed*.
+        // Between the two there is a real interval — the first window has to
+        // cross a wire that moves one chunk per model turn — and CB-46 found a
+        // panel that sat in it indefinitely with all three of its sources
+        // silent at once: the window had not arrived, the delta subscription
+        // does not start until one has, and OnInbound was dropping the far
+        // session's messages because _mirroring was true. The user sent "test",
+        // the session replied "Received — connectivity confirmed.", that reply
+        // reached this machine, and the panel threw it away.
+        //
+        // So the rules that go quiet in favour of the transcript key on this
+        // instead. A panel that has upgraded but never painted keeps behaving
+        // like the messaging channel it was a moment ago, which is the honest
+        // answer: it degrades to something rather than to nothing, and it does
+        // so for a stalled mirror later just as much as for a slow first paint.
+        private bool _painted;
         private CliChatFormat _format = CliChatFormat.ClaudeCode;
         private bool _saidNoLiveView;
         private bool _disposed;
@@ -171,8 +190,29 @@ namespace ClaudeBuddy
             // every panel is closed switches the mode and stops there; the next
             // PanelOpened reads the tail, which by then is the current one
             // anyway.
-            if (_panelOpen) _ = client.OpenAsync(_remoteName);
+            if (!_panelOpen) return;
+
+            // Said before the fetch rather than after, because the fetch is the
+            // part that takes time. The opening line is "Checking whether a live
+            // view … is available", and leaving that on screen for the whole
+            // transfer showed a user the exact sentence that meant failure an
+            // hour earlier — they reported a working transfer as "no live view"
+            // twice, which is a wording bug rather than a mirror one.
+            //
+            // Not a problem to clean up afterwards: the window that ends this
+            // wait clears the history outright and replaces it with the far
+            // conversation, so this line goes with it.
+            if (!_painted) Note(FetchingNote(_remoteName));
+
+            _ = client.OpenAsync(_remoteName);
         }
+
+        // Named for the same reason the refusals are: a line a user reads while
+        // nothing appears to be happening has to say that something is.
+        internal static string FetchingNote(string remoteName) =>
+            $"Found a live view of {remoteName} — fetching its conversation from the other machine. "
+          + "This can take a minute: the transcript comes across in pieces, and each one waits its "
+          + "turn on the relay.";
 
         private void SayNoLiveView()
         {
@@ -241,6 +281,8 @@ namespace ClaudeBuddy
                              + "the other machine, a few seconds behind. Messages you type are typed "
                              + "into its terminal."
                     });
+
+                    _painted = true;
 
                     HistoryReplaced?.Invoke();
                     return;
@@ -676,7 +718,13 @@ namespace ClaudeBuddy
             // message would be a second, differently-worded account of
             // something already shown. Dropped rather than appended: showing
             // both is precisely the confusion this feature was built to end.
-            if (_mirroring) return;
+            //
+            // Only once it really is showing that transcript, though. Before the
+            // first window lands there is no second account to be confused with
+            // — there is nothing on screen at all — so dropping the message here
+            // makes the panel strictly worse than the messaging channel it
+            // replaced. See _painted.
+            if (_mirroring && _painted) return;
 
             // The answer supersedes the "working" line, so that comes off first —
             // leaving it above the reply would read as though it were still going.
@@ -704,7 +752,9 @@ namespace ClaudeBuddy
 
         public void SetWorking(bool working)
         {
-            if (_mirroring) return;
+            // Same rule as OnInbound, for the same reason: the live view only
+            // supersedes the working line once it is actually showing the work.
+            if (_mirroring && _painted) return;
 
             if (working)
             {

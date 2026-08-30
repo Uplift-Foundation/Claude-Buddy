@@ -521,8 +521,13 @@ public class MirrorEdgeCaseTests : IDisposable
     [Fact]
     public async Task ARelayThatStopsAcceptingMidTransferDoesNotKeepPushing()
     {
-        // Big enough to need several frames, so there is a middle to stop in.
-        AddSession(rows: 4000);
+        // Big enough to need several frames, so there is a middle to stop in —
+        // and since CB-46 that takes content, not row count. The server now
+        // sizes an opening window to fit one chunk, so four thousand rows of
+        // "line 1", "line 2" compress to nothing and arrive in a single frame
+        // with no middle at all. What spans chunks is payload that does not
+        // compress, so the rows carry incompressible text instead.
+        AddSession(IncompressibleTranscript());
 
         await Handshake();
 
@@ -535,6 +540,83 @@ public class MirrorEdgeCaseTests : IDisposable
 
         Assert.False(await _client.OpenAsync(Name));
         Assert.Empty(_windows);
+    }
+
+    // --- CB-46: one window request per session, however many callers ---------
+
+    // The measured bug: four distinct FETCHes for one session inside 78 seconds,
+    // against a three-minute timeout, so none of them were retries. Each one
+    // makes the far side build and queue another whole window, so a relay
+    // already minutes deep in the first acquires more behind it and the queue
+    // grows faster than a model turn can drain it.
+    //
+    // Asserted on task identity rather than on a frame count, because that is
+    // the actual contract: a second caller is handed the first answer, not a
+    // second conversation about it.
+    [Fact]
+    public async Task ASecondAskForAWindowJoinsTheFirstRatherThanStartingAnother()
+    {
+        AddSession(rows: 20);
+        await Handshake();
+
+        _holdFetch = new TaskCompletionSource();
+
+        var first = _client.OpenAsync(Name);
+        var second = _client.OpenAsync(Name);
+
+        Assert.Same(first, second);
+
+        _holdFetch.SetResult();
+
+        Assert.True(await first);
+        Assert.True(await second);
+
+        // One window, not two.
+        Assert.Single(_windows);
+    }
+
+    // The specific path that defeated the old guard, and the reason it was not
+    // obvious: Loading lived on the Feed, and CloseAsync *removes* the Feed. A
+    // panel being rebound — which clicking between two orbs does constantly —
+    // threw away the only record that a fetch was running, so the next open
+    // started another.
+    [Fact]
+    public async Task ClosingAPanelMidFetchDoesNotLetTheNextOpenStartASecondOne()
+    {
+        AddSession(rows: 20);
+        await Handshake();
+
+        _holdFetch = new TaskCompletionSource();
+
+        var first = _client.OpenAsync(Name);
+
+        // The panel closes while the window is still crossing the wire.
+        await _client.CloseAsync(Name);
+
+        var second = _client.OpenAsync(Name);
+
+        Assert.Same(first, second);
+
+        _holdFetch.SetResult();
+        await first;
+
+        Assert.Single(_windows);
+    }
+
+    // A refusal is not a running request and must not be remembered as one: a
+    // session with no roster entry answers no immediately, and caching that
+    // would answer every later caller with the same stale no — including the
+    // one that asks after the roster finally arrives.
+    [Fact]
+    public async Task ARefusalIsNotRememberedAsAnOutstandingRequest()
+    {
+        AddSession(rows: 20);
+
+        Assert.False(await _client.OpenAsync("nobody-here"));
+
+        await Handshake();
+
+        Assert.True(await _client.OpenAsync(Name));
     }
 
     // The real wiring, constructed. Nothing here runs a process — the point is
@@ -594,6 +676,41 @@ public class MirrorEdgeCaseTests : IDisposable
         };
 
     private Task Handshake() => _client.DiscoverAsync(Peers, new[] { Name });
+
+    // A transcript whose turns cannot be squeezed into one chunk, however small
+    // a window the server chooses.
+    //
+    // Two properties, and both are needed. The text is incompressible, so gzip
+    // cannot rescue it — and each single row is larger than a chunk on its own,
+    // so *no* window size makes it fit. That second part is what makes the
+    // fixture hold: since CB-46 the server shrinks a tail until it fits, so
+    // merely being a big file is not enough — it would just send a smaller
+    // window and arrive in one frame again, leaving this test no middle to stop
+    // in. A row bigger than a chunk is the one shape shrinking cannot answer,
+    // which is exactly why the server sends it oversized and the client's
+    // timeout extends while pieces keep coming.
+    //
+    // Deterministically pseudo-random rather than actually random, so a failure
+    // reproduces: the seed is fixed and the same bytes come out every run.
+    private string IncompressibleTranscript()
+    {
+        var random = new Random(20260830);
+        var alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        var rows = new List<string>();
+
+        for (var i = 0; i < 8; i++)
+        {
+            var noise = new char[8 * MirrorProtocol.ChunkBytes];
+            for (var c = 0; c < noise.Length; c++) noise[c] = alphabet[random.Next(alphabet.Length)];
+
+            rows.Add(UserRow($"u{i}", new string(noise)));
+        }
+
+        _path = Path.Combine(_dir, "incompressible.jsonl");
+        File.WriteAllText(_path, string.Join("\n", rows) + "\n");
+
+        return _path;
+    }
 
     private void AddSession(string? transcriptPath = null, int rows = 2)
     {
@@ -662,10 +779,18 @@ public class MirrorEdgeCaseTests : IDisposable
         MirrorProtocol.TryParseFrame(MirrorProtocol.BuildFrame(
             type, id, fields.ToDictionary(f => f.Key, f => f.Value)))!;
 
+    // Holds FETCH frames at the door until a test lets them through, so a
+    // request can be genuinely in flight while something else asks for the same
+    // thing. Without it "concurrent" is a guess about scheduling.
+    private TaskCompletionSource? _holdFetch;
+
     private async Task<bool> SendToServerAsync(string peer, string line)
     {
         var frame = MirrorProtocol.TryParseFrame(line);
         if (frame is null) return false;
+
+        if (_holdFetch is { } gate && frame.Type == MirrorProtocol.Fetch)
+            await gate.Task;
 
         await _server.HandleAsync(NearRelay, frame);
         return true;
