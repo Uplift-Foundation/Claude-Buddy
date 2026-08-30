@@ -573,9 +573,35 @@ namespace ClaudeBuddy
             @"Do you trust the files|trust the files in this folder",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // A session that came up logged out. Not first-run setup strictly
+        // speaking, but the same shape of dead end: the session runs, holds its
+        // pane, and answers every prompt Buddy types with this instead of an
+        // answer — measured on the user's MacBook at 22:06 UTC on 29 Aug 2026,
+        // where the whole of the relay's reply to ListAgents was "Not logged in
+        // · Please run /login". CB-42's forced config directory is what put it
+        // in a context with no credentials; this is what that looks like from
+        // the outside, and it is worth naming whatever put it there.
+        //
+        // Deliberately narrow, because there is a *healthy* banner a few lines
+        // above with the word login in it: "⚠ Your login expires in 3 days ·
+        // run /login to renew" is a working relay with a warning, which
+        // ReadHealth already surfaces as one, and treating it as a block would
+        // refuse to start a session that works. "Not logged in" and the
+        // capitalised "Please run /login" are the phrasings that mean there is
+        // no session to have.
+        private static readonly Regex LoggedOut = new(
+            @"Not logged in|Please run /login|Invalid API key",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public static string? ReadSetupBlock(string paneText)
         {
             if (string.IsNullOrEmpty(paneText)) return null;
+
+            if (LoggedOut.IsMatch(paneText))
+            {
+                return "this account is not logged in to Claude Code. Run `claude` in a "
+                     + "terminal once under that account and sign in, then try again.";
+            }
 
             if (ThemePrompt.IsMatch(paneText))
             {
