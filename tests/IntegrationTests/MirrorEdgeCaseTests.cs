@@ -835,6 +835,36 @@ public class MirrorEdgeCaseTests : IDisposable
         Assert.False(_client.Waiting);
     }
 
+    // What the idle timer asks before it retires a relay.
+    //
+    // Remote Control shuts its relays down after RemoteControlIdleMinutes
+    // without use, and "use" meant Touch(), which is called on send and nowhere
+    // else. Watching sends nothing, so an open panel streaming a far machine's
+    // conversation was idle by that definition and had the relay pulled out from
+    // under it — measured overnight as 27 deltas and then nothing, with the
+    // panel still showing 1 a.m. at 8 a.m.
+    //
+    // The window has to match the panel exactly: a feed exists between OpenAsync
+    // and CloseAsync, and CloseAsync is what PanelClosed calls. True for as long
+    // as somebody is looking, and no longer — a client that stayed "watching"
+    // after the panel closed would keep a live Claude Code session alive on
+    // another machine for nothing, which is the cost the setting exists to
+    // avoid.
+    [Fact]
+    public async Task WatchingIsTrueForExactlyAsLongAsAPanelIsOpen()
+    {
+        AddSession();
+        await Handshake();
+
+        Assert.False(_client.Watching);
+
+        Assert.True(await _client.OpenAsync(Name));
+        Assert.True(_client.Watching);
+
+        await _client.CloseAsync(Name);
+        Assert.False(_client.Watching);
+    }
+
     // And silence still ends it. Extending on progress would be worthless if it
     // also extended on nothing — a far side that stops halfway has to become a
     // failure the panel can report rather than a wait nobody ever leaves.

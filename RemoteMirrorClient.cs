@@ -259,6 +259,30 @@ namespace ClaudeBuddy
 
         private readonly Dictionary<string, Feed> _feeds = new(StringComparer.OrdinalIgnoreCase);
 
+        // Whether any panel is currently mirroring a session through this client.
+        //
+        // **Exposed because watching was not counted as using.** Remote Control
+        // retires its relays after RemoteControlIdleMinutes without use, and
+        // "use" meant Touch(), which is called on send and nowhere else. A panel
+        // sitting open and streaming a far machine's conversation touched
+        // nothing, so the idle timer ran the whole time somebody was watching
+        // and then shut the relays down underneath them.
+        //
+        // Measured overnight on 30 Aug 2026: a panel opened at 00:49 took 27
+        // delta transfers and then stopped dead at 01:36 — about thirty minutes
+        // after the last message was *sent*, which is what the timer was really
+        // measuring. It showed 1 a.m. content at 8 a.m. with no indication that
+        // it had stopped, because a mirror that has gone stale looks exactly
+        // like one that is quiet.
+        //
+        // A feed exists between OpenAsync and CloseAsync, and CloseAsync runs
+        // when the panel closes — so this is true for exactly as long as
+        // somebody is looking, and no longer.
+        internal bool Watching
+        {
+            get { lock (_gate) return _feeds.Count > 0; }
+        }
+
         public bool HasMore(string name)
         {
             lock (_gate) return _feeds.TryGetValue(name, out var feed) && feed.BacklogFrom > 0;
