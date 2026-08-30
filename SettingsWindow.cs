@@ -317,7 +317,12 @@ namespace ClaudeBuddy
             // Straight after the CLI sections and before the Desktop app,
             // because that is what it is about: the same Claude Code sessions
             // those two sections govern, just not on this machine.
-            root.Children.Add(Group("Other machines", Card(RemoteControlRows())));
+            // Two cards, and the order is the recommendation. The direct link
+            // is free and instant; the relay costs usage and takes minutes. A
+            // user reading top to bottom should meet the good one first.
+            root.Children.Add(Group("Other machines",
+                Card(PeerLinkRows()),
+                Card(RemoteControlRows())));
 
             // Not an agent CLI at all — the Electron desktop app — so it sits
             // after them with its own profiles, which is where someone looking
@@ -1077,6 +1082,7 @@ namespace ClaudeBuddy
         // the fields are private only so that nothing outside assigns them.
         internal string? OpenClawStatusText => _openClawStatus?.Text;
         internal string? RemoteControlStatusText => _remoteControlStatus?.Text;
+        internal string? PeerLinkStatusText => _peerLinkStatus?.Text;
 
         // Excluded from coverage: starts a real one-second Avalonia timer. The
         // work it schedules is OnStatusTick below, which is reachable directly and
@@ -1109,6 +1115,15 @@ namespace ClaudeBuddy
                 // than none.
                 var relay = RemoteControlSessions.StatusText;
                 if (_remoteControlStatus.Text != relay) _remoteControlStatus.Text = relay;
+            }
+
+            if (_peerLinkStatus is not null)
+            {
+                // Changes under you more than either of the others: a machine
+                // waking on the network appears within a discovery interval,
+                // and the whole point of the line is to say when that happened.
+                var link = PeerSessions.StatusText();
+                if (_peerLinkStatus.Text != link) _peerLinkStatus.Text = link;
             }
         }
 
@@ -1300,6 +1315,194 @@ namespace ClaudeBuddy
                 TextWrapping = TextWrapping.Wrap
             })
         };
+
+        private TextBlock? _peerLinkStatus;
+
+        // The direct link, and the pairing that makes it possible.
+        //
+        // **Deliberately not symmetrical with the relay section above it.** That
+        // one is a switch and a warning about cost; this one is a switch and a
+        // list of machines, because the thing a person has to *do* here is pair
+        // two of them, and a list with a state per row is the only honest way to
+        // show a pairing that is halfway done.
+        //
+        // No platform gate. The relay is macOS-only because it lives in tmux;
+        // this is a socket, and the whole reason for choosing SslStream over the
+        // gateway's hand-rolled TLS was that it is the same on both.
+        internal Control[] PeerLinkRows()
+        {
+            // Dropped before anything is built, for the reason the relay's is:
+            // Rebuild() replaces the content tree, and a label left pointing at
+            // the old one is written to once a second forever.
+            _peerLinkStatus = null;
+
+            var rows = new List<Control>
+            {
+                Row("Connect directly to other machines",
+                    Switch(ClaudeBuddySettings.PeerLinkEnabled, OnPeerLinkToggled),
+
+                    // The contrast with the row below is the point, and it is
+                    // stated rather than implied: this is the same feature
+                    // without the model in the middle.
+                    "Talks straight to Claude Buddy on your other machines over your local "
+                    + "network. Transcripts arrive in a moment rather than in minutes, and "
+                    + "nothing here signs into your Claude account or counts against your "
+                    + "usage. Both machines need this switched on, and you pair them once.")
+            };
+
+            if (!ClaudeBuddySettings.PeerLinkEnabled) return rows.ToArray();
+
+            _peerLinkStatus = new TextBlock
+            {
+                Text = PeerSessions.StatusText(),
+                FontSize = 12,
+                Opacity = 0.75,
+                TextWrapping = TextWrapping.Wrap
+            };
+
+            rows.Add(NoteRow(_peerLinkStatus));
+
+            rows.Add(Row("Let another machine pair with this one", PairingCodeButton(),
+                "Shows a code. Type it into the other machine's list below, next to this "
+                + "machine's name. The code works once."));
+
+            var listing = PeerSessions.Listing();
+
+            foreach (var machine in listing) rows.Add(PeerRow(machine));
+
+            if (listing.Count == 0)
+            {
+                rows.Add(NoteRow(new TextBlock
+                {
+                    // Says which of the two "nothing here" cases this is. A
+                    // machine that is off and a machine that cannot be seen look
+                    // identical from here, and the fixes are different.
+                    Text = "No other machines yet. They appear here on their own once Claude "
+                         + "Buddy is running on them with this switched on, and both are on "
+                         + "the same network.",
+                    FontSize = 11,
+                    Opacity = 0.55,
+                    TextWrapping = TextWrapping.Wrap
+                }));
+            }
+
+            return rows.ToArray();
+        }
+
+        // One machine, and whatever it is that machine currently needs.
+        //
+        // A paired one needs a way to be forgotten; an unpaired one needs a box
+        // for the code showing on its screen. Both are on the right, where every
+        // other control in this window is.
+        internal Control PeerRow(PeerSessions.Listed machine)
+        {
+            var right = new StackPanel
+            {
+                Orientation = Avalonia.Layout.Orientation.Horizontal,
+                Spacing = 8,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            right.Children.Add(new TextBlock
+            {
+                Text = PeerSessions.RowStatus(machine),
+                FontSize = 11,
+                Opacity = 0.55,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+
+            if (machine.Paired)
+            {
+                var forget = new Button { Content = "Forget" };
+                forget.Click += (_, _) => OnUnpairClicked(machine.Machine);
+                right.Children.Add(forget);
+            }
+            else
+            {
+                var code = new TextBox
+                {
+                    Width = 88,
+                    MaxLength = 6,
+                    Watermark = "code",
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                var pair = new Button { Content = "Pair" };
+                pair.Click += (_, _) => OnPairClicked(machine.Machine, code.Text);
+
+                right.Children.Add(code);
+                right.Children.Add(pair);
+            }
+
+            return Row(machine.Machine, right);
+        }
+
+        // The button that opens this machine to one pairing.
+        //
+        // It becomes the code rather than opening a dialog for it: the code is
+        // six digits read aloud or copied once, and a dialog would be a second
+        // thing to dismiss for something that fits on the button.
+        internal Control PairingCodeButton()
+        {
+            var button = new Button { Content = "Show a code" };
+
+            button.Click += (_, _) =>
+            {
+                var code = PeerSessions.OpenForPairing();
+                button.Content = code ?? "Not listening";
+                button.IsEnabled = false;
+            };
+
+            return button;
+        }
+
+        // Excluded from coverage: opens and closes a real socket. The rows that
+        // reach it are covered, and what the link does with the setting is
+        // PeerSessions' own business and tested there.
+        [ExcludeFromCodeCoverage]
+        internal void OnPeerLinkToggled(bool on)
+        {
+            ClaudeBuddySettings.PeerLinkEnabled = on;
+
+            // Restarted rather than left for the next launch, unlike the relay
+            // switch above: a socket costs nothing to open, so making someone
+            // quit the app to try the thing they just switched on would be a
+            // gratuitous round trip.
+            PeerSessions.Restart();
+
+            Rebuild();
+        }
+
+        [ExcludeFromCodeCoverage]
+        private void OnUnpairClicked(string machine)
+        {
+            PeerSessions.Unpair(machine);
+            Rebuild();
+        }
+
+        // Excluded from coverage: dials a real machine. Whether the code is
+        // worth dialling with is PairingWorthTrying, which is not.
+        [ExcludeFromCodeCoverage]
+        private void OnPairClicked(string machine, string? code)
+        {
+            if (!PairingWorthTrying(code)) return;
+
+            var peer = PeerSessions.SeenFor(machine);
+            if (peer is null) return;
+
+            _ = PeerSessions.PairAsync(peer, code!.Trim());
+        }
+
+        // Whether a typed code is even worth a dial.
+        //
+        // Six digits, because that is what NewPairingCode makes. Checked here so
+        // a half-typed code does not spend a connection and come back refused —
+        // which reads as the pairing having failed rather than as not having
+        // been attempted.
+        internal static bool PairingWorthTrying(string? code) =>
+            code is not null
+            && code.Trim().Length == 6
+            && code.Trim().All(char.IsAsciiDigit);
 
         internal Control[] RemoteControlRows()
         {

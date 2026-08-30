@@ -129,4 +129,52 @@ public class SettingsWindowScreenshots
             ClaudeBuddySettings.RemoteControlEnabled = wasEnabled;
         }
     }
+
+    // The direct link's card, switched on, so the pairing controls are in frame.
+    //
+    // **Unlike every other scenario in this file, this one has no platform
+    // gate — and that is the thing to look at when comparing the two rids.**
+    // The relay card above is macOS-only because it lives in tmux; this is a
+    // socket, and the whole reason it uses SslStream rather than the gateway's
+    // hand-rolled TLS is that it behaves identically on Windows. So the two
+    // captures should show the *same* card. A Windows rid that shows a
+    // "macOS-only" note here, or nothing at all, is the regression this exists
+    // to make visible, and no unit test can show it.
+    [AvaloniaFact]
+    public void PeerLinkGroupShowsThePairingControls()
+    {
+        var wasEnabled = ClaudeBuddySettings.PeerLinkEnabled;
+        try
+        {
+            ClaudeBuddySettings.PeerLinkEnabled = true;
+
+            var ctor = typeof(SettingsWindow).GetConstructor(
+                BindingFlags.NonPublic | BindingFlags.Instance,
+                types: Type.EmptyTypes)
+                ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+            var window = (Avalonia.Controls.Window)ctor.Invoke(null);
+
+            window.Show();
+            ScreenshotHelper.Flush();
+
+            var anchor = window.GetLogicalDescendants()
+                .OfType<TextBlock>()
+                .FirstOrDefault(block =>
+                    block.Text == "Let another machine pair with this one");
+
+            Assert.NotNull(anchor);
+
+            var card = anchor!.GetLogicalAncestors().OfType<Control>()
+                .FirstOrDefault(control =>
+                    control.Bounds.Height > 60 && control.Bounds.Width > 200)
+                ?? (Control)anchor;
+
+            ScreenshotHelper.CaptureControl(card, "settings-peer-link-group.png");
+        }
+        finally
+        {
+            ClaudeBuddySettings.PeerLinkEnabled = wasEnabled;
+        }
+    }
 }

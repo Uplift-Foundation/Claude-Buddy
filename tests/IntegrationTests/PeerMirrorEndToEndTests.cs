@@ -117,7 +117,18 @@ public class PeerMirrorEndToEndTests : IDisposable
         // one may talk. Both ends run in this process and so share one identity
         // file, which means one certificate and therefore one pin — the same
         // situation as two machines that have paired.
+        //
+        // **Both directions, because pairing is mutual and the greeting made
+        // that visible.** The dialling side has to trust the certificate it is
+        // offered; the accepting side has to trust the machine that greets it,
+        // and a greeting names the *real* machine — Environment.MachineName —
+        // rather than the label the dial used. Remembering only "far" left the
+        // far end refusing a connection it had already completed a TLS
+        // handshake on, which arrived here as a session that was never
+        // Available and no explanation anywhere.
         PeerIdentity.Remember(new PeerIdentity.Peer(PeerIdentity.OwnPin(), "far"));
+        PeerIdentity.Remember(
+            new PeerIdentity.Peer(PeerIdentity.OwnPin(), Environment.MachineName));
 
         far.Host.Link.Listen(0);
         var port = far.Host.Link.BoundPort;
