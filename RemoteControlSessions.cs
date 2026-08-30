@@ -1490,11 +1490,53 @@ namespace ClaudeBuddy
         {
             lock (Gate)
             {
-                _snapshot = Relays.Values
-                    .SelectMany(r => r.Sessions)
-                    .Concat(_peerRows)
-                    .ToList();
+                _snapshot = OnePerSession(
+                    Relays.Values.SelectMany(r => r.Sessions).ToList(), _peerRows);
             }
+        }
+
+        // One row per session, however many transports can see it.
+        //
+        // **Both can see the same session, and until this they both drew it.**
+        // A session running `claude --remote-control` is listed by any relay on
+        // that account *and* served over the link by the Buddy beside it — which
+        // is not an odd configuration, it is the normal one for a machine that
+        // was reachable before the link existed and still is. Two rows share a
+        // Key, so the scan draws two orbs for one terminal.
+        //
+        // That is the "there's two Claude Buddy's running" complaint in a
+        // smaller form, and it would have been the first thing anybody saw on
+        // turning the link on with the relay still enabled.
+        //
+        // **The direct row wins.** Not arbitrarily: the two carry the same
+        // session but not the same capability. A relay row can only ever offer a
+        // messaging channel unless the mirror also answers, while the link's row
+        // comes with a live transcript by construction — the roster it was built
+        // from is the answer to "can you show me this". Preferring the other way
+        // round would put a "no live view" panel on a session that has one.
+        //
+        // Pure, because "which orb does the user see" is a rule and the answer
+        // is not obvious from either list alone.
+        internal static IReadOnlyList<Remote> OnePerSession(
+            IReadOnlyList<Remote> relayed, IReadOnlyList<Remote> direct)
+        {
+            var byKey = new Dictionary<string, Remote>(StringComparer.OrdinalIgnoreCase);
+            var order = new List<string>();
+
+            foreach (var row in direct)
+            {
+                if (byKey.TryAdd(row.Key, row)) order.Add(row.Key);
+            }
+
+            foreach (var row in relayed)
+            {
+                if (byKey.ContainsKey(row.Key)) continue;
+
+                byKey[row.Key] = row;
+                order.Add(row.Key);
+            }
+
+            return order.Select(k => byKey[k]).ToList();
         }
 
         internal static void RaiseWorkingTransitions(IEnumerable<Remote> remotes)
@@ -1831,10 +1873,8 @@ namespace ClaudeBuddy
                         .ToList();
                 }
 
-                _snapshot = Relays.Values
-                    .SelectMany(r => r.Sessions)
-                    .Concat(_peerRows)
-                    .ToList();
+                _snapshot = OnePerSession(
+                    Relays.Values.SelectMany(r => r.Sessions).ToList(), _peerRows);
             }
         }
     }
