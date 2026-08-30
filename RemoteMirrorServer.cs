@@ -351,21 +351,139 @@ namespace ClaudeBuddy
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             var length = fs.Length;
 
-            if (tail)
-            {
-                from = Math.Max(0, length - MirrorProtocol.InitialBytes);
-                to = length;
-            }
-            else
-            {
-                from = Math.Max(0, from);
-                to = Math.Min(to <= 0 ? length : to, length);
-            }
+            if (tail) return ReadTailThatFits(fs, length, cli);
+
+            from = Math.Max(0, from);
+            to = Math.Min(to <= 0 ? length : to, length);
 
             var read = ReadRange(fs, from, to, alignStart: true);
             return new Window(
                 MirrorProtocol.TurnsFrom(read.Lines, cli), read.From, read.To, length);
         }
+
+        // The newest slice of a transcript that still fits in one chunk.
+        //
+        // A first paint has to arrive, and on this wire a chunk costs a model
+        // turn — close to two minutes on the relay this was measured on. Two
+        // chunks is therefore a four-minute first paint against a request
+        // timeout of three, which is not a slow panel but an empty one: the
+        // reply cannot exist before the request expires. CB-46 is that bug, and
+        // the panel it was found on had shown nothing for hours.
+        //
+        // Measured rather than asserted, because a byte count cannot predict
+        // this. What matters is how large the *encoded, compressed turns* are,
+        // and the ratio between raw transcript bytes and that is wildly
+        // variable: a chatty session compresses twenty to one, a session full of
+        // hashes or base64 barely at all, and how many turns a byte range even
+        // contains depends on how long its rows are. So this shrinks the window
+        // and asks the real encoder, rather than picking a constant and hoping.
+        //
+        // Halving from the newest end, so what survives is always the most
+        // recent conversation — the part somebody opening a panel is looking
+        // for. Paging back supplies the rest on demand.
+        //
+        // The floor matters as much as the loop. A single turn can be bigger
+        // than a chunk all by itself, and there is no window size that makes it
+        // fit; when halving stops helping, the window is sent as-is and arrives
+        // over several chunks. That is slow but correct, and it is why the
+        // client's timeout extends while chunks are still coming rather than
+        // being a flat deadline — the two changes are halves of one fix.
+        private static Window ReadTailThatFits(FileStream fs, long length, string cli)
+        {
+            var span = (long)MirrorProtocol.InitialBytes;
+            var best = ReadTail(fs, length, span, cli);
+
+            // The binding constraint is the chunk, not the byte count, and the
+            // two are only loosely related — so the window is searched for
+            // rather than calculated, in whichever direction the first guess was
+            // wrong.
+            return FitsOneChunk(best.Turns)
+                ? Grow(fs, length, span, best, cli)
+                : Shrink(fs, length, span, best, cli);
+        }
+
+        // Bigger while it still fits, because a bigger window is more
+        // conversation and the panel should show as much as one chunk can carry.
+        //
+        // This is not greed, it is the noise case. Most of a transcript is rows
+        // no panel ever shows — tool results, and file-history snapshots that
+        // run to hundreds of kilobytes each — and those contribute no turns, so
+        // they contribute no payload either. A window that lands inside one is
+        // spent entirely on something invisible: a fixed 128KB tail on a
+        // transcript whose newest 200KB is a single snapshot row paints one
+        // message where it could have painted the whole conversation. Growing
+        // past such a row is free in the only currency that matters here.
+        private static Window Grow(FileStream fs, long length, long span, Window best, string cli)
+        {
+            // From > 0 means there is still file behind this window; once it
+            // reaches the start there is nothing left to reach for.
+            while (span < MaxTailBytes && best.From > 0)
+            {
+                span *= 2;
+
+                var bigger = ReadTail(fs, length, span, cli);
+                if (!FitsOneChunk(bigger.Turns)) break;
+
+                best = bigger;
+            }
+
+            return best;
+        }
+
+        // Smaller until it fits, halving from the newest end so what survives is
+        // always the most recent conversation — the part somebody opening a
+        // panel is looking for. Paging back supplies the rest on demand.
+        private static Window Shrink(FileStream fs, long length, long span, Window best, string cli)
+        {
+            while (!FitsOneChunk(best.Turns))
+            {
+                span /= 2;
+
+                // Nothing left to give up. Either the newest single row is
+                // larger than a chunk all by itself — no window size makes that
+                // fit — or the file is smaller than the floor and shrinking
+                // further would start returning nothing at all. An empty panel
+                // is the failure being fixed, not an acceptable way to fix it,
+                // so the oversized window is sent and arrives over several
+                // chunks: slow, but correct, and the client's timeout extends
+                // while chunks are still coming precisely so this case lands.
+                if (span < MinTailBytes) break;
+
+                var smaller = ReadTail(fs, length, span, cli);
+
+                // A smaller byte window that yields no turns has cut into the
+                // middle of the newest row. Keep the larger one: too slow beats
+                // nothing to show.
+                if (smaller.Turns.Count == 0) break;
+
+                best = smaller;
+            }
+
+            return best;
+        }
+
+        // A ceiling on the search rather than on the answer: each step re-reads
+        // and re-parses, and past a few megabytes that is real CPU spent to
+        // discover something a chunk was never going to hold anyway.
+        private const int MaxTailBytes = 8 * 1024 * 1024;
+
+        // Below this a window stops being a conversation. Four kilobytes is a
+        // handful of turns, and if that still does not fit one chunk then no
+        // window will, so the loop stops rather than shrinking towards zero.
+        private const int MinTailBytes = 4 * 1024;
+
+        private static Window ReadTail(FileStream fs, long length, long span, string cli)
+        {
+            var read = ReadRange(fs, Math.Max(0, length - span), length, alignStart: true);
+
+            return new Window(
+                MirrorProtocol.TurnsFrom(read.Lines, cli), read.From, read.To, length);
+        }
+
+        // Asked of the same encoder and splitter that will carry it, because a
+        // prediction of that answer is exactly the thing that has been wrong.
+        internal static bool FitsOneChunk(List<MirrorProtocol.MirrorTurn> turns) =>
+            MirrorProtocol.Split(MirrorProtocol.EncodeTurns(turns)).Count <= 1;
 
         // A byte range as whole lines, and the two offsets that bound what was
         // actually read.

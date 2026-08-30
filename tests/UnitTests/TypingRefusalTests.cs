@@ -164,4 +164,59 @@ public class TypingRefusalTests
         Assert.Contains("Slash commands", said);
         Assert.Contains("tmux pane", said);
     }
+
+    // --- CB-46: the rules a first paint depends on -----------------------------
+
+    // The question the server asks before deciding how much transcript to send,
+    // and it is asked of the same encoder and splitter that will carry the
+    // answer — a prediction of that is exactly the thing that has been wrong.
+    [Fact]
+    public void AShortConversationFitsOneChunk()
+    {
+        var turns = new List<MirrorProtocol.MirrorTurn>
+        {
+            new("user", "what did the build say?"),
+            new("assistant", "it passed on both runners")
+        };
+
+        Assert.True(RemoteMirrorServer.FitsOneChunk(turns));
+    }
+
+    // Incompressible, because that is the case a byte count cannot predict: the
+    // ratio between transcript bytes and encoded, compressed turns runs from
+    // twenty to one down to nothing at all, which is why this is measured rather
+    // than assumed.
+    [Fact]
+    public void SomethingThatCannotBeCompressedDoesNotFitOneChunk()
+    {
+        var random = new Random(20260830);
+        var alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+        var noise = new char[8 * MirrorProtocol.ChunkBytes];
+
+        for (var i = 0; i < noise.Length; i++) noise[i] = alphabet[random.Next(alphabet.Length)];
+
+        var turns = new List<MirrorProtocol.MirrorTurn> { new("user", new string(noise)) };
+
+        Assert.False(RemoteMirrorServer.FitsOneChunk(turns));
+    }
+
+    [Fact]
+    public void NothingAtAllFitsOneChunk() =>
+        Assert.True(RemoteMirrorServer.FitsOneChunk(new List<MirrorProtocol.MirrorTurn>()));
+
+    // The line a user reads while nothing appears to be happening. It replaced
+    // the opening "Checking whether a live view … is available", which stayed on
+    // screen for the whole transfer and is the exact sentence that meant failure
+    // an hour earlier — a working transfer got reported as "no live view" twice
+    // on the strength of it.
+    [Fact]
+    public void TheFetchingNoteSaysSomethingIsHappeningAndThatItTakesAMinute()
+    {
+        var said = RemoteControlChatSession.FetchingNote(Remote);
+
+        Assert.Contains(Remote, said);
+        Assert.Contains("fetching its conversation", said);
+        Assert.Contains("take a minute", said);
+        Assert.DoesNotContain("Checking whether", said);
+    }
 }
