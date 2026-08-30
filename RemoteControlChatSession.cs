@@ -34,7 +34,8 @@ namespace ClaudeBuddy
     // find out it could have been a live view all along. HistoryReplaced is what
     // makes that free — the panel already redraws from History when it fires.
     internal sealed class RemoteControlChatSession :
-        IRemoteChatSession, IRemoteChatComposer, IRemoteChatSlashCommands, IRemoteChatBacklog, IDisposable
+        IRemoteChatSession, IRemoteChatComposer, IRemoteChatSlashCommands, IRemoteChatBacklog,
+        IRemoteChatFetchWait, IDisposable
     {
         private readonly List<ChatTurn> _history = new();
 
@@ -204,8 +205,70 @@ namespace ClaudeBuddy
             // conversation, so this line goes with it.
             if (!_painted) Note(FetchingNote(_remoteName));
 
+            // Started here rather than inside OpenAsync so the indicator covers
+            // the whole wait the user experiences, including the part where the
+            // frame is still queued on this machine's own relay. That queueing
+            // was eight minutes once (CB-56), and a spinner that only began when
+            // the frame finally went out would have shown nothing for the part
+            // that most needed explaining.
+            BeginWait();
+
             _ = client.OpenAsync(_remoteName);
         }
+
+        // --- the wait, while it is happening --------------------------------
+
+        // See IRemoteChatFetchWait. Set immediately before the fetch and cleared
+        // however it ends, including the failure paths, because a spinner left
+        // running after a transfer gave up is a worse lie than no spinner.
+        private DateTimeOffset? _waitingSince;
+
+        public DateTimeOffset? WaitingSince => _waitingSince;
+
+        public string WaitingFor => $"{_remoteName}'s conversation";
+
+        public event Action? WaitChanged;
+
+        private void BeginWait()
+        {
+            _waitingSince = DateTimeOffset.Now;
+            WaitChanged?.Invoke();
+        }
+
+        private void EndWait()
+        {
+            if (_waitingSince is null) return;
+
+            _waitingSince = null;
+            WaitChanged?.Invoke();
+        }
+
+        // How long it has been, in words, for the indicator above the turns.
+        //
+        // Pure and static so the wording is a unit test rather than a
+        // screenshot, the same arrangement FetchingNote is under.
+        //
+        // **Seconds all the way to a minute, then minutes and seconds.** The
+        // measured waits are 3–4 minutes, so a counter that only showed whole
+        // minutes would sit unchanged for sixty seconds at exactly the moment
+        // somebody is deciding whether it has hung — which is the entire failure
+        // this indicator exists to prevent.
+        internal static string WaitLabel(TimeSpan elapsed, string what)
+        {
+            if (elapsed < TimeSpan.Zero) elapsed = TimeSpan.Zero;
+
+            var when = elapsed.TotalSeconds < 60
+                ? $"{(int)elapsed.TotalSeconds}s"
+                : $"{(int)elapsed.TotalMinutes}m {elapsed.Seconds}s";
+
+            return $"Fetching {what} — {when}";
+        }
+
+        // The second line, which is the one that stops a normal wait reading as
+        // a fault. Fixed rather than counting down: an estimate that ran out
+        // while the transfer was still going would be the same broken promise
+        // as the "about a minute" this project has already had to correct once.
+        internal const string WaitHint = "these usually take three or four minutes";
 
         // Named for the same reason the refusals are: a line a user reads while
         // nothing appears to be happening has to say that something is.
@@ -237,6 +300,8 @@ namespace ClaudeBuddy
         private void OnDelivered(RemoteMirrorClient.MirrorRows rows)
         {
             if (!rows.Name.Equals(_remoteName, StringComparison.OrdinalIgnoreCase)) return;
+
+            EndWait();
 
             // Already parsed, on the machine that had the file.
             //
@@ -310,6 +375,8 @@ namespace ClaudeBuddy
         private void OnMirrorFailed(string name, string why)
         {
             if (!name.Equals(_remoteName, StringComparison.OrdinalIgnoreCase)) return;
+
+            EndWait();
 
             OnUi(() =>
             {
@@ -861,6 +928,12 @@ namespace ClaudeBuddy
         public void PanelClosed()
         {
             _panelOpen = false;
+
+            // Whatever was in flight is no longer being waited for by anybody.
+            // Reopening starts a fresh fetch (CloseAsync drops the feed), so a
+            // wait carried across the gap would be timing something that had
+            // already been abandoned.
+            EndWait();
 
             if (!_mirroring) return;
 

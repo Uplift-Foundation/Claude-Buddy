@@ -42,7 +42,7 @@
             HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
             CornerRadius="12" Padding="10"
             Background="#E0202024" BorderBrush="#80FFFFFF" BorderThickness="1.5">
-        <Grid RowDefinitions="Auto,*,Auto,Auto,Auto" RowSpacing="6">
+        <Grid RowDefinitions="Auto,Auto,*,Auto,Auto,Auto" RowSpacing="6">
 
             <!-- A contact card: portrait, then who and where stacked beside
                  it, then the actions. The name and the place used to be one
@@ -143,7 +143,7 @@
                  never pull focus out of it while a reply is streaming. That is
                  also what keeps the focus story a single point rather than a
                  scatter. -->
-            <ScrollViewer x:Name="Scroll" Grid.Row="1"
+            <ScrollViewer x:Name="Scroll" Grid.Row="2"
                           Focusable="False"
                           HorizontalScrollBarVisibility="Disabled"
                           VerticalScrollBarVisibility="Auto">
@@ -252,6 +252,35 @@
                 </ItemsControl>
             </ScrollViewer>
 
+            <!-- The wait, while it is happening.
+
+                 A row of its own rather than an overlay. Overlaying was tried
+                 first and is wrong: a Grid cell stacks its children, so the
+                 indicator sat on top of the very note explaining the wait and
+                 both became unreadable. Collapsed (IsVisible=False) the row has
+                 no height, so it costs nothing when there is no fetch, and the
+                 one reflow when it appears is the honest cost of showing it.
+
+                 Indeterminate on purpose. A window that fits one chunk is a
+                 single round trip with no intermediate signal, so a percentage
+                 would be invented — and an invented one parks at 99% and makes
+                 a healthy transfer look stuck. Elapsed time is the honest
+                 number, and the hint underneath is what stops three minutes
+                 reading as a fault. See CB-58. -->
+            <Border x:Name="FetchWaitBox" Grid.Row="1" IsVisible="False"
+                    Padding="10,7" CornerRadius="8"
+                    Background="#FF2C2C31"
+                    BorderBrush="#33FFFFFF" BorderThickness="1">
+                <StackPanel Spacing="6">
+                    <TextBlock x:Name="FetchWaitText" TextWrapping="Wrap"
+                               FontSize="11" Foreground="#EEFFFFFF" />
+                    <TextBlock x:Name="FetchWaitHint" TextWrapping="Wrap"
+                               FontSize="10" Foreground="#99FFFFFF" />
+                    <ProgressBar x:Name="FetchWaitBar" IsIndeterminate="True"
+                                 Height="3" MinWidth="0" />
+                </StackPanel>
+            </Border>
+
             <!-- A dialog the session has stopped on, almost always a permission
                  prompt. It sits between the transcript and the input because
                  that is what it is: the thing standing between what has been
@@ -268,7 +297,7 @@
                  is the one failure this feature must not have. When the screen
                  can't be parsed there are no options and only the terminal
                  button, which is the honest answer at that point. -->
-            <Border x:Name="PromptBox" Grid.Row="2" IsVisible="False"
+            <Border x:Name="PromptBox" Grid.Row="3" IsVisible="False"
                     CornerRadius="8" Padding="8,6"
                     Background="#26B8860B" BorderBrush="#80B8860B" BorderThickness="1">
                 <StackPanel Spacing="6">
@@ -318,7 +347,7 @@
                  window above or below the orb to stay on screen, so this
                  borrows machinery that is already there rather than teaching a
                  second control the same trick. -->
-            <Border x:Name="SlashBox" Grid.Row="3" IsVisible="False"
+            <Border x:Name="SlashBox" Grid.Row="4" IsVisible="False"
                     CornerRadius="8" Padding="4"
                     Background="#26FFFFFF" BorderBrush="#40FFFFFF" BorderThickness="1">
                 <ScrollViewer MaxHeight="150" Focusable="False"
@@ -344,7 +373,7 @@
                 </ScrollViewer>
             </Border>
 
-            <StackPanel Grid.Row="4" Spacing="6">
+            <StackPanel Grid.Row="5" Spacing="6">
                 <!-- Pictures pasted since the last send, waiting to go out
                      with whatever gets typed next. Hidden rather than
                      collapsed-to-nothing by an empty items source, so

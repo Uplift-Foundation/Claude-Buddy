@@ -382,6 +382,9 @@ namespace ClaudeBuddy
 
             if (_session is IRemoteChatPrompts prompts) prompts.PromptChanged -= OnPromptChanged;
 
+            if (_session is IRemoteChatFetchWait waited) waited.WaitChanged -= OnWaitChanged;
+            HideWait();
+
             // A remote session can take a turn back — its "working…" line comes
             // off once the answer lands. Subscribed on the concrete type rather
             // than through an interface: nothing else in this app has ever needed
@@ -456,6 +459,19 @@ namespace ClaudeBuddy
             }
 
             if (session is IRemoteChatPrompts prompts) prompts.PromptChanged += OnPromptChanged;
+
+            // Only the mirror has a wait worth drawing; everything else answers
+            // fast enough that a spinner would flicker. Optional for exactly
+            // that reason — see IRemoteChatFetchWait.
+            if (session is IRemoteChatFetchWait waiting)
+            {
+                waiting.WaitChanged += OnWaitChanged;
+                ShowWait(waiting);
+            }
+            else
+            {
+                HideWait();
+            }
 
             // "Zara — wtvamp" is built as name plus place, so it splits back
             // into the two lines the header now has. A name with no place (an
@@ -1910,6 +1926,67 @@ namespace ClaudeBuddy
         }
 
         private void OnPromptChanged() => ApplyPrompt();
+
+        // --- the wait, while it is happening --------------------------------
+
+        // Ticks the elapsed figure while a fetch is in flight.
+        //
+        // A timer rather than a binding because the thing that changes is the
+        // clock, not the session: nothing raises an event once a second, and
+        // asking the session to would put a timer in the transport instead of
+        // in the one place that draws it.
+        private DispatcherTimer? _waitTick;
+
+        private void OnWaitChanged()
+        {
+            if (_session is IRemoteChatFetchWait waiting) ShowWait(waiting);
+            else HideWait();
+        }
+
+        private void ShowWait(IRemoteChatFetchWait waiting)
+        {
+            if (waiting.WaitingSince is not { } since)
+            {
+                HideWait();
+                return;
+            }
+
+            FetchWaitBox.IsVisible = true;
+            FetchWaitHint.Text = RemoteControlChatSession.WaitHint;
+
+            void Paint() => FetchWaitText.Text = RemoteControlChatSession.WaitLabel(
+                DateTimeOffset.Now - since, waiting.WaitingFor);
+
+            Paint();
+
+            // A second, because that is the resolution of what it says. Half of
+            // one would redraw twice for every change and a longer one would
+            // make a counter that is supposed to prove liveness look stopped.
+            _waitTick ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _waitTick.Tick -= OnWaitTick;
+            _waitTick.Tick += OnWaitTick;
+            _waitTick.Start();
+        }
+
+        private void OnWaitTick(object? sender, EventArgs e)
+        {
+            if (_session is IRemoteChatFetchWait waiting
+                && waiting.WaitingSince is { } since)
+            {
+                FetchWaitText.Text = RemoteControlChatSession.WaitLabel(
+                    DateTimeOffset.Now - since, waiting.WaitingFor);
+                return;
+            }
+
+            HideWait();
+        }
+
+        private void HideWait()
+        {
+            _waitTick?.Stop();
+            FetchWaitBox.IsVisible = false;
+        }
+
 
         // A dialog the session has stopped on, or nothing.
         //
