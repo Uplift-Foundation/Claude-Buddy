@@ -228,7 +228,7 @@ namespace ClaudeBuddy
                 }
                 catch (Exception ex)
                 {
-                    MirrorLog.Say("peer-dial-failed",
+                    MirrorLog.SayOnce($"peer-dial-failed:{peer.Machine}",
                         $"to={peer.Machine} {ex.GetType().Name}: {ex.Message}");
                 }
             }

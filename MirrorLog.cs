@@ -70,6 +70,56 @@ namespace ClaudeBuddy
         internal static string Line(DateTime whenUtc, string what, string detail) =>
             $"{whenUtc:HH:mm:ss.fff} {what} {detail}".TrimEnd();
 
+        // What each repeating line last said, and how many times it has said it.
+        private static readonly Dictionary<string, (string Detail, int Since)> Repeats = new();
+
+        // How many identical occurrences to swallow before saying it again.
+        //
+        // Not silence: a fault that is still happening an hour later should still
+        // be visible, and a log that goes quiet reads as a fault that stopped.
+        // Thirty ten-second ticks is five minutes, which is often enough to see
+        // it is ongoing and rare enough not to bury anything.
+        internal const int RepeatEvery = 30;
+
+        // Whether a repeating line should be written this time.
+        //
+        // **The mini made this necessary within a minute of being deployed.** It
+        // cannot dial without a Local Network grant it has no way to obtain, so
+        // it logged the identical connect failure every ten seconds — about
+        // 8,600 lines a day, into a log with a 1MB ceiling. The failure was real
+        // and worth knowing once; what it actually did was evict the history
+        // that made the log worth reading, which is the opposite of what the
+        // log is for.
+        //
+        // Pure, and separate from the writing, so the rule is a test rather than
+        // a counter buried in an IO path. This repository has fixed this exact
+        // shape before — "Say a failure once, not once per attempt".
+        internal static bool WorthSaying(string? lastDetail, int since, string detail) =>
+            lastDetail is null || lastDetail != detail || since >= RepeatEvery;
+
+        // Says something that may repeat forever, without letting it fill the
+        // log. The first occurrence always lands; identical ones after it are
+        // counted and restated every RepeatEvery.
+        internal static void SayOnce(string what, string detail = "")
+        {
+            bool worth;
+            int since;
+
+            lock (Gate)
+            {
+                Repeats.TryGetValue(what, out var last);
+
+                worth = WorthSaying(last.Detail, last.Since, detail);
+                since = last.Since;
+
+                Repeats[what] = worth ? (detail, 0) : (detail, last.Since + 1);
+            }
+
+            if (!worth) return;
+
+            Say(what, since >= RepeatEvery ? $"{detail} (still, x{since})" : detail);
+        }
+
         [ExcludeFromCodeCoverage]
         internal static void Say(string what, string detail = "")
         {
