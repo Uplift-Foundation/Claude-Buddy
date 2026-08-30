@@ -1085,13 +1085,20 @@ connection rather than through the system trust store. `docs/openclaw-findings.m
 records what was measured against a real gateway, including several places where
 the published protocol documentation disagrees with the running software.
 
-## Sessions on other machines (macOS, off by default)
+## Sessions on other machines (off by default)
 
 If you run Claude Code on more than one machine — a desktop at home, a server,
 a laptop you left on — Claude Buddy can show those sessions as orbs too, and let
-you send them instructions from anywhere. There is no port to open, no tunnel,
-and nothing to install on the other machine: it works from a hotel or a diner
-exactly as it does from your desk.
+you send them instructions.
+
+There are two ways it can reach them, and it prefers the second when it is
+available. **Through Remote Control** (macOS only) there is no port to open, no
+tunnel and nothing to install on the other machine, and it works from a hotel or
+a diner exactly as it does from your desk — at the cost of your Claude usage and
+of transcripts that take minutes to arrive. **Directly** (both platforms) is
+instant and free, and needs both machines on the same network. The rest of this
+section covers Remote Control; [connecting directly](#connecting-directly-instead-both-platforms-off-by-default)
+is at the end of it.
 
 The requirement is that the session on the other machine has **Remote Control
 on** (`claude --remote-control`, or `/remote-control` in a running session).
@@ -1203,6 +1210,63 @@ one.
 machines before any of this was built — including what the relay does and does
 not expose, and the two things a stronger test caught that a weaker one had
 passed.
+
+### Connecting directly instead (both platforms, off by default)
+
+Everything above goes through Anthropic's Remote Control cloud, carried by a
+hidden Claude Code session that Claude Buddy runs as a relay. That works from a
+hotel, and it has two costs that are hard to miss once you have watched it: it
+uses your Claude account, and a transcript arrives in **minutes** — the relay's
+*model* retypes the transcript by hand, about four minutes per six kilobytes.
+
+When both machines are on the same network, they can talk to each other
+directly instead. Turn on **"Connect directly to other machines"** in Settings →
+Other machines, on both. Transcripts then arrive in a moment, nothing signs into
+your account, and nothing counts against your usage.
+
+Machines find each other by announcing themselves on the local network, so
+paired ones reconnect on their own whenever both are up. Two things have to
+happen once:
+
+1. **Pair them.** On one machine, press **Show a code**. On the other, find that
+   machine in the list and type the code beside it. Both then remember each
+   other's certificate, and the code is good for five minutes and one pairing.
+2. **Say yes to the permission.** The first time it listens, macOS asks for
+   Local Network access and Windows raises a firewall prompt. Both are the
+   feature working; a "no" here looks exactly like the network being broken.
+
+Two situations need a different route in, and both have one.
+
+**A machine with no screen** — a Mac mini serving its sessions unattended — has
+no button to press. Write the code into a file instead, and it opens the same
+window for the same five minutes:
+
+```bash
+ssh your-mini
+echo 123456 > "$HOME/Library/Application Support/ClaudeBuddy/pair-open"
+```
+
+Then pair from the machine that does have a screen, typing that code. The file
+is read once and deleted, so a forgotten one is not a standing invitation.
+
+**A machine this one cannot see** — on another subnet, behind a VPN, or on a
+network that does not carry the announcements — is added by hand. Use **Add a
+machine by address** with its address (and `:port` if you changed it) and the
+code it is showing. Its name fills itself in as soon as it answers, because the
+machine on the other end is the one that knows it.
+
+Both machines still need Claude Buddy running, but the far one no longer needs
+Remote Control on, or a Claude account at all: this path never asks a model for
+anything.
+
+**If a machine never appears**, the likeliest cause on macOS is that Local
+Network access was refused or lost. It is tied to the app's code signature and
+**does not survive an upgrade**, and the symptom is a connection error that
+reads like an ordinary network fault. `ping`, `nc`, `curl` and `ssh` are all
+Apple-signed and exempt from the gate, so every obvious check will tell you the
+machine is perfectly reachable while Claude Buddy cannot open a socket to it.
+Check System Settings → Privacy & Security → Local Network. `docs/` and CB-38
+have the full diagnosis.
 
 ## 1. Install it
 
