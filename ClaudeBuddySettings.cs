@@ -94,7 +94,8 @@ namespace ClaudeBuddy
             "claudeCodeEnabled", "codexEnabled",
             "clickAction", "doubleClickAction", "tripleClickAction",
             "remoteControlEnabled", "remoteControlProfileDir", "remoteControlProfileDirs",
-            "remoteControlIdleMinutes", "remoteControlServeOnLaunch"
+            "remoteControlIdleMinutes", "remoteControlServeOnLaunch",
+            "peerLinkEnabled", "peerLinkPort"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -356,6 +357,27 @@ namespace ClaudeBuddy
             // Claude Code session of its own, which costs the user's quota.
             // See RemoteControlBridge for why a bridge is the only way in.
             public bool RemoteControlEnabled { get; set; }
+
+            // Talking directly to another machine running Claude Buddy, rather
+            // than through a hidden Claude Code session relaying text.
+            //
+            // Off by default, and that is not timidity: switching it on makes
+            // this app listen on a socket for the first time, which both
+            // platforms gate — macOS behind Local Network consent, Windows
+            // behind the firewall. A feature that quietly opened a port on first
+            // launch would be a worse neighbour than one the user turns on.
+            //
+            // Unlike RemoteControlEnabled this costs nothing to leave on: there
+            // is no model in the path and no quota to spend, which is the whole
+            // point of it.
+            public bool PeerLinkEnabled { get; set; }
+
+            // Which port to listen on. Zero means "let the operating system
+            // choose", which is the sensible default because discovery
+            // announces whatever was chosen — a fixed port only matters to
+            // somebody adding a machine by address through a firewall they
+            // control.
+            public int PeerLinkPort { get; set; }
 
             // Which CLI config directory — and therefore which Anthropic
             // account — the bridge runs under. A home-relative name, the same
@@ -789,6 +811,28 @@ namespace ClaudeBuddy
             }
         }
 
+        public static bool PeerLinkEnabled
+        {
+            get { Load(); lock (Gate) return _model.PeerLinkEnabled; }
+            set { Load(); lock (Gate) _model.PeerLinkEnabled = value; Save(); }
+        }
+
+        public static int PeerLinkPort
+        {
+            get { Load(); lock (Gate) return _model.PeerLinkPort; }
+
+            // Clamped rather than trusted. A port outside the range cannot be
+            // bound, and a settings file edited by hand is the ordinary way one
+            // arrives — the headless case in this project is administered
+            // exactly that way.
+            set
+            {
+                Load();
+                lock (Gate) _model.PeerLinkPort = value is < 0 or > 65535 ? 0 : value;
+                Save();
+            }
+        }
+
         public static bool RemoteControlServeOnLaunch
         {
             get { Load(); lock (Gate) return _model.RemoteControlServeOnLaunch; }
@@ -1183,6 +1227,8 @@ namespace ClaudeBuddy
                             root["remoteControlIdleMinutes"]?.GetValue<int>() ?? DefaultRemoteControlIdle,
                         RemoteControlServeOnLaunch =
                             root["remoteControlServeOnLaunch"]?.GetValue<bool>() ?? false,
+                        PeerLinkEnabled = root["peerLinkEnabled"]?.GetValue<bool>() ?? false,
+                        PeerLinkPort = root["peerLinkPort"]?.GetValue<int>() ?? 0,
                         ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
@@ -1558,6 +1604,8 @@ namespace ClaudeBuddy
                         ["openclawCronMode"] = OrbClusters.Name(_model.OpenClawCronMode),
                         ["openclawCronShape"] = _model.OpenClawCronShape,
                         ["remoteControlEnabled"] = _model.RemoteControlEnabled,
+                        ["peerLinkEnabled"] = _model.PeerLinkEnabled,
+                        ["peerLinkPort"] = _model.PeerLinkPort,
                         // Null when never chosen rather than a copy of the
                         // current default, the same as speakVoice below — so
                         // changing which profile ships as the default still
