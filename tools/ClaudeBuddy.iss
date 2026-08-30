@@ -121,9 +121,32 @@ Name: "{group}\Wire up agent hooks"; \
 Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startup
 
 [Run]
+; Let the peer link listen without the first experience being a silent block.
+;
+; Claude Buddy connects directly to your other machines running it, which means
+; listening on a port — the first time this app has ever done so. Windows
+; Firewall would otherwise either drop the packets with no visible reason or
+; raise a prompt behind a menu-bar-only app that has no window to attach it to.
+; Neither reads as "the firewall did this"; both read as "the other machine
+; isn't there", which is the same class of confusion NSLocalNetworkUsageDescription
+; heads off on macOS.
+;
+; Private profile only: a home or work network, never a public one. runhidden so
+; an install does not flash a console. Failure is deliberately not fatal — the
+; app still runs, and a user who declines or lacks the rights gets a link that
+; cannot reach out rather than an install that stops.
+Filename: "{sys}\netsh.exe"; \
+  Parameters: "advfirewall firewall add rule name=""{#AppName} peer link"" dir=in action=allow program=""{app}\{#AppExe}"" enable=yes profile=private"; \
+  Flags: runhidden skipifdoesntexist; StatusMsg: "Allowing Claude Buddy through the firewall..."
 Filename: "{app}\{#AppExe}"; Description: "Start {#AppName} now"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+; The firewall rule goes when the app does. Leaving it behind would name a
+; program that is no longer installed, which is exactly the kind of debris a
+; user cannot interpret later.
+Filename: "{sys}\netsh.exe"; \
+  Parameters: "advfirewall firewall delete rule name=""{#AppName} peer link"""; \
+  Flags: runhidden skipifdoesntexist; RunOnceId: "removefirewallrule"
 ; Take the hook entries back out of every CLI they were wired into, or the CLI
 ; keeps invoking a script that is about to be deleted and logs a hook error on
 ; every event. runhidden because an uninstall should not flash a console window.

@@ -102,14 +102,6 @@ public class PeerMirrorEndToEndTests : IDisposable
     private static string AssistantRow(string uuid, string text) =>
         $"{{\"type\":\"assistant\",\"uuid\":\"{uuid}\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{text}\"}}]}}}}";
 
-    private static int FreePort()
-    {
-        var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        return port;
-    }
 
     [Fact]
     public async Task ATranscriptCrossesTheLinkAndArrivesAsTurns()
@@ -127,8 +119,8 @@ public class PeerMirrorEndToEndTests : IDisposable
         // situation as two machines that have paired.
         PeerIdentity.Remember(new PeerIdentity.Peer(PeerIdentity.OwnPin(), "far"));
 
-        var port = FreePort();
-        far.Host.Link.Listen(port);
+        far.Host.Link.Listen(0);
+        var port = far.Host.Link.BoundPort;
 
         Assert.True(
             await near.Host.Link.ConnectAsync("far", "127.0.0.1", port,

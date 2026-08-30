@@ -198,6 +198,24 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     </array>
     <key>NSMicrophoneUsageDescription</key>
     <string>Claude Buddy uses the microphone to transcribe what you say, entirely on this machine, when you click the mic that appears on hovering an orb — only after you turn voice input on in Settings.</string>
+
+    <!-- Required before the app may open a socket to, or listen for, another
+         machine on the local network. Without it the peer link fails as
+         EHOSTUNREACH, which reads as an ordinary network fault and sends
+         everybody to check the wrong thing — see CB-38, where exactly that cost
+         hours against the OpenClaw gateway.
+
+         Two things about this permission are worth remembering, because both
+         have already bitten:
+
+           * The grant is tied to the app's code identity. Replacing
+             /Applications/Claude Buddy.app gives the bundle a new CDHash,
+             macOS re-evaluates, and the grant DOES NOT carry over. It breaks on
+             every upgrade.
+           * Nothing prompts loudly enough to notice, because LSUIElement is
+             true: no Dock icon and no window. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Claude Buddy connects directly to your other machines running Claude Buddy, so you can see and reply to sessions on them. It talks only to machines you have paired, over an encrypted connection, and nothing leaves your network.</string>
 </dict>
 </plist>
 PLIST
