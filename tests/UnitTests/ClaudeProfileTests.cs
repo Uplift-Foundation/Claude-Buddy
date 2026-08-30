@@ -12,7 +12,14 @@ namespace ClaudeBuddy.Tests;
 // `$HOME/.claude/.claude.json` when told and `$HOME/.claude.json` when not.
 public class ClaudeProfileTests
 {
-    private const string Home = "/Users/someone";
+    // Rooted for the platform the test is running on, because the answers are
+    // resolved paths: Path.GetFullPath("/Users/someone") on Windows is not
+    // "/Users/someone", it is that path on the current drive. A Unix-shaped
+    // constant here passed on macOS and failed on the Windows CI leg — the
+    // exact "passes on the machine it was written on" shape CLAUDE.md warns
+    // about, caught by the leg that exists to catch it.
+    private static readonly string Home =
+        OperatingSystem.IsWindows() ? @"C:\Users\someone" : "/Users/someone";
 
     [Fact]
     public void Names_no_context_for_the_default_account()
