@@ -843,4 +843,35 @@ public class RemoteControlBridgeRoutingTests : IDisposable
         // settled as unavailable and the panel says there is no live view.
         Assert.True(entry.HasTranscript);
     }
+
+    // --- an attribute this app never wrote -------------------------------------
+
+    // A real reply from a live relay, copied verbatim from a probe session's
+    // transcript. It carries `hop-chain`, an attribute Claude Code added and
+    // this app neither writes nor reads.
+    //
+    // Worth pinning because the parser is a regex over a format nobody here
+    // controls, and the failure mode of an unknown attribute is not an error —
+    // it is a message that silently stops arriving. This is also the shape the
+    // attribute actually survives in: the `user` row Claude Code writes when it
+    // delivers a message normally has hop-chain stripped, so only a message
+    // absorbed mid-turn ever presents it to this code.
+    private const string RealHopChainPrompt =
+        "<cross-session-message from=\"bridge:session_01XkLEcdXztiDFW7LdpECzte\" hop-chain=\"009be9b8f8643b328c2352dd\" from-name=\"job-hunter-mac-mini\" from-mode=\"prompting\">\nRunning a /daily-run job-application campaign toward a 40-application goal (Director/VP/CTO-level, technical only) \u2014 currently on batch 2, working through queue rows and discovery.\n</cross-session-message>";
+
+    [Fact]
+    public void AnUnknownAttributeOnTheTagDoesNotStopTheMessageArriving()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        var seen = Collect(bridge, Absorbed("a1", RealHopChainPrompt));
+
+        var only = Assert.Single(seen);
+        Assert.Equal("job-hunter-mac-mini", only.FromName);
+        Assert.Contains("40-application goal", only.Body);
+
+        // The unknown attribute is not mistaken for part of the message.
+        Assert.DoesNotContain("hop-chain", only.Body);
+        Assert.DoesNotContain("cross-session-message", only.Body);
+    }
 }
