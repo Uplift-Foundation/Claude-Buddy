@@ -53,6 +53,17 @@ namespace ClaudeBuddy
 
         private readonly Speaker _soleSpeaker = new();
 
+        // How much bigger or smaller than shipped this panel draws chat text.
+        //
+        // Boxed and shared with every TurnView for the same reason Speaker
+        // above is: a bubble built before the last Cmd+ has to end up the same
+        // size as one built after it. Copied into each row, only the rows built
+        // since the keystroke would be right, and a transcript would fan out
+        // into as many sizes as the user had pressed the key.
+        private sealed class TextScale { public double Value = ChatZoom.Default; }
+
+        private readonly TextScale _textScale = new();
+
         // The colour a reply is drawn in when the turn itself doesn't name one.
         //
         // A room's turns carry their own, because several agents are talking. In
@@ -184,6 +195,18 @@ namespace ClaudeBuddy
             AddHandler(KeyDownEvent, OnCopyKeyDown, RoutingStrategies.Tunnel);
 
             KeyDown += OnPanelKeyDown;
+
+            // Tunnel, and on the window rather than on the composer. The
+            // composer holds focus almost the whole time this panel is open, so
+            // a bubbling handler would be asking the TextBox's own key handling
+            // for permission to run — and the one gesture that has to work
+            // whatever is focused is the one that makes the text readable.
+            AddHandler(KeyDownEvent, OnZoomKeyDown, RoutingStrategies.Tunnel);
+
+            // The size is a setting, so a panel opens at whatever the last one
+            // was left at. Done here rather than in Bind because it is about
+            // the window, not about which session is in it.
+            ApplyTextScale();
 
             Opened += (_, _) =>
             {
@@ -473,7 +496,7 @@ namespace ClaudeBuddy
             OnStateChanged(session.State);
 
             _turns.Clear();
-            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt));
+            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt, _textScale));
 
             HideSlashSuggestions();
 
@@ -1604,6 +1627,59 @@ namespace ClaudeBuddy
             public string Description => Command.Description;
         }
 
+        // Cmd+= / Cmd+- / Cmd+0, Ctrl on Windows — see ChatZoom, which owns
+        // both the key mapping and the ladder of sizes.
+        private void OnZoomKeyDown(object? sender, KeyEventArgs e)
+        {
+            var command = ChatZoom.Gesture(e.Key, e.KeyModifiers);
+            if (command == ChatZoom.Command.None) return;
+
+            // Handled even when the size does not change — at either end of the
+            // ladder the gesture was still understood, and letting it travel on
+            // would put a "0" in the composer for someone pressing Cmd+0 twice.
+            e.Handled = true;
+
+            var next = ChatZoom.Apply(command, ClaudeBuddySettings.ChatTextScale);
+            if (next.Equals(_textScale.Value)) return;
+
+            ClaudeBuddySettings.ChatTextScale = next;
+            ApplyTextScale();
+        }
+
+        // Pushes the saved scale into everything that draws chat text. Called
+        // when the panel is built, after a zoom keystroke, and from the
+        // settings slider through ReapplyTextScale below.
+        private void ApplyTextScale()
+        {
+            var scale = ClaudeBuddySettings.ChatTextScale;
+
+            _textScale.Value = scale;
+
+            // The composer is chat text too — you read back what you typed. Its
+            // heights go with it, or a doubled font size would be drawn into a
+            // box still sized for one line of the old one.
+            Input.FontSize = 11.5 * scale;
+            Input.MinHeight = 26 * scale;
+            Input.MaxHeight = 66 * scale;
+
+            // The permission dialog sits between the transcript and the
+            // composer and is the most important text in the window when it is
+            // there at all — it is the thing being agreed to. PromptOptions
+            // carries the size for its items, which have no handle of their own
+            // (see the template's comment).
+            PromptTitle.FontSize = 11 * scale;
+            PromptOptions.FontSize = 11 * scale;
+            PromptElsewhere.FontSize = 10.5 * scale;
+
+            foreach (var turn in _turns) turn.Rescaled();
+        }
+
+        // The settings slider changes the same number this window's keyboard
+        // does, so an open panel has to hear about it. Null-safe and
+        // visibility-blind on purpose: a panel that exists but is hidden still
+        // holds rows that will be shown again without being rebuilt.
+        internal static void ReapplyTextScale() => _instance?.ApplyTextScale();
+
         private void OnPanelKeyDown(object? sender, KeyEventArgs e)
         {
             var isClose = e.Key == Key.Escape
@@ -1757,7 +1833,7 @@ namespace ClaudeBuddy
             // start them downloading again.
             for (var i = 0; i < count && i < _session.History.Count; i++)
             {
-                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble, _soleSpeaker, Adopt));
+                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble, _soleSpeaker, Adopt, _textScale));
             }
         }
 
@@ -1780,7 +1856,7 @@ namespace ClaudeBuddy
             if (_session is null) return;
 
             _turns.Clear();
-            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt));
+            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt, _textScale));
 
             // Re-read rather than left at what Bind found.
             //
@@ -1801,7 +1877,7 @@ namespace ClaudeBuddy
 
         private void OnTurnAdded(ChatTurn turn)
         {
-            _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt));
+            _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt, _textScale));
 
             // Your own turn always brings the view with it; everything else
             // respects where you were reading.
@@ -1974,6 +2050,7 @@ namespace ClaudeBuddy
             private readonly Speaker? _soleSpeaker;
             private readonly Color? _defaultBubble;
             private readonly Action<SelectableTextBlock> _adopt;
+            private readonly TextScale _scale;
 
             // soleSpeaker is who is talking when the transcript does not say.
             // A room stamps every turn with its speaker because there are
@@ -1986,12 +2063,13 @@ namespace ClaudeBuddy
             // bubble. Passed in rather than reached for through the singleton,
             // so a TurnView built by a test is a TurnView and not half a window.
             public TurnView(ChatTurn turn, Color? defaultBubble, Speaker? soleSpeaker,
-                Action<SelectableTextBlock> adopt)
+                Action<SelectableTextBlock> adopt, TextScale scale)
             {
                 _turn = turn;
                 _defaultBubble = defaultBubble;
                 _soleSpeaker = soleSpeaker;
                 _adopt = adopt;
+                _scale = scale;
 
                 turn.PropertyChanged += (_, e) =>
                 {
@@ -2120,7 +2198,7 @@ namespace ClaudeBuddy
                             CornerRadius = new CornerRadius(4),
                             Padding = new Thickness(6, 4),
                             Margin = new Thickness(0, 1),
-                            Child = Selectable(block.Text, Mono, Size - 1, CodeInk)
+                            Child = Selectable(block.Text, Mono, Size - Points(1), CodeInk)
                         };
 
                     case ChatMarkdown.MdKind.Heading:
@@ -2130,7 +2208,7 @@ namespace ClaudeBuddy
 
                         // Only two sizes. Six levels of heading inside a bubble
                         // this size would be a distinction nobody could see.
-                        heading.FontSize = block.Depth <= 2 ? Size + 1 : Size;
+                        heading.FontSize = block.Depth <= 2 ? Size + Points(1) : Size;
                         heading.Margin = new Thickness(0, 2, 0, 0);
                         return heading;
                     }
@@ -2156,7 +2234,7 @@ namespace ClaudeBuddy
                         var row = new Grid
                         {
                             ColumnDefinitions = new ColumnDefinitions("Auto,*"),
-                            Margin = new Thickness(block.Depth * 10, 0, 0, 0)
+                            Margin = new Thickness(Points(block.Depth * 10), 0, 0, 0)
                         };
 
                         var marker = Line(block.Marker);
@@ -2217,7 +2295,7 @@ namespace ClaudeBuddy
                         // told apart by face and colour rather than by a chip.
                         case ChatMarkdown.MdStyle.Code:
                             run.FontFamily = Mono;
-                            run.FontSize = Size - 0.5;
+                            run.FontSize = Size - Points(0.5);
                             run.Foreground = CodeInk;
                             break;
 
@@ -2525,7 +2603,57 @@ namespace ClaudeBuddy
             // read as a note about the conversation, not one side of it.
             public double MaxBubbleWidth => Math.Max(140, AvailableWidth * (IsSystem ? 0.95 : 0.8));
 
-            public double Size => IsSystem ? 10 : 11.5;
+            // Every size in a bubble, multiplied. Four different numbers on
+            // purpose — a system note is quieter than a message, a name is
+            // quieter than what it said, a timestamp quieter still — and the
+            // multiplier keeps that hierarchy instead of flattening it, which
+            // is what a single "chat font size" setting would have done.
+            private double Scale => _scale.Value;
+
+            public double Size => (IsSystem ? 10 : 11.5) * Scale;
+
+            // A measurement written in shipped points, in the size it should be
+            // at the current scale.
+            //
+            // The differences inside a bubble are what make it readable — a
+            // heading a point above its prose, code a point below it, a nested
+            // list indented from its parent. Left as raw constants those gaps
+            // stay the same absolute size while everything around them grows,
+            // so the hierarchy quietly flattens exactly when someone has said
+            // they are having trouble reading it. Caught by a test asserting
+            // that every part of a turn grows by the same factor.
+            private double Points(double shipped) => shipped * Scale;
+
+            public double SpeakerNameSize => 9.5 * Scale;
+
+            public double TimeSize => 8.5 * Scale;
+
+            // The chip grows with the name beside it. Left at 16pt it would sit
+            // next to 20pt text looking like a bullet point, and the initials
+            // inside it would spill out of their own circle.
+            public double ChipSize => 16 * Scale;
+
+            public CornerRadius ChipCorners => new(8 * Scale);
+
+            public double ChipTextSize => 8 * Scale;
+
+            // Called when the scale changes under a row that already exists.
+            // The body is rendered Markdown with the sizes baked into each
+            // TextBlock, so it is thrown away and rebuilt rather than restyled
+            // — the same thing a streaming turn's text change already does.
+            public void Rescaled()
+            {
+                _body = null;
+
+                foreach (var name in new[]
+                         {
+                             nameof(Body), nameof(Size), nameof(SpeakerNameSize), nameof(TimeSize),
+                             nameof(ChipSize), nameof(ChipCorners), nameof(ChipTextSize)
+                         })
+                {
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+                }
+            }
 
             public FontStyle Style => IsSystem ? FontStyle.Italic : FontStyle.Normal;
 

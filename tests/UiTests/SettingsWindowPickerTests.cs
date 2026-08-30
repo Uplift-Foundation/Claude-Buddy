@@ -1,6 +1,7 @@
 using System.Reflection;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.LogicalTree;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -217,5 +218,63 @@ public class SettingsWindowPickerTests
 
         Assert.True(slider.IsSnapToTickEnabled);
         Assert.True(slider.TickFrequency > 0);
+    }
+
+    // --- chat text size ---
+
+    // The slider moves over rungs of ChatZoom's ladder, not over the
+    // multipliers themselves — an even tick over an uneven ladder could land
+    // between two rungs, and the keyboard and the slider would then disagree
+    // about what one step bigger means.
+    [AvaloniaFact]
+    public void TheTextSizeSliderCoversTheWholeLadderOneRungPerTick()
+    {
+        var window = NewWindow();
+        var slider = (Slider)window.TextSizeSlider();
+
+        Assert.Equal(0, slider.Minimum, 3);
+        Assert.Equal(ChatZoom.Steps.Length - 1, slider.Maximum, 3);
+        Assert.True(slider.IsSnapToTickEnabled);
+        Assert.Equal(1, slider.TickFrequency, 3);
+    }
+
+    [AvaloniaFact]
+    public void TheTextSizeSliderOpensOnTheSavedSizeAndWritesTheRungItIsDraggedTo()
+    {
+        ClaudeBuddySettings.ChatTextScale = 1.3;
+
+        var window = NewWindow();
+        var slider = (Slider)window.TextSizeSlider();
+
+        Assert.Equal(ChatZoom.IndexOf(1.3), slider.Value, 3);
+
+        // Every rung, so a builder that wrote the index rather than the
+        // multiplier — or read the ladder backwards — cannot pass.
+        for (var i = 0; i < ChatZoom.Steps.Length; i++)
+        {
+            slider.Value = i;
+            Assert.Equal(ChatZoom.Steps[i], ClaudeBuddySettings.ChatTextScale, 3);
+        }
+
+        ClaudeBuddySettings.ChatTextScale = ChatZoom.Default;
+    }
+
+    // The row says which keys do the same thing, and says the right ones for
+    // the platform it is drawn on — a macOS user told to press Ctrl+ would
+    // conclude the feature does not work.
+    [AvaloniaFact]
+    public void TheTextSizeRowNamesThisPlatformsShortcut()
+    {
+        var window = NewWindow();
+        // The logical tree, not the visual one: these rows are built but never
+        // attached to a window here, so no template has been applied and the
+        // visual tree is empty. Row() adds its label and its help text to the
+        // grid directly, which is what the logical tree holds.
+        var help = string.Join(" ", window.ChatRows()
+            .SelectMany(r => r.GetLogicalDescendants().OfType<TextBlock>())
+            .Select(tb => tb.Text ?? ""));
+
+        Assert.Contains(OperatingSystem.IsMacOS() ? "Cmd+" : "Ctrl+", help);
+        Assert.DoesNotContain(OperatingSystem.IsMacOS() ? "Ctrl+" : "Cmd+", help);
     }
 }

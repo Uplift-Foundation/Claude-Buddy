@@ -412,4 +412,56 @@ public class ChatPanelScreenshots : IDisposable
                 : $"Message {i + 1} of {what}, somewhere above the fold.",
             IsComplete = true,
         }).ToList();
+
+    // The panel after Cmd+ has been pressed a few times.
+    //
+    // The tests assert the numbers; this is the half a number cannot answer.
+    // Whether an enlarged conversation is still a conversation — whether the
+    // bubbles still read as two people talking, whether a heading is still a
+    // heading beside its prose, whether a wrapped code block at 1.75x has
+    // anything left of its line — is a judgement, and it is made by looking.
+    // Both runners capture it, so a font that falls back differently on
+    // Windows shows up here rather than on someone's machine.
+    [AvaloniaFact]
+    public void AnEnlargedPanelIsStillAReadableConversation()
+    {
+        var was = ClaudeBuddySettings.ChatTextScale;
+
+        try
+        {
+            ClaudeBuddySettings.ChatTextScale = 1.75;
+
+            var fake = NewFake(new[]
+            {
+                new ChatTurn { Role = ChatRole.User, Text = "why is the build red?" },
+                new ChatTurn
+                {
+                    Role = ChatRole.Assistant,
+                    Text = "## One test\n\n`ArrangementSweep` fails at the widest spacing:\n\n"
+                         + "```\nExpected: 1.15\nActual:   1.0\n```\n\n"
+                         + "- the ladder is uneven\n- the tick was not",
+                    IsComplete = true
+                },
+                new ChatTurn { Role = ChatRole.System, Text = "Session went idle." },
+            }, displayName: "Build");
+
+            ChatPanel.OpenFor(NewOrb(), fake);
+
+            // The panel is a singleton and may already have been built by an
+            // earlier capture, in which case its constructor's ApplyTextScale
+            // ran against the old size. This is the same hook the settings
+            // slider uses.
+            ChatPanel.ReapplyTextScale();
+            ScreenshotHelper.Flush();
+            ScreenshotHelper.CaptureAlreadyShown(
+                ChatPanelTestAccess.Instance!, "chat-panel-text-enlarged.png");
+        }
+        finally
+        {
+            // Every other capture in this assembly draws at the shipped size,
+            // and the suite shares one process.
+            ClaudeBuddySettings.ChatTextScale = was;
+            ChatPanel.ReapplyTextScale();
+        }
+    }
 }
