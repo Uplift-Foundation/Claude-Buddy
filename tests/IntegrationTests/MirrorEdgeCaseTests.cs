@@ -619,6 +619,38 @@ public class MirrorEdgeCaseTests : IDisposable
         Assert.True(await _client.OpenAsync(Name));
     }
 
+    // A range fetch that names no upper bound means "to the end of the file".
+    //
+    // Reachable only by building the frame by hand: LoadOlderAsync always knows
+    // where its page stops, so the client never omits `to`. It is still part of
+    // the protocol another machine's Buddy speaks, and a version of it that
+    // guessed zero would answer an empty window rather than the tail.
+    [Fact]
+    public async Task ARangeFetchWithNoEndReadsToTheEndOfTheFile()
+    {
+        AddSession(rows: 20);
+        await Handshake();
+
+        _windows.Clear();
+
+        var frame = MirrorProtocol.TryParseFrame(MirrorProtocol.BuildFrame(
+            MirrorProtocol.Fetch, "range-1",
+            new Dictionary<string, string>
+            {
+                ["n"] = MirrorProtocol.Encode(Name),
+                ["w"] = "range",
+                ["from"] = "0"
+            }));
+
+        await _server.HandleAsync(NearRelay, frame!);
+
+        // The whole conversation came back, which is what "no end" has to mean:
+        // an empty window would be the same answer as a broken one.
+        var sent = string.Join("\n", _toClient);
+        Assert.Contains("t=CHUNK", sent);
+        Assert.Contains("range-1", sent);
+    }
+
     // The real wiring, constructed. Nothing here runs a process — the point is
     // that every delegate is present and the two that read settings read the
     // right ones, since a null in this record would be a crash the first time
