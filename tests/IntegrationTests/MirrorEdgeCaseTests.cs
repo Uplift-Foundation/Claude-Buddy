@@ -733,6 +733,70 @@ public class MirrorEdgeCaseTests : IDisposable
         Assert.Equal(before, _client.TimeoutExtensionsForTests);
     }
 
+    // Discovery runs off the poll, and the poll does not wait for the last one.
+    //
+    // A name enters the roster only when a reply lands, so while a far relay is
+    // slow every tick used to send another HELLO for the same name — every 20
+    // seconds, or every 5 while anything was working. Measured on the mini as a
+    // backlog of **166 roster requests** queued ahead of the window that had
+    // actually been asked for, each costing a model turn to answer: the wait for
+    // an answer manufactured the queue that stopped the answer arriving, and the
+    // busier the relay got the harder it was asked.
+    //
+    // Held at the door rather than raced, so "in flight" is a fact the test
+    // arranges instead of a guess about scheduling.
+    [Fact]
+    public async Task ASecondPollDoesNotAskAgainForAnAnswerAlreadyOnTheWire()
+    {
+        AddSession();
+
+        _holdHello = new TaskCompletionSource();
+
+        var first = _client.DiscoverAsync(Peers, new[] { Name });
+
+        // The first HELLO is now parked mid-send. A poll landing here is the
+        // case that used to pile on.
+        var second = _client.DiscoverAsync(Peers, new[] { Name });
+
+        // Counted rather than awaited, and that is deliberate. Awaiting the
+        // second call asserts the same thing, but a regression then *hangs* it
+        // against the same door instead of failing — and a suite that stops
+        // dead is a worse way to learn this than one that says which number was
+        // wrong. The frame count rises synchronously on the way to the gate, so
+        // reading it here is a fact rather than a race.
+        Assert.Equal(1, _hellos);
+
+        _holdHello.SetResult();
+        await first;
+        await second;
+
+        Assert.Equal(1, _hellos);
+    }
+
+    // And the suppression has to lift, or it trades a flood for a silence.
+    //
+    // Silence is still not "no": a relay that was busy or timed out is asked
+    // again on the next poll, and only a real answer settles a name. A name left
+    // marked as being asked about would never be asked again, which is the worse
+    // of the two failures — the flood was at least still trying.
+    [Fact]
+    public async Task AskingAgainIsAllowedOnceTheFirstAnswerHasSettled()
+    {
+        AddSession();
+
+        await _client.DiscoverAsync(Peers, new[] { Name });
+        Assert.Equal(1, _hellos);
+
+        // Answered, so the name is in the roster and there is nothing to ask.
+        await _client.DiscoverAsync(Peers, new[] { Name });
+        Assert.Equal(1, _hellos);
+
+        // A name that is not known is asked about, proving the gate released
+        // rather than the roster merely covering for it.
+        await _client.DiscoverAsync(Peers, new[] { "some-other-session" });
+        Assert.Equal(2, _hellos);
+    }
+
     // And silence still ends it. Extending on progress would be worthless if it
     // also extended on nothing — a far side that stops halfway has to become a
     // failure the panel can report rather than a wait nobody ever leaves.
@@ -915,10 +979,21 @@ public class MirrorEdgeCaseTests : IDisposable
     // thing. Without it "concurrent" is a guess about scheduling.
     private TaskCompletionSource? _holdFetch;
 
+    // The same door, for HELLO, and counted on the way through. Discovery's
+    // duplicate suppression is about what is *not* sent, so the test needs to
+    // see every frame that reached the wire rather than only the replies.
+    private TaskCompletionSource? _holdHello;
+    private int _hellos;
+
     private async Task<bool> SendToServerAsync(string peer, string line)
     {
         var frame = MirrorProtocol.TryParseFrame(line);
         if (frame is null) return false;
+
+        if (frame.Type == MirrorProtocol.Hello) _hellos++;
+
+        if (_holdHello is { } helloGate && frame.Type == MirrorProtocol.Hello)
+            await helloGate.Task;
 
         if (_holdFetch is { } gate && frame.Type == MirrorProtocol.Fetch)
             await gate.Task;
