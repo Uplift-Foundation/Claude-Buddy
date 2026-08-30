@@ -48,6 +48,46 @@ namespace ClaudeBuddy
         // more than this can.
         private static ServePump? _servePump;
 
+        // When a DispatcherTimer last actually fired.
+        //
+        // **The difference between "a dispatcher exists" and "a dispatcher is
+        // running", which is the whole of CB-61.** EnsureTimer is delivered by
+        // Dispatcher.UIThread.Post, so reaching it proves the loop ran once —
+        // and StopServePump used to take that as proof it would keep running,
+        // and destroyed the stand-in on the strength of it. A DispatcherTimer
+        // only fires while that loop is pumping. On a headless machine it can
+        // deliver the Post at startup and then go quiet, at which point both
+        // timers stop firing and the thing that covered for exactly this has
+        // already been disposed.
+        //
+        // Measured on job-hunter-mac-mini: Buddy alive at 0% CPU, its relay
+        // receiving well-formed HELLOs from a correctly-named peer, and two
+        // ListAgents in seven minutes — the first of which was StartAsync's own
+        // direct call, not a tick. Nothing drained the transcript, so nothing
+        // was ever routed to the mirror server, so it answered none of them.
+        // From the far end: a panel that says the other machine did not answer.
+        private static DateTime _dispatcherTickedAt;
+
+        // How long the dispatcher may be silent before the stand-in takes over
+        // again. Comfortably longer than MirrorPumpEvery (1.5s), so a healthy
+        // machine never double-pumps, and short enough that a machine which has
+        // gone quiet is covered within seconds rather than left dark.
+        internal static readonly TimeSpan DispatcherSilenceBeforeStandIn =
+            TimeSpan.FromSeconds(15);
+
+        // Whether the dispatcher has ticked recently enough to be trusted with
+        // the work. Pure so the handover rule is testable without a dispatcher —
+        // which is the one thing a test of this cannot conjure.
+        internal static bool DispatcherLooksAlive(DateTime now, DateTime lastTick) =>
+            lastTick != default && now - lastTick < DispatcherSilenceBeforeStandIn;
+
+        // Called from both DispatcherTimers. The proof is the firing, not the
+        // existence.
+        private static void DispatcherTicked()
+        {
+            lock (Gate) _dispatcherTickedAt = DateTime.UtcNow;
+        }
+
         // Fast, because it is free — the same reasoning as MirrorPumpEvery next
         // door, and a shade slower because this one runs when the mirror halves
         // are idle as well as when they are not.
@@ -713,6 +753,20 @@ namespace ClaudeBuddy
         // HELLO arrives in.
         internal static async Task ServeTickAsync()
         {
+            // Stands down while the dispatcher is doing the work.
+            //
+            // The two DispatcherTimers do strictly more than this can, so while
+            // they are firing this has nothing to add. What it must not do is
+            // *stay* stood down on the strength of them having fired once —
+            // which is what disposing it used to amount to, and is why a
+            // headless machine could go silent with no way back.
+            DateTime lastTick;
+            lock (Gate) lastTick = _dispatcherTickedAt;
+
+            if (DispatcherLooksAlive(DateTime.UtcNow, lastTick)) return;
+
+            MirrorLog.Say("serve-tick", "stand-in is driving; dispatcher quiet");
+
             List<Relay> live;
             lock (Gate) live = Relays.Values.Where(r => r.Bridge is not null).ToList();
 
@@ -922,12 +976,22 @@ namespace ClaudeBuddy
             // there is at most one such round, and the gate is why that round
             // cannot collide. The earlier version of this comment claimed the
             // ordering alone was enough; it never was.
-            StopServePump();
+            // Deliberately NOT StopServePump() any more.
+            //
+            // The stand-in stays, and stands down instead: ServeTickAsync does
+            // nothing while the dispatcher is demonstrably firing, and picks the
+            // work back up if it stops. Disposing it here was right about the
+            // handover and wrong about its permanence — see _dispatcherTickedAt.
+            //
+            // Safe to leave running because PumpGate is what actually keeps the
+            // two rounds off each other, which the comment on that gate has
+            // always said; the ordering here never was the guarantee.
+            DispatcherTicked();
 
             if (_poll is not null) return;
 
             _poll = new DispatcherTimer { Interval = PollEvery };
-            _poll.Tick += (_, _) => _ = TickAsync();
+            _poll.Tick += (_, _) => { DispatcherTicked(); _ = TickAsync(); };
             _poll.Start();
 
             EnsureMirrorTimer();
@@ -963,7 +1027,7 @@ namespace ClaudeBuddy
             if (_mirrorPump is not null) return;
 
             _mirrorPump = new DispatcherTimer { Interval = MirrorPumpEvery };
-            _mirrorPump.Tick += (_, _) => _ = MirrorTickAsync();
+            _mirrorPump.Tick += (_, _) => { DispatcherTicked(); _ = MirrorTickAsync(); };
             _mirrorPump.Start();
         }
 
@@ -1526,6 +1590,25 @@ namespace ClaudeBuddy
         // Internal so the two things this decides — that a frame never reaches a
         // chat bubble, and that a CB-INFO answer is swallowed — can be tested
         // without a relay to deliver one.
+        // A discarded task that faults is a fault nobody hears about.
+        //
+        // Both mirror halves were started with `_ =`, which is correct about not
+        // waiting and wrong about not looking: an exception inside HandleAsync
+        // went nowhere at all. That is how a machine could accept a frame, run
+        // its handler, and answer nothing, with every visible signal saying it
+        // was fine.
+        private static void Watched(Task work, string half, MirrorProtocol.MirrorFrame frame)
+        {
+            _ = work.ContinueWith(
+                t => MirrorLog.Say("threw",
+                    $"{half} t={frame.Type} id={frame.Id} "
+                    + $"{t.Exception?.GetBaseException().GetType().Name}: "
+                    + $"{t.Exception?.GetBaseException().Message}"),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+        }
+
         internal static void OnMessage(string account, BridgeProtocol.InboundMessage message)
         {
             // A mirror frame is plumbing between two Buddies and must never
@@ -1542,7 +1625,15 @@ namespace ClaudeBuddy
             if (MirrorProtocol.IsFrame(message.Body))
             {
                 var frame = MirrorProtocol.TryParseFrame(message.Body);
-                if (frame is null) return;
+
+                if (frame is null)
+                {
+                    // A frame that looked like one and would not parse. Silent
+                    // until now, and indistinguishable from never arriving.
+                    MirrorLog.Say("frame-unparseable",
+                        $"from={message.FromName} len={message.Body.Length}");
+                    return;
+                }
 
                 RemoteMirrorServer? server;
                 RemoteMirrorClient? client;
@@ -1558,16 +1649,23 @@ namespace ClaudeBuddy
                 // it: a request is for the server here, a reply is for the
                 // client here, and one relay carries both directions at once
                 // because both machines are asking each other.
+                MirrorLog.Say("frame-in",
+                    $"t={frame.Type} id={frame.Id} from={message.FromName} "
+                    + $"server={(server is null ? "null" : "yes")} "
+                    + $"client={(client is null ? "null" : "yes")}");
+
                 switch (frame.Type)
                 {
                     case MirrorProtocol.Chunk:
                     case MirrorProtocol.Ok:
                     case MirrorProtocol.Err:
-                        if (client is not null) _ = client.OnFrameAsync(message.FromName, frame);
+                        if (client is not null) Watched(client.OnFrameAsync(message.FromName, frame), "client", frame);
+                        else MirrorLog.Say("dropped", $"t={frame.Type} no client for {account}");
                         break;
 
                     default:
-                        if (server is not null) _ = server.HandleAsync(message.FromName, frame);
+                        if (server is not null) Watched(server.HandleAsync(message.FromName, frame), "server", frame);
+                        else MirrorLog.Say("dropped", $"t={frame.Type} no server for {account}");
                         break;
                 }
 

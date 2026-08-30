@@ -116,4 +116,56 @@ public class RemoteControlServePumpTests : IDisposable
         await RemoteControlSessions.MirrorTickAsync();
         Assert.False(RemoteControlSessions.PumpGate.Busy);
     }
+
+    // ---- the handover, and why it is no longer a disposal -------------------
+
+    // EnsureTimer used to dispose the stand-in outright, on the reasoning that
+    // reaching it "*is* the proof that a dispatcher now exists". It is proof
+    // that the loop ran *once* — EnsureTimer is delivered by
+    // Dispatcher.UIThread.Post — and a DispatcherTimer only fires while that
+    // loop keeps pumping.
+    //
+    // On a headless machine the two are not the same thing. Measured on
+    // job-hunter-mac-mini: Buddy alive at 0% CPU, its relay receiving
+    // well-formed HELLOs from a correctly-named peer, and two ListAgents in
+    // seven minutes — the first of which was StartAsync's own direct call, not
+    // a tick. Nothing drained the transcript, nothing reached the mirror
+    // server, and it answered none of them. From the far end: "the other
+    // machine didn't answer in time", for hours.
+    //
+    // So the rule is now about the dispatcher *firing*, not existing.
+
+    // A dispatcher that has never ticked is not alive, however long ago the app
+    // started. This is the state a headless machine sits in, and the one that
+    // used to be read as healthy.
+    [Fact]
+    public void ADispatcherThatHasNeverTickedIsNotAlive() =>
+        Assert.False(RemoteControlSessions.DispatcherLooksAlive(DateTime.UtcNow, default));
+
+    // One that ticked a moment ago is doing the work, and the stand-in has
+    // nothing to add.
+    [Fact]
+    public void ADispatcherThatJustTickedIsAlive() =>
+        Assert.True(RemoteControlSessions.DispatcherLooksAlive(
+            DateTime.UtcNow, DateTime.UtcNow));
+
+    // And one that has gone quiet hands the work back. This is the arm that
+    // actually fixes the bug: without it the machine stays dark for ever.
+    [Fact]
+    public void ADispatcherThatHasGoneQuietHandsTheWorkBack()
+    {
+        var now = DateTime.UtcNow;
+        var quiet = now - RemoteControlSessions.DispatcherSilenceBeforeStandIn
+                        - TimeSpan.FromSeconds(1);
+
+        Assert.False(RemoteControlSessions.DispatcherLooksAlive(now, quiet));
+    }
+
+    // The window has to clear the mirror timer's own interval comfortably, or a
+    // perfectly healthy machine double-pumps every round — which PumpGate would
+    // survive but should never be asked to.
+    [Fact]
+    public void TheSilenceWindowIsLongerThanAHealthyTickInterval() =>
+        Assert.True(RemoteControlSessions.DispatcherSilenceBeforeStandIn
+                    > TimeSpan.FromSeconds(5));
 }
