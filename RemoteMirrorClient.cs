@@ -73,6 +73,24 @@ namespace ClaudeBuddy
             lock (_gate) return _servedBy.TryGetValue(name, out var relay) ? relay : null;
         }
 
+        // Everything this client currently knows about, with who serves it.
+        //
+        // The roster is already the answer to "what is out there"; over the
+        // relay nothing read it that way because a second channel — the relay's
+        // own ListAgents poll — was producing the orb rows. A direct link has
+        // only this, so it has to be readable from outside.
+        internal IReadOnlyList<(string Peer, MirrorProtocol.MirrorRosterEntry Entry)> Known()
+        {
+            lock (_gate)
+            {
+                return _roster.Values
+                    .Select(e => (
+                        Peer: _servedBy.TryGetValue(e.Name, out var peer) ? peer : string.Empty,
+                        Entry: e))
+                    .ToList();
+            }
+        }
+
         // Names that have been asked about and came back with nothing. Kept so a
         // panel can say "no live view" definitively rather than sitting on
         // "checking…" forever.

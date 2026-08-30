@@ -68,6 +68,26 @@ namespace ClaudeBuddy
                 _discovery = discovery = new PeerDiscovery();
             }
 
+            // Both halves, before anything connects. A machine that is dialled
+            // must be able to answer immediately, and a panel opened the moment
+            // the app starts must find a client rather than a null.
+            var account = ClaudeBuddySettings.DefaultRemoteControlProfileDir;
+
+            host.Serve(account, RemoteControlSessions.LocalSessions);
+
+            // A roster landing is what puts an orb on screen and what tells an
+            // open panel to look again. Both, in that order: the panel reads the
+            // published rows, so raising the event first would hand it the list
+            // it already had.
+            if (host.Client is { } client)
+            {
+                client.RosterUpdated += () =>
+                {
+                    RemoteControlSessions.RepublishFromLink();
+                    RemoteControlSessions.RaiseMirrorChanged(account);
+                };
+            }
+
             try
             {
                 host.Link.Listen(ClaudeBuddySettings.PeerLinkPort);
@@ -132,6 +152,36 @@ namespace ClaudeBuddy
                     MirrorLog.Say("peer-dial-failed",
                         $"to={peer.Machine} {ex.GetType().Name}: {ex.Message}");
                 }
+            }
+
+            await AskWhatTheyHaveAsync(host).ConfigureAwait(false);
+        }
+
+        // Asks every connected machine what sessions it has.
+        //
+        // With no names, which means "everything" — see CB-67. That is the only
+        // possible first question on a link with no prior list, and it is what
+        // puts an orb on screen for a session on another machine.
+        //
+        // Cheap to repeat: the client only asks about names it does not already
+        // know (CB-55), so a machine whose roster has already arrived costs
+        // nothing per tick.
+        [ExcludeFromCodeCoverage]
+        private static async Task AskWhatTheyHaveAsync(PeerMirrorHost host)
+        {
+            var client = host.Client;
+            if (client is null) return;
+
+            var connected = host.Link.ConnectedMachines();
+            if (connected.Count == 0) return;
+
+            try
+            {
+                await client.DiscoverAsync(connected, Array.Empty<string>()).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                MirrorLog.Say("peer-roster-failed", $"{ex.GetType().Name}: {ex.Message}");
             }
         }
 

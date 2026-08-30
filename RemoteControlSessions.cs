@@ -33,6 +33,15 @@ namespace ClaudeBuddy
         // thread and locks nothing else it reads — is handed a finished list.
         private static volatile IReadOnlyList<Remote> _snapshot = Array.Empty<Remote>();
 
+        // Orb rows that came off the direct link rather than a relay poll.
+        //
+        // A separate bucket rather than a fake Relay entry, because the two are
+        // filled by different things at different times and a Relay carries a
+        // bridge, a state string and a warning that a socket has no answer for.
+        // Both are unioned into _snapshot by Republish, which is the only place
+        // that has to know there are two.
+        private static IReadOnlyList<Remote> _peerRows = Array.Empty<Remote>();
+
         // One entry per account with a relay up or coming up. Keyed by profile
         // dir, which is also what makes "already starting" answerable without a
         // second flag per account.
@@ -236,9 +245,34 @@ namespace ClaudeBuddy
         }
 
         public static IReadOnlyList<Remote> Snapshot() =>
-            ClaudeBuddySettings.RemoteControlEnabled && RemoteControlBridge.IsSupported
-                ? _snapshot
-                : Array.Empty<Remote>();
+            Visible(
+                _snapshot,
+                ClaudeBuddySettings.RemoteControlEnabled,
+                RemoteControlBridge.IsSupported,
+                ClaudeBuddySettings.PeerLinkEnabled);
+
+        // Whether remote orbs are shown at all.
+        //
+        // **Two transports now, and the gate has to ask about both.** It used to
+        // read "is Remote Control on and supported", which was the same question
+        // as "could any of these rows exist" while a relay was the only way one
+        // could. It is not any more: a machine with the relay switched off and
+        // the link on has real rows and would have drawn none of them — and the
+        // relay is exactly what a user turns off first, having been told it
+        // costs model turns.
+        //
+        // Neither transport running still means nothing, which keeps the scan's
+        // job trivial: it never has to know why the list is empty.
+        internal static IReadOnlyList<Remote> Visible(
+            IReadOnlyList<Remote> rows, bool relayOn, bool relaySupported, bool linkOn) =>
+            (relayOn && relaySupported) || linkOn ? rows : Array.Empty<Remote>();
+
+        // Lets the link raise the event a panel listens on. The event itself
+        // cannot be raised from outside the class it is declared in, and the
+        // link deliberately lives outside — see PeerMirrorHost's note on why it
+        // is not account-scoped.
+        [ExcludeFromCodeCoverage]
+        internal static void RaiseMirrorChanged(string account) => MirrorChanged?.Invoke(account);
 
         // ---- test seams ----------------------------------------------------
 
@@ -510,8 +544,36 @@ namespace ClaudeBuddy
 
         internal static RemoteMirrorClient? MirrorClientFor(string account)
         {
-            lock (Gate) return Relays.TryGetValue(account, out var relay) ? relay.Client : null;
+            // The direct link first, when there is one.
+            //
+            // **This is the line that moves the panel off the relay.** Both
+            // clients are the same class doing the same work; what differs is
+            // what carries their frames — a socket, or a model retyping base64
+            // at 222 to 247 seconds a chunk.
+            //
+            // The peer client is not account-scoped, because a socket is not:
+            // this machine talks to that machine whatever either is signed into.
+            // Asking for one by account and getting the machine-wide one is
+            // therefore correct rather than sloppy, and is why the parameter is
+            // ignored on this path.
+            //
+            // Falls through while the link is off or has no client yet, so a
+            // user who has not turned it on keeps exactly the behaviour they
+            // had. That fallback goes when the relay does.
+            RemoteMirrorClient? relayed;
+            lock (Gate) relayed = Relays.TryGetValue(account, out var relay) ? relay.Client : null;
+
+            return Prefer(PeerSessions.Host?.Client, relayed);
         }
+
+        // Which of the two clients a panel gets, given both.
+        //
+        // Pure so the precedence is a rule with a test rather than an `??` in
+        // the middle of a lock — this one line decides whether a transcript
+        // arrives in milliseconds or in four minutes, and it should be as hard
+        // to change by accident as that implies.
+        internal static RemoteMirrorClient? Prefer(
+            RemoteMirrorClient? direct, RemoteMirrorClient? relayed) => direct ?? relayed;
 
         // Installs a mirror client without a relay behind it.
         //
@@ -553,6 +615,7 @@ namespace ClaudeBuddy
                 InfoAsked.Clear();
                 WorkingNow.Clear();
                 _snapshot = Array.Empty<Remote>();
+                _peerRows = Array.Empty<Remote>();
             }
 
             // Chat sessions subscribe to this in their constructor and are
@@ -1375,12 +1438,62 @@ namespace ClaudeBuddy
             return DateTime.UtcNow - lastSend < BusyGrace;
         }
 
-        // Every relay's sessions, flattened into the one list the scan reads.
+        // A mirror roster, as orb rows.
+        //
+        // Pure, and the only place the two vocabularies meet: a roster entry
+        // says what a session *is* (name, CLI, transcript, colour), and a Remote
+        // says what to draw. The peer name doubles as the Ref, because over a
+        // direct link the machine that served a session is the machine it is on
+        // — which is the fact the relay path had to parse back out of a session
+        // name (see RemoteControlChatSession.MachineName).
+        //
+        // An entry nobody has claimed is dropped rather than drawn with a blank
+        // machine: it would be an orb the panel could not then ask anyone about.
+        internal static IReadOnlyList<Remote> RemotesFromRoster(
+            string account,
+            IReadOnlyList<(string Peer, MirrorProtocol.MirrorRosterEntry Entry)> known,
+            DateTime now) =>
+            known
+                .Where(k => !string.IsNullOrWhiteSpace(k.Peer))
+                .Select(k => new Remote(
+                    k.Entry.Name,
+                    k.Peer,
+                    k.Entry.Status ?? "idle",
+                    now,
+                    account,
+                    string.IsNullOrWhiteSpace(k.Entry.Color) ? null : k.Entry.Color))
+                .ToList();
+
+        // Excluded from coverage: reads the live link. What it decides is
+        // RemotesFromRoster, which is tested; this is the two lines that fetch
+        // and store.
+        [ExcludeFromCodeCoverage]
+        internal static void RepublishFromLink()
+        {
+            var client = PeerSessions.Host?.Client;
+
+            var rows = client is null
+                ? Array.Empty<Remote>()
+                : RemotesFromRoster(
+                    ClaudeBuddySettings.DefaultRemoteControlProfileDir,
+                    client.Known(),
+                    Now());
+
+            lock (Gate) _peerRows = rows;
+
+            Republish();
+        }
+
+        // Every relay's sessions and every peer's, flattened into the one list
+        // the scan reads.
         internal static void Republish()
         {
             lock (Gate)
             {
-                _snapshot = Relays.Values.SelectMany(r => r.Sessions).ToList();
+                _snapshot = Relays.Values
+                    .SelectMany(r => r.Sessions)
+                    .Concat(_peerRows)
+                    .ToList();
             }
         }
 
@@ -1718,7 +1831,10 @@ namespace ClaudeBuddy
                         .ToList();
                 }
 
-                _snapshot = Relays.Values.SelectMany(r => r.Sessions).ToList();
+                _snapshot = Relays.Values
+                    .SelectMany(r => r.Sessions)
+                    .Concat(_peerRows)
+                    .ToList();
             }
         }
     }
