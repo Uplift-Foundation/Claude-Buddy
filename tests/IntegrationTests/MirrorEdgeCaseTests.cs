@@ -55,15 +55,32 @@ public class MirrorEdgeCaseTests : IDisposable
 
     // --- asking about nothing --------------------------------------------------
 
-    // HELLO carries the names the asker cares about. One with none is malformed,
-    // and is answered rather than ignored so the asker is not left waiting out a
-    // timeout for a question it asked wrong.
+    // A HELLO naming nothing means "what have you got?", and is answered with a
+    // roster rather than refused.
+    //
+    // **This assertion is the reverse of what it used to be, and the reversal is
+    // deliberate.** The old rule — a nameless handshake is malformed — was right
+    // for the relay and wrong in general. Over the relay the asker already had a
+    // list of sessions from ListAgents, so a hello naming none of them really
+    // was a question asked wrong; and answering it would have described sessions
+    // the far peer list could not see, which is a visibility rule the mirror had
+    // no business undoing.
+    //
+    // A direct link has neither property. There is no prior list, so a nameless
+    // hello is the *only* possible first question — without an answer there is
+    // nothing to put an orb on and no name to ask about next. And the asker is
+    // not any process sharing an account: it presented a certificate pinned when
+    // a person typed a pairing code.
+    //
+    // Nothing new becomes visible either way: the same IsLocalCli filter still
+    // applies, so the answer covers only sessions this machine would show.
     [Fact]
-    public async Task AHandshakeThatNamesNoSessionsIsRefusedRatherThanIgnored()
+    public async Task AHandshakeThatNamesNoSessionsIsAnsweredWithEverything()
     {
         await _server.HandleAsync(NearRelay, Frame(MirrorProtocol.Hello, "abcd1234"));
 
-        Assert.Contains(_toClient, line => line.Contains(";t=" + MirrorProtocol.Err));
+        Assert.DoesNotContain(_toClient, line => line.Contains(";t=" + MirrorProtocol.Err));
+        Assert.Contains(_toClient, line => line.Contains(";t=" + MirrorProtocol.Chunk));
     }
 
     [Fact]

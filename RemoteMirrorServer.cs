@@ -191,25 +191,44 @@ namespace ClaudeBuddy
         // over there, and a roster is no place to undo that.
         private async Task HelloAsync(string fromPeer, MirrorProtocol.MirrorFrame frame)
         {
-            var wanted = frame.Payload is null
+            var asked = frame.Payload is null
                 ? null
                 : MirrorProtocol.UnpackRows(frame.Payload);
 
-            if (wanted is null || wanted.Count == 0)
-            {
-                await SendAsync(fromPeer, MirrorProtocol.BuildFrame(
-                    MirrorProtocol.Err, frame.Id,
-                    new Dictionary<string, string> { ["code"] = MirrorProtocol.ErrNoSession }))
-                    .ConfigureAwait(false);
-                return;
-            }
-
             var agents = _seams.Agents();
             var sessions = _seams.LocalSessions();
+
+            // Asking about nothing in particular means "what have you got?"
+            //
+            // **This used to be an error, and the reasoning behind that was
+            // transport-specific.** Over the relay a peer already had its own
+            // list of sessions from ListAgents, so a hello naming none of them
+            // was a malformed question — and answering it would have told the
+            // far machine about sessions its own peer list deliberately could
+            // not see, which is a visibility rule this had no business undoing.
+            //
+            // A direct link has neither property. There is no prior list, so
+            // without this there is nothing to put an orb on and no way to
+            // learn a name to ask about — the question would have no first
+            // answer. And the peer is not any process that happens to share an
+            // account: it completed a TLS handshake presenting a certificate
+            // pinned when a person typed a pairing code. Telling a machine the
+            // user deliberately paired what sessions are here is the feature.
+            //
+            // Still only what this machine would show anyway: the same
+            // IsLocalCli filter below applies either way, so nothing becomes
+            // visible that was not already a session on this disk.
+            var everything = asked is null || asked.Count == 0;
+
+            var wanted = everything
+                ? agents.Select(a => a.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+                : asked!;
+
             var entries = new List<MirrorProtocol.MirrorRosterEntry>();
 
             MirrorLog.Say("hello",
-                $"asked={wanted.Count} agents={agents.Count} sessions={sessions.Count}");
+                $"asked={(everything ? "all" : wanted.Count.ToString())} "
+                + $"agents={agents.Count} sessions={sessions.Count}");
 
             foreach (var name in wanted.Distinct(StringComparer.OrdinalIgnoreCase))
             {
