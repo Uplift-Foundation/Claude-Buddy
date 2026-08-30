@@ -127,6 +127,151 @@ public class MirrorRoundTripTests : IDisposable
         Assert.True(harness.ChunkFrames <= 2, $"the big row was relayed anyway ({harness.ChunkFrames} frames)");
     }
 
+    // --- serving with no dispatcher (CB-39) -------------------------------------
+
+    // The regression itself: a machine whose screen never unlocks has no
+    // dispatcher, so the two DispatcherTimers that drive a relay never run, and
+    // for two hours the relay answered nothing while looking perfectly alive
+    // from every other machine.
+    //
+    // This suite has no Avalonia lifetime in it at all, which is what makes it
+    // the right place to assert the fix: if ServeOneAsync needed the UI thread
+    // for anything, there is nothing here to give it one.
+    [Fact]
+    public async Task AServeTickDeliversAnUpdateWithNoDispatcherAnywhere()
+    {
+        var path = WriteTranscript("headless.jsonl", Conversation(6));
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        await harness.Client.OpenAsync("job-hunter");
+
+        Assert.Single(harness.Windows);
+
+        File.AppendAllText(path, Row("assistant", "later", "said while the screen was locked") + "\n");
+
+        // Exactly what the pump's timer calls, and the only thing standing
+        // between an unattended machine and serving nothing.
+        await RemoteControlSessions.ServeOneAsync(
+            new RemoteControlBridge(".claude"), harness.Server, harness.Client);
+
+        var delta = Assert.Single(harness.Deltas);
+        Assert.Contains("said while the screen was locked", Assert.Single(delta.Turns).Text);
+    }
+
+    // The handover window, from the side that has to stand down (CB-28).
+    //
+    // For one round at the moment the dispatcher arrives, the serve pump and the
+    // mirror DispatcherTimer both exist: EnsureTimer disposes the pump before it
+    // creates the timers, but disposing a timer does not reach inside a round
+    // already running. Two rounds on one relay would both read from the same
+    // transcript offset and route the same lines twice, so a message could reach
+    // a panel twice. The shared gate is what stops it, and this is where "the
+    // caller actually asks" can be proved rather than read.
+    [Fact]
+    public async Task AServeTickStandsDownWhileTheOtherPumpHoldsTheGate()
+    {
+        var path = WriteTranscript("handover.jsonl", Conversation(6));
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        await harness.Client.OpenAsync("job-hunter");
+        Assert.Single(harness.Windows);
+
+        File.AppendAllText(path, Row("assistant", "later", "said mid-handover") + "\n");
+
+        Assert.True(RemoteControlSessions.PumpGate.TryEnter());
+        try
+        {
+            // The mirror timer's round is in flight. This round is declined
+            // rather than queued or run late — the pump's own timer is what
+            // brings it back.
+            Assert.False(await RemoteControlSessions.ServeOneAsync(
+                new RemoteControlBridge(".claude"), harness.Server, harness.Client));
+
+            Assert.Empty(harness.Deltas);
+        }
+        finally
+        {
+            RemoteControlSessions.PumpGate.Exit();
+        }
+
+        // ...and nothing was lost by standing down: the next round delivers the
+        // rows the declined one would have.
+        Assert.True(await RemoteControlSessions.ServeOneAsync(
+            new RemoteControlBridge(".claude"), harness.Server, harness.Client));
+
+        var delta = Assert.Single(harness.Deltas);
+        Assert.Contains("said mid-handover", Assert.Single(delta.Turns).Text);
+    }
+
+    // A gate that is not released is worse than no gate: it stops the machine
+    // serving permanently, silently, on the one machine nobody is watching. So
+    // the `finally` is asserted through the failure that would exercise it.
+    [Fact]
+    public async Task AServeTickLeavesTheGateFreeEvenWhenAHalfThrows()
+    {
+        var path = WriteTranscript("throwing-gate.jsonl", Conversation(4));
+
+        var harness = new Harness(_dir) { AgentsThrow = true };
+        harness.AddSession("job-hunter", path);
+
+        Assert.True(await RemoteControlSessions.ServeOneAsync(
+            new RemoteControlBridge(".claude"), harness.Server, harness.Client));
+
+        Assert.False(RemoteControlSessions.PumpGate.Busy);
+
+        // And the next round can still get in, which is the thing that actually
+        // matters about the previous line.
+        Assert.True(await RemoteControlSessions.ServeOneAsync(
+            new RemoteControlBridge(".claude"), harness.Server, harness.Client));
+    }
+
+    // A relay with neither half built yet — the window between the bridge
+    // starting and StartAsync putting a server and client on it. Nothing to
+    // tick, and specifically not a null dereference in the loop that is meant to
+    // be keeping the machine alive.
+    [Fact]
+    public async Task AServeTickOverARelayWithNoMirrorHalvesDoesNothing()
+    {
+        await RemoteControlSessions.ServeOneAsync(new RemoteControlBridge(".claude"), null, null);
+    }
+
+    // One half throwing must cost that half's round and nothing else. The
+    // client is still ticked afterwards, and the next tick still delivers —
+    // because on a serving machine there is nobody to notice a loop that quietly
+    // stopped.
+    [Fact]
+    public async Task AServeTickSurvivesAMirrorHalfThatThrows()
+    {
+        var path = WriteTranscript("throwing.jsonl", Conversation(4));
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        await harness.Client.OpenAsync("job-hunter");
+
+        File.AppendAllText(path, Row("assistant", "later", "arrived during the outage") + "\n");
+
+        harness.AgentsThrow = true;
+        await RemoteControlSessions.ServeOneAsync(
+            new RemoteControlBridge(".claude"), harness.Server, harness.Client);
+
+        Assert.Empty(harness.Deltas);
+
+        harness.AgentsThrow = false;
+        await RemoteControlSessions.ServeOneAsync(
+            new RemoteControlBridge(".claude"), harness.Server, harness.Client);
+
+        var delta = Assert.Single(harness.Deltas);
+        Assert.Contains("arrived during the outage", Assert.Single(delta.Turns).Text);
+    }
+
     // --- keeping up ------------------------------------------------------------
 
     [Fact]
@@ -202,14 +347,115 @@ public class MirrorRoundTripTests : IDisposable
         Assert.NotEqual(first.Gen, second.Gen);
     }
 
+    // --- CB-46: a first paint that can actually arrive --------------------------
+
+    // The headline claim, and the one the user's empty panel came down to.
+    //
+    // Every chunk is a model emitting ~8KB of base64 as tool input, so
+    // throughput is one chunk per model turn — measured at close to two minutes
+    // on a real relay. A 512KB opening window came out as two chunks, which is a
+    // four-minute first paint against a three-minute request timeout: the reply
+    // could not exist before the request expired, and the panel showed nothing
+    // for hours.
+    //
+    // So an opening window is one chunk, and it is asserted on a transcript far
+    // bigger than one — because a rule that only holds for small files is not
+    // the rule that was needed.
+    [Fact]
+    public async Task ALargeTranscriptOpensInASingleChunk()
+    {
+        var path = WriteTranscript("huge.jsonl", Rows(MirrorProtocol.InitialBytes * 8));
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        harness.ForgetFramesSoFar();
+
+        Assert.True(await harness.Client.OpenAsync("job-hunter"));
+
+        Assert.Equal(1, harness.ChunkFrames);
+
+        // And it is a real conversation, not an empty window bought by cutting
+        // until nothing was left — which would satisfy the frame count while
+        // reproducing the bug.
+        Assert.NotEmpty(Assert.Single(harness.Windows).Turns);
+    }
+
+    // The newest end, specifically. Someone opening a panel is looking for what
+    // just happened, so what survives the shrink is the tail rather than an
+    // arbitrary slice.
+    [Fact]
+    public async Task WhatSurvivesIsTheNewestPartOfTheConversation()
+    {
+        var rows = Rows(MirrorProtocol.InitialBytes * 8);
+        rows.Add(Row("assistant", "last", "the most recent thing said"));
+
+        var path = WriteTranscript("newest.jsonl", rows);
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        Assert.True(await harness.Client.OpenAsync("job-hunter"));
+
+        var window = Assert.Single(harness.Windows);
+
+        Assert.Contains("the most recent thing said", window.Turns[^1].Text);
+    }
+
+    // Growing is what makes the noise case work, and the noise case is most of a
+    // real transcript. A stretch of rows no panel shows contributes no turns and
+    // therefore no payload, so a window can cover it for free — where a fixed
+    // byte window that landed inside one would paint a single message and call
+    // it the conversation.
+    [Fact]
+    public async Task AStretchOfRowsNobodySeesDoesNotCostTheConversation()
+    {
+        var rows = new List<string> { Row("user", "u1", "the question") };
+
+        // Comfortably more than the old fixed window, all of it invisible.
+        for (var i = 0; i < 40; i++)
+            rows.Add("{\"type\":\"file-history-snapshot\",\"uuid\":\"h" + i + "\",\"blob\":\""
+                     + new string('x', 20_000) + "\"}");
+
+        rows.Add(Row("assistant", "a1", "the answer"));
+
+        var path = WriteTranscript("buried.jsonl", rows);
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", path);
+
+        await harness.HandshakeAsync("job-hunter");
+        Assert.True(await harness.Client.OpenAsync("job-hunter"));
+
+        var turns = Assert.Single(harness.Windows).Turns;
+
+        // Both ends of the conversation, from opposite sides of 800KB of noise.
+        Assert.Equal(2, turns.Count);
+        Assert.Contains("the question", turns[0].Text);
+        Assert.Contains("the answer", turns[1].Text);
+    }
+
     // --- paging back ------------------------------------------------------------
 
     [Fact]
     public async Task ScrollingBackReadsTheOlderBytesAndStopsAtTheStart()
     {
-        // Comfortably more than one initial window, so there is genuinely
-        // something behind the tail.
-        var rows = Rows(MirrorProtocol.InitialBytes * 2);
+        // Comfortably more than one *window*, and since CB-46 that is no longer
+        // the same thing as more than InitialBytes. The opening window is now
+        // searched for rather than fixed: the server grows it while the turns
+        // still fit in one chunk, because the wire moves one chunk per model
+        // turn and a bigger window costs nothing when the extra bytes compress
+        // away. These rows are two hundred repeated characters each, so they
+        // compress to almost nothing and the old fixture — twice InitialBytes —
+        // now arrives whole, with no backlog behind it and nothing for this test
+        // to page through.
+        //
+        // Sized against the real constraint instead. Big enough that its turns
+        // cannot fit one chunk however well they compress, and small enough that
+        // the loop below can still reach the start of the file.
+        var rows = Rows(MirrorProtocol.InitialBytes * 8);
         var path = WriteTranscript("deep.jsonl", rows);
 
         var harness = new Harness(_dir);
@@ -222,7 +468,7 @@ public class MirrorRoundTripTests : IDisposable
 
         var seen = new List<MirrorProtocol.MirrorTurn>(Assert.Single(harness.Windows).Turns);
 
-        for (var page = 0; page < 10 && harness.Client.HasMore("job-hunter"); page++)
+        for (var page = 0; page < 40 && harness.Client.HasMore("job-hunter"); page++)
         {
             var older = await harness.Client.LoadOlderAsync("job-hunter");
             if (older is null) break;
@@ -923,6 +1169,10 @@ public class MirrorRoundTripTests : IDisposable
         public List<string> ToClient { get; } = new();
 
         public int ChunkFrames { get; private set; }
+
+        // The handshake pays for its own roster chunk, and a test about the
+        // *window* should not have to subtract it.
+        public void ForgetFramesSoFar() => ChunkFrames = 0;
         public int Resends { get; private set; }
 
         public bool ReplyEnabled { get; init; } = true;
@@ -954,6 +1204,13 @@ public class MirrorRoundTripTests : IDisposable
         private readonly List<AgentRoster.Entry> _agents = new();
         private readonly string _dir;
 
+        // `claude agents --json` failing where the server reads it. In
+        // production that is a subprocess that timed out or a CLI that has been
+        // upgraded out from under a running app — a throw, not an empty list —
+        // and it is the one thing a serve tick has to survive without taking the
+        // other accounts down with it. See ServeOneAsync.
+        public bool AgentsThrow { get; set; }
+
         public Harness(string dir)
         {
             _dir = dir;
@@ -961,7 +1218,9 @@ public class MirrorRoundTripTests : IDisposable
             Server = new RemoteMirrorServer("acct", new RemoteMirrorServer.Seams(
                 SendToClientAsync,
                 () => _sessions,
-                () => _agents,
+                () => AgentsThrow
+                    ? throw new InvalidOperationException("the agent registry did not answer")
+                    : _agents,
                 _ => ReplyEnabled,
                 _ => CanType,
                 (status, text) =>

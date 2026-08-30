@@ -41,6 +41,18 @@ namespace ClaudeBuddy
         private static DispatcherTimer? _poll;
         private static DateTime _lastUse = DateTime.MinValue;
 
+        // What drives a relay while there is no dispatcher to drive it from.
+        // See ServePump for the whole of why, and ServeTickAsync below for what
+        // one round does. Null once the UI is up: EnsureTimer disposes it,
+        // because from that point the two DispatcherTimers are doing strictly
+        // more than this can.
+        private static ServePump? _servePump;
+
+        // Fast, because it is free — the same reasoning as MirrorPumpEvery next
+        // door, and a shade slower because this one runs when the mirror halves
+        // are idle as well as when they are not.
+        private static readonly TimeSpan ServePumpEvery = TimeSpan.FromSeconds(2);
+
         private sealed class Relay
         {
             public RemoteControlBridge? Bridge;
@@ -478,6 +490,7 @@ namespace ClaudeBuddy
             // deliberately never disposed, so without clearing it every session
             // any earlier test built stays subscribed for the rest of the run.
             MirrorChanged = null;
+            SendOverrideForTests = null;
 
             Now = () => DateTime.UtcNow;
         }
@@ -529,11 +542,37 @@ namespace ClaudeBuddy
         // marks them all as wanted either way. Every entry point that means "a
         // person is looking at remote sessions" calls this — the tray item,
         // opening a remote chat, sending to one.
+        // Whether starting a real relay is forbidden in this process.
+        //
+        // A test suite must never start one: it is a live Claude Code session in
+        // a tmux pane, on the developer's own account, spending quota and
+        // holding a machine-wide relay name that the installed app also wants.
+        // Three suites already say so in comments and route around the calls
+        // that would do it — and CB-42 showed a comment is not a mechanism.
+        // `RemoteScanTests` opens a remote chat panel, which counts as asking
+        // for the bridge (SessionManager.RemoteChatFor), and had been calling
+        // EnsureStarted all along. It was harmless only because the relay could
+        // not start: the default account was being launched into a config
+        // context nobody had onboarded, so it died in a first-run wizard every
+        // time. Fixing that turned a dormant call into a real relay on every
+        // developer machine — and left CI green, because a GitHub runner has no
+        // `claude` installed to start.
+        //
+        // An environment variable rather than a property a test sets, so it is
+        // in place before any code in the assembly runs — the same shape and
+        // the same reason as CLAUDE_BUDDY_SETTINGS_DIR, which each suite's
+        // [ModuleInitializer] sets for exactly this class of accident. Read on
+        // every call rather than cached, so the opt-in live-bridge tests can
+        // clear it for their own duration.
+        internal static bool StartsBlocked =>
+            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_NO_RELAY") == "1";
+
         // Excluded from coverage: starts a relay, which launches a real Claude
         // Code session in tmux.
         [ExcludeFromCodeCoverage]
         public static void EnsureStarted()
         {
+            if (StartsBlocked) return;
             if (!ClaudeBuddySettings.RemoteControlEnabled) return;
             if (!RemoteControlBridge.IsSupported) return;
 
@@ -579,6 +618,124 @@ namespace ClaudeBuddy
         {
             if (!ClaudeBuddySettings.RemoteControlServeOnLaunch) return;
             EnsureStarted();
+
+            // The only call site, and deliberately so: this is the one path that
+            // brings a relay up with no dispatcher behind it. Every other route
+            // to EnsureStarted is a hand on this machine, which means a window,
+            // which means the UI thread is already running its own timers.
+            EnsureServePump();
+        }
+
+        // Excluded from coverage: starts a real repeating timer over whatever
+        // relays are live. Both rules it relies on — Start being idempotent, and
+        // a tick neither overlapping nor being killed by a throw — are ServePump's
+        // and are covered there; what one round *does* is ServeTickAsync's, and
+        // is covered against relays with no bridge behind them.
+        [ExcludeFromCodeCoverage]
+        internal static void EnsureServePump()
+        {
+            lock (Gate)
+            {
+                _servePump ??= new ServePump(ServeTickAsync, ServePumpEvery);
+                _servePump.Start();
+            }
+        }
+
+        // Handing over. Called from EnsureTimer, which only ever runs on the UI
+        // thread, so reaching it *is* the proof that a dispatcher now exists —
+        // which is the only thing this pump was standing in for.
+        internal static void StopServePump()
+        {
+            ServePump? pump;
+            lock (Gate)
+            {
+                pump = _servePump;
+                _servePump = null;
+            }
+
+            pump?.Dispose();
+        }
+
+        // Whether the stand-in is still needed, as a question rather than a
+        // field, so the handover can be asserted from either side.
+        internal static bool ServePumpRunning
+        {
+            get { lock (Gate) return _servePump?.Running == true; }
+        }
+
+        // One round of serving, with no display and no prompt.
+        //
+        // Draining the transcript is the whole of it: an inbound frame becomes a
+        // MessageReceived, which OnMessage routes to this account's
+        // RemoteMirrorServer, which answers on its own. Nothing here pastes a
+        // prompt, so a machine that nobody is asking about spends nothing to sit
+        // here — the cost of serving is paid by the answer, once, when a request
+        // actually arrives.
+        //
+        // Deliberately *not* the poll: that asks the relay's model for a peer
+        // list, which costs a turn and produces remote orbs for a screen that,
+        // by construction, nobody is looking at. It starts when the dispatcher
+        // does.
+        //
+        // Unlike MirrorTickAsync this does not skip a relay whose halves report
+        // idle. That check is an optimisation there because the poll is draining
+        // the same transcript every twenty seconds anyway; here nothing else is
+        // draining it at all, and an idle server is exactly the state a first
+        // HELLO arrives in.
+        internal static async Task ServeTickAsync()
+        {
+            List<Relay> live;
+            lock (Gate) live = Relays.Values.Where(r => r.Bridge is not null).ToList();
+
+            foreach (var relay in live)
+            {
+                await ServeOneAsync(relay.Bridge!, relay.Server, relay.Client).ConfigureAwait(false);
+            }
+        }
+
+        // One relay's round, split out for the reason the rest of this file
+        // splits things out: Relay is private and holds a live bridge, so the
+        // loop above can only be reached by having one — while what the loop
+        // *does* is three calls and three catches, and those are worth
+        // asserting.
+        //
+        // Each of the three is caught separately and none of them stops the
+        // others. A relay whose pane has gone, or a mirror half that throws on
+        // an expiry, must not take the other accounts' serving down with it:
+        // this runs where nobody is watching, so the failure would be permanent
+        // and silent, which is the whole family of bug this ticket belongs to.
+        //
+        // Takes PumpGate for the same reason MirrorTickAsync does, and it is the
+        // same gate: at the handover these two overlap by one round (CB-28's
+        // review), and two rounds draining one transcript both start from the
+        // same offset and route the same lines twice. Returns false when it
+        // declined because the other pump held it — never an error, since
+        // whichever timer called this comes back around.
+        internal static async Task<bool> ServeOneAsync(
+            RemoteControlBridge bridge, RemoteMirrorServer? server, RemoteMirrorClient? client)
+        {
+            if (!PumpGate.TryEnter()) return false;
+
+            try
+            {
+                try { bridge.Pump(); } catch { }
+
+                if (server is not null)
+                {
+                    try { await server.TickAsync().ConfigureAwait(false); } catch { }
+                }
+
+                if (client is not null)
+                {
+                    try { await client.TickAsync().ConfigureAwait(false); } catch { }
+                }
+            }
+            finally
+            {
+                PumpGate.Exit();
+            }
+
+            return true;
         }
 
         // Deletes scratch directories no configured account owns.
@@ -724,6 +881,20 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static void EnsureTimer()
         {
+            // Reaching here means the dispatcher is running, which is the one
+            // thing the serve pump was covering for.
+            //
+            // Stopped before the timers are created rather than after, which
+            // narrows the overlap but does not close it: disposing a timer does
+            // not reach inside a round already running, so a serve tick still
+            // inside bridge.Pump() when the mirror timer first fires 1.5s later
+            // would be a second pump on the same transcript. What actually
+            // closes it is PumpGate, which both rounds take — this line is why
+            // there is at most one such round, and the gate is why that round
+            // cannot collide. The earlier version of this comment claimed the
+            // ordering alone was enough; it never was.
+            StopServePump();
+
             if (_poll is not null) return;
 
             _poll = new DispatcherTimer { Interval = PollEvery };
@@ -767,18 +938,30 @@ namespace ClaudeBuddy
             _mirrorPump.Start();
         }
 
-        private static bool _mirrorTicking;
+        // The one guard both pumps take, so that "only one round at a time" is a
+        // single rule rather than two that agree by luck. Internal so a test can
+        // hold it and watch a round decline — the only way to prove from outside
+        // that a caller actually asks.
+        //
+        // It replaced a plain bool here. The bool was sound while MirrorTickAsync
+        // was the only caller and the UI thread the only thread; it stopped being
+        // sound when ServeOneAsync started calling it from the pool. See TickGate.
+        internal static readonly TickGate PumpGate = new();
 
         // Excluded from coverage: one round of the pump above, reading files
         // belonging to live relays and ticking a mirror server and client that
         // only exist when one is running.
         [ExcludeFromCodeCoverage]
-        private static async Task MirrorTickAsync()
+        // Internal rather than private only so a UI test can watch it decline
+        // while the serve pump holds the gate — the assertion that the two
+        // pumps really do share one, which is otherwise a claim about code
+        // nobody can call.
+        internal static async Task MirrorTickAsync()
         {
             // Ticks can overlap when a file read is slow, and two pumps racing
-            // on one relay would read the same bytes twice.
-            if (_mirrorTicking) return;
-            _mirrorTicking = true;
+            // on one relay would read the same bytes twice. Shared with
+            // ServeOneAsync, which is the other pump.
+            if (!PumpGate.TryEnter()) return;
 
             try
             {
@@ -805,7 +988,7 @@ namespace ClaudeBuddy
             }
             finally
             {
-                _mirrorTicking = false;
+                PumpGate.Exit();
             }
         }
 
@@ -1046,10 +1229,22 @@ namespace ClaudeBuddy
         // account that session belongs to. Null when there is no relay to send
         // it through, which the caller shows as a system line rather than
         // swallowing.
+        // Stands in for the send in tests.
+        //
+        // Added for CB-43, whose whole subject is what happens *after* a send is
+        // attempted: without it the fallback below could only be reached by
+        // starting a live relay on somebody's account, which is the same reason
+        // this method is excluded from coverage in the first place. Cleared by
+        // ResetForTests, the way UseMirrorClientForTests is.
+        internal static Func<string, string, string, Task<string?>>? SendOverrideForTests;
+
         // Excluded from coverage: sends a message through a live relay.
         [ExcludeFromCodeCoverage]
         public static async Task<string?> SendToAsync(string account, string remoteName, string text)
         {
+            if (SendOverrideForTests is { } instead)
+                return await instead(account, remoteName, text).ConfigureAwait(false);
+
             EnsureStarted();
 
             RemoteControlBridge? bridge;

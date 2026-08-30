@@ -662,4 +662,281 @@ public class RemoteControlBridgeRoutingTests : IDisposable
 
         Assert.Empty(Collect(bridge, row));
     }
+
+    // --- CB-41: a message the relay absorbed into a turn already running ---
+
+    // The shape Claude Code 2.1.251 actually writes, copied from the transcript
+    // this bug was found in. Note there is no `message` property at all — which
+    // is how these were being dropped: Route required one and returned before it
+    // ever reached the row-type rule.
+    private static string Absorbed(string uuid, string prompt, string kind = "queued_command") =>
+        "{\"parentUuid\":\"p1\",\"isSidechain\":false,\"attachment\":{\"type\":\"" + kind
+        + "\",\"prompt\":" + JsonSerializer.Serialize(prompt)
+        + ",\"source_uuid\":\"s1\",\"commandMode\":\"prompt\",\"origin\":{\"kind\":\"human\"}},"
+        + "\"type\":\"attachment\",\"uuid\":\"" + uuid + "\",\"userType\":\"external\"}";
+
+    // The regression test. A relay is mid-turn most of the time — Buddy's own
+    // poll keeps it working — so a reply arriving from the far machine is
+    // usually queued and folded into the running turn rather than delivered as
+    // a turn of its own. Every one of those was lost, which is why the panel
+    // said "no live view" while the far Buddy was demonstrably answering.
+    [Fact]
+    public void AMessageAbsorbedIntoARunningTurnIsDelivered()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+        var row = Absorbed("a1", Tagged("mac-mini", "the roster you asked for"));
+
+        var seen = Collect(bridge, row);
+
+        Assert.Single(seen);
+        Assert.Equal("mac-mini", seen[0].FromName);
+        Assert.Contains("the roster you asked for", seen[0].Body);
+    }
+
+    // `attachment` is a catch-all row type — a token reminder wears it, and so
+    // does a file-history snapshot. The nested attachment.type is what actually
+    // says this is a queued command, and anything else is left alone however
+    // much of a message its text looks like.
+    [Theory]
+    [InlineData("total_tokens_reminder")]
+    [InlineData("file_history_snapshot")]
+    [InlineData("")]
+    public void AnotherKindOfAttachmentIsNotAMessage(string kind)
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        Assert.Empty(Collect(bridge, Absorbed("a1", Tagged("mac-mini", "not from here"), kind)));
+    }
+
+    // The malformed shapes, each stepped over rather than throwing on the cast.
+    // A transcript carries plenty of rows this code has no business reading, and
+    // an exception here would end the pump for every row after it.
+    [Theory]
+    // No attachment at all.
+    [InlineData("""{"uuid":"a1","type":"attachment"}""")]
+    // An attachment that is not an object.
+    [InlineData("""{"uuid":"a1","type":"attachment","attachment":"nope"}""")]
+    // No type on the attachment.
+    [InlineData("""{"uuid":"a1","type":"attachment","attachment":{"prompt":"x"}}""")]
+    // A type that is not a string.
+    [InlineData("""{"uuid":"a1","type":"attachment","attachment":{"type":7,"prompt":"x"}}""")]
+    // The right type, but no prompt to read.
+    [InlineData("""{"uuid":"a1","type":"attachment","attachment":{"type":"queued_command"}}""")]
+    // A prompt that is not a string.
+    [InlineData("""{"uuid":"a1","type":"attachment","attachment":{"type":"queued_command","prompt":7}}""")]
+    public void AnUnreadableAttachmentIsIgnored(string line)
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        Assert.Empty(Collect(bridge, line));
+    }
+
+    // An absorbed row carrying no tag is Buddy's own queued prompt being folded
+    // in — "Call the ListAgents tool now", which is what keeps the relay busy in
+    // the first place. It is not a message and must not become a chat bubble.
+    [Fact]
+    public void AnAbsorbedPromptWithNoTagIsNotAMessage()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        Assert.Empty(Collect(bridge, Absorbed("a1", "Call the ListAgents tool now.")));
+    }
+
+    // Nothing is listening. The pump runs whether or not a panel has
+    // subscribed — a relay drains its transcript to keep its offset current
+    // regardless — so the null arm of the event is an ordinary state rather
+    // than a defensive one, and it must not throw its way out of the pump.
+    [Fact]
+    public void AnAbsorbedMessageWithNobodyListeningIsHarmless()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        // Deliberately not via Collect, which subscribes: that is the whole
+        // point of this case.
+        bridge.Route(Absorbed("a1", Tagged("mac-mini", "into the void")));
+    }
+
+    // The uuid dedup covers these the same way it covers a user row: the pump
+    // re-reads from the start of the file after a restart.
+    [Fact]
+    public void AnAbsorbedRowSeenTwiceIsDeliveredOnce()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+        var row = Absorbed("a1", Tagged("mac-mini", "only once"));
+
+        Assert.Single(Collect(bridge, row, row, row));
+    }
+
+    // Two peers answering into one absorbed prompt is ordinary once frames are
+    // in flight, and reading only the first would drop the rest silently — the
+    // same bug ParseInboundMessages was made plural for.
+    [Fact]
+    public void EveryMessageInAnAbsorbedPromptIsDelivered()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+        var row = Absorbed("a1", Tagged("mac-mini", "first") + "\n" + Tagged("avatar", "second"));
+
+        var seen = Collect(bridge, row);
+
+        Assert.Equal(2, seen.Count);
+        Assert.Equal("mac-mini", seen[0].FromName);
+        Assert.Equal("avatar", seen[1].FromName);
+    }
+
+    // --- CB-41 end to end, on the bytes it was found on -----------------------
+
+    // The real roster reply from the mini, copied verbatim out of the client
+    // relay's transcript — the exact frame that arrived three times on the
+    // afternoon this was diagnosed and was dropped all three times.
+    //
+    // Kept whole rather than rebuilt from a formatter, because a fixture written
+    // from memory is what this repository has been caught by before: the
+    // permission-dialog parser was first written against an invented one and
+    // failed on every real dialog. The payload carries its own SHA-256, so a
+    // fixture that had been retyped or reflowed would fail its own integrity
+    // check here rather than passing quietly.
+    private const string RealAbsorbedFrame =
+        "CB-MIRROR:v1;t=CHUNK;id=d06dd46b;seq=0;of=1;H=389e729755ece3c54e2193dbc3e00612302947e3cd0721e5370574d8ea8e77d1;p=H4sIAAAAAAAAE1VTy3LkIAz8F59D5Z5fSeWAQba1A4ji4Rlna/99ZQlPJqfuFgJaQnz+nZKNMH1Mf2g2W08NionWmYgJp7fJBeQ1F2z3wLIVm6ormNv00UqHtynbxLsXGyoLR4EK568FIJ27KUabfJ0+Pqd3673xWDjMdMdKSldIrQrLORxPYtAJLw0X60ZGb2QieTAVWs9XiG/JnHLJBR8my9mzdbe1UE9eVXObEC5isHYX6OsJTtLcViiCMKna2IyqwMqp7jRQYEe4qwzeYGqFhqKR9TTlKC24DtbgMYL5UKyivUUuuvT0S4wueNvsjt9CYbj1AJltVHalxXiouCYTaMX0ouuR3JC3RtI0j8uiWB3tUF65Oc/9FRgWyDWtDJaFiniGBw7MI7JYrWYB8Gf3ld/5lAwlYq1IiR+He6MvupDrgxRJXiOXbp6jsJINJ25gs+8xKw+KRDfZizKa7xgvFzy6A7kDm97EvNkQzIpt6/N5w2u0BjZ7BW9wzJg8plV2BqzN/Izps79MqDdl2tfoFCBSEfuRZgygzINUkm2tIAf9dERlsEmxjwsyceN0zHPB3brjnPt2+SrWo8xcAWezkkgNzDllhYJG5HcLq/1i1+gWuKP+jQq8yRu38c+AEegF2/Ey6JUbHHCRwuoNQxAX3L+mT1j73GyVVzxRYg0CXK/SNlADPfM8A/+ZmR6qV65Flyo3+iQ8eOOqHeMJd5inr39f/wHxv0qosAQAAA==;h=389e729755ece3c54e2193dbc3e00612302947e3cd0721e5370574d8ea8e77d1";
+
+    private const string RealAbsorbedPrompt =
+        "<cross-session-message from=\"bridge:session_01Usy6tz755EvmaQpkKGARMA\" from-name=\"claude-buddy-rc--claude-board-avatar\" from-mode=\"prompting\">\n"
+        + RealAbsorbedFrame
+        + "\n</cross-session-message>";
+
+    // The whole hop, on real bytes: the row Claude Code wrote when the reply
+    // landed mid-turn, through Route, out as a message, recognised as a frame,
+    // reassembled, hash-checked and decoded into the roster the panel needed.
+    //
+    // Every one of those steps already worked. The first one is the only one
+    // that did not, and it is the reason the live view never opened.
+    [Fact]
+    public void TheRealRosterReplyThatWasBeingDroppedArrivesAndDecodes()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        var seen = Collect(bridge, Absorbed("a1", RealAbsorbedPrompt));
+
+        var only = Assert.Single(seen);
+        Assert.Equal("claude-buddy-rc--claude-board-avatar", only.FromName);
+
+        // Recognised as a frame rather than as something to show a person —
+        // the test that RemoteControlSessions applies before handing it on.
+        Assert.True(MirrorProtocol.IsFrame(only.Body));
+
+        var frame = MirrorProtocol.TryParseFrame(only.Body);
+        Assert.NotNull(frame);
+        Assert.Equal(MirrorProtocol.Chunk, frame!.Type);
+        Assert.Equal("d06dd46b", frame.Id);
+
+        // Its own integrity check, which is also what proves the fixture is the
+        // original bytes and not a retyping of them.
+        var assembly = new MirrorProtocol.MirrorAssembly();
+        var result = assembly.Offer(frame);
+        Assert.Equal(MirrorProtocol.AssemblyState.Complete, result.State);
+
+        var entries = MirrorProtocol.DecodeRoster(result.Payload!);
+        var entry = Assert.Single(entries!);
+
+        Assert.Equal("job-hunter-mac-mini", entry.Name);
+
+        // The field the panel actually turns on: without it the session is
+        // settled as unavailable and the panel says there is no live view.
+        Assert.True(entry.HasTranscript);
+    }
+
+    // --- an attribute this app never wrote -------------------------------------
+
+    // A real reply from a live relay, copied verbatim from a probe session's
+    // transcript. It carries `hop-chain`, an attribute Claude Code added and
+    // this app neither writes nor reads.
+    //
+    // Worth pinning because the parser is a regex over a format nobody here
+    // controls, and the failure mode of an unknown attribute is not an error —
+    // it is a message that silently stops arriving. This is also the shape the
+    // attribute actually survives in: the `user` row Claude Code writes when it
+    // delivers a message normally has hop-chain stripped, so only a message
+    // absorbed mid-turn ever presents it to this code.
+    private const string RealHopChainPrompt =
+        "<cross-session-message from=\"bridge:session_01XkLEcdXztiDFW7LdpECzte\" hop-chain=\"009be9b8f8643b328c2352dd\" from-name=\"job-hunter-mac-mini\" from-mode=\"prompting\">\nRunning a /daily-run job-application campaign toward a 40-application goal (Director/VP/CTO-level, technical only) \u2014 currently on batch 2, working through queue rows and discovery.\n</cross-session-message>";
+
+    [Fact]
+    public void AnUnknownAttributeOnTheTagDoesNotStopTheMessageArriving()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        var seen = Collect(bridge, Absorbed("a1", RealHopChainPrompt));
+
+        var only = Assert.Single(seen);
+        Assert.Equal("job-hunter-mac-mini", only.FromName);
+        Assert.Contains("40-application goal", only.Body);
+
+        // The unknown attribute is not mistaken for part of the message.
+        Assert.DoesNotContain("hop-chain", only.Body);
+        Assert.DoesNotContain("cross-session-message", only.Body);
+    }
+
+    // --- CB-45: the address a send actually types into the pane ----------------
+
+    private static BridgeProtocol.RemoteAgent Peer(
+        string name, string peerRef, string status = "idle") =>
+        new(name, peerRef, "Remote Control", status);
+
+    // The bridge holds the peer list its own poll last reported, so a send does
+    // not have to be handed one. Covered here rather than only as a rule,
+    // because the wiring is the part that was missing: AddressFor could be
+    // perfect and every send still go out bare.
+    [Fact]
+    public void TheBridgeAddressesADuplicatedNameByRef()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        bridge.SetPeersForTests(new[] { Peer("job-hunter", "2548f2"), Peer("job-hunter", "462b2e") });
+
+        Assert.Equal("job-hunter [2548f2]", bridge.Address("job-hunter"));
+    }
+
+    [Fact]
+    public void TheBridgeLeavesAUniqueNameAlone()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        bridge.SetPeersForTests(new[] { Peer("job-hunter", "94f106") });
+
+        Assert.Equal("job-hunter", bridge.Address("job-hunter"));
+    }
+
+    // A bridge that has never polled has no evidence of ambiguity.
+    [Fact]
+    public void ABridgeThatHasNotPolledSendsTheBareName()
+    {
+        using var bridge = new RemoteControlBridge(".claude");
+
+        Assert.Equal("job-hunter", bridge.Address("job-hunter"));
+    }
+
+    // What the pane actually receives. Both send paths build their prompt from
+    // the address rather than the name, and the whole point is the text typed
+    // into the relay — so it is asserted as text.
+    //
+    // The frame prompt matters most: a mirror answer is what queues up behind a
+    // picker, so a wedge here stops the machine serving every other session too.
+    [Fact]
+    public void BothSendPromptsCarryTheDisambiguatedAddress()
+    {
+        var address = BridgeProtocol.AddressFor(
+            "job-hunter",
+            new[] { Peer("job-hunter", "2548f2"), Peer("job-hunter", "462b2e") });
+
+        Assert.Contains(
+            "send job-hunter [2548f2] exactly this text",
+            BridgeProtocol.SendMessagePrompt(address, "how is the build?"));
+
+        Assert.Contains(
+            "send job-hunter [2548f2] exactly this text",
+            BridgeProtocol.SendFramePrompt(address, "CB-MIRROR:v1;t=HELLO;id=abc123;"));
+
+        Assert.Contains(
+            "job-hunter [2548f2]",
+            BridgeProtocol.CapabilitiesQueryPrompt(address));
+    }
 }
