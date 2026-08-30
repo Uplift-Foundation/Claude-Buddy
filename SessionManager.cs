@@ -422,10 +422,6 @@ namespace ClaudeBuddy
             RemoteControlSessions.ProvideLocalSessions(() =>
                 _statuses.Select(pair => (pair.Key, pair.Value)).ToList());
 
-            // A machine that serves its sessions to other Buddies unattended
-            // asks for the relay itself, once, at startup. Why that is opt-in —
-            // and what it costs — is on ServeOnLaunch itself.
-            RemoteControlSessions.ServeOnLaunch();
 
             _debounce.Tick += (_, _) =>
             {
@@ -971,7 +967,7 @@ namespace ClaudeBuddy
 
                 status.Source = SourceOf(status);
                 if (!EnabledFor(status.Source)) continue;
-                if (RemoteControlBridge.IsOwnRelayCwd(status.Cwd)) continue;
+                if (MachineNames.LooksLikeALeftoverRelay(status.Cwd)) continue;
 
                 found.Add(new ScanEntry(
                     Path.GetFileNameWithoutExtension(file), status, written));
@@ -1378,7 +1374,7 @@ namespace ClaudeBuddy
                 // The same prefix test the bridge and the mirror already key on —
                 // see RemoteControlBridge.IsOwnRelayCwd for why it is the prefix
                 // and not the live tag, and why the cwd rather than argv.
-                if (RemoteControlBridge.IsOwnRelayCwd(status.Cwd)) continue;
+                if (MachineNames.LooksLikeALeftoverRelay(status.Cwd)) continue;
 
                 found.Add(new ScanEntry(sessionId, status, written));
             }
@@ -2079,10 +2075,6 @@ namespace ClaudeBuddy
                 var remote = new RemoteControlChatSession(sessionId, account, remoteName);
                 _remoteChats[sessionId] = remote;
 
-                // Opening the panel counts as asking for the bridge, so the
-                // conversation is usable the moment it appears rather than only
-                // after the first message is typed.
-                RemoteControlSessions.EnsureStarted();
 
                 return remote;
             }

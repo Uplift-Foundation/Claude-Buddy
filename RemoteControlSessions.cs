@@ -102,15 +102,17 @@ namespace ClaudeBuddy
         // are idle as well as when they are not.
         private static readonly TimeSpan ServePumpEvery = TimeSpan.FromSeconds(2);
 
+        // What is left of a relay, which is its published sessions and the
+        // mirror halves that once talked over it.
+        //
+        // **The bridge itself is gone and this is the shell it lived in.** The
+        // table is still filled by the test seams — SetRelayForTests and
+        // UseMirrorClientForTests — because the rules that read it are the same
+        // rules whichever transport supplied the rows, and asserting them
+        // without inventing a second table is worth the vestigial type. Nothing
+        // in the app writes it any more.
         private sealed class Relay
         {
-            public RemoteControlBridge? Bridge;
-
-            // Kept so the subscription can be undone on stop. The handler closes
-            // over the account name, so it is not the same delegate for two
-            // relays and cannot be reconstructed to unsubscribe.
-            public Action<BridgeProtocol.InboundMessage>? Handler;
-
             public bool Starting;
             public string State = "starting";
             public string? Warning;
@@ -245,27 +247,23 @@ namespace ClaudeBuddy
         }
 
         public static IReadOnlyList<Remote> Snapshot() =>
-            Visible(
-                _snapshot,
-                ClaudeBuddySettings.RemoteControlEnabled,
-                RemoteControlBridge.IsSupported,
-                ClaudeBuddySettings.PeerLinkEnabled);
+            Visible(_snapshot, ClaudeBuddySettings.PeerLinkEnabled);
 
         // Whether remote orbs are shown at all.
         //
-        // **Two transports now, and the gate has to ask about both.** It used to
-        // read "is Remote Control on and supported", which was the same question
-        // as "could any of these rows exist" while a relay was the only way one
-        // could. It is not any more: a machine with the relay switched off and
-        // the link on has real rows and would have drawn none of them — and the
-        // relay is exactly what a user turns off first, having been told it
-        // costs model turns.
+        // **One switch again, and a different one.** This asked about the relay
+        // for as long as a relay was the only way a remote row could exist; then
+        // briefly about both; and now about the link alone, because the relay is
+        // gone and the link is the only thing that fills the list.
         //
-        // Neither transport running still means nothing, which keeps the scan's
-        // job trivial: it never has to know why the list is empty.
-        internal static IReadOnlyList<Remote> Visible(
-            IReadOnlyList<Remote> rows, bool relayOn, bool relaySupported, bool linkOn) =>
-            (relayOn && relaySupported) || linkOn ? rows : Array.Empty<Remote>();
+        // Worth keeping as a function rather than collapsing into the property:
+        // it is the reason the scan never has to know *why* the list is empty,
+        // and the arms have been wrong once already — the two-transport version
+        // shipped drawing nothing on exactly the machine most likely to have
+        // rows, because it insisted on a switch the user had been told to turn
+        // off.
+        internal static IReadOnlyList<Remote> Visible(IReadOnlyList<Remote> rows, bool linkOn) =>
+            linkOn ? rows : Array.Empty<Remote>();
 
         // Lets the link raise the event a panel listens on. The event itself
         // cannot be raised from outside the class it is declared in, and the
@@ -331,32 +329,9 @@ namespace ClaudeBuddy
             return remotes;
         }
 
-        // Excluded from coverage: a guard that must never fire. If it ever does, a
-        // test started a real relay and would otherwise leak a live subprocess for
-        // the rest of the run — which is worth failing loudly over, and is also
-        // why there is nothing here to cover.
-        [ExcludeFromCodeCoverage]
-        private static void AssertNoLiveBridge(RemoteControlBridge? bridge)
-        {
-            if (bridge is not null)
-            {
-                throw new InvalidOperationException(
-                    "ClearRelaysForTests found a live bridge; a test started a real relay");
-            }
-        }
-
         internal static void ClearRelaysForTests()
         {
-            lock (Gate)
-            {
-                // Bridges are never started by a test, so there is nothing to
-                // stop — but assert that rather than assume it, because a relay
-                // holding a live bridge dropped on the floor here would leak a
-                // subprocess for the rest of the run.
-                foreach (var relay in Relays.Values) AssertNoLiveBridge(relay.Bridge);
-
-                Relays.Clear();
-            }
+            lock (Gate) Relays.Clear();
         }
 
         internal static void SetLastUseForTests(DateTime when)
@@ -699,95 +674,6 @@ namespace ClaudeBuddy
         internal static bool StartsBlocked =>
             Environment.GetEnvironmentVariable("CLAUDE_BUDDY_NO_RELAY") == "1";
 
-        // Excluded from coverage: starts a relay, which launches a real Claude
-        // Code session in tmux.
-        [ExcludeFromCodeCoverage]
-        public static void EnsureStarted()
-        {
-            if (StartsBlocked) return;
-            if (!ClaudeBuddySettings.RemoteControlEnabled) return;
-            if (!RemoteControlBridge.IsSupported) return;
-
-            var wanted = ClaudeBuddySettings.RemoteControlProfileDirs;
-            var toStart = new List<string>();
-
-            lock (Gate)
-            {
-                _lastUse = DateTime.UtcNow;
-
-                foreach (var account in wanted)
-                {
-                    if (Relays.TryGetValue(account, out var existing)
-                        && (existing.Bridge is not null || existing.Starting))
-                    {
-                        continue;
-                    }
-
-                    Relays[account] = new Relay { Starting = true, State = "starting" };
-                    toStart.Add(account);
-                }
-            }
-
-            SweepStaleScratch(wanted);
-
-            foreach (var account in toStart) _ = StartAsync(account);
-        }
-
-        // The one relay start that is not a person's gesture on this machine.
-        //
-        // Every other path to EnsureStarted is someone asking — the tray item,
-        // the settings button, opening a remote chat — because a relay spends
-        // the account's quota. A machine that *serves* its sessions to other
-        // Buddies unattended has nobody there to ask, which is the whole reason
-        // it is unattended; remoteControlServeOnLaunch is that machine saying
-        // "treat the app starting as me asking". Guarded here rather than at
-        // the call site so the meaning lives next to EnsureStarted, whose other
-        // callers all mean "someone asked just now".
-        // Excluded from coverage for EnsureStarted's own reason: with the
-        // setting on, this starts a real Claude Code session in tmux.
-        [ExcludeFromCodeCoverage]
-        public static void ServeOnLaunch()
-        {
-            if (!ClaudeBuddySettings.RemoteControlServeOnLaunch) return;
-            EnsureStarted();
-
-            // The only call site, and deliberately so: this is the one path that
-            // brings a relay up with no dispatcher behind it. Every other route
-            // to EnsureStarted is a hand on this machine, which means a window,
-            // which means the UI thread is already running its own timers.
-            EnsureServePump();
-        }
-
-        // Excluded from coverage: starts a real repeating timer over whatever
-        // relays are live. Both rules it relies on — Start being idempotent, and
-        // a tick neither overlapping nor being killed by a throw — are ServePump's
-        // and are covered there; what one round *does* is ServeTickAsync's, and
-        // is covered against relays with no bridge behind them.
-        [ExcludeFromCodeCoverage]
-        internal static void EnsureServePump()
-        {
-            lock (Gate)
-            {
-                _servePump ??= new ServePump(ServeTickAsync, ServePumpEvery);
-                _servePump.Start();
-            }
-        }
-
-        // Handing over. Called from EnsureTimer, which only ever runs on the UI
-        // thread, so reaching it *is* the proof that a dispatcher now exists —
-        // which is the only thing this pump was standing in for.
-        internal static void StopServePump()
-        {
-            ServePump? pump;
-            lock (Gate)
-            {
-                pump = _servePump;
-                _servePump = null;
-            }
-
-            pump?.Dispose();
-        }
-
         // Whether the stand-in is still needed, as a question rather than a
         // field, so the handover can be asserted from either side.
         internal static bool ServePumpRunning
@@ -795,269 +681,11 @@ namespace ClaudeBuddy
             get { lock (Gate) return _servePump?.Running == true; }
         }
 
-        // One round of serving, with no display and no prompt.
-        //
-        // Draining the transcript is the whole of it: an inbound frame becomes a
-        // MessageReceived, which OnMessage routes to this account's
-        // RemoteMirrorServer, which answers on its own. Nothing here pastes a
-        // prompt, so a machine that nobody is asking about spends nothing to sit
-        // here — the cost of serving is paid by the answer, once, when a request
-        // actually arrives.
-        //
-        // Deliberately *not* the poll: that asks the relay's model for a peer
-        // list, which costs a turn and produces remote orbs for a screen that,
-        // by construction, nobody is looking at. It starts when the dispatcher
-        // does.
-        //
-        // Unlike MirrorTickAsync this does not skip a relay whose halves report
-        // idle. That check is an optimisation there because the poll is draining
-        // the same transcript every twenty seconds anyway; here nothing else is
-        // draining it at all, and an idle server is exactly the state a first
-        // HELLO arrives in.
-        internal static async Task ServeTickAsync()
-        {
-            // Stands down while the dispatcher is doing the work.
-            //
-            // The two DispatcherTimers do strictly more than this can, so while
-            // they are firing this has nothing to add. What it must not do is
-            // *stay* stood down on the strength of them having fired once —
-            // which is what disposing it used to amount to, and is why a
-            // headless machine could go silent with no way back.
-            DateTime lastTick;
-            lock (Gate) lastTick = _dispatcherTickedAt;
-
-            if (DispatcherLooksAlive(DateTime.UtcNow, lastTick)) return;
-
-            MirrorLog.Say("serve-tick", "stand-in is driving; dispatcher quiet");
-
-            List<Relay> live;
-            lock (Gate) live = Relays.Values.Where(r => r.Bridge is not null).ToList();
-
-            foreach (var relay in live)
-            {
-                await ServeOneAsync(relay.Bridge!, relay.Server, relay.Client).ConfigureAwait(false);
-            }
-        }
-
-        // One relay's round, split out for the reason the rest of this file
-        // splits things out: Relay is private and holds a live bridge, so the
-        // loop above can only be reached by having one — while what the loop
-        // *does* is three calls and three catches, and those are worth
-        // asserting.
-        //
-        // Each of the three is caught separately and none of them stops the
-        // others. A relay whose pane has gone, or a mirror half that throws on
-        // an expiry, must not take the other accounts' serving down with it:
-        // this runs where nobody is watching, so the failure would be permanent
-        // and silent, which is the whole family of bug this ticket belongs to.
-        //
-        // Takes PumpGate for the same reason MirrorTickAsync does, and it is the
-        // same gate: at the handover these two overlap by one round (CB-28's
-        // review), and two rounds draining one transcript both start from the
-        // same offset and route the same lines twice. Returns false when it
-        // declined because the other pump held it — never an error, since
-        // whichever timer called this comes back around.
-        internal static async Task<bool> ServeOneAsync(
-            RemoteControlBridge bridge, RemoteMirrorServer? server, RemoteMirrorClient? client)
-        {
-            if (!PumpGate.TryEnter()) return false;
-
-            try
-            {
-                try { bridge.Pump(); } catch { }
-
-                if (server is not null)
-                {
-                    try { await server.TickAsync().ConfigureAwait(false); } catch { }
-                }
-
-                if (client is not null)
-                {
-                    try { await client.TickAsync().ConfigureAwait(false); } catch { }
-                }
-            }
-            finally
-            {
-                PumpGate.Exit();
-            }
-
-            return true;
-        }
-
-        // Deletes scratch directories no configured account owns.
-        //
-        // Each relay's private TMPDIR collects a Node compile cache — about
-        // 2.5MB a time — and a relay only removes its *own* on a clean stop. So
-        // the ones left by a crash, by an earlier version that used a different
-        // layout, by an account since un-ticked, or by a tagged test run are
-        // never reclaimed by anything. Measured at 7.2MB across four directories
-        // after a day of development, three of them belonging to nothing.
-        //
-        // Keyed on the names a relay would build for the accounts currently
-        // selected, so a live relay's directory is never a candidate — including
-        // a sibling account's, which matters now that several can run at once.
-        // The one case this can catch mid-flight is an account un-ticked while
-        // its relay is still winding down, which the next poll was about to
-        // retire anyway.
-        // Excluded from coverage: deletes real scratch directories from disk.
-        [ExcludeFromCodeCoverage]
-        private static void SweepStaleScratch(IReadOnlyList<string> wanted)
-        {
-            try
-            {
-                var root = RemoteControlBridge.ScratchRoot;
-                if (!Directory.Exists(root)) return;
-
-                var keep = new HashSet<string>(
-                    wanted.Select(a => new RemoteControlBridge(a).ScratchName),
-                    StringComparer.Ordinal);
-
-                foreach (var dir in Directory.EnumerateDirectories(root))
-                {
-                    if (keep.Contains(Path.GetFileName(dir))) continue;
-
-                    try { Directory.Delete(dir, recursive: true); } catch { }
-                }
-            }
-            catch
-            {
-                // Housekeeping. Never a reason to fail a start.
-            }
-        }
-
         // Keeps relays that are being used from being idled out from under
         // whoever is using them. Cheap enough to call on every send.
         public static void Touch()
         {
             lock (Gate) _lastUse = DateTime.UtcNow;
-        }
-
-        // Excluded from coverage: starts a relay bridge, which spends quota on a
-        // real session.
-        [ExcludeFromCodeCoverage]
-        private static async Task StartAsync(string account)
-        {
-            var bridge = new RemoteControlBridge(account);
-            void OnMessageFrom(BridgeProtocol.InboundMessage m) => OnMessage(account, m);
-            bridge.MessageReceived += OnMessageFrom;
-
-            bool ok;
-            try
-            {
-                ok = await bridge.StartAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                ok = false;
-            }
-
-            if (!ok)
-            {
-                bridge.MessageReceived -= OnMessageFrom;
-                bridge.Dispose();
-
-                lock (Gate)
-                {
-                    // Kept rather than removed, so the settings window can say
-                    // *which* account failed instead of silently showing one
-                    // fewer than the user ticked.
-                    if (Relays.TryGetValue(account, out var failed))
-                    {
-                        failed.Starting = false;
-
-                        // The specific reason when there is one — an unfinished
-                        // first-run setup is the common case and is fixable in
-                        // ten seconds, but only if it says so.
-                        failed.State = bridge.StartFailure ?? "failed to start";
-                        failed.Warning = null;
-                    }
-                }
-
-                return;
-            }
-
-            // Both mirror halves are built with the relay and live as long as
-            // it does. Neither costs anything until something asks: the server
-            // answers frames that arrive, the client sends none until there is a
-            // remote orb to ask about.
-            var client = new RemoteMirrorClient(
-                account,
-                new RemoteMirrorClient.Seams(bridge.SendFrameToAsync));
-
-            var server = new RemoteMirrorServer(
-                account,
-                RemoteMirrorServer.RealSeams(
-                    account,
-                    bridge.SendFrameToAsync,
-                    LocalSessions));
-
-            client.RosterUpdated += () => Dispatcher.UIThread.Post(() => MirrorChanged?.Invoke(account));
-
-            lock (Gate)
-            {
-                var relay = Relays.TryGetValue(account, out var found) ? found : new Relay();
-                relay.Bridge = bridge;
-                relay.Handler = OnMessageFrom;
-                relay.Starting = false;
-                relay.Polled = false;
-                relay.State = "connected";
-                relay.Warning = bridge.Warning;
-                relay.Client = client;
-                relay.Server = server;
-                Relays[account] = relay;
-            }
-
-            // Posted, not awaited. The timer has to be created on the UI thread
-            // because DispatcherTimer belongs to it, but waiting for that to
-            // happen would put the first poll behind the dispatcher being free —
-            // and awaiting InvokeAsync where no dispatcher is pumping blocks
-            // forever, which is exactly what it did: the relay reported
-            // "connected" and then never asked for a peer list, because startup
-            // stopped one line short of doing so.
-            //
-            // One timer for all relays, not one each: they are polled together,
-            // and N timers on the same interval would just be N wakeups.
-            Dispatcher.UIThread.Post(EnsureTimer);
-
-            await PollAsync(account).ConfigureAwait(false);
-        }
-
-        // Excluded from coverage: creates the Avalonia poll timer the relay runs
-        // on.
-        [ExcludeFromCodeCoverage]
-        private static void EnsureTimer()
-        {
-            // Reaching here means the dispatcher is running, which is the one
-            // thing the serve pump was covering for.
-            //
-            // Stopped before the timers are created rather than after, which
-            // narrows the overlap but does not close it: disposing a timer does
-            // not reach inside a round already running, so a serve tick still
-            // inside bridge.Pump() when the mirror timer first fires 1.5s later
-            // would be a second pump on the same transcript. What actually
-            // closes it is PumpGate, which both rounds take — this line is why
-            // there is at most one such round, and the gate is why that round
-            // cannot collide. The earlier version of this comment claimed the
-            // ordering alone was enough; it never was.
-            // Deliberately NOT StopServePump() any more.
-            //
-            // The stand-in stays, and stands down instead: ServeTickAsync does
-            // nothing while the dispatcher is demonstrably firing, and picks the
-            // work back up if it stops. Disposing it here was right about the
-            // handover and wrong about its permanence — see _dispatcherTickedAt.
-            //
-            // Safe to leave running because PumpGate is what actually keeps the
-            // two rounds off each other, which the comment on that gate has
-            // always said; the ordering here never was the guarantee.
-            DispatcherTicked();
-
-            if (_poll is not null) return;
-
-            _poll = new DispatcherTimer { Interval = PollEvery };
-            _poll.Tick += (_, _) => { DispatcherTicked(); _ = TickAsync(); };
-            _poll.Start();
-
-            EnsureMirrorTimer();
         }
 
         // The one poll in this class that is free.
@@ -1079,21 +707,6 @@ namespace ClaudeBuddy
 
         private static readonly TimeSpan MirrorPumpEvery = TimeSpan.FromMilliseconds(1500);
 
-        // Excluded from coverage: starts a real DispatcherTimer whose every tick
-        // pumps live relays. Same reasoning as the poll loop below it, and the
-        // same reason ClaudeBuddySettings' deferred write is excluded — a test
-        // that waited for a real timer is the shape that has cost this branch
-        // five flakes.
-        [ExcludeFromCodeCoverage]
-        private static void EnsureMirrorTimer()
-        {
-            if (_mirrorPump is not null) return;
-
-            _mirrorPump = new DispatcherTimer { Interval = MirrorPumpEvery };
-            _mirrorPump.Tick += (_, _) => { DispatcherTicked(); _ = MirrorTickAsync(); };
-            _mirrorPump.Start();
-        }
-
         // The one guard both pumps take, so that "only one round at a time" is a
         // single rule rather than two that agree by luck. Internal so a test can
         // hold it and watch a round decline — the only way to prove from outside
@@ -1108,6 +721,44 @@ namespace ClaudeBuddy
         // belonging to live relays and ticking a mirror server and client that
         // only exist when one is running.
         [ExcludeFromCodeCoverage]
+        // One turn of both mirror halves, under the shared pump gate.
+        //
+        // **This used to take a bridge and pump it first; it no longer does, and
+        // that is the only thing that changed.** What it always actually was is
+        // the gate and the two ticks — the bridge was the transport that
+        // happened to need waking, and the transport now wakes itself on its own
+        // read loop.
+        //
+        // Kept rather than folded into MirrorTickAsync because the thing worth
+        // asserting is the *decline*: two pumps must not tick the same halves at
+        // once, and a test can only watch that happen if it can call one of them
+        // directly. False means the gate was held, which is never an error —
+        // whichever timer called this comes back around.
+        internal static async Task<bool> ServeOneAsync(
+            RemoteMirrorServer? server, RemoteMirrorClient? client)
+        {
+            if (!PumpGate.TryEnter()) return false;
+
+            try
+            {
+                if (server is not null)
+                {
+                    try { await server.TickAsync().ConfigureAwait(true); } catch { }
+                }
+
+                if (client is not null)
+                {
+                    try { await client.TickAsync().ConfigureAwait(true); } catch { }
+                }
+            }
+            finally
+            {
+                PumpGate.Exit();
+            }
+
+            return true;
+        }
+
         // Internal rather than private only so a UI test can watch it decline
         // while the serve pump holds the gate — the assertion that the two
         // pumps really do share one, which is otherwise a claim about code
@@ -1121,95 +772,35 @@ namespace ClaudeBuddy
 
             try
             {
-                List<Relay> live;
-                lock (Gate) live = Relays.Values.Where(r => r.Bridge is not null).ToList();
+                // **Repointed at the link rather than deleted with the relay,
+                // and that distinction matters.** What this used to do was pump
+                // a tmux pane and then tick the two mirror halves that read it.
+                // The pane is gone; the halves are not, and neither is their
+                // reason for wanting a tick — deadlines lapse and watches renew
+                // on this clock, not on the arrival of bytes. Deleting it
+                // wholesale would have left a fetch that never times out and a
+                // watch that quietly expires, both of which look like the far
+                // machine having gone quiet.
+                var host = PeerSessions.Host;
+                if (host is null) return;
 
-                foreach (var relay in live)
+                var client = host.Client;
+                var server = host.Server;
+
+                if (server is not null)
                 {
-                    var busy = relay.Server?.Busy == true || relay.Client?.Busy == true;
-                    if (!busy) continue;
+                    try { await server.TickAsync().ConfigureAwait(true); } catch { }
+                }
 
-                    try { relay.Bridge!.Pump(); } catch { }
-
-                    if (relay.Server is not null)
-                    {
-                        try { await relay.Server.TickAsync().ConfigureAwait(true); } catch { }
-                    }
-
-                    if (relay.Client is not null)
-                    {
-                        try { await relay.Client.TickAsync().ConfigureAwait(true); } catch { }
-                    }
+                if (client is not null)
+                {
+                    try { await client.TickAsync().ConfigureAwait(true); } catch { }
                 }
             }
             finally
             {
                 PumpGate.Exit();
             }
-        }
-
-        // One round: retire the relays nobody wants, then re-ask the rest.
-        // Excluded from coverage: the poll loop, driving live relays.
-        [ExcludeFromCodeCoverage]
-        private static async Task TickAsync()
-        {
-            // Idle check first, so relays nobody wants aren't kept alive by the
-            // very poll that was about to retire them.
-            if (IdleExpired())
-            {
-                StopAll("idle");
-                return;
-            }
-
-            if (!ClaudeBuddySettings.RemoteControlEnabled)
-            {
-                StopAll("off");
-                return;
-            }
-
-            // An account un-ticked in Settings while its relay was up. Retired
-            // here rather than by the settings window, so there is one place
-            // that decides which relays should exist.
-            var wanted = ClaudeBuddySettings.RemoteControlProfileDirs;
-            List<string> unwanted;
-            lock (Gate)
-            {
-                unwanted = Relays.Keys.Where(a => !wanted.Contains(a, StringComparer.Ordinal)).ToList();
-            }
-
-            foreach (var account in unwanted) Stop(account, "no longer selected");
-
-            // A machine that is meant to be serving puts its own relay back.
-            //
-            // **Nothing else was ever going to.** EnsureStarted runs at launch
-            // and from user gestures, and PollAsync retires a relay that stops
-            // answering — `Stop(account, "relay stopped")`. After that the poll
-            // finds no bridge and returns immediately, every tick, for ever. On
-            // a machine with somebody at it that is invisible: the next click on
-            // an orb starts a new relay. On a headless one there is no next
-            // click, so the machine simply goes dark and stays dark.
-            //
-            // Measured on job-hunter-mac-mini: served four transfers happily,
-            // went silent at 16:19 mid-fetch — no relay writes at all, not even
-            // its own ListAgents poll — and was still silent thirteen minutes
-            // later with Buddy alive and using no CPU. Restarting Buddy brought
-            // it back within seconds. From the far end that is a panel that
-            // works, then times out, then keeps timing out.
-            //
-            // Gated on serve-on-launch because that setting is exactly the
-            // statement "this machine serves whether or not anyone is here",
-            // and it is the case that has no other way back. A machine with a
-            // user gets its relay back from the gesture that wants it.
-            //
-            // Below the idle check on purpose: a relay stopped for idleness
-            // must stay stopped, and this only ever sees relays that stopped
-            // for some other reason.
-            if (ClaudeBuddySettings.RemoteControlServeOnLaunch) ReviveStoppedRelays(wanted);
-
-            List<string> live;
-            lock (Gate) live = Relays.Where(p => p.Value.Bridge is not null).Select(p => p.Key).ToList();
-
-            foreach (var account in live) await PollAsync(account).ConfigureAwait(false);
         }
 
         // When a stopped relay was last given another go, per account. A
@@ -1233,200 +824,6 @@ namespace ClaudeBuddy
         // one tried recently waits.
         internal static bool ShouldRevive(bool hasBridge, DateTime now, DateTime? lastAttempt) =>
             !hasBridge && (lastAttempt is not { } last || now - last >= ReviveEvery);
-
-        // Excluded from coverage: starts a real relay, which spends quota on a
-        // live Claude Code session. The decision above is what is tested.
-        [ExcludeFromCodeCoverage]
-        private static void ReviveStoppedRelays(IReadOnlyList<string> wanted)
-        {
-            var now = DateTime.UtcNow;
-            var any = false;
-
-            lock (Gate)
-            {
-                foreach (var account in wanted)
-                {
-                    var hasBridge = Relays.TryGetValue(account, out var relay)
-                                    && relay.Bridge is not null;
-
-                    RevivedAt.TryGetValue(account, out var last);
-
-                    if (!ShouldRevive(hasBridge, now, last == default ? null : last)) continue;
-
-                    RevivedAt[account] = now;
-                    any = true;
-                }
-            }
-
-            // Outside the lock: EnsureStarted takes it, and it starts processes.
-            if (any) EnsureStarted();
-        }
-
-        // Re-asks one account's relay for its peers and republishes.
-        // Excluded from coverage: asks a live relay for its agent list.
-        [ExcludeFromCodeCoverage]
-        private static async Task PollAsync(string account)
-        {
-            RemoteControlBridge? bridge;
-            lock (Gate)
-            {
-                bridge = Relays.TryGetValue(account, out var relay) ? relay.Bridge : null;
-            }
-
-            if (bridge is null) return;
-
-            // Also drains the transcript, which is how an inbound reply that
-            // arrived while nobody was asking anything gets noticed at all.
-            bridge.Pump();
-
-            // Nothing below this line while somebody is waiting on that relay.
-            //
-            // Pump above is the half that matters during a wait: it reads what
-            // has already arrived and costs the relay nothing. ListAgents below
-            // costs it a whole model turn, and a relay only has one at a time.
-            // Polling through a fetch does not slow it down a little — it can
-            // stop it happening at all, because the poll comes round again
-            // before the relay has finished answering the last one and the
-            // user's frame never reaches the front of the queue. Measured: a
-            // FETCH not typed for eight minutes, by which time its deadline had
-            // gone. See RemoteMirrorClient.Waiting.
-            //
-            // Skipping a poll costs a peer list that is a few seconds stale,
-            // which is what the next tick fixes anyway.
-            if (MirrorClientFor(account)?.Waiting == true) return;
-
-            IReadOnlyList<BridgeProtocol.RemoteAgent>? agents;
-            try
-            {
-                agents = await bridge.ListAgentsAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                agents = null;
-            }
-
-            if (agents is null)
-            {
-                // A relay that has stopped answering is worse than none: it
-                // would publish a peer list frozen at whatever was true when it
-                // died. Retiring it means those orbs go away, which is at least
-                // honest, and the next EnsureStarted brings a fresh one up.
-                if (!bridge.IsRunning) Stop(account, "relay stopped");
-                else lock (Gate) { if (Relays.TryGetValue(account, out var r)) r.State = "not answering"; }
-
-                Republish();
-                return;
-            }
-
-            var remotes = RemotesFrom(agents, account, DateTime.UtcNow);
-
-            lock (Gate)
-            {
-                if (Relays.TryGetValue(account, out var relay))
-                {
-                    relay.Sessions = remotes;
-                    relay.Polled = true;
-                    relay.Warning = bridge.Warning;
-                    relay.Stall = bridge.Stall?.Describe();
-                    relay.State = remotes.Count switch
-                    {
-                        0 => "no remote sessions found",
-                        1 => "1 remote session",
-                        _ => $"{remotes.Count} remote sessions"
-                    };
-                }
-            }
-
-            Republish();
-            RaiseWorkingTransitions(remotes);
-            RetuneTimer();
-
-            // Before the colour question below, because it can answer it for
-            // free. A far Buddy's roster carries the colour and the command list
-            // read off its own disk, so a session it covers never needs the
-            // CB-INFO round trip at all.
-            //
-            // The *unfiltered* peer list goes in on purpose: a far Buddy's relay
-            // is deliberately not worth an orb, so the filtered list is the one
-            // place it has been removed from.
-            RemoteMirrorClient? client;
-            lock (Gate) client = Relays.TryGetValue(account, out var found) ? found.Client : null;
-
-            if (client is not null)
-            {
-                try
-                {
-                    await client.DiscoverAsync(agents, remotes.Select(r => r.Name).ToList())
-                        .ConfigureAwait(false);
-                }
-                catch
-                {
-                    // A handshake that failed leaves every session on the
-                    // messaging channel, which is where they already were.
-                }
-            }
-
-            await AskForMissingInfoAsync(account, remotes, bridge).ConfigureAwait(false);
-        }
-
-        // Asks each newly seen session what colour it is, once.
-        //
-        // This costs a message per remote session — there is no cheaper route,
-        // since a peer row carries neither the transcript nor the cwd a colour
-        // is derived from (see BridgeProtocol's own note). Bounded by asking
-        // only once per session per run, and only for sessions already deemed
-        // worth an orb, so nothing is spent on relays or dead registrations.
-        //
-        // Sequential rather than fanned out: the relay serializes requests
-        // anyway, and firing five at once would just queue five deep behind one
-        // input line.
-        // Excluded from coverage: sends prompts into a live relay session.
-        [ExcludeFromCodeCoverage]
-        private static async Task AskForMissingInfoAsync(
-            string account, IReadOnlyList<Remote> remotes, RemoteControlBridge bridge)
-        {
-            foreach (var remote in remotes)
-            {
-                var key = account + ":" + remote.Name;
-
-                // A far Buddy has already said, off its own disk. Asking its
-                // model the same question would cost a turn to get a worse
-                // answer.
-                if (MirrorFor(account, remote.Name) is not null) continue;
-
-                lock (Gate)
-                {
-                    if (KnownColors.ContainsKey(key)) continue;
-                    if (!ShouldAsk(key)) continue;
-                }
-
-                try
-                {
-                    await bridge.AskCapabilitiesAsync(remote.Name).ConfigureAwait(false);
-                }
-                catch
-                {
-                    // Cosmetic. A colour that never arrives leaves the derived
-                    // one in place, which is what every orb had before this.
-                }
-            }
-        }
-
-        // Picks the cadence from what is actually happening. Called after every
-        // poll rather than on a schedule of its own, because the thing it reacts
-        // to — a session going busy — is exactly what a poll discovers.
-        // Excluded from coverage: changes the interval of the Avalonia poll timer.
-        [ExcludeFromCodeCoverage]
-        private static void RetuneTimer()
-        {
-            var wanted = ShouldPollFast() ? PollEveryBusy : PollEvery;
-
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (_poll is null || _poll.Interval == wanted) return;
-                _poll.Interval = wanted;
-            });
-        }
 
         internal static bool ShouldPollFast()
         {
@@ -1622,81 +1019,22 @@ namespace ClaudeBuddy
         // ResetForTests, the way UseMirrorClientForTests is.
         internal static Func<string, string, string, Task<string?>>? SendOverrideForTests;
 
-        // Excluded from coverage: sends a message through a live relay.
-        [ExcludeFromCodeCoverage]
-        public static async Task<string?> SendToAsync(string account, string remoteName, string text)
-        {
-            if (SendOverrideForTests is { } instead)
-                return await instead(account, remoteName, text).ConfigureAwait(false);
-
-            EnsureStarted();
-
-            RemoteControlBridge? bridge;
-            lock (Gate)
-            {
-                bridge = Relays.TryGetValue(account, out var relay) ? relay.Bridge : null;
-            }
-
-            if (bridge is null) return null;
-
-            Touch();
-            lock (Gate) _lastSend = DateTime.UtcNow;
-
-            var id = await bridge.SendToAsync(remoteName, text).ConfigureAwait(false);
-
-            // Straight back to the relay rather than waiting up to a full tick:
-            // the moment after a send is exactly when whether it started is
-            // worth knowing, and it is also when someone is watching.
-            if (id is not null) _ = PollAsync(account);
-
-            return id;
-        }
-
-        // Excluded from coverage: kills a relay tmux session.
-        [ExcludeFromCodeCoverage]
-        public static void Stop(string account, string why = "off")
-        {
-            RemoteControlBridge? bridge = null;
-            Action<BridgeProtocol.InboundMessage>? handler = null;
-
-            lock (Gate)
-            {
-                if (Relays.TryGetValue(account, out var relay))
-                {
-                    bridge = relay.Bridge;
-                    handler = relay.Handler;
-
-                    // Both mirror halves go with the wire they talked over.
-                    // Nothing to unsubscribe from the far side: its watches
-                    // carry a TTL precisely so a relay that vanished without
-                    // saying goodbye stops being served.
-                    relay.Client = null;
-                    relay.Server = null;
-
-                    Relays.Remove(account);
-                }
-            }
-
-            if (bridge is not null)
-            {
-                if (handler is not null) bridge.MessageReceived -= handler;
-                bridge.Dispose();
-            }
-
-            Republish();
-            StopTimerIfIdle();
-        }
-
-        // Excluded from coverage: kills every relay tmux session.
-        [ExcludeFromCodeCoverage]
+        // Forgets every remote session and everything remembered about them.
+        //
+        // There is no longer a subprocess to kill: this used to end each
+        // account's relay tmux session, and now it only clears the table those
+        // relays filled. Kept because the tray and the settings switch both need
+        // a way to say "stop showing me these", which is a different thing from
+        // the transport being off.
         public static void StopAll(string why = "off")
         {
-            List<string> accounts;
-            lock (Gate) accounts = Relays.Keys.ToList();
-
-            foreach (var account in accounts) Stop(account, why);
-
-            lock (Gate) WorkingNow.Clear();
+            lock (Gate)
+            {
+                Relays.Clear();
+                WorkingNow.Clear();
+                _peerRows = Array.Empty<Remote>();
+                _snapshot = Array.Empty<Remote>();
+            }
         }
 
         // Excluded from coverage: stops the Avalonia poll timer.
@@ -1722,24 +1060,6 @@ namespace ClaudeBuddy
 
             _mirrorPump?.Stop();
             _mirrorPump = null;
-        }
-
-        // Settings changed under us. Unlike OpenClawSessions.Restart this only
-        // ever tears down: bringing a relay back has to be asked for, because
-        // starting one costs the user something.
-        // Excluded from coverage: stops every relay and starts them again.
-        [ExcludeFromCodeCoverage]
-        public static void Restart()
-        {
-            if (!ClaudeBuddySettings.RemoteControlEnabled || !RemoteControlBridge.IsSupported)
-            {
-                StopAll("off");
-                return;
-            }
-
-            bool any;
-            lock (Gate) any = Relays.Count > 0;
-            if (any) StopAll("restarting");
         }
 
         // Internal so the two things this decides — that a frame never reaches a

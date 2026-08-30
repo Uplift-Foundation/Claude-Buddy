@@ -22,6 +22,22 @@ namespace ClaudeBuddy
         private static PeerMirrorHost? _host;
         private static PeerDiscovery? _discovery;
         private static Timer? _connecting;
+        private static Timer? _pumping;
+
+        // How often the two mirror halves are given a chance to notice a
+        // deadline lapsing or a watch needing renewal.
+        //
+        // **A plain Timer, and that is the whole point of it.** This work used
+        // to be a DispatcherTimer, and a DispatcherTimer does not fire on a Mac
+        // whose screen never unlocks — which is exactly the machine this feature
+        // exists to serve, and exactly the fault CB-39 spent a ticket on. The
+        // relay grew a non-dispatcher stand-in for it; the relay is gone and the
+        // reason is not, so the link owns one of its own.
+        //
+        // 1.5s, unchanged from the pump it replaces: fast enough that a lapsed
+        // fetch is noticed while somebody is still looking at the panel, and far
+        // too cheap to be worth tuning.
+        internal static readonly TimeSpan PumpEvery = TimeSpan.FromMilliseconds(1500);
 
         // How often to try the machines we are paired with but not connected
         // to. A machine that has just woken should come back within a few
@@ -145,6 +161,9 @@ namespace ClaudeBuddy
             {
                 _connecting = new Timer(
                     _ => _ = DialAsync(), null, TimeSpan.Zero, ReconnectEvery);
+
+                _pumping = new Timer(
+                    _ => _ = PumpAsync(), null, PumpEvery, PumpEvery);
             }
         }
 
@@ -273,6 +292,24 @@ namespace ClaudeBuddy
             catch (Exception ex)
             {
                 MirrorLog.Say("peer-roster-failed", $"{ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        // Gives the mirror halves their tick.
+        //
+        // Wrapped for the same reason DialAsync is: the timer discards this
+        // task, so anything thrown inside it would go nowhere at all — no log,
+        // no crash, and a pump that had silently stopped.
+        [ExcludeFromCodeCoverage]
+        private static async Task PumpAsync()
+        {
+            try
+            {
+                await RemoteControlSessions.MirrorTickAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                MirrorLog.SayOnce("peer-pump-threw", $"{ex.GetType().Name}: {ex.Message}");
             }
         }
 
@@ -623,19 +660,23 @@ namespace ClaudeBuddy
             PeerMirrorHost? host;
             PeerDiscovery? discovery;
             Timer? connecting;
+            Timer? pumping;
 
             lock (Gate)
             {
                 host = _host;
                 discovery = _discovery;
                 connecting = _connecting;
+                pumping = _pumping;
 
                 _host = null;
                 _discovery = null;
                 _connecting = null;
+                _pumping = null;
             }
 
             connecting?.Dispose();
+            pumping?.Dispose();
             discovery?.Dispose();
             host?.Dispose();
         }

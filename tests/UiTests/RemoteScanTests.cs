@@ -62,7 +62,11 @@ public class RemoteScanTests
     // Skipped where the bridge cannot run at all — it is tmux-based, so a Windows
     // runner has no remote sessions to scan and Snapshot answers empty whatever
     // is published. Asserting otherwise there would be asserting the skip.
-    private static bool Supported => RemoteControlBridge.IsSupported;
+    // Every transport this app has is cross-platform now, so there is no
+    // longer a platform to gate on. Kept as a constant rather than removed,
+    // because the tests that read it are asserting "the feature is available",
+    // which is still a real question and may acquire a new answer.
+    private static bool Supported => true;
 
     [AvaloniaFact]
     public void ARemoteSessionGetsAnOrb()

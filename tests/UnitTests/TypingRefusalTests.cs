@@ -127,44 +127,6 @@ public class TypingRefusalTests
 
     // --- CB-43: which refusals the messaging channel may answer ----------------
 
-    // The one that falls back. No pane is a missing mechanism, and the panel
-    // had a working channel before it upgraded to a live view — refusing here
-    // made mirroring *cost* the user the ability to send.
-    [Fact]
-    public void NoPaneFallsBackToTheMessagingChannel() =>
-        Assert.True(RemoteControlChatSession.FallsBackToMessaging(MirrorProtocol.ErrNoPane));
-
-    // The ones that must not. ErrReplyOff is the interesting member: it is the
-    // far machine's owner having switched replying off, and the messaging
-    // channel puts text into that session too — so falling back would route
-    // around a stated decision rather than around an absent capability. The
-    // others are not refusals of typing at all and have their own wording.
-    [Theory]
-    [InlineData(MirrorProtocol.ErrReplyOff)]
-    [InlineData(MirrorProtocol.ErrNoSession)]
-    [InlineData(MirrorProtocol.ErrBadHash)]
-    [InlineData(MirrorProtocol.ErrUnsupported)]
-    [InlineData("something-a-newer-machine-invented")]
-    [InlineData("")]
-    [InlineData(null)]
-    public void NothingElseFallsBack(string? errCode) =>
-        Assert.False(RemoteControlChatSession.FallsBackToMessaging(errCode));
-
-    // The note has one job beyond saying the message went: warning that a slash
-    // command will not run this way. Typing goes through the session's input
-    // line, so "/color blue" runs; handed over as a message it is a sentence
-    // about a command, and someone who is not told that retypes it.
-    [Fact]
-    public void TheFallbackNoteSaysSlashCommandsWillNotRun()
-    {
-        var said = RemoteControlChatSession.SentAsMessageNote(Remote);
-
-        Assert.Contains(Remote, said);
-        Assert.Contains("as a message", said);
-        Assert.Contains("Slash commands", said);
-        Assert.Contains("tmux pane", said);
-    }
-
     // --- CB-46: the rules a first paint depends on -----------------------------
 
     // The question the server asks before deciding how much transcript to send,

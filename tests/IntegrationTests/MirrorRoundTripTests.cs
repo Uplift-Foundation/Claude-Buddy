@@ -155,7 +155,7 @@ public class MirrorRoundTripTests : IDisposable
         // Exactly what the pump's timer calls, and the only thing standing
         // between an unattended machine and serving nothing.
         await RemoteControlSessions.ServeOneAsync(
-            new RemoteControlBridge(".claude"), harness.Server, harness.Client);
+            harness.Server, harness.Client);
 
         var delta = Assert.Single(harness.Deltas);
         Assert.Contains("said while the screen was locked", Assert.Single(delta.Turns).Text);
@@ -191,7 +191,7 @@ public class MirrorRoundTripTests : IDisposable
             // rather than queued or run late — the pump's own timer is what
             // brings it back.
             Assert.False(await RemoteControlSessions.ServeOneAsync(
-                new RemoteControlBridge(".claude"), harness.Server, harness.Client));
+                harness.Server, harness.Client));
 
             Assert.Empty(harness.Deltas);
         }
@@ -203,7 +203,7 @@ public class MirrorRoundTripTests : IDisposable
         // ...and nothing was lost by standing down: the next round delivers the
         // rows the declined one would have.
         Assert.True(await RemoteControlSessions.ServeOneAsync(
-            new RemoteControlBridge(".claude"), harness.Server, harness.Client));
+            harness.Server, harness.Client));
 
         var delta = Assert.Single(harness.Deltas);
         Assert.Contains("said mid-handover", Assert.Single(delta.Turns).Text);
@@ -221,14 +221,14 @@ public class MirrorRoundTripTests : IDisposable
         harness.AddSession("job-hunter", path);
 
         Assert.True(await RemoteControlSessions.ServeOneAsync(
-            new RemoteControlBridge(".claude"), harness.Server, harness.Client));
+            harness.Server, harness.Client));
 
         Assert.False(RemoteControlSessions.PumpGate.Busy);
 
         // And the next round can still get in, which is the thing that actually
         // matters about the previous line.
         Assert.True(await RemoteControlSessions.ServeOneAsync(
-            new RemoteControlBridge(".claude"), harness.Server, harness.Client));
+            harness.Server, harness.Client));
     }
 
     // A relay with neither half built yet — the window between the bridge
@@ -238,7 +238,7 @@ public class MirrorRoundTripTests : IDisposable
     [Fact]
     public async Task AServeTickOverARelayWithNoMirrorHalvesDoesNothing()
     {
-        await RemoteControlSessions.ServeOneAsync(new RemoteControlBridge(".claude"), null, null);
+        await RemoteControlSessions.ServeOneAsync(null, null);
     }
 
     // One half throwing must cost that half's round and nothing else. The
@@ -260,13 +260,13 @@ public class MirrorRoundTripTests : IDisposable
 
         harness.AgentsThrow = true;
         await RemoteControlSessions.ServeOneAsync(
-            new RemoteControlBridge(".claude"), harness.Server, harness.Client);
+            harness.Server, harness.Client);
 
         Assert.Empty(harness.Deltas);
 
         harness.AgentsThrow = false;
         await RemoteControlSessions.ServeOneAsync(
-            new RemoteControlBridge(".claude"), harness.Server, harness.Client);
+            harness.Server, harness.Client);
 
         var delta = Assert.Single(harness.Deltas);
         Assert.Contains("arrived during the outage", Assert.Single(delta.Turns).Text);
@@ -662,37 +662,44 @@ public class MirrorRoundTripTests : IDisposable
     {
         var harness = new Harness(_dir);
 
-        var justAPeer = new[]
-        {
-            new BridgeProtocol.RemoteAgent("job-hunter", "94f106", "Remote Control", "idle")
-        };
-
-        await harness.Client.DiscoverAsync(justAPeer, new[] { "job-hunter" });
+        // Nobody to ask. Over the relay this was said with a peer list holding
+        // the session but no Buddy; over a link it is said by being connected to
+        // no machines, which is the same fact with the indirection removed.
+        await harness.Client.DiscoverAsync(Array.Empty<string>(), new[] { "job-hunter" });
 
         Assert.Equal(
             RemoteMirrorClient.MirrorAvailability.Unavailable,
             harness.Client.StateFor("job-hunter").Availability);
     }
 
-    // A relay left registered by a Buddy that has since quit reads "offline".
-    // Asking it would be asking nothing.
+    // **This used to assert that a relay reading "offline" was not mistaken for
+    // a live Buddy, and that state no longer exists.** A relay was a
+    // registration that outlived the process behind it, so the list could name
+    // something that was not there; a connection cannot. A machine is connected
+    // or it is not, and the case above — nobody to ask — is now the whole of it.
+    //
+    // Kept as a note rather than deleted silently, because "a test disappeared"
+    // and "a state stopped being possible" look identical in a diff.
+    //
+    // What still needs asserting is that a session Buddy *has* is not settled
+    // as unavailable merely because a different name went unanswered, which is
+    // the surviving half of the same worry.
     [Fact]
-    public async Task AnOfflineRelayIsNotMistakenForALiveBuddy()
+    public async Task OneNameGoingUnansweredDoesNotSettleAnother()
     {
         var harness = new Harness(_dir);
         harness.AddSession("job-hunter", WriteTranscript("c.jsonl", Conversation(2)));
 
-        var offline = new[]
-        {
-            new BridgeProtocol.RemoteAgent(Harness.FarRelay, "aa11bb", "Remote Control", "offline"),
-            new BridgeProtocol.RemoteAgent("job-hunter", "94f106", "Remote Control", "idle")
-        };
+        await harness.Client.DiscoverAsync(
+            new[] { Harness.FarRelay }, new[] { "job-hunter", "never-heard-of-it" });
 
-        await harness.Client.DiscoverAsync(offline, new[] { "job-hunter" });
+        Assert.Equal(
+            RemoteMirrorClient.MirrorAvailability.Available,
+            harness.Client.StateFor("job-hunter").Availability);
 
         Assert.Equal(
             RemoteMirrorClient.MirrorAvailability.Unavailable,
-            harness.Client.StateFor("job-hunter").Availability);
+            harness.Client.StateFor("never-heard-of-it").Availability);
     }
 
     // The far Buddy reads the command list off its own disk, which is how a
@@ -792,31 +799,43 @@ public class MirrorRoundTripTests : IDisposable
         Assert.Empty(harness.ToClient);
     }
 
+    // **The name test these covered was a guess dressed as a check, and it is
+    // gone.** RemoteMirrorServer used to allow anything called
+    // `claude-buddy-rc-…` to ask it for transcripts, on the reasoning that only
+    // another Buddy would be called that. A name is not a credential: anyone on
+    // the account could pick one. Who may ask is the transport's answer now, and
+    // a peer has completed a TLS handshake with a certificate somebody pinned by
+    // typing a code.
+    //
+    // What survives is the recognition of a *leftover* relay, which is a
+    // different job — keeping one that outlived the upgrade from becoming an orb
+    // — and lives with the machine-name helpers it belongs to.
     [Theory]
     [InlineData("claude-buddy-rc--claude-mini")]
     [InlineData("CLAUDE-BUDDY-RC--claude-mini")]
-    public void ARelayIsRecognisedByItsPrefix(string name) =>
-        Assert.True(RemoteMirrorServer.IsRelayName(name));
+    public void ALeftoverRelayIsRecognisedByItsPrefix(string name) =>
+        Assert.True(MachineNames.IsRelayName(name));
 
     [Theory]
     [InlineData("job-hunter")]
     [InlineData("claude-buddy")]
     [InlineData("")]
-    public void AnythingElseIsNotARelay(string name) =>
-        Assert.False(RemoteMirrorServer.IsRelayName(name));
+    public void AnythingElseIsNotALeftoverRelay(string name) =>
+        Assert.False(MachineNames.IsRelayName(name));
 
     // Two machines on one account used to build the identical relay name, and
-    // that name is what SendMessage addresses.
+    // that name is what SendMessage addressed. The relay is gone; the tag is
+    // not, because a peer announcement carries it — see MachineNames.
     [Fact]
-    public void AMachineTagIsTmuxSafeAndNeverEmpty()
+    public void AMachineTagIsSafeToPutOnAWireAndNeverEmpty()
     {
-        var tag = RemoteControlBridge.MachineTag();
+        var tag = MachineNames.Tag();
 
         Assert.NotEmpty(tag);
         Assert.DoesNotContain('.', tag);
         Assert.DoesNotContain(':', tag);
         Assert.True(tag.Length <= 20);
-        Assert.Equal(tag, RemoteControlBridge.MachineTag());
+        Assert.Equal(tag, MachineNames.Tag());
     }
 
     // --- fixtures --------------------------------------------------------------------
@@ -1240,12 +1259,10 @@ public class MirrorRoundTripTests : IDisposable
             Client.Failed += (name, why) => Failures.Add((name, why));
         }
 
-        public IReadOnlyList<BridgeProtocol.RemoteAgent> Peers =>
-            new[]
-            {
-                new BridgeProtocol.RemoteAgent(FarRelay, "aa11bb", "Remote Control", "idle"),
-                new BridgeProtocol.RemoteAgent("job-hunter", "94f106", "Remote Control", "idle")
-            };
+        // The machines to ask, by name. A direct link knows the machines it is
+        // connected to; the relay-shaped list this replaced had to be filtered
+        // down to that same answer.
+        public IReadOnlyList<string> Peers => new[] { FarRelay };
 
         public void AddSession(string name, string transcriptPath)
         {

@@ -739,8 +739,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
         session.PanelOpened();
 
         await _client.DiscoverAsync(
-            new[] { new BridgeProtocol.RemoteAgent(Name, "94f106", "Remote Control", "idle") },
-            new[] { Name });
+            Array.Empty<string>(), new[] { Name });
 
         Assert.False(session.IsMirroring);
 
@@ -772,8 +771,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
 
         // No Buddy over there yet: the name settles as unavailable and says so.
         await _client.DiscoverAsync(
-            new[] { new BridgeProtocol.RemoteAgent(Name, "94f106", "Remote Control", "idle") },
-            new[] { Name });
+            Array.Empty<string>(), new[] { Name });
 
         Assert.False(session.IsMirroring);
         Assert.Contains(session.History, t => t.Text.Contains("No live view"));
@@ -819,7 +817,10 @@ public class RemoteMirrorChatSessionTests : IDisposable
         var session = NewSession();
         session.PanelOpened();
 
-        var peers = new[] { new BridgeProtocol.RemoteAgent(Name, "94f106", "Remote Control", "idle") };
+        // Nobody to ask, twice. Over the relay this was a peer list with the
+        // session but no Buddy on it; a link says the same thing by being
+        // connected to no machines.
+        var peers = Array.Empty<string>();
 
         await _client.DiscoverAsync(peers, new[] { Name });
         await _client.DiscoverAsync(peers, new[] { Name });
@@ -1208,13 +1209,15 @@ public class RemoteMirrorChatSessionTests : IDisposable
         return session;
     }
 
-    private static IReadOnlyList<BridgeProtocol.RemoteAgent> Peers =>
-        new[]
-        {
-            new BridgeProtocol.RemoteAgent(FarRelay, "aa11bb", "Remote Control", "idle"),
-            new BridgeProtocol.RemoteAgent(Name, "94f106", "Remote Control", "idle")
-        };
-
+    // The machines to ask, by name.
+    //
+    // **This used to be a list of BridgeProtocol.RemoteAgent that the client
+    // filtered down to relays** — IsOwnRelay, IsOffline, IsRemoteControl — which
+    // is why the second entry below was the session itself and was expected to
+    // be dropped. A direct link has no such list and needs no such filter: it
+    // knows the machines it is connected to, which is the answer that filtering
+    // was working towards.
+    private static IReadOnlyList<string> Peers => new[] { FarRelay };
     private const string FarRelay = "claude-buddy-rc--claude-mini";
     private const string NearRelay = "claude-buddy-rc--claude-laptop";
 

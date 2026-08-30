@@ -948,13 +948,15 @@ public class MirrorEdgeCaseTests : IDisposable
     private bool _typeSucceeds = true;
     private bool _typeThrows;
 
-    private static IReadOnlyList<BridgeProtocol.RemoteAgent> Peers =>
-        new[]
-        {
-            new BridgeProtocol.RemoteAgent(FarRelay, "aa11bb", "Remote Control", "idle"),
-            new BridgeProtocol.RemoteAgent(Name, "94f106", "Remote Control", "idle")
-        };
-
+    // The machines to ask, by name.
+    //
+    // **This used to be a list of BridgeProtocol.RemoteAgent that the client
+    // filtered down to relays** — IsOwnRelay, IsOffline, IsRemoteControl — which
+    // is why the second entry below was the session itself and was expected to
+    // be dropped. A direct link has no such list and needs no such filter: it
+    // knows the machines it is connected to, which is the answer that filtering
+    // was working towards.
+    private static IReadOnlyList<string> Peers => new[] { FarRelay };
     private Task Handshake() => _client.DiscoverAsync(Peers, new[] { Name });
 
     // A transcript whose turns cannot be squeezed into one chunk, however small

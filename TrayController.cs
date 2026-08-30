@@ -253,7 +253,7 @@ namespace ClaudeBuddy
             // Hidden entirely unless the feature is on, so the menu does not
             // grow a line about machines for the majority who have not asked
             // for any.
-            if (ClaudeBuddySettings.RemoteControlEnabled && RemoteControlBridge.IsSupported)
+            if (ClaudeBuddySettings.PeerLinkEnabled)
             {
                 var remoteItem = new NativeMenuItem("Connect to other machines");
                 remoteItem.Click += (_, _) => ConnectToOtherMachines();
@@ -325,7 +325,12 @@ namespace ClaudeBuddy
         // from the other side, which is why it checks the item exists and stops
         // there.
         [ExcludeFromCodeCoverage]
-        internal static void ConnectToOtherMachines() => RemoteControlSessions.EnsureStarted();
+        // Nothing to start on demand any more: the link is either listening or
+        // it is not, and turning it on is a switch in Settings rather than an
+        // act with a cost. Kept as the menu item's handler so the item still
+        // does something useful — it retries the machines we are paired with
+        // rather than waiting out the next ten-second tick.
+        internal static void ConnectToOtherMachines() => PeerSessions.Restart();
 
         internal static string Summary(int total, int waiting, int generating)
         {

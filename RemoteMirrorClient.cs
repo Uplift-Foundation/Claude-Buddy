@@ -131,32 +131,14 @@ namespace ClaudeBuddy
 
         // --- discovery --------------------------------------------------------
 
-        // The far Buddies among the peers, and what to ask them.
+        // Told directly who to ask.
         //
-        // A far Buddy's relay is recognisable by the name prefix
-        // RemoteControlBridge builds, which is the same string
-        // BridgeProtocol.IsOwnRelay already keys on to keep relays from becoming
-        // orbs. Our *own* relay is never in this list — ListAgents excludes the
-        // asking session by its own promise — so anything wearing the prefix and
-        // still online is somebody else's Buddy, which is exactly what this
-        // wants. Ones left registered by a dead relay read "offline" and are
-        // skipped.
-        public async Task DiscoverAsync(
-            IReadOnlyList<BridgeProtocol.RemoteAgent> agents,
-            IReadOnlyList<string> wantedNames)
-        {
-            if (wantedNames.Count == 0) return;
-
-            var relays = agents
-                .Where(a => a.IsOwnRelay && !a.IsOffline && a.IsRemoteControl)
-                .Select(a => a.Name)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            await DiscoverAsync(relays, wantedNames).ConfigureAwait(false);
-        }
-
-        // The same discovery, told directly who to ask.
+        // **There used to be an overload above this one taking a peer list and
+        // filtering it by IsOwnRelay/IsOffline/IsRemoteControl** — three
+        // properties that only meant anything while a far Buddy was reachable as
+        // a session on a relay. It went with the relay. What it was working
+        // towards is what a direct link simply knows: the machines it is
+        // connected to.
         //
         // **Split out because the peer list is transport-shaped and discovery is
         // not.** The overload above takes BridgeProtocol.RemoteAgent and filters
