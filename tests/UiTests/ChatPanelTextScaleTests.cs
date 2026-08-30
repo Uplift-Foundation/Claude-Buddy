@@ -32,32 +32,20 @@ public class ChatPanelTextScaleTests : IDisposable
         ClaudeBuddySettings.ChatTextScale = ChatZoom.Default;
         ChatPanel.ReapplyTextScale();
 
-        // Then let the panel actually re-measure at the restored size, and put
-        // it back to the geometry the XAML ships.
+        // Then let the panel actually re-measure at the restored size before
+        // the next class opens a session against it.
         //
-        // Resetting the setting is not enough on its own, and this cost a
-        // Windows CI failure to learn. ChatPanel is one window shared by every
-        // class in the process, and its backlog trigger is a comparison of the
-        // scroll's extent against its viewport (see the ScrollChanged handler:
-        // extent > viewport + 8 and offset <= 24 asks for the page before).
-        // Rescaled() invalidates each row and the composer's MinHeight/MaxHeight
-        // change with the scale, but nothing re-runs layout until something
-        // else does — so the next class could open its own session against a
-        // scroll still measured for 2x rows in a 2x-composer's viewport, see
-        // "taller than the viewport" for a two-turn transcript, and load a
-        // backlog page nobody asked for. That is exactly what
-        // ChatPanelHistoryTests.HistoryReplacedRebuildsTheTranscriptFromScratch
-        // reported: 7 rows where it seeded 2, on all three Windows attempts.
+        // ChatPanel is one window shared by every class in the process.
+        // Rescaled() invalidates each row and the composer's MinHeight and
+        // MaxHeight go back with the scale, but nothing re-runs layout until
+        // something else does — so without this the window would carry a scroll
+        // still measured for 2x rows inside a 2x composer's viewport into
+        // whatever ran next.
         //
-        // It never reproduced on macOS, which is the point — the extent and the
-        // viewport are font metrics, and the margin between them on a 340x420
-        // panel is a few pixels wider there.
-        if (ChatPanelTestAccess.Instance is { } panel)
-        {
-            panel.Width = 340;
-            panel.Height = 420;
-        }
-
+        // Deliberately no Width/Height reset: the size this class leaves is the
+        // size it found. A suite that forces the shared window to its own idea
+        // of a good size is reaching into windows it does not own, and it tips
+        // exactly the kind of layout-sensitive test it is trying to protect.
         Flush();
     }
 
