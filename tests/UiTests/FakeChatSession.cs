@@ -15,7 +15,7 @@ namespace ClaudeBuddy.Tests;
 //     sorting of its own.
 internal sealed class FakeChatSession :
     IRemoteChatSession, IRemoteChatImages, IRemoteChatSlashCommands,
-    IRemoteChatComposer, IRemoteChatElsewhere
+    IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatFetchWait
 {
     public string SessionId { get; init; } = "fake-session";
     public string DisplayName { get; init; } = "Fake Session";
@@ -107,5 +107,27 @@ internal sealed class FakeChatSession :
     {
         State = state;
         StateChanged?.Invoke(state);
+    }
+
+    // IRemoteChatFetchWait. The panel draws a wait for any session that offers
+    // one, so the fake offers one it can drive: Waiting(seconds) puts the start
+    // in the past, which is how a test asserts a counter without waiting for a
+    // clock.
+    public DateTimeOffset? WaitingSince { get; private set; }
+
+    public string WaitingFor { get; set; } = "its conversation";
+
+    public event Action? WaitChanged;
+
+    public void BeginWaiting(TimeSpan alreadyElapsed = default)
+    {
+        WaitingSince = DateTimeOffset.Now - alreadyElapsed;
+        WaitChanged?.Invoke();
+    }
+
+    public void EndWaiting()
+    {
+        WaitingSince = null;
+        WaitChanged?.Invoke();
     }
 }
