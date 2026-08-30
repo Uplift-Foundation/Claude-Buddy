@@ -35,7 +35,7 @@ namespace ClaudeBuddy
     // makes that free — the panel already redraws from History when it fires.
     internal sealed class RemoteControlChatSession :
         IRemoteChatSession, IRemoteChatComposer, IRemoteChatSlashCommands, IRemoteChatBacklog,
-        IRemoteChatFetchWait, IDisposable
+        IRemoteChatFetchWait, IRemoteChatMachine, IDisposable
     {
         private readonly List<ChatTurn> _history = new();
 
@@ -132,9 +132,24 @@ namespace ClaudeBuddy
         // Said in the input box itself. "Message…" would be a lie by omission
         // here: this one leaves the machine, and in live view it is typed into
         // somebody else's terminal, which is worth being even plainer about.
-        public string ComposerHint => _mirroring
+        public string ComposerHint => _mirroring && _canType
             ? $"Type into {_remoteName}'s terminal on the other machine…"
             : $"Message {_remoteName} on the other machine…";
+
+        // Whether the far session actually has an input line to type into.
+        //
+        // **The roster has always answered this and the hint ignored it.**
+        // MirrorRosterEntry carries HasPane, and its own comment says why: "a
+        // panel that offered a send it cannot deliver would be lying in the one
+        // place it matters." Keying the hint on _mirroring alone did exactly
+        // that — a live view was taken to mean a typable one, and on a headless
+        // machine it never is.
+        //
+        // Seen on a real pair: the composer said "Type into
+        // job-hunter-mac-mini's terminal" while the line directly above it read
+        // "Sent as a message rather than typed … there is no input line to type
+        // into." Both were on screen at once, and only one of them was true.
+        private bool _canType;
 
         // In live view: every command that session can run, read off the far
         // machine's own disk by the Buddy sitting next to it — built-ins
@@ -157,7 +172,13 @@ namespace ClaudeBuddy
         {
             if (!account.Equals(_account, StringComparison.Ordinal)) return;
 
-            OnUi(TryUpgrade);
+            // The roster landing is what makes the far machine knowable, so this
+            // is the moment a panel opened before it can be told.
+            OnUi(() =>
+            {
+                MachineChanged?.Invoke();
+                TryUpgrade();
+            });
         }
 
         private void TryUpgrade()
@@ -179,6 +200,7 @@ namespace ClaudeBuddy
             if (client is null) return;
 
             _mirroring = true;
+            _canType = entry.HasPane;
             _format = CliChatFormat.For(
                 entry.Cli.Equals(MirrorProtocol.CliCodex, StringComparison.OrdinalIgnoreCase)
                     ? SessionSource.Codex
@@ -215,6 +237,19 @@ namespace ClaudeBuddy
 
             _ = client.OpenAsync(_remoteName);
         }
+
+        // --- where this conversation actually is ----------------------------
+
+        // See IRemoteChatMachine. Read through on demand rather than cached,
+        // because the roster usually answers after the panel is already open and
+        // a cached null would stay null until something else happened to
+        // refresh it.
+        public string? MachineName =>
+            RemoteControlBridge.MachineFromRelayName(
+                RemoteControlSessions.MirrorClientFor(_account)?.RelayFor(_remoteName),
+                _account);
+
+        public event Action? MachineChanged;
 
         // --- the wait, while it is happening --------------------------------
 

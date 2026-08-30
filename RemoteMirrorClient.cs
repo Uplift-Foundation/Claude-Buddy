@@ -62,6 +62,17 @@ namespace ClaudeBuddy
         // back to the one that can serve it.
         private readonly Dictionary<string, string> _servedBy = new(StringComparer.OrdinalIgnoreCase);
 
+        // Which relay answered for a session, for a caller that wants to say
+        // *where* it is rather than talk to it. The relay's name carries the far
+        // machine's — see RemoteControlBridge.MachineFromRelayName — so this is
+        // how the panel names the machine without anything new going on the
+        // wire. Null before the roster has answered, which a panel can open
+        // before.
+        internal string? RelayFor(string name)
+        {
+            lock (_gate) return _servedBy.TryGetValue(name, out var relay) ? relay : null;
+        }
+
         // Names that have been asked about and came back with nothing. Kept so a
         // panel can say "no live view" definitively rather than sitting on
         // "checking…" forever.
