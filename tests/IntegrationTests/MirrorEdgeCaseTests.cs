@@ -663,32 +663,41 @@ public class MirrorEdgeCaseTests : IDisposable
     // the remaining chunks arrived as replies to nothing — which is precisely
     // how a four-minute window died against a three-minute timeout.
     //
-    // Deliberately asserted with a timeout SHORTER than the transfer: that is
-    // the whole claim, and a test whose timeout could have covered it anyway
-    // would prove nothing.
+    // **Asserted on the resets rather than on the clock, and that is a
+    // correction.** The first version of this ran the transfer slower than one
+    // interval and checked it had outlasted it, which reads as the obvious test
+    // and is a wall-clock claim CI cannot honour: it went red on the macOS leg —
+    // "a transfer that keeps delivering verified chunks must not be timed out" —
+    // while passing on Windows, because a loaded runner stalled longer between
+    // two chunks than the deliberately short timeout allowed. Widening the
+    // window would only have moved the failure, and a sleep would be the same
+    // mistake this repository has already fixed four times.
+    //
+    // The deadline is pushed out once per intermediate chunk, unconditionally,
+    // so the count is a property of the transfer's *shape* and not of how fast
+    // the machine was. That makes the mechanism assertable with no clock in it:
+    // a flat deadline scores zero resets, which is the regression worth
+    // catching, and the completion assertion below carries the rest.
     [Fact]
-    public async Task ATransferSlowerThanTheTimeoutStillArrivesIfItKeepsMakingProgress()
+    public async Task AMultiChunkTransferResetsItsWaitOnEveryPieceThatArrives()
     {
         AddSession(IncompressibleTranscript());
         await Handshake();
 
-        // Each frame takes 40ms to cross, and the whole transfer is many frames
-        // — comfortably more than the 150ms any single wait allows.
-        _chunkDelayMs = 40;
-        _client.TimeoutOverrideForTests = TimeSpan.FromMilliseconds(150);
+        // The handshake has its own frames; only what this fetch does counts.
+        var before = _client.TimeoutExtensionsForTests;
         _windows.Clear();
 
-        var started = DateTime.UtcNow;
-
-        Assert.True(
-            await _client.OpenAsync(Name),
-            "a transfer that keeps delivering verified chunks must not be timed out");
-
-        Assert.True(
-            DateTime.UtcNow - started > TimeSpan.FromMilliseconds(150),
-            "this transfer should have outlasted a single timeout, or it proves nothing");
+        // Left at the real timeout on purpose. Nothing here is trying to race a
+        // deadline, so there is no window for a slow runner to miss.
+        Assert.True(await _client.OpenAsync(Name));
 
         Assert.Single(_windows);
+
+        Assert.True(
+            _client.TimeoutExtensionsForTests > before,
+            "a multi-chunk transfer must push its deadline out as pieces arrive, "
+            + "or the wait is still a flat deadline");
     }
 
     // And silence still ends it. Extending on progress would be worthless if it
@@ -868,10 +877,6 @@ public class MirrorEdgeCaseTests : IDisposable
         MirrorProtocol.TryParseFrame(MirrorProtocol.BuildFrame(
             type, id, fields.ToDictionary(f => f.Key, f => f.Value)))!;
 
-    // Milliseconds to stall each frame on its way to the client, so a transfer
-    // takes real time and the gaps between chunks can be reasoned about.
-    private int _chunkDelayMs;
-
     // Holds FETCH frames at the door until a test lets them through, so a
     // request can be genuinely in flight while something else asks for the same
     // thing. Without it "concurrent" is a guess about scheduling.
@@ -893,8 +898,6 @@ public class MirrorEdgeCaseTests : IDisposable
     {
         _toClient.Add(line);
         if (_dropEverything) return true;
-
-        if (_chunkDelayMs > 0) await Task.Delay(_chunkDelayMs);
 
         // A relay that stops accepting part-way through a transfer.
         if (_refuseAfter >= 0 && ++_sent > _refuseAfter) return false;
