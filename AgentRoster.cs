@@ -116,6 +116,34 @@ namespace ClaudeBuddy
             return only;
         }
 
+        // How that subprocess is set up, split out for the reason
+        // RemoteControlBridge.LaunchLine is: the environment it does *not* carry
+        // is as load-bearing as the environment it does, and until this was its
+        // own function the only way to check either was to run a real `claude`
+        // against a real account.
+        //
+        // A null configDir leaves the variable off the child's environment
+        // rather than setting it to anything, so the child inherits whatever
+        // this process has — which for the default account is exactly the
+        // context an ordinary `claude` would use.
+        internal static ProcessStartInfo AgentsProcess(string claude, string? configDir)
+        {
+            var psi = new ProcessStartInfo(claude)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+
+            psi.ArgumentList.Add("agents");
+            psi.ArgumentList.Add("--json");
+
+            if (configDir is not null) psi.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+
+            return psi;
+        }
+
         // Asks this machine's Claude Code what it has registered, under a
         // specific profile.
         //
@@ -123,6 +151,14 @@ namespace ClaudeBuddy
         // it when launching a relay: the registry is per-account, and reading
         // the wrong account's would answer confidently about sessions this relay
         // cannot see.
+        //
+        // ...and left unset for the default account, for the reason
+        // ClaudeProfile gives: naming that directory explicitly is not the same
+        // as saying nothing, and the context it names is one nothing has ever
+        // onboarded. Here the consequence is milder than the relay's — a read
+        // against a context with no credentials answers empty rather than
+        // hanging on a wizard — but it is the same wrong account, so a fix in
+        // one place and not the other would be half a fix (CB-42).
         // Excluded from coverage: launches `claude agents --json` as a real
         // subprocess against a real account's config directory. What comes back
         // is turned into entries by ParseAgentsJson, which is pure and covered
@@ -135,21 +171,10 @@ namespace ClaudeBuddy
             if (claude is null) return Array.Empty<Entry>();
 
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var configDir = Path.Combine(home, profileDir);
 
             try
             {
-                var psi = new ProcessStartInfo(claude)
-                {
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
-
-                psi.ArgumentList.Add("agents");
-                psi.ArgumentList.Add("--json");
-                psi.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+                var psi = AgentsProcess(claude, ClaudeProfile.ConfigDirFor(home, profileDir));
 
                 using var process = Process.Start(psi);
                 if (process is null) return Array.Empty<Entry>();
