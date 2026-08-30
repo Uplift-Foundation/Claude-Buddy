@@ -314,7 +314,11 @@ namespace ClaudeBuddy
         {
             if (peers is null || string.IsNullOrEmpty(peerName)) return peerName;
 
-            RemoteAgent? first = null;
+            // The first live namesake's ref, kept as the string rather than as a
+            // nullable row: holding the row would need a null test below that
+            // `live >= 2` has already made unreachable, and an arm nothing can
+            // execute reads as an untested branch forever.
+            string? chosen = null;
             var live = 0;
 
             foreach (var peer in peers)
@@ -323,13 +327,13 @@ namespace ClaudeBuddy
                 if (peer.IsOffline) continue;
 
                 live++;
-                first ??= peer;
+                chosen ??= peer.Ref;
             }
 
             if (live < 2) return peerName;
-            if (first is not { } chosen || string.IsNullOrWhiteSpace(chosen.Ref)) return peerName;
+            if (string.IsNullOrWhiteSpace(chosen)) return peerName;
 
-            return $"{peerName} [{chosen.Ref}]";
+            return $"{peerName} [{chosen}]";
         }
 
         // --- the peer list ---
