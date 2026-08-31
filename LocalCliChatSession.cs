@@ -556,7 +556,7 @@ namespace ClaudeBuddy
         {
             if (!canSendQuietly)
             {
-                if (shape != LocalSessionShape.Background) return "No pane to type into";
+                if (shape != LocalSessionShape.Background) return "No terminal to type into";
 
                 return presence switch
                 {

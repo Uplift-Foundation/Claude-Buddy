@@ -395,7 +395,7 @@ public class LocalCliChatSessionTests : IDisposable
 
     // --- the composer ---
 
-    // "No pane to type into" wins over the reply setting, and the precedence is
+    // "No terminal to type into" wins over the reply setting, and the precedence is
     // the interesting half: a session with nowhere to send has to say *that*
     // rather than "Replying is off", because the two have different answers —
     // one is a setting the user can change and the other is not.
@@ -412,10 +412,10 @@ public class LocalCliChatSessionTests : IDisposable
         var session = Session(Transcript(User("u1", "hello")));
 
         ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
-        Assert.Equal("No pane to type into", session.ComposerHint);
+        Assert.Equal("No terminal to type into", session.ComposerHint);
 
         ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
-        Assert.Equal("No pane to type into", session.ComposerHint);
+        Assert.Equal("No terminal to type into", session.ComposerHint);
     }
 
     // Scanned once per session rather than per keystroke, since the commands a

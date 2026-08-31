@@ -1183,7 +1183,7 @@ namespace ClaudeBuddy
             // with neither a terminal nor a transcript has nothing behind it in
             // either direction — the click goes nowhere and the chat opens
             // blank, showing an amber "connecting" dot that never turns green
-            // and a composer disabled with "No pane to type into".
+            // and a composer disabled with "No terminal to type into".
             //
             // This is what a background job that has not been given a prompt
             // looks like. Measured on a real machine: job "evidence", `state:
