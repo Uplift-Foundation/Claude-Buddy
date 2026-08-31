@@ -53,6 +53,17 @@ namespace ClaudeBuddy
 
         private readonly Speaker _soleSpeaker = new();
 
+        // How much bigger or smaller than shipped this panel draws chat text.
+        //
+        // Boxed and shared with every TurnView for the same reason Speaker
+        // above is: a bubble built before the last Cmd+ has to end up the same
+        // size as one built after it. Copied into each row, only the rows built
+        // since the keystroke would be right, and a transcript would fan out
+        // into as many sizes as the user had pressed the key.
+        private sealed class TextScale { public double Value = ChatZoom.Default; }
+
+        private readonly TextScale _textScale = new();
+
         // The colour a reply is drawn in when the turn itself doesn't name one.
         //
         // A room's turns carry their own, because several agents are talking. In
@@ -110,6 +121,8 @@ namespace ClaudeBuddy
 
             _defaultWidth = Width;
             _defaultHeight = Height;
+
+            _bubbleMenu = BuildBubbleMenu();
 
             Turns.ItemsSource = _turns;
             Attachments.ItemsSource = _pendingImages;
@@ -175,7 +188,25 @@ namespace ClaudeBuddy
             Input.AddHandler(KeyDownEvent, OnInputKeyDown, RoutingStrategies.Tunnel);
             Input.TextChanged += (_, _) => UpdateSlashSuggestions();
 
+            // On the window rather than on Input, and ahead of it: a selection
+            // in a bubble has to be copyable no matter which control the
+            // keystroke was aimed at, and the composer would otherwise eat the
+            // gesture whether or not it had anything to copy. See OnCopyKeyDown.
+            AddHandler(KeyDownEvent, OnCopyKeyDown, RoutingStrategies.Tunnel);
+
             KeyDown += OnPanelKeyDown;
+
+            // Tunnel, and on the window rather than on the composer. The
+            // composer holds focus almost the whole time this panel is open, so
+            // a bubbling handler would be asking the TextBox's own key handling
+            // for permission to run — and the one gesture that has to work
+            // whatever is focused is the one that makes the text readable.
+            AddHandler(KeyDownEvent, OnZoomKeyDown, RoutingStrategies.Tunnel);
+
+            // The size is a setting, so a panel opens at whatever the last one
+            // was left at. Done here rather than in Bind because it is about
+            // the window, not about which session is in it.
+            ApplyTextScale();
 
             Opened += (_, _) =>
             {
@@ -202,6 +233,11 @@ namespace ClaudeBuddy
                 // deactivates the panel, and closing the panel out from under it
                 // would be a strange answer to "show me that picture".
                 if (AvatarPopup.IsOpen) return;
+
+                // Same argument, one control further out: a context menu opened
+                // on a message bubble is its own window too, and closing the
+                // panel behind it would take the menu with it.
+                if (ContextMenuIsOpen) return;
 
                 HideNow();
             }, DispatcherPriority.Background);
@@ -346,6 +382,11 @@ namespace ClaudeBuddy
 
             if (_session is IRemoteChatPrompts prompts) prompts.PromptChanged -= OnPromptChanged;
 
+            if (_session is IRemoteChatFetchWait waited) waited.WaitChanged -= OnWaitChanged;
+            HideWait();
+
+            if (_session is IRemoteChatMachine wasNamed) wasNamed.MachineChanged -= OnMachineChanged;
+
             // A remote session can take a turn back — its "working…" line comes
             // off once the answer lands. Subscribed on the concrete type rather
             // than through an interface: nothing else in this app has ever needed
@@ -421,6 +462,24 @@ namespace ClaudeBuddy
 
             if (session is IRemoteChatPrompts prompts) prompts.PromptChanged += OnPromptChanged;
 
+            // Only the mirror has a wait worth drawing; everything else answers
+            // fast enough that a spinner would flicker. Optional for exactly
+            // that reason — see IRemoteChatFetchWait.
+            if (session is IRemoteChatFetchWait waiting)
+            {
+                waiting.WaitChanged += OnWaitChanged;
+                ShowWait(waiting);
+            }
+            else
+            {
+                HideWait();
+            }
+
+            // The roster usually answers after the panel is already open, so the
+            // machine's name arrives late and the chip has to be redrawn when it
+            // does.
+            if (session is IRemoteChatMachine named) named.MachineChanged += OnMachineChanged;
+
             // "Zara — wtvamp" is built as name plus place, so it splits back
             // into the two lines the header now has. A name with no place (an
             // agent's own main session) simply leaves the second line empty.
@@ -446,11 +505,9 @@ namespace ClaudeBuddy
             // one of those is badged — and a chip that made room for the
             // impossible case would be a claim about this app that is not true.
             KindChip.IsVisible = kind is not null;
-            KindChipText.Text = kind is null
-                ? ""
-                : presence is null
-                    ? $"{orb.KindGlyphText}  {kind}"
-                    : $"{orb.KindGlyphText}  {kind} · {presence}";
+            KindChipText.Text = KindChipLabel(
+                orb.KindGlyphText, kind, presence,
+                (_session as IRemoteChatMachine)?.MachineName);
 
             ApplyHeartbeat(orb.IsHeartbeat);
 
@@ -460,7 +517,7 @@ namespace ClaudeBuddy
             OnStateChanged(session.State);
 
             _turns.Clear();
-            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
+            foreach (var turn in session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt, _textScale));
 
             HideSlashSuggestions();
 
@@ -487,7 +544,23 @@ namespace ClaudeBuddy
             Activate();
             Dispatcher.UIThread.Post(() => Input.Focus(), DispatcherPriority.Input);
 
-            Dispatcher.UIThread.Post(ScrollToEndIfPinned, DispatcherPriority.Loaded);
+            // Unconditionally, not the pinned-only rule — this used to be
+            // ScrollToEndIfPinned and that is why a panel sometimes opened
+            // halfway up a conversation.
+            //
+            // There is one ChatPanel for every orb (its own comment above says
+            // why: two of them would fight over being the key window), so the
+            // scroll position this instance is carrying belongs to whichever
+            // session you had open last. Asking whether *that* offset is at the
+            // bottom is asking a question about a transcript that is no longer
+            // on screen: scroll up in one chat, click a different orb, and the
+            // answer is "no", so the new chat opens at the old offset with the
+            // newest message somewhere below the fold.
+            //
+            // Same reasoning as OnHistoryReplaced: a transcript that was just
+            // loaded wholesale has no read position worth preserving, and the
+            // newest turn is the one you clicked the orb to read.
+            ScrollToEndAfterLayout();
         }
 
         // What the box says, and whether there is a button beside it — one method
@@ -1209,6 +1282,185 @@ namespace ClaudeBuddy
             return gesture is not null && e.Key == gesture.Key && e.KeyModifiers == gesture.KeyModifiers;
         }
 
+        // Read off TextBox rather than spelled out, exactly as IsPasteGesture
+        // above does, which is also what makes this right on both platforms
+        // without a single OS check: Avalonia resolves the gesture to Cmd+C on
+        // macOS and Ctrl+C on Windows.
+        private static bool IsCopyGesture(KeyEventArgs e)
+        {
+            var gesture = TextBox.CopyGesture;
+            return gesture is not null && e.Key == gesture.Key && e.KeyModifiers == gesture.KeyModifiers;
+        }
+
+        // The copy keystroke, claimed before the composer can swallow it.
+        //
+        // Tunnel and registered on the window, for a reason worth spelling out
+        // because the bug it avoids is silent: Avalonia's TextBox handles the
+        // copy gesture in OnKeyDown and marks it handled *unconditionally* —
+        // even with nothing selected, where it copies nothing at all. The
+        // composer is always the focused control here, so an ordinary bubbling
+        // handler would never run, and a message selection would look copyable
+        // while the clipboard never changed. Getting there first is the only
+        // way. Same reasoning, and the same routing strategy, as the Enter
+        // interception in OnInputKeyDown.
+        private void OnCopyKeyDown(object? sender, KeyEventArgs e)
+        {
+            if (!IsCopyGesture(e)) return;
+
+            var selected = SelectedMessageText();
+            var composerHasSelection = !string.IsNullOrEmpty(Input.SelectedText);
+
+            if (ChatCopy.Decide(composerHasSelection, selected is not null) != ChatCopy.Target.Message)
+                return;
+
+            // Handled only in the one case the panel is actually answering for.
+            // Left alone otherwise, so the composer's own copy — and its own
+            // no-op on an empty selection — behave exactly as they always have.
+            e.Handled = true;
+            _ = CopyToClipboardAsync(selected!);
+        }
+
+        // The selection a person can see in the transcript, if there is one.
+        //
+        // First rather than joined: SelectOnly keeps exactly one bubble
+        // selected at a time, so "first" and "only" are the same block, and
+        // asking for the first is how that invariant gets stated rather than
+        // assumed.
+        private string? SelectedMessageText()
+        {
+            foreach (var turn in _turns)
+            {
+                foreach (var block in turn.Blocks)
+                {
+                    if (!string.IsNullOrEmpty(block.SelectedText)) return block.SelectedText;
+                }
+            }
+
+            return null;
+        }
+
+        // Every rule that spans more than one bubble, applied to a block as
+        // TurnView builds it.
+        private void Adopt(SelectableTextBlock block)
+        {
+            // Only one bubble may hold a selection at a time, so that the copy
+            // gesture is never ambiguous about which of two highlighted
+            // passages it meant. Tunnel, so the previous selection is gone
+            // before SelectableTextBlock's own handler starts the new one.
+            block.AddHandler(
+                InputElement.PointerPressedEvent,
+                (_, _) => SelectOnly(block),
+                RoutingStrategies.Tunnel);
+
+            // One menu shared by every bubble rather than one built per
+            // paragraph: a long transcript is hundreds of paragraphs, and they
+            // would be hundreds of identical two-item menus. Avalonia sets
+            // Target to whichever control opened it, which is the only thing
+            // the two items need to know.
+            block.ContextFlyout = _bubbleMenu;
+        }
+
+        // Right-click on a message: copy what is selected, or the message
+        // whole.
+        //
+        // The second item is not a convenience — it is the answer to the one
+        // real limit of doing this with SelectableTextBlock. A rendered reply
+        // is a stack of controls (a paragraph here, a code block there) and
+        // Avalonia has no selection that spans two of them, so a drag can only
+        // ever take one of those pieces. "Copy message" is how a person gets
+        // the whole thing, and it hands back the original Markdown rather than
+        // the rendering, which is what anyone pasting it into a terminal or an
+        // editor actually wants.
+        // Built once with the panel rather than on first use. Lazy would save
+        // a two-item menu on a panel nobody right-clicks, and cost a null to
+        // reason about on every path that asks whether it is open — including
+        // the deactivate guard, which runs whether or not a bubble was ever
+        // drawn.
+        private readonly MenuFlyout _bubbleMenu;
+
+        private MenuFlyout BuildBubbleMenu()
+        {
+            var copy = new MenuItem { Header = "Copy" };
+            copy.Click += (_, _) =>
+            {
+                var text = SelectedMessageText();
+                if (text is not null) _ = CopyToClipboardAsync(text);
+            };
+
+            var copyAll = new MenuItem { Header = "Copy message" };
+            copyAll.Click += (_, _) =>
+            {
+                var text = MessageTextOf(_bubbleMenu.Target as SelectableTextBlock);
+                if (!string.IsNullOrEmpty(text)) _ = CopyToClipboardAsync(text!);
+            };
+
+            var menu = new MenuFlyout { ItemsSource = new[] { copy, copyAll } };
+
+            // Greyed rather than hidden when there is no selection, so the menu
+            // is the same shape every time it opens and "Copy" is where it was
+            // last time.
+            menu.Opening += (_, _) => copy.IsEnabled = SelectedMessageText() is not null;
+
+            return menu;
+        }
+
+        // The Markdown a bubble was drawn from, found by asking which turn
+        // owns the block the menu opened on.
+        private string? MessageTextOf(SelectableTextBlock? block)
+        {
+            if (block is null) return null;
+
+            foreach (var turn in _turns)
+            {
+                foreach (var candidate in turn.Blocks)
+                {
+                    if (ReferenceEquals(candidate, block)) return turn.Text;
+                }
+            }
+
+            return null;
+        }
+
+        // Whether a bubble's context menu is standing open.
+        //
+        // Asked by the deactivate handler for the same reason it already asks
+        // about the enlarged portrait: a menu is its own window on this
+        // platform, so opening one deactivates the panel, and hiding the panel
+        // out from under a menu the user just opened would be a strange answer
+        // to a right-click.
+        private bool ContextMenuIsOpen => _bubbleMenu.IsOpen;
+
+        // Everything except the block a drag has just started in.
+        //
+        // Avalonia selections are per-control and know nothing about each
+        // other, so without this every paragraph a person had ever dragged
+        // across would stay highlighted and the copy gesture would have to pick
+        // between them.
+        private void SelectOnly(SelectableTextBlock pressed)
+        {
+            foreach (var turn in _turns)
+            {
+                foreach (var block in turn.Blocks)
+                {
+                    if (!ReferenceEquals(block, pressed)) block.ClearSelection();
+                }
+            }
+        }
+
+        // Excluded from coverage for the same reason as TryClipboardText above:
+        // the catch is the platform's clipboard refusing, which a headless
+        // clipboard never does. The decision in front of it — whether this text
+        // is copied at all — is the half worth covering, and is covered.
+        [ExcludeFromCodeCoverage]
+        private async Task CopyToClipboardAsync(string text)
+        {
+            var clipboard = Clipboard;
+            if (clipboard is null) return;
+
+            try { await clipboard.SetTextAsync(text); }
+            catch { }
+        }
+
         // Whether the paste this preempted turns out to be a picture can
         // only be known asynchronously, so the keystroke is always taken
         // first and one of two things is done with it here: a picture
@@ -1396,6 +1648,59 @@ namespace ClaudeBuddy
             public string Description => Command.Description;
         }
 
+        // Cmd+= / Cmd+- / Cmd+0, Ctrl on Windows — see ChatZoom, which owns
+        // both the key mapping and the ladder of sizes.
+        private void OnZoomKeyDown(object? sender, KeyEventArgs e)
+        {
+            var command = ChatZoom.Gesture(e.Key, e.KeyModifiers);
+            if (command == ChatZoom.Command.None) return;
+
+            // Handled even when the size does not change — at either end of the
+            // ladder the gesture was still understood, and letting it travel on
+            // would put a "0" in the composer for someone pressing Cmd+0 twice.
+            e.Handled = true;
+
+            var next = ChatZoom.Apply(command, ClaudeBuddySettings.ChatTextScale);
+            if (next.Equals(_textScale.Value)) return;
+
+            ClaudeBuddySettings.ChatTextScale = next;
+            ApplyTextScale();
+        }
+
+        // Pushes the saved scale into everything that draws chat text. Called
+        // when the panel is built, after a zoom keystroke, and from the
+        // settings slider through ReapplyTextScale below.
+        private void ApplyTextScale()
+        {
+            var scale = ClaudeBuddySettings.ChatTextScale;
+
+            _textScale.Value = scale;
+
+            // The composer is chat text too — you read back what you typed. Its
+            // heights go with it, or a doubled font size would be drawn into a
+            // box still sized for one line of the old one.
+            Input.FontSize = 11.5 * scale;
+            Input.MinHeight = 26 * scale;
+            Input.MaxHeight = 66 * scale;
+
+            // The permission dialog sits between the transcript and the
+            // composer and is the most important text in the window when it is
+            // there at all — it is the thing being agreed to. PromptOptions
+            // carries the size for its items, which have no handle of their own
+            // (see the template's comment).
+            PromptTitle.FontSize = 11 * scale;
+            PromptOptions.FontSize = 11 * scale;
+            PromptElsewhere.FontSize = 10.5 * scale;
+
+            foreach (var turn in _turns) turn.Rescaled();
+        }
+
+        // The settings slider changes the same number this window's keyboard
+        // does, so an open panel has to hear about it. Null-safe and
+        // visibility-blind on purpose: a panel that exists but is hidden still
+        // holds rows that will be shown again without being rebuilt.
+        internal static void ReapplyTextScale() => _instance?.ApplyTextScale();
+
         private void OnPanelKeyDown(object? sender, KeyEventArgs e)
         {
             var isClose = e.Key == Key.Escape
@@ -1433,7 +1738,7 @@ namespace ClaudeBuddy
             // regardless. The autoscroll rule elsewhere deliberately leaves you
             // where you are reading, but a message you just sent landing
             // somewhere off screen reads as it not having sent at all.
-            Dispatcher.UIThread.Post(() => Scroll.ScrollToEnd(), DispatcherPriority.Loaded);
+            ScrollToEndAfterLayout();
 
             // Deliberately not inserting the user's turn here: the session
             // raises TurnAdded for it, so one thing owns the transcript and a
@@ -1549,7 +1854,7 @@ namespace ClaudeBuddy
             // start them downloading again.
             for (var i = 0; i < count && i < _session.History.Count; i++)
             {
-                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble, _soleSpeaker));
+                _turns.Insert(i, new TurnView(_session.History[i], _defaultBubble, _soleSpeaker, Adopt, _textScale));
             }
         }
 
@@ -1572,7 +1877,7 @@ namespace ClaudeBuddy
             if (_session is null) return;
 
             _turns.Clear();
-            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
+            foreach (var turn in _session.History) _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt, _textScale));
 
             // Re-read rather than left at what Bind found.
             //
@@ -1588,22 +1893,22 @@ namespace ClaudeBuddy
             // transcript that has just been replaced wholesale has no scroll
             // position worth preserving, and the newest turn is the one you
             // opened the panel to read.
-            Dispatcher.UIThread.Post(() => Scroll.ScrollToEnd(), DispatcherPriority.Loaded);
+            ScrollToEndAfterLayout();
         }
 
         private void OnTurnAdded(ChatTurn turn)
         {
-            _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker));
+            _turns.Add(new TurnView(turn, _defaultBubble, _soleSpeaker, Adopt, _textScale));
 
             // Your own turn always brings the view with it; everything else
             // respects where you were reading.
             if (turn.Role == ChatRole.User)
             {
-                Dispatcher.UIThread.Post(() => Scroll.ScrollToEnd(), DispatcherPriority.Loaded);
+                ScrollToEndAfterLayout();
                 return;
             }
 
-            Dispatcher.UIThread.Post(ScrollToEndIfPinned, DispatcherPriority.Loaded);
+            ScrollToEndIfPinned();
         }
 
         private void OnTurnUpdated(ChatTurn turn)
@@ -1611,7 +1916,7 @@ namespace ClaudeBuddy
             // Nothing to do to the collection: the view wraps the same object
             // and forwards its own change notification, so no row is recreated
             // and nothing can steal focus by being re-templated.
-            Dispatcher.UIThread.Post(ScrollToEndIfPinned, DispatcherPriority.Loaded);
+            ScrollToEndIfPinned();
         }
 
         private void OnStateChanged(RemoteChatState state)
@@ -1626,6 +1931,106 @@ namespace ClaudeBuddy
         }
 
         private void OnPromptChanged() => ApplyPrompt();
+
+        // The far machine's name arrives on the roster, which normally lands
+        // after the panel is already open — so the chip is redrawn rather than
+        // only being set once at Bind.
+        private void OnMachineChanged()
+        {
+            if (_owner is null) return;
+
+            KindChipText.Text = KindChipLabel(
+                _owner.KindGlyphText, _owner.KindLabel, _owner.PresenceLabel,
+                (_session as IRemoteChatMachine)?.MachineName);
+        }
+
+        // What the chip says, including which machine when that is known.
+        //
+        // "another machine" is true and is not an answer: somebody with two of
+        // them cannot act on it, which is what prompted this. The machine name
+        // replaces the generic word rather than being appended to it — "⇄
+        // another machine · avatar" says the same thing twice and is longer than
+        // the header has room for.
+        //
+        // Falls back the moment the name is unknown, which is the ordinary case
+        // for the first second a panel is open: the roster has not answered yet,
+        // and naming no machine beats naming a guessed one.
+        //
+        // Pure and static so the wording is a unit test rather than a
+        // screenshot. See CB-59.
+        internal static string KindChipLabel(
+            string glyph, string? kind, string? presence, string? machine)
+        {
+            if (kind is null) return "";
+
+            var what = string.IsNullOrWhiteSpace(machine) ? kind : machine;
+
+            return presence is null
+                ? $"{glyph}  {what}"
+                : $"{glyph}  {what} · {presence}";
+        }
+
+
+        // --- the wait, while it is happening --------------------------------
+
+        // Ticks the elapsed figure while a fetch is in flight.
+        //
+        // A timer rather than a binding because the thing that changes is the
+        // clock, not the session: nothing raises an event once a second, and
+        // asking the session to would put a timer in the transport instead of
+        // in the one place that draws it.
+        private DispatcherTimer? _waitTick;
+
+        private void OnWaitChanged()
+        {
+            if (_session is IRemoteChatFetchWait waiting) ShowWait(waiting);
+            else HideWait();
+        }
+
+        private void ShowWait(IRemoteChatFetchWait waiting)
+        {
+            if (waiting.WaitingSince is not { } since)
+            {
+                HideWait();
+                return;
+            }
+
+            FetchWaitBox.IsVisible = true;
+            FetchWaitHint.Text = RemoteControlChatSession.WaitHint;
+
+            void Paint() => FetchWaitText.Text = RemoteControlChatSession.WaitLabel(
+                DateTimeOffset.Now - since, waiting.WaitingFor);
+
+            Paint();
+
+            // A second, because that is the resolution of what it says. Half of
+            // one would redraw twice for every change and a longer one would
+            // make a counter that is supposed to prove liveness look stopped.
+            _waitTick ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _waitTick.Tick -= OnWaitTick;
+            _waitTick.Tick += OnWaitTick;
+            _waitTick.Start();
+        }
+
+        private void OnWaitTick(object? sender, EventArgs e)
+        {
+            if (_session is IRemoteChatFetchWait waiting
+                && waiting.WaitingSince is { } since)
+            {
+                FetchWaitText.Text = RemoteControlChatSession.WaitLabel(
+                    DateTimeOffset.Now - since, waiting.WaitingFor);
+                return;
+            }
+
+            HideWait();
+        }
+
+        private void HideWait()
+        {
+            _waitTick?.Stop();
+            FetchWaitBox.IsVisible = false;
+        }
+
 
         // A dialog the session has stopped on, or nothing.
         //
@@ -1681,13 +2086,50 @@ namespace ClaudeBuddy
             HideNow();
         }
 
+        // Whether the view is sitting at the bottom — read *now*, on the same
+        // tick as the turn that prompted the question, rather than after a
+        // yield.
+        //
+        // The row that was just added or grown has not been measured yet, so the
+        // extent still describes the transcript you were reading and an offset
+        // at the bottom of it still reads as the bottom. A yield later the new
+        // content has height, the extent has grown past where you are sitting,
+        // and the same position answers "no" — so autoscroll switches itself off
+        // partway through a streaming reply and the panel is left in the middle
+        // of it. That is the intermittent half of the same complaint the bind
+        // path above fixes: it depended on whether measure had happened yet.
+        private bool IsPinnedToBottom =>
+            Scroll.Offset.Y >= Scroll.Extent.Height - Scroll.Viewport.Height - 8;
+
         // Only when already at the bottom, so reading back through a long reply
-        // isn't yanked forward as it grows. DispatcherPriority.Loaded because
-        // the extent isn't updated until the text has re-measured.
+        // isn't yanked forward as it grows.
         private void ScrollToEndIfPinned()
         {
-            var pinned = Scroll.Offset.Y >= Scroll.Extent.Height - Scroll.Viewport.Height - 8;
-            if (pinned) Scroll.ScrollToEnd();
+            if (IsPinnedToBottom) ScrollToEndAfterLayout();
+        }
+
+        // To the newest message, after layout has caught up with the rows that
+        // put it there.
+        //
+        // Twice, at two priorities, for the reason LoadOlderAsync spells out at
+        // length: one yield gets the rows into the visual tree, and the measure
+        // that gives them height happens after that. A single ScrollToEnd() at
+        // Loaded priority — which is what every one of these call sites used to
+        // be — reads the extent the transcript had *before* those rows existed
+        // and lands short of the bottom by however much was added. Loading a
+        // whole transcript at once adds a lot, so "short of the bottom" is not a
+        // few pixels; it is the middle of the conversation.
+        //
+        // The first call is kept rather than only doing the late one: it puts
+        // the view roughly right on the frame the panel appears, so the
+        // correction is a settle rather than a visible jump.
+        private void ScrollToEndAfterLayout()
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                Scroll.ScrollToEnd();
+                Dispatcher.UIThread.Post(() => Scroll.ScrollToEnd(), DispatcherPriority.Background);
+            }, DispatcherPriority.Loaded);
         }
 
         private void HideNow()
@@ -1728,6 +2170,8 @@ namespace ClaudeBuddy
             private readonly ChatTurn _turn;
             private readonly Speaker? _soleSpeaker;
             private readonly Color? _defaultBubble;
+            private readonly Action<SelectableTextBlock> _adopt;
+            private readonly TextScale _scale;
 
             // soleSpeaker is who is talking when the transcript does not say.
             // A room stamps every turn with its speaker because there are
@@ -1735,11 +2179,18 @@ namespace ClaudeBuddy
             // or a single agent — stamps none, because there is only one and it
             // was obvious to whoever wrote the transport. It is not obvious in
             // the bubbles, which is the whole point of the chip.
-            public TurnView(ChatTurn turn, Color? defaultBubble, Speaker? soleSpeaker)
+            // adopt is how each selectable run of text gets handed to the
+            // panel as it is built, for the rules that span more than one
+            // bubble. Passed in rather than reached for through the singleton,
+            // so a TurnView built by a test is a TurnView and not half a window.
+            public TurnView(ChatTurn turn, Color? defaultBubble, Speaker? soleSpeaker,
+                Action<SelectableTextBlock> adopt, TextScale scale)
             {
                 _turn = turn;
                 _defaultBubble = defaultBubble;
                 _soleSpeaker = soleSpeaker;
+                _adopt = adopt;
+                _scale = scale;
 
                 turn.PropertyChanged += (_, e) =>
                 {
@@ -1782,6 +2233,13 @@ namespace ClaudeBuddy
 
             private Control BuildBody()
             {
+                // Thrown away with the body they belong to. A streaming turn
+                // rebuilds its body per delta (see the PropertyChanged hook
+                // above), and a list that kept growing across those rebuilds
+                // would have the panel searching controls that are no longer
+                // on screen for a selection the user cannot see.
+                _blocks.Clear();
+
                 var stack = new StackPanel { Spacing = 4 };
 
                 foreach (var block in ChatMarkdown.Parse(_turn.Text))
@@ -1793,6 +2251,58 @@ namespace ClaudeBuddy
                     stack.Children.Add(Line(_turn.Text));
 
                 return stack;
+            }
+
+            // Every selectable run of text in this bubble, in the order it is
+            // drawn. The panel asks for these rather than walking the visual
+            // tree: a turn knows what it built, whereas a tree walk would only
+            // find what has been realised and laid out, which is a different
+            // question with a different answer under a headless renderer.
+            //
+            // Empty until Body has been read, which is correct rather than
+            // merely convenient — a bubble nobody has drawn cannot be holding
+            // a selection.
+            private readonly List<SelectableTextBlock> _blocks = new();
+
+            public IReadOnlyList<SelectableTextBlock> Blocks => _blocks;
+
+            // A paragraph, heading, list item, quote or code block that a
+            // person can drag across and copy out.
+            //
+            // Focusable is off, which is the whole trick and worth stating
+            // plainly: SelectableTextBlock ships Focusable=true, and taking it
+            // at face value would break the rule ChatPanel.axaml sets out —
+            // that the composer is the only focusable thing in the window, so
+            // nothing can pull focus out of it mid-reply. Selection does not
+            // need focus: Avalonia drives it entirely from the pointer handlers
+            // and never calls Focus() itself. What focus *is* needed for is the
+            // copy keystroke, which is why the panel claims that gesture on the
+            // tunnel route instead — see OnCopyKeyDown.
+            private SelectableTextBlock Selectable(
+                string? text = null, FontFamily? font = null, double? size = null, IBrush? ink = null)
+            {
+                var block = new SelectableTextBlock
+                {
+                    TextWrapping = TextWrapping.Wrap,
+                    Focusable = false,
+                    Cursor = TextCursor,
+                    SelectionBrush = SelectionFill
+                };
+
+                if (text is not null) block.Text = text;
+                if (font is not null) block.FontFamily = font;
+                if (size is not null) block.FontSize = size.Value;
+                if (ink is not null) block.Foreground = ink;
+
+                _blocks.Add(block);
+
+                // Handed to the panel to finish: it owns the rules that span
+                // more than one bubble — that only one may hold a selection,
+                // and that they share a single context menu — and neither is a
+                // TurnView's to enforce from inside one row.
+                _adopt(block);
+
+                return block;
             }
 
             private Control BuildBlock(ChatMarkdown.MdBlock block)
@@ -1809,14 +2319,7 @@ namespace ClaudeBuddy
                             CornerRadius = new CornerRadius(4),
                             Padding = new Thickness(6, 4),
                             Margin = new Thickness(0, 1),
-                            Child = new TextBlock
-                            {
-                                Text = block.Text,
-                                TextWrapping = TextWrapping.Wrap,
-                                FontFamily = Mono,
-                                FontSize = Size - 1,
-                                Foreground = CodeInk
-                            }
+                            Child = Selectable(block.Text, Mono, Size - Points(1), CodeInk)
                         };
 
                     case ChatMarkdown.MdKind.Heading:
@@ -1826,7 +2329,7 @@ namespace ClaudeBuddy
 
                         // Only two sizes. Six levels of heading inside a bubble
                         // this size would be a distinction nobody could see.
-                        heading.FontSize = block.Depth <= 2 ? Size + 1 : Size;
+                        heading.FontSize = block.Depth <= 2 ? Size + Points(1) : Size;
                         heading.Margin = new Thickness(0, 2, 0, 0);
                         return heading;
                     }
@@ -1852,7 +2355,7 @@ namespace ClaudeBuddy
                         var row = new Grid
                         {
                             ColumnDefinitions = new ColumnDefinitions("Auto,*"),
-                            Margin = new Thickness(block.Depth * 10, 0, 0, 0)
+                            Margin = new Thickness(Points(block.Depth * 10), 0, 0, 0)
                         };
 
                         var marker = Line(block.Marker);
@@ -1873,15 +2376,12 @@ namespace ClaudeBuddy
             }
 
             // One line of inline Markdown as a TextBlock of styled runs.
-            private TextBlock Line(string text)
+            private SelectableTextBlock Line(string text)
             {
-                var block = new TextBlock
-                {
-                    TextWrapping = TextWrapping.Wrap,
-                    FontSize = Size,
-                    FontStyle = Style,
-                    Foreground = Ink
-                };
+                var block = Selectable();
+                block.FontSize = Size;
+                block.FontStyle = Style;
+                block.Foreground = Ink;
 
                 var spans = ChatMarkdown.Inline(text);
 
@@ -1916,7 +2416,7 @@ namespace ClaudeBuddy
                         // told apart by face and colour rather than by a chip.
                         case ChatMarkdown.MdStyle.Code:
                             run.FontFamily = Mono;
-                            run.FontSize = Size - 0.5;
+                            run.FontSize = Size - Points(0.5);
                             run.Foreground = CodeInk;
                             break;
 
@@ -1931,6 +2431,17 @@ namespace ClaudeBuddy
 
                 return block;
             }
+
+            // An I-beam over text a person can drag across, because nothing else
+            // in this window can be dragged across and the cursor is the only
+            // thing that says so before they try.
+            private static readonly Cursor TextCursor = new(StandardCursorType.Ibeam);
+
+            // Light enough to read the ink through on a coloured bubble, which
+            // a solid system highlight is not — bubbles here are tinted per
+            // agent, so the one selection colour has to sit on any of them.
+            private static readonly IBrush SelectionFill =
+                new SolidColorBrush(Color.Parse("#59FFFFFF"));
 
             private static readonly FontFamily Mono = new("Menlo,SF Mono,Consolas,monospace");
             private static readonly IBrush CodeBackground = new SolidColorBrush(Color.Parse("#33000000"));
@@ -2213,7 +2724,57 @@ namespace ClaudeBuddy
             // read as a note about the conversation, not one side of it.
             public double MaxBubbleWidth => Math.Max(140, AvailableWidth * (IsSystem ? 0.95 : 0.8));
 
-            public double Size => IsSystem ? 10 : 11.5;
+            // Every size in a bubble, multiplied. Four different numbers on
+            // purpose — a system note is quieter than a message, a name is
+            // quieter than what it said, a timestamp quieter still — and the
+            // multiplier keeps that hierarchy instead of flattening it, which
+            // is what a single "chat font size" setting would have done.
+            private double Scale => _scale.Value;
+
+            public double Size => (IsSystem ? 10 : 11.5) * Scale;
+
+            // A measurement written in shipped points, in the size it should be
+            // at the current scale.
+            //
+            // The differences inside a bubble are what make it readable — a
+            // heading a point above its prose, code a point below it, a nested
+            // list indented from its parent. Left as raw constants those gaps
+            // stay the same absolute size while everything around them grows,
+            // so the hierarchy quietly flattens exactly when someone has said
+            // they are having trouble reading it. Caught by a test asserting
+            // that every part of a turn grows by the same factor.
+            private double Points(double shipped) => shipped * Scale;
+
+            public double SpeakerNameSize => 9.5 * Scale;
+
+            public double TimeSize => 8.5 * Scale;
+
+            // The chip grows with the name beside it. Left at 16pt it would sit
+            // next to 20pt text looking like a bullet point, and the initials
+            // inside it would spill out of their own circle.
+            public double ChipSize => 16 * Scale;
+
+            public CornerRadius ChipCorners => new(8 * Scale);
+
+            public double ChipTextSize => 8 * Scale;
+
+            // Called when the scale changes under a row that already exists.
+            // The body is rendered Markdown with the sizes baked into each
+            // TextBlock, so it is thrown away and rebuilt rather than restyled
+            // — the same thing a streaming turn's text change already does.
+            public void Rescaled()
+            {
+                _body = null;
+
+                foreach (var name in new[]
+                         {
+                             nameof(Body), nameof(Size), nameof(SpeakerNameSize), nameof(TimeSize),
+                             nameof(ChipSize), nameof(ChipCorners), nameof(ChipTextSize)
+                         })
+                {
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+                }
+            }
 
             public FontStyle Style => IsSystem ? FontStyle.Italic : FontStyle.Normal;
 

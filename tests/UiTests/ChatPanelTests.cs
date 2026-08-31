@@ -1033,4 +1033,108 @@ public class ChatPanelTests : IDisposable
         {
         }
     }
+
+    // --- the wait shown while a mirror fetches -------------------------------
+
+    // Four minutes of a blank panel is what this exists to stop.
+    //
+    // The opening window of a mirrored session is carried by a model retyping
+    // base64 by hand — measured at 222, 231, 234, 247 and 192 seconds on real
+    // machines — and until CB-58 the panel showed nothing moving for all of it.
+    // A session that offers IRemoteChatFetchWait gets an indicator; one that
+    // does not is unchanged, which is why the interface is optional.
+    [AvaloniaFact]
+    public void AWaitingSessionShowsTheIndicatorWithHowLongItHasBeen()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var box = panel.FindControl<Border>("FetchWaitBox")!;
+
+        Assert.False(box.IsVisible);
+
+        // Started in the past, so the counter can be asserted without waiting
+        // on a real clock.
+        fake.BeginWaiting(TimeSpan.FromSeconds(192));
+        Flush();
+
+        Assert.True(box.IsVisible);
+
+        var text = RenderedText(panel.FindControl<TextBlock>("FetchWaitText")!);
+        Assert.Contains("3m 12s", text);
+        Assert.Contains(fake.WaitingFor, text);
+
+        // And the hint, which is the half that stops an ordinary wait reading
+        // as a fault.
+        var hint = RenderedText(panel.FindControl<TextBlock>("FetchWaitHint")!);
+        Assert.Contains("minutes", hint);
+    }
+
+    // It has to go away again, and on every ending rather than only the happy
+    // one: an indicator still spinning after a transfer gave up is a worse lie
+    // than never having shown one.
+    [AvaloniaFact]
+    public void TheIndicatorGoesAwayWhenTheWaitEnds()
+    {
+        var orb = NewOrb();
+        var fake = NewFake();
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var box = panel.FindControl<Border>("FetchWaitBox")!;
+
+        fake.BeginWaiting(TimeSpan.FromSeconds(30));
+        Flush();
+        Assert.True(box.IsVisible);
+
+        fake.EndWaiting();
+        Flush();
+        Assert.False(box.IsVisible);
+    }
+
+    // --- which machine, not just "another" -----------------------------------
+
+    // "another machine" is true and is not an answer.
+    //
+    // Somebody running two of them cannot act on it, which is what prompted
+    // this. The machine *replaces* the generic word rather than being appended:
+    // "another machine · avatar" says the same thing twice and the header has
+    // no room for it.
+    [Theory]
+    [InlineData("avatar", "\u21C4  avatar")]
+    [InlineData("warrens-mbp", "\u21C4  warrens-mbp")]
+    public void TheChipNamesTheMachineWhenItIsKnown(string machine, string expected) =>
+        Assert.Equal(expected, ChatPanel.KindChipLabel(
+            "\u21C4", "another machine", presence: null, machine: machine));
+
+    // And keeps the vague wording when it is not, which is the ordinary case
+    // for the first second a panel is open — the roster has not answered yet.
+    // Naming no machine beats naming a guessed one.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void TheChipFallsBackToTheGenericWordWhenTheMachineIsUnknown(string? machine) =>
+        Assert.Equal("\u21C4  another machine", ChatPanel.KindChipLabel(
+            "\u21C4", "another machine", presence: null, machine: machine));
+
+    // The presence half is untouched by any of this: it answers a different
+    // question, and a background session still says what it is waiting for.
+    [Fact]
+    public void TheChipKeepsPresenceBesideTheMachine() =>
+        Assert.Equal("\u21C4  avatar \u00B7 needs input", ChatPanel.KindChipLabel(
+            "\u21C4", "another machine", "needs input", "avatar"));
+
+    // No kind means no chip at all, machine or not — the chip is gated on the
+    // kind, and a machine name floating alone would be a claim about a session
+    // this app does not badge.
+    [Fact]
+    public void NoKindMeansNoChipEvenWithAMachine() =>
+        Assert.Equal("", ChatPanel.KindChipLabel("\u21C4", null, null, "avatar"));
 }

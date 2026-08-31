@@ -58,6 +58,11 @@ public class RemoteControlChatSessionTurnTests
     {
         ClaudeBuddySettings.ReloadForTests();
         ClaudeBuddySettings.RemoteControlEnabled = false;
+        // Both transports, because "off" is now two switches. A test that
+        // turns one off and leaves the other to whatever the last test set
+        // is asserting about a state it did not arrange — and settings here
+        // persist through ReloadForTests, since the setter writes the file.
+        ClaudeBuddySettings.PeerLinkEnabled = false;
 
         var session = Session();
         var before = session.History.Count;
@@ -87,6 +92,11 @@ public class RemoteControlChatSessionTurnTests
     {
         ClaudeBuddySettings.ReloadForTests();
         ClaudeBuddySettings.RemoteControlEnabled = false;
+        // Both transports, because "off" is now two switches. A test that
+        // turns one off and leaves the other to whatever the last test set
+        // is asserting about a state it did not arrange — and settings here
+        // persist through ReloadForTests, since the setter writes the file.
+        ClaudeBuddySettings.PeerLinkEnabled = false;
 
         var session = Session();
         ChatTurn? seen = null;
@@ -171,6 +181,11 @@ public class RemoteControlChatSessionTurnTests
     {
         ClaudeBuddySettings.ReloadForTests();
         ClaudeBuddySettings.RemoteControlEnabled = false;
+        // Both transports, because "off" is now two switches. A test that
+        // turns one off and leaves the other to whatever the last test set
+        // is asserting about a state it did not arrange — and settings here
+        // persist through ReloadForTests, since the setter writes the file.
+        ClaudeBuddySettings.PeerLinkEnabled = false;
 
         var session = Session();
         var seen = new List<ChatTurn>();

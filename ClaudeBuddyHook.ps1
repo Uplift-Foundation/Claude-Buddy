@@ -103,9 +103,22 @@ if ($State -eq 'ended') {
 # (WindowsTerminal.exe, Code.exe, the conhost shell, ...). The walk finds
 # nothing for WSL sessions (the Windows-side parent is an interop bridge,
 # not the terminal), which is what the term_program fallback is for.
+#
+# term_id is "the handle this terminal understands", and on Windows only
+# WezTerm has one — the console route needs nothing but the session's own pid,
+# which is why Windows Terminal, conhost and VS Code all work without a line
+# here. WEZTERM_PANE is recorded because `wezterm cli send-text --pane-id`
+# reaches the exact pane, where the console route reaches the exact process:
+# both are right, and the pane one costs no console juggling.
 $termProgram = ''
+$termId = ''
 if ($env:WT_SESSION) { $termProgram = 'WindowsTerminal' }
 elseif ($env:TERM_PROGRAM) { $termProgram = $env:TERM_PROGRAM }
+
+if ($env:WEZTERM_PANE) {
+    $termId = $env:WEZTERM_PANE
+    if (-not $termProgram) { $termProgram = 'WezTerm' }
+}
 
 # Give this session a colour when it has none, the way each CLI allows.
 #
@@ -313,6 +326,7 @@ $status = @{
     title           = $title
     color           = $color
     term_program    = $termProgram
+    term_id         = $termId
     term_pid        = $termPid
     session_pid     = $sessionPid
     transcript_path = $transcript

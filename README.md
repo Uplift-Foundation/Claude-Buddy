@@ -1039,6 +1039,23 @@ the same way dragged orb positions are — by the agent rather than by the
 session, since Claude Code mints a new session id every conversation and a size
 saved under one would never be found again.
 
+**Cmd+ and Cmd- change the text size, and Cmd+0 puts it back** — Ctrl on
+Windows, the way every other app on each platform spells the same gesture. It
+works while the caret is in the composer, which is where it usually is, and it
+moves the whole conversation together: bubbles, headings, code blocks, the
+speaker chips, the timestamps, the box you type into, and a permission prompt
+standing between them. The window's own header and buttons stay where they
+are, the same way Messages scales messages and not its toolbar.
+
+Unlike the panel size, **the text size is one setting for every agent**, not one
+per agent — it is a preference about your eyes rather than about a
+conversation. It lives in `chatTextScale` in `settings.json` as a multiplier
+over the shipped size, runs from 0.8x to 2x in eight steps, and there is a
+**Text size** slider under **Chat panel** in settings for anyone who never tries
+the keyboard. A hand-edited value outside that range is pinned back into it on
+read, so a mistyped `40` cannot leave you with a panel too large to find the
+setting that caused it.
+
 Replying is a **second switch**, off by default: **Allow replying to agents**.
 Turning it on asks the gateway for write permission as well as read, which it
 treats as a new pairing — so approve the device again there
@@ -1047,6 +1064,20 @@ waiting until you do. Seeing what your agents are doing and being able to make
 them do things are different powers, which is why the second one is asked for
 separately rather than coming along with the first.
 
+**If the status row says `can't reach the gateway: No route to host`, check
+macOS's Local Network permission before you check your network.** macOS grants
+local network access per app *identity*, and installing an upgrade replaces the
+app bundle — so the permission does not survive the update, and Claude Buddy
+silently loses the ability to reach a gateway that is running perfectly well.
+Open **System Settings → Privacy & Security → Local Network** and make sure
+Claude Buddy is switched on. The app now says so in that row itself, but the
+underlying error still reads like a network fault, which is why it is worth
+naming here.
+
+Testing it from a terminal will mislead you: `ping`, `nc`, `curl` and `ssh` are
+all built into macOS and exempt from that permission, so they will report the
+gateway reachable while the app cannot open a socket to it at all.
+
 Two things worth knowing if you are wiring this up yourself: the connection uses
 its own TLS stack (BouncyCastle) because the gateway requires TLS 1.3 and .NET
 on macOS cannot speak it, and the certificate is trusted by fingerprint on first
@@ -1054,13 +1085,83 @@ connection rather than through the system trust store. `docs/openclaw-findings.m
 records what was measured against a real gateway, including several places where
 the published protocol documentation disagrees with the running software.
 
-## Sessions on other machines (macOS, off by default)
+## Usage orbs for each account (off by default)
+
+If you run more than one Claude Code account — `~/.claude` plus whatever you
+have wired up under **Claude Code → additional accounts** — the only way to see
+how much of each one you have spent is to open a session on it and run
+`/usage`, once per account. Turn on **Usage orbs for each account** in Settings
+and each account gets an orb instead.
+
+Each orb wears three rings. Outside in, they are **this week** (the 7-day
+window), **this session** (the 5-hour window), and **extra usage**. The colour
+is how much room is left rather than which account it is — green under 60%,
+amber to 85%, red above — so an account you do not need to think about is a
+quiet green outline and nothing else, and a row of them reads from across the
+room without a number on screen. Which account an orb *is* stays where it
+always is: the two letters in the middle.
+
+Hover an orb for the numbers, the reset times and the extra-usage position.
+Click it to keep that card up — pin two and they sit side by side, which is the
+only way to compare accounts at a glance. Click again to put it away. The orbs
+drag like the session ones and stay where you leave them.
+
+Some things the rings deliberately do not do:
+
+- **A window that has reset is not drawn.** Once a five-hour or weekly window
+  passes its reset time its percentage is about a period that has ended, so the
+  ring empties rather than showing yesterday's number.
+- **The inner ring has three states, not two.** Extra usage shows a real
+  percentage when it is switched on *and* has a spending limit. When the
+  month's limit has been **reached**, the ring is full — you have spent it, and
+  that is the opposite of not having any. When there is genuinely no extra
+  usage on the account, the ring is a dotted outline instead of a gauge sitting
+  at zero, because an empty gauge would claim a budget you do not have.
+- **The card never guesses why.** It says "Extra usage limit reached for this
+  month" or "switched off for this account" only when the API states those as
+  facts; any other reason is shown as the raw code the API sent, in
+  parentheses, rather than translated into a sentence. An earlier version did
+  translate one, and told somebody their organisation had disabled extra usage
+  when in truth they had simply spent that month's budget.
+- **An orb that could not be read goes dim** rather than dropping to zero, with
+  how old the reading is in its card.
+
+**Where the numbers come from.** Claude Buddy asks Claude Code itself, once
+every five minutes per account, over the same control protocol its SDK uses —
+roughly `claude -p --input-format stream-json` with a `get_usage` request and
+`CLAUDE_CONFIG_DIR` set. Two consequences worth knowing:
+
+- **It costs no tokens.** The request makes no model call; Claude Code answers
+  from the usage endpoint it already talks to. It does start a short-lived
+  `claude` process per account per poll, which is the reason for the
+  five-minute floor — Claude Code caches the underlying fetch for five minutes,
+  so asking more often could not return a newer number anyway.
+- **Nothing here touches your credentials.** Claude Buddy never reads your
+  login token or your keychain; Claude Code handles its own authentication and
+  simply answers the question. That is also why this works the same on macOS
+  and Windows.
+
+An account signed in with an API key, or running against Bedrock or Vertex, has
+no subscription windows to report. Its orb says so in the card rather than
+showing zeros.
+
+The response shape this reads is marked experimental by Claude Code, so it may
+change. If it does, the orbs go quiet rather than showing something wrong.
+
+## Sessions on other machines (off by default)
 
 If you run Claude Code on more than one machine — a desktop at home, a server,
 a laptop you left on — Claude Buddy can show those sessions as orbs too, and let
-you send them instructions from anywhere. There is no port to open, no tunnel,
-and nothing to install on the other machine: it works from a hotel or a diner
-exactly as it does from your desk.
+you send them instructions.
+
+There are two ways it can reach them, and it prefers the second when it is
+available. **Through Remote Control** (macOS only) there is no port to open, no
+tunnel and nothing to install on the other machine, and it works from a hotel or
+a diner exactly as it does from your desk — at the cost of your Claude usage and
+of transcripts that take minutes to arrive. **Directly** (both platforms) is
+instant and free, and needs both machines on the same network. The rest of this
+section covers Remote Control; [connecting directly](#connecting-directly-instead-both-platforms-off-by-default)
+is at the end of it.
 
 The requirement is that the session on the other machine has **Remote Control
 on** (`claude --remote-control`, or `/remote-control` in a running session).
@@ -1094,6 +1195,14 @@ Turn it on in **Settings → Other machines**, then:
   **Stop the relay after: Never**), and the relay comes up with the app. Both
   are plain keys in `settings.json`, so an SSH session and an app relaunch is
   enough to manage a machine you can't see.
+
+  **A locked screen is fine, and that took two goes to be true.** The relay
+  starts before the app waits for the screen to unlock, and — since CB-39 — it
+  is also *driven* before then, by a pump that does not belong to the UI thread.
+  Without that second half the relay came up, registered, and answered nothing:
+  from every other machine its orbs looked alive and its panels all said the
+  other machine wasn't running Remote Control. Serving is files and a tmux pane
+  with no display anywhere in it, so it no longer waits for one.
 
 Nothing else starts merely because the switch is on. Use **Connect to other
 machines** in the tray menu, or the button in Settings, or just open a remote
@@ -1164,6 +1273,89 @@ one.
 machines before any of this was built — including what the relay does and does
 not expose, and the two things a stronger test caught that a weaker one had
 passed.
+
+### Connecting directly instead (both platforms, off by default)
+
+Everything above goes through Anthropic's Remote Control cloud, carried by a
+hidden Claude Code session that Claude Buddy runs as a relay. That works from a
+hotel, and it has two costs that are hard to miss once you have watched it: it
+uses your Claude account, and a transcript arrives in **minutes** — the relay's
+*model* retypes the transcript by hand, about four minutes per six kilobytes.
+
+When both machines are on the same network, they can talk to each other
+directly instead. Turn on **"Connect directly to other machines"** in Settings →
+Other machines, on both. Transcripts then arrive in a moment, nothing signs into
+your account, and nothing counts against your usage.
+
+Machines find each other by announcing themselves on the local network, so
+paired ones reconnect on their own whenever both are up. Two things have to
+happen once:
+
+1. **Pair them.** On one machine, press **Show a code**. On the other, find that
+   machine in the list and type the code beside it. Both then remember each
+   other's certificate, and the code is good for five minutes and one pairing.
+2. **Say yes to the permission.** The first time it listens, macOS asks for
+   Local Network access and Windows raises a firewall prompt. Both are the
+   feature working; a "no" here looks exactly like the network being broken.
+
+Two situations need a different route in, and both have one.
+
+**A machine with no screen** — a Mac mini serving its sessions unattended — has
+no button to press. Write the code into a file instead, and it opens the same
+window for the same five minutes:
+
+```bash
+ssh your-mini
+echo 123456 > "$HOME/Library/Application Support/ClaudeBuddy/pair-open"
+```
+
+Then pair from the machine that does have a screen, typing that code. The file
+is read once and deleted, so a forgotten one is not a standing invitation.
+
+**A machine this one cannot see** — on another subnet, behind a VPN, or on a
+network that does not carry the announcements — is added by hand. Use **Add a
+machine by address** with its address (and `:port` if you changed it) and the
+code it is showing. Its name fills itself in as soon as it answers, because the
+machine on the other end is the one that knows it.
+
+Both machines still need Claude Buddy running, but the far one no longer needs
+Remote Control on, or a Claude account at all: this path never asks a model for
+anything.
+
+**A Mac with no screen can serve, but cannot start a conversation.** macOS gates
+the machine that *opens* a local connection, not the one that accepts it — and a
+headless Mac has nobody to approve the prompt, so it never gets the grant. What
+that looks like, measured on a real one:
+
+```
+peer-connect-failed to=your-laptop   No route to host — macOS may be blocking
+  local network access — check System Settings → Privacy & Security → Local Network
+discovery-announce-failed            No route to host — …
+```
+
+Both of those are the *same* missing grant. The second is the one that misleads:
+a headless Mac cannot send its announcements either, so it never appears in
+anyone's list however healthy it is — which reads as the network not carrying
+multicast rather than as a permission.
+
+It still works, because none of that is needed in the direction that matters:
+
+- Pair from the machine **with** a screen, using the `pair-open` file above.
+- Add the headless one **by address**, not by waiting for it to appear.
+- The machine with a screen keeps the connection up. The headless one answers on
+  it, in both directions, because one connection carries both.
+
+If you want the headless machine to dial as well, screen-share into it once and
+approve Local Network access there; it is a one-time prompt like any other.
+
+**If a machine never appears**, the likeliest cause on macOS is that Local
+Network access was refused or lost. It is tied to the app's code signature and
+**does not survive an upgrade**, and the symptom is a connection error that
+reads like an ordinary network fault. `ping`, `nc`, `curl` and `ssh` are all
+Apple-signed and exempt from the gate, so every obvious check will tell you the
+machine is perfectly reachable while Claude Buddy cannot open a socket to it.
+Check System Settings → Privacy & Security → Local Network. `docs/` and CB-38
+have the full diagnosis.
 
 ## 1. Install it
 
@@ -1624,6 +1816,33 @@ memory for CoreCLR, library validation off for the bundled native libs, and
 Apple Events for click-to-focus. Removing any of them still notarizes cleanly
 but breaks the app at runtime, so they can only be validated by running a
 signed build.
+
+## When it crashes
+
+Buddy writes unhandled exceptions to a file, on by default and with nothing to
+switch on:
+
+| | |
+| --- | --- |
+| macOS | `~/Library/Logs/ClaudeBuddy/crash.log` |
+| Windows | `%LOCALAPPDATA%\ClaudeBuddy\Logs\crash.log` |
+
+One entry per crash, newest last, each starting with `===` and a timestamp, and
+naming which of three paths caught it — a throw nothing caught
+(`AppDomain.UnhandledException`), a faulted task nobody awaited
+(`TaskScheduler.UnobservedTaskException`), or a throw inside a UI callback
+(`Dispatcher.UnhandledException`). The file rolls over to `crash.log.1` at
+256 KB, and one previous generation is kept.
+
+It exists because the alternative was a macOS `.ips` crash report, whose managed
+frames are unsymbolicated addresses: when Buddy aborted twice on an unattended
+Mac mini, identifying the exception took two crash reports, a read of Avalonia's
+source and a purpose-built probe. It is not telemetry — nothing is sent
+anywhere, and deleting the file is always safe.
+
+If Buddy vanished and that file is empty, the process did not die of a managed
+exception: look at Console.app's crash reports instead, and at whether something
+outside the app (a launchd agent, an installer replacing the bundle) stopped it.
 
 ## Notes / things you might want to tweak
 

@@ -40,23 +40,6 @@ public class SettingsStatusTickTests
         return window;
     }
 
-    private static SettingsWindow WithRelay()
-    {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.RemoteControlEnabled = true;
-        RemoteControlSessions.ClearRelaysForTests();
-
-        var window = NewWindow();
-        _ = window.RemoteControlRows();
-        return window;
-    }
-
-    // The relay section is macOS-only — the bridge is tmux-based, so on Windows
-    // RemoteControlRows returns before its label exists and there is nothing for
-    // the tick to write. Derived from the platform rather than skipped, so these
-    // assert something true on both CI legs.
-    private static bool RelayRowsExist => OperatingSystem.IsMacOS();
-
     // Each label is null unless its own section has been built, which is the
     // point of the single timer: one ticker serving at most two labels rather
     // than a timer each.
@@ -91,45 +74,6 @@ public class SettingsStatusTickTests
         Assert.False(string.IsNullOrWhiteSpace(window.OpenClawStatusText));
     }
 
-    [AvaloniaFact]
-    public void TheRelayLineIsFilledOnceItsSectionExists()
-    {
-        var window = WithRelay();
-
-        window.OnStatusTick(null, EventArgs.Empty);
-
-        if (RelayRowsExist)
-            Assert.Equal(RemoteControlSessions.StatusText, window.RemoteControlStatusText);
-        else
-            Assert.Null(window.RemoteControlStatusText);
-    }
-
-    // The relay line has to follow the relay, which is the whole reason it ticks
-    // rather than being written once when the window opens.
-    [AvaloniaFact]
-    public void TheRelayLineFollowsTheRelayChangingUnderIt()
-    {
-        if (!RelayRowsExist) return;
-
-        var window = WithRelay();
-
-        window.OnStatusTick(null, EventArgs.Empty);
-        var off = window.RemoteControlStatusText;
-
-        try
-        {
-            RemoteControlSessions.SetRelayForTests("work@example.com", "3 sessions");
-            window.OnStatusTick(null, EventArgs.Empty);
-
-            Assert.NotEqual(off, window.RemoteControlStatusText);
-            Assert.Contains("3 sessions", window.RemoteControlStatusText!);
-        }
-        finally
-        {
-            RemoteControlSessions.ClearRelaysForTests();
-        }
-    }
-
     // Ticking again with nothing changed leaves the same text. The guard is an
     // `if (label.Text != value)` rather than an unconditional assignment, which
     // matters at one tick a second for as long as the window is open: assigning
@@ -139,40 +83,42 @@ public class SettingsStatusTickTests
     {
         ClaudeBuddySettings.ReloadForTests();
         ClaudeBuddySettings.OpenClawEnabled = true;
-        ClaudeBuddySettings.RemoteControlEnabled = true;
-        RemoteControlSessions.ClearRelaysForTests();
+        ClaudeBuddySettings.PeerLinkEnabled = true;
 
         var window = NewWindow();
         _ = window.OpenClawRows();
-        _ = window.RemoteControlRows();
+        _ = window.PeerLinkRows();
 
         window.OnStatusTick(null, EventArgs.Empty);
         var gateway = window.OpenClawStatusText;
-        var relay = window.RemoteControlStatusText;
+        var link = window.PeerLinkStatusText;
 
         for (var i = 0; i < 5; i++) window.OnStatusTick(null, EventArgs.Empty);
 
         Assert.Equal(gateway, window.OpenClawStatusText);
-        Assert.Equal(relay, window.RemoteControlStatusText);
+        Assert.Equal(link, window.PeerLinkStatusText);
     }
 
     // Both sections built, both lines fed by the one tick.
+    //
+    // The second line used to be the relay's and is now the link's — same
+    // ticker, same slot, and the reason for one timer rather than two is
+    // unchanged: each label is null unless its own section has been built.
     [AvaloniaFact]
     public void OneTickServesBothLines()
     {
         ClaudeBuddySettings.ReloadForTests();
         ClaudeBuddySettings.OpenClawEnabled = true;
-        ClaudeBuddySettings.RemoteControlEnabled = true;
-        RemoteControlSessions.ClearRelaysForTests();
+        ClaudeBuddySettings.PeerLinkEnabled = true;
 
         var window = NewWindow();
         _ = window.OpenClawRows();
-        _ = window.RemoteControlRows();
+        _ = window.PeerLinkRows();
 
         window.OnStatusTick(null, EventArgs.Empty);
 
         Assert.NotNull(window.OpenClawStatusText);
-        Assert.Equal(RelayRowsExist, window.RemoteControlStatusText is not null);
+        Assert.NotNull(window.PeerLinkStatusText);
     }
 
     // The sender and args are ignored — it is wired as a DispatcherTimer.Tick

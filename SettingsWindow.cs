@@ -291,6 +291,11 @@ namespace ClaudeBuddy
 
             root.Children.Add(Group("Orb colours", Card(OrbColourRows())));
 
+            // Between the orbs and the voice, because that is where the chat
+            // panel sits in the app: it is what an orb opens, and the thing
+            // the voice types into.
+            root.Children.Add(Group("Chat panel", Card(ChatRows())));
+
             root.Children.Add(Group("Voice", Card(VoiceRows())));
 
             // One section per agent, each starting with whether it is tracked
@@ -312,7 +317,10 @@ namespace ClaudeBuddy
             // Straight after the CLI sections and before the Desktop app,
             // because that is what it is about: the same Claude Code sessions
             // those two sections govern, just not on this machine.
-            root.Children.Add(Group("Other machines", Card(RemoteControlRows())));
+            // One card again. There were briefly two — the direct link and the
+            // relay — with the order as the recommendation; the relay is gone
+            // and the recommendation went with it.
+            root.Children.Add(Group("Other machines", Card(PeerLinkRows())));
 
             // Not an agent CLI at all — the Electron desktop app — so it sits
             // after them with its own profiles, which is where someone looking
@@ -595,6 +603,43 @@ namespace ClaudeBuddy
             };
         }
 
+        // internal for the same reason the rows above are: a test drives the
+        // slider directly rather than hunting for it through whichever theme
+        // template happened to load.
+        internal Control[] ChatRows() => new[]
+        {
+            Row("Text size", TextSizeSlider(),
+                "How big the chat panel draws a conversation. "
+                + (OperatingSystem.IsMacOS()
+                    ? "Cmd+ and Cmd- do the same thing from the panel itself, and Cmd+0 puts it back."
+                    : "Ctrl+ and Ctrl- do the same thing from the panel itself, and Ctrl+0 puts it back."))
+        };
+
+        internal Control TextSizeSlider()
+        {
+            // Over rungs, not over multipliers — ChatZoom.IndexOf explains why
+            // the two have to agree.
+            var slider = new Slider
+            {
+                Minimum = 0,
+                Maximum = ChatZoom.Steps.Length - 1,
+                Value = ChatZoom.IndexOf(ClaudeBuddySettings.ChatTextScale),
+                MinWidth = 160,
+                SmallChange = 1,
+                LargeChange = 1,
+                TickFrequency = 1,
+                IsSnapToTickEnabled = true
+            };
+            slider.PropertyChanged += (_, e) =>
+            {
+                if (e.Property != Slider.ValueProperty) return;
+
+                ClaudeBuddySettings.ChatTextScale = ChatZoom.At((int)Math.Round(slider.Value));
+                ChatPanel.ReapplyTextScale();
+            };
+            return slider;
+        }
+
         internal Control SpacingSlider()
         {
             var slider = new Slider
@@ -732,7 +777,24 @@ namespace ClaudeBuddy
                 + "too. Sessions not running under tmux stay read-only either way, because "
                 + "the only way to type into those is to bring their window to the front."));
 
+            rows.Add(Row("Usage orbs for each account",
+                Switch(ClaudeBuddySettings.AccountUsageEnabled, OnAccountUsageToggled),
+                "An orb per Claude Code account wearing three rings — this week, this "
+                + "five-hour session, and extra usage. Hover one for the numbers; click it "
+                + "to keep the card up. The figures come from Claude Code itself, asked "
+                + "once every five minutes per account; nothing here reads your login "
+                + "details, and asking costs no tokens."));
+
             return rows.ToArray();
+        }
+
+        internal void OnAccountUsageToggled(bool enabled)
+        {
+            ClaudeBuddySettings.AccountUsageEnabled = enabled;
+
+            // Whoever changed the setting says so — nothing on the scan path
+            // treats a setting change as a session change.
+            SessionManager.Instance?.ReapplyAccountOrbs();
         }
 
         internal void OnClaudeCodeChatToggled(bool enabled)
@@ -1035,6 +1097,7 @@ namespace ClaudeBuddy
         // the fields are private only so that nothing outside assigns them.
         internal string? OpenClawStatusText => _openClawStatus?.Text;
         internal string? RemoteControlStatusText => _remoteControlStatus?.Text;
+        internal string? PeerLinkStatusText => _peerLinkStatus?.Text;
 
         // Excluded from coverage: starts a real one-second Avalonia timer. The
         // work it schedules is OnStatusTick below, which is reachable directly and
@@ -1067,6 +1130,15 @@ namespace ClaudeBuddy
                 // than none.
                 var relay = RemoteControlSessions.StatusText;
                 if (_remoteControlStatus.Text != relay) _remoteControlStatus.Text = relay;
+            }
+
+            if (_peerLinkStatus is not null)
+            {
+                // Changes under you more than either of the others: a machine
+                // waking on the network appears within a discovery interval,
+                // and the whole point of the line is to say when that happened.
+                var link = PeerSessions.StatusText();
+                if (_peerLinkStatus.Text != link) _peerLinkStatus.Text = link;
             }
         }
 
@@ -1244,115 +1316,251 @@ namespace ClaudeBuddy
             return done;
         }
 
-        // The bridge is tmux-based, so there is nothing to offer on Windows yet.
-        // Said plainly rather than hidden: a feature that exists in the docs and
-        // nowhere in the window reads as a broken install.
-        internal Control[] RemoteControlUnsupportedRows() => new[]
-        {
-            NoteRow(new TextBlock
-            {
-                Text = "Sessions from other machines are macOS-only for now. "
-                     + "The relay runs inside tmux, which Windows has no equivalent of here.",
-                FontSize = 12,
-                Opacity = 0.75,
-                TextWrapping = TextWrapping.Wrap
-            })
-        };
+        private TextBlock? _peerLinkStatus;
 
-        internal Control[] RemoteControlRows()
+        // The direct link, and the pairing that makes it possible.
+        //
+        // **Deliberately not symmetrical with the relay section above it.** That
+        // one is a switch and a warning about cost; this one is a switch and a
+        // list of machines, because the thing a person has to *do* here is pair
+        // two of them, and a list with a state per row is the only honest way to
+        // show a pairing that is halfway done.
+        //
+        // No platform gate. The relay is macOS-only because it lives in tmux;
+        // this is a socket, and the whole reason for choosing SslStream over the
+        // gateway's hand-rolled TLS was that it is the same on both.
+        internal Control[] PeerLinkRows()
         {
-            // Dropped before anything is built, because Rebuild() replaces the
-            // whole content tree: left set, this would point at a label that is
-            // no longer on screen and the ticker would spend every second
-            // writing to it.
-            _remoteControlStatus = null;
-
-            // The bridge is tmux-based, so there is nothing to offer on Windows
-            // yet. Said plainly rather than hidden: a feature that exists in the
-            // docs and nowhere in the window reads as a broken install.
-            if (!RemoteControlBridge.IsSupported) return RemoteControlUnsupportedRows();
+            // Dropped before anything is built, for the reason the relay's is:
+            // Rebuild() replaces the content tree, and a label left pointing at
+            // the old one is written to once a second forever.
+            _peerLinkStatus = null;
 
             var rows = new List<Control>
             {
-                Row("Show sessions from other machines",
-                    Switch(ClaudeBuddySettings.RemoteControlEnabled, OnRemoteControlToggled),
+                Row("Connect directly to other machines",
+                    Switch(ClaudeBuddySettings.PeerLinkEnabled, OnPeerLinkToggled),
 
-                    // The cost is stated up front because it is the one thing
-                    // about this feature a person cannot discover by looking at
-                    // it: every other switch in this window only changes what is
-                    // drawn.
-                    "Shows an orb for each of your Claude Code sessions that has Remote Control "
-                    + "on, wherever it is running. To reach them, Claude Buddy runs a hidden "
-                    + "Claude Code session of its own as a relay — so this uses your account, "
-                    + "and counts against your usage while it is running.")
+                    // The contrast with the row below is the point, and it is
+                    // stated rather than implied: this is the same feature
+                    // without the model in the middle.
+                    "Talks straight to Claude Buddy on your other machines over your local "
+                    + "network. Transcripts arrive in a moment rather than in minutes, and "
+                    + "nothing here signs into your Claude account or counts against your "
+                    + "usage. Both machines need this switched on, and you pair them once.")
             };
 
-            if (!ClaudeBuddySettings.RemoteControlEnabled) return rows.ToArray();
+            if (!ClaudeBuddySettings.PeerLinkEnabled) return rows.ToArray();
 
-            rows.Add(Row("Accounts", RemoteControlAccountList(),
-                "Which Claude Code config directories to look through. Remote Control only shows "
-                + "sessions on the same account, so tick the ones your other machines use — "
-                + "each ticked account runs its own relay, and each relay costs usage while it is "
-                + "running. Add more under \"Claude Code profiles\" above."));
-
-            rows.Add(Row("Stop the relay after", RemoteControlIdlePicker(),
-                "The relay shuts down once you stop using it, and starts again by itself the "
-                + "next time you open or send to a remote session."));
-
-            rows.Add(Row("Start the relay when Claude Buddy starts",
-                Switch(ClaudeBuddySettings.RemoteControlServeOnLaunch, OnServeOnLaunchToggled),
-                "For a machine that serves its sessions to other Buddies unattended — nobody "
-                + "there to press the button below when another machine wants its chats. Takes "
-                + "effect at the next launch; pair it with \"Stop the relay after: Never\" if "
-                + "the relay should stay up. Costs usage while the relay runs, like everything "
-                + "else in this section."));
-
-            // Shares the OpenClaw ticker's TextBlock slot deliberately — see
-            // OnStatusTick, which now reports whichever of the two is switched
-            // on. Both being on at once is possible but rare, and a second
-            // one-second timer for a line of text nobody is watching is worse
-            // than the ambiguity.
-            _remoteControlStatus = new TextBlock
+            _peerLinkStatus = new TextBlock
             {
-                Text = RemoteControlSessions.StatusText,
+                Text = PeerSessions.StatusText(),
                 FontSize = 12,
                 Opacity = 0.75,
                 TextWrapping = TextWrapping.Wrap
             };
 
-            rows.Add(NoteRow(_remoteControlStatus));
+            rows.Add(NoteRow(_peerLinkStatus));
 
-            // Starting it from here rather than only from the tray, because this
-            // is where someone has just switched the feature on and wants to
-            // know whether it works — and "nothing appeared" is the least
-            // helpful possible answer at that moment.
-            var start = new Button
+            rows.Add(Row("Let another machine pair with this one", PairingCodeButton(),
+                "Shows a code. Type it into the other machine's list below, next to this "
+                + "machine's name. The code works once."));
+
+            rows.Add(Row("Add a machine by address", AddByAddress(),
+                "For a machine this one cannot see on its own — a different subnet, a VPN, or "
+                + "a network that does not carry the announcements. Type its address and the "
+                + "code it is showing. Its name fills itself in once it answers."));
+
+            var listing = PeerSessions.Listing();
+
+            foreach (var machine in listing) rows.Add(PeerRow(machine));
+
+            if (listing.Count == 0)
             {
-                Content = "Start the relay now",
-                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left
-            };
-            start.Click += (_, _) => OnStartTheRelayNowClicked();
-            rows.Add(Row("", start));
+                rows.Add(NoteRow(new TextBlock
+                {
+                    // Says which of the two "nothing here" cases this is. A
+                    // machine that is off and a machine that cannot be seen look
+                    // identical from here, and the fixes are different.
+                    Text = "No other machines yet. They appear here on their own once Claude "
+                         + "Buddy is running on them with this switched on, and both are on "
+                         + "the same network.",
+                    FontSize = 11,
+                    Opacity = 0.55,
+                    TextWrapping = TextWrapping.Wrap
+                }));
+            }
 
             return rows.ToArray();
         }
 
-        // Excluded from coverage: starts a real Claude Code session in a tmux
-        // pane as the relay. The button that reaches this is covered by the
-        // rows around it.
-        [ExcludeFromCodeCoverage]
-        private void OnStartTheRelayNowClicked() => RemoteControlSessions.EnsureStarted();
-
-        // Only the setting is written here: the start itself stays a deliberate
-        // act, and "Start the relay now" in the same section is already the
-        // immediate version of it. Wiring EnsureStarted into this switch would
-        // also make it the one switch no headless test could flip — see the
-        // "never click" note in SettingsWindowCoverageTests.
-        internal void OnServeOnLaunchToggled(bool on)
+        // One machine, and whatever it is that machine currently needs.
+        //
+        // A paired one needs a way to be forgotten; an unpaired one needs a box
+        // for the code showing on its screen. Both are on the right, where every
+        // other control in this window is.
+        internal Control PeerRow(PeerSessions.Listed machine)
         {
-            ClaudeBuddySettings.RemoteControlServeOnLaunch = on;
+            var right = new StackPanel
+            {
+                Orientation = Avalonia.Layout.Orientation.Horizontal,
+                Spacing = 8,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            right.Children.Add(new TextBlock
+            {
+                Text = PeerSessions.RowStatus(machine),
+                FontSize = 11,
+                Opacity = 0.55,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+
+            if (machine.Paired)
+            {
+                var forget = new Button { Content = "Forget" };
+                forget.Click += (_, _) => OnUnpairClicked(machine.Machine);
+                right.Children.Add(forget);
+            }
+            else
+            {
+                var code = new TextBox
+                {
+                    Width = 88,
+                    MaxLength = 6,
+                    Watermark = "code",
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                var pair = new Button { Content = "Pair" };
+                pair.Click += (_, _) => OnPairClicked(machine.Machine, code.Text);
+
+                right.Children.Add(code);
+                right.Children.Add(pair);
+            }
+
+            return Row(machine.Machine, right);
+        }
+
+        // An address and a code, for a machine that never announced itself.
+        //
+        // No name field, deliberately: the far end says what it is called in its
+        // answer to the greeting, and asking a person to guess a value the
+        // protocol already carries only creates a way to get it wrong.
+        internal Control AddByAddress()
+        {
+            var where = new TextBox
+            {
+                Width = 150,
+                Watermark = "192.168.0.10",
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var code = new TextBox
+            {
+                Width = 88,
+                MaxLength = 6,
+                Watermark = "code",
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var add = new Button { Content = "Add" };
+            add.Click += (_, _) => OnAddByAddressClicked(where.Text, code.Text);
+
+            var right = new StackPanel
+            {
+                Orientation = Avalonia.Layout.Orientation.Horizontal,
+                Spacing = 8,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            right.Children.Add(where);
+            right.Children.Add(code);
+            right.Children.Add(add);
+
+            return right;
+        }
+
+        // Excluded from coverage: dials a real address. Both decisions in front
+        // of it — whether the code is worth trying and whether the address
+        // parses — are pure and tested.
+        [ExcludeFromCodeCoverage]
+        private void OnAddByAddressClicked(string? typed, string? code)
+        {
+            if (!PairingWorthTrying(code)) return;
+
+            var address = PeerSessions.Address(typed, PeerLink.DefaultPort);
+            if (address is null) return;
+
+            _ = PeerSessions.PairAtAsync(address.Value.Host, address.Value.Port, code!.Trim());
+        }
+
+        // The button that opens this machine to one pairing.
+        //
+        // It becomes the code rather than opening a dialog for it: the code is
+        // six digits read aloud or copied once, and a dialog would be a second
+        // thing to dismiss for something that fits on the button.
+        internal Control PairingCodeButton()
+        {
+            var button = new Button { Content = "Show a code" };
+
+            button.Click += (_, _) =>
+            {
+                var code = PeerSessions.OpenForPairing();
+                button.Content = code ?? "Not listening";
+                button.IsEnabled = false;
+            };
+
+            return button;
+        }
+
+        // Excluded from coverage: opens and closes a real socket. The rows that
+        // reach it are covered, and what the link does with the setting is
+        // PeerSessions' own business and tested there.
+        [ExcludeFromCodeCoverage]
+        internal void OnPeerLinkToggled(bool on)
+        {
+            ClaudeBuddySettings.PeerLinkEnabled = on;
+
+            // Restarted rather than left for the next launch, unlike the relay
+            // switch above: a socket costs nothing to open, so making someone
+            // quit the app to try the thing they just switched on would be a
+            // gratuitous round trip.
+            PeerSessions.Restart();
+
             Rebuild();
         }
+
+        [ExcludeFromCodeCoverage]
+        private void OnUnpairClicked(string machine)
+        {
+            PeerSessions.Unpair(machine);
+            Rebuild();
+        }
+
+        // Excluded from coverage: dials a real machine. Whether the code is
+        // worth dialling with is PairingWorthTrying, which is not.
+        [ExcludeFromCodeCoverage]
+        private void OnPairClicked(string machine, string? code)
+        {
+            if (!PairingWorthTrying(code)) return;
+
+            var peer = PeerSessions.SeenFor(machine);
+            if (peer is null) return;
+
+            _ = PeerSessions.PairAsync(peer, code!.Trim());
+        }
+
+        // Whether a typed code is even worth a dial.
+        //
+        // Six digits, because that is what NewPairingCode makes. Checked here so
+        // a half-typed code does not spend a connection and come back refused —
+        // which reads as the pairing having failed rather than as not having
+        // been attempted.
+        internal static bool PairingWorthTrying(string? code) =>
+            code is not null
+            && code.Trim().Length == 6
+            && code.Trim().All(char.IsAsciiDigit);
 
         // Every config directory a relay could sign into, each with a tick.
         //
@@ -1384,72 +1592,6 @@ namespace ClaudeBuddy
             OnDownloadVoicesLinkClicked();
         }
 
-        internal Control RemoteControlAccountList()
-        {
-            var offered = new List<string> { ClaudeBuddySettings.DefaultRemoteControlProfileDir };
-            foreach (var dir in ClaudeBuddySettings.ClaudeCodeProfileDirs)
-            {
-                if (!offered.Contains(dir, StringComparer.Ordinal)) offered.Add(dir);
-            }
-
-            var selected = ClaudeBuddySettings.RemoteControlProfileDirs.ToList();
-
-            // A previously ticked account whose profile has since been removed
-            // from the Claude Code section still shows, ticked, rather than
-            // silently disappearing — otherwise a relay would keep running for
-            // something the window claims is not selected.
-            foreach (var dir in selected)
-            {
-                if (!offered.Contains(dir, StringComparer.Ordinal)) offered.Add(dir);
-            }
-
-            var stack = new StackPanel { Spacing = 2 };
-            var boxes = new List<CheckBox>();
-
-            void Apply()
-            {
-                var chosen = boxes.Where(b => b.IsChecked == true)
-                                  .Select(b => (string)b.Content!)
-                                  .ToList();
-
-                // Never all-unticked: with none selected the feature is on and
-                // can do nothing, which reads as broken. Falling back to the
-                // default account is the least surprising answer, and the switch
-                // above is the way to actually turn it off.
-                if (chosen.Count == 0)
-                {
-                    chosen.Add(ClaudeBuddySettings.DefaultRemoteControlProfileDir);
-                    foreach (var box in boxes)
-                    {
-                        if ((string)box.Content! == ClaudeBuddySettings.DefaultRemoteControlProfileDir)
-                            box.IsChecked = true;
-                    }
-                }
-
-                ClaudeBuddySettings.SetRemoteControlProfileDirs(chosen);
-
-                // Relays for accounts that were just un-ticked are retired by the
-                // next poll, which is where the "which relays should exist"
-                // decision lives. Nothing is started here: ticking an account
-                // must not begin spending on it until something asks.
-            }
-
-            foreach (var dir in offered)
-            {
-                var box = new CheckBox
-                {
-                    Content = dir,
-                    IsChecked = selected.Contains(dir, StringComparer.Ordinal)
-                };
-
-                box.IsCheckedChanged += (_, _) => Apply();
-                boxes.Add(box);
-                stack.Children.Add(box);
-            }
-
-            return stack;
-        }
-
         private static readonly (string Label, int Minutes)[] RemoteIdleChoices =
         {
             ("2 minutes", 2),
@@ -1458,56 +1600,6 @@ namespace ClaudeBuddy
             ("1 hour", 60),
             ("Never", ClaudeBuddySettings.RemoteControlIdleNever)
         };
-
-        internal Control RemoteControlIdlePicker()
-        {
-            var current = ClaudeBuddySettings.RemoteControlIdleMinutes;
-            var choices = RemoteIdleChoices.ToList();
-
-            if (choices.All(choice => choice.Minutes != current))
-            {
-                choices.Insert(choices.Count - 1, ($"{current} minutes", current));
-            }
-
-            var combo = new ComboBox
-            {
-                ItemsSource = choices.Select(choice => choice.Label).ToList(),
-                SelectedIndex = choices.FindIndex(choice => choice.Minutes == current),
-                MinWidth = 132
-            };
-
-            combo.SelectionChanged += (_, _) =>
-            {
-                var index = combo.SelectedIndex;
-                if (index < 0 || index >= choices.Count) return;
-
-                var minutes = choices[index].Minutes;
-                if (minutes == ClaudeBuddySettings.RemoteControlIdleMinutes) return;
-
-                // Read on every idle check rather than captured when the relay
-                // started, so shortening this takes effect on the next poll
-                // instead of at the next launch.
-                ClaudeBuddySettings.RemoteControlIdleMinutes = minutes;
-            };
-
-            return combo;
-        }
-
-        // Excluded from coverage: tears down every Remote Control relay — the
-        // setting write either side of that is one line, and the switch it belongs
-        // to is covered by the rows around it.
-        [ExcludeFromCodeCoverage]
-        private void OnRemoteControlToggled(bool enabled)
-        {
-            ClaudeBuddySettings.RemoteControlEnabled = enabled;
-
-            // Only ever tears down, unlike OnOpenClawToggled above. Turning this
-            // on must not start the relay by itself — that spends the user's
-            // quota, so something has to ask for it (the tray item, opening a
-            // remote session, or the button in this section).
-            RemoteControlSessions.Restart();
-            Rebuild();
-        }
 
         internal Control[] VoiceRows()
         {

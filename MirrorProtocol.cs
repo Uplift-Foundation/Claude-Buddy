@@ -70,26 +70,95 @@ namespace ClaudeBuddy
         public const string ErrNoSession = "no-session";
         public const string ErrNoTranscript = "no-transcript";
         public const string ErrNoPane = "no-pane";
+
+        // A terminal Buddy *can* address, which then refused the text.
+        //
+        // **Split from ErrNoPane because collapsing the two sent a user
+        // looking for the wrong thing.** "There is nowhere to type" is a
+        // statement about the session's terminal and it is what a user acts
+        // on; saying it when the terminal was found and the delivery failed
+        // is a wrong answer that reads like a right one. The two have
+        // completely different fixes: one is "this terminal isn't supported",
+        // the other is almost always macOS Automation consent not yet given,
+        // or the window having been closed since the status file was written.
+        public const string ErrTypeFailed = "type-failed";
+
         public const string ErrReplyOff = "reply-off";
         public const string ErrBadHash = "bad-hash";
         public const string ErrUnsupported = "unsupported";
 
         // How much raw payload goes in one frame.
         //
-        // A guess, and flagged as one: nothing documents how long a SendMessage
-        // body may be, and the spike never sent one big enough to find out. 6KB
-        // of payload is roughly 8KB of base64 once expanded, which is a large
-        // chat message and a small file. Deliberately one constant so the answer
-        // is a one-line change once a real ceiling is measured.
-        public const int ChunkBytes = 6 * 1024;
+        // **6KB, because a model had to retype it. Now the size of a message.**
+        //
+        // The old value was a guess about how long a SendMessage body could be,
+        // and its consequences ran through everything: a transcript arrived as
+        // dozens of chunks, each one a model emitting ~8KB of base64 as tool
+        // input at roughly two minutes a turn, each with its own hash so a
+        // mistyped character could be asked for again.
+        //
+        // The wire is a TLS socket now and PeerProtocol carries a message up to
+        // 32MB whole. Chunking at 6KB would cut a transcript into five thousand
+        // pieces and reassemble them, to move bytes that fit in one write.
+        //
+        // Left as a constant rather than deleted outright, and matched to the
+        // transport's own ceiling: Split still exists, still splits, and simply
+        // never has anything to split — which is what makes the machinery
+        // around it safe to remove in the next commit rather than the same one.
+        public const int ChunkBytes = PeerProtocol.MaxMessageBytes;
 
-        // The tail a panel opens on, and the page it walks back by. Both are
-        // LocalCliChatSession's numbers rather than new ones, because the mirror
-        // is meant to show what that panel would have shown — and those two were
-        // measured against six real transcripts (see its comment) rather than
-        // chosen.
-        public const int InitialBytes = 512 * 1024;
-        public const int PageBytes = 1024 * 1024;
+        // The tail a panel opens on, and the page it walks back by.
+        //
+        // These used to be LocalCliChatSession's numbers — 512KB and 1MB — on
+        // the reasoning that the mirror should show what that panel would have
+        // shown. That reasoning is right about a local file read and does not
+        // survive this wire. Every chunk here is a model emitting ~8KB of base64
+        // as tool input, so throughput is one ChunkBytes per model turn, and a
+        // turn was measured at close to two minutes on a real relay. A 512KB
+        // tail came out as two chunks — a four-minute first paint against a
+        // 180-second request timeout, so the window could not arrive before the
+        // request that asked for it expired, and the panel showed nothing at
+        // all. See CB-46.
+        //
+        // So they are chosen against what the wire can carry rather than what
+        // the panel would like. These are only the *starting* size: the server
+        // shrinks a tail further until it genuinely fits one chunk (see
+        // RemoteMirrorServer.ReadFor), because how many turns a byte range
+        // yields, and how well they compress, varies far too much between
+        // transcripts to be settled by a constant.
+        //
+        // Paging back is what supplies the rest, which is what paging is for.
+        public const int InitialBytes = 128 * 1024;
+        public const int PageBytes = 128 * 1024;
+
+        // How long a client waits for a fetch that carries a transcript back.
+        //
+        // **This was 600 seconds and is now 20, and the difference is the whole
+        // point of the new transport.** The old number was measured, not
+        // chosen: a fetch's reply was a chunk of base64 that a far model emitted
+        // token by token, and a single-chunk window off the mini took 7m 15s on
+        // 29 Aug — arriving intact and being thrown away, because the request
+        // that asked for it had expired eight minutes earlier. Ten minutes was
+        // the honest ceiling for a courier that slow.
+        //
+        // There is no model in the path now. A fetch is a read off a disk and a
+        // write to a socket; measured between two real machines, a roster round
+        // trip is ten milliseconds. Twenty seconds is not a target, it is a
+        // ceiling generous enough for a large transcript on a busy machine and
+        // short enough that a broken link says so while somebody is still
+        // looking at the panel.
+        //
+        // **A too-long timeout is not a safe default.** Ten minutes of "no live
+        // view" for a link that is simply down is a worse answer than an honest
+        // failure in twenty seconds, and it was the single most confusing part
+        // of the transport this replaces.
+        public const int FetchTimeoutSeconds = 20;
+
+        // Sending keeps a shorter wait still. An INPUT's reply is a bare OK, so
+        // a slow one means the far machine is busy rather than that the answer
+        // is long — and there is no longer any fallback if it does not come, so
+        // saying so promptly is the only kindness available.
+        public const int InputTimeoutSeconds = 10;
 
         // How long a subscription lives without being renewed, and how often a
         // client renews one it still wants. The gap between them is slack for a
@@ -383,7 +452,23 @@ namespace ClaudeBuddy
             [property: JsonPropertyName("transcript")] bool HasTranscript,
             [property: JsonPropertyName("pane")] bool HasPane,
             [property: JsonPropertyName("color")] string? Color = null,
-            [property: JsonPropertyName("commands")] IReadOnlyList<string>? Commands = null);
+            [property: JsonPropertyName("commands")] IReadOnlyList<string>? Commands = null,
+
+            // What that session is doing right now, in its own status file's
+            // words — "idle", "working".
+            //
+            // **Added because the orb needs it and the relay used to supply it
+            // from somewhere else.** Over the relay, status came from
+            // `claude agents --json` parsed by the relay's model, and the roster
+            // never had to carry it. A direct link has no such second channel,
+            // so the one answer the far machine sends has to say everything an
+            // orb needs — otherwise a session over the link can be found and
+            // read and typed into, and still sits grey while it works.
+            //
+            // Optional, and absent reads as idle: an older Buddy on the far end
+            // answers without it, and gets an orb that is right about everything
+            // except its pulse rather than no orb at all.
+            [property: JsonPropertyName("status")] string? Status = null);
 
         public const string CliClaudeCode = "claude";
         public const string CliCodex = "codex";

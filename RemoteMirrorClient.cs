@@ -62,10 +62,57 @@ namespace ClaudeBuddy
         // back to the one that can serve it.
         private readonly Dictionary<string, string> _servedBy = new(StringComparer.OrdinalIgnoreCase);
 
+        // Which relay answered for a session, for a caller that wants to say
+        // *where* it is rather than talk to it. The relay's name carries the far
+        // machine's — see RemoteControlBridge.MachineFromRelayName — so this is
+        // how the panel names the machine without anything new going on the
+        // wire. Null before the roster has answered, which a panel can open
+        // before.
+        internal string? RelayFor(string name)
+        {
+            lock (_gate) return _servedBy.TryGetValue(name, out var relay) ? relay : null;
+        }
+
+        // Everything this client currently knows about, with who serves it.
+        //
+        // The roster is already the answer to "what is out there"; over the
+        // relay nothing read it that way because a second channel — the relay's
+        // own ListAgents poll — was producing the orb rows. A direct link has
+        // only this, so it has to be readable from outside.
+        internal IReadOnlyList<(string Peer, MirrorProtocol.MirrorRosterEntry Entry)> Known()
+        {
+            lock (_gate)
+            {
+                return _roster.Values
+                    .Select(e => (
+                        Peer: _servedBy.TryGetValue(e.Name, out var peer) ? peer : string.Empty,
+                        Entry: e))
+                    .ToList();
+            }
+        }
+
         // Names that have been asked about and came back with nothing. Kept so a
         // panel can say "no live view" definitively rather than sitting on
         // "checking…" forever.
         private readonly HashSet<string> _answeredNo = new(StringComparer.OrdinalIgnoreCase);
+
+        // Names with a HELLO already on the wire.
+        //
+        // **Without this the wait for an answer manufactures the queue that
+        // stops the answer arriving.** Discovery runs off the poll — every 20
+        // seconds, or every 5 while anything is working — and asks about every
+        // name not yet in the roster. A name only enters the roster when a reply
+        // lands, so for as long as the far relay is slow, each tick sent another
+        // HELLO: measured on the mini as a backlog of 166 roster requests queued
+        // ahead of the window that had been asked for, each one costing a model
+        // turn to answer. The busier the relay got, the harder it was asked.
+        //
+        // Silence still is not "no" — a request that genuinely fails clears its
+        // name here and the next poll asks again, which is the retry the comment
+        // in DiscoverAsync describes and is worth keeping. What is dropped is
+        // only the *duplicate*: asking a second time for something already being
+        // answered, which can never arrive sooner and always arrives slower.
+        private readonly HashSet<string> _asking = new(StringComparer.OrdinalIgnoreCase);
 
         public event Action? RosterUpdated;
 
@@ -84,27 +131,110 @@ namespace ClaudeBuddy
 
         // --- discovery --------------------------------------------------------
 
-        // The far Buddies among the peers, and what to ask them.
+        // Told directly who to ask.
         //
-        // A far Buddy's relay is recognisable by the name prefix
-        // RemoteControlBridge builds, which is the same string
-        // BridgeProtocol.IsOwnRelay already keys on to keep relays from becoming
-        // orbs. Our *own* relay is never in this list — ListAgents excludes the
-        // asking session by its own promise — so anything wearing the prefix and
-        // still online is somebody else's Buddy, which is exactly what this
-        // wants. Ones left registered by a dead relay read "offline" and are
-        // skipped.
+        // **There used to be an overload above this one taking a peer list and
+        // filtering it by IsOwnRelay/IsOffline/IsRemoteControl** — three
+        // properties that only meant anything while a far Buddy was reachable as
+        // a session on a relay. It went with the relay. What it was working
+        // towards is what a direct link simply knows: the machines it is
+        // connected to.
+        //
+        // **Split out because the peer list is transport-shaped and discovery is
+        // not.** The overload above takes BridgeProtocol.RemoteAgent and filters
+        // it by IsOwnRelay/IsOffline/IsRemoteControl — three properties that
+        // only mean anything when the far Buddy is reachable as a *session on a
+        // relay*. A direct connection has no such list: it knows the machines it
+        // is connected to, which is already the answer that filter was working
+        // towards.
+        //
+        // Everything below this line is identical for both, which is the point:
+        // asking a far Buddy what it has does not depend on how the question
+        // travels.
+        // Peers with an open-ended question outstanding, so it is asked once
+        // rather than on every ten-second tick.
+        private readonly HashSet<string> _askingAll = new(StringComparer.OrdinalIgnoreCase);
+
+        // Asks a machine what it has, naming nothing.
+        //
+        // **A separate method because DiscoverAsync cannot express this, and
+        // that gap cost a bring-up.** DiscoverAsync starts `if
+        // (wantedNames.Count == 0) return;` — an empty list means "ask about
+        // nothing", which is right when the caller is working from a list of
+        // sessions it already knows. The server was taught in CB-67 that an
+        // empty payload means "everything you have", and the client had no way
+        // to send that: passing an empty list returned before writing a byte.
+        //
+        // So two machines connected over TLS in 22 milliseconds, greeted each
+        // other, and then sat there — one able to answer a question the other
+        // was structurally unable to ask. Nothing failed and nothing was logged,
+        // because from the client's point of view it had been asked to do
+        // nothing and had done it.
+        //
+        // Open-ended is the only possible *first* question on a direct link:
+        // there is no prior list of session names to work from, so without this
+        // there is no way to learn one.
+        public async Task AskWhatTheyHaveAsync(IReadOnlyList<string> peers)
+        {
+            foreach (var peer in peers)
+            {
+                lock (_gate)
+                {
+                    // Once per peer at a time. The answer names every session
+                    // that machine has, so a second question in flight can only
+                    // duplicate the first.
+                    if (!_askingAll.Add(peer)) continue;
+                }
+
+                Reply reply;
+
+                try
+                {
+                    reply = await RequestAsync(
+                        peer, MirrorProtocol.Hello,
+                        new Dictionary<string, string> { ["pv"] = "1" },
+                        payload: null, TimeSpan.FromSeconds(30))
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    lock (_gate) _askingAll.Remove(peer);
+                }
+
+                if (!reply.Ok || reply.Payload is null) continue;
+
+                var entries = MirrorProtocol.DecodeRoster(reply.Payload);
+                if (entries is null) continue;
+
+                var changed = false;
+
+                lock (_gate)
+                {
+                    foreach (var entry in entries)
+                    {
+                        // Unlike the named ask, nothing is settled as
+                        // unavailable here. A machine that did not mention a
+                        // session is not saying it does not have one — it was
+                        // never asked about anything in particular.
+                        if (!entry.HasTranscript) continue;
+
+                        _roster[entry.Name] = entry;
+                        _servedBy[entry.Name] = peer;
+                        _answeredNo.Remove(entry.Name);
+                        changed = true;
+                    }
+                }
+
+                MirrorLog.Say("roster-all", $"from={peer} entries={entries.Count}");
+
+                if (changed) RosterUpdated?.Invoke();
+            }
+        }
+
         public async Task DiscoverAsync(
-            IReadOnlyList<BridgeProtocol.RemoteAgent> agents,
-            IReadOnlyList<string> wantedNames)
+            IReadOnlyList<string> relays, IReadOnlyList<string> wantedNames)
         {
             if (wantedNames.Count == 0) return;
-
-            var relays = agents
-                .Where(a => a.IsOwnRelay && !a.IsOffline && a.IsRemoteControl)
-                .Select(a => a.Name)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
 
             if (relays.Count == 0)
             {
@@ -137,15 +267,32 @@ namespace ClaudeBuddy
                     // refreshed by asking again when a panel opens — and
                     // re-asking every poll would spend a model turn per tick for
                     // an answer that has not changed.
-                    ask = wantedNames.Where(n => !_roster.ContainsKey(n)).ToList();
+                    ask = wantedNames
+                        .Where(n => !_roster.ContainsKey(n) && !_asking.Contains(n))
+                        .ToList();
+
+                    foreach (var n in ask) _asking.Add(n);
                 }
 
                 if (ask.Count == 0) continue;
 
-                var reply = await RequestAsync(
-                    relay, MirrorProtocol.Hello, new Dictionary<string, string> { ["pv"] = "1" },
-                    MirrorProtocol.PackRows(ask), TimeSpan.FromSeconds(120))
-                    .ConfigureAwait(false);
+                Reply reply;
+
+                try
+                {
+                    reply = await RequestAsync(
+                        relay, MirrorProtocol.Hello, new Dictionary<string, string> { ["pv"] = "1" },
+                        MirrorProtocol.PackRows(ask), TimeSpan.FromSeconds(120))
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    // Released however it ended, including a throw. A name left
+                    // marked as being asked about would never be asked again,
+                    // which trades a flood for a silence and is the worse of the
+                    // two failures: the flood was at least still trying.
+                    lock (_gate) foreach (var n in ask) _asking.Remove(n);
+                }
 
                 if (!reply.Ok || reply.Payload is null)
                 {
@@ -224,6 +371,30 @@ namespace ClaudeBuddy
 
         private readonly Dictionary<string, Feed> _feeds = new(StringComparer.OrdinalIgnoreCase);
 
+        // Whether any panel is currently mirroring a session through this client.
+        //
+        // **Exposed because watching was not counted as using.** Remote Control
+        // retires its relays after RemoteControlIdleMinutes without use, and
+        // "use" meant Touch(), which is called on send and nowhere else. A panel
+        // sitting open and streaming a far machine's conversation touched
+        // nothing, so the idle timer ran the whole time somebody was watching
+        // and then shut the relays down underneath them.
+        //
+        // Measured overnight on 30 Aug 2026: a panel opened at 00:49 took 27
+        // delta transfers and then stopped dead at 01:36 — about thirty minutes
+        // after the last message was *sent*, which is what the timer was really
+        // measuring. It showed 1 a.m. content at 8 a.m. with no indication that
+        // it had stopped, because a mirror that has gone stale looks exactly
+        // like one that is quiet.
+        //
+        // A feed exists between OpenAsync and CloseAsync, and CloseAsync runs
+        // when the panel closes — so this is true for exactly as long as
+        // somebody is looking, and no longer.
+        internal bool Watching
+        {
+            get { lock (_gate) return _feeds.Count > 0; }
+        }
+
         public bool HasMore(string name)
         {
             lock (_gate) return _feeds.TryGetValue(name, out var feed) && feed.BacklogFrom > 0;
@@ -231,7 +402,59 @@ namespace ClaudeBuddy
 
         // Opens a mirror for one session: the tail first, then a subscription so
         // what happens next arrives without being asked for.
-        public async Task<bool> OpenAsync(string name)
+        // One outstanding window per session, however many callers ask for it.
+        //
+        // The Loading flag below is not enough on its own, and CB-46 measured
+        // why: it lives on the Feed, and CloseAsync *removes* the Feed. A panel
+        // being rebound — closed and reopened, which clicking between two orbs
+        // does constantly — therefore threw away the only record that a fetch
+        // was already running, and the next PanelOpened started another. Four
+        // distinct FETCHes for one session inside 78 seconds, against a
+        // three-minute timeout, so none of them were retries.
+        //
+        // That is worse than wasted effort. Each one makes the far side build
+        // and queue another whole window, so a relay already minutes deep in
+        // chunk 0 acquires more behind it and the queue grows faster than a
+        // model turn can drain it — the panel gets slower every time somebody
+        // looks at it.
+        //
+        // Keyed outside the Feed so it survives the Feed being removed, and
+        // handed out as the *same task* so a second caller waits on the first
+        // answer rather than starting a second conversation about it.
+        private readonly Dictionary<string, Task<bool>> _opening =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public Task<bool> OpenAsync(string name)
+        {
+            lock (_gate)
+            {
+                if (_opening.TryGetValue(name, out var running)) return running;
+
+                var started = OpenCoreAsync(name);
+
+                // Only track it if it is actually still running: a synchronous
+                // refusal (no roster entry) has already completed here, and
+                // recording that would answer every later caller with the same
+                // stale "no".
+                if (!started.IsCompleted) _opening[name] = started;
+
+                return started;
+            }
+        }
+
+        private async Task<bool> OpenCoreAsync(string name)
+        {
+            try
+            {
+                return await OpenOnceAsync(name).ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (_gate) _opening.Remove(name);
+            }
+        }
+
+        private async Task<bool> OpenOnceAsync(string name)
         {
             string relay;
             string cli;
@@ -256,7 +479,7 @@ namespace ClaudeBuddy
                     ["n"] = MirrorProtocol.Encode(name),
                     ["w"] = "tail"
                 },
-                null, TimeSpan.FromSeconds(180))
+                null, TimeSpan.FromSeconds(MirrorProtocol.FetchTimeoutSeconds))
                 .ConfigureAwait(false);
 
             lock (_gate)
@@ -332,7 +555,7 @@ namespace ClaudeBuddy
                     ["from"] = from.ToString(),
                     ["to"] = to.ToString()
                 },
-                null, TimeSpan.FromSeconds(180))
+                null, TimeSpan.FromSeconds(MirrorProtocol.FetchTimeoutSeconds))
                 .ConfigureAwait(false);
 
             if (!reply.Ok || reply.Payload is null) return null;
@@ -433,7 +656,7 @@ namespace ClaudeBuddy
                 relay, MirrorProtocol.Input,
                 new Dictionary<string, string> { ["n"] = MirrorProtocol.Encode(name) },
                 System.Text.Encoding.UTF8.GetBytes(text),
-                TimeSpan.FromSeconds(180))
+                TimeSpan.FromSeconds(MirrorProtocol.InputTimeoutSeconds))
                 .ConfigureAwait(false);
 
             if (reply.Ok) return null;
@@ -503,9 +726,47 @@ namespace ClaudeBuddy
             public required string Relay;
             public required MirrorProtocol.MirrorAssembly Assembly;
             public int Resends;
+
+            // When to give up, and it moves. A flat deadline asks the wrong
+            // question on this wire: a transfer is not late because it is
+            // broken, it is late because every chunk costs a model turn, so a
+            // multi-chunk answer can be arriving perfectly and still miss any
+            // fixed cut-off. Each chunk that verifies buys another full
+            // interval, so what is actually being timed is *silence* rather
+            // than duration — which is the thing that means something has gone
+            // wrong. Bounded regardless, because chunks are finite: `of` says
+            // how many there are and a far side cannot extend this for ever
+            // without sending real, hash-checked payload each time.
+            public DateTime Deadline;
+            public TimeSpan Grace;
         }
 
         private readonly Dictionary<string, Pending> _pending = new(StringComparer.Ordinal);
+
+        // Whether this client is waiting on an answer right now.
+        //
+        // **Exposed so the poll can get out of the way.** A relay carries one
+        // frame per model turn, and Buddy's own poll asks it for ListAgents on
+        // every tick — every 20 seconds, or every 5 while anything is working.
+        // A ListAgents answer was measured at about 6 seconds on a real relay,
+        // so at the fast cadence the relay is never idle, and a FETCH the user
+        // is actually waiting for queues behind an unbroken run of polls.
+        //
+        // Measured on 30 Aug 2026: a panel opened, and its FETCH was not typed
+        // into the relay for roughly eight minutes, by which time the client's
+        // deadline had already burned. The far machine then answered correctly
+        // and the reply was dropped for arriving too late — the same ending as
+        // CB-54 and a completely different cause, which is exactly why it was
+        // mistaken for CB-54 not being fixed.
+        //
+        // The poll is refreshing a peer list that changes rarely; the fetch is
+        // the thing somebody is looking at. When the two compete for the same
+        // relay, the fetch wins. Bounded by construction: every pending request
+        // carries a deadline, so this cannot stay true for longer than one.
+        internal bool Waiting
+        {
+            get { lock (_gate) return _pending.Count > 0; }
+        }
 
         // Transfers arriving unbidden — the deltas a subscription pushes. Keyed
         // by the transfer's own id, which is fresh each time, and matched back
@@ -521,6 +782,25 @@ namespace ClaudeBuddy
         // and "the relay never answered" is a path worth covering, not one worth
         // two minutes of a CI run.
         internal TimeSpan? TimeoutOverrideForTests { get; set; }
+
+        // How many times a wait has been pushed out by a verified chunk
+        // arriving.
+        //
+        // For tests, and it exists because the obvious assertion cannot be made
+        // honestly. The idle timeout's claim is "progress resets the wait", and
+        // the tempting way to check that is to run a transfer slower than one
+        // interval and time it — which is a wall-clock claim a loaded CI runner
+        // will not honour, and it duly went red on macOS while passing on
+        // Windows. Widening the window would only move the failure; a sleep
+        // would be the same mistake this repository has already fixed four
+        // times.
+        //
+        // Counting the resets asserts the same mechanism with no clock in it at
+        // all: the deadline is pushed out once per intermediate chunk,
+        // unconditionally, so the count is a property of the transfer's shape
+        // rather than of how fast the machine happened to be. A flat deadline
+        // scores zero, which is exactly the regression worth catching.
+        internal int TimeoutExtensionsForTests { get; private set; }
 
         private async Task<Reply> RequestAsync(
             string relay, string type,
@@ -539,7 +819,9 @@ namespace ClaudeBuddy
                 {
                     Waiter = waiter,
                     Relay = relay,
-                    Assembly = new MirrorProtocol.MirrorAssembly()
+                    Assembly = new MirrorProtocol.MirrorAssembly(),
+                    Deadline = DateTime.UtcNow + timeout,
+                    Grace = timeout
                 };
             }
 
@@ -552,11 +834,29 @@ namespace ClaudeBuddy
 
                 if (!awaitReply) return new Reply(true, null, null, null, null);
 
-                var done = await Task.WhenAny(waiter.Task, Task.Delay(timeout)).ConfigureAwait(false);
+                // Held rather than looked up each pass. Nothing removes it
+                // before the finally below, so a lookup here can only ever
+                // succeed — and a miss arm that cannot run reads as an untested
+                // branch for ever.
+                Pending mine;
+                lock (_gate) mine = _pending[id];
 
-                return done == waiter.Task
-                    ? waiter.Task.Result
-                    : new Reply(false, null, null, null, "the other machine didn't answer in time");
+                while (true)
+                {
+                    TimeSpan left;
+                    lock (_gate) left = mine.Deadline - DateTime.UtcNow;
+
+                    if (left <= TimeSpan.Zero) break;
+
+                    var done = await Task.WhenAny(waiter.Task, Task.Delay(left)).ConfigureAwait(false);
+                    if (done == waiter.Task) return waiter.Task.Result;
+
+                    // The delay won, but a chunk may have landed while it was
+                    // running and pushed the deadline out. Looping re-reads it
+                    // rather than assuming this wait was the last one.
+                }
+
+                return new Reply(false, null, null, null, "the other machine didn't answer in time");
             }
             finally
             {
@@ -627,6 +927,16 @@ namespace ClaudeBuddy
                 switch (result.State)
                 {
                     case MirrorProtocol.AssemblyState.Incomplete:
+                        // Progress. The far side is working through a transfer
+                        // one model turn at a time, so the wait starts again
+                        // rather than counting down towards a cut-off the
+                        // transfer was never going to meet.
+                        lock (_gate)
+                        {
+                            pending.Deadline = DateTime.UtcNow + pending.Grace;
+                            TimeoutExtensionsForTests++;
+                        }
+
                         return;
 
                     case MirrorProtocol.AssemblyState.Complete:

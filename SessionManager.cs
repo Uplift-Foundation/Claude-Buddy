@@ -237,7 +237,7 @@ namespace ClaudeBuddy
         private readonly string _statusDir;
 
         public SessionManager()
-            : this(Path.Combine(Path.GetTempPath(), "claude_buddy"))
+            : this(StatusDirectory.Path())
         {
         }
 
@@ -320,6 +320,12 @@ namespace ClaudeBuddy
         private readonly Dictionary<string, DateTime> _deadSince = new(StringComparer.Ordinal);
 
         private readonly Dictionary<string, OrbWindow> _windows = new();
+
+        // The account orbs, held apart from the session ones on purpose — see
+        // the header of AccountOrbs for why they are not entries in _windows.
+        // Kept here rather than owned by App so they ride the scan tick this
+        // class already runs, instead of starting a second timer.
+        private readonly AccountOrbs _accountOrbs = new(new UsagePoller());
         private readonly Dictionary<string, SessionStatus> _statuses = new();
         private readonly List<string> _order = new(); // stable stacking order
 
@@ -393,6 +399,12 @@ namespace ClaudeBuddy
             StartWatching();
 
             _pollTimer.Tick += (_, _) => ScanAndUpdate();
+
+            // Piggybacks the scan tick rather than adding a timer of its own.
+            // AccountOrbs decides whether there is anything to do — it holds the
+            // five-minute floor, which is the interval Claude Code's own cache
+            // makes meaningful, not this two-second one.
+            _pollTimer.Tick += (_, _) => _accountOrbs.Tick(DateTimeOffset.UtcNow);
             _pollTimer.Start();
 
             // Connects only if the user has turned it on and given it an
@@ -411,21 +423,6 @@ namespace ClaudeBuddy
             RemoteControlSessions.MessageReceived += OnRemoteMessage;
             RemoteControlSessions.WorkingChanged += OnRemoteWorkingChanged;
 
-            // What this machine can show another machine's Buddy.
-            //
-            // Handed over as a delegate rather than read from over there: the
-            // sessions this app knows about live here, behind the scan, and a
-            // static relay class reaching into an orb list would invert the
-            // dependency for no benefit. Snapshotted on call rather than cached,
-            // because a mirror request is exactly when "what is running right
-            // now" has to be right.
-            RemoteControlSessions.ProvideLocalSessions(() =>
-                _statuses.Select(pair => (pair.Key, pair.Value)).ToList());
-
-            // A machine that serves its sessions to other Buddies unattended
-            // asks for the relay itself, once, at startup. Why that is opt-in —
-            // and what it costs — is on ServeOnLaunch itself.
-            RemoteControlSessions.ServeOnLaunch();
 
             _debounce.Tick += (_, _) =>
             {
@@ -934,21 +931,29 @@ namespace ClaudeBuddy
             string? statusDir = null,
             Func<Dictionary<string, string>?>? jobListing = null,
             Func<int, bool>? isRunning = null,
-            DateTime? nowUtc = null)
+            DateTime? nowUtc = null,
+            bool honourOrbLifetime = true)
         {
-            statusDir ??= Path.Combine(Path.GetTempPath(), "claude_buddy");
+            statusDir ??= StatusDirectory.Path();
             var now = nowUtc ?? DateTime.UtcNow;
 
             IEnumerable<string> files;
             try
             {
-                files = Directory.EnumerateFiles(statusDir, "*.txt");
+                files = Directory.EnumerateFiles(statusDir, "*.txt").ToList();
             }
             catch
             {
                 // No directory yet means no sessions yet, which is an answer.
+                MirrorLog.SayOnce("headless-scan", $"dir={statusDir} unreadable");
                 return new List<(string, SessionStatus)>();
             }
+
+            // Says where it looked and what it found, once. Two halves of this
+            // app agreeing on a directory is not something either can check
+            // alone, and when they disagreed the symptom was a machine calmly
+            // reporting no sessions while running two.
+            MirrorLog.SayOnce("headless-scan", $"dir={statusDir} files={files.Count()}");
 
             var found = new List<ScanEntry>();
             foreach (var file in files)
@@ -971,7 +976,7 @@ namespace ClaudeBuddy
 
                 status.Source = SourceOf(status);
                 if (!EnabledFor(status.Source)) continue;
-                if (RemoteControlBridge.IsOwnRelayCwd(status.Cwd)) continue;
+                if (MachineNames.LooksLikeALeftoverRelay(status.Cwd)) continue;
 
                 found.Add(new ScanEntry(
                     Path.GetFileNameWithoutExtension(file), status, written));
@@ -1032,11 +1037,53 @@ namespace ClaudeBuddy
                     SessionPresence.CouldBeABackgroundedHusk(status, phase)
                     && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
 
+                // **Orb lifetime is a display preference and does not belong in
+                // an answer to another machine.** Its own definition says "how
+                // long an *orb* outlives its session's last hook write" — it
+                // exists so a screen full of yesterday's orbs tidies itself up.
+                // A far machine asking what sessions this one has is asking a
+                // question of fact, and "I have stopped drawing it" is not an
+                // answer to it.
+                //
+                // Measured on the mini, which is the whole point of the feature:
+                // two Claude Code sessions alive and idle, their status files
+                // last written when the user last typed into them, both dropped
+                // as Expired — so every roster it served said it had nothing,
+                // while the far panel showed a session it could not open.
+                //
+                // Everything else JudgeLiveness decides still applies, and the
+                // distinction is exactly right: superseded, process-gone and
+                // backgrounded-husk are *facts* about whether the session is
+                // there. Only expiry is a preference about how long to keep
+                // showing one, and only expiry is dropped here.
                 var verdict = JudgeLiveness(
                     entry.SessionId, entry.Status, entry.Written,
-                    now, StaleAfter, superseded, running, handedToBackground);
+                    now, honourOrbLifetime ? StaleAfter : null,
+                    superseded, running, handedToBackground);
+
                 if (verdict == ScanVerdict.Keep) kept.Add((entry.SessionId, entry.Status));
+                else
+                {
+                    // Per session and per verdict, so a machine reporting no
+                    // sessions says which rule dropped them. Every one of these
+                    // is a legitimate answer on its own and a mystery in
+                    // aggregate — "0 sessions" is the same output for a stale
+                    // file, a dead process, a superseded twin and a husk.
+                    // Sliced with a bound rather than a literal 8: a session id
+                    // is a uuid in the app and four characters in a fixture, and
+                    // a diagnostic that throws on the short one turns "explain
+                    // this drop" into "lose the whole scan".
+                    var shortId = entry.SessionId.Length > 8
+                        ? entry.SessionId[..8]
+                        : entry.SessionId;
+
+                    MirrorLog.SayOnce($"headless-drop:{entry.SessionId}",
+                        $"{shortId} {verdict} pid={entry.Status.SessionPid} "
+                        + $"written={entry.Written:HH:mm} phase={phase}");
+                }
             }
+
+            MirrorLog.SayOnce("headless-kept", $"found={found.Count} kept={kept.Count}");
 
             return kept;
         }
@@ -1136,7 +1183,7 @@ namespace ClaudeBuddy
             // with neither a terminal nor a transcript has nothing behind it in
             // either direction — the click goes nowhere and the chat opens
             // blank, showing an amber "connecting" dot that never turns green
-            // and a composer disabled with "No pane to type into".
+            // and a composer disabled with "No terminal to type into".
             //
             // This is what a background job that has not been given a prompt
             // looks like. Measured on a real machine: job "evidence", `state:
@@ -1378,7 +1425,7 @@ namespace ClaudeBuddy
                 // The same prefix test the bridge and the mirror already key on —
                 // see RemoteControlBridge.IsOwnRelayCwd for why it is the prefix
                 // and not the live tag, and why the cwd rather than argv.
-                if (RemoteControlBridge.IsOwnRelayCwd(status.Cwd)) continue;
+                if (MachineNames.LooksLikeALeftoverRelay(status.Cwd)) continue;
 
                 found.Add(new ScanEntry(sessionId, status, written));
             }
@@ -2079,10 +2126,6 @@ namespace ClaudeBuddy
                 var remote = new RemoteControlChatSession(sessionId, account, remoteName);
                 _remoteChats[sessionId] = remote;
 
-                // Opening the panel counts as asking for the bridge, so the
-                // conversation is usable the moment it appears rather than only
-                // after the first message is typed.
-                RemoteControlSessions.EnsureStarted();
 
                 return remote;
             }
@@ -2277,6 +2320,11 @@ namespace ClaudeBuddy
             // visible arrow is a line from nowhere to nowhere.
             TeamLinks.SetVisible(visible);
 
+            // "Show orbs" means all of them. An account orb left floating over a
+            // cleared desktop would be the one thing the switch failed to turn
+            // off, which is worse than it never having been covered.
+            _accountOrbs.SetVisible(visible);
+
             if (visible) ReflowPositions();
             UpdateTray();
         }
@@ -2296,6 +2344,27 @@ namespace ClaudeBuddy
             }
 
             _tray?.ReapplyStateColors();
+        }
+
+        // Turning the account orbs on or off, said out loud by whoever changed
+        // the setting — the same convention as SetOrbsVisible and
+        // ReapplyStateColors above, and for the same reason: nothing on the scan
+        // path would otherwise notice, because a setting change is not a session
+        // change.
+        //
+        // Switching on does not poll immediately here. AccountOrbs.Tick runs
+        // within two seconds and owns the decision about when asking is
+        // worthwhile; duplicating that judgement at the call site is how two
+        // schedules end up disagreeing.
+        public void ReapplyAccountOrbs()
+        {
+            if (!ClaudeBuddySettings.AccountUsageEnabled)
+            {
+                _accountOrbs.CloseAll();
+                return;
+            }
+
+            _accountOrbs.SetVisible(OrbsVisible);
         }
 
         // Same shape as ReapplyStateColors, for the "Two-letter initials"

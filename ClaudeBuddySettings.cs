@@ -75,12 +75,13 @@ namespace ClaudeBuddy
         private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
         {
             "version", "showOrbs", "tintActiveWindow", "orbLifetimeMinutes",
-            "voiceInputEnabled", "twoLetterGlyphs", "arrangeShape", "arrangeSpacing",
+            "voiceInputEnabled", "twoLetterGlyphs", "accountUsageEnabled",
+            "arrangeShape", "arrangeSpacing",
             "speakVoice", "neuralVoiceEnabled", "neuralVoice",
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions",
-            "chatPanelSizes", "arrangeAnchor",
+            "chatPanelSizes", "arrangeAnchor", "chatTextScale",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
             // Still written, though nothing reads it into the model any more —
@@ -94,7 +95,8 @@ namespace ClaudeBuddy
             "claudeCodeEnabled", "codexEnabled",
             "clickAction", "doubleClickAction", "tripleClickAction",
             "remoteControlEnabled", "remoteControlProfileDir", "remoteControlProfileDirs",
-            "remoteControlIdleMinutes", "remoteControlServeOnLaunch"
+            "remoteControlIdleMinutes", "remoteControlServeOnLaunch",
+            "peerLinkEnabled", "peerLinkPort"
         };
 
         // JsonNode.ToJsonString(options) needs a TypeInfoResolver on the
@@ -211,6 +213,13 @@ namespace ClaudeBuddy
             // looks like, and changing that for everyone on upgrade would be
             // a cosmetic surprise nobody asked for.
             public bool TwoLetterGlyphs { get; set; }
+
+            // Off by default. The orbs are useful but they are also four more
+            // things on a desktop that already has orbs on it, and the poll
+            // behind them starts a `claude` process per account every five
+            // minutes — neither is something to begin doing to someone who has
+            // not asked.
+            public bool AccountUsageEnabled { get; set; }
 
             // Off by default: turning this on is what triggers the one-time
             // Whisper model download (a few hundred MB), so it must be an
@@ -356,6 +365,27 @@ namespace ClaudeBuddy
             // Claude Code session of its own, which costs the user's quota.
             // See RemoteControlBridge for why a bridge is the only way in.
             public bool RemoteControlEnabled { get; set; }
+
+            // Talking directly to another machine running Claude Buddy, rather
+            // than through a hidden Claude Code session relaying text.
+            //
+            // Off by default, and that is not timidity: switching it on makes
+            // this app listen on a socket for the first time, which both
+            // platforms gate — macOS behind Local Network consent, Windows
+            // behind the firewall. A feature that quietly opened a port on first
+            // launch would be a worse neighbour than one the user turns on.
+            //
+            // Unlike RemoteControlEnabled this costs nothing to leave on: there
+            // is no model in the path and no quota to spend, which is the whole
+            // point of it.
+            public bool PeerLinkEnabled { get; set; }
+
+            // Which port to listen on. Zero means "let the operating system
+            // choose", which is the sensible default because discovery
+            // announces whatever was chosen — a fixed port only matters to
+            // somebody adding a machine by address through a firewall they
+            // control.
+            public int PeerLinkPort { get; set; }
 
             // Which CLI config directory — and therefore which Anthropic
             // account — the bridge runs under. A home-relative name, the same
@@ -518,6 +548,10 @@ namespace ClaudeBuddy
             // Auto-organize: which shape and how much space between orbs.
             public string ArrangeShape { get; set; } = DefaultArrangeShape;
             public double ArrangeSpacing { get; set; } = DefaultArrangeSpacing;
+
+            // How much bigger or smaller than shipped the chat panel draws its
+            // text. A multiplier, not a point size — see ChatZoom.
+            public double ChatTextScale { get; set; } = ChatZoom.Default;
 
             // Where the arranged shape is centred on screen — physical pixels,
             // same space as OrbPlacement above. Null means "never arranged
@@ -785,6 +819,47 @@ namespace ClaudeBuddy
             }
         }
 
+        public static bool PeerLinkEnabled
+        {
+            get { Load(); lock (Gate) return _model.PeerLinkEnabled; }
+            set { Load(); lock (Gate) _model.PeerLinkEnabled = value; Save(); }
+        }
+
+        // The port to listen on, with 0 meaning "the one everybody expects".
+        //
+        // **Found by deploying, not by reading.** The stored default was 0, and
+        // 0 asks the OS to pick — so a fresh install listened on an ephemeral
+        // port (50816, on the mini) instead of 7677. Discovery announces
+        // whatever it bound, so that half kept working and hid it; the half that
+        // broke is "add a machine by address", whose whole reason for existing
+        // is the case where discovery does *not* work. Its optional `:port`
+        // defaults to PeerLink.DefaultPort, so a user typing an address would
+        // have been dialling 7677 at a machine listening somewhere else, with
+        // nothing anywhere saying so.
+        //
+        // Pure so the mapping is a rule rather than a `??` in a property, and
+        // because 0 still has to mean "let the OS pick" where a test asks for
+        // it explicitly — Listen(0) is what keeps two loopback tests from
+        // colliding.
+        internal static int PortToBind(int stored) =>
+            stored is <= 0 or > 65535 ? PeerLink.DefaultPort : stored;
+
+        public static int PeerLinkPort
+        {
+            get { Load(); lock (Gate) return PortToBind(_model.PeerLinkPort); }
+
+            // Clamped rather than trusted. A port outside the range cannot be
+            // bound, and a settings file edited by hand is the ordinary way one
+            // arrives — the headless case in this project is administered
+            // exactly that way.
+            set
+            {
+                Load();
+                lock (Gate) _model.PeerLinkPort = value is < 0 or > 65535 ? 0 : value;
+                Save();
+            }
+        }
+
         public static bool RemoteControlServeOnLaunch
         {
             get { Load(); lock (Gate) return _model.RemoteControlServeOnLaunch; }
@@ -880,6 +955,12 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.TwoLetterGlyphs = value; Save(); }
         }
 
+        public static bool AccountUsageEnabled
+        {
+            get { Load(); lock (Gate) return _model.AccountUsageEnabled; }
+            set { Load(); lock (Gate) _model.AccountUsageEnabled = value; Save(); }
+        }
+
         // ---- auto-organize ----------------------------------------------------
 
         public static string ArrangeShape
@@ -892,6 +973,16 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.ArrangeSpacing; }
             set { Load(); lock (Gate) _model.ArrangeSpacing = value; Save(); }
+        }
+
+        // The chat panel's text size, as a multiplier over what it ships at.
+        // Clamped in the setter rather than trusted, so the one thing that can
+        // never happen is a panel drawn at a size nothing on screen can undo —
+        // the keyboard gesture and the settings slider both go through here.
+        public static double ChatTextScale
+        {
+            get { Load(); lock (Gate) return ChatZoom.Clamp(_model.ChatTextScale); }
+            set { Load(); lock (Gate) _model.ChatTextScale = ChatZoom.Clamp(value); Save(); }
         }
 
         public static OrbPlacement? ArrangeAnchor
@@ -1169,6 +1260,8 @@ namespace ClaudeBuddy
                             root["remoteControlIdleMinutes"]?.GetValue<int>() ?? DefaultRemoteControlIdle,
                         RemoteControlServeOnLaunch =
                             root["remoteControlServeOnLaunch"]?.GetValue<bool>() ?? false,
+                        PeerLinkEnabled = root["peerLinkEnabled"]?.GetValue<bool>() ?? false,
+                        PeerLinkPort = root["peerLinkPort"]?.GetValue<int>() ?? 0,
                         ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
@@ -1180,8 +1273,16 @@ namespace ClaudeBuddy
                         DoubleClickAction = root["doubleClickAction"]?.GetValue<string>() ?? "none",
                         TripleClickAction = root["tripleClickAction"]?.GetValue<string>() ?? "none",
                         TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
+                        AccountUsageEnabled = root["accountUsageEnabled"]?.GetValue<bool>() ?? false,
                         ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
                         ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing,
+
+                        // Clamped on the way in as well as on the way out: this
+                        // file is editable by hand and a 40x scale is a chat
+                        // panel with one word in it and no way back to the
+                        // setting that caused it.
+                        ChatTextScale = ChatZoom.Clamp(
+                            root["chatTextScale"]?.GetValue<double>() ?? ChatZoom.Default),
 
                         // speakVoice was declared on the model and written by its
                         // property from the start, but never read here and never
@@ -1537,6 +1638,8 @@ namespace ClaudeBuddy
                         ["openclawCronMode"] = OrbClusters.Name(_model.OpenClawCronMode),
                         ["openclawCronShape"] = _model.OpenClawCronShape,
                         ["remoteControlEnabled"] = _model.RemoteControlEnabled,
+                        ["peerLinkEnabled"] = _model.PeerLinkEnabled,
+                        ["peerLinkPort"] = _model.PeerLinkPort,
                         // Null when never chosen rather than a copy of the
                         // current default, the same as speakVoice below — so
                         // changing which profile ships as the default still
@@ -1556,8 +1659,10 @@ namespace ClaudeBuddy
                         ["doubleClickAction"] = _model.DoubleClickAction,
                         ["tripleClickAction"] = _model.TripleClickAction,
                         ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
+                        ["accountUsageEnabled"] = _model.AccountUsageEnabled,
                         ["arrangeShape"] = _model.ArrangeShape,
                         ["arrangeSpacing"] = _model.ArrangeSpacing,
+                        ["chatTextScale"] = _model.ChatTextScale,
                         // Null when never chosen, like the colours below rather
                         // than a copy of the current default — so changing which
                         // voice ships as the default still reaches everyone who
@@ -1643,7 +1748,7 @@ namespace ClaudeBuddy
         {
             try
             {
-                var dir = Path.Combine(Path.GetTempPath(), "claude_buddy");
+                var dir = StatusDirectory.Path();
                 System.IO.Directory.CreateDirectory(dir);
                 File.AppendAllText(
                     Path.Combine(dir, "settings-errors.log"),

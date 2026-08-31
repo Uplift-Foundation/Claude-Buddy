@@ -34,7 +34,8 @@ namespace ClaudeBuddy
     // find out it could have been a live view all along. HistoryReplaced is what
     // makes that free — the panel already redraws from History when it fires.
     internal sealed class RemoteControlChatSession :
-        IRemoteChatSession, IRemoteChatComposer, IRemoteChatSlashCommands, IRemoteChatBacklog, IDisposable
+        IRemoteChatSession, IRemoteChatComposer, IRemoteChatSlashCommands, IRemoteChatBacklog,
+        IRemoteChatFetchWait, IRemoteChatMachine, IDisposable
     {
         private readonly List<ChatTurn> _history = new();
 
@@ -56,6 +57,25 @@ namespace ClaudeBuddy
         private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
 
         private bool _mirroring;
+
+        // Whether the mirror has ever actually put the far transcript on screen.
+        //
+        // Distinct from _mirroring, which only says a live view was *agreed*.
+        // Between the two there is a real interval — the first window has to
+        // cross a wire that moves one chunk per model turn — and CB-46 found a
+        // panel that sat in it indefinitely with all three of its sources
+        // silent at once: the window had not arrived, the delta subscription
+        // does not start until one has, and OnInbound was dropping the far
+        // session's messages because _mirroring was true. The user sent "test",
+        // the session replied "Received — connectivity confirmed.", that reply
+        // reached this machine, and the panel threw it away.
+        //
+        // So the rules that go quiet in favour of the transcript key on this
+        // instead. A panel that has upgraded but never painted keeps behaving
+        // like the messaging channel it was a moment ago, which is the honest
+        // answer: it degrades to something rather than to nothing, and it does
+        // so for a stalled mirror later just as much as for a slow first paint.
+        private bool _painted;
         private CliChatFormat _format = CliChatFormat.ClaudeCode;
         private bool _saidNoLiveView;
         private bool _disposed;
@@ -112,9 +132,24 @@ namespace ClaudeBuddy
         // Said in the input box itself. "Message…" would be a lie by omission
         // here: this one leaves the machine, and in live view it is typed into
         // somebody else's terminal, which is worth being even plainer about.
-        public string ComposerHint => _mirroring
+        public string ComposerHint => _mirroring && _canType
             ? $"Type into {_remoteName}'s terminal on the other machine…"
             : $"Message {_remoteName} on the other machine…";
+
+        // Whether the far session actually has an input line to type into.
+        //
+        // **The roster has always answered this and the hint ignored it.**
+        // MirrorRosterEntry carries HasPane, and its own comment says why: "a
+        // panel that offered a send it cannot deliver would be lying in the one
+        // place it matters." Keying the hint on _mirroring alone did exactly
+        // that — a live view was taken to mean a typable one, and on a headless
+        // machine it never is.
+        //
+        // Seen on a real pair: the composer said "Type into
+        // job-hunter-mac-mini's terminal" while the line directly above it read
+        // "Sent as a message rather than typed … there is no input line to type
+        // into." Both were on screen at once, and only one of them was true.
+        private bool _canType;
 
         // In live view: every command that session can run, read off the far
         // machine's own disk by the Buddy sitting next to it — built-ins
@@ -137,7 +172,13 @@ namespace ClaudeBuddy
         {
             if (!account.Equals(_account, StringComparison.Ordinal)) return;
 
-            OnUi(TryUpgrade);
+            // The roster landing is what makes the far machine knowable, so this
+            // is the moment a panel opened before it can be told.
+            OnUi(() =>
+            {
+                MachineChanged?.Invoke();
+                TryUpgrade();
+            });
         }
 
         private void TryUpgrade()
@@ -159,6 +200,7 @@ namespace ClaudeBuddy
             if (client is null) return;
 
             _mirroring = true;
+            _canType = entry.HasPane;
             _format = CliChatFormat.For(
                 entry.Cli.Equals(MirrorProtocol.CliCodex, StringComparison.OrdinalIgnoreCase)
                     ? SessionSource.Codex
@@ -171,8 +213,118 @@ namespace ClaudeBuddy
             // every panel is closed switches the mode and stops there; the next
             // PanelOpened reads the tail, which by then is the current one
             // anyway.
-            if (_panelOpen) _ = client.OpenAsync(_remoteName);
+            if (!_panelOpen) return;
+
+            // Said before the fetch rather than after, because the fetch is the
+            // part that takes time. The opening line is "Checking whether a live
+            // view … is available", and leaving that on screen for the whole
+            // transfer showed a user the exact sentence that meant failure an
+            // hour earlier — they reported a working transfer as "no live view"
+            // twice, which is a wording bug rather than a mirror one.
+            //
+            // Not a problem to clean up afterwards: the window that ends this
+            // wait clears the history outright and replaces it with the far
+            // conversation, so this line goes with it.
+            if (!_painted) Note(FetchingNote(_remoteName));
+
+            // Started here rather than inside OpenAsync so the indicator covers
+            // the whole wait the user experiences, including the part where the
+            // frame is still queued on this machine's own relay. That queueing
+            // was eight minutes once (CB-56), and a spinner that only began when
+            // the frame finally went out would have shown nothing for the part
+            // that most needed explaining.
+            BeginWait();
+
+            _ = client.OpenAsync(_remoteName);
         }
+
+        // --- where this conversation actually is ----------------------------
+
+        // See IRemoteChatMachine. Read through on demand rather than cached,
+        // because the roster usually answers after the panel is already open and
+        // a cached null would stay null until something else happened to
+        // refresh it.
+        // **Straight off the roster now, where it used to be parsed back out of
+        // a relay's tmux session name.** That parse was the third of the three
+        // couplings this transport had to break, and it was the fiddliest: one
+        // account's name is a prefix of another's the moment somebody has
+        // `.claude` and `.claude-board`, so it could answer confidently and
+        // wrongly. A direct link records who served each session, and who served
+        // it *is* the machine it is on.
+        public string? MachineName =>
+            RemoteControlSessions.MirrorClientFor(_account)?.RelayFor(_remoteName);
+
+        public event Action? MachineChanged;
+
+        // --- the wait, while it is happening --------------------------------
+
+        // See IRemoteChatFetchWait. Set immediately before the fetch and cleared
+        // however it ends, including the failure paths, because a spinner left
+        // running after a transfer gave up is a worse lie than no spinner.
+        private DateTimeOffset? _waitingSince;
+
+        public DateTimeOffset? WaitingSince => _waitingSince;
+
+        public string WaitingFor => $"{_remoteName}'s conversation";
+
+        public event Action? WaitChanged;
+
+        private void BeginWait()
+        {
+            _waitingSince = DateTimeOffset.Now;
+            WaitChanged?.Invoke();
+        }
+
+        private void EndWait()
+        {
+            if (_waitingSince is null) return;
+
+            _waitingSince = null;
+            WaitChanged?.Invoke();
+        }
+
+        // How long it has been, in words, for the indicator above the turns.
+        //
+        // Pure and static so the wording is a unit test rather than a
+        // screenshot, the same arrangement FetchingNote is under.
+        //
+        // **Seconds all the way to a minute, then minutes and seconds.** The
+        // measured waits are 3–4 minutes, so a counter that only showed whole
+        // minutes would sit unchanged for sixty seconds at exactly the moment
+        // somebody is deciding whether it has hung — which is the entire failure
+        // this indicator exists to prevent.
+        internal static string WaitLabel(TimeSpan elapsed, string what)
+        {
+            if (elapsed < TimeSpan.Zero) elapsed = TimeSpan.Zero;
+
+            var when = elapsed.TotalSeconds < 60
+                ? $"{(int)elapsed.TotalSeconds}s"
+                : $"{(int)elapsed.TotalMinutes}m {elapsed.Seconds}s";
+
+            return $"Fetching {what} — {when}";
+        }
+
+        // The second line, which is the one that stops a normal wait reading as
+        // a fault. Fixed rather than counting down: an estimate that ran out
+        // while the transfer was still going would be the same broken promise
+        // as the "about a minute" this project has already had to correct once.
+        internal const string WaitHint = "these usually take three or four minutes";
+
+        // Named for the same reason the refusals are: a line a user reads while
+        // nothing appears to be happening has to say that something is.
+        // **"A minute" was wrong, and understating it is the same bug in a
+        // quieter form.** The first version said the wait could take a minute,
+        // which was a guess; a single window off the mini was then timed at
+        // `7m 15s`, because each piece is base64 the far relay's *model* has to
+        // retype exactly. A user told to expect one minute and left waiting
+        // seven concludes it has hung — which is how a transfer that was working
+        // perfectly got reported as broken, twice, on the strength of a wording.
+        // So it says minutes, and says why, rather than promising a number this
+        // wire has never met. See CB-54.
+        internal static string FetchingNote(string remoteName) =>
+            $"Found a live view of {remoteName} — fetching its conversation from the other machine. "
+          + "This can take several minutes: the transcript comes across in pieces, and each one "
+          + "waits its turn on the relay, which retypes it by hand.";
 
         private void SayNoLiveView()
         {
@@ -188,6 +340,8 @@ namespace ClaudeBuddy
         private void OnDelivered(RemoteMirrorClient.MirrorRows rows)
         {
             if (!rows.Name.Equals(_remoteName, StringComparison.OrdinalIgnoreCase)) return;
+
+            EndWait();
 
             // Already parsed, on the machine that had the file.
             //
@@ -242,6 +396,8 @@ namespace ClaudeBuddy
                              + "into its terminal."
                     });
 
+                    _painted = true;
+
                     HistoryReplaced?.Invoke();
                     return;
                 }
@@ -260,6 +416,8 @@ namespace ClaudeBuddy
         {
             if (!name.Equals(_remoteName, StringComparison.OrdinalIgnoreCase)) return;
 
+            EndWait();
+
             OnUi(() =>
             {
                 if (_disposed) return;
@@ -270,8 +428,16 @@ namespace ClaudeBuddy
                 // draft is indistinguishable from the real thing once it is on
                 // screen, and quietly substituting one at the exact moment
                 // integrity failed would be the worst possible time to do it.
-                Note($"Couldn't verify {_remoteName}'s transcript — {why}. Showing nothing rather "
-                   + "than something altered; close and reopen the panel to try again.");
+                // If the relay is stuck on a prompt, that is the real answer and
+                // it names what to do about it. Saying "try again" to somebody
+                // whose relay is waiting on a keypress sends them round the loop
+                // that produced this.
+                var stall = RemoteControlSessions.StallFor(_account);
+
+                Note(stall is null
+                    ? $"Couldn't verify {_remoteName}'s transcript — {why}. Showing nothing rather "
+                      + "than something altered; close and reopen the panel to try again."
+                    : $"Couldn't reach {_remoteName}: this machine's relay session is {stall}");
             });
         }
 
@@ -362,7 +528,7 @@ namespace ClaudeBuddy
             var mine = new ChatTurn { Role = ChatRole.User, Text = text, IsComplete = true };
             Add(mine);
 
-            if (!ClaudeBuddySettings.RemoteControlEnabled)
+            if (!ClaudeBuddySettings.PeerLinkEnabled)
             {
                 Note(RemoteControlOffNote);
                 return;
@@ -374,65 +540,34 @@ namespace ClaudeBuddy
                 return;
             }
 
-            await SendThroughRelayAsync(text);
+            // **No live view means no way to send, and that is a real loss
+            // rather than an oversight.** The relay used to answer here: a
+            // session it could see but not mirror still took a message, handed
+            // to its model as text. That channel went with the relay, and
+            // nothing on a direct link replaces it — the link types into the far
+            // session's own input line, which needs a pane to type into.
+            //
+            // Said plainly rather than left as a dead composer. A message that
+            // vanishes with no explanation is the failure this panel has spent
+            // six tickets learning not to produce.
+            Note(NoWayToSendNote(_remoteName));
         }
+
+        // Said when there is a session on screen and no way to reach it.
+        //
+        // Names the actual condition — no live view — rather than blaming the
+        // network, because the fix is on the far machine and this is the only
+        // place that will ever say so.
+        internal static string NoWayToSendNote(string remoteName) =>
+            $"No live view of {remoteName}, so there is nothing to type into. Claude Buddy can "
+          + "show and reply to a session running under tmux on the other machine; this one "
+          + "isn't, so it can be listed but not written to.";
 
         // Named so the wording is reachable from a test even though the method
         // that says it is not measured: a refusal that does not name the setting
         // to turn on is a dead end for whoever reads it.
         internal const string RemoteControlOffNote =
             "Remote sessions are switched off. Turn on \"Show sessions from other machines\" in Settings.";
-
-        // Excluded from coverage: SendToAsync starts the relay if it is not up —
-        // a live Claude Code session in a tmux pane on another machine, which
-        // costs the person running the tests real money — and then types into it.
-        // RemoteControlProfileDirs always returns at least the default account, so
-        // there is no configuration that makes this inert.
-        //
-        // The decision in front of it is covered: with remote control switched
-        // off nothing is sent and the transcript says why, keeping the user's
-        // typed turn so the refusal reads as "this did not go" rather than the
-        // message vanishing.
-        //
-        // Its two failure notes are worth reading even though they are not
-        // measured. "Couldn't send" carries the exception; "Couldn't reach" is
-        // deliberately vague about WHICH link failed, because from here they are
-        // indistinguishable — the bridge may not have started, its login may have
-        // expired, or the model may not have called the tool — and naming one
-        // would be a guess presented as a fact.
-        [ExcludeFromCodeCoverage]
-        private async Task SendThroughRelayAsync(string text)
-        {
-            string? id;
-            try
-            {
-                // Starts the bridge if it isn't up, so a message typed after an
-                // idle shutdown just works rather than needing the tray item
-                // again. The wait is the price of that, and it is why the
-                // composer stays enabled rather than being disabled while down.
-                id = await RemoteControlSessions.SendToAsync(_account, _remoteName, text).ConfigureAwait(true);
-            }
-            catch (Exception ex)
-            {
-                Note("Couldn't send: " + ex.Message);
-                return;
-            }
-
-            if (id is null)
-            {
-                // Deliberately vague about which link failed, because from here
-                // they are indistinguishable: the bridge may not have started,
-                // its login may have expired, or the model may not have called
-                // the tool. Naming one would be a guess presented as a fact.
-                Note($"Couldn't reach {_remoteName}. The relay session may not be running — "
-                   + "check Settings, or try again to restart it.");
-                return;
-            }
-
-            // No "sent" confirmation on screen. The message is already there as
-            // the user's own turn, and a receipt under every line would be noise
-            // — the reply, when it comes, is the confirmation that matters.
-        }
 
         // The live-view send: typed into the far session's terminal by the Buddy
         // beside it. The far transcript will produce this message back, because
@@ -460,6 +595,24 @@ namespace ClaudeBuddy
             var error = await client.SendInputAsync(_remoteName, text).ConfigureAwait(true);
             if (error is null) return;
 
+            // No terminal to type into is a missing mechanism, not a refusal, and
+            // the messaging channel this panel used before it upgraded still
+            // works. Refusing here made a live view *cost* the user the ability
+            // to send — strictly worse than not having mirrored at all — and on
+            // a headless machine, where a session runs in a plain tty rather
+            // than under tmux, that is the ordinary case and not an edge one.
+            //
+            // **There used to be a fallback here and there is not any more.**
+            // ErrNoPane — the far session is not in a tmux pane — was answered
+            // by handing the text to that session as a message through the
+            // relay. The relay is gone, and nothing on a direct link replaces
+            // it: typing needs an input line to type into.
+            //
+            // The refusal below names which of the four codes came back, which
+            // is the whole of what is left to say. Three of them are things to
+            // change on the other machine and one is a locked door: ErrReplyOff
+            // is that machine's owner having switched replying off, and a
+            // request arriving over a wire does not change it.
             _pending = null;
 
             Note(TypingRefusal(error, _remoteName));
@@ -481,9 +634,39 @@ namespace ClaudeBuddy
                     $"{remoteName}'s machine has replying to sessions switched off, so nothing was typed. "
                     + "That is its own setting, and it has to be turned on over there.",
 
+                // No longer reached from a mirrored send: CB-43 routes this code
+                // to the messaging channel instead (see FallsBackToMessaging),
+                // so what a user sees for a pane-less session is
+                // SentAsMessageNote. Kept because this is a general mapping from
+                // code to wording rather than one call site's switch, and the
+                // generic arm below would be a worse answer for a caller that
+                // does hand it this code.
+                // Says "a terminal Buddy can type into" rather than naming
+                // tmux. Since CB-79 that is iTerm2 and Terminal.app as well,
+                // and the old wording sent at least one user looking for a
+                // tmux setting they did not want and did not need — for a
+                // session that was in an ordinary iTerm2 window all along.
+                //
+                // The far machine's own reason cannot be read from here: this
+                // maps a code, and the code is all that crosses the wire.
+                // Built from the same phrase every local refusal uses, so a
+                // user who has learned to recognise one answer does not have
+                // to learn a second because the session is on another machine.
                 MirrorProtocol.ErrNoPane =>
-                    $"{remoteName} isn't in a tmux pane on the other machine, so there is nowhere to "
-                    + "type without bringing its terminal forward.",
+                    $"{remoteName}'s terminal {TerminalTyping.CantTypePhrase} on the other "
+                    + "machine, so there is nowhere to type without bringing its window forward.",
+
+                // The terminal was found and refused. Almost always one of two
+                // things, and both are worth naming because neither is
+                // guessable from "couldn't type that": macOS asks for
+                // Automation consent the first time one app drives another and
+                // that prompt appears on the *far* machine's screen, which on
+                // a headless Mac nobody is looking at; or the window has been
+                // closed since the status file was written.
+                MirrorProtocol.ErrTypeFailed =>
+                    $"{remoteName}'s terminal refused the text. On macOS the other machine may be "
+                    + "waiting for you to allow Claude Buddy to control it — check for a prompt "
+                    + "there — or that terminal window may have been closed.",
 
                 MirrorProtocol.ErrNoSession =>
                     $"The other machine's Claude Buddy no longer has a session called {remoteName}.",
@@ -535,7 +718,7 @@ namespace ClaudeBuddy
 
             if (ReferenceEquals(incoming, _pending)) return false;
             if (incoming.Role != ChatRole.User) return false;
-            if (!string.Equals(incoming.Text.Trim(), _pendingText, StringComparison.Ordinal)) return false;
+            if (!Echoes(incoming.Text)) return false;
 
             // Keep the transcript's own text: it is what that session actually
             // received, which is the thing this panel exists to show.
@@ -545,6 +728,36 @@ namespace ClaudeBuddy
             settled.Text = incoming.Text;
             TurnUpdated?.Invoke(settled);
             return true;
+        }
+
+        // Whether a turn arriving from the far transcript is the message this
+        // panel just sent, coming back.
+        //
+        // Two shapes, because there are two ways it can have got there. A typed
+        // message went in through the session's own input line, so the
+        // transcript holds exactly what was typed. A message sent through the
+        // relay channel — the CB-43 fallback — was *handed* to that session, so
+        // its transcript holds the whole `<cross-session-message …>` tag with
+        // the text inside it, and an exact match would miss it and render the
+        // message twice.
+        //
+        // Matched on the tag's parsed body rather than by looking for the text
+        // anywhere in the row: a far session that merely quoted the same
+        // sentence back would otherwise be swallowed as an echo, which is the
+        // failure mode worth avoiding here — a message silently disappearing
+        // reads as a bug in the panel, not in the matching.
+        private bool Echoes(string incomingText)
+        {
+            if (string.Equals(incomingText.Trim(), _pendingText, StringComparison.Ordinal))
+                return true;
+
+            foreach (var carried in BridgeProtocol.ParseInboundMessages(incomingText))
+            {
+                if (string.Equals(carried.Body.Trim(), _pendingText, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
         }
 
         // --- inbound (messaging mode) ---------------------------------------------
@@ -568,7 +781,13 @@ namespace ClaudeBuddy
             // message would be a second, differently-worded account of
             // something already shown. Dropped rather than appended: showing
             // both is precisely the confusion this feature was built to end.
-            if (_mirroring) return;
+            //
+            // Only once it really is showing that transcript, though. Before the
+            // first window lands there is no second account to be confused with
+            // — there is nothing on screen at all — so dropping the message here
+            // makes the panel strictly worse than the messaging channel it
+            // replaced. See _painted.
+            if (_mirroring && _painted) return;
 
             // The answer supersedes the "working" line, so that comes off first —
             // leaving it above the reply would read as though it were still going.
@@ -596,7 +815,9 @@ namespace ClaudeBuddy
 
         public void SetWorking(bool working)
         {
-            if (_mirroring) return;
+            // Same rule as OnInbound, for the same reason: the live view only
+            // supersedes the working line once it is actually showing the work.
+            if (_mirroring && _painted) return;
 
             if (working)
             {
@@ -686,6 +907,12 @@ namespace ClaudeBuddy
         public void PanelClosed()
         {
             _panelOpen = false;
+
+            // Whatever was in flight is no longer being waited for by anybody.
+            // Reopening starts a fresh fetch (CloseAsync drops the feed), so a
+            // wait carried across the gap would be timing something that had
+            // already been abandoned.
+            EndWait();
 
             if (!_mirroring) return;
 
