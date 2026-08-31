@@ -93,39 +93,6 @@ public class SettingsDownloadDecisionTests
 
     // ---- pickers holding a value they were not offered ----------------------
 
-    // A relay idle timeout set by hand — or carried over from a version with
-    // different choices — is offered as itself rather than silently snapping to
-    // the nearest option. Snapping would change a setting the user never touched.
-    [AvaloniaFact]
-    public void AHandWrittenRelayTimeoutIsOfferedAsItself()
-    {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.RemoteControlIdleMinutes = 7;
-
-        var combo = (ComboBox)NewWindow().RemoteControlIdlePicker();
-        var labels = combo.ItemsSource!.Cast<object>().Select(o => o?.ToString()).ToList();
-
-        Assert.Contains(labels, l => l is not null && l.Contains("7"));
-        Assert.True(combo.SelectedIndex >= 0);
-    }
-
-    // A value that IS one of the offered choices is not duplicated into the list
-    // as well.
-    [AvaloniaFact]
-    public void AStandardRelayTimeoutIsNotOfferedTwice()
-    {
-        ClaudeBuddySettings.ReloadForTests();
-        ClaudeBuddySettings.RemoteControlIdleMinutes = 7;
-        var withHandWritten = ((ComboBox)NewWindow().RemoteControlIdlePicker())
-            .ItemsSource!.Cast<object>().Count();
-
-        ClaudeBuddySettings.RemoteControlIdleMinutes = 30;
-        var standard = ((ComboBox)NewWindow().RemoteControlIdlePicker())
-            .ItemsSource!.Cast<object>().Count();
-
-        Assert.Equal(withHandWritten - 1, standard);
-    }
-
     private static void PlaceEngine()
     {
         var version = NeuralSpeech.EngineVersion;

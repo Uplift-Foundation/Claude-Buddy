@@ -97,7 +97,7 @@ public class RemoteMirrorPanelScreenshots : IDisposable
         var session = Open();
 
         await _client.DiscoverAsync(
-            new[] { new BridgeProtocol.RemoteAgent(Name, "94f106", "Remote Control", "idle") },
+            Array.Empty<string>(),
             new[] { Name });
 
         ChatPanel.OpenFor(NewOrb(), session);
@@ -181,13 +181,9 @@ public class RemoteMirrorPanelScreenshots : IDisposable
         return session;
     }
 
-    private static IReadOnlyList<BridgeProtocol.RemoteAgent> Peers =>
-        new[]
-        {
-            new BridgeProtocol.RemoteAgent(FarRelay, "aa11bb", "Remote Control", "idle"),
-            new BridgeProtocol.RemoteAgent(Name, "94f106", "Remote Control", "idle")
-        };
-
+    // The machines to ask, by name. The relay-shaped list this replaced had
+    // to be filtered down to the same answer a direct link simply knows.
+    private static IReadOnlyList<string> Peers => new[] { FarRelay };
     private void Wire(params (string Role, string Text)[] turns)
     {
         _path = Path.Combine(_dir, "session.jsonl");

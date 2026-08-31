@@ -52,50 +52,50 @@ public class PanelOverTheLinkTests
     private static readonly IReadOnlyList<RemoteControlSessions.Remote> OneRow =
         new[] { new RemoteControlSessions.Remote("jh", "mini", "idle", DateTime.UnixEpoch, "acct") };
 
+    // **One switch again, and a different one.** This gate asked about the relay
+    // while a relay was the only way a remote row could exist, then briefly
+    // about both, and now about the link alone. The middle version is the one
+    // worth remembering: it drew nothing on exactly the machine most likely to
+    // have rows, because it insisted on a switch users had been told to turn off.
     [Fact]
-    public void TheLinkAloneIsEnoughToShowRemoteOrbs()
+    public void TheLinkOnShowsRemoteOrbs()
     {
-        // The case the old gate got wrong: relay off, link on, real rows.
-        Assert.Same(OneRow, RemoteControlSessions.Visible(
-            OneRow, relayOn: false, relaySupported: false, linkOn: true));
+        Assert.Same(OneRow, RemoteControlSessions.Visible(OneRow, linkOn: true));
     }
 
     [Fact]
-    public void TheRelayAloneIsStillEnough()
+    public void TheLinkOffShowsNothing()
     {
-        Assert.Same(OneRow, RemoteControlSessions.Visible(
-            OneRow, relayOn: true, relaySupported: true, linkOn: false));
-    }
-
-    [Fact]
-    public void AnUnsupportedRelayWithNoLinkShowsNothing()
-    {
-        Assert.Empty(RemoteControlSessions.Visible(
-            OneRow, relayOn: true, relaySupported: false, linkOn: false));
-    }
-
-    [Fact]
-    public void BothOffShowsNothing()
-    {
-        Assert.Empty(RemoteControlSessions.Visible(
-            OneRow, relayOn: false, relaySupported: false, linkOn: false));
+        // The scan never has to know *why* the list is empty, which is the whole
+        // reason this is a gate rather than a filter further down.
+        Assert.Empty(RemoteControlSessions.Visible(OneRow, linkOn: false));
     }
 
     // --- whether a send is even attempted ------------------------------------
 
-    [Theory]
-    [InlineData(true, true)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    public void EitherTransportIsEnoughToSend(bool relayOn, bool linkOn)
+    // The send gate went the same way — one transport, one switch — so
+    // CanReachRemotes is gone and SendAsync asks about the link directly. What
+    // is worth keeping is the wording, because a refusal that does not name the
+    // setting to turn on is a dead end for whoever reads it.
+    [Fact]
+    public void TheRefusalNamesTheSettingToTurnOn()
     {
-        Assert.True(RemoteControlChatSession.CanReachRemotes(relayOn, linkOn));
+        Assert.Contains(
+            "Show sessions from other machines",
+            RemoteControlChatSession.RemoteControlOffNote);
     }
 
+    // And the other refusal, which is new: a session on screen with no live
+    // view can no longer be sent to at all, because the messaging channel that
+    // used to answer here went with the relay. Said plainly rather than left as
+    // a composer that swallows what you type.
     [Fact]
-    public void NoTransportRefusesTheSend()
+    public void ASessionWithNoLiveViewSaysWhyItCannotBeWrittenTo()
     {
-        Assert.False(RemoteControlChatSession.CanReachRemotes(false, false));
+        var note = RemoteControlChatSession.NoWayToSendNote("job-hunter");
+
+        Assert.Contains("job-hunter", note);
+        Assert.Contains("tmux", note);
     }
 
     // --- roster rows become orb rows -----------------------------------------

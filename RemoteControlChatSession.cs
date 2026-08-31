@@ -244,10 +244,15 @@ namespace ClaudeBuddy
         // because the roster usually answers after the panel is already open and
         // a cached null would stay null until something else happened to
         // refresh it.
+        // **Straight off the roster now, where it used to be parsed back out of
+        // a relay's tmux session name.** That parse was the third of the three
+        // couplings this transport had to break, and it was the fiddliest: one
+        // account's name is a prefix of another's the moment somebody has
+        // `.claude` and `.claude-board`, so it could answer confidently and
+        // wrongly. A direct link records who served each session, and who served
+        // it *is* the machine it is on.
         public string? MachineName =>
-            RemoteControlBridge.MachineFromRelayName(
-                RemoteControlSessions.MirrorClientFor(_account)?.RelayFor(_remoteName),
-                _account);
+            RemoteControlSessions.MirrorClientFor(_account)?.RelayFor(_remoteName);
 
         public event Action? MachineChanged;
 
@@ -523,9 +528,7 @@ namespace ClaudeBuddy
             var mine = new ChatTurn { Role = ChatRole.User, Text = text, IsComplete = true };
             Add(mine);
 
-            if (!CanReachRemotes(
-                    ClaudeBuddySettings.RemoteControlEnabled,
-                    ClaudeBuddySettings.PeerLinkEnabled))
+            if (!ClaudeBuddySettings.PeerLinkEnabled)
             {
                 Note(RemoteControlOffNote);
                 return;
@@ -537,88 +540,34 @@ namespace ClaudeBuddy
                 return;
             }
 
-            await SendThroughRelayAsync(text);
+            // **No live view means no way to send, and that is a real loss
+            // rather than an oversight.** The relay used to answer here: a
+            // session it could see but not mirror still took a message, handed
+            // to its model as text. That channel went with the relay, and
+            // nothing on a direct link replaces it — the link types into the far
+            // session's own input line, which needs a pane to type into.
+            //
+            // Said plainly rather than left as a dead composer. A message that
+            // vanishes with no explanation is the failure this panel has spent
+            // six tickets learning not to produce.
+            Note(NoWayToSendNote(_remoteName));
         }
+
+        // Said when there is a session on screen and no way to reach it.
+        //
+        // Names the actual condition — no live view — rather than blaming the
+        // network, because the fix is on the far machine and this is the only
+        // place that will ever say so.
+        internal static string NoWayToSendNote(string remoteName) =>
+            $"No live view of {remoteName}, so there is nothing to type into. Claude Buddy can "
+          + "show and reply to a session running under tmux on the other machine; this one "
+          + "isn't, so it can be listed but not written to.";
 
         // Named so the wording is reachable from a test even though the method
         // that says it is not measured: a refusal that does not name the setting
         // to turn on is a dead end for whoever reads it.
         internal const string RemoteControlOffNote =
             "Remote sessions are switched off. Turn on \"Show sessions from other machines\" in Settings.";
-
-        // Whether there is any way at all to reach the far machine.
-        //
-        // **Either transport will do, and asking only about the relay was wrong
-        // the moment there were two.** The panel is already open on a session
-        // the link found, so refusing to send because the *relay* is off would
-        // refuse on the strength of a switch that has nothing to do with how
-        // this session got here — and that switch is precisely the one a user is
-        // told to turn off, the relay being the expensive one.
-        //
-        // Pure so both arms are a test rather than a settings file.
-        internal static bool CanReachRemotes(bool relayOn, bool linkOn) => relayOn || linkOn;
-
-        // Excluded from coverage: SendToAsync starts the relay if it is not up —
-        // a live Claude Code session in a tmux pane on another machine, which
-        // costs the person running the tests real money — and then types into it.
-        // RemoteControlProfileDirs always returns at least the default account, so
-        // there is no configuration that makes this inert.
-        //
-        // The decision in front of it is covered: with remote control switched
-        // off nothing is sent and the transcript says why, keeping the user's
-        // typed turn so the refusal reads as "this did not go" rather than the
-        // message vanishing.
-        //
-        // Its two failure notes: "Couldn't send" carries the exception;
-        // "Couldn't reach" is deliberately vague about WHICH link failed,
-        // because from here they are indistinguishable — the bridge may not have
-        // started, its login may have expired, or the model may not have called
-        // the tool — and naming one would be a guess presented as a fact.
-        //
-        // No longer excluded from coverage. It used to be, on the grounds that
-        // no arrangement of settings made the send inert; CB-43 gave
-        // RemoteControlSessions.SendToAsync a test seam, because this is now the
-        // *fallback* for a mirrored send and a fallback nothing can exercise is
-        // not a fallback anyone should rely on. An exclusion that has stopped
-        // being true is worse than none, since it reads as a claim that the code
-        // still cannot be reached.
-        //
-        // Answers whether the message actually left, so a caller that is falling
-        // back to it can tell the user which of the two things happened rather
-        // than asserting the cheerful one.
-        private async Task<bool> SendThroughRelayAsync(string text)
-        {
-            string? id;
-            try
-            {
-                // Starts the bridge if it isn't up, so a message typed after an
-                // idle shutdown just works rather than needing the tray item
-                // again. The wait is the price of that, and it is why the
-                // composer stays enabled rather than being disabled while down.
-                id = await RemoteControlSessions.SendToAsync(_account, _remoteName, text).ConfigureAwait(true);
-            }
-            catch (Exception ex)
-            {
-                Note("Couldn't send: " + ex.Message);
-                return false;
-            }
-
-            if (id is null)
-            {
-                // Deliberately vague about which link failed, because from here
-                // they are indistinguishable: the bridge may not have started,
-                // its login may have expired, or the model may not have called
-                // the tool. Naming one would be a guess presented as a fact.
-                Note($"Couldn't reach {_remoteName}. The relay session may not be running — "
-                   + "check Settings, or try again to restart it.");
-                return false;
-            }
-
-            // No "sent" confirmation on screen. The message is already there as
-            // the user's own turn, and a receipt under every line would be noise
-            // — the reply, when it comes, is the confirmation that matters.
-            return true;
-        }
 
         // The live-view send: typed into the far session's terminal by the Buddy
         // beside it. The far transcript will produce this message back, because
@@ -653,63 +602,21 @@ namespace ClaudeBuddy
             // a headless machine, where a session runs in a plain tty rather
             // than under tmux, that is the ordinary case and not an edge one.
             //
-            // Deliberately only this code. ErrReplyOff is the far machine's
-            // owner having switched replying off, and RemoteMirrorServer's own
-            // header says what that means: "a request arriving over a wire does
-            // not change it". The relay channel puts text into that session
-            // too, so falling back there would route around a stated decision
-            // rather than around an absent capability. One is a locked door and
-            // the other is a missing one.
-            if (FallsBackToMessaging(error))
-            {
-                // Awaited into a local rather than tested inline: an await
-                // inside the condition splits the method across the state
-                // machine and the coverage engines cannot map either arm back
-                // to this line, which reads as untested branching on a decision
-                // that is very much tested.
-                var sent = await SendThroughRelayAsync(text).ConfigureAwait(true);
-
-                if (sent)
-                {
-                    // _pending stays set on purpose: the far session receives
-                    // this as a cross-session message, so it comes back through
-                    // the mirrored transcript and has to reconcile rather than
-                    // render twice. See Reconcile, which knows both shapes.
-                    Note(SentAsMessageNote(_remoteName));
-                    return;
-                }
-
-                // SendThroughRelayAsync has already said why. Adding the typing
-                // refusal on top would name a second cause for one failure.
-                _pending = null;
-                return;
-            }
-
+            // **There used to be a fallback here and there is not any more.**
+            // ErrNoPane — the far session is not in a tmux pane — was answered
+            // by handing the text to that session as a message through the
+            // relay. The relay is gone, and nothing on a direct link replaces
+            // it: typing needs an input line to type into.
+            //
+            // The refusal below names which of the four codes came back, which
+            // is the whole of what is left to say. Three of them are things to
+            // change on the other machine and one is a locked door: ErrReplyOff
+            // is that machine's owner having switched replying off, and a
+            // request arriving over a wire does not change it.
             _pending = null;
 
             Note(TypingRefusal(error, _remoteName));
         }
-
-        // Which refusals the messaging channel is allowed to answer.
-        //
-        // A rule rather than an inline comparison so every code can be asserted
-        // against it by name — the interesting content of this function is the
-        // four codes it says *no* to, and an inline `==` leaves that untested.
-        internal static bool FallsBackToMessaging(string? errCode) =>
-            string.Equals(errCode, MirrorProtocol.ErrNoPane, StringComparison.Ordinal);
-
-        // Said when a mirrored panel had to send the long way round.
-        //
-        // Worth saying rather than falling back silently: the two channels are
-        // not equivalent from where the user sits. Typing goes through the
-        // session's own input line, which is what makes a slash command run;
-        // a message is handed to the model as text, so "/color blue" over this
-        // channel is a sentence about a command rather than the command. Saying
-        // nothing would leave someone retyping a slash command that cannot work.
-        internal static string SentAsMessageNote(string remoteName) =>
-            $"Sent as a message rather than typed: {remoteName} isn't in a tmux pane on the other "
-          + "machine, so there is no input line to type into. It will still see this and reply. "
-          + "Slash commands won't run this way — they arrive as text.";
 
         // What a refused keystroke says, as a function of the code that came
         // back rather than as a switch buried in the send.

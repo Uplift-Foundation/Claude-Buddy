@@ -76,12 +76,23 @@ namespace ClaudeBuddy
 
         // How much raw payload goes in one frame.
         //
-        // A guess, and flagged as one: nothing documents how long a SendMessage
-        // body may be, and the spike never sent one big enough to find out. 6KB
-        // of payload is roughly 8KB of base64 once expanded, which is a large
-        // chat message and a small file. Deliberately one constant so the answer
-        // is a one-line change once a real ceiling is measured.
-        public const int ChunkBytes = 6 * 1024;
+        // **6KB, because a model had to retype it. Now the size of a message.**
+        //
+        // The old value was a guess about how long a SendMessage body could be,
+        // and its consequences ran through everything: a transcript arrived as
+        // dozens of chunks, each one a model emitting ~8KB of base64 as tool
+        // input at roughly two minutes a turn, each with its own hash so a
+        // mistyped character could be asked for again.
+        //
+        // The wire is a TLS socket now and PeerProtocol carries a message up to
+        // 32MB whole. Chunking at 6KB would cut a transcript into five thousand
+        // pieces and reassemble them, to move bytes that fit in one write.
+        //
+        // Left as a constant rather than deleted outright, and matched to the
+        // transport's own ceiling: Split still exists, still splits, and simply
+        // never has anything to split — which is what makes the machinery
+        // around it safe to remove in the next commit rather than the same one.
+        public const int ChunkBytes = PeerProtocol.MaxMessageBytes;
 
         // The tail a panel opens on, and the page it walks back by.
         //

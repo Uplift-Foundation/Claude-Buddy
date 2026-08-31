@@ -411,10 +411,6 @@ namespace ClaudeBuddy
             RemoteControlSessions.MessageReceived += OnRemoteMessage;
             RemoteControlSessions.WorkingChanged += OnRemoteWorkingChanged;
 
-            // What this machine can show another machine's Buddy.
-            //
-            // Handed over as a delegate rather than read from over there: the
-            // sessions this app knows about live here, behind the scan, and a
 
             _debounce.Tick += (_, _) =>
             {
@@ -968,7 +964,7 @@ namespace ClaudeBuddy
 
                 status.Source = SourceOf(status);
                 if (!EnabledFor(status.Source)) continue;
-                if (RemoteControlBridge.IsOwnRelayCwd(status.Cwd)) continue;
+                if (MachineNames.LooksLikeALeftoverRelay(status.Cwd)) continue;
 
                 found.Add(new ScanEntry(
                     Path.GetFileNameWithoutExtension(file), status, written));
@@ -1417,7 +1413,7 @@ namespace ClaudeBuddy
                 // The same prefix test the bridge and the mirror already key on —
                 // see RemoteControlBridge.IsOwnRelayCwd for why it is the prefix
                 // and not the live tag, and why the cwd rather than argv.
-                if (RemoteControlBridge.IsOwnRelayCwd(status.Cwd)) continue;
+                if (MachineNames.LooksLikeALeftoverRelay(status.Cwd)) continue;
 
                 found.Add(new ScanEntry(sessionId, status, written));
             }
@@ -2118,10 +2114,6 @@ namespace ClaudeBuddy
                 var remote = new RemoteControlChatSession(sessionId, account, remoteName);
                 _remoteChats[sessionId] = remote;
 
-                // Opening the panel counts as asking for the bridge, so the
-                // conversation is usable the moment it appears rather than only
-                // after the first message is typed.
-                RemoteControlSessions.EnsureStarted();
 
                 return remote;
             }

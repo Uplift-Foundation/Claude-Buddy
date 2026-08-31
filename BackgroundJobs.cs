@@ -463,7 +463,7 @@ namespace ClaudeBuddy
                 // The row's cwd is the relay's by construction (RelayCwd runs
                 // every relay from a directory named after itself), so the test
                 // is the same pure string check the scan already keys on.
-                if (RemoteControlBridge.IsOwnRelayCwd(Text(entry, "cwd")))
+                if (MachineNames.LooksLikeALeftoverRelay(Text(entry, "cwd")))
                 {
                     map.TryAdd(jobId, state);
                 }
