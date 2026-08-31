@@ -36,6 +36,7 @@ namespace ClaudeBuddy
         {
             ReapplyClaudeCode();
             ReapplyCodex();
+            ReapplyGrok();
         }
 
         // Re-wire every Claude Code account the app knows about.
@@ -68,6 +69,18 @@ namespace ClaudeBuddy
             }
 
             RunScript("install-codex-hooks.sh", ClaudeBuddySettings.AutoColorSessions);
+        }
+
+        [ExcludeFromCodeCoverage]
+        public static void ReapplyGrok()
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                RunPowerShell("install-grok-hooks.ps1", ClaudeBuddySettings.AutoColorSessions);
+                return;
+            }
+
+            RunScript("install-grok-hooks.sh", ClaudeBuddySettings.AutoColorSessions);
         }
 
         // Excluded from coverage: invokes /bin/bash on a real script; which script

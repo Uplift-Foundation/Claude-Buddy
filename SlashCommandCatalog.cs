@@ -23,7 +23,9 @@ namespace ClaudeBuddy
     internal static class SlashCommandCatalog
     {
         public static IReadOnlyList<SlashCommand> For(SessionSource source, string cwd) =>
-            source == SessionSource.Codex ? ForCodex() : ForClaudeCode(cwd);
+            source == SessionSource.Codex ? ForCodex()
+            : source == SessionSource.Grok ? ForGrok()
+            : ForClaudeCode(cwd);
 
 
         // --- Claude Code ---
@@ -332,6 +334,59 @@ namespace ClaudeBuddy
             new("/experimental", "Toggle experimental features"),
             new("/approve", "Approve one retry of a recent auto review denial"),
             new("/memories", "Configure memory use and generation"),
+        };
+
+        // Checked against ~/.grok/docs/user-guide/04-slash-commands.md as of
+        // 31 Aug 2026. A floor, not a mirror: Grok adds commands between
+        // releases the same way Claude Code does.
+        private static IReadOnlyList<SlashCommand> ForGrok() => ForGrok(HomeDir);
+
+        internal static IReadOnlyList<SlashCommand> ForGrok(string home)
+        {
+            var byName = new Dictionary<string, SlashCommand>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var command in GrokBuiltins) byName[command.Name] = command;
+
+            foreach (var dir in SafeDirectories(Path.Combine(home, ".grok", "skills")))
+            {
+                var skillFile = Path.Combine(dir, "SKILL.md");
+                if (!File.Exists(skillFile)) continue;
+                byName["/" + Path.GetFileName(dir)] =
+                    new SlashCommand("/" + Path.GetFileName(dir), DescriptionOf(skillFile));
+            }
+
+            return byName.Values.OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static readonly SlashCommand[] GrokBuiltins =
+        {
+            new("/new", "Start a new session"),
+            new("/clear", "Start a new session (alias of /new)"),
+            new("/resume", "Open the session picker"),
+            new("/dashboard", "Open the agent dashboard"),
+            new("/compact", "Compress conversation history"),
+            new("/context", "Show context-window use"),
+            new("/session-info", "Show session details"),
+            new("/status", "Alias for /session-info"),
+            new("/fork", "Branch this session into a peer agent"),
+            new("/rewind", "Rewind to an earlier turn"),
+            new("/rename", "Rename this session"),
+            new("/title", "Alias for /rename"),
+            new("/usage", "Show credit usage"),
+            new("/cost", "Alias for /usage"),
+            new("/model", "Switch models"),
+            new("/effort", "Set reasoning effort"),
+            new("/hooks", "View and manage hooks"),
+            new("/skills", "List or inject skills"),
+            new("/plugins", "Manage plugins"),
+            new("/theme", "Switch the TUI theme"),
+            new("/settings", "Open settings"),
+            new("/copy", "Copy the last response"),
+            new("/export", "Export the conversation"),
+            new("/quit", "Exit Grok"),
+            new("/exit", "Exit Grok (alias of /quit)"),
+            new("/delete", "Delete this session"),
+            new("/always-approve", "Toggle always-approve mode"),
         };
     }
 }

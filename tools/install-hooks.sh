@@ -61,6 +61,10 @@ have_codex() {
     [[ -d "${CODEX_HOME:-$HOME/.codex}" ]] || command -v codex >/dev/null 2>&1
 }
 
+have_grok() {
+    [[ -d "${GROK_HOME:-$HOME/.grok}" ]] || command -v grok >/dev/null 2>&1
+}
+
 wired=0
 skipped=()
 failed=()
@@ -94,6 +98,12 @@ else
     skipped+=("Codex")
 fi
 
+if have_grok; then
+    run_one "Grok Build" install-grok-hooks.sh
+else
+    skipped+=("Grok Build")
+fi
+
 for one in "${skipped[@]+"${skipped[@]}"}"; do
     echo "=== $one: not installed on this machine, nothing to wire."
     echo "    Install it and run this again — that is all it takes."
@@ -107,7 +117,7 @@ if [[ ${#failed[@]} -gt 0 ]]; then
 fi
 
 if [[ $wired -eq 0 ]]; then
-    echo "Neither Claude Code nor Codex was found, so nothing was wired."
+    echo "Neither Claude Code, Codex, nor Grok Build was found, so nothing was wired."
     echo "Claude Buddy will show no orbs until one of them is installed."
     exit 0
 fi

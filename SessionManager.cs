@@ -92,7 +92,7 @@ namespace ClaudeBuddy
         // genuinely mean Claude Code — agent teams, background jobs, the
         // projects directory — still say so, and each says why.
         [JsonIgnore]
-        public bool IsLocalCli => Source is SessionSource.ClaudeCode or SessionSource.Codex;
+        public bool IsLocalCli => Source is SessionSource.ClaudeCode or SessionSource.Codex or SessionSource.Grok;
 
         // What kind of gateway conversation this is. [JsonIgnore] for the same
         // reason Source is: it is derived from the gateway's answer during the
@@ -185,21 +185,22 @@ namespace ClaudeBuddy
         public string TranscriptPath { get; set; } = "";
     }
 
-    // What produced a session. ClaudeCode and Codex are local processes that
-    // fire the hook; OpenClaw is a conversation on a remote gateway with no
-    // process, no terminal and no transcript file here. Almost every rule in
-    // this file was written for the first and is wrong for the third, which is
+    // What produced a session. ClaudeCode, Codex and Grok are local processes
+    // that fire the hook; OpenClaw is a conversation on a remote gateway with
+    // no process, no terminal and no transcript file here. Almost every rule in
+    // this file was written for the first and is wrong for OpenClaw, which is
     // why this exists rather than being inferred from which fields happen to be
     // empty.
     //
-    // The split that matters most is not one-of-three but two-against-one — see
-    // SessionStatus.IsLocalCli. Codex differs from Claude Code in what its
-    // transcript looks like and in what it can be asked to do, not in whether
-    // there is a terminal behind it.
+    // The split that matters most is not one-of-four but local-against-the-rest
+    // — see SessionStatus.IsLocalCli. Codex and Grok differ from Claude Code in
+    // what their transcripts look like and in what they can be asked to do, not
+    // in whether there is a terminal behind them.
     public enum SessionSource
     {
         ClaudeCode,
         Codex,
+        Grok,
         OpenClaw,
 
         // A Claude Code session on another machine, seen through the bridge (see
@@ -325,7 +326,8 @@ namespace ClaudeBuddy
         // the header of AccountOrbs for why they are not entries in _windows.
         // Kept here rather than owned by App so they ride the scan tick this
         // class already runs, instead of starting a second timer.
-        private readonly AccountOrbs _accountOrbs = new(new UsagePoller());
+        private readonly AccountOrbs _accountOrbs = new(
+            new CompositeUsageSource(new UsagePoller(), new GrokUsagePoller()));
         private readonly Dictionary<string, SessionStatus> _statuses = new();
         private readonly List<string> _order = new(); // stable stacking order
 
@@ -479,6 +481,7 @@ namespace ClaudeBuddy
         internal static bool EnabledFor(SessionSource source) => source switch
         {
             SessionSource.Codex => ClaudeBuddySettings.CodexEnabled,
+            SessionSource.Grok => ClaudeBuddySettings.GrokEnabled,
             SessionSource.ClaudeCode => ClaudeBuddySettings.ClaudeCodeEnabled,
             _ => true
         };
@@ -498,6 +501,7 @@ namespace ClaudeBuddy
         // written before this key existed has no "cli" at all and was Claude
         // Code, and a hook from some future version naming something this build
         // has never heard of is still, at worst, a local session in a terminal.
+        // "grok" and "codex" are the two named exceptions.
         // Whether this session's own transcript is worth asking what it is
         // called. See TranscriptIdentity for the case this exists for — a status
         // file whose title was caught empty in a one-off race and never
@@ -601,10 +605,14 @@ namespace ClaudeBuddy
         // no test can pin both arms of on purpose. One named field, no branch.
         private static readonly Func<string, bool> FileExists = File.Exists;
 
-        internal static SessionSource SourceOf(SessionStatus status) =>
-            string.Equals(status.Cli, "codex", StringComparison.OrdinalIgnoreCase)
-                ? SessionSource.Codex
-                : SessionSource.ClaudeCode;
+        internal static SessionSource SourceOf(SessionStatus status)
+        {
+            if (string.Equals(status.Cli, "grok", StringComparison.OrdinalIgnoreCase))
+                return SessionSource.Grok;
+            if (string.Equals(status.Cli, "codex", StringComparison.OrdinalIgnoreCase))
+                return SessionSource.Codex;
+            return SessionSource.ClaudeCode;
+        }
 
         // Session ids one process has already moved on from.
         //
@@ -1317,7 +1325,8 @@ namespace ClaudeBuddy
             // the liveness check treats pid 0 as alive, so nothing else
             // would ever have removed it. With the orb lifetime set to
             // "forever", nothing would have removed it at all.
-            if (status.Source == SessionSource.Codex && status.SessionPid <= 0)
+            if ((status.Source == SessionSource.Codex || status.Source == SessionSource.Grok)
+                && status.SessionPid <= 0)
             {
                 return ScanVerdict.NotALiveJob;
             }
@@ -2599,7 +2608,12 @@ namespace ClaudeBuddy
             // bare directory still matches the session it was saved for. A
             // scheme that renamed both would have been tidier and would have
             // moved every pinned orb on this machine back to the stack once.
-            var prefix = status.Source == SessionSource.Codex ? "codex\n" : "";
+            var prefix = status.Source switch
+            {
+                SessionSource.Codex => "codex\n",
+                SessionSource.Grok => "grok\n",
+                _ => ""
+            };
 
             // The directory alone is not enough when two sessions are open in
             // one: "makayla-lawyer" and "job-lawyer" both live in Evidence, so

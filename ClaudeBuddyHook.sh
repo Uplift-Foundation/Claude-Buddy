@@ -1,14 +1,22 @@
 #!/bin/bash
 # Claude Buddy hook for macOS/Linux — bash twin of ClaudeBuddyHook.ps1.
-# Usage (from a Claude Code or Codex hook):
+# Usage (from a Claude Code, Codex, or Grok Build hook):
 #   ClaudeBuddyHook.sh <idle|generating|waiting|ended>
 #   ClaudeBuddyHook.sh codex <idle|generating|waiting|ended>
+#   ClaudeBuddyHook.sh grok <idle|generating|waiting|ended>
 # Reads the hook payload JSON on stdin for session_id and cwd.
 #
-# One script for both CLIs rather than two, because almost none of it is about
-# either: finding the terminal, finding the session's process, and writing the
-# status file are the same job whoever asked. The agent word only gates the
-# handful of places where the two genuinely differ, and each of those says why.
+# One script for the three CLIs rather than three, because almost none of it is
+# about any of them: finding the terminal, finding the session's process, and
+# writing the status file are the same job whoever asked. The agent word only
+# gates the handful of places where they genuinely differ, and each of those
+# says why.
+#
+# Grok Build also fires this script through Claude Code's settings.json — it
+# loads ~/.claude as a compatibility layer. GROK_SESSION_ID is set on every
+# Grok hook process, so that, not $1, is what decides the agent when both
+# apply. Otherwise a Grok session is labelled cli:claude and auto-color
+# appends a Claude Code agent-color record into Grok's updates.jsonl.
 #
 # It must exit 0 and print nothing, whatever happens. That has always been good
 # manners; under Codex it is load-bearing. Codex reads a hook's stdout as JSON
@@ -19,7 +27,7 @@
 
 AGENT="claude"
 case "$1" in
-    claude|codex) AGENT="$1"; shift ;;
+    claude|codex|grok) AGENT="$1"; shift ;;
 esac
 
 STATE="$1"
@@ -27,6 +35,13 @@ case "$STATE" in
     idle|generating|waiting|ended) ;;
     *) exit 0 ;;
 esac
+
+# Grok injects these on every hook, including ones loaded from Claude Code's
+# settings.json. That is a stronger signal than argv: a Grok session that
+# reached this script as `claude idle` is still a Grok session.
+if [ -n "${GROK_SESSION_ID:-}" ] || [ -n "${GROK_HOOK_EVENT:-}" ]; then
+    AGENT="grok"
+fi
 
 PAYLOAD=$(cat)
 
@@ -50,8 +65,12 @@ field() {
 }
 
 SESSION_ID=$(field session_id)
+[ -n "$SESSION_ID" ] || SESSION_ID=$(field sessionId)
+[ -n "$SESSION_ID" ] || SESSION_ID="${GROK_SESSION_ID:-}"
 CWD=$(field cwd)
+[ -n "$CWD" ] || CWD="${GROK_WORKSPACE_ROOT:-}"
 TRANSCRIPT=$(field transcript_path)
+[ -n "$TRANSCRIPT" ] || TRANSCRIPT=$(field transcriptPath)
 [ -n "$SESSION_ID" ] || SESSION_ID="unknown"
 
 # ${TMPDIR} is what .NET's Path.GetTempPath() returns on macOS, so the app
@@ -88,6 +107,17 @@ fi
 # reads files.
 if [ "$AGENT" = "codex" ] && [ -z "$TRANSCRIPT" ]; then
     for candidate in "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/rollout-*-"$SESSION_ID".jsonl; do
+        [ -f "$candidate" ] && TRANSCRIPT="$candidate"
+    done
+fi
+
+# Grok stores each session at ~/.grok/sessions/<urlencode(cwd)>/<id>/updates.jsonl.
+# The payload usually names that file already (Claude-compat snake_case was
+# observed live); this is the same glob fallback Codex has, for the window
+# before transcript_path is set.
+if [ "$AGENT" = "grok" ] && [ -z "$TRANSCRIPT" ] && [ -n "$SESSION_ID" ] \
+   && [ "$SESSION_ID" != "unknown" ]; then
+    for candidate in "${GROK_HOME:-$HOME/.grok}"/sessions/*/"$SESSION_ID"/updates.jsonl; do
         [ -f "$candidate" ] && TRANSCRIPT="$candidate"
     done
 fi
@@ -310,6 +340,52 @@ if [ "$AGENT" = "codex" ]; then
     fi
 fi
 
+# Grok's name lives in summary.json next to the updates.jsonl the payload
+# already named, not in Claude-style custom-title rows. /rename sets
+# title_is_manual and wins over generated_title — see docs/grok-findings.md.
+# Colour is Codex-shaped: derived from cwd when asked, never written. Grok
+# has /theme (TUI-wide) and no /color; appending an agent-color record into
+# updates.jsonl was the accidental path this branch exists to stop.
+if [ "$AGENT" = "grok" ]; then
+    if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+        GROK_SUMMARY="$(dirname "$TRANSCRIPT")/summary.json"
+        if [ -f "$GROK_SUMMARY" ]; then
+            GROK_MANUAL=$(grep -o '"title_is_manual"[[:space:]]*:[[:space:]]*true' \
+                "$GROK_SUMMARY" 2>/dev/null | head -1)
+            if [ -n "$GROK_MANUAL" ]; then
+                TITLE=$(sed -n 's/.*"title"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                    "$GROK_SUMMARY" 2>/dev/null | head -1)
+            fi
+            [ -n "$TITLE" ] || TITLE=$(sed -n \
+                's/.*"generated_title"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                "$GROK_SUMMARY" 2>/dev/null | head -1)
+            [ -n "$TITLE" ] || TITLE=$(sed -n \
+                's/.*"session_summary"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                "$GROK_SUMMARY" 2>/dev/null | head -1)
+        fi
+    fi
+
+    if [ "$AUTO_COLOR" = "1" ] && [ -z "$COLOR" ] && [ -n "$CWD" ]; then
+        CB_HASH=$(printf '%s' "$CWD" | cksum | awk '{print $1}')
+        set -- red orange yellow green teal cyan blue purple violet magenta pink
+        CB_INDEX=$(( CB_HASH % $# + 1 ))
+        eval "COLOR=\${$CB_INDEX}"
+    fi
+
+    if [ -n "$TITLE" ]; then
+        TITLE=$(printf '%s' "$TITLE" \
+            | sed 's/\\[nrt]/ /g' \
+            | tr -d '\\' \
+            | tr -s '[:space:]' ' ' \
+            | cut -c1-60 \
+            | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        SHORTER="${TITLE% *}"
+        if [ "$SHORTER" != "$TITLE" ] && [ "${#SHORTER}" -ge 30 ]; then
+            TITLE="$SHORTER"
+        fi
+    fi
+fi
+
 # Identify the terminal hosting this session so a click on the orb can jump
 # to it. This script runs inside the terminal's process tree, so:
 # - inside tmux, the pane id is the only trustworthy coordinate (see below);
@@ -440,6 +516,16 @@ for _ in 1 2 3 4 5; do
 
     if [ "$AGENT" = "codex" ]; then
         if [ "$COMM_NAME" = "codex" ]; then
+            SESSION_PID="$PID"
+            [ -n "$T" ] && [ "$T" != "??" ] && TTY="$T"
+            break
+        fi
+    elif [ "$AGENT" = "grok" ]; then
+        # Same by-name walk Codex has, for the same nested-CLI reason: a
+        # Claude Code session that shells out to grok would otherwise record
+        # Claude's pid, and Grok firing the Claude-compat hook would record
+        # whichever ancestor first owned a tty.
+        if [ "$COMM_NAME" = "grok" ]; then
             SESSION_PID="$PID"
             [ -n "$T" ] && [ "$T" != "??" ] && TTY="$T"
             break

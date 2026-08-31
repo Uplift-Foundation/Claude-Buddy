@@ -139,4 +139,36 @@ public class SettingsWindowScreenshots
             ClaudeBuddySettings.PeerLinkEnabled = wasEnabled;
         }
     }
+
+    // The Grok Build group. Same reason the Claude Desktop group is captured
+    // on its own: the whole-window shot is the window's own height, and this
+    // section sits below Codex. A reviewer comparing rids should see the new
+    // CLI on both, not infer it from a cropped page.
+    [AvaloniaFact]
+    public void GrokBuildGroupShowsTheCliRows()
+    {
+        var ctor = typeof(SettingsWindow).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            types: Type.EmptyTypes)
+            ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+        var window = (Avalonia.Controls.Window)ctor.Invoke(null);
+
+        window.Show();
+        ScreenshotHelper.Flush();
+
+        var anchor = window.GetLogicalDescendants()
+            .OfType<TextBlock>()
+            .FirstOrDefault(block => block.Text == "Show Grok Build sessions");
+
+        Assert.NotNull(anchor);
+
+        var group = anchor!.GetLogicalAncestors().OfType<Control>()
+            .FirstOrDefault(control => control.GetLogicalDescendants()
+                .OfType<TextBlock>()
+                .Any(block => block.Text == "Grok Build"))
+            ?? (Control)anchor;
+
+        ScreenshotHelper.CaptureControl(group, "settings-grok-build-group.png");
+    }
 }
