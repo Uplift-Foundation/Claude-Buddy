@@ -51,13 +51,26 @@ namespace ClaudeBuddy
     // zero. Every account on the machine this was written against is in exactly
     // that state ("org_level_disabled_until"), which is why it is modelled
     // rather than treated as the empty case.
+    // SpendLimitReached and UserDisabled are the two causes this app is
+    // entitled to state out loud. They are booleans the API sends about
+    // specific, named facts, and they mean what they say.
+    //
+    // `DisabledReason` is not. It is an opaque string, and this app
+    // deliberately does **not** translate it — the first version did, mapping
+    // "org_level_disabled_until" to "extra usage is off for your organisation",
+    // which was shown to a user whose organisation had done no such thing. What
+    // had actually happened was the month's extra-usage budget running out,
+    // which `spend_limit_reached` states plainly one field away. A reason code
+    // seen once, with no documentation, is not a sentence.
     internal sealed record ExtraUsage(
         bool Enabled,
         long? UsedMinor,
         long? LimitMinor,
         string Currency,
         int DecimalPlaces,
-        string? DisabledReason)
+        string? DisabledReason,
+        bool UserDisabled = false,
+        bool SpendLimitReached = false)
     {
         // The share of the cap spent, or null when there is no cap to be a share
         // of. Null is the common case and is not a failure.
@@ -65,6 +78,16 @@ namespace ClaudeBuddy
             Enabled && UsedMinor is { } used && LimitMinor is { } limit && limit > 0
                 ? used * 100.0 / limit
                 : null;
+
+        // What the inner ring should draw.
+        //
+        // A spend limit that has been reached is a full ring, not an absent one,
+        // even when the API sends no numbers to go with it. "You have spent all
+        // of it" and "there is none here" are opposite states, and the first
+        // version drew them identically — as a dotted absence — which is how a
+        // spent budget came to look like an account that had never had one.
+        public double? RingPercent =>
+            Percent ?? (SpendLimitReached ? 100 : null);
     }
 
     // One account's usage, as of one reading.
@@ -270,7 +293,12 @@ namespace ClaudeBuddy
 
             var places = (hasExtra ? Int(extra, "decimal_places") : null) ?? 2;
 
-            return new ExtraUsage(enabled, used, limit, currency, (int)places, reason);
+            var userDisabled = (hasExtra ? Bool(extra, "user_disabled") : null) ?? false;
+            var limitReached = (hasExtra ? Bool(extra, "spend_limit_reached") : null) ?? false;
+
+            return new ExtraUsage(
+                enabled, used, limit, currency, (int)places,
+                reason, userDisabled, limitReached);
         }
 
         // ---- JSON helpers ---------------------------------------------------
