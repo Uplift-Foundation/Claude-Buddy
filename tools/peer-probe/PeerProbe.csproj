@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RollForward>LatestMajor</RollForward>
+    <AssemblyName>PeerProbe</AssemblyName>
+    <RootNamespace>ClaudeBuddy</RootNamespace>
+    <!-- Matches ClaudeBuddy.csproj, which publishes self-contained: the SDK
+         refuses to let a framework-dependent executable reference a
+         self-contained one. -->
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The shipped link and the shipped client, referenced rather than
+         reimplemented. A probe that spoke the protocol its own way could
+         answer a question the app would answer differently, which is the one
+         thing it must not do.
+
+         PeerLink and RemoteMirrorClient are internal, so ClaudeBuddy.csproj
+         grants this assembly InternalsVisibleTo alongside the test ones. -->
+    <ProjectReference Include="../../ClaudeBuddy.csproj" />
+  </ItemGroup>
+
+</Project>
