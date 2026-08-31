@@ -308,10 +308,8 @@ namespace ClaudeBuddy
                 $"asked={(everything ? "all" : wanted.Count.ToString())} "
                 + $"agents={agents.Count} sessions={sessions.Count}");
 
-            foreach (var name in wanted.Distinct(StringComparer.OrdinalIgnoreCase))
+            foreach (var (name, resolved) in Offer(wanted, agents, sessions))
             {
-                var resolved = Resolve(name, agents, sessions);
-
                 if (resolved is null)
                 {
                     // Says which of the two halves failed to line up. An agent
@@ -407,6 +405,120 @@ namespace ClaudeBuddy
             IReadOnlyList<(string SessionId, SessionStatus Status)> sessions) =>
             Pick(name, agents, sessions);
 
+        // Every session worth offering, and what to call each one.
+        //
+        // **Two live sessions can share a name, and refusing both was worse
+        // than either answer.** One machine with the same session name under
+        // two Claude accounts is ordinary — `.claude` and `.claude-board`, one
+        // person, two logins — and Pick declines an ambiguous name on the sound
+        // reasoning that typing into the wrong terminal is worse than typing
+        // into none. For *typing* that is right. For a roster it is not: the
+        // far user gets no live view of either session, and nothing anywhere
+        // says why.
+        //
+        // Measured on the mini, which had exactly this: two sessions both called
+        // `job-hunter-mac-mini`, both alive, and every roster it served came
+        // back empty.
+        //
+        // So a shared name is disambiguated rather than refused, and only when
+        // it is actually shared — a name belonging to one session is untouched,
+        // which keeps the ordinary case free of noise and keeps an orb's
+        // identity stable for as long as it is unambiguous.
+        //
+        // Pure, and returning the *name to publish* beside the session, because
+        // the two are no longer the same thing.
+        internal static List<(string Name, (string SessionId, SessionStatus Status)? Resolved)> Offer(
+            IReadOnlyList<string> wanted,
+            IReadOnlyList<AgentRoster.Entry> agents,
+            IReadOnlyList<(string SessionId, SessionStatus Status)> sessions)
+        {
+            var offered = new List<(string, (string, SessionStatus)?)>();
+
+            foreach (var name in wanted.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var candidates = Candidates(name, agents, sessions);
+
+                if (candidates.Count == 0)
+                {
+                    offered.Add((name, null));
+                    continue;
+                }
+
+                if (candidates.Count == 1)
+                {
+                    offered.Add((name, candidates[0]));
+                    continue;
+                }
+
+                foreach (var candidate in candidates)
+                    offered.Add((Qualified(name, candidate.SessionId), candidate));
+            }
+
+            return offered;
+        }
+
+        // A name with enough of the session id to tell two apart.
+        //
+        // Six characters, which is what git shows and for the same reason: long
+        // enough to be unique in practice, short enough to read on an orb. The
+        // separator is one a session name cannot contain, so splitting it back
+        // apart is unambiguous.
+        internal const char QualifierMark = '#';
+
+        internal static string Qualified(string name, string sessionId) =>
+            sessionId.Length >= 6 ? name + QualifierMark + sessionId[..6] : name;
+
+        // The sessions a name could mean, in the order the roster lists them.
+        internal static List<(string SessionId, SessionStatus Status)> Candidates(
+            string name,
+            IReadOnlyList<AgentRoster.Entry> agents,
+            IReadOnlyList<(string SessionId, SessionStatus Status)> sessions)
+        {
+            var bare = Unqualified(name, out var wantedId);
+
+            var named = agents
+                .Where(a => a.Name.Equals(bare, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (named.Count == 0) return new List<(string, SessionStatus)>();
+
+            var found = new List<(string SessionId, SessionStatus Status)>();
+
+            foreach (var session in sessions)
+            {
+                var matches = named.Any(a =>
+                    string.Equals(a.SessionId, session.SessionId, StringComparison.OrdinalIgnoreCase)
+                    || (a.Pid > 0 && a.Pid == session.Status.SessionPid));
+
+                if (!matches) continue;
+
+                // A qualified name means exactly one of them.
+                if (wantedId is not null
+                    && !session.SessionId.StartsWith(wantedId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                found.Add(session);
+            }
+
+            return found;
+        }
+
+        // Splits a published name back into the name the far machine knows and
+        // the session it was pointing at, if it carried one.
+        internal static string Unqualified(string name, out string? sessionIdPrefix)
+        {
+            var mark = name.LastIndexOf(QualifierMark);
+
+            if (mark <= 0 || mark == name.Length - 1)
+            {
+                sessionIdPrefix = null;
+                return name;
+            }
+
+            sessionIdPrefix = name[(mark + 1)..];
+            return name[..mark];
+        }
+
         // Which local session a name refers to, across every account.
         //
         // **This used to defer to AgentRoster.Resolve, which refuses a name two
@@ -435,26 +547,11 @@ namespace ClaudeBuddy
             IReadOnlyList<AgentRoster.Entry> agents,
             IReadOnlyList<(string SessionId, SessionStatus Status)> sessions)
         {
-            var candidates = agents
-                .Where(a => a.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-
-            if (candidates.Count == 0) return null;
-
-            var matched = new List<(string SessionId, SessionStatus Status)>();
-
-            foreach (var session in sessions)
-            {
-                var hit = candidates.Any(c =>
-                    string.Equals(c.SessionId, session.SessionId, StringComparison.OrdinalIgnoreCase)
-
-                    // The registry knows it and Buddy does not, which happens
-                    // for a session whose hook has not fired yet. Matching on
-                    // pid as well costs nothing and covers it.
-                    || (c.Pid > 0 && c.Pid == session.Status.SessionPid));
-
-                if (hit) matched.Add(session);
-            }
+            // Shares its candidate list with the roster, so a name the roster
+            // published is a name this can resolve. That was the missing half:
+            // a qualified name reaching a fetch would otherwise match no agent
+            // at all and read as a session that had vanished.
+            var matched = Candidates(name, agents, sessions);
 
             return matched.Count == 1 ? matched[0] : null;
         }
