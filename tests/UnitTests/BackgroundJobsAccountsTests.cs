@@ -118,8 +118,8 @@ public class BackgroundJobsAccountsTests
 
         Assert.Equal(LocalSessionShape.Terminal, shape);
         Assert.Equal(
-            "its terminal isn't a terminal Buddy can type into without bringing it "
-                + "forward. tmux, iTerm2, Terminal.app, kitty and WezTerm are the ones it can. "
+            "its terminal isn't a terminal Buddy can type into without bringing it forward. "
+                + "tmux, iTerm2, Terminal.app, kitty and WezTerm are the ones it can. "
                 + "Reply in the terminal instead.",
             LocalCliChatSession.NoPaneNote(InAnUnknownTerminal, shape, onMacOS: true, onWindows: false));
     }

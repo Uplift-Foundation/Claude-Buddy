@@ -649,9 +649,12 @@ namespace ClaudeBuddy
                 //
                 // The far machine's own reason cannot be read from here: this
                 // maps a code, and the code is all that crosses the wire.
+                // Built from the same phrase every local refusal uses, so a
+                // user who has learned to recognise one answer does not have
+                // to learn a second because the session is on another machine.
                 MirrorProtocol.ErrNoPane =>
-                    $"{remoteName} isn't in a terminal Buddy can type into on the other machine, "
-                    + "so there is nowhere to type without bringing its window forward.",
+                    $"{remoteName}'s terminal {TerminalTyping.CantTypePhrase} on the other "
+                    + "machine, so there is nowhere to type without bringing its window forward.",
 
                 // The terminal was found and refused. Almost always one of two
                 // things, and both are worth naming because neither is

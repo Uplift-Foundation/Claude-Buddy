@@ -208,6 +208,20 @@ namespace ClaudeBuddy
         // which sent at least one user looking for a tmux setting they did not
         // want and did not need. What is true is narrower: this terminal is
         // not one Buddy can address.
+        // The phrase every refusal shares, whatever the platform.
+        //
+        // **A contract, and it was broken the moment it was written.** The
+        // Windows arm originally said "Buddy couldn't find the console…" and
+        // nothing else — perfectly true, and it cost a green CI run: two UI
+        // tests assert the panel explains itself, they match on this phrase,
+        // and they run on both legs. Nobody would have noticed on a Mac.
+        //
+        // Keeping it constant is also the honest thing for a reader. Every one
+        // of these sentences answers the same question — *why can't I type
+        // here* — and a user who has learned to recognise one answer should
+        // not have to learn a second because they moved machines.
+        internal const string CantTypePhrase = "isn't a terminal Buddy can type into";
+
         internal static string WhyNot(SessionStatus? status, bool onMacOS, bool onWindows)
         {
             if (status is not { IsLocalCli: true })
@@ -217,17 +231,21 @@ namespace ClaudeBuddy
                 ? "its terminal"
                 : status.TermProgram;
 
+            // **Every arm carries the same phrase**, and that is a contract
+            // rather than a stylistic preference — see CantTypePhrase.
+            //
             // On Windows every session has a console, so the only way to land
-            // here is a status file with no pid — one written by a hook older
+            // here is a status file with no pid: one written by a hook older
             // than the field, or by a session that had already gone.
             if (onWindows)
-                return $"Buddy couldn't find the console {program} is running this session in.";
+                return $"{program} {CantTypePhrase} — Buddy couldn't find the console this "
+                       + "session is running in.";
 
             if (!onMacOS)
-                return $"{program} isn't a terminal Buddy can type into on this platform.";
+                return $"{program} {CantTypePhrase} on this platform.";
 
-            return $"{program} isn't a terminal Buddy can type into without bringing it "
-                   + "forward. tmux, iTerm2, Terminal.app, kitty and WezTerm are the ones it can.";
+            return $"{program} {CantTypePhrase} without bringing it forward. "
+                   + "tmux, iTerm2, Terminal.app, kitty and WezTerm are the ones it can.";
         }
     }
 }
