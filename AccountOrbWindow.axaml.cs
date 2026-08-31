@@ -97,8 +97,6 @@ namespace ClaudeBuddy
             Root.PointerReleased += OnReleased;
         }
 
-        private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
-
         // Which account this orb is for: the CLAUDE_CONFIG_DIR it was read
         // under, or the empty string for the account the app itself runs as.
         // Opaque to everything here — it exists so SessionManager can match an

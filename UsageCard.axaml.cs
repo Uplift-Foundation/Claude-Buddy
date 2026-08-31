@@ -61,8 +61,6 @@ namespace ClaudeBuddy
             ExtraTrack.SizeChanged += (_, _) => ApplyBars();
         }
 
-        private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
-
         internal string AccountKey { get; private set; } = string.Empty;
 
         internal event Action<UsageCard>? PointerEnteredCard;
@@ -88,6 +86,13 @@ namespace ClaudeBuddy
         internal bool ShowsExtraBar => ExtraTrack.IsVisible;
 
         internal bool ShowsStaleNote => StaleNote.IsVisible;
+
+        internal string StaleText => StaleNote.Text ?? string.Empty;
+
+        // Named for the suite that clicks it. Exposed as a property rather than
+        // reached through the generated field so a rename of the XAML element
+        // breaks the compile rather than a test's assumptions.
+        internal Control PinControl => PinButton;
 
         internal void SetPinned(bool pinned)
         {
