@@ -1,0 +1,132 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ClaudeBuddy.UsageCard"
+        Width="248" SizeToContent="Height"
+        WindowDecorations="None"
+        TransparencyLevelHint="Transparent"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        CanResize="False"
+        ShowActivated="False"
+        WindowStartupLocation="Manual">
+
+    <!-- The detail behind one account's rings.
+
+         ShowActivated stays False, unlike ChatPanel's: that panel has a text box
+         in it and must take focus, this one has a single button and must not —
+         a card that stole focus every time the pointer crossed an orb would
+         interrupt whatever was being typed, which is the exact complaint that
+         made the flyout wait 450ms before opening.
+
+         Root carries a transparent background on purpose. The hover bridge that
+         keeps this card open while the pointer travels from the orb asks
+         IsPointerOverCard, and a null background is not hit-testable, so without
+         it the card closes in the gap it exists to survive. -->
+    <Border x:Name="Root"
+            Background="Transparent"
+            Padding="0,0,0,0">
+        <Border CornerRadius="12"
+                Background="#F0202024"
+                BorderBrush="#80FFFFFF"
+                BorderThickness="1.5"
+                Padding="12,10,12,12">
+            <StackPanel Spacing="0">
+
+                <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,2">
+                    <Ellipse x:Name="AccountDot" Grid.Column="0"
+                             Width="7" Height="7"
+                             VerticalAlignment="Center"
+                             Margin="0,0,7,0"/>
+                    <TextBlock x:Name="AccountName" Grid.Column="1"
+                               FontSize="12.5" FontWeight="SemiBold"
+                               Foreground="#F2FFFFFF"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center"/>
+                    <Border x:Name="PinButton" Grid.Column="2"
+                            Width="20" Height="20"
+                            CornerRadius="5"
+                            Background="Transparent"
+                            Cursor="Hand">
+                        <TextBlock x:Name="PinGlyph"
+                                   Text="&#128204;"
+                                   FontSize="10"
+                                   Opacity="0.5"
+                                   TextAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   IsHitTestVisible="False"/>
+                    </Border>
+                </Grid>
+
+                <TextBlock x:Name="AccountWhere"
+                           FontSize="10"
+                           Foreground="#5CFFFFFF"
+                           FontFamily="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+                           TextTrimming="CharacterEllipsis"
+                           Margin="0,0,0,10"/>
+
+                <!-- Session -->
+                <Grid x:Name="SessionRow" ColumnDefinitions="Auto,Auto,*,Auto" Margin="0,0,0,4">
+                    <TextBlock Grid.Column="0" Text="Session 5h"
+                               FontSize="10.5" Foreground="#9EFFFFFF"/>
+                    <TextBlock x:Name="SessionPercent" Grid.Column="1"
+                               FontSize="10.5" FontWeight="SemiBold"
+                               Foreground="#EBFFFFFF" Margin="6,0,0,0"/>
+                    <TextBlock x:Name="SessionResets" Grid.Column="3"
+                               FontSize="9.5" Foreground="#66FFFFFF"/>
+                </Grid>
+                <Border x:Name="SessionTrack" Height="6" CornerRadius="3"
+                        Background="#1AFFFFFF" Margin="0,0,0,9">
+                    <Border x:Name="SessionFill" Height="6" CornerRadius="3"
+                            HorizontalAlignment="Left"/>
+                </Border>
+
+                <!-- Weekly -->
+                <Grid x:Name="WeeklyRow" ColumnDefinitions="Auto,Auto,*,Auto" Margin="0,0,0,4">
+                    <TextBlock Grid.Column="0" Text="Weekly 7d"
+                               FontSize="10.5" Foreground="#9EFFFFFF"/>
+                    <TextBlock x:Name="WeeklyPercent" Grid.Column="1"
+                               FontSize="10.5" FontWeight="SemiBold"
+                               Foreground="#EBFFFFFF" Margin="6,0,0,0"/>
+                    <TextBlock x:Name="WeeklyResets" Grid.Column="3"
+                               FontSize="9.5" Foreground="#66FFFFFF"/>
+                </Grid>
+                <Border x:Name="WeeklyTrack" Height="6" CornerRadius="3"
+                        Background="#1AFFFFFF" Margin="0,0,0,9">
+                    <Border x:Name="WeeklyFill" Height="6" CornerRadius="3"
+                            HorizontalAlignment="Left"/>
+                </Border>
+
+                <!-- Extra usage, when there is a cap to be a share of. -->
+                <Grid x:Name="ExtraRow" ColumnDefinitions="Auto,Auto,*,Auto"
+                      IsVisible="False" Margin="0,0,0,4">
+                    <TextBlock Grid.Column="0" Text="Extra"
+                               FontSize="10.5" Foreground="#9EFFFFFF"/>
+                    <TextBlock x:Name="ExtraAmount" Grid.Column="1"
+                               FontSize="10.5" FontWeight="SemiBold"
+                               Foreground="#EBFFFFFF" Margin="6,0,0,0"/>
+                    <TextBlock x:Name="ExtraOf" Grid.Column="3"
+                               FontSize="9.5" Foreground="#66FFFFFF"/>
+                </Grid>
+                <Border x:Name="ExtraTrack" Height="6" CornerRadius="3"
+                        Background="#1AFFFFFF" IsVisible="False">
+                    <Border x:Name="ExtraFill" Height="6" CornerRadius="3"
+                            HorizontalAlignment="Left"/>
+                </Border>
+
+                <!-- ...and the sentence that replaces it when there is not. -->
+                <TextBlock x:Name="ExtraNote"
+                           FontSize="9.5"
+                           Foreground="#5CFFFFFF"
+                           TextWrapping="Wrap"/>
+
+                <TextBlock x:Name="StaleNote"
+                           FontSize="9.5"
+                           Foreground="#D7AF5F"
+                           IsVisible="False"
+                           TextWrapping="Wrap"
+                           Margin="0,7,0,0"/>
+            </StackPanel>
+        </Border>
+    </Border>
+</Window>

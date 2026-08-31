@@ -1085,6 +1085,62 @@ connection rather than through the system trust store. `docs/openclaw-findings.m
 records what was measured against a real gateway, including several places where
 the published protocol documentation disagrees with the running software.
 
+## Usage orbs for each account (off by default)
+
+If you run more than one Claude Code account — `~/.claude` plus whatever you
+have wired up under **Claude Code → additional accounts** — the only way to see
+how much of each one you have spent is to open a session on it and run
+`/usage`, once per account. Turn on **Usage orbs for each account** in Settings
+and each account gets an orb instead.
+
+Each orb wears three rings. Outside in, they are **this week** (the 7-day
+window), **this session** (the 5-hour window), and **extra usage**. The colour
+is how much room is left rather than which account it is — green under 60%,
+amber to 85%, red above — so an account you do not need to think about is a
+quiet green outline and nothing else, and a row of them reads from across the
+room without a number on screen. Which account an orb *is* stays where it
+always is: the two letters in the middle.
+
+Hover an orb for the numbers, the reset times and the extra-usage position.
+Click it to keep that card up — pin two and they sit side by side, which is the
+only way to compare accounts at a glance. Click again to put it away. The orbs
+drag like the session ones and stay where you leave them.
+
+Some things the rings deliberately do not do:
+
+- **A window that has reset is not drawn.** Once a five-hour or weekly window
+  passes its reset time its percentage is about a period that has ended, so the
+  ring empties rather than showing yesterday's number.
+- **The inner ring is usually not a gauge.** Extra usage only has a percentage
+  when it is switched on *and* has a spending limit; otherwise there is no cap
+  to be a share of, and the ring is a dotted outline with the reason in the
+  card ("Extra usage is off for your organisation"). An empty gauge would claim
+  a budget you do not have.
+- **An orb that could not be read goes dim** rather than dropping to zero, with
+  how old the reading is in its card.
+
+**Where the numbers come from.** Claude Buddy asks Claude Code itself, once
+every five minutes per account, over the same control protocol its SDK uses —
+roughly `claude -p --input-format stream-json` with a `get_usage` request and
+`CLAUDE_CONFIG_DIR` set. Two consequences worth knowing:
+
+- **It costs no tokens.** The request makes no model call; Claude Code answers
+  from the usage endpoint it already talks to. It does start a short-lived
+  `claude` process per account per poll, which is the reason for the
+  five-minute floor — Claude Code caches the underlying fetch for five minutes,
+  so asking more often could not return a newer number anyway.
+- **Nothing here touches your credentials.** Claude Buddy never reads your
+  login token or your keychain; Claude Code handles its own authentication and
+  simply answers the question. That is also why this works the same on macOS
+  and Windows.
+
+An account signed in with an API key, or running against Bedrock or Vertex, has
+no subscription windows to report. Its orb says so in the card rather than
+showing zeros.
+
+The response shape this reads is marked experimental by Claude Code, so it may
+change. If it does, the orbs go quiet rather than showing something wrong.
+
 ## Sessions on other machines (off by default)
 
 If you run Claude Code on more than one machine — a desktop at home, a server,

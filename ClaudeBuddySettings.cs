@@ -75,7 +75,8 @@ namespace ClaudeBuddy
         private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
         {
             "version", "showOrbs", "tintActiveWindow", "orbLifetimeMinutes",
-            "voiceInputEnabled", "twoLetterGlyphs", "arrangeShape", "arrangeSpacing",
+            "voiceInputEnabled", "twoLetterGlyphs", "accountUsageEnabled",
+            "arrangeShape", "arrangeSpacing",
             "speakVoice", "neuralVoiceEnabled", "neuralVoice",
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
@@ -212,6 +213,13 @@ namespace ClaudeBuddy
             // looks like, and changing that for everyone on upgrade would be
             // a cosmetic surprise nobody asked for.
             public bool TwoLetterGlyphs { get; set; }
+
+            // Off by default. The orbs are useful but they are also four more
+            // things on a desktop that already has orbs on it, and the poll
+            // behind them starts a `claude` process per account every five
+            // minutes — neither is something to begin doing to someone who has
+            // not asked.
+            public bool AccountUsageEnabled { get; set; }
 
             // Off by default: turning this on is what triggers the one-time
             // Whisper model download (a few hundred MB), so it must be an
@@ -947,6 +955,12 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.TwoLetterGlyphs = value; Save(); }
         }
 
+        public static bool AccountUsageEnabled
+        {
+            get { Load(); lock (Gate) return _model.AccountUsageEnabled; }
+            set { Load(); lock (Gate) _model.AccountUsageEnabled = value; Save(); }
+        }
+
         // ---- auto-organize ----------------------------------------------------
 
         public static string ArrangeShape
@@ -1259,6 +1273,7 @@ namespace ClaudeBuddy
                         DoubleClickAction = root["doubleClickAction"]?.GetValue<string>() ?? "none",
                         TripleClickAction = root["tripleClickAction"]?.GetValue<string>() ?? "none",
                         TwoLetterGlyphs = root["twoLetterGlyphs"]?.GetValue<bool>() ?? false,
+                        AccountUsageEnabled = root["accountUsageEnabled"]?.GetValue<bool>() ?? false,
                         ArrangeShape = root["arrangeShape"]?.GetValue<string>() ?? DefaultArrangeShape,
                         ArrangeSpacing = root["arrangeSpacing"]?.GetValue<double>() ?? DefaultArrangeSpacing,
 
@@ -1644,6 +1659,7 @@ namespace ClaudeBuddy
                         ["doubleClickAction"] = _model.DoubleClickAction,
                         ["tripleClickAction"] = _model.TripleClickAction,
                         ["twoLetterGlyphs"] = _model.TwoLetterGlyphs,
+                        ["accountUsageEnabled"] = _model.AccountUsageEnabled,
                         ["arrangeShape"] = _model.ArrangeShape,
                         ["arrangeSpacing"] = _model.ArrangeSpacing,
                         ["chatTextScale"] = _model.ChatTextScale,
