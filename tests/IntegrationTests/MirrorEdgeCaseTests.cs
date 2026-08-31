@@ -198,7 +198,12 @@ public class MirrorEdgeCaseTests : IDisposable
 
         await Handshake();
 
-        Assert.Equal(MirrorProtocol.ErrNoPane, await _client.SendInputAsync(Name, "hello"));
+        // ErrTypeFailed, not ErrNoPane: a route was found and the delivery
+        // threw. Reporting "there is nowhere to type" for that is a statement
+        // about the session's terminal, and it is the wrong thing for a user
+        // to act on — the fix for a throw is consent or a reopened window,
+        // not a different terminal.
+        Assert.Equal(MirrorProtocol.ErrTypeFailed, await _client.SendInputAsync(Name, "hello"));
     }
 
     [Fact]
@@ -209,7 +214,7 @@ public class MirrorEdgeCaseTests : IDisposable
 
         await Handshake();
 
-        Assert.Equal(MirrorProtocol.ErrNoPane, await _client.SendInputAsync(Name, "hello"));
+        Assert.Equal(MirrorProtocol.ErrTypeFailed, await _client.SendInputAsync(Name, "hello"));
     }
 
     [Fact]

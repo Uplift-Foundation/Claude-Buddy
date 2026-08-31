@@ -595,7 +595,7 @@ namespace ClaudeBuddy
             var error = await client.SendInputAsync(_remoteName, text).ConfigureAwait(true);
             if (error is null) return;
 
-            // No pane to type into is a missing mechanism, not a refusal, and
+            // No terminal to type into is a missing mechanism, not a refusal, and
             // the messaging channel this panel used before it upgraded still
             // works. Refusing here made a live view *cost* the user the ability
             // to send — strictly worse than not having mirrored at all — and on
@@ -641,9 +641,32 @@ namespace ClaudeBuddy
                 // code to wording rather than one call site's switch, and the
                 // generic arm below would be a worse answer for a caller that
                 // does hand it this code.
+                // Says "a terminal Buddy can type into" rather than naming
+                // tmux. Since CB-79 that is iTerm2 and Terminal.app as well,
+                // and the old wording sent at least one user looking for a
+                // tmux setting they did not want and did not need — for a
+                // session that was in an ordinary iTerm2 window all along.
+                //
+                // The far machine's own reason cannot be read from here: this
+                // maps a code, and the code is all that crosses the wire.
+                // Built from the same phrase every local refusal uses, so a
+                // user who has learned to recognise one answer does not have
+                // to learn a second because the session is on another machine.
                 MirrorProtocol.ErrNoPane =>
-                    $"{remoteName} isn't in a tmux pane on the other machine, so there is nowhere to "
-                    + "type without bringing its terminal forward.",
+                    $"{remoteName}'s terminal {TerminalTyping.CantTypePhrase} on the other "
+                    + "machine, so there is nowhere to type without bringing its window forward.",
+
+                // The terminal was found and refused. Almost always one of two
+                // things, and both are worth naming because neither is
+                // guessable from "couldn't type that": macOS asks for
+                // Automation consent the first time one app drives another and
+                // that prompt appears on the *far* machine's screen, which on
+                // a headless Mac nobody is looking at; or the window has been
+                // closed since the status file was written.
+                MirrorProtocol.ErrTypeFailed =>
+                    $"{remoteName}'s terminal refused the text. On macOS the other machine may be "
+                    + "waiting for you to allow Claude Buddy to control it — check for a prompt "
+                    + "there — or that terminal window may have been closed.",
 
                 MirrorProtocol.ErrNoSession =>
                     $"The other machine's Claude Buddy no longer has a session called {remoteName}.",
