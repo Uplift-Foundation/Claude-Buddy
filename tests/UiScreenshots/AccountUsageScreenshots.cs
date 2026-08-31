@@ -109,12 +109,28 @@ public class AccountUsageScreenshots
 
     // The inner ring as an absence — a dotted outline, not a gauge at zero.
     [AvaloniaFact]
-    public void ExtraUsageSwitchedOffForTheOrganisation()
+    public void AnAccountWithNoExtraUsageAtAll()
     {
-        var off = new ExtraUsage(false, 0, null, "USD", 2, "org_level_disabled_until");
+        var off = new ExtraUsage(false, 0, null, "USD", 2, null);
 
         ScreenshotHelper.Capture(
             Orb(Usage(25, 50, off)), "account-orb-extra-disabled.png");
+    }
+
+    // ...against a budget that has been spent, which is a full red ring. These
+    // two captures are the pair: they were once identical, and that identity was
+    // the bug — an account that had used every penny looked like one that had
+    // never had any.
+    [AvaloniaFact]
+    public void AnAccountThatHasSpentItsExtraUsage()
+    {
+        var spent = new ExtraUsage(
+            Enabled: false, UsedMinor: null, LimitMinor: null, Currency: "USD",
+            DecimalPlaces: 2, DisabledReason: "org_level_disabled_until",
+            UserDisabled: false, SpendLimitReached: true);
+
+        ScreenshotHelper.Capture(
+            Orb(Usage(25, 50, spent)), "account-orb-extra-spent.png");
     }
 
     [AvaloniaFact]
@@ -149,10 +165,27 @@ public class AccountUsageScreenshots
     public void TheCardSayingWhyThereIsNoExtraUsage()
     {
         var card = new UsageCard();
-        var off = new ExtraUsage(false, 0, null, "USD", 2, "org_level_disabled_until");
+        var off = new ExtraUsage(false, 0, null, "USD", 2, null);
         card.UpdateFrom(Usage(33, 84, off), "board@example.org", Now);
 
         ScreenshotHelper.Capture(card, "usage-card-extra-off.png");
+    }
+
+    // The sentence that replaced the wrong one. Captured so the words are
+    // reviewable rather than only asserted — this is the state a real account
+    // was in when the first version told its owner his organisation had turned
+    // extra usage off.
+    [AvaloniaFact]
+    public void TheCardForASpentMonthlyBudget()
+    {
+        var card = new UsageCard();
+        var spent = new ExtraUsage(
+            Enabled: false, UsedMinor: null, LimitMinor: null, Currency: "USD",
+            DecimalPlaces: 2, DisabledReason: "org_level_disabled_until",
+            UserDisabled: false, SpendLimitReached: true);
+        card.UpdateFrom(Usage(8, 85, spent), "board@example.org", Now);
+
+        ScreenshotHelper.Capture(card, "usage-card-extra-spent.png");
     }
 
     [AvaloniaFact]

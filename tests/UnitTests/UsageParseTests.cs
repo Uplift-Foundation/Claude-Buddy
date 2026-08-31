@@ -120,6 +120,49 @@ public class UsageParseTests
         Assert.Null(usage.Extra.Percent);
     }
 
+    // The two booleans that carry the actual cause, both present in the real
+    // payload and both ignored by the first version — which is how a spent
+    // monthly budget came to be reported as an organisation policy.
+    [Fact]
+    public void TheCauseBooleansAreReadAlongsideTheOpaqueReason()
+    {
+        var usage = UsageParse.FromStream(Live, null, "wthompson", ReadAt);
+
+        Assert.True(usage!.Extra!.SpendLimitReached);
+        Assert.False(usage.Extra.UserDisabled);
+    }
+
+    // No numbers, but a limit that has been reached, is a full ring. There is no
+    // arithmetic available here — used_credits and monthly_limit are both null —
+    // and the fact is still that every penny is spent.
+    [Fact]
+    public void ASpentLimitFillsTheRingEvenWithNoAmountsToDivide()
+    {
+        var usage = UsageParse.FromStream(Live, null, "wthompson", ReadAt);
+
+        Assert.Null(usage!.Extra!.Percent);
+        Assert.Equal(100, usage.Extra.RingPercent);
+    }
+
+    [Fact]
+    public void AnAccountThatSimplyHasNoExtraUsageDrawsNothing()
+    {
+        var none = OneLine("""
+        {"type":"control_response","response":{"subtype":"success","response":{
+          "rate_limits_available":true,
+          "rate_limits":{
+            "extra_usage":{"is_enabled":false,"monthly_limit":null,"used_credits":null,
+                           "currency":"USD","decimal_places":2,"disabled_reason":null,
+                           "user_disabled":false,"spend_limit_reached":false}
+          }
+        }}}
+        """);
+
+        var usage = UsageParse.FromStream(none, null, "x", ReadAt);
+
+        Assert.Null(usage!.Extra!.RingPercent);
+    }
+
     [Fact]
     public void EnabledExtraUsageIsMoneyInMinorUnits()
     {
