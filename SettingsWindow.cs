@@ -779,7 +779,24 @@ namespace ClaudeBuddy
                 + "too. Sessions not running under tmux stay read-only either way, because "
                 + "the only way to type into those is to bring their window to the front."));
 
+            rows.Add(Row("Usage orbs for each account",
+                Switch(ClaudeBuddySettings.AccountUsageEnabled, OnAccountUsageToggled),
+                "An orb per Claude Code account wearing three rings — this week, this "
+                + "five-hour session, and extra usage. Hover one for the numbers; click it "
+                + "to keep the card up. The figures come from Claude Code itself, asked "
+                + "once every five minutes per account; nothing here reads your login "
+                + "details, and asking costs no tokens."));
+
             return rows.ToArray();
+        }
+
+        internal void OnAccountUsageToggled(bool enabled)
+        {
+            ClaudeBuddySettings.AccountUsageEnabled = enabled;
+
+            // Whoever changed the setting says so — nothing on the scan path
+            // treats a setting change as a session change.
+            SessionManager.Instance?.ReapplyAccountOrbs();
         }
 
         internal void OnClaudeCodeChatToggled(bool enabled)
