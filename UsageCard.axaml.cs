@@ -214,22 +214,35 @@ namespace ClaudeBuddy
             _extraFraction = Math.Clamp(percent / 100.0, 0, 1);
         }
 
-        // Why there is no extra-usage bar, in words.
+        // Why there is no extra-usage bar, in words — and only in words this app
+        // can stand behind.
         //
-        // The reason matters more than the absence: "your organisation turned
-        // this off" and "you have not switched it on" are different problems
-        // with different people to talk to, and the raw reason code is the only
-        // thing that distinguishes them.
+        // The first version of this method translated `disabled_reason` into
+        // English, and mapped the one code it had ever seen,
+        // "org_level_disabled_until", to "Extra usage is off for your
+        // organisation". That sentence was shown to a user whose organisation
+        // had not switched anything off; what had actually happened was the
+        // month's extra-usage budget running out. The word "until" in that code
+        // was the clue, and reading it as a settled policy rather than a
+        // deadline was an invention.
+        //
+        // So the order below is deliberate: **the explicit booleans first, the
+        // opaque string never.** `spend_limit_reached` and `user_disabled` are
+        // specific named facts the API asserts. `disabled_reason` is shown
+        // verbatim, in parentheses, so it stays diagnosable — but it is never
+        // paraphrased, because a code seen once with no documentation behind it
+        // is not a sentence.
         internal static string ExtraSentence(ExtraUsage extra)
         {
-            if (extra.Enabled) return "Extra usage on, no limit set.";
+            if (extra.SpendLimitReached) return "Extra usage limit reached for this month.";
 
-            return extra.DisabledReason switch
-            {
-                null or "" => "Extra usage is off.",
-                "org_level_disabled_until" => "Extra usage is off for your organisation.",
-                var reason => "Extra usage is off (" + reason + ")."
-            };
+            if (extra.Enabled) return "Extra usage is on, with no limit set.";
+
+            if (extra.UserDisabled) return "Extra usage is switched off for this account.";
+
+            return string.IsNullOrEmpty(extra.DisabledReason)
+                ? "Extra usage is not active."
+                : "Extra usage is not active right now (" + extra.DisabledReason + ").";
         }
 
         internal static string Money(long? minor, ExtraUsage extra)
