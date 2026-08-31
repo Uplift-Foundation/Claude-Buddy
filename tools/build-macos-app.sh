@@ -106,11 +106,13 @@ chmod +x "$CONTENTS/MacOS/ClaudeBuddy"
 cp ClaudeBuddyHook.sh \
    tools/install-hooks.sh \
    tools/install-macos-hooks.sh \
-   tools/install-codex-hooks.sh "$CONTENTS/Resources/"
+   tools/install-codex-hooks.sh \
+   tools/install-grok-hooks.sh "$CONTENTS/Resources/"
 chmod +x "$CONTENTS/Resources/ClaudeBuddyHook.sh" \
          "$CONTENTS/Resources/install-hooks.sh" \
          "$CONTENTS/Resources/install-macos-hooks.sh" \
-         "$CONTENTS/Resources/install-codex-hooks.sh"
+         "$CONTENTS/Resources/install-codex-hooks.sh" \
+         "$CONTENTS/Resources/install-grok-hooks.sh"
 
 echo "==> Building icon"
 ICONSET="$DIST/ClaudeBuddy.iconset"

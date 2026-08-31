@@ -127,6 +127,31 @@ public class SettingsListParsingTests
         Assert.Empty(ClaudeBuddySettings.CodexHomes);
     }
 
+    [Fact]
+    public void GrokHomesAreRead()
+    {
+        Stage("""{ "grokHomes": ["work", "personal"] }""");
+
+        Assert.Contains("work", ClaudeBuddySettings.GrokHomes);
+        Assert.Contains("personal", ClaudeBuddySettings.GrokHomes);
+    }
+
+    [Fact]
+    public void BlankAndNullGrokHomesAreDropped()
+    {
+        Stage("""{ "grokHomes": ["work", "", null] }""");
+
+        Assert.Equal(new[] { "work" }, ClaudeBuddySettings.GrokHomes);
+    }
+
+    [Fact]
+    public void AFileWithNoGrokHomesLoadsEmpty()
+    {
+        Stage("{}");
+
+        Assert.Empty(ClaudeBuddySettings.GrokHomes);
+    }
+
     // ---- OpenClaw scalars ------------------------------------------------
 
     // Note the key spelling: "openclawPort", not "openClawPort". Every OpenClaw

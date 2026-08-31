@@ -55,13 +55,19 @@ if (args.Length > 0)
         // trimmed of it.
         fs.Seek(0, SeekOrigin.Begin);
         var header = new StreamReader(fs, leaveOpen: true).ReadLine() ?? "";
+        var grok = header.Contains("session/update", StringComparison.Ordinal)
+                    || header.Contains("updates.jsonl", StringComparison.OrdinalIgnoreCase)
+                    || Path.GetFileName(path).Equals("updates.jsonl", StringComparison.OrdinalIgnoreCase);
         var codex = header.Contains("\"type\":\"session_meta\"", StringComparison.Ordinal)
                     || Path.GetFileName(path).StartsWith("rollout-", StringComparison.OrdinalIgnoreCase);
 
         var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
-        var turns = codex ? CodexTranscript.Map(lines) : ChatTranscript.Map(lines);
+        var turns = grok ? GrokTranscript.Map(lines)
+            : codex ? CodexTranscript.Map(lines)
+            : ChatTranscript.Map(lines);
+        var label = grok ? "grok" : codex ? "codex" : "claude code";
         Console.WriteLine(
-            $"{turns.Count} turns from the last {(fs.Length - from) / 1024}KB, read as {(codex ? "codex" : "claude code")}\n");
+            $"{turns.Count} turns from the last {(fs.Length - from) / 1024}KB, read as {label}\n");
 
         foreach (var t in turns)
         {

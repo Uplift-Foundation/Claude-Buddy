@@ -578,6 +578,7 @@ public class MirrorProtocolTests
     [Theory]
     [InlineData(SessionSource.ClaudeCode, MirrorProtocol.CliClaudeCode)]
     [InlineData(SessionSource.Codex, MirrorProtocol.CliCodex)]
+    [InlineData(SessionSource.Grok, MirrorProtocol.CliGrok)]
     [InlineData(SessionSource.OpenClaw, MirrorProtocol.CliClaudeCode)]
     public void TheCliLabelFollowsTheSource(SessionSource source, string expected) =>
         Assert.Equal(expected, MirrorProtocol.CliFor(source));

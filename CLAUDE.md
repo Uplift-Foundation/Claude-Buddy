@@ -435,8 +435,10 @@ Transcript and dialog parsing has one too — `dotnet run --project
 tests/TranscriptTests`. It covers `ChatTranscript`: turning Claude Code's JSONL
 into chat turns, and reading a permission dialog off a captured tmux pane. It
 also covers `CodexTranscript`, which does the first of those for Codex's
-rollout JSONL. Same rule as the geometry — both parsers are pure, and the chat
-session only decides which bytes to hand them.
+rollout JSONL, and `GrokTranscript` for Grok Build's ACP `updates.jsonl`
+(see `docs/grok-findings.md` before changing that parser). Same rule as the
+geometry — the parsers are pure, and the chat session only decides which
+bytes to hand them.
 
 Both parsers read formats nobody here controls, and both fail *quietly*: a
 mis-mapped transcript silently drops a message, and a mis-read dialog puts a

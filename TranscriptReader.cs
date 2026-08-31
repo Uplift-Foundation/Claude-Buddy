@@ -44,6 +44,33 @@ namespace ClaudeBuddy
             catch { return null; }
         }
 
+        // The last thing a Grok session said. Separate from LatestAssistantText
+        // for the same reason LatestCodexAgentText is: that method falls back
+        // into ~/.claude/projects, which would speak a Claude Code session out
+        // of a Grok orb.
+        [ExcludeFromCodeCoverage]
+        public static string? LatestGrokAgentText(string? transcriptPath)
+        {
+            if (string.IsNullOrEmpty(transcriptPath) || !File.Exists(transcriptPath))
+                return null;
+
+            try { return NewestGrokText(transcriptPath); }
+            catch { return null; }
+        }
+
+        private static string? NewestGrokText(string transcriptPath)
+        {
+            var lines = TailLines(transcriptPath);
+            var mapped = GrokTranscript.Map(lines);
+            var text = mapped
+                .Where(t => t.Turn.Role == ChatRole.Assistant)
+                .Select(t => t.Turn.Text)
+                .LastOrDefault();
+
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            return text.Length > MaxSpokenChars ? text[..MaxSpokenChars] + "…" : text;
+        }
+
         private static string? NewestCodexText(string transcriptPath)
         {
             var lines = TailLines(transcriptPath);

@@ -1489,6 +1489,9 @@ namespace ClaudeBuddy
             if (_lastStatus?.Source == SessionSource.Codex)
                 return TranscriptReader.LatestCodexAgentText(_lastStatus?.TranscriptPath);
 
+            if (_lastStatus?.Source == SessionSource.Grok)
+                return TranscriptReader.LatestGrokAgentText(_lastStatus?.TranscriptPath);
+
             var path = _lastStatus?.TranscriptPath;
             var text = TranscriptReader.LatestAssistantText(path, SessionId);
             if (text is not null) return text;

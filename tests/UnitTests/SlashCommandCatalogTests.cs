@@ -53,6 +53,18 @@ public class SlashCommandCatalogTests : IDisposable
     }
 
     [Fact]
+    public void Grok_UsesItsOwnBuiltinsIncludingUsage()
+    {
+        var found = SlashCommandCatalog.For(SessionSource.Grok, "");
+
+        Assert.Contains(found, c => c.Name == "/usage");
+        Assert.Contains(found, c => c.Name == "/cost");
+        Assert.Contains(found, c => c.Name == "/rename");
+        Assert.DoesNotContain(found, c => c.Name == "/color");
+        Assert.DoesNotContain(found, c => c.Name == "/archive");
+    }
+
+    [Fact]
     public void ProjectCommand_IsNamedForItsFileWithoutExtension()
     {
         Write(".claude/commands/deploy.md", "Deploy the app");
