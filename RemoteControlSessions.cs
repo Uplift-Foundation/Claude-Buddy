@@ -544,10 +544,24 @@ namespace ClaudeBuddy
         internal static MirrorProtocol.MirrorRosterEntry? MirrorFor(string account, string name) =>
             MirrorStateFor(account, name).Entry;
 
+        // **Through MirrorClientFor, not into the relay table.** This read the
+        // table directly, which was the same thing while a relay was the only
+        // client there was — and stopped being the same thing the moment the
+        // link arrived, because the link's client is not in that table at all.
+        //
+        // What it produced is the worst shape of failure this panel has: not an
+        // error, not a refusal, but `Unknown` forever. The panel says "checking
+        // whether a live view is available…" and means it, and there is nothing
+        // anywhere to read. Watched happen on a real machine with the roster
+        // arriving every ten seconds the whole time — the answer was in the
+        // client this never asked.
+        //
+        // Found by a person clicking an orb, which is the one test I could not
+        // run. CB-69 fixed MirrorClientFor and did not go looking for the
+        // callers that went around it.
         internal static RemoteMirrorClient.MirrorState MirrorStateFor(string account, string name)
         {
-            RemoteMirrorClient? client;
-            lock (Gate) client = Relays.TryGetValue(account, out var relay) ? relay.Client : null;
+            var client = MirrorClientFor(account);
 
             return client?.StateFor(name)
                    ?? new RemoteMirrorClient.MirrorState(
