@@ -46,6 +46,38 @@ public class TypingRefusalTests
         Assert.Contains(Remote, said);
     }
 
+    // A terminal Buddy *can* address, which then refused the text.
+    //
+    // **The distinction this test exists for is one the protocol used to
+    // collapse**, and collapsing it produced a wrong answer that read like a
+    // right one: a delivery failure was reported as "there is nowhere to
+    // type", which is a statement about the session's terminal and is what a
+    // user acts on. The two have completely different fixes — one is "this
+    // terminal isn't supported", the other is almost always Automation
+    // consent not yet given on the far machine, where the prompt appears on a
+    // screen the user may not be looking at.
+    [Fact]
+    public void ATerminalThatRefusedTheTextIsNotTheSameAsHavingNoTerminal()
+    {
+        var refused = RemoteControlChatSession.TypingRefusal(
+            MirrorProtocol.ErrTypeFailed, Remote);
+
+        Assert.Contains(Remote, refused);
+        Assert.Contains("refused the text", refused);
+
+        // Names both real causes, because neither is guessable from the
+        // failure itself.
+        Assert.Contains("allow Claude Buddy to control it", refused);
+        Assert.Contains("closed", refused);
+
+        // And is not the other sentence.
+        Assert.DoesNotContain("nowhere to type", refused);
+
+        Assert.NotEqual(
+            RemoteControlChatSession.TypingRefusal(MirrorProtocol.ErrNoPane, Remote),
+            refused);
+    }
+
     [Fact]
     public void ASessionTheFarBuddyNoLongerHasIsNamed()
     {
