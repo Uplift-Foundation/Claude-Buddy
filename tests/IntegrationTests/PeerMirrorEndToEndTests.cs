@@ -121,14 +121,20 @@ public class PeerMirrorEndToEndTests : IDisposable
         // **Both directions, because pairing is mutual and the greeting made
         // that visible.** The dialling side has to trust the certificate it is
         // offered; the accepting side has to trust the machine that greets it,
-        // and a greeting names the *real* machine — Environment.MachineName —
+        // and a greeting names the *real* machine — MachineNames.Mine() —
         // rather than the label the dial used. Remembering only "far" left the
         // far end refusing a connection it had already completed a TLS
         // handshake on, which arrived here as a session that was never
         // Available and no explanation anywhere.
+        //
+        // MachineNames.Mine() rather than Environment.MachineName, and the two
+        // are not the same on macOS: the greeting says what the app calls this
+        // machine, which is its LocalHostName and not its gethostname. Seeding
+        // the wrong one leaves the far end refusing a connection it has already
+        // completed a TLS handshake on.
         PeerIdentity.Remember(new PeerIdentity.Peer(PeerIdentity.OwnPin(), "far"));
         PeerIdentity.Remember(
-            new PeerIdentity.Peer(PeerIdentity.OwnPin(), Environment.MachineName));
+            new PeerIdentity.Peer(PeerIdentity.OwnPin(), MachineNames.Mine()));
 
         far.Host.Link.Listen(0);
         var port = far.Host.Link.BoundPort;

@@ -209,7 +209,7 @@ namespace ClaudeBuddy
             using var key = RSA.Create(2048);
 
             var request = new CertificateRequest(
-                $"CN={Environment.MachineName}", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+                $"CN={MachineNames.Mine()}", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
 
             // Ten years, because this certificate is not trusted for being
             // unexpired — it is trusted for being the one that was pinned. An
