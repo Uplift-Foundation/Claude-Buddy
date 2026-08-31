@@ -77,59 +77,6 @@ public class SettingsWindowScreenshots
         ScreenshotHelper.CaptureControl(card, "settings-claude-desktop-group.png");
     }
 
-    // The Other machines group with the feature switched on, so the CB-18 row —
-    // the switch that starts the relay at launch for a machine that serves its
-    // sessions unattended — is in frame. Also below the fold of the whole-window
-    // shot, for the same reason as the Claude Desktop group above.
-    //
-    // macOS-only in a stronger sense than that group: on Windows the section is
-    // a single "macOS-only for now" note with no rows at all (the relay runs in
-    // tmux), so there is no anchor to capture and the scenario returns rather
-    // than asserting one. The Windows leg's coverage of the section is
-    // RemoteControlUnsupportedRows' own tests.
-    [AvaloniaFact]
-    public void RemoteControlGroupShowsTheServeOnLaunchRow()
-    {
-        if (!RemoteControlBridge.IsSupported) return;
-
-        var wasEnabled = ClaudeBuddySettings.RemoteControlEnabled;
-        var wasServe = ClaudeBuddySettings.RemoteControlServeOnLaunch;
-        try
-        {
-            ClaudeBuddySettings.RemoteControlEnabled = true;
-            ClaudeBuddySettings.RemoteControlServeOnLaunch = true;
-
-            var ctor = typeof(SettingsWindow).GetConstructor(
-                BindingFlags.NonPublic | BindingFlags.Instance,
-                types: Type.EmptyTypes)
-                ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
-
-            var window = (Avalonia.Controls.Window)ctor.Invoke(null);
-
-            window.Show();
-            ScreenshotHelper.Flush();
-
-            var anchor = window.GetLogicalDescendants()
-                .OfType<TextBlock>()
-                .FirstOrDefault(block =>
-                    block.Text == "Start the relay when Claude Buddy starts");
-
-            Assert.NotNull(anchor);
-
-            var card = anchor!.GetLogicalAncestors().OfType<Control>()
-                .FirstOrDefault(control =>
-                    control.Bounds.Height > 60 && control.Bounds.Width > 200)
-                ?? (Control)anchor;
-
-            ScreenshotHelper.CaptureControl(card, "settings-remote-control-group.png");
-        }
-        finally
-        {
-            ClaudeBuddySettings.RemoteControlServeOnLaunch = wasServe;
-            ClaudeBuddySettings.RemoteControlEnabled = wasEnabled;
-        }
-    }
-
     // The direct link's card, switched on, so the pairing controls are in frame.
     //
     // **Unlike every other scenario in this file, this one has no platform

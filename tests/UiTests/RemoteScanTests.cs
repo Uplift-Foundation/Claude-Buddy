@@ -48,7 +48,7 @@ public class RemoteScanTests
 
     private static void Publish(params RemoteControlSessions.Remote[] remotes)
     {
-        ClaudeBuddySettings.RemoteControlEnabled = true;
+        ClaudeBuddySettings.PeerLinkEnabled = true;
         RemoteControlSessions.SetSnapshotForTests(remotes);
     }
 
@@ -333,7 +333,7 @@ public class RemoteScanTests
         }
         finally
         {
-            ClaudeBuddySettings.RemoteControlEnabled = true;
+            ClaudeBuddySettings.PeerLinkEnabled = true;
             PublishNothing();
         }
     }
