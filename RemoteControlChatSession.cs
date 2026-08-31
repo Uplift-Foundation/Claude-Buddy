@@ -653,6 +653,18 @@ namespace ClaudeBuddy
                     $"{remoteName} isn't in a terminal Buddy can type into on the other machine, "
                     + "so there is nowhere to type without bringing its window forward.",
 
+                // The terminal was found and refused. Almost always one of two
+                // things, and both are worth naming because neither is
+                // guessable from "couldn't type that": macOS asks for
+                // Automation consent the first time one app drives another and
+                // that prompt appears on the *far* machine's screen, which on
+                // a headless Mac nobody is looking at; or the window has been
+                // closed since the status file was written.
+                MirrorProtocol.ErrTypeFailed =>
+                    $"{remoteName}'s terminal refused the text. On macOS the other machine may be "
+                    + "waiting for you to allow Claude Buddy to control it — check for a prompt "
+                    + "there — or that terminal window may have been closed.",
+
                 MirrorProtocol.ErrNoSession =>
                     $"The other machine's Claude Buddy no longer has a session called {remoteName}.",
 
