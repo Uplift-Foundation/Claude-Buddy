@@ -120,40 +120,32 @@ namespace ClaudeBuddy
 
         // How long a client waits for a fetch that carries a transcript back.
         //
-        // **Measured, not chosen.** A fetch's reply is a chunk of base64 that
-        // the far relay's model has to emit token by token as tool input, and
-        // on 29 Aug a single-chunk window off the mini took `7m 15s` — 435
-        // seconds — from the frame arriving to SendMessage returning. The
-        // window then reached this machine intact: 23 chunks, zero bad hashes,
-        // the right byte range. It was thrown away on arrival, because the
-        // request that asked for it had been given 180 seconds and had expired
-        // eight minutes earlier. Nothing was broken on the wire; the deadline
-        // was simply shorter than the answer.
+        // **This was 600 seconds and is now 20, and the difference is the whole
+        // point of the new transport.** The old number was measured, not
+        // chosen: a fetch's reply was a chunk of base64 that a far model emitted
+        // token by token, and a single-chunk window off the mini took 7m 15s on
+        // 29 Aug — arriving intact and being thrown away, because the request
+        // that asked for it had expired eight minutes earlier. Ten minutes was
+        // the honest ceiling for a courier that slow.
         //
-        // **CB-46's fix is what exposed it, and the two have to be read
-        // together.** RequestAsync pushes its deadline out on every
-        // *intermediate* chunk, so a long transfer renews itself for as long as
-        // it is making progress. ReadFor now shrinks a tail until it fits in a
-        // single chunk — and a single-chunk transfer has no intermediate chunk,
-        // so it never renews. Shrinking the payload removed the only signal
-        // keeping the wait alive, and the smallest transfers became the ones
-        // most likely to be abandoned. That is worth stating plainly because
-        // the two changes look unrelated and are not.
+        // There is no model in the path now. A fetch is a read off a disk and a
+        // write to a socket; measured between two real machines, a roster round
+        // trip is ten milliseconds. Twenty seconds is not a target, it is a
+        // ceiling generous enough for a large transcript on a busy machine and
+        // short enough that a broken link says so while somebody is still
+        // looking at the panel.
         //
-        // 600 seconds is 435 plus room for a relay that is already mid-turn on
-        // something else when the fetch lands. It is a ceiling on a wait that
-        // is nearly always far shorter, not a target.
-        public const int FetchTimeoutSeconds = 600;
+        // **A too-long timeout is not a safe default.** Ten minutes of "no live
+        // view" for a link that is simply down is a worse answer than an honest
+        // failure in twenty seconds, and it was the single most confusing part
+        // of the transport this replaces.
+        public const int FetchTimeoutSeconds = 20;
 
-        // Sending, by contrast, keeps the shorter wait, and the asymmetry is
-        // deliberate. An INPUT's reply is a bare OK — a few dozen characters,
-        // one quick turn — so a slow one means the relay is busy, not that the
-        // answer is long. Typing into a panel already falls back to an ordinary
-        // message when the relay does not acknowledge in time, and the user is
-        // told so; making them wait ten minutes to find that out would be worse
-        // than the fallback it delays. A fetch has no such fallback: the panel
-        // either gets the transcript or shows nothing.
-        public const int InputTimeoutSeconds = 180;
+        // Sending keeps a shorter wait still. An INPUT's reply is a bare OK, so
+        // a slow one means the far machine is busy rather than that the answer
+        // is long — and there is no longer any fallback if it does not come, so
+        // saying so promptly is the only kindness available.
+        public const int InputTimeoutSeconds = 10;
 
         // How long a subscription lives without being renewed, and how often a
         // client renews one it still wants. The gap between them is slack for a
