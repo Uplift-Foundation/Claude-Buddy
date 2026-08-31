@@ -255,6 +255,38 @@ public class TypingWithoutTmuxTests
                 onMacOS: false, onWindows: true, TerminalTyping.Tools.None));
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void ABackgroundJobHasNoTerminalOnEitherPlatform(bool onMacOS, bool onWindows)
+    {
+        // **The regression CI caught, and only on the Windows leg.** A
+        // background job is run by a daemon so that no terminal has to hold
+        // it — and a pid is something it *has*, where a terminal handle is
+        // something it conspicuously does not. Keying the console route on a
+        // pid therefore claimed a daemon could be typed into, and the attach
+        // affordance that is the only real way to answer one disappeared.
+        var job = WithPid(Claude(termProgram: "WindowsTerminal"), 4242);
+        job.Shape = LocalSessionShape.Background;
+
+        Assert.Equal(
+            TerminalTyping.Route.None,
+            TerminalTyping.RouteFor(job, onMacOS, onWindows, Everything));
+    }
+
+    [Fact]
+    public void ABackgroundJobInsideTmuxIsStillNotTypedInto()
+    {
+        // Belt and braces on the ordering: the tmux arm comes first, so the
+        // shape check has to precede it rather than sit with the others.
+        var job = WithPid(Claude(tmuxPane: "%0"), 4242);
+        job.Shape = LocalSessionShape.Background;
+
+        Assert.Equal(
+            TerminalTyping.Route.None,
+            TerminalTyping.RouteFor(job, onMacOS: true, onWindows: false, Everything));
+    }
+
     [Fact]
     public void AWindowsSessionWithNoRecordedPidIsNot()
     {

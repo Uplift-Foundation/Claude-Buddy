@@ -595,7 +595,7 @@ namespace ClaudeBuddy
             var error = await client.SendInputAsync(_remoteName, text).ConfigureAwait(true);
             if (error is null) return;
 
-            // No pane to type into is a missing mechanism, not a refusal, and
+            // No terminal to type into is a missing mechanism, not a refusal, and
             // the messaging channel this panel used before it upgraded still
             // works. Refusing here made a live view *cost* the user the ability
             // to send — strictly worse than not having mirrored at all — and on

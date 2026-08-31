@@ -475,7 +475,7 @@ public class LastReachableArmsTests
     [Fact]
     public void WithNoPaneTheComposerSaysSoRatherThanOfferingToSend()
     {
-        Assert.Equal("No pane to type into",
+        Assert.Equal("No terminal to type into",
             LocalCliChatSession.ComposerHintFor(
                 canSendQuietly: false, replyEnabled: true,
                 LocalSessionShape.Terminal, OrbPresence.Present));
@@ -486,7 +486,7 @@ public class LastReachableArmsTests
     [Fact]
     public void NoPaneBeatsReplyingOff()
     {
-        Assert.Equal("No pane to type into",
+        Assert.Equal("No terminal to type into",
             LocalCliChatSession.ComposerHintFor(
                 canSendQuietly: false, replyEnabled: false,
                 LocalSessionShape.Terminal, OrbPresence.Present));
@@ -548,7 +548,7 @@ public class LastReachableArmsTests
     [Fact]
     public void ATeammateWithNoPaneKeepsTheOrdinaryWording()
     {
-        Assert.Equal("No pane to type into",
+        Assert.Equal("No terminal to type into",
             LocalCliChatSession.ComposerHintFor(
                 canSendQuietly: false, replyEnabled: true,
                 LocalSessionShape.Teammate, OrbPresence.Parked));

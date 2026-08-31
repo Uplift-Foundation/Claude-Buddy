@@ -116,6 +116,19 @@ namespace ClaudeBuddy
             // here at all, whatever else it has.
             if (status is not { IsLocalCli: true }) return Route.None;
 
+            // **A background job is run by a daemon precisely so that no
+            // terminal has to hold it.** There is no window and no console, so
+            // there is nothing to address — which is why the panel offers
+            // `claude attach` there instead of a composer.
+            //
+            // Caught by CI on the Windows leg and nowhere else, which is the
+            // whole argument for the console route being keyed on a pid: a pid
+            // is something a background job *has*, where a terminal handle is
+            // something it conspicuously does not. Without this the Windows
+            // arm claimed it could type into a daemon, and the attach
+            // affordance — the only way to actually answer one — went away.
+            if (status.Shape == LocalSessionShape.Background) return Route.None;
+
             // First, because it is the only route that does not have to guess
             // about bracketed paste, and because a session inside tmux may
             // *also* report iTerm2 or kitty as its TERM_PROGRAM — tmux is what
