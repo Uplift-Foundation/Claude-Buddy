@@ -605,54 +605,72 @@ public class MirrorProtocolTests
 
     // --- how long a client is willing to wait ---------------------------------
 
-    // The numbers below are a measurement, so these tests assert the measurement
-    // rather than the literal. Asserting `== 600` would pass for any reason at
-    // all, including somebody lowering the constant back under what the wire was
-    // observed to need; asserting that it clears a turn which actually happened
-    // fails for exactly the reason worth failing for.
+    // **These used to assert against a measurement, and the measurement is now
+    // history.** A fetch's reply was once a chunk of base64 that a far model
+    // emitted token by token: on 29 Aug 2026 a single-chunk window off the mini
+    // took 435 seconds, timed by the relay itself as `Brewed for 7m 15s`. It
+    // arrived intact — 23 chunks, no bad hashes — and was discarded, because the
+    // request that asked for it had been given 180. So the deadline had to clear
+    // 435, and a test asserting that was the right test.
+    //
+    // There is no model in the path any more. A fetch is a read off a disk and a
+    // write to a socket, and a roster round trip between two real machines was
+    // measured at ten milliseconds. The old assertions would now *require* the
+    // ten-minute wait that made the previous transport so hard to diagnose, so
+    // they are inverted rather than deleted: what needs guarding is that nobody
+    // puts it back.
 
-    // 435 seconds: one single-chunk window off the mini on 29 Aug 2026, timed by
-    // the relay itself as `Brewed for 7m 15s`. The window arrived intact — 23
-    // chunks, no bad hashes — and was discarded, because the fetch that asked
-    // for it had been given 180.
-    private const int MeasuredSingleChunkTurnSeconds = 435;
+    // What the wire can actually be expected to take, generously: a large
+    // transcript off a slow disk on a busy machine, over TLS on a LAN.
+    private const int GenerousRealTransferSeconds = 5;
 
     [Fact]
-    public void AFetchOutlivesASingleChunkTurnThatWasActuallyMeasured()
+    public void AFetchGivesUpWhileSomebodyIsStillLooking()
     {
-        Assert.True(
-            MirrorProtocol.FetchTimeoutSeconds > MeasuredSingleChunkTurnSeconds,
-            $"a fetch waits {MirrorProtocol.FetchTimeoutSeconds}s, but a single "
-            + $"chunk has been measured at {MeasuredSingleChunkTurnSeconds}s — a "
-            + "reply that arrives correct and complete would be thrown away");
+        // The failure this prevents is not a fetch that gives up too early. It
+        // is ten minutes of "no live view" on a link that is simply down, which
+        // was the single most confusing thing about the transport this replaced
+        // — and a long timeout reads as a safe default while being the opposite.
+        Assert.InRange(MirrorProtocol.FetchTimeoutSeconds, GenerousRealTransferSeconds, 60);
+    }
+
+    [Fact]
+    public void AFetchStillOutlastsARealTransfer()
+    {
+        // The other direction, so lowering it until it fails on a real
+        // transcript is a test failure rather than a support question.
+        Assert.True(MirrorProtocol.FetchTimeoutSeconds > GenerousRealTransferSeconds);
     }
 
     [Fact]
     public void AFetchWaitsLongerThanASend()
     {
-        // The asymmetry is the point rather than an oversight: a fetch's reply is
-        // a whole transcript the far model must retype, a send's reply is a bare
-        // OK. Typing falls back to an ordinary message when the relay does not
-        // answer; fetching has no fallback, so only fetching gets the long wait.
+        // The asymmetry survives the transport change, though its reasoning is
+        // thinner now: a fetch carries a transcript and a send's reply is a bare
+        // OK. Both are fast; a fetch is still the one with more to carry.
         Assert.True(MirrorProtocol.FetchTimeoutSeconds > MirrorProtocol.InputTimeoutSeconds);
     }
 
     [Fact]
-    public void ASendStillGivesUpSoonEnoughToFallBack()
+    public void ASendSaysSoPromptlyBecauseThereIsNoLongerAFallback()
     {
-        // A send that cannot be acknowledged should reach its fallback while the
-        // user is still looking at the panel. Ten minutes of silence would be
-        // worse than the message it delays.
-        Assert.InRange(MirrorProtocol.InputTimeoutSeconds, 60, 300);
+        // This used to say "soon enough to fall back to a message". There is no
+        // fallback: the relay's messaging channel went with the relay, so a send
+        // that is not acknowledged has nothing else to try. Saying so quickly is
+        // the only kindness left.
+        Assert.InRange(MirrorProtocol.InputTimeoutSeconds, 3, 30);
     }
 
     [Fact]
-    public void AWatchLapsesLongBeforeAFetchGivesUp()
+    public void AWatchOutlivesAFetchRatherThanTheOtherWayRound()
     {
-        // A subscription is cheap to re-establish and a transfer is not, so the
-        // watch TTL must not become what limits a slow window: a fetch in
-        // progress outlives several renewal cycles by design.
-        Assert.True(MirrorProtocol.FetchTimeoutSeconds > MirrorProtocol.WatchTtlSeconds);
+        // **Inverted, and deliberately.** The old rule was that a fetch must
+        // outlive the watch TTL, because a transfer could span several renewal
+        // cycles and the subscription must not be what killed it. A transfer is
+        // now faster than a renewal by three orders of magnitude, so the
+        // relationship is simply the other way up: a watch lives across many
+        // fetches.
+        Assert.True(MirrorProtocol.WatchTtlSeconds > MirrorProtocol.FetchTimeoutSeconds);
         Assert.True(MirrorProtocol.WatchRenewSeconds < MirrorProtocol.WatchTtlSeconds);
     }
 

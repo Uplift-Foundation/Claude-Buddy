@@ -356,24 +356,89 @@ public class HeadlessSnapshotTests
         }
     }
 
+    // **This used to assert that the live orb list beat the scan, and that
+    // preference was the bug.** The orb list is what is on screen, and what is
+    // on screen has had the user's orb-lifetime preference applied — so an idle
+    // session that had stopped being drawn was reported to every other machine
+    // as not existing. On a headless Mac the list is filled by a scan on a
+    // dispatcher that never pumps, so it was permanently empty.
+    //
+    // Measured: the mini answered one roster with a session and, an hour later,
+    // the same roster with none, from two live status files on its disk
+    // throughout. Serving is a question of fact, so the disk is asked.
     [Fact]
-    public void LocalSessionsPrefersTheLiveProviderOverTheFallback()
+    public void LocalSessionsAsksTheDiskRatherThanTheOrbList()
     {
+        RemoteControlSessions.ForgetLocalSessionsForTests();
         var was = RemoteControlSessions.HeadlessFallback;
         try
         {
             RemoteControlSessions.HeadlessFallback = () =>
-                new List<(string, SessionStatus)> { ("fallback", new SessionStatus()) };
-            RemoteControlSessions.ProvideLocalSessions(() =>
-                new List<(string, SessionStatus)> { ("live", new SessionStatus()) });
+                new List<(string, SessionStatus)> { ("from-disk", new SessionStatus()) };
 
             Assert.Equal(
-                "live", Assert.Single(RemoteControlSessions.LocalSessions()).SessionId);
+                "from-disk", Assert.Single(RemoteControlSessions.LocalSessions()).SessionId);
         }
         finally
         {
             RemoteControlSessions.ForgetLocalSessionsForTests();
             RemoteControlSessions.HeadlessFallback = was;
+        }
+    }
+
+    // The other half of the same change: orb lifetime is a display preference
+    // and an answer to another machine is not a display.
+    [Fact]
+    public void AnIdleSessionIsStillOfferedWhenItsOrbWouldHaveExpired()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "idle-but-alive", new SessionStatus
+            {
+                State = "idle",
+                Cwd = "/tmp/somewhere",
+                SessionPid = 4242
+            });
+
+            var longAfter = DateTime.UtcNow.AddDays(3);
+
+            Assert.Empty(SessionManager.HeadlessSnapshot(
+                dir, NoJobs, isRunning: _ => true, nowUtc: longAfter,
+                honourOrbLifetime: true));
+
+            Assert.Single(SessionManager.HeadlessSnapshot(
+                dir, NoJobs, isRunning: _ => true, nowUtc: longAfter,
+                honourOrbLifetime: false));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // What is *not* excused by that, which is the part worth pinning: a process
+    // that has gone is gone whatever the preference says.
+    [Fact]
+    public void ADeadProcessIsStillDroppedWithLifetimeIgnored()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "gone-too", new SessionStatus
+            {
+                State = "idle",
+                Cwd = "/tmp/somewhere",
+                SessionPid = 4242
+            });
+
+            Assert.Empty(SessionManager.HeadlessSnapshot(
+                dir, NoJobs, isRunning: _ => false, nowUtc: DateTime.UtcNow,
+                honourOrbLifetime: false));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
         }
     }
 }
