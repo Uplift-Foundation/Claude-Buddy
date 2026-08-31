@@ -915,7 +915,7 @@ public class LocalCliChatSessionTests : IDisposable
 
             Assert.Contains(
                 session.History,
-                t => t.Text.Contains("isn't in a tmux pane", StringComparison.Ordinal));
+                t => t.Text.Contains("terminal Buddy can type into", StringComparison.Ordinal));
         }
         finally
         {

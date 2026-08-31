@@ -641,9 +641,17 @@ namespace ClaudeBuddy
                 // code to wording rather than one call site's switch, and the
                 // generic arm below would be a worse answer for a caller that
                 // does hand it this code.
+                // Says "a terminal Buddy can type into" rather than naming
+                // tmux. Since CB-79 that is iTerm2 and Terminal.app as well,
+                // and the old wording sent at least one user looking for a
+                // tmux setting they did not want and did not need — for a
+                // session that was in an ordinary iTerm2 window all along.
+                //
+                // The far machine's own reason cannot be read from here: this
+                // maps a code, and the code is all that crosses the wire.
                 MirrorProtocol.ErrNoPane =>
-                    $"{remoteName} isn't in a tmux pane on the other machine, so there is nowhere to "
-                    + "type without bringing its terminal forward.",
+                    $"{remoteName} isn't in a terminal Buddy can type into on the other machine, "
+                    + "so there is nowhere to type without bringing its window forward.",
 
                 MirrorProtocol.ErrNoSession =>
                     $"The other machine's Claude Buddy no longer has a session called {remoteName}.",

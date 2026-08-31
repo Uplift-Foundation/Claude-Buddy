@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Microsoft.Win32.SafeHandles;
 
 namespace ClaudeBuddy
 {
@@ -399,20 +400,102 @@ namespace ClaudeBuddy
 
         // --- the chat panel's half ---
         //
-        // Everything below is tmux-only and deliberately so. The keystroke and
-        // SendInput fallbacks above type into whatever is *frontmost*, which
-        // means focusing the terminal first; that is a fine trade for dictation,
-        // which you started by reaching for the orb anyway, and the wrong one
-        // for a chat panel whose entire point is not making you leave what you
-        // are doing. A session with no pane gets a read-only panel instead —
-        // see ClaudeCodeChatSession.CanType.
+        // Everything below sends without anything coming to the front. The
+        // keystroke and SendInput fallbacks above type into whatever is
+        // *frontmost*, which means focusing the terminal first; that is a fine
+        // trade for dictation, which you started by reaching for the orb
+        // anyway, and the wrong one for a chat panel whose entire point is not
+        // making you leave what you are doing. A session Buddy cannot address
+        // gets a read-only panel instead — see ClaudeCodeChatSession.CanType.
+        //
+        // **This used to mean tmux and nothing else**, which was a much
+        // narrower rule than the name suggested: an ordinary `claude` in
+        // iTerm2 was told there was "nowhere to type", and on Windows every
+        // session was, permanently. TerminalTyping has the routing and the two
+        // mechanisms that were tried and rejected first.
 
         // Whether this session can be typed into without anything coming to the
         // front. The one question the panel asks before enabling its composer.
         public static bool CanSendQuietly(SessionStatus? status) =>
-            status is { IsLocalCli: true }
-            && !string.IsNullOrEmpty(status.TmuxPane)
-            && ResolveTmuxBinary(status.TmuxBin) is not null;
+            RouteFor(status) != TerminalTyping.Route.None;
+
+        // The platform and tmux's availability, resolved here so the rule
+        // itself stays pure — and asked in this order because probing for a
+        // tmux binary costs a PATH walk that a session with no pane recorded
+        // has no reason to pay.
+        private static TerminalTyping.Route RouteFor(SessionStatus? status) =>
+            TerminalTyping.RouteFor(
+                status,
+                OperatingSystem.IsMacOS(),
+                OperatingSystem.IsWindows(),
+                ToolsFor(status));
+
+        // Which of the tools a route needs this machine actually has.
+        //
+        // Each probe is skipped unless the session claims the terminal it
+        // belongs to, because every one of them costs a PATH walk or a
+        // subprocess and this is asked on every roster tick.
+        [ExcludeFromCodeCoverage]
+        private static TerminalTyping.Tools ToolsFor(SessionStatus? status)
+        {
+            if (status is null) return TerminalTyping.Tools.None;
+
+            return new TerminalTyping.Tools(
+                Tmux: !string.IsNullOrEmpty(status.TmuxPane)
+                      && ResolveTmuxBinary(status.TmuxBin) is not null,
+                Kitty: Named(status, TerminalTyping.KittyProgram) && KittyIsListening(),
+                WezTerm: Named(status, TerminalTyping.WezTermProgram) && OnPath("wezterm") is not null);
+        }
+
+        private static bool Named(SessionStatus status, string program) =>
+            string.Equals(status.TermProgram, program, StringComparison.OrdinalIgnoreCase);
+
+        // kitty's remote control is **off unless the user turned it on**, so
+        // the binary being present proves nothing. `kitty @ ls` is the cheapest
+        // question that distinguishes the two: it answers with JSON when
+        // remote control is allowed and fails outright when it is not.
+        //
+        // Cached, because a Send button asking every keystroke would be a
+        // subprocess per keystroke, and whether kitty is listening changes only
+        // when kitty is restarted.
+        [ExcludeFromCodeCoverage]
+        private static bool KittyIsListening()
+        {
+            if (_kittyListening is { } known) return known;
+
+            var kitty = OnPath("kitty");
+            var answer = kitty is not null && TryRun(kitty, 3000, out _, "@", "ls");
+
+            _kittyListening = answer;
+            return answer;
+        }
+
+        private static bool? _kittyListening;
+
+        // Excluded from coverage: walks the real PATH.
+        [ExcludeFromCodeCoverage]
+        private static string? OnPath(string exe)
+        {
+            var name = OperatingSystem.IsWindows() ? exe + ".exe" : exe;
+
+            foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "")
+                     .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                try
+                {
+                    var full = Path.Combine(dir.Trim(), name);
+                    if (File.Exists(full)) return full;
+                }
+                catch
+                {
+                    // A PATH entry that is not a usable path at all. Windows
+                    // picks these up from installers often enough that
+                    // throwing here would take out every route on the machine.
+                }
+            }
+
+            return null;
+        }
 
         // Types the text and presses Enter. The Enter is the whole difference
         // from SendText above, and it is why this is reached only from a Send
@@ -424,8 +507,288 @@ namespace ClaudeBuddy
         public static Task<bool> SendTextAndSubmit(SessionStatus? status, string text)
         {
             if (status is null || string.IsNullOrEmpty(text)) return Task.FromResult(false);
-            if (!CanSendQuietly(status)) return Task.FromResult(false);
 
+            return RouteFor(status) switch
+            {
+                TerminalTyping.Route.Tmux => SendViaTmux(status, text),
+                TerminalTyping.Route.Kitty => Task.Run(() => SendViaKitty(status, text)),
+                TerminalTyping.Route.WezTerm => Task.Run(() => SendViaWezTerm(status, text)),
+                TerminalTyping.Route.ITerm2 => Task.Run(() => SendViaITerm2(status, text)),
+                TerminalTyping.Route.TerminalApp => Task.Run(() => SendViaTerminalApp(status, text)),
+                TerminalTyping.Route.WindowsConsole => Task.Run(() => SendViaConsole(status, text)),
+                _ => Task.FromResult(false),
+            };
+        }
+
+        // kitty, addressed by the window id it exports as KITTY_WINDOW_ID.
+        //
+        // Text goes over stdin rather than as an argument, which is what
+        // `--stdin` is for: a message is arbitrary user text and a command line
+        // is the wrong place for it on every platform, doubly so on Windows
+        // where quoting is the caller's problem rather than the shell's.
+        //
+        // The trailing newline is the Enter. kitty sends exactly the bytes it
+        // is given, so the submit has to be one of them.
+        [ExcludeFromCodeCoverage]
+        private static bool SendViaKitty(SessionStatus status, string text) =>
+            Feed(
+                OnPath("kitty"),
+                TerminalTyping.ForPasting(text) + "\n",
+                "@", "send-text", "--match", "id:" + status.TermId, "--stdin");
+
+        // WezTerm, addressed by the pane id it exports as WEZTERM_PANE.
+        //
+        // `--no-paste` because ForPasting has already decided whether this
+        // text needs bracketed-paste markers, and letting wezterm add its own
+        // as well would deliver them twice.
+        [ExcludeFromCodeCoverage]
+        private static bool SendViaWezTerm(SessionStatus status, string text) =>
+            Feed(
+                OnPath("wezterm"),
+                TerminalTyping.ForPasting(text) + "\n",
+                "cli", "send-text", "--pane-id", status.TermId, "--no-paste");
+
+        // Runs a tool and hands it the message on stdin.
+        //
+        // Separate from TryRun because that one does not write stdin, and this
+        // is the difference between passing a user's message safely and
+        // building a command line around it.
+        [ExcludeFromCodeCoverage]
+        private static bool Feed(string? exe, string stdin, params string[] args)
+        {
+            if (exe is null) return false;
+
+            try
+            {
+                var psi = new ProcessStartInfo(exe)
+                {
+                    UseShellExecute = false,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                };
+
+                foreach (var a in args) psi.ArgumentList.Add(a);
+
+                using var p = Process.Start(psi);
+                if (p is null) return false;
+
+                p.StandardInput.Write(stdin);
+                p.StandardInput.Close();
+
+                if (!p.WaitForExit(5000))
+                {
+                    try { p.Kill(entireProcessTree: true); } catch { }
+                    return false;
+                }
+
+                return p.ExitCode == 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // iTerm2, addressed by the session GUID the hook already records.
+        //
+        // `write text` puts the characters into the session as though they had
+        // been typed, and — the property this whole file exists for — does not
+        // activate the application. Nothing comes forward.
+        //
+        // Arguments go through `on run argv` rather than being interpolated
+        // into the script. Not tidiness: a message is arbitrary user text, and
+        // building AppleScript source around it means escaping quotes,
+        // backslashes and newlines correctly every time or executing whatever
+        // the user happened to type. argv has no such failure mode, and
+        // carries multi-line text unaltered.
+        [ExcludeFromCodeCoverage]
+        private static bool SendViaITerm2(SessionStatus status, string text) =>
+            TellTerminal(
+                new[]
+                {
+                    "on run argv",
+                    "set wanted to item 1 of argv",
+                    "set body to item 2 of argv",
+                    "tell application \"iTerm2\"",
+                    "repeat with w in windows",
+                    "repeat with t in tabs of w",
+                    "repeat with s in sessions of t",
+                    "if ((id of s) as string) is wanted then",
+                    "tell s to write text body",
+                    "return \"ok\"",
+                    "end if",
+                    "end repeat",
+                    "end repeat",
+                    "end repeat",
+                    "end tell",
+                    "return \"no\"",
+                    "end run",
+                },
+                status.TermId,
+                TerminalTyping.ForPasting(text));
+
+        // Terminal.app, addressed by tty.
+        //
+        // Terminal exposes no stable per-tab identifier — a tab's index
+        // changes when another is closed and its window's id changes when it
+        // is merged — but `tty` is the one handle that follows the session
+        // itself, and it is what the hook records.
+        //
+        // `do script … in <tab>` types the text into that tab and presses
+        // Return, which is exactly the contract here, without activating
+        // Terminal.
+        [ExcludeFromCodeCoverage]
+        private static bool SendViaTerminalApp(SessionStatus status, string text) =>
+            TellTerminal(
+                new[]
+                {
+                    "on run argv",
+                    "set wanted to item 1 of argv",
+                    "set body to item 2 of argv",
+                    "tell application \"Terminal\"",
+                    "repeat with w in windows",
+                    "repeat with t in tabs of w",
+                    "if ((tty of t) as string) is wanted then",
+                    "do script body in t",
+                    "return \"ok\"",
+                    "end if",
+                    "end repeat",
+                    "end repeat",
+                    "end tell",
+                    "return \"no\"",
+                    "end run",
+                },
+                TerminalTyping.DevicePath(status.Tty),
+                TerminalTyping.ForPasting(text));
+
+        // Runs one of the two scripts above and reports whether it found its
+        // session.
+        //
+        // Not RunOsaScript, which is deliberately fire-and-forget: a Send
+        // button has to know. The script answers "ok" or "no", and the
+        // difference between them is the difference between a message
+        // delivered and a message silently dropped — which is precisely the
+        // failure this whole ticket started as.
+        //
+        // A longer timeout than TryRun's default because the first Apple Event
+        // to an application this process has never talked to can raise a
+        // consent prompt, and on a Mac nobody is looking at that prompt is
+        // answered slowly or not at all. Failing is correct there; failing in
+        // three seconds while the user is still reading the dialog is not.
+        [ExcludeFromCodeCoverage]
+        private static bool TellTerminal(string[] script, string wanted, string body)
+        {
+            if (string.IsNullOrEmpty(wanted)) return false;
+
+            var args = new List<string>();
+            foreach (var line in script)
+            {
+                args.Add("-e");
+                args.Add(line);
+            }
+
+            args.Add("--");
+            args.Add(wanted);
+            args.Add(body);
+
+            if (!TryRun("/usr/bin/osascript", 15000, out var answer, args.ToArray()))
+                return false;
+
+            return answer.Trim() == "ok";
+        }
+
+        // --- Windows: the console, not the terminal --------------------------------
+        //
+        // **The best-addressed route of the six, and the only one that needed
+        // nothing taught to it.** `AttachConsole` takes a process id, so this
+        // reaches the console of the `claude` process itself — Windows
+        // Terminal, conhost and VS Code's integrated terminal are one case,
+        // and a new terminal shipping next year will be too. On macOS every
+        // emulator has to be taught separately; here none of them does.
+        //
+        // What it costs is that the console is *process-global state*.
+        // `AttachConsole` rebinds this process's own standard handles, so two
+        // sends at once would interleave into something neither of them meant.
+        // Hence the lock, and hence the `FreeConsole` in a finally: leaving
+        // this process attached to a user's terminal would redirect anything
+        // Buddy later wrote into their session.
+        private static readonly object ConsoleGate = new();
+
+        [SupportedOSPlatform("windows")]
+        [ExcludeFromCodeCoverage]
+        private static bool SendViaConsole(SessionStatus status, string text)
+        {
+            // The Enter is a keystroke here rather than a character, so the
+            // body and the submit are built separately.
+            var body = TerminalTyping.ForPasting(text);
+
+            lock (ConsoleGate)
+            {
+                // A GUI app normally has no console, so this is usually a
+                // no-op — but "usually" is not "always" (a debugger, a
+                // console-allocating dependency), and AttachConsole fails
+                // outright if one is already attached.
+                NativeMethods.FreeConsole();
+
+                if (!NativeMethods.AttachConsole((uint)status.SessionPid)) return false;
+
+                try
+                {
+                    using var input = NativeMethods.OpenConsoleInput();
+                    if (input.IsInvalid) return false;
+
+                    var records = new List<NativeMethods.InputRecord>(body.Length * 2 + 2);
+
+                    foreach (var c in body) AddKeystroke(records, c);
+
+                    // VK_RETURN, with '\r' as its character: a TUI reading
+                    // characters sees the carriage return and one reading key
+                    // events sees Enter, and both are correct.
+                    AddKeystroke(records, '\r', virtualKey: 0x0D);
+
+                    var all = records.ToArray();
+                    return NativeMethods.WriteConsoleInput(
+                        input, all, (uint)all.Length, out var written)
+                        && written == all.Length;
+                }
+                finally
+                {
+                    NativeMethods.FreeConsole();
+                }
+            }
+        }
+
+        // One character, as the down-then-up pair a console expects.
+        //
+        // Both halves, because a TUI that reads key events rather than
+        // characters counts them: sending only the key-down leaves every key
+        // logically held, and the first one to be checked for a modifier
+        // behaves as though it were.
+        [SupportedOSPlatform("windows")]
+        [ExcludeFromCodeCoverage]
+        private static void AddKeystroke(
+            List<NativeMethods.InputRecord> into, char c, ushort virtualKey = 0)
+        {
+            for (var down = 1; down >= 0; down--)
+            {
+                into.Add(new NativeMethods.InputRecord
+                {
+                    EventType = NativeMethods.KeyEvent,
+                    KeyDown = down,
+                    RepeatCount = 1,
+                    VirtualKeyCode = virtualKey,
+                    VirtualScanCode = 0,
+                    Char = c,
+                    ControlKeyState = 0,
+                });
+            }
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static Task<bool> SendViaTmux(SessionStatus status, string text)
+        {
             return Task.Run(() =>
             {
                 var tmux = ResolveTmuxBinary(status.TmuxBin);
@@ -1122,6 +1485,69 @@ namespace ClaudeBuddy
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint SendInput(uint numberOfInputs, Input[] inputs, int sizeOfInputStructure);
+
+        // The console API, for typing into a session by its own process id.
+        //
+        // Grouped rather than scattered because these four only make sense
+        // together: attach to a process's console, open its input buffer,
+        // write key events, detach. See SendViaConsole for why the sequence
+        // has to be exactly that and why it holds a lock while it runs.
+        [ExcludeFromCodeCoverage]
+        private static class NativeMethods
+        {
+            internal const ushort KeyEvent = 0x0001;
+
+            private const uint GenericRead = 0x80000000;
+            private const uint GenericWrite = 0x40000000;
+            private const uint FileShareRead = 0x00000001;
+            private const uint FileShareWrite = 0x00000002;
+            private const uint OpenExisting = 3;
+
+            // Laid out to match Windows' INPUT_RECORD with a KEY_EVENT_RECORD
+            // in its union. The union's other members are all smaller, so the
+            // explicit size is what a KEY_EVENT_RECORD needs and nothing here
+            // reads the others.
+            [StructLayout(LayoutKind.Sequential)]
+            internal struct InputRecord
+            {
+                internal ushort EventType;
+                internal ushort Padding;
+                internal int KeyDown;
+                internal ushort RepeatCount;
+                internal ushort VirtualKeyCode;
+                internal ushort VirtualScanCode;
+                internal char Char;
+                internal uint ControlKeyState;
+            }
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            internal static extern bool AttachConsole(uint processId);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            internal static extern bool FreeConsole();
+
+            [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+            private static extern SafeFileHandle CreateFile(
+                string fileName, uint access, uint share, IntPtr security,
+                uint creation, uint flags, IntPtr template);
+
+            // CONIN$ rather than GetStdHandle: after AttachConsole the standard
+            // handles are the ones this process started with, which for a GUI
+            // app are not console handles at all. CONIN$ names the attached
+            // console's input buffer whatever the handles say.
+            internal static SafeFileHandle OpenConsoleInput() =>
+                CreateFile(
+                    "CONIN$", GenericRead | GenericWrite,
+                    FileShareRead | FileShareWrite, IntPtr.Zero,
+                    OpenExisting, 0, IntPtr.Zero);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            internal static extern bool WriteConsoleInput(
+                SafeFileHandle input, InputRecord[] buffer, uint length, out uint written);
+        }
 
         [SupportedOSPlatform("windows")]
         private static void SendUnicodeText(string text)
