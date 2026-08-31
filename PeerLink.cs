@@ -378,7 +378,7 @@ namespace ClaudeBuddy
                 // session on to a machine called "(inbound)".
                 await SendAsync(machine, PeerProtocol.Message(
                     PeerProtocol.Hello, PeerProtocol.NewId(),
-                    name: Environment.MachineName, code: pairingCode))
+                    name: MachineNames.Mine(), code: pairingCode))
                     .ConfigureAwait(false);
 
                 return true;
@@ -586,7 +586,7 @@ namespace ClaudeBuddy
             Rename(machine, claimed);
 
             await SendAsync(claimed, PeerProtocol.Message(
-                PeerProtocol.Ok, hello.Id, name: Environment.MachineName))
+                PeerProtocol.Ok, hello.Id, name: MachineNames.Mine()))
                 .ConfigureAwait(false);
 
             return claimed;

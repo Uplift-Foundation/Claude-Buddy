@@ -102,7 +102,7 @@ public class PeerLinkLoopbackTests
         // placeholder it was accepted as. Without it the mirror would attribute
         // every session on the far machine to a peer called "(inbound …)".
         Assert.True(
-            server.IsConnected(Environment.MachineName),
+            server.IsConnected(MachineNames.Mine()),
             "the greeting did not name the inbound connection");
     }
 
