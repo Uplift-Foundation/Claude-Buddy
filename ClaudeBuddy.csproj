@@ -74,14 +74,16 @@
     <InternalsVisibleTo Include="ClaudeBuddy.UiTests" />
     <InternalsVisibleTo Include="ClaudeBuddy.UiScreenshots" />
 
-    <!-- And tools/mirror-probe, for the same reason and by the same rule.
-         RemoteMirrorClient is internal, and its closure is not the small kind
-         that openclaw-probe's <Compile Include> handles — reaching it that way
-         wanted the transcript parsers, the chat types and RemoteControlBridge
-         behind them. The probe fetches another machine's transcript exactly as
-         the panel does, which is only worth anything if it runs the shipped
-         client rather than a second copy of the protocol. -->
-    <InternalsVisibleTo Include="MirrorProbe" />
+    <!-- And tools/peer-probe, for the same reason and by the same rule.
+         PeerLink and RemoteMirrorClient are internal, and their closure is not
+         the small kind openclaw-probe's <Compile Include> handles. The probe
+         fetches another machine's transcript exactly as the panel does, which
+         is only worth anything if it runs the shipped client and the shipped
+         link rather than a second copy of either.
+
+         It replaces tools/mirror-probe, which drove the relay and went with
+         it. -->
+    <InternalsVisibleTo Include="PeerProbe" />
   </ItemGroup>
 
   <ItemGroup>
