@@ -1467,7 +1467,8 @@ testing — see [Releasing](#releasing) for what CI adds on top.
 
 ## 2. Wire up your agent CLIs
 
-Claude Buddy tracks **Claude Code** and **OpenAI's Codex CLI**. Each install you
+Claude Buddy tracks **Claude Code**, **OpenAI's Codex CLI**, and **Grok Build**.
+Each install you
 want tracked (WSL, native Windows, macOS, ...) needs its own copy of the hooks
 added to *its own* config — installs don't share config.
 
@@ -1494,9 +1495,31 @@ setup — or picks up the second CLI after you install it. Pass `--uninstall` /
 A CLI you don't have is skipped and said so, not treated as an error. Underneath
 it are one installer per CLI — `install-macos-hooks.sh` /
 `install-windows-hooks.ps1` for Claude Code, `install-codex-hooks.sh` /
-`install-codex-hooks.ps1` for Codex — and those still take the per-CLI options
+`install-codex-hooks.ps1` for Codex, `install-grok-hooks.sh` /
+`install-grok-hooks.ps1` for Grok Build — and those still take the per-CLI options
 described below. You only need them if you want one of those options; the
 wrapper is what an install runs.
+
+### Grok Build
+
+Grok loads hooks from `$GROK_HOME/hooks/*.json` (`~/.grok/hooks/` by default)
+and those files are **always trusted** — there is no Codex-style review step.
+`install-hooks.sh` wires them when it finds Grok; `install-grok-hooks.sh` is
+the per-CLI script if you only want that.
+
+Two differences from a Claude Code orb, both because Grok works differently:
+
+- **No `/color`.** Grok's `/theme` is TUI-wide. Auto-color derives a ring from
+  the working directory and never writes into Grok's `updates.jsonl`.
+- **The name comes from `summary.json`**, Grok's own title (and `/rename` when
+  that has been used). The conversation in the chat panel is the ACP update
+  stream at `updates.jsonl`, not Claude Code JSONL.
+- **Usage orbs** (Settings → Grok Build) draw the weekly credit window Grok
+  already fetches. Grok has no five-hour cap, so that ring is omitted rather
+  than drawn at zero. The figure is as fresh as the last Grok session on this
+  machine — Claude Buddy does not hold Grok's login token.
+
+See `docs/grok-findings.md` for what was measured on a real session.
 
 ### Codex
 

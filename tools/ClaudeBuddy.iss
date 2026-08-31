@@ -105,6 +105,7 @@ Source: "..\ClaudeBuddyHook.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\tools\install-hooks.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\tools\install-windows-hooks.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\tools\install-codex-hooks.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
+Source: "..\tools\install-grok-hooks.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 

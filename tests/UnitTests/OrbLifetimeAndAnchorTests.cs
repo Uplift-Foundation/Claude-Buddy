@@ -51,26 +51,32 @@ public class OrbLifetimeAndAnchorTests
         // on beyond the bridge already being running.
         var claude = ClaudeBuddySettings.ClaudeCodeEnabled;
         var codex = ClaudeBuddySettings.CodexEnabled;
+        var grok = ClaudeBuddySettings.GrokEnabled;
         try
         {
             ClaudeBuddySettings.ClaudeCodeEnabled = false;
             ClaudeBuddySettings.CodexEnabled = false;
+            ClaudeBuddySettings.GrokEnabled = false;
 
             Assert.False(SessionManager.EnabledFor(SessionSource.ClaudeCode));
             Assert.False(SessionManager.EnabledFor(SessionSource.Codex));
+            Assert.False(SessionManager.EnabledFor(SessionSource.Grok));
             Assert.True(SessionManager.EnabledFor(SessionSource.OpenClaw));
             Assert.True(SessionManager.EnabledFor(SessionSource.RemoteControl));
 
             ClaudeBuddySettings.ClaudeCodeEnabled = true;
             ClaudeBuddySettings.CodexEnabled = true;
+            ClaudeBuddySettings.GrokEnabled = true;
 
             Assert.True(SessionManager.EnabledFor(SessionSource.ClaudeCode));
             Assert.True(SessionManager.EnabledFor(SessionSource.Codex));
+            Assert.True(SessionManager.EnabledFor(SessionSource.Grok));
         }
         finally
         {
             ClaudeBuddySettings.ClaudeCodeEnabled = claude;
             ClaudeBuddySettings.CodexEnabled = codex;
+            ClaudeBuddySettings.GrokEnabled = grok;
         }
     }
 

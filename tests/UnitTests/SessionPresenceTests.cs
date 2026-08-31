@@ -151,7 +151,7 @@ public class SessionPresenceTests
     {
         var others = new[]
         {
-            SessionSource.Codex, SessionSource.OpenClaw, SessionSource.RemoteControl,
+            SessionSource.Codex, SessionSource.Grok, SessionSource.OpenClaw, SessionSource.RemoteControl,
         };
 
         foreach (var source in others)

@@ -396,16 +396,20 @@ public class ScanVerdictTests
     {
         var claude = new SessionStatus { Source = SessionSource.ClaudeCode, SessionPid = 4321 };
         var codex = new SessionStatus { Source = SessionSource.Codex, SessionPid = 4321 };
+        var grok = new SessionStatus { Source = SessionSource.Grok, SessionPid = 4321 };
 
         Assert.Equal(
             SessionManager.ScanVerdict.Keep,
             Reachability(claude, phase: JobPhase.Parked));
 
-        // Codex has no background jobs to be one of, so the exemption must not
-        // reach it however the daemon answers.
+        // Codex and Grok have no Claude daemon jobs to be one of, so the
+        // exemption must not reach them however the daemon answers.
         Assert.Equal(
             SessionManager.ScanVerdict.NoTerminal,
             Reachability(codex, phase: JobPhase.Parked));
+        Assert.Equal(
+            SessionManager.ScanVerdict.NoTerminal,
+            Reachability(grok, phase: JobPhase.Parked));
     }
 
     [Theory]

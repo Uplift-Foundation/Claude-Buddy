@@ -100,6 +100,22 @@ public class SettingsWindowRowTests
     public void TheCodexReplySwitchWritesItsOwnSetting() => Toggles(
         (w, v) => w.OnCodexReplyToggled(v), () => ClaudeBuddySettings.CodexReplyEnabled);
 
+    [AvaloniaFact]
+    public void TheGrokSwitchWritesItsOwnSetting() => Toggles(
+        (w, v) => w.OnGrokEnabledToggled(v), () => ClaudeBuddySettings.GrokEnabled);
+
+    [AvaloniaFact]
+    public void TheGrokChatSwitchWritesItsOwnSetting() => Toggles(
+        (w, v) => w.OnGrokChatToggled(v), () => ClaudeBuddySettings.GrokChatEnabled);
+
+    [AvaloniaFact]
+    public void TheGrokReplySwitchWritesItsOwnSetting() => Toggles(
+        (w, v) => w.OnGrokReplyToggled(v), () => ClaudeBuddySettings.GrokReplyEnabled);
+
+    [AvaloniaFact]
+    public void TheGrokUsageSwitchWritesItsOwnSetting() => Toggles(
+        (w, v) => w.OnGrokAccountUsageToggled(v), () => ClaudeBuddySettings.GrokAccountUsageEnabled);
+
     // Not Toggles(), because these two are no longer switches: three answers
     // do not fit in a boolean, which is the whole reason the setting changed
     // shape. The handler is still the production one, driven through every

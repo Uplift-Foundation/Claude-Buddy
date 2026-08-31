@@ -548,6 +548,19 @@ invisible: macOS already *consumed* the list in `TranscriptReader` and offered
 no way to fill it in, so a second account got wired once by hand if at all and
 was never maintained afterwards.
 
+## Grok Build specifically
+
+`docs/grok-findings.md` is the record for Grok Build — the ACP `updates.jsonl`
+stream, `summary.json` titles, hook payload spellings, and the credits-config
+shape. Read it before changing `GrokTranscript.cs`, `ClaudeBuddyHook.sh` or
+`tools/install-grok-hooks.sh`, and add to it rather than to a commit message
+when you measure something new.
+
+Grok also fires Claude Buddy's Claude Code hooks via its compatibility layer.
+The hook itself treats `GROK_SESSION_ID` as the source of truth so those
+sessions are labelled `cli:grok` rather than `cli:claude`, and it never writes
+an `agent-color` record into Grok's transcript.
+
 ## Codex specifically
 
 `docs/codex-findings.md` is the reference for everything measured about the
