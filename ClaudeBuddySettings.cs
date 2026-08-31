@@ -1732,7 +1732,7 @@ namespace ClaudeBuddy
         {
             try
             {
-                var dir = Path.Combine(Path.GetTempPath(), "claude_buddy");
+                var dir = StatusDirectory.Path();
                 System.IO.Directory.CreateDirectory(dir);
                 File.AppendAllText(
                     Path.Combine(dir, "settings-errors.log"),
