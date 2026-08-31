@@ -342,6 +342,23 @@ namespace ClaudeBuddy
                 var hasTranscript = !string.IsNullOrEmpty(status.TranscriptPath)
                                     && File.Exists(status.TranscriptPath);
 
+                // A conversation, not just a process.
+                //
+                // The registry lists every session whose window is still open,
+                // including ones abandoned at a prompt days ago — and drawing
+                // those puts an orb beside a live session with the same name
+                // and no way to tell them apart. SessionLiveness has the full
+                // account of why the obvious checks all say "alive" for a
+                // session nobody has spoken to since Saturday.
+                //
+                // Said once per name: a peer asks every ten seconds, and a
+                // session that has been abandoned stays abandoned.
+                if (hasTranscript && !LivelyEnough(status))
+                {
+                    MirrorLog.SayOnce($"hello-abandoned:{name}", $"name={name}");
+                    continue;
+                }
+
                 entries.Add(new MirrorProtocol.MirrorRosterEntry(
                     name,
                     MirrorProtocol.CliFor(status.Source),
@@ -397,6 +414,51 @@ namespace ClaudeBuddy
             catch
             {
                 return Array.Empty<string>();
+            }
+        }
+
+        // How much of a transcript to read looking for the last turn.
+        //
+        // Larger than the window used to *render* a conversation, because this
+        // is asking a different question: a session that has been sitting at a
+        // prompt accumulates bookkeeping rows — `bridge-session`,
+        // `queue-operation`, `mode` — after its final turn, and the answer is
+        // wrong if the last turn has been pushed out of the window by them.
+        // A megabyte reaches past several hundred such rows, and the cost is a
+        // bounded read on a path that already scans a commands directory per
+        // entry.
+        internal const int LivelinessTailBytes = 1024 * 1024;
+
+        // Excluded from coverage: this is the disk. What it decides is
+        // SessionLiveness, which is pure and covered from both sides of the
+        // boundary; this reads a tail and asks.
+        //
+        // Through `Now()` rather than `DateTime.UtcNow` for the reason that
+        // property already exists: a rule about how long ago something happened
+        // is untestable against a wall clock. It also keeps the fixtures
+        // honest — MirrorRoundTripTests pins every row at a fixed instant
+        // deliberately (its own comment says why), and a roster that read the
+        // real clock would quietly drop every one of those sessions and take
+        // the whole suite with it.
+        [ExcludeFromCodeCoverage]
+        private bool LivelyEnough(SessionStatus status)
+        {
+            try
+            {
+                var lines = TranscriptReader.TailLines(
+                    status.TranscriptPath!, LivelinessTailBytes);
+
+                return SessionLiveness.WorthShowing(
+                    status.State,
+                    SessionLiveness.LastTurnAt(lines),
+                    Now());
+            }
+            catch
+            {
+                // A transcript that cannot be read is shown rather than
+                // hidden — see WorthShowing on why an unreadable file must not
+                // look like an abandoned session.
+                return true;
             }
         }
 

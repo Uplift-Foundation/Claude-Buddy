@@ -757,6 +757,71 @@ public class MirrorRoundTripTests : IDisposable
         Assert.True(entry.HasPane);
     }
 
+    // --- a conversation, not just a process ---------------------------------------
+
+    // A session nobody has spoken to since yesterday does not get an orb.
+    //
+    // **Measured on real machines and not reproducible any other way.** The Mac
+    // mini had two sessions both called `job-hunter-mac-mini`, both with a live
+    // process, both listed by `claude agents` — and one of them had last been
+    // spoken to 23 hours earlier. Drawn side by side they were
+    // indistinguishable, so the live one read as missing and both read as fake.
+    //
+    // The trap this pins is the one that makes it hard to see: the abandoned
+    // session's transcript had been *written six minutes earlier*. Remote
+    // Control's bridge keeps poking the file of a session it is attached to,
+    // with rows carrying no timestamp at all — so file mtime, process liveness
+    // and registry presence all agreed it was alive. Only the newest turn did
+    // not. The fixture below is that exact shape.
+    [Fact]
+    public async Task ASessionNobodyHasSpokenToSinceYesterdayIsNotOffered()
+    {
+        var stale = WriteTranscript("abandoned.jsonl",
+            Conversation(2).Concat(Enumerable.Range(0, 40).Select(BridgeRow)));
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", stale);
+
+        // A day after the rows, rather than a minute. Nothing else changes.
+        harness.Server.Now = () => LiveAt.AddHours(23);
+
+        await harness.Client.DiscoverAsync(new[] { Harness.FarRelay }, new[] { "job-hunter" });
+
+        Assert.Equal(
+            RemoteMirrorClient.MirrorAvailability.Unavailable,
+            harness.Client.StateFor("job-hunter").Availability);
+    }
+
+    // ...and the same session, an hour later rather than a day, still does.
+    //
+    // The other half of the boundary, and the mistake this must not repeat:
+    // CB-74 removed a filter that keyed off the status file's heartbeat, which
+    // stops for a session that is merely idle — so it hid sessions that were
+    // alive and waiting. Walking away for an hour is not abandoning a
+    // conversation.
+    [Fact]
+    public async Task ASessionSpokenToWithinTheHourStillIs()
+    {
+        var recent = WriteTranscript("still-warm.jsonl",
+            Conversation(2).Concat(Enumerable.Range(0, 40).Select(BridgeRow)));
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", recent);
+
+        harness.Server.Now = () => LiveAt.AddHours(1);
+
+        await harness.Client.DiscoverAsync(new[] { Harness.FarRelay }, new[] { "job-hunter" });
+
+        Assert.Equal(
+            RemoteMirrorClient.MirrorAvailability.Available,
+            harness.Client.StateFor("job-hunter").Availability);
+    }
+
+    // What the bridge appends to a session it is attached to: no timestamp, and
+    // enough of them to bury the last real turn under bookkeeping.
+    private static string BridgeRow(int n) =>
+        $"{{\"type\":\"bridge-session\",\"sessionId\":\"dc6b769b\",\"seq\":{n}}}";
+
     // --- refusing what did not survive --------------------------------------------
 
     // The guarantee, end to end: a courier that alters a frame in flight
@@ -931,6 +996,12 @@ public class MirrorRoundTripTests : IDisposable
     // twice in twelve full runs, and the captured diff was two identical turns
     // whose At differed by exactly one.
     private const string RowAt = "2026-08-16T10:00:00Z";
+
+    // A minute after the rows above, which is what the far side's clock is set
+    // to. Far enough inside SessionLiveness.StaysInterestingFor that a change
+    // to that window does not silently empty every roster in this file.
+    internal static readonly DateTime LiveAt =
+        new(2026, 8, 16, 10, 1, 0, DateTimeKind.Utc);
 
     private static string Row(string type, string uuid, string text) =>
         type == "user"
@@ -1292,6 +1363,20 @@ public class MirrorRoundTripTests : IDisposable
                 // because a peer has completed a TLS handshake with a certificate
                 // somebody pinned by typing a code. A harness says yes explicitly.
                 PeerAllowed: _ => true));
+
+            // The far machine's clock, parked beside the fixture's own instant.
+            //
+            // The roster now asks whether a session has been spoken to
+            // recently, and `RowAt` below is deliberately a fixed moment rather
+            // than "now" — so against a real clock every fixture here reads as
+            // a conversation abandoned weeks ago, and the roster would answer
+            // with nothing. Pinning the server's clock a minute after the rows
+            // keeps that fixed instant *and* makes these sessions live, which
+            // is what all but a handful of these tests are actually about.
+            //
+            // A test that cares about liveness sets it somewhere else; a test
+            // about subscriptions lapsing already did exactly this.
+            Server.Now = () => LiveAt;
 
             Client = new RemoteMirrorClient("acct", new RemoteMirrorClient.Seams(SendToServerAsync));
 
