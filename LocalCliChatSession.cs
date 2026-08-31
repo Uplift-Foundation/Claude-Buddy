@@ -699,7 +699,7 @@ namespace ClaudeBuddy
 
             if (!TerminalFocuser.CanSendQuietly(_status))
             {
-                Note(NoPaneNote(_status.TmuxPane, _status.Shape));
+                Note(NoPaneNote(_status, _status.Shape, OperatingSystem.IsMacOS(), OperatingSystem.IsWindows()));
                 return;
             }
 
@@ -718,9 +718,15 @@ namespace ClaudeBuddy
         // in its own terminal, where a missing tmux binary cannot be worked
         // around at all. Telling someone to go to a terminal that isn't there is
         // the failure this distinction exists to avoid.
-        internal static string NoPaneNote(string? tmuxPane, LocalSessionShape shape)
+        //
+        // Takes the whole status rather than a pane and a shape since CB-79:
+        // the answer now depends on which terminal the session is in, and
+        // `onMacOS` is a parameter rather than a call to
+        // `OperatingSystem.IsMacOS()` so both arms run on both CI legs.
+        internal static string NoPaneNote(
+            SessionStatus status, LocalSessionShape shape, bool onMacOS, bool onWindows)
         {
-            if (!string.IsNullOrEmpty(tmuxPane)) return "Couldn't find tmux to type with.";
+            if (!string.IsNullOrEmpty(status.TmuxPane)) return "Couldn't find tmux to type with.";
 
             // Three problems that all end in "nothing was typed", and the note
             // has to say which. The third is the one this branch added, and the
@@ -734,8 +740,13 @@ namespace ClaudeBuddy
                     + "Attach it (⚙ beside the box) to answer it there.";
             }
 
-            return "This session isn't in a tmux pane, so there is nowhere to type without "
-                + "bringing its terminal forward. Reply in the terminal instead.";
+            // Locally the reason is knowable, so it is said. TerminalTyping
+            // names the terminal it found and the ones it can address, which
+            // is something a user can act on — unlike "isn't in a tmux pane",
+            // which described a setting they did not want for a session that
+            // was in an ordinary iTerm2 window.
+            return TerminalTyping.WhyNot(status, onMacOS, onWindows)
+                + " Reply in the terminal instead.";
         }
 
         // Excluded from coverage: only reachable once CanSendQuietly has said yes,

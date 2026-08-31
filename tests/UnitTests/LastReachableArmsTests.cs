@@ -586,23 +586,23 @@ public class LastReachableArmsTests
     public void ASessionOutsideTmuxIsToldWhereItCanReply()
     {
         Assert.Contains("Reply in the terminal instead",
-            LocalCliChatSession.NoPaneNote(null, LocalSessionShape.Terminal));
+            LocalCliChatSession.NoPaneNote(new SessionStatus { Cli = "claude" }, LocalSessionShape.Terminal, onMacOS: true, onWindows: false));
         Assert.Contains("Reply in the terminal instead",
-            LocalCliChatSession.NoPaneNote("", LocalSessionShape.Terminal));
+            LocalCliChatSession.NoPaneNote(new SessionStatus { Cli = "claude", TermProgram = "Ghostty" }, LocalSessionShape.Terminal, onMacOS: true, onWindows: false));
     }
 
     [Fact]
     public void AMachineWithNoTmuxIsToldThatInstead()
     {
         Assert.Equal("Couldn't find tmux to type with.",
-            LocalCliChatSession.NoPaneNote("%12", LocalSessionShape.Terminal));
+            LocalCliChatSession.NoPaneNote(new SessionStatus { Cli = "claude", TmuxPane = "%12" }, LocalSessionShape.Terminal, onMacOS: true, onWindows: false));
 
         // The pane is what decides this one, not the shape: a machine with no
         // tmux binary cannot be worked around by attaching, and offering an
         // attach to someone whose tmux is missing would be a third wrong
         // answer — `claude attach` is placed in a tmux window.
         Assert.Equal("Couldn't find tmux to type with.",
-            LocalCliChatSession.NoPaneNote("%12", LocalSessionShape.Background));
+            LocalCliChatSession.NoPaneNote(new SessionStatus { Cli = "claude", TmuxPane = "%12" }, LocalSessionShape.Background, onMacOS: true, onWindows: false));
     }
 
     // The note a background job's refused send leaves. The sentence it replaces
@@ -612,7 +612,7 @@ public class LastReachableArmsTests
     [Fact]
     public void ABackgroundJobsRefusedSendPointsAtTheAttach()
     {
-        var note = LocalCliChatSession.NoPaneNote(null, LocalSessionShape.Background);
+        var note = LocalCliChatSession.NoPaneNote(new SessionStatus { Cli = "claude" }, LocalSessionShape.Background, onMacOS: true, onWindows: false);
 
         Assert.Contains("Attach it", note);
         Assert.Contains("background job", note);

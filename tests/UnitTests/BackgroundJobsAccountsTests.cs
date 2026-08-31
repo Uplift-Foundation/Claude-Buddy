@@ -99,6 +99,15 @@ public class BackgroundJobsAccountsTests
         Assert.False(BackgroundJobs.IsLive(alone, Makayla));
     }
 
+    // A CLI session in a terminal Buddy has no way to address: no tmux pane,
+    // and a TERM_PROGRAM that is neither iTerm2 nor Terminal.app. Since CB-79
+    // the note names the terminal it found, so the fixture has to have one.
+    private static readonly SessionStatus InAnUnknownTerminal = new()
+    {
+        Cli = "claude",
+        TermProgram = "its terminal",
+    };
+
     // And the consequence, in the vocabulary the user actually sees: a job with
     // no terminal classified as a session that has one.
     [Fact]
@@ -109,9 +118,10 @@ public class BackgroundJobsAccountsTests
 
         Assert.Equal(LocalSessionShape.Terminal, shape);
         Assert.Equal(
-            "This session isn't in a tmux pane, so there is nowhere to type without "
-                + "bringing its terminal forward. Reply in the terminal instead.",
-            LocalCliChatSession.NoPaneNote(tmuxPane: "", shape));
+            "its terminal isn't a terminal Buddy can type into without bringing it "
+                + "forward. tmux, iTerm2, Terminal.app, kitty and WezTerm are the ones it can. "
+                + "Reply in the terminal instead.",
+            LocalCliChatSession.NoPaneNote(InAnUnknownTerminal, shape, onMacOS: true, onWindows: false));
     }
 
     // --- the fix -----------------------------------------------------------
@@ -142,7 +152,7 @@ public class BackgroundJobsAccountsTests
         var shape = SessionPresence.ShapeOf(new SessionStatus(), BackgroundJobs.Phase(Merged, Makayla));
 
         Assert.Equal(LocalSessionShape.Background, shape);
-        Assert.Contains("background job", LocalCliChatSession.NoPaneNote(tmuxPane: "", shape));
+        Assert.Contains("background job", LocalCliChatSession.NoPaneNote(InAnUnknownTerminal, shape, onMacOS: true, onWindows: false));
     }
 
     // The default account's own rows are untouched by having a second one.

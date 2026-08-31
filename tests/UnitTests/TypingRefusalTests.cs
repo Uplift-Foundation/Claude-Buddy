@@ -35,7 +35,14 @@ public class TypingRefusalTests
     {
         var said = RemoteControlChatSession.TypingRefusal(MirrorProtocol.ErrNoPane, Remote);
 
-        Assert.Contains("tmux pane", said);
+        // Not "tmux pane" any more, which was the wording before CB-79 and was
+        // narrower than the truth even then: tmux is one of several terminals
+        // Buddy can type into, and naming it sent a user looking for a setting
+        // they did not want for a session that was in iTerm2 all along. The
+        // far machine's own reason cannot be read from here — a code is all
+        // that crosses the wire — so this says what is true of every case.
+        Assert.Contains("terminal Buddy can type into", said);
+        Assert.DoesNotContain("tmux pane", said);
         Assert.Contains(Remote, said);
     }
 
