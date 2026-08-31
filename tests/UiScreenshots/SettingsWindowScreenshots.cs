@@ -77,27 +77,23 @@ public class SettingsWindowScreenshots
         ScreenshotHelper.CaptureControl(card, "settings-claude-desktop-group.png");
     }
 
-    // The Other machines group with the feature switched on, so the CB-18 row —
-    // the switch that starts the relay at launch for a machine that serves its
-    // sessions unattended — is in frame. Also below the fold of the whole-window
-    // shot, for the same reason as the Claude Desktop group above.
+    // The direct link's card, switched on, so the pairing controls are in frame.
     //
-    // macOS-only in a stronger sense than that group: on Windows the section is
-    // a single "macOS-only for now" note with no rows at all (the relay runs in
-    // tmux), so there is no anchor to capture and the scenario returns rather
-    // than asserting one. The Windows leg's coverage of the section is
-    // RemoteControlUnsupportedRows' own tests.
+    // **Unlike every other scenario in this file, this one has no platform
+    // gate — and that is the thing to look at when comparing the two rids.**
+    // The relay card above is macOS-only because it lives in tmux; this is a
+    // socket, and the whole reason it uses SslStream rather than the gateway's
+    // hand-rolled TLS is that it behaves identically on Windows. So the two
+    // captures should show the *same* card. A Windows rid that shows a
+    // "macOS-only" note here, or nothing at all, is the regression this exists
+    // to make visible, and no unit test can show it.
     [AvaloniaFact]
-    public void RemoteControlGroupShowsTheServeOnLaunchRow()
+    public void PeerLinkGroupShowsThePairingControls()
     {
-        if (!RemoteControlBridge.IsSupported) return;
-
-        var wasEnabled = ClaudeBuddySettings.RemoteControlEnabled;
-        var wasServe = ClaudeBuddySettings.RemoteControlServeOnLaunch;
+        var wasEnabled = ClaudeBuddySettings.PeerLinkEnabled;
         try
         {
-            ClaudeBuddySettings.RemoteControlEnabled = true;
-            ClaudeBuddySettings.RemoteControlServeOnLaunch = true;
+            ClaudeBuddySettings.PeerLinkEnabled = true;
 
             var ctor = typeof(SettingsWindow).GetConstructor(
                 BindingFlags.NonPublic | BindingFlags.Instance,
@@ -112,21 +108,35 @@ public class SettingsWindowScreenshots
             var anchor = window.GetLogicalDescendants()
                 .OfType<TextBlock>()
                 .FirstOrDefault(block =>
-                    block.Text == "Start the relay when Claude Buddy starts");
+                    block.Text == "Let another machine pair with this one");
 
             Assert.NotNull(anchor);
 
+            // **Found by what it contains, not by how big it is.** The
+            // measure-based search the other two scenarios use — first ancestor
+            // over 60 by 200 — is a guess about layout, and the guess lands on a
+            // different control per platform: the first capture of this card
+            // came back as the whole card on macOS and as one row on Windows,
+            // which makes the two rids look like a platform gate when there
+            // isn't one. Since the whole reason this scenario exists is to let a
+            // reviewer compare the two, an anchor that picks differently on each
+            // defeats it entirely.
+            //
+            // The card is by construction the nearest ancestor holding both the
+            // first row and the last, so ask for that instead. It is the same
+            // control on any platform and at any font size.
             var card = anchor!.GetLogicalAncestors().OfType<Control>()
-                .FirstOrDefault(control =>
-                    control.Bounds.Height > 60 && control.Bounds.Width > 200)
+                .FirstOrDefault(control => control.GetLogicalDescendants()
+                    .OfType<TextBlock>()
+                    .Any(block => block.Text is not null
+                        && block.Text.StartsWith("No other machines yet")))
                 ?? (Control)anchor;
 
-            ScreenshotHelper.CaptureControl(card, "settings-remote-control-group.png");
+            ScreenshotHelper.CaptureControl(card, "settings-peer-link-group.png");
         }
         finally
         {
-            ClaudeBuddySettings.RemoteControlServeOnLaunch = wasServe;
-            ClaudeBuddySettings.RemoteControlEnabled = wasEnabled;
+            ClaudeBuddySettings.PeerLinkEnabled = wasEnabled;
         }
     }
 }

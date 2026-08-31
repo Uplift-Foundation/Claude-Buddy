@@ -330,12 +330,29 @@ TMUX_SOCKET=""
 TMUX_PANE_ID=""
 TMUX_BIN=""
 TERM_ID=""
+#
+# term_id is "the handle this terminal understands", not an iTerm2 field —
+# which is what it has always meant, and what the three branches added below
+# rely on. kitty and WezTerm both hand out a pane id and both ship a CLI that
+# types into one, so they route exactly the way tmux does; recording the id is
+# the whole of what this script has to do for them.
+#
+# kitty does not set TERM_PROGRAM at all, so this fills it in. That is not a
+# lie about the environment: the field means "which terminal is this", and
+# leaving it empty for the one terminal that declines to say would make it
+# unaddressable for no better reason than a missing variable.
 if [ -n "$TMUX" ]; then
     TMUX_SOCKET="${TMUX%%,*}"
     TMUX_PANE_ID="$TMUX_PANE"
     TMUX_BIN=$(command -v tmux 2>/dev/null)
 elif [ -n "$ITERM_SESSION_ID" ]; then
     TERM_ID="${ITERM_SESSION_ID#*:}"
+elif [ -n "$KITTY_WINDOW_ID" ]; then
+    TERM_ID="$KITTY_WINDOW_ID"
+    TERM_PROGRAM="${TERM_PROGRAM:-kitty}"
+elif [ -n "$WEZTERM_PANE" ]; then
+    TERM_ID="$WEZTERM_PANE"
+    TERM_PROGRAM="${TERM_PROGRAM:-WezTerm}"
 fi
 
 # The ancestor that owns the tty is the claude TUI process itself, so the same

@@ -33,6 +33,15 @@ namespace ClaudeBuddy
         // thread and locks nothing else it reads — is handed a finished list.
         private static volatile IReadOnlyList<Remote> _snapshot = Array.Empty<Remote>();
 
+        // Orb rows that came off the direct link rather than a relay poll.
+        //
+        // A separate bucket rather than a fake Relay entry, because the two are
+        // filled by different things at different times and a Relay carries a
+        // bridge, a state string and a warning that a socket has no answer for.
+        // Both are unioned into _snapshot by Republish, which is the only place
+        // that has to know there are two.
+        private static IReadOnlyList<Remote> _peerRows = Array.Empty<Remote>();
+
         // One entry per account with a relay up or coming up. Keyed by profile
         // dir, which is also what makes "already starting" answerable without a
         // second flag per account.
@@ -41,18 +50,79 @@ namespace ClaudeBuddy
         private static DispatcherTimer? _poll;
         private static DateTime _lastUse = DateTime.MinValue;
 
+        // What drives a relay while there is no dispatcher to drive it from.
+        // See ServePump for the whole of why, and ServeTickAsync below for what
+        // one round does. Null once the UI is up: EnsureTimer disposes it,
+        // because from that point the two DispatcherTimers are doing strictly
+        // more than this can.
+        private static ServePump? _servePump;
+
+        // When a DispatcherTimer last actually fired.
+        //
+        // **The difference between "a dispatcher exists" and "a dispatcher is
+        // running", which is the whole of CB-61.** EnsureTimer is delivered by
+        // Dispatcher.UIThread.Post, so reaching it proves the loop ran once —
+        // and StopServePump used to take that as proof it would keep running,
+        // and destroyed the stand-in on the strength of it. A DispatcherTimer
+        // only fires while that loop is pumping. On a headless machine it can
+        // deliver the Post at startup and then go quiet, at which point both
+        // timers stop firing and the thing that covered for exactly this has
+        // already been disposed.
+        //
+        // Measured on job-hunter-mac-mini: Buddy alive at 0% CPU, its relay
+        // receiving well-formed HELLOs from a correctly-named peer, and two
+        // ListAgents in seven minutes — the first of which was StartAsync's own
+        // direct call, not a tick. Nothing drained the transcript, so nothing
+        // was ever routed to the mirror server, so it answered none of them.
+        // From the far end: a panel that says the other machine did not answer.
+        private static DateTime _dispatcherTickedAt;
+
+        // How long the dispatcher may be silent before the stand-in takes over
+        // again. Comfortably longer than MirrorPumpEvery (1.5s), so a healthy
+        // machine never double-pumps, and short enough that a machine which has
+        // gone quiet is covered within seconds rather than left dark.
+        internal static readonly TimeSpan DispatcherSilenceBeforeStandIn =
+            TimeSpan.FromSeconds(15);
+
+        // Whether the dispatcher has ticked recently enough to be trusted with
+        // the work. Pure so the handover rule is testable without a dispatcher —
+        // which is the one thing a test of this cannot conjure.
+        internal static bool DispatcherLooksAlive(DateTime now, DateTime lastTick) =>
+            lastTick != default && now - lastTick < DispatcherSilenceBeforeStandIn;
+
+        // Called from both DispatcherTimers. The proof is the firing, not the
+        // existence.
+        private static void DispatcherTicked()
+        {
+            lock (Gate) _dispatcherTickedAt = DateTime.UtcNow;
+        }
+
+        // Fast, because it is free — the same reasoning as MirrorPumpEvery next
+        // door, and a shade slower because this one runs when the mirror halves
+        // are idle as well as when they are not.
+        private static readonly TimeSpan ServePumpEvery = TimeSpan.FromSeconds(2);
+
+        // What is left of a relay, which is its published sessions and the
+        // mirror halves that once talked over it.
+        //
+        // **The bridge itself is gone and this is the shell it lived in.** The
+        // table is still filled by the test seams — SetRelayForTests and
+        // UseMirrorClientForTests — because the rules that read it are the same
+        // rules whichever transport supplied the rows, and asserting them
+        // without inventing a second table is worth the vestigial type. Nothing
+        // in the app writes it any more.
         private sealed class Relay
         {
-            public RemoteControlBridge? Bridge;
-
-            // Kept so the subscription can be undone on stop. The handler closes
-            // over the account name, so it is not the same delegate for two
-            // relays and cannot be reconstructed to unsubscribe.
-            public Action<BridgeProtocol.InboundMessage>? Handler;
-
             public bool Starting;
             public string State = "starting";
             public string? Warning;
+
+            // Why this relay is not answering, when the pane says so. Separate
+            // from Warning because they are different kinds of fact: a warning
+            // is something that will bite later, a stall is something that has
+            // already stopped the machine serving and names the keypress that
+            // clears it.
+            public string? Stall;
             public bool Polled;
             public IReadOnlyList<Remote> Sessions = Array.Empty<Remote>();
 
@@ -72,11 +142,9 @@ namespace ClaudeBuddy
         // class is static and starts long before any window exists, and a
         // reference the other way would make the orb list a dependency of the
         // relay rather than the other way round.
-        private static Func<IReadOnlyList<(string SessionId, SessionStatus Status)>>? _localSessions;
 
-        public static void ProvideLocalSessions(
-            Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> provider) =>
-            _localSessions = provider;
+
+
 
         // Named rather than written as a lambda at the one place a relay is
         // built, because the fallback is a real answer with a real consequence:
@@ -91,15 +159,63 @@ namespace ClaudeBuddy
         //
         // A relay is only built with a live bridge behind it, so this is also
         // the only way to ask what the provider currently says.
-        internal static IReadOnlyList<(string SessionId, SessionStatus Status)> LocalSessions() =>
-            _localSessions?.Invoke() ?? HeadlessFallback();
+        internal static IReadOnlyList<(string SessionId, SessionStatus Status)> LocalSessions()
+        {
+            lock (Gate)
+            {
+                if (_localSessionsAt is { } at && Now() - at < LocalSessionsFor)
+                    return _localSessionsWere;
+            }
 
-        // Swappable because the real fallback reads this machine's actual
-        // status directory, which a unit test has no business depending on.
+            var fresh = HeadlessFallback();
+
+            lock (Gate)
+            {
+                _localSessionsWere = fresh;
+                _localSessionsAt = Now();
+            }
+
+            return fresh;
+        }
+
+        // **This used to prefer the orb list and fall back to a scan, and the
+        // preference was the bug.** The orb list is what is on screen, and what
+        // is on screen has had the user's orb-lifetime preference applied to it
+        // — so an idle session that had stopped being drawn was reported to
+        // every other machine as not existing. On a headless Mac it was worse
+        // still: the orb list is filled by a scan on a dispatcher that never
+        // pumps, so the list was not merely filtered but empty.
+        //
+        // Serving is a question of fact and the disk is what knows the answer,
+        // so the disk is asked. See SessionManager.HeadlessSnapshot, which is
+        // told to ignore orb lifetime for exactly this call.
+        //
+        // Memoised for a moment because a peer asks every ten seconds and the
+        // scan reads a directory and a job listing. Two seconds is short enough
+        // that a session starting is noticed at once and long enough that
+        // several peers asking together cost one scan.
+        private static readonly TimeSpan LocalSessionsFor = TimeSpan.FromSeconds(2);
+
+        private static IReadOnlyList<(string SessionId, SessionStatus Status)> _localSessionsWere =
+            Array.Empty<(string, SessionStatus)>();
+
+        private static DateTime? _localSessionsAt;
+
+        // Swappable because the real scan reads this machine's actual status
+        // directory, which a unit test has no business depending on.
         internal static Func<IReadOnlyList<(string SessionId, SessionStatus Status)>>
-            HeadlessFallback = () => SessionManager.HeadlessSnapshot();
+            HeadlessFallback = () => SessionManager.HeadlessSnapshot(honourOrbLifetime: false);
 
-        internal static void ForgetLocalSessionsForTests() => _localSessions = null;
+        // Also clears the memo, or one test's answer is still being served two
+        // seconds into the next one.
+        internal static void ForgetLocalSessionsForTests()
+        {
+            lock (Gate)
+            {
+                _localSessionsWere = Array.Empty<(string, SessionStatus)>();
+                _localSessionsAt = null;
+            }
+        }
 
         // A session on another machine, as the orb scan wants it. Kept separate
         // from BridgeProtocol.RemoteAgent so the parser stays a parser: this one
@@ -177,9 +293,30 @@ namespace ClaudeBuddy
         }
 
         public static IReadOnlyList<Remote> Snapshot() =>
-            ClaudeBuddySettings.RemoteControlEnabled && RemoteControlBridge.IsSupported
-                ? _snapshot
-                : Array.Empty<Remote>();
+            Visible(_snapshot, ClaudeBuddySettings.PeerLinkEnabled);
+
+        // Whether remote orbs are shown at all.
+        //
+        // **One switch again, and a different one.** This asked about the relay
+        // for as long as a relay was the only way a remote row could exist; then
+        // briefly about both; and now about the link alone, because the relay is
+        // gone and the link is the only thing that fills the list.
+        //
+        // Worth keeping as a function rather than collapsing into the property:
+        // it is the reason the scan never has to know *why* the list is empty,
+        // and the arms have been wrong once already — the two-transport version
+        // shipped drawing nothing on exactly the machine most likely to have
+        // rows, because it insisted on a switch the user had been told to turn
+        // off.
+        internal static IReadOnlyList<Remote> Visible(IReadOnlyList<Remote> rows, bool linkOn) =>
+            linkOn ? rows : Array.Empty<Remote>();
+
+        // Lets the link raise the event a panel listens on. The event itself
+        // cannot be raised from outside the class it is declared in, and the
+        // link deliberately lives outside — see PeerMirrorHost's note on why it
+        // is not account-scoped.
+        [ExcludeFromCodeCoverage]
+        internal static void RaiseMirrorChanged(string account) => MirrorChanged?.Invoke(account);
 
         // ---- test seams ----------------------------------------------------
 
@@ -193,7 +330,7 @@ namespace ClaudeBuddy
         // test assemblies InternalsVisibleTo names.
         internal static void SetRelayForTests(
             string account, string state, string? warning = null, bool polled = false,
-            IReadOnlyList<Remote>? sessions = null)
+            IReadOnlyList<Remote>? sessions = null, string? stall = null)
         {
             lock (Gate)
             {
@@ -205,6 +342,7 @@ namespace ClaudeBuddy
 
                 relay.State = state;
                 relay.Warning = warning;
+                relay.Stall = stall;
                 relay.Polled = polled;
                 relay.Sessions = sessions ?? Array.Empty<Remote>();
             }
@@ -237,32 +375,9 @@ namespace ClaudeBuddy
             return remotes;
         }
 
-        // Excluded from coverage: a guard that must never fire. If it ever does, a
-        // test started a real relay and would otherwise leak a live subprocess for
-        // the rest of the run — which is worth failing loudly over, and is also
-        // why there is nothing here to cover.
-        [ExcludeFromCodeCoverage]
-        private static void AssertNoLiveBridge(RemoteControlBridge? bridge)
-        {
-            if (bridge is not null)
-            {
-                throw new InvalidOperationException(
-                    "ClearRelaysForTests found a live bridge; a test started a real relay");
-            }
-        }
-
         internal static void ClearRelaysForTests()
         {
-            lock (Gate)
-            {
-                // Bridges are never started by a test, so there is nothing to
-                // stop — but assert that rather than assume it, because a relay
-                // holding a live bridge dropped on the floor here would leak a
-                // subprocess for the rest of the run.
-                foreach (var relay in Relays.Values) AssertNoLiveBridge(relay.Bridge);
-
-                Relays.Clear();
-            }
+            lock (Gate) Relays.Clear();
         }
 
         internal static void SetLastUseForTests(DateTime when)
@@ -303,11 +418,12 @@ namespace ClaudeBuddy
                     if (Relays.Count == 1)
                     {
                         var only = Relays.Values.First();
-                        return Compose(only.State, only.Warning);
+                        return Compose(only.State, only.Warning, only.Stall);
                     }
 
                     return string.Join("  ·  ",
-                        Relays.Select(pair => $"{pair.Key}: {Compose(pair.Value.State, pair.Value.Warning)}"));
+                        Relays.Select(pair =>
+                            $"{pair.Key}: {Compose(pair.Value.State, pair.Value.Warning, pair.Value.Stall)}"));
                 }
             }
         }
@@ -318,10 +434,21 @@ namespace ClaudeBuddy
         // login-expiry notice starts three days out. "Your login expires in 3
         // days" is useful; being unable to tell whether it also found anything
         // is not.
-        internal static string Compose(string state, string? warning)
+        // The stall joins on the same terms and for the same reason. It is the
+        // most actionable of the three — it names a keypress — but it does not
+        // replace the count either: "3 remote sessions" and "none of them can be
+        // reached right now" are both true and a reader needs both to know what
+        // they have lost.
+        internal static string Compose(string state, string? warning, string? stall = null)
         {
-            if (warning is null) return state;
-            return state is "off" or "starting" ? warning : $"{state} · {warning}";
+            var text = Join(state, stall);
+            return Join(text, warning);
+        }
+
+        private static string Join(string state, string? extra)
+        {
+            if (extra is null) return state;
+            return state is "off" or "starting" ? extra : $"{state} · {extra}";
         }
 
         // True once every relay that is up has completed a poll. Lets a caller
@@ -417,20 +544,71 @@ namespace ClaudeBuddy
         internal static MirrorProtocol.MirrorRosterEntry? MirrorFor(string account, string name) =>
             MirrorStateFor(account, name).Entry;
 
+        // **Through MirrorClientFor, not into the relay table.** This read the
+        // table directly, which was the same thing while a relay was the only
+        // client there was — and stopped being the same thing the moment the
+        // link arrived, because the link's client is not in that table at all.
+        //
+        // What it produced is the worst shape of failure this panel has: not an
+        // error, not a refusal, but `Unknown` forever. The panel says "checking
+        // whether a live view is available…" and means it, and there is nothing
+        // anywhere to read. Watched happen on a real machine with the roster
+        // arriving every ten seconds the whole time — the answer was in the
+        // client this never asked.
+        //
+        // Found by a person clicking an orb, which is the one test I could not
+        // run. CB-69 fixed MirrorClientFor and did not go looking for the
+        // callers that went around it.
         internal static RemoteMirrorClient.MirrorState MirrorStateFor(string account, string name)
         {
-            RemoteMirrorClient? client;
-            lock (Gate) client = Relays.TryGetValue(account, out var relay) ? relay.Client : null;
+            var client = MirrorClientFor(account);
 
             return client?.StateFor(name)
                    ?? new RemoteMirrorClient.MirrorState(
                        RemoteMirrorClient.MirrorAvailability.Unknown, null);
         }
 
+        // Why an account's relay is not answering, for a panel that is waiting on
+        // it. Null when nothing says it is stuck, which includes "we have not
+        // looked yet" — an absent answer must not read as a clean bill of
+        // health.
+        internal static string? StallFor(string account)
+        {
+            lock (Gate) return Relays.TryGetValue(account, out var relay) ? relay.Stall : null;
+        }
+
         internal static RemoteMirrorClient? MirrorClientFor(string account)
         {
-            lock (Gate) return Relays.TryGetValue(account, out var relay) ? relay.Client : null;
+            // The direct link first, when there is one.
+            //
+            // **This is the line that moves the panel off the relay.** Both
+            // clients are the same class doing the same work; what differs is
+            // what carries their frames — a socket, or a model retyping base64
+            // at 222 to 247 seconds a chunk.
+            //
+            // The peer client is not account-scoped, because a socket is not:
+            // this machine talks to that machine whatever either is signed into.
+            // Asking for one by account and getting the machine-wide one is
+            // therefore correct rather than sloppy, and is why the parameter is
+            // ignored on this path.
+            //
+            // Falls through while the link is off or has no client yet, so a
+            // user who has not turned it on keeps exactly the behaviour they
+            // had. That fallback goes when the relay does.
+            RemoteMirrorClient? relayed;
+            lock (Gate) relayed = Relays.TryGetValue(account, out var relay) ? relay.Client : null;
+
+            return Prefer(PeerSessions.Host?.Client, relayed);
         }
+
+        // Which of the two clients a panel gets, given both.
+        //
+        // Pure so the precedence is a rule with a test rather than an `??` in
+        // the middle of a lock — this one line decides whether a transcript
+        // arrives in milliseconds or in four minutes, and it should be as hard
+        // to change by accident as that implies.
+        internal static RemoteMirrorClient? Prefer(
+            RemoteMirrorClient? direct, RemoteMirrorClient? relayed) => direct ?? relayed;
 
         // Installs a mirror client without a relay behind it.
         //
@@ -472,12 +650,19 @@ namespace ClaudeBuddy
                 InfoAsked.Clear();
                 WorkingNow.Clear();
                 _snapshot = Array.Empty<Remote>();
+                _peerRows = Array.Empty<Remote>();
+
+                // The memoised local-session scan, or one test's answer is
+                // still being served two seconds into the next one.
+                _localSessionsWere = Array.Empty<(string, SessionStatus)>();
+                _localSessionsAt = null;
             }
 
             // Chat sessions subscribe to this in their constructor and are
             // deliberately never disposed, so without clearing it every session
             // any earlier test built stays subscribed for the rest of the run.
             MirrorChanged = null;
+            SendOverrideForTests = null;
 
             Now = () => DateTime.UtcNow;
         }
@@ -529,97 +714,36 @@ namespace ClaudeBuddy
         // marks them all as wanted either way. Every entry point that means "a
         // person is looking at remote sessions" calls this — the tray item,
         // opening a remote chat, sending to one.
-        // Excluded from coverage: starts a relay, which launches a real Claude
-        // Code session in tmux.
-        [ExcludeFromCodeCoverage]
-        public static void EnsureStarted()
-        {
-            if (!ClaudeBuddySettings.RemoteControlEnabled) return;
-            if (!RemoteControlBridge.IsSupported) return;
-
-            var wanted = ClaudeBuddySettings.RemoteControlProfileDirs;
-            var toStart = new List<string>();
-
-            lock (Gate)
-            {
-                _lastUse = DateTime.UtcNow;
-
-                foreach (var account in wanted)
-                {
-                    if (Relays.TryGetValue(account, out var existing)
-                        && (existing.Bridge is not null || existing.Starting))
-                    {
-                        continue;
-                    }
-
-                    Relays[account] = new Relay { Starting = true, State = "starting" };
-                    toStart.Add(account);
-                }
-            }
-
-            SweepStaleScratch(wanted);
-
-            foreach (var account in toStart) _ = StartAsync(account);
-        }
-
-        // The one relay start that is not a person's gesture on this machine.
+        // Whether starting a real relay is forbidden in this process.
         //
-        // Every other path to EnsureStarted is someone asking — the tray item,
-        // the settings button, opening a remote chat — because a relay spends
-        // the account's quota. A machine that *serves* its sessions to other
-        // Buddies unattended has nobody there to ask, which is the whole reason
-        // it is unattended; remoteControlServeOnLaunch is that machine saying
-        // "treat the app starting as me asking". Guarded here rather than at
-        // the call site so the meaning lives next to EnsureStarted, whose other
-        // callers all mean "someone asked just now".
-        // Excluded from coverage for EnsureStarted's own reason: with the
-        // setting on, this starts a real Claude Code session in tmux.
-        [ExcludeFromCodeCoverage]
-        public static void ServeOnLaunch()
-        {
-            if (!ClaudeBuddySettings.RemoteControlServeOnLaunch) return;
-            EnsureStarted();
-        }
-
-        // Deletes scratch directories no configured account owns.
+        // A test suite must never start one: it is a live Claude Code session in
+        // a tmux pane, on the developer's own account, spending quota and
+        // holding a machine-wide relay name that the installed app also wants.
+        // Three suites already say so in comments and route around the calls
+        // that would do it — and CB-42 showed a comment is not a mechanism.
+        // `RemoteScanTests` opens a remote chat panel, which counts as asking
+        // for the bridge (SessionManager.RemoteChatFor), and had been calling
+        // EnsureStarted all along. It was harmless only because the relay could
+        // not start: the default account was being launched into a config
+        // context nobody had onboarded, so it died in a first-run wizard every
+        // time. Fixing that turned a dormant call into a real relay on every
+        // developer machine — and left CI green, because a GitHub runner has no
+        // `claude` installed to start.
         //
-        // Each relay's private TMPDIR collects a Node compile cache — about
-        // 2.5MB a time — and a relay only removes its *own* on a clean stop. So
-        // the ones left by a crash, by an earlier version that used a different
-        // layout, by an account since un-ticked, or by a tagged test run are
-        // never reclaimed by anything. Measured at 7.2MB across four directories
-        // after a day of development, three of them belonging to nothing.
-        //
-        // Keyed on the names a relay would build for the accounts currently
-        // selected, so a live relay's directory is never a candidate — including
-        // a sibling account's, which matters now that several can run at once.
-        // The one case this can catch mid-flight is an account un-ticked while
-        // its relay is still winding down, which the next poll was about to
-        // retire anyway.
-        // Excluded from coverage: deletes real scratch directories from disk.
-        [ExcludeFromCodeCoverage]
-        private static void SweepStaleScratch(IReadOnlyList<string> wanted)
+        // An environment variable rather than a property a test sets, so it is
+        // in place before any code in the assembly runs — the same shape and
+        // the same reason as CLAUDE_BUDDY_SETTINGS_DIR, which each suite's
+        // [ModuleInitializer] sets for exactly this class of accident. Read on
+        // every call rather than cached, so the opt-in live-bridge tests can
+        // clear it for their own duration.
+        internal static bool StartsBlocked =>
+            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_NO_RELAY") == "1";
+
+        // Whether the stand-in is still needed, as a question rather than a
+        // field, so the handover can be asserted from either side.
+        internal static bool ServePumpRunning
         {
-            try
-            {
-                var root = RemoteControlBridge.ScratchRoot;
-                if (!Directory.Exists(root)) return;
-
-                var keep = new HashSet<string>(
-                    wanted.Select(a => new RemoteControlBridge(a).ScratchName),
-                    StringComparer.Ordinal);
-
-                foreach (var dir in Directory.EnumerateDirectories(root))
-                {
-                    if (keep.Contains(Path.GetFileName(dir))) continue;
-
-                    try { Directory.Delete(dir, recursive: true); } catch { }
-                }
-            }
-            catch
-            {
-                // Housekeeping. Never a reason to fail a start.
-            }
+            get { lock (Gate) return _servePump?.Running == true; }
         }
 
         // Keeps relays that are being used from being idled out from under
@@ -627,110 +751,6 @@ namespace ClaudeBuddy
         public static void Touch()
         {
             lock (Gate) _lastUse = DateTime.UtcNow;
-        }
-
-        // Excluded from coverage: starts a relay bridge, which spends quota on a
-        // real session.
-        [ExcludeFromCodeCoverage]
-        private static async Task StartAsync(string account)
-        {
-            var bridge = new RemoteControlBridge(account);
-            void OnMessageFrom(BridgeProtocol.InboundMessage m) => OnMessage(account, m);
-            bridge.MessageReceived += OnMessageFrom;
-
-            bool ok;
-            try
-            {
-                ok = await bridge.StartAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                ok = false;
-            }
-
-            if (!ok)
-            {
-                bridge.MessageReceived -= OnMessageFrom;
-                bridge.Dispose();
-
-                lock (Gate)
-                {
-                    // Kept rather than removed, so the settings window can say
-                    // *which* account failed instead of silently showing one
-                    // fewer than the user ticked.
-                    if (Relays.TryGetValue(account, out var failed))
-                    {
-                        failed.Starting = false;
-
-                        // The specific reason when there is one — an unfinished
-                        // first-run setup is the common case and is fixable in
-                        // ten seconds, but only if it says so.
-                        failed.State = bridge.StartFailure ?? "failed to start";
-                        failed.Warning = null;
-                    }
-                }
-
-                return;
-            }
-
-            // Both mirror halves are built with the relay and live as long as
-            // it does. Neither costs anything until something asks: the server
-            // answers frames that arrive, the client sends none until there is a
-            // remote orb to ask about.
-            var client = new RemoteMirrorClient(
-                account,
-                new RemoteMirrorClient.Seams(bridge.SendFrameToAsync));
-
-            var server = new RemoteMirrorServer(
-                account,
-                RemoteMirrorServer.RealSeams(
-                    account,
-                    bridge.SendFrameToAsync,
-                    LocalSessions));
-
-            client.RosterUpdated += () => Dispatcher.UIThread.Post(() => MirrorChanged?.Invoke(account));
-
-            lock (Gate)
-            {
-                var relay = Relays.TryGetValue(account, out var found) ? found : new Relay();
-                relay.Bridge = bridge;
-                relay.Handler = OnMessageFrom;
-                relay.Starting = false;
-                relay.Polled = false;
-                relay.State = "connected";
-                relay.Warning = bridge.Warning;
-                relay.Client = client;
-                relay.Server = server;
-                Relays[account] = relay;
-            }
-
-            // Posted, not awaited. The timer has to be created on the UI thread
-            // because DispatcherTimer belongs to it, but waiting for that to
-            // happen would put the first poll behind the dispatcher being free —
-            // and awaiting InvokeAsync where no dispatcher is pumping blocks
-            // forever, which is exactly what it did: the relay reported
-            // "connected" and then never asked for a peer list, because startup
-            // stopped one line short of doing so.
-            //
-            // One timer for all relays, not one each: they are polled together,
-            // and N timers on the same interval would just be N wakeups.
-            Dispatcher.UIThread.Post(EnsureTimer);
-
-            await PollAsync(account).ConfigureAwait(false);
-        }
-
-        // Excluded from coverage: creates the Avalonia poll timer the relay runs
-        // on.
-        [ExcludeFromCodeCoverage]
-        private static void EnsureTimer()
-        {
-            if (_poll is not null) return;
-
-            _poll = new DispatcherTimer { Interval = PollEvery };
-            _poll.Tick += (_, _) => _ = TickAsync();
-            _poll.Start();
-
-            EnsureMirrorTimer();
         }
 
         // The one poll in this class that is free.
@@ -752,248 +772,123 @@ namespace ClaudeBuddy
 
         private static readonly TimeSpan MirrorPumpEvery = TimeSpan.FromMilliseconds(1500);
 
-        // Excluded from coverage: starts a real DispatcherTimer whose every tick
-        // pumps live relays. Same reasoning as the poll loop below it, and the
-        // same reason ClaudeBuddySettings' deferred write is excluded — a test
-        // that waited for a real timer is the shape that has cost this branch
-        // five flakes.
-        [ExcludeFromCodeCoverage]
-        private static void EnsureMirrorTimer()
-        {
-            if (_mirrorPump is not null) return;
-
-            _mirrorPump = new DispatcherTimer { Interval = MirrorPumpEvery };
-            _mirrorPump.Tick += (_, _) => _ = MirrorTickAsync();
-            _mirrorPump.Start();
-        }
-
-        private static bool _mirrorTicking;
+        // The one guard both pumps take, so that "only one round at a time" is a
+        // single rule rather than two that agree by luck. Internal so a test can
+        // hold it and watch a round decline — the only way to prove from outside
+        // that a caller actually asks.
+        //
+        // It replaced a plain bool here. The bool was sound while MirrorTickAsync
+        // was the only caller and the UI thread the only thread; it stopped being
+        // sound when ServeOneAsync started calling it from the pool. See TickGate.
+        internal static readonly TickGate PumpGate = new();
 
         // Excluded from coverage: one round of the pump above, reading files
         // belonging to live relays and ticking a mirror server and client that
         // only exist when one is running.
         [ExcludeFromCodeCoverage]
-        private static async Task MirrorTickAsync()
+        // One turn of both mirror halves, under the shared pump gate.
+        //
+        // **This used to take a bridge and pump it first; it no longer does, and
+        // that is the only thing that changed.** What it always actually was is
+        // the gate and the two ticks — the bridge was the transport that
+        // happened to need waking, and the transport now wakes itself on its own
+        // read loop.
+        //
+        // Kept rather than folded into MirrorTickAsync because the thing worth
+        // asserting is the *decline*: two pumps must not tick the same halves at
+        // once, and a test can only watch that happen if it can call one of them
+        // directly. False means the gate was held, which is never an error —
+        // whichever timer called this comes back around.
+        internal static async Task<bool> ServeOneAsync(
+            RemoteMirrorServer? server, RemoteMirrorClient? client)
         {
-            // Ticks can overlap when a file read is slow, and two pumps racing
-            // on one relay would read the same bytes twice.
-            if (_mirrorTicking) return;
-            _mirrorTicking = true;
+            if (!PumpGate.TryEnter()) return false;
 
             try
             {
-                List<Relay> live;
-                lock (Gate) live = Relays.Values.Where(r => r.Bridge is not null).ToList();
-
-                foreach (var relay in live)
+                if (server is not null)
                 {
-                    var busy = relay.Server?.Busy == true || relay.Client?.Busy == true;
-                    if (!busy) continue;
+                    try { await server.TickAsync().ConfigureAwait(true); } catch { }
+                }
 
-                    try { relay.Bridge!.Pump(); } catch { }
-
-                    if (relay.Server is not null)
-                    {
-                        try { await relay.Server.TickAsync().ConfigureAwait(true); } catch { }
-                    }
-
-                    if (relay.Client is not null)
-                    {
-                        try { await relay.Client.TickAsync().ConfigureAwait(true); } catch { }
-                    }
+                if (client is not null)
+                {
+                    try { await client.TickAsync().ConfigureAwait(true); } catch { }
                 }
             }
             finally
             {
-                _mirrorTicking = false;
+                PumpGate.Exit();
             }
+
+            return true;
         }
 
-        // One round: retire the relays nobody wants, then re-ask the rest.
-        // Excluded from coverage: the poll loop, driving live relays.
-        [ExcludeFromCodeCoverage]
-        private static async Task TickAsync()
+        // Internal rather than private only so a UI test can watch it decline
+        // while the serve pump holds the gate — the assertion that the two
+        // pumps really do share one, which is otherwise a claim about code
+        // nobody can call.
+        internal static async Task MirrorTickAsync()
         {
-            // Idle check first, so relays nobody wants aren't kept alive by the
-            // very poll that was about to retire them.
-            if (IdleExpired())
-            {
-                StopAll("idle");
-                return;
-            }
+            // Ticks can overlap when a file read is slow, and two pumps racing
+            // on one relay would read the same bytes twice. Shared with
+            // ServeOneAsync, which is the other pump.
+            if (!PumpGate.TryEnter()) return;
 
-            if (!ClaudeBuddySettings.RemoteControlEnabled)
-            {
-                StopAll("off");
-                return;
-            }
-
-            // An account un-ticked in Settings while its relay was up. Retired
-            // here rather than by the settings window, so there is one place
-            // that decides which relays should exist.
-            var wanted = ClaudeBuddySettings.RemoteControlProfileDirs;
-            List<string> unwanted;
-            lock (Gate)
-            {
-                unwanted = Relays.Keys.Where(a => !wanted.Contains(a, StringComparer.Ordinal)).ToList();
-            }
-
-            foreach (var account in unwanted) Stop(account, "no longer selected");
-
-            List<string> live;
-            lock (Gate) live = Relays.Where(p => p.Value.Bridge is not null).Select(p => p.Key).ToList();
-
-            foreach (var account in live) await PollAsync(account).ConfigureAwait(false);
-        }
-
-        // Re-asks one account's relay for its peers and republishes.
-        // Excluded from coverage: asks a live relay for its agent list.
-        [ExcludeFromCodeCoverage]
-        private static async Task PollAsync(string account)
-        {
-            RemoteControlBridge? bridge;
-            lock (Gate)
-            {
-                bridge = Relays.TryGetValue(account, out var relay) ? relay.Bridge : null;
-            }
-
-            if (bridge is null) return;
-
-            // Also drains the transcript, which is how an inbound reply that
-            // arrived while nobody was asking anything gets noticed at all.
-            bridge.Pump();
-
-            IReadOnlyList<BridgeProtocol.RemoteAgent>? agents;
             try
             {
-                agents = await bridge.ListAgentsAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                agents = null;
-            }
+                // **Repointed at the link rather than deleted with the relay,
+                // and that distinction matters.** What this used to do was pump
+                // a tmux pane and then tick the two mirror halves that read it.
+                // The pane is gone; the halves are not, and neither is their
+                // reason for wanting a tick — deadlines lapse and watches renew
+                // on this clock, not on the arrival of bytes. Deleting it
+                // wholesale would have left a fetch that never times out and a
+                // watch that quietly expires, both of which look like the far
+                // machine having gone quiet.
+                var host = PeerSessions.Host;
+                if (host is null) return;
 
-            if (agents is null)
-            {
-                // A relay that has stopped answering is worse than none: it
-                // would publish a peer list frozen at whatever was true when it
-                // died. Retiring it means those orbs go away, which is at least
-                // honest, and the next EnsureStarted brings a fresh one up.
-                if (!bridge.IsRunning) Stop(account, "relay stopped");
-                else lock (Gate) { if (Relays.TryGetValue(account, out var r)) r.State = "not answering"; }
+                var client = host.Client;
+                var server = host.Server;
 
-                Republish();
-                return;
-            }
-
-            var remotes = RemotesFrom(agents, account, DateTime.UtcNow);
-
-            lock (Gate)
-            {
-                if (Relays.TryGetValue(account, out var relay))
+                if (server is not null)
                 {
-                    relay.Sessions = remotes;
-                    relay.Polled = true;
-                    relay.Warning = bridge.Warning;
-                    relay.State = remotes.Count switch
-                    {
-                        0 => "no remote sessions found",
-                        1 => "1 remote session",
-                        _ => $"{remotes.Count} remote sessions"
-                    };
+                    try { await server.TickAsync().ConfigureAwait(true); } catch { }
+                }
+
+                if (client is not null)
+                {
+                    try { await client.TickAsync().ConfigureAwait(true); } catch { }
                 }
             }
-
-            Republish();
-            RaiseWorkingTransitions(remotes);
-            RetuneTimer();
-
-            // Before the colour question below, because it can answer it for
-            // free. A far Buddy's roster carries the colour and the command list
-            // read off its own disk, so a session it covers never needs the
-            // CB-INFO round trip at all.
-            //
-            // The *unfiltered* peer list goes in on purpose: a far Buddy's relay
-            // is deliberately not worth an orb, so the filtered list is the one
-            // place it has been removed from.
-            RemoteMirrorClient? client;
-            lock (Gate) client = Relays.TryGetValue(account, out var found) ? found.Client : null;
-
-            if (client is not null)
+            finally
             {
-                try
-                {
-                    await client.DiscoverAsync(agents, remotes.Select(r => r.Name).ToList())
-                        .ConfigureAwait(false);
-                }
-                catch
-                {
-                    // A handshake that failed leaves every session on the
-                    // messaging channel, which is where they already were.
-                }
+                PumpGate.Exit();
             }
-
-            await AskForMissingInfoAsync(account, remotes, bridge).ConfigureAwait(false);
         }
 
-        // Asks each newly seen session what colour it is, once.
+        // When a stopped relay was last given another go, per account. A
+        // dictionary rather than a field because the accounts fail
+        // independently — one relay wedged is no reason to hold the other's
+        // retry back.
+        private static readonly Dictionary<string, DateTime> RevivedAt =
+            new(StringComparer.Ordinal);
+
+        // Slow enough that a relay which cannot start is not restarted in a
+        // loop, spending quota on a session that dies each time; fast enough
+        // that a machine nobody is looking at is dark for a minute rather than
+        // until somebody notices.
+        internal static readonly TimeSpan ReviveEvery = TimeSpan.FromMinutes(1);
+
+        // Whether it is worth trying this account again.
         //
-        // This costs a message per remote session — there is no cheaper route,
-        // since a peer row carries neither the transcript nor the cwd a colour
-        // is derived from (see BridgeProtocol's own note). Bounded by asking
-        // only once per session per run, and only for sessions already deemed
-        // worth an orb, so nothing is spent on relays or dead registrations.
-        //
-        // Sequential rather than fanned out: the relay serializes requests
-        // anyway, and firing five at once would just queue five deep behind one
-        // input line.
-        // Excluded from coverage: sends prompts into a live relay session.
-        [ExcludeFromCodeCoverage]
-        private static async Task AskForMissingInfoAsync(
-            string account, IReadOnlyList<Remote> remotes, RemoteControlBridge bridge)
-        {
-            foreach (var remote in remotes)
-            {
-                var key = account + ":" + remote.Name;
-
-                // A far Buddy has already said, off its own disk. Asking its
-                // model the same question would cost a turn to get a worse
-                // answer.
-                if (MirrorFor(account, remote.Name) is not null) continue;
-
-                lock (Gate)
-                {
-                    if (KnownColors.ContainsKey(key)) continue;
-                    if (!ShouldAsk(key)) continue;
-                }
-
-                try
-                {
-                    await bridge.AskCapabilitiesAsync(remote.Name).ConfigureAwait(false);
-                }
-                catch
-                {
-                    // Cosmetic. A colour that never arrives leaves the derived
-                    // one in place, which is what every orb had before this.
-                }
-            }
-        }
-
-        // Picks the cadence from what is actually happening. Called after every
-        // poll rather than on a schedule of its own, because the thing it reacts
-        // to — a session going busy — is exactly what a poll discovers.
-        // Excluded from coverage: changes the interval of the Avalonia poll timer.
-        [ExcludeFromCodeCoverage]
-        private static void RetuneTimer()
-        {
-            var wanted = ShouldPollFast() ? PollEveryBusy : PollEvery;
-
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (_poll is null || _poll.Interval == wanted) return;
-                _poll.Interval = wanted;
-            });
-        }
+        // Pure so the rule is testable without a relay, a bridge or a clock —
+        // the same reason IdleExpired was split. The three arms are the whole of
+        // it: a live bridge needs nothing, a never-tried account goes now, and
+        // one tried recently waits.
+        internal static bool ShouldRevive(bool hasBridge, DateTime now, DateTime? lastAttempt) =>
+            !hasBridge && (lastAttempt is not { } last || now - last >= ReviveEvery);
 
         internal static bool ShouldPollFast()
         {
@@ -1005,13 +900,105 @@ namespace ClaudeBuddy
             return DateTime.UtcNow - lastSend < BusyGrace;
         }
 
-        // Every relay's sessions, flattened into the one list the scan reads.
+        // A mirror roster, as orb rows.
+        //
+        // Pure, and the only place the two vocabularies meet: a roster entry
+        // says what a session *is* (name, CLI, transcript, colour), and a Remote
+        // says what to draw. The peer name doubles as the Ref, because over a
+        // direct link the machine that served a session is the machine it is on
+        // — which is the fact the relay path had to parse back out of a session
+        // name (see RemoteControlChatSession.MachineName).
+        //
+        // An entry nobody has claimed is dropped rather than drawn with a blank
+        // machine: it would be an orb the panel could not then ask anyone about.
+        internal static IReadOnlyList<Remote> RemotesFromRoster(
+            string account,
+            IReadOnlyList<(string Peer, MirrorProtocol.MirrorRosterEntry Entry)> known,
+            DateTime now) =>
+            known
+                .Where(k => !string.IsNullOrWhiteSpace(k.Peer))
+                .Select(k => new Remote(
+                    k.Entry.Name,
+                    k.Peer,
+                    k.Entry.Status ?? "idle",
+                    now,
+                    account,
+                    string.IsNullOrWhiteSpace(k.Entry.Color) ? null : k.Entry.Color))
+                .ToList();
+
+        // Excluded from coverage: reads the live link. What it decides is
+        // RemotesFromRoster, which is tested; this is the two lines that fetch
+        // and store.
+        [ExcludeFromCodeCoverage]
+        internal static void RepublishFromLink()
+        {
+            var client = PeerSessions.Host?.Client;
+
+            var rows = client is null
+                ? Array.Empty<Remote>()
+                : RemotesFromRoster(
+                    ClaudeBuddySettings.DefaultRemoteControlProfileDir,
+                    client.Known(),
+                    Now());
+
+            lock (Gate) _peerRows = rows;
+
+            Republish();
+        }
+
+        // Every relay's sessions and every peer's, flattened into the one list
+        // the scan reads.
         internal static void Republish()
         {
             lock (Gate)
             {
-                _snapshot = Relays.Values.SelectMany(r => r.Sessions).ToList();
+                _snapshot = OnePerSession(
+                    Relays.Values.SelectMany(r => r.Sessions).ToList(), _peerRows);
             }
+        }
+
+        // One row per session, however many transports can see it.
+        //
+        // **Both can see the same session, and until this they both drew it.**
+        // A session running `claude --remote-control` is listed by any relay on
+        // that account *and* served over the link by the Buddy beside it — which
+        // is not an odd configuration, it is the normal one for a machine that
+        // was reachable before the link existed and still is. Two rows share a
+        // Key, so the scan draws two orbs for one terminal.
+        //
+        // That is the "there's two Claude Buddy's running" complaint in a
+        // smaller form, and it would have been the first thing anybody saw on
+        // turning the link on with the relay still enabled.
+        //
+        // **The direct row wins.** Not arbitrarily: the two carry the same
+        // session but not the same capability. A relay row can only ever offer a
+        // messaging channel unless the mirror also answers, while the link's row
+        // comes with a live transcript by construction — the roster it was built
+        // from is the answer to "can you show me this". Preferring the other way
+        // round would put a "no live view" panel on a session that has one.
+        //
+        // Pure, because "which orb does the user see" is a rule and the answer
+        // is not obvious from either list alone.
+        internal static IReadOnlyList<Remote> OnePerSession(
+            IReadOnlyList<Remote> relayed, IReadOnlyList<Remote> direct)
+        {
+            var byKey = new Dictionary<string, Remote>(StringComparer.OrdinalIgnoreCase);
+            var order = new List<string>();
+
+            foreach (var row in direct)
+            {
+                if (byKey.TryAdd(row.Key, row)) order.Add(row.Key);
+            }
+
+            foreach (var row in relayed)
+            {
+                if (byKey.ContainsKey(row.Key)) continue;
+
+                byKey[row.Key] = row;
+                order.Add(row.Key);
+            }
+
+            return order.Select(k => byKey[k]).ToList();
         }
 
         internal static void RaiseWorkingTransitions(IEnumerable<Remote> remotes)
@@ -1036,88 +1023,83 @@ namespace ClaudeBuddy
             var minutes = ClaudeBuddySettings.RemoteControlIdleMinutes;
             if (minutes <= ClaudeBuddySettings.RemoteControlIdleNever) return false;
 
+            // Somebody watching is somebody using it.
+            //
+            // Touch() is what holds a relay open, and its own comment says it is
+            // "cheap enough to call on every send" — which is the whole of where
+            // it was called from. Watching a mirrored panel sends nothing, so a
+            // panel that was open and streaming counted as idle and had its
+            // relays retired underneath it. Measured overnight: 27 deltas
+            // delivered, then nothing from 01:36, and the panel still showing
+            // 1 a.m. at 8 a.m.
+            //
+            // Asked of the clients rather than fixed by touching on delivery,
+            // because a delta only arrives when the far session says something.
+            // Touching on delivery would keep a busy far session alive and still
+            // idle out a quiet one, which is the same bug with a smaller window
+            // and a much harder repro — a panel watching a thinking agent is
+            // exactly when this must not happen.
             DateTime last;
             lock (Gate) last = _lastUse;
 
-            return DateTime.UtcNow - last > TimeSpan.FromMinutes(minutes);
+            return IdleExpired(WatchingAnywhere(), last, minutes, DateTime.UtcNow);
+        }
+
+        // The rule itself, with the state read out of it.
+        //
+        // Split so the decision can be tested without relays, clients or a
+        // window behind it — the same reason OrbArrangement and OrbGlyph are
+        // pure. Reaching the watching arm otherwise means standing up a real
+        // mirror client with an open feed inside the UI suite, which is a lot of
+        // machinery to assert one boolean.
+        internal static bool IdleExpired(
+            bool watching, DateTime lastUse, int minutes, DateTime now)
+        {
+            if (minutes <= ClaudeBuddySettings.RemoteControlIdleNever) return false;
+
+            if (watching) return false;
+
+            return now - lastUse > TimeSpan.FromMinutes(minutes);
+        }
+
+        // Whether any account's mirror client has a panel open on a far session.
+        internal static bool WatchingAnywhere()
+        {
+            List<Relay> all;
+            lock (Gate) all = Relays.Values.ToList();
+
+            return all.Any(r => r.Client?.Watching == true);
         }
 
         // Hands text to a session on another machine, through the relay for the
         // account that session belongs to. Null when there is no relay to send
         // it through, which the caller shows as a system line rather than
         // swallowing.
-        // Excluded from coverage: sends a message through a live relay.
-        [ExcludeFromCodeCoverage]
-        public static async Task<string?> SendToAsync(string account, string remoteName, string text)
-        {
-            EnsureStarted();
+        // Stands in for the send in tests.
+        //
+        // Added for CB-43, whose whole subject is what happens *after* a send is
+        // attempted: without it the fallback below could only be reached by
+        // starting a live relay on somebody's account, which is the same reason
+        // this method is excluded from coverage in the first place. Cleared by
+        // ResetForTests, the way UseMirrorClientForTests is.
+        internal static Func<string, string, string, Task<string?>>? SendOverrideForTests;
 
-            RemoteControlBridge? bridge;
-            lock (Gate)
-            {
-                bridge = Relays.TryGetValue(account, out var relay) ? relay.Bridge : null;
-            }
-
-            if (bridge is null) return null;
-
-            Touch();
-            lock (Gate) _lastSend = DateTime.UtcNow;
-
-            var id = await bridge.SendToAsync(remoteName, text).ConfigureAwait(false);
-
-            // Straight back to the relay rather than waiting up to a full tick:
-            // the moment after a send is exactly when whether it started is
-            // worth knowing, and it is also when someone is watching.
-            if (id is not null) _ = PollAsync(account);
-
-            return id;
-        }
-
-        // Excluded from coverage: kills a relay tmux session.
-        [ExcludeFromCodeCoverage]
-        public static void Stop(string account, string why = "off")
-        {
-            RemoteControlBridge? bridge = null;
-            Action<BridgeProtocol.InboundMessage>? handler = null;
-
-            lock (Gate)
-            {
-                if (Relays.TryGetValue(account, out var relay))
-                {
-                    bridge = relay.Bridge;
-                    handler = relay.Handler;
-
-                    // Both mirror halves go with the wire they talked over.
-                    // Nothing to unsubscribe from the far side: its watches
-                    // carry a TTL precisely so a relay that vanished without
-                    // saying goodbye stops being served.
-                    relay.Client = null;
-                    relay.Server = null;
-
-                    Relays.Remove(account);
-                }
-            }
-
-            if (bridge is not null)
-            {
-                if (handler is not null) bridge.MessageReceived -= handler;
-                bridge.Dispose();
-            }
-
-            Republish();
-            StopTimerIfIdle();
-        }
-
-        // Excluded from coverage: kills every relay tmux session.
-        [ExcludeFromCodeCoverage]
+        // Forgets every remote session and everything remembered about them.
+        //
+        // There is no longer a subprocess to kill: this used to end each
+        // account's relay tmux session, and now it only clears the table those
+        // relays filled. Kept because the tray and the settings switch both need
+        // a way to say "stop showing me these", which is a different thing from
+        // the transport being off.
         public static void StopAll(string why = "off")
         {
-            List<string> accounts;
-            lock (Gate) accounts = Relays.Keys.ToList();
-
-            foreach (var account in accounts) Stop(account, why);
-
-            lock (Gate) WorkingNow.Clear();
+            lock (Gate)
+            {
+                Relays.Clear();
+                WorkingNow.Clear();
+                _peerRows = Array.Empty<Remote>();
+                _snapshot = Array.Empty<Remote>();
+            }
         }
 
         // Excluded from coverage: stops the Avalonia poll timer.
@@ -1145,27 +1127,28 @@ namespace ClaudeBuddy
             _mirrorPump = null;
         }
 
-        // Settings changed under us. Unlike OpenClawSessions.Restart this only
-        // ever tears down: bringing a relay back has to be asked for, because
-        // starting one costs the user something.
-        // Excluded from coverage: stops every relay and starts them again.
-        [ExcludeFromCodeCoverage]
-        public static void Restart()
-        {
-            if (!ClaudeBuddySettings.RemoteControlEnabled || !RemoteControlBridge.IsSupported)
-            {
-                StopAll("off");
-                return;
-            }
-
-            bool any;
-            lock (Gate) any = Relays.Count > 0;
-            if (any) StopAll("restarting");
-        }
-
         // Internal so the two things this decides — that a frame never reaches a
         // chat bubble, and that a CB-INFO answer is swallowed — can be tested
         // without a relay to deliver one.
+        // A discarded task that faults is a fault nobody hears about.
+        //
+        // Both mirror halves were started with `_ =`, which is correct about not
+        // waiting and wrong about not looking: an exception inside HandleAsync
+        // went nowhere at all. That is how a machine could accept a frame, run
+        // its handler, and answer nothing, with every visible signal saying it
+        // was fine.
+        private static void Watched(Task work, string half, MirrorProtocol.MirrorFrame frame)
+        {
+            _ = work.ContinueWith(
+                t => MirrorLog.Say("threw",
+                    $"{half} t={frame.Type} id={frame.Id} "
+                    + $"{t.Exception?.GetBaseException().GetType().Name}: "
+                    + $"{t.Exception?.GetBaseException().Message}"),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+        }
+
         internal static void OnMessage(string account, BridgeProtocol.InboundMessage message)
         {
             // A mirror frame is plumbing between two Buddies and must never
@@ -1182,7 +1165,15 @@ namespace ClaudeBuddy
             if (MirrorProtocol.IsFrame(message.Body))
             {
                 var frame = MirrorProtocol.TryParseFrame(message.Body);
-                if (frame is null) return;
+
+                if (frame is null)
+                {
+                    // A frame that looked like one and would not parse. Silent
+                    // until now, and indistinguishable from never arriving.
+                    MirrorLog.Say("frame-unparseable",
+                        $"from={message.FromName} len={message.Body.Length}");
+                    return;
+                }
 
                 RemoteMirrorServer? server;
                 RemoteMirrorClient? client;
@@ -1198,16 +1189,23 @@ namespace ClaudeBuddy
                 // it: a request is for the server here, a reply is for the
                 // client here, and one relay carries both directions at once
                 // because both machines are asking each other.
+                MirrorLog.Say("frame-in",
+                    $"t={frame.Type} id={frame.Id} from={message.FromName} "
+                    + $"server={(server is null ? "null" : "yes")} "
+                    + $"client={(client is null ? "null" : "yes")}");
+
                 switch (frame.Type)
                 {
                     case MirrorProtocol.Chunk:
                     case MirrorProtocol.Ok:
                     case MirrorProtocol.Err:
-                        if (client is not null) _ = client.OnFrameAsync(message.FromName, frame);
+                        if (client is not null) Watched(client.OnFrameAsync(message.FromName, frame), "client", frame);
+                        else MirrorLog.Say("dropped", $"t={frame.Type} no client for {account}");
                         break;
 
                     default:
-                        if (server is not null) _ = server.HandleAsync(message.FromName, frame);
+                        if (server is not null) Watched(server.HandleAsync(message.FromName, frame), "server", frame);
+                        else MirrorLog.Say("dropped", $"t={frame.Type} no server for {account}");
                         break;
                 }
 
@@ -1260,7 +1258,8 @@ namespace ClaudeBuddy
                         .ToList();
                 }
 
-                _snapshot = Relays.Values.SelectMany(r => r.Sessions).ToList();
+                _snapshot = OnePerSession(
+                    Relays.Values.SelectMany(r => r.Sessions).ToList(), _peerRows);
             }
         }
     }

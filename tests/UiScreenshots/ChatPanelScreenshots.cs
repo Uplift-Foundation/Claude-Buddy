@@ -1,6 +1,8 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.VisualTree;
 
 namespace ClaudeBuddy.Tests;
 
@@ -297,5 +299,169 @@ public class ChatPanelScreenshots : IDisposable
         ScreenshotHelper.Flush();
         ScreenshotHelper.CaptureAlreadyShown(
             ChatPanelTestAccess.Instance!, "chat-panel-room-attribution.png");
+    }
+
+    // A passage held selected in a reply.
+    //
+    // Captured because the selection is the whole feature and the only part of
+    // it a reviewer cannot check any other way: the tests can prove the right
+    // characters end up on the clipboard, but not that the highlight can
+    // actually be read. That is a judgement about one colour sitting on a
+    // tinted bubble, and it is the reason SelectionFill is a translucent white
+    // rather than the solid system highlight — which is exactly the kind of
+    // choice a picture settles and a passing assertion does not.
+    [AvaloniaFact]
+    public void ASelectedPassageIsHighlightedInTheReply()
+    {
+        var fake = NewFake(new[]
+        {
+            new ChatTurn
+            {
+                Role = ChatRole.User,
+                Text = "where does the hook write its status files?",
+                IsComplete = true,
+            },
+            new ChatTurn
+            {
+                Role = ChatRole.Assistant,
+                Text = "They go to `$TMPDIR/claude-buddy`, one file per session.\n\n"
+                     + "Drag across any of this to select it, then copy.",
+                IsComplete = true,
+            },
+        });
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        ScreenshotHelper.Flush();
+
+        // The selection a person would have made by dragging. Set directly
+        // rather than synthesized, because a headless drag would be testing
+        // Avalonia's hit-testing rather than this app's rendering — and it is
+        // the rendering the capture exists to show.
+        var panel = ChatPanelTestAccess.Instance!;
+        var line = panel.FindControl<ItemsControl>("Turns")!
+            .GetVisualDescendants()
+            .OfType<SelectableTextBlock>()
+            .First(b => Text(b).StartsWith("They go to", StringComparison.Ordinal));
+
+        line.SelectionStart = "They go to ".Length;
+        line.SelectionEnd = "They go to $TMPDIR/claude-buddy".Length;
+
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.CaptureAlreadyShown(panel, "chat-panel-selected-text.png");
+    }
+
+    // A styled line keeps its words in Inlines and leaves Text null.
+    private static string Text(TextBlock block)
+    {
+        if (!string.IsNullOrEmpty(block.Text)) return block.Text!;
+        if (block.Inlines is null) return "";
+
+        return string.Concat(
+            block.Inlines.OfType<Avalonia.Controls.Documents.Run>().Select(r => r.Text));
+    }
+    // Where a long transcript sits when you open it, which every capture above
+    // is silent about — they all hold a handful of turns and so never overflow
+    // the panel at all.
+    //
+    // Worth a picture rather than only the assertions in tests/UiTests'
+    // ChatPanelScrollTests, because the fault it covers was reported by eye and
+    // is read back by eye: the numbers in an offset-versus-extent assertion say
+    // the scroll viewer is at its end, and the image says the newest message is
+    // the one you are looking at. It is also the one part of this fix whose
+    // behaviour is worth confirming per platform — the two-priority yield it
+    // depends on is dispatcher and layout timing, and the capture runs on both
+    // runners.
+    //
+    // Staged the way the report describes rather than on a fresh panel: a first
+    // session read part way up, then a second one opened over it. The panel is a
+    // process-wide singleton, so the offset left behind by the first is exactly
+    // what the second used to inherit.
+    [AvaloniaFact]
+    public void ALongTranscriptOpensOnItsNewestTurn()
+    {
+        var read = NewFake(LongTranscript("an earlier conversation"));
+        ChatPanel.OpenFor(NewOrb(), read);
+        ScreenshotHelper.Flush();
+
+        // Part way up the first transcript, where reading back through it
+        // leaves you.
+        ChatPanelTestAccess.Instance!.Scroll.Offset = new Vector(0, 300);
+        ScreenshotHelper.Flush();
+
+        var opened = NewFake(LongTranscript("this conversation"), displayName: "Long Session");
+        ChatPanel.OpenFor(NewOrb(), opened);
+
+        // Several, because the scroll deliberately settles across two dispatcher
+        // priorities with a measure between them, and a capture taken before it
+        // has finished is a picture of the bug rather than of the fix.
+        for (var i = 0; i < 8; i++) ScreenshotHelper.Flush();
+
+        ScreenshotHelper.CaptureAlreadyShown(
+            ChatPanelTestAccess.Instance!, "chat-panel-opens-at-newest-turn.png");
+    }
+
+    // Numbered, and with the last turn saying so, because the whole point of the
+    // image is which end of the transcript is on screen — and "some chat
+    // bubbles" looks the same at either end.
+    private static List<ChatTurn> LongTranscript(string what) =>
+        Enumerable.Range(0, 60).Select(i => new ChatTurn
+        {
+            Role = i % 2 == 0 ? ChatRole.User : ChatRole.Assistant,
+            Text = i == 59
+                ? $"Message 60 of {what} — the newest turn, and the one you should be looking at."
+                : $"Message {i + 1} of {what}, somewhere above the fold.",
+            IsComplete = true,
+        }).ToList();
+
+    // The panel after Cmd+ has been pressed a few times.
+    //
+    // The tests assert the numbers; this is the half a number cannot answer.
+    // Whether an enlarged conversation is still a conversation — whether the
+    // bubbles still read as two people talking, whether a heading is still a
+    // heading beside its prose, whether a wrapped code block at 1.75x has
+    // anything left of its line — is a judgement, and it is made by looking.
+    // Both runners capture it, so a font that falls back differently on
+    // Windows shows up here rather than on someone's machine.
+    [AvaloniaFact]
+    public void AnEnlargedPanelIsStillAReadableConversation()
+    {
+        var was = ClaudeBuddySettings.ChatTextScale;
+
+        try
+        {
+            ClaudeBuddySettings.ChatTextScale = 1.75;
+
+            var fake = NewFake(new[]
+            {
+                new ChatTurn { Role = ChatRole.User, Text = "why is the build red?" },
+                new ChatTurn
+                {
+                    Role = ChatRole.Assistant,
+                    Text = "## One test\n\n`ArrangementSweep` fails at the widest spacing:\n\n"
+                         + "```\nExpected: 1.15\nActual:   1.0\n```\n\n"
+                         + "- the ladder is uneven\n- the tick was not",
+                    IsComplete = true
+                },
+                new ChatTurn { Role = ChatRole.System, Text = "Session went idle." },
+            }, displayName: "Build");
+
+            ChatPanel.OpenFor(NewOrb(), fake);
+
+            // The panel is a singleton and may already have been built by an
+            // earlier capture, in which case its constructor's ApplyTextScale
+            // ran against the old size. This is the same hook the settings
+            // slider uses.
+            ChatPanel.ReapplyTextScale();
+            ScreenshotHelper.Flush();
+            ScreenshotHelper.CaptureAlreadyShown(
+                ChatPanelTestAccess.Instance!, "chat-panel-text-enlarged.png");
+        }
+        finally
+        {
+            // Every other capture in this assembly draws at the shipped size,
+            // and the suite shares one process.
+            ClaudeBuddySettings.ChatTextScale = was;
+            ChatPanel.ReapplyTextScale();
+        }
     }
 }

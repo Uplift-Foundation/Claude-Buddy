@@ -40,7 +40,22 @@ namespace ClaudeBuddy
             Func<IReadOnlyList<AgentRoster.Entry>> Agents,
             Func<SessionSource, bool> ReplyEnabled,
             Func<SessionStatus, bool> CanType,
-            Func<SessionStatus, string, Task<bool>> TypeInto);
+            Func<SessionStatus, string, Task<bool>> TypeInto,
+
+            // Whether this peer is allowed to ask anything at all.
+            //
+            // **A seam because the answer depends on the transport, and the
+            // hard-coded version was a second copy of a string.** Over the relay
+            // it meant "the name starts with the prefix RemoteControlBridge
+            // builds" — a guard rather than a boundary, since the account is
+            // shared and anything on it could wear that name. Over a direct link
+            // it means something much stronger: this peer completed a TLS
+            // handshake presenting a certificate we pinned when a person typed a
+            // pairing code.
+            //
+            // Null keeps the old prefix test, so nothing that has not been moved
+            // across yet changes behaviour.
+            Func<string, bool>? PeerAllowed = null);
 
         private readonly string _account;
         private readonly Seams _seams;
@@ -96,6 +111,84 @@ namespace ClaudeBuddy
             Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> localSessions) =>
             LiveSeams(profileDir, sendFrame, localSessions);
 
+        // The same, for a transport that is not account-scoped.
+        //
+        // **A socket has no account, and reading one account's roster made that
+        // comment untrue where it mattered.** A relay signs into one Anthropic
+        // account and can only ever see that account's sessions, so
+        // RealSeams taking one profile dir is not a limitation there — it is the
+        // shape of the thing. A direct link has no such excuse: the machine has
+        // whatever sessions it has, under whatever config dirs the user set up,
+        // and answering for only the first is answering the wrong question.
+        //
+        // Caught on real hardware and nowhere else. The mini's sessions live
+        // under `.claude-board`; the peer server read `.claude`; the two
+        // machines connected in 22 milliseconds and exchanged a roster of
+        // exactly zero entries, with nothing failing anywhere.
+        public static Seams AllAccountSeams(
+            IReadOnlyList<string> profileDirs,
+            Func<string, string, Task<bool>> sendFrame,
+            Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> localSessions)
+        {
+            var one = LiveSeams(
+                profileDirs.Count > 0 ? profileDirs[0] : ".claude", sendFrame, localSessions);
+
+            return one with { Agents = () => AgentsAcross(profileDirs) };
+        }
+
+        // Every account's roster, as one list.
+        //
+        // Excluded from coverage: each call launches `claude agents`. What is
+        // worth asserting is that duplicates collapse, which MergeRosters does
+        // and is pure.
+        [ExcludeFromCodeCoverage]
+        private static IReadOnlyList<AgentRoster.Entry> AgentsAcross(
+            IReadOnlyList<string> profileDirs)
+        {
+            var all = new List<IReadOnlyList<AgentRoster.Entry>>();
+
+            foreach (var dir in profileDirs)
+            {
+                try
+                {
+                    all.Add(AgentRoster.Read(dir));
+                }
+                catch (Exception ex)
+                {
+                    // One account that cannot be read must not take the others
+                    // with it — a profile dir removed from disk but left in
+                    // settings is the ordinary way this happens.
+                    MirrorLog.Say("roster-read-failed", $"dir={dir} {ex.GetType().Name}");
+                }
+            }
+
+            return MergeRosters(all);
+        }
+
+        // Several accounts' rosters, deduplicated by session id.
+        //
+        // By session id rather than by name, because two accounts genuinely can
+        // hold sessions with the same name — the same person naming things the
+        // same way twice is the normal case — while a session id is unique. The
+        // first account to claim an id wins, which makes the order of
+        // profileDirs the tie-break and keeps the answer stable across ticks.
+        internal static IReadOnlyList<AgentRoster.Entry> MergeRosters(
+            IReadOnlyList<IReadOnlyList<AgentRoster.Entry>> rosters)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var merged = new List<AgentRoster.Entry>();
+
+            foreach (var roster in rosters)
+            foreach (var entry in roster)
+            {
+                if (!seen.Add(entry.SessionId)) continue;
+
+                merged.Add(entry);
+            }
+
+            return merged;
+        }
+
         // Excluded from coverage: this is the wiring that makes the seams real,
         // and every delegate in it is one a test must not run — launching
         // `claude agents`, asking tmux whether a pane can be typed into, and
@@ -123,7 +216,13 @@ namespace ClaudeBuddy
             // is a guard rather than a boundary, and it is cheap enough to keep
             // for the one thing it does catch — a person on the same account
             // typing something that happens to look like a frame.
-            if (!IsRelayName(fromPeer)) return;
+            if (!MayAsk(fromPeer))
+            {
+                MirrorLog.Say("serve-refused", $"t={frame.Type} from={fromPeer} not-a-relay-name");
+                return;
+            }
+
+            MirrorLog.Say("serve", $"t={frame.Type} id={frame.Id} from={fromPeer}");
 
             switch (frame.Type)
             {
@@ -153,8 +252,19 @@ namespace ClaudeBuddy
             }
         }
 
-        internal static bool IsRelayName(string name) =>
-            name.StartsWith("claude-buddy-rc-", StringComparison.OrdinalIgnoreCase);
+        // Who is allowed to ask.
+        //
+        // **The default is now "nobody", and that is the right way round.** It
+        // used to fall back to a name test — anything called `claude-buddy-rc-…`
+        // was another Buddy's relay — which was a guess dressed as a check: a
+        // name is not a credential, and anyone on the account could pick one.
+        // The transport answers this properly now, because a peer has completed
+        // a TLS handshake with a certificate somebody pinned by typing a code.
+        //
+        // A server built with no PeerAllowed serves nothing, which is what a
+        // half-wired server should do.
+        private bool MayAsk(string fromPeer) =>
+            _seams.PeerAllowed?.Invoke(fromPeer) ?? false;
 
         // What of this machine the asker can see.
         //
@@ -165,27 +275,62 @@ namespace ClaudeBuddy
         // over there, and a roster is no place to undo that.
         private async Task HelloAsync(string fromPeer, MirrorProtocol.MirrorFrame frame)
         {
-            var wanted = frame.Payload is null
+            var asked = frame.Payload is null
                 ? null
                 : MirrorProtocol.UnpackRows(frame.Payload);
 
-            if (wanted is null || wanted.Count == 0)
-            {
-                await SendAsync(fromPeer, MirrorProtocol.BuildFrame(
-                    MirrorProtocol.Err, frame.Id,
-                    new Dictionary<string, string> { ["code"] = MirrorProtocol.ErrNoSession }))
-                    .ConfigureAwait(false);
-                return;
-            }
-
             var agents = _seams.Agents();
             var sessions = _seams.LocalSessions();
+
+            // Asking about nothing in particular means "what have you got?"
+            //
+            // **This used to be an error, and the reasoning behind that was
+            // transport-specific.** Over the relay a peer already had its own
+            // list of sessions from ListAgents, so a hello naming none of them
+            // was a malformed question — and answering it would have told the
+            // far machine about sessions its own peer list deliberately could
+            // not see, which is a visibility rule this had no business undoing.
+            //
+            // A direct link has neither property. There is no prior list, so
+            // without this there is nothing to put an orb on and no way to
+            // learn a name to ask about — the question would have no first
+            // answer. And the peer is not any process that happens to share an
+            // account: it completed a TLS handshake presenting a certificate
+            // pinned when a person typed a pairing code. Telling a machine the
+            // user deliberately paired what sessions are here is the feature.
+            //
+            // Still only what this machine would show anyway: the same
+            // IsLocalCli filter below applies either way, so nothing becomes
+            // visible that was not already a session on this disk.
+            var everything = asked is null || asked.Count == 0;
+
+            var wanted = everything
+                ? agents.Select(a => a.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+                : asked!;
+
             var entries = new List<MirrorProtocol.MirrorRosterEntry>();
 
-            foreach (var name in wanted.Distinct(StringComparer.OrdinalIgnoreCase))
+            MirrorLog.Say("hello",
+                $"asked={(everything ? "all" : wanted.Count.ToString())} "
+                + $"agents={agents.Count} sessions={sessions.Count}");
+
+            foreach (var (name, resolved) in Offer(wanted, agents, sessions))
             {
-                var resolved = Resolve(name, agents, sessions);
-                if (resolved is null) continue;
+                if (resolved is null)
+                {
+                    // Says which of the two halves failed to line up. An agent
+                    // the registry knows and Buddy has no status file for, and a
+                    // status file Buddy has for a session the registry does not
+                    // list, are different problems — and both arrive here as an
+                    // empty roster and a panel with nothing in it.
+                    // Keyed per name and said once: a peer asks every ten
+                    // seconds, so a session the registry knows and Buddy has
+                    // never seen a status file for would otherwise write a line
+                    // per name per tick, forever, for a condition that is not
+                    // changing.
+                    MirrorLog.SayOnce($"hello-unresolved:{name}", $"name={name}");
+                    continue;
+                }
 
                 var status = resolved.Value.Status;
 
@@ -197,13 +342,31 @@ namespace ClaudeBuddy
                 var hasTranscript = !string.IsNullOrEmpty(status.TranscriptPath)
                                     && File.Exists(status.TranscriptPath);
 
+                // A conversation, not just a process.
+                //
+                // The registry lists every session whose window is still open,
+                // including ones abandoned at a prompt days ago — and drawing
+                // those puts an orb beside a live session with the same name
+                // and no way to tell them apart. SessionLiveness has the full
+                // account of why the obvious checks all say "alive" for a
+                // session nobody has spoken to since Saturday.
+                //
+                // Said once per name: a peer asks every ten seconds, and a
+                // session that has been abandoned stays abandoned.
+                if (hasTranscript && !LivelyEnough(status))
+                {
+                    MirrorLog.SayOnce($"hello-abandoned:{name}", $"name={name}");
+                    continue;
+                }
+
                 entries.Add(new MirrorProtocol.MirrorRosterEntry(
                     name,
                     MirrorProtocol.CliFor(status.Source),
                     hasTranscript,
                     _seams.CanType(status),
                     string.IsNullOrWhiteSpace(status.Color) ? null : status.Color,
-                    Commands(status)));
+                    Commands(status),
+                    status.State));
             }
 
             await SendTransferAsync(
@@ -254,6 +417,51 @@ namespace ClaudeBuddy
             }
         }
 
+        // How much of a transcript to read looking for the last turn.
+        //
+        // Larger than the window used to *render* a conversation, because this
+        // is asking a different question: a session that has been sitting at a
+        // prompt accumulates bookkeeping rows — `bridge-session`,
+        // `queue-operation`, `mode` — after its final turn, and the answer is
+        // wrong if the last turn has been pushed out of the window by them.
+        // A megabyte reaches past several hundred such rows, and the cost is a
+        // bounded read on a path that already scans a commands directory per
+        // entry.
+        internal const int LivelinessTailBytes = 1024 * 1024;
+
+        // Excluded from coverage: this is the disk. What it decides is
+        // SessionLiveness, which is pure and covered from both sides of the
+        // boundary; this reads a tail and asks.
+        //
+        // Through `Now()` rather than `DateTime.UtcNow` for the reason that
+        // property already exists: a rule about how long ago something happened
+        // is untestable against a wall clock. It also keeps the fixtures
+        // honest — MirrorRoundTripTests pins every row at a fixed instant
+        // deliberately (its own comment says why), and a roster that read the
+        // real clock would quietly drop every one of those sessions and take
+        // the whole suite with it.
+        [ExcludeFromCodeCoverage]
+        private bool LivelyEnough(SessionStatus status)
+        {
+            try
+            {
+                var lines = TranscriptReader.TailLines(
+                    status.TranscriptPath!, LivelinessTailBytes);
+
+                return SessionLiveness.WorthShowing(
+                    status.State,
+                    SessionLiveness.LastTurnAt(lines),
+                    Now());
+            }
+            catch
+            {
+                // A transcript that cannot be read is shown rather than
+                // hidden — see WorthShowing on why an unreadable file must not
+                // look like an abandoned session.
+                return true;
+            }
+        }
+
         // A peer name, resolved to a session on this machine — or nothing.
         //
         // Nothing is a perfectly good answer and the caller turns it into "no
@@ -262,29 +470,158 @@ namespace ClaudeBuddy
         private static (string SessionId, SessionStatus Status)? Resolve(
             string name,
             IReadOnlyList<AgentRoster.Entry> agents,
+            IReadOnlyList<(string SessionId, SessionStatus Status)> sessions) =>
+            Pick(name, agents, sessions);
+
+        // Every session worth offering, and what to call each one.
+        //
+        // **Two live sessions can share a name, and refusing both was worse
+        // than either answer.** One machine with the same session name under
+        // two Claude accounts is ordinary — `.claude` and `.claude-board`, one
+        // person, two logins — and Pick declines an ambiguous name on the sound
+        // reasoning that typing into the wrong terminal is worse than typing
+        // into none. For *typing* that is right. For a roster it is not: the
+        // far user gets no live view of either session, and nothing anywhere
+        // says why.
+        //
+        // Measured on the mini, which had exactly this: two sessions both called
+        // `job-hunter-mac-mini`, both alive, and every roster it served came
+        // back empty.
+        //
+        // So a shared name is disambiguated rather than refused, and only when
+        // it is actually shared — a name belonging to one session is untouched,
+        // which keeps the ordinary case free of noise and keeps an orb's
+        // identity stable for as long as it is unambiguous.
+        //
+        // Pure, and returning the *name to publish* beside the session, because
+        // the two are no longer the same thing.
+        internal static List<(string Name, (string SessionId, SessionStatus Status)? Resolved)> Offer(
+            IReadOnlyList<string> wanted,
+            IReadOnlyList<AgentRoster.Entry> agents,
             IReadOnlyList<(string SessionId, SessionStatus Status)> sessions)
         {
-            var entry = AgentRoster.Resolve(agents, name);
-            if (entry is null) return null;
+            var offered = new List<(string, (string, SessionStatus)?)>();
+
+            foreach (var name in wanted.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var candidates = Candidates(name, agents, sessions);
+
+                if (candidates.Count == 0)
+                {
+                    offered.Add((name, null));
+                    continue;
+                }
+
+                if (candidates.Count == 1)
+                {
+                    offered.Add((name, candidates[0]));
+                    continue;
+                }
+
+                foreach (var candidate in candidates)
+                    offered.Add((Qualified(name, candidate.SessionId), candidate));
+            }
+
+            return offered;
+        }
+
+        // A name with enough of the session id to tell two apart.
+        //
+        // Six characters, which is what git shows and for the same reason: long
+        // enough to be unique in practice, short enough to read on an orb. The
+        // separator is one a session name cannot contain, so splitting it back
+        // apart is unambiguous.
+        internal const char QualifierMark = '#';
+
+        internal static string Qualified(string name, string sessionId) =>
+            sessionId.Length >= 6 ? name + QualifierMark + sessionId[..6] : name;
+
+        // The sessions a name could mean, in the order the roster lists them.
+        internal static List<(string SessionId, SessionStatus Status)> Candidates(
+            string name,
+            IReadOnlyList<AgentRoster.Entry> agents,
+            IReadOnlyList<(string SessionId, SessionStatus Status)> sessions)
+        {
+            var bare = Unqualified(name, out var wantedId);
+
+            var named = agents
+                .Where(a => a.Name.Equals(bare, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (named.Count == 0) return new List<(string, SessionStatus)>();
+
+            var found = new List<(string SessionId, SessionStatus Status)>();
 
             foreach (var session in sessions)
             {
-                if (string.Equals(session.SessionId, entry.Value.SessionId, StringComparison.OrdinalIgnoreCase))
-                    return session;
+                var matches = named.Any(a =>
+                    string.Equals(a.SessionId, session.SessionId, StringComparison.OrdinalIgnoreCase)
+                    || (a.Pid > 0 && a.Pid == session.Status.SessionPid));
+
+                if (!matches) continue;
+
+                // A qualified name means exactly one of them.
+                if (wantedId is not null
+                    && !session.SessionId.StartsWith(wantedId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                found.Add(session);
             }
 
-            // The registry knows it and Buddy does not, which happens for a
-            // session whose hook has not fired yet. Matching on pid as well
-            // costs nothing and covers it.
-            if (entry.Value.Pid > 0)
+            return found;
+        }
+
+        // Splits a published name back into the name the far machine knows and
+        // the session it was pointing at, if it carried one.
+        internal static string Unqualified(string name, out string? sessionIdPrefix)
+        {
+            var mark = name.LastIndexOf(QualifierMark);
+
+            if (mark <= 0 || mark == name.Length - 1)
             {
-                foreach (var session in sessions)
-                {
-                    if (session.Status.SessionPid == entry.Value.Pid) return session;
-                }
+                sessionIdPrefix = null;
+                return name;
             }
 
-            return null;
+            sessionIdPrefix = name[(mark + 1)..];
+            return name[..mark];
+        }
+
+        // Which local session a name refers to, across every account.
+        //
+        // **This used to defer to AgentRoster.Resolve, which refuses a name two
+        // entries share — and that refusal is right for one account and wrong
+        // the moment rosters from several are merged.** Within one account, two
+        // sessions called the same thing genuinely are ambiguous and guessing
+        // between them would type into the wrong terminal. Across accounts they
+        // are usually the *same person's* two logins on one machine, and one of
+        // them is the session Buddy actually holds a status file for. Refusing
+        // there throws away the only answer there was.
+        //
+        // Measured, not imagined: the mini has `job-hunter-mac-mini` under both
+        // `.claude` and `.claude-board`, with different session ids. Every
+        // roster it sent came back empty, and the machine that asked showed no
+        // orbs at all, with nothing in either log saying why until this ticket
+        // added the line that named the dropped session.
+        //
+        // Still refuses when it is genuinely ambiguous — two *different* live
+        // sessions both answering to one name is the case the original rule was
+        // protecting, and it is still protected. What changed is that "one
+        // candidate, one match" is now an answer rather than a tie.
+        //
+        // Pure, so both arms are a test rather than two machines and a log.
+        internal static (string SessionId, SessionStatus Status)? Pick(
+            string name,
+            IReadOnlyList<AgentRoster.Entry> agents,
+            IReadOnlyList<(string SessionId, SessionStatus Status)> sessions)
+        {
+            // Shares its candidate list with the roster, so a name the roster
+            // published is a name this can resolve. That was the missing half:
+            // a qualified name reaching a fetch would otherwise match no agent
+            // at all and read as a session that had vanished.
+            var matched = Candidates(name, agents, sessions);
+
+            return matched.Count == 1 ? matched[0] : null;
         }
 
         // --- reading a transcript --------------------------------------------
@@ -351,21 +688,170 @@ namespace ClaudeBuddy
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             var length = fs.Length;
 
-            if (tail)
-            {
-                from = Math.Max(0, length - MirrorProtocol.InitialBytes);
-                to = length;
-            }
-            else
-            {
-                from = Math.Max(0, from);
-                to = Math.Min(to <= 0 ? length : to, length);
-            }
+            if (tail) return ReadTailThatFits(fs, length, cli);
+
+            from = Math.Max(0, from);
+            to = Math.Min(to <= 0 ? length : to, length);
 
             var read = ReadRange(fs, from, to, alignStart: true);
             return new Window(
                 MirrorProtocol.TurnsFrom(read.Lines, cli), read.From, read.To, length);
         }
+
+        // The newest slice of a transcript that still fits in one chunk.
+        //
+        // A first paint has to arrive, and on this wire a chunk costs a model
+        // turn — close to two minutes on the relay this was measured on. Two
+        // chunks is therefore a four-minute first paint against a request
+        // timeout of three, which is not a slow panel but an empty one: the
+        // reply cannot exist before the request expires. CB-46 is that bug, and
+        // the panel it was found on had shown nothing for hours.
+        //
+        // Measured rather than asserted, because a byte count cannot predict
+        // this. What matters is how large the *encoded, compressed turns* are,
+        // and the ratio between raw transcript bytes and that is wildly
+        // variable: a chatty session compresses twenty to one, a session full of
+        // hashes or base64 barely at all, and how many turns a byte range even
+        // contains depends on how long its rows are. So this shrinks the window
+        // and asks the real encoder, rather than picking a constant and hoping.
+        //
+        // Halving from the newest end, so what survives is always the most
+        // recent conversation — the part somebody opening a panel is looking
+        // for. Paging back supplies the rest on demand.
+        //
+        // The floor matters as much as the loop. A single turn can be bigger
+        // than a chunk all by itself, and there is no window size that makes it
+        // fit; when halving stops helping, the window is sent as-is and arrives
+        // over several chunks. That is slow but correct, and it is why the
+        // client's timeout extends while chunks are still coming rather than
+        // being a flat deadline — the two changes are halves of one fix.
+        private static Window ReadTailThatFits(FileStream fs, long length, string cli)
+        {
+            var span = (long)MirrorProtocol.InitialBytes;
+            var best = ReadTail(fs, length, span, cli);
+
+            // The binding constraint is the chunk, not the byte count, and the
+            // two are only loosely related — so the window is searched for
+            // rather than calculated, in whichever direction the first guess was
+            // wrong.
+            return FitsOneChunk(best.Turns)
+                ? Grow(fs, length, span, best, cli)
+                : Shrink(fs, length, span, best, cli);
+        }
+
+        // Bigger while it still fits, because a bigger window is more
+        // conversation and the panel should show as much as one chunk can carry.
+        //
+        // This is not greed, it is the noise case. Most of a transcript is rows
+        // no panel ever shows — tool results, and file-history snapshots that
+        // run to hundreds of kilobytes each — and those contribute no turns, so
+        // they contribute no payload either. A window that lands inside one is
+        // spent entirely on something invisible: a fixed 128KB tail on a
+        // transcript whose newest 200KB is a single snapshot row paints one
+        // message where it could have painted the whole conversation. Growing
+        // past such a row is free in the only currency that matters here.
+        private static Window Grow(FileStream fs, long length, long span, Window best, string cli)
+        {
+            // **Stops when it has enough conversation, not when it stops
+            // fitting — and the difference is 27 seconds per panel open.**
+            //
+            // The old condition was "grow while it still fits one chunk", which
+            // terminated quickly only because a chunk was 6KB. A chunk is now
+            // the whole 32MB message, so everything fits and this doubled all
+            // the way to MaxTailBytes every time — six passes, each re-reading
+            // and re-gzipping up to eight megabytes. Measured at 27s on a
+            // transcript that does not compress, which is a panel that looks
+            // hung.
+            //
+            // The reason for growing at all survives intact and is the noise
+            // case: most of a transcript is rows no panel shows — tool results,
+            // file-history snapshots running to hundreds of kilobytes — and a
+            // window landing inside one is spent entirely on something
+            // invisible. So it grows while the window is *short of
+            // conversation*, which is what that fault actually looks like, and
+            // stops as soon as it has some. On an ordinary transcript the first
+            // read already has plenty and this does nothing at all.
+            while (span < MaxTailBytes
+                   && best.From > 0
+                   && best.Turns.Count < EnoughTurnsToOpenOn)
+            {
+                span *= 2;
+
+                var bigger = ReadTail(fs, length, span, cli);
+
+                // Still bounded by what the wire can carry. It can no longer
+                // bind in practice, and leaving it costs nothing and keeps the
+                // guarantee true if the ceiling ever moves.
+                if (!FitsOneChunk(bigger.Turns)) break;
+
+                best = bigger;
+            }
+
+            return best;
+        }
+
+        // Enough to fill a panel and give somebody something to scroll, without
+        // reaching for a whole conversation nobody asked for. Paging back
+        // supplies the rest on demand, which is what paging is for.
+        private const int EnoughTurnsToOpenOn = 40;
+
+        // Smaller until it fits, halving from the newest end so what survives is
+        // always the most recent conversation — the part somebody opening a
+        // panel is looking for. Paging back supplies the rest on demand.
+        private static Window Shrink(FileStream fs, long length, long span, Window best, string cli)
+        {
+            while (!FitsOneChunk(best.Turns))
+            {
+                span /= 2;
+
+                // Nothing left to give up. Either the newest single row is
+                // larger than a chunk all by itself — no window size makes that
+                // fit — or the file is smaller than the floor and shrinking
+                // further would start returning nothing at all. An empty panel
+                // is the failure being fixed, not an acceptable way to fix it,
+                // so the oversized window is sent and arrives over several
+                // chunks: slow, but correct, and the client's timeout extends
+                // while chunks are still coming precisely so this case lands.
+                if (span < MinTailBytes) break;
+
+                var smaller = ReadTail(fs, length, span, cli);
+
+                // A smaller byte window that yields no turns has cut into the
+                // middle of the newest row. Keep the larger one: too slow beats
+                // nothing to show.
+                if (smaller.Turns.Count == 0) break;
+
+                best = smaller;
+            }
+
+            return best;
+        }
+
+        // A ceiling on the search rather than on the answer: each step re-reads
+        // and re-parses, and past a few megabytes that is real CPU spent to
+        // discover something a chunk was never going to hold anyway.
+        // Internal so a paging test can size its fixture against the real cap.
+        // It used to be sized against the chunk instead, which worked only while
+        // a chunk was small — see the note in MirrorRoundTripTests.
+        internal const int MaxTailBytes = 8 * 1024 * 1024;
+
+        // Below this a window stops being a conversation. Four kilobytes is a
+        // handful of turns, and if that still does not fit one chunk then no
+        // window will, so the loop stops rather than shrinking towards zero.
+        private const int MinTailBytes = 4 * 1024;
+
+        private static Window ReadTail(FileStream fs, long length, long span, string cli)
+        {
+            var read = ReadRange(fs, Math.Max(0, length - span), length, alignStart: true);
+
+            return new Window(
+                MirrorProtocol.TurnsFrom(read.Lines, cli), read.From, read.To, length);
+        }
+
+        // Asked of the same encoder and splitter that will carry it, because a
+        // prediction of that answer is exactly the thing that has been wrong.
+        internal static bool FitsOneChunk(List<MirrorProtocol.MirrorTurn> turns) =>
+            MirrorProtocol.Split(MirrorProtocol.EncodeTurns(turns)).Count <= 1;
 
         // A byte range as whole lines, and the two offsets that bound what was
         // actually read.
@@ -472,14 +958,14 @@ namespace ClaudeBuddy
 
         private void SetWatchOffset(string watcher, string name, long offset)
         {
-            lock (_gate) _pendingOffsets[watcher + " " + name] = offset;
+            lock (_gate) _pendingOffsets[watcher + "\0" + name] = offset;
         }
 
         private long PendingOffset(string watcher, string name)
         {
             lock (_gate)
             {
-                return _pendingOffsets.TryGetValue(watcher + " " + name, out var at) ? at : 0;
+                return _pendingOffsets.TryGetValue(watcher + "\0" + name, out var at) ? at : 0;
             }
         }
 
@@ -644,8 +1130,12 @@ namespace ClaudeBuddy
                 ? MirrorProtocol.BuildFrame(MirrorProtocol.Ok, frame.Id)
                 : MirrorProtocol.BuildFrame(MirrorProtocol.Err, frame.Id, new Dictionary<string, string>
                 {
-                    ["code"] = MirrorProtocol.ErrNoPane,
-                    ["msg"] = MirrorProtocol.Encode("couldn't type into the pane")
+                    // Not ErrNoPane. A route was found and it refused — see
+                    // that constant's comment for why saying "there is nowhere
+                    // to type" here is a wrong answer that reads like a right
+                    // one.
+                    ["code"] = MirrorProtocol.ErrTypeFailed,
+                    ["msg"] = MirrorProtocol.Encode("the terminal refused the text")
                 })).ConfigureAwait(false);
         }
 

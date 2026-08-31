@@ -35,8 +35,47 @@ public class TypingRefusalTests
     {
         var said = RemoteControlChatSession.TypingRefusal(MirrorProtocol.ErrNoPane, Remote);
 
-        Assert.Contains("tmux pane", said);
+        // Not "tmux pane" any more, which was the wording before CB-79 and was
+        // narrower than the truth even then: tmux is one of several terminals
+        // Buddy can type into, and naming it sent a user looking for a setting
+        // they did not want for a session that was in iTerm2 all along. The
+        // far machine's own reason cannot be read from here — a code is all
+        // that crosses the wire — so this says what is true of every case.
+        Assert.Contains("terminal Buddy can type into", said);
+        Assert.DoesNotContain("tmux pane", said);
         Assert.Contains(Remote, said);
+    }
+
+    // A terminal Buddy *can* address, which then refused the text.
+    //
+    // **The distinction this test exists for is one the protocol used to
+    // collapse**, and collapsing it produced a wrong answer that read like a
+    // right one: a delivery failure was reported as "there is nowhere to
+    // type", which is a statement about the session's terminal and is what a
+    // user acts on. The two have completely different fixes — one is "this
+    // terminal isn't supported", the other is almost always Automation
+    // consent not yet given on the far machine, where the prompt appears on a
+    // screen the user may not be looking at.
+    [Fact]
+    public void ATerminalThatRefusedTheTextIsNotTheSameAsHavingNoTerminal()
+    {
+        var refused = RemoteControlChatSession.TypingRefusal(
+            MirrorProtocol.ErrTypeFailed, Remote);
+
+        Assert.Contains(Remote, refused);
+        Assert.Contains("refused the text", refused);
+
+        // Names both real causes, because neither is guessable from the
+        // failure itself.
+        Assert.Contains("allow Claude Buddy to control it", refused);
+        Assert.Contains("closed", refused);
+
+        // And is not the other sentence.
+        Assert.DoesNotContain("nowhere to type", refused);
+
+        Assert.NotEqual(
+            RemoteControlChatSession.TypingRefusal(MirrorProtocol.ErrNoPane, Remote),
+            refused);
     }
 
     [Fact]
@@ -123,5 +162,151 @@ public class TypingRefusalTests
 
         Assert.False(RemoteControlChatSession.PendingHasGoneStale(
             now, now + TimeSpan.FromMinutes(2)));
+    }
+
+    // --- CB-43: which refusals the messaging channel may answer ----------------
+
+    // --- CB-46: the rules a first paint depends on -----------------------------
+
+    // The question the server asks before deciding how much transcript to send,
+    // and it is asked of the same encoder and splitter that will carry the
+    // answer — a prediction of that is exactly the thing that has been wrong.
+    [Fact]
+    public void AShortConversationFitsOneChunk()
+    {
+        var turns = new List<MirrorProtocol.MirrorTurn>
+        {
+            new("user", "what did the build say?"),
+            new("assistant", "it passed on both runners")
+        };
+
+        Assert.True(RemoteMirrorServer.FitsOneChunk(turns));
+    }
+
+    // Incompressible, because that is the case a byte count cannot predict: the
+    // ratio between transcript bytes and encoded, compressed turns runs from
+    // twenty to one down to nothing at all, which is why this is measured rather
+    // than assumed.
+    // **The "does not fit" case is no longer cheaply reachable, and saying so
+    // is more honest than a fixture that pretends otherwise.**
+    //
+    // This used to be 8 chunks of random text — 48KB — which was plenty when a
+    // chunk was what a model could retype in one turn. A chunk is now the
+    // transport's whole 32MB message, and random ASCII from a 36-letter
+    // alphabet gzips to about two thirds and then base64s back up by a third,
+    // so a 33MB fixture still fits. Reaching the ceiling honestly needs
+    // hundreds of megabytes allocated to assert an arithmetic fact.
+    //
+    // The ceiling itself is enforced where it belongs and tested there:
+    // PeerProtocol refuses to encode a message over MaxMessageBytes and refuses
+    // to read a length claiming to be one, and PeerProtocolTests covers both
+    // directions. FitsOneChunk asks Split, and Split's boundary arithmetic has
+    // its own tests in MirrorProtocolTests.
+    //
+    // What is worth asserting here is the *shape* of the answer — that
+    // FitsOneChunk is a real question with a real threshold rather than a
+    // constant true — which the two cases below do without allocating anything.
+    [Fact]
+    public void FitsOneChunkIsBoundedByTheTransportRatherThanByAGuess()
+    {
+        // The old bound was a guess about a SendMessage body. The new one is the
+        // number the wire actually enforces, which is the point of the change.
+        Assert.Equal(PeerProtocol.MaxMessageBytes, MirrorProtocol.ChunkBytes);
+    }
+
+    // And the case that used to be the interesting one, now the ordinary one: a
+    // transcript that would have taken dozens of model turns goes in a single
+    // frame.
+    [Fact]
+    public void ATranscriptThatOnceNeededDozensOfChunksNowFitsInOne()
+    {
+        var turns = Enumerable.Range(0, 5000)
+            .Select(i => new MirrorProtocol.MirrorTurn("user", $"a message about thing {i}"))
+            .ToList();
+
+        Assert.True(RemoteMirrorServer.FitsOneChunk(turns));
+    }
+
+    [Fact]
+    public void NothingAtAllFitsOneChunk() =>
+        Assert.True(RemoteMirrorServer.FitsOneChunk(new List<MirrorProtocol.MirrorTurn>()));
+
+    // The line a user reads while nothing appears to be happening. It replaced
+    // the opening "Checking whether a live view … is available", which stayed on
+    // screen for the whole transfer and is the exact sentence that meant failure
+    // an hour earlier — a working transfer got reported as "no live view" twice
+    // on the strength of it.
+    [Fact]
+    public void TheFetchingNoteSaysSomethingIsHappeningAndThatItTakesMinutes()
+    {
+        var said = RemoteControlChatSession.FetchingNote(Remote);
+
+        Assert.Contains(Remote, said);
+        Assert.Contains("fetching its conversation", said);
+        Assert.Contains("several minutes", said);
+        Assert.DoesNotContain("Checking whether", said);
+    }
+
+    // --- the counter that runs while nothing appears to happen ---------------
+
+    // Seconds all the way to a minute, then minutes and seconds.
+    //
+    // The measured waits are three to four minutes, so a counter showing only
+    // whole minutes would sit unchanged for sixty seconds at exactly the moment
+    // somebody is deciding whether it has hung — which is the whole failure this
+    // indicator exists to prevent.
+    [Theory]
+    [InlineData(0, "0s")]
+    [InlineData(9, "9s")]
+    [InlineData(59, "59s")]
+    [InlineData(60, "1m 0s")]
+    [InlineData(75, "1m 15s")]
+    [InlineData(192, "3m 12s")]
+    [InlineData(247, "4m 7s")]
+    public void TheWaitLabelCountsInWholeSecondsAndThenMinutes(int seconds, string expected)
+    {
+        var said = RemoteControlChatSession.WaitLabel(
+            TimeSpan.FromSeconds(seconds), "its conversation");
+
+        Assert.Contains(expected, said);
+        Assert.Contains("its conversation", said);
+    }
+
+    // A clock that has gone backwards is a machine problem, not a reason to
+    // print "-3s" at somebody. Clamped rather than guarded at the call site so
+    // there is one answer to this and it is here.
+    [Fact]
+    public void TheWaitLabelDoesNotCountBackwards()
+    {
+        var said = RemoteControlChatSession.WaitLabel(
+            TimeSpan.FromSeconds(-5), "its conversation");
+
+        Assert.Contains("0s", said);
+        Assert.DoesNotContain("-", said);
+    }
+
+    // The hint is what stops an ordinary three-minute wait reading as a fault,
+    // so it has to name a duration and it has to match what was measured.
+    [Fact]
+    public void TheWaitHintSaysHowLongTheseActuallyTake()
+    {
+        Assert.Contains("minutes", RemoteControlChatSession.WaitHint);
+        Assert.DoesNotContain("second", RemoteControlChatSession.WaitHint);
+    }
+
+    // And specifically not the singular it used to promise.
+    //
+    // A wait quoted as one minute and measured at seven reads as a hang, which
+    // is the failure this note exists to prevent — so understating it is worse
+    // than saying nothing. Asserted separately from the wording above because
+    // this is the part that was actually wrong, and a future edit that reaches
+    // for "a minute" again should fail on the reason rather than on the phrasing.
+    [Fact]
+    public void TheFetchingNoteDoesNotPromiseAMinuteItCannotKeep()
+    {
+        var said = RemoteControlChatSession.FetchingNote(Remote);
+
+        Assert.DoesNotContain("take a minute", said);
+        Assert.DoesNotContain("a minute:", said);
     }
 }

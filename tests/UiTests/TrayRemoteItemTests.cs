@@ -59,7 +59,9 @@ public class TrayRemoteItemTests
 
     private static NativeMenu? BuildMenuCore(bool remoteEnabled)
     {
-        ClaudeBuddySettings.RemoteControlEnabled = remoteEnabled;
+        // The menu item follows the link now rather than the relay, which is
+        // the only transport left for it to offer.
+        ClaudeBuddySettings.PeerLinkEnabled = remoteEnabled;
 
         TrayController tray;
         try
@@ -97,14 +99,9 @@ public class TrayRemoteItemTests
         var menu = BuildMenu(remoteEnabled: true);
         if (menu is null) return; // headless platform has no tray; see BuildMenu
 
-        // Only on macOS/Linux — the relay is tmux-based, and the menu should not
-        // offer something that cannot work.
-        if (!RemoteControlBridge.IsSupported)
-        {
-            Assert.DoesNotContain(ItemLabel, Labels(menu));
-            return;
-        }
-
+        // On every platform now. The gate here was the relay being tmux-based,
+        // and the transport that replaced it is a socket — which was the whole
+        // reason for choosing SslStream over the gateway's hand-rolled TLS.
         Assert.Contains(ItemLabel, Labels(menu));
     }
 

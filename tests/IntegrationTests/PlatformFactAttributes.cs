@@ -122,3 +122,23 @@ public sealed class MacOpenFactAttribute : FactAttribute
             Skip = "no /usr/bin/open on this machine";
     }
 }
+
+// The cloned-bundle cache is a macOS feature end to end: ClaudeDesktopBundles
+// short-circuits to null everywhere else, so a "passing" run on Windows would be
+// asserting on a function that declined to do anything. It also reads
+// CFBundleVersion through plutil, which is macOS's — hence the second check,
+// mirroring MacOpenFact rather than assuming a stock install.
+public sealed class MacFactAttribute : FactAttribute
+{
+    public MacFactAttribute()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            Skip = "the cloned-bundle cache is macOS-only";
+            return;
+        }
+
+        if (!File.Exists("/usr/bin/plutil"))
+            Skip = "no /usr/bin/plutil on this machine";
+    }
+}

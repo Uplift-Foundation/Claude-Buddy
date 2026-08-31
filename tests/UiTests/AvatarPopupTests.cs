@@ -28,6 +28,15 @@ namespace ClaudeBuddy.Tests;
 // ChatPanelTestAccess records: reflection on a private static field has no
 // runtime effect on the app, where adding a public accessor for one test
 // project's convenience would change its surface.
+//
+// **In the Settings collection for the singleton, not for the settings.**
+// AvatarPopup holds one instance in a private static field and three other
+// classes reach for it — ChatPanelAvatarTests calls Close() and asserts IsOpen,
+// OrbWindowClickResolutionTests and OrbWindowShownTests open it. All three were
+// already in this collection and this one was not, so it ran in parallel with
+// them against shared state. Added as hardening rather than as a fix for any
+// one failure; the Release failure below had its own cause, named there.
+[Collection("Settings")]
 public class AvatarPopupTests
 {
     private static readonly FieldInfo InstanceField =
@@ -385,6 +394,19 @@ public class AvatarPopupTests
 
         AvatarPopup.Show(avatar, new PixelPoint(960, 640));
         Flush();
+
+        // **The line this test was missing, and the reason it failed in Release
+        // and passed in Debug.** Show starts a real DispatcherTimer on a 40ms
+        // first frame; the test then drives Advance by hand. If a tick lands
+        // between Show and the first Advance, the portrait is already on frame 1
+        // before the test moves it and every assertion below is off by one.
+        //
+        // StopTheRealTimer exists for exactly this — its own comment above
+        // describes this failure — and one of the two tests that drives frames
+        // by hand simply did not call it. Fixed by calling it rather than by
+        // slowing the timer down, which would be the tolerance this suite has
+        // already removed twice.
+        StopTheRealTimer();
 
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
 

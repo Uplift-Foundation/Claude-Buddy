@@ -100,15 +100,6 @@ public class SettingsWindowRowTests
     public void TheCodexReplySwitchWritesItsOwnSetting() => Toggles(
         (w, v) => w.OnCodexReplyToggled(v), () => ClaudeBuddySettings.CodexReplyEnabled);
 
-    // Like the colour switch below, this handler must stay a plain setting
-    // write. Its effect belongs to the *next* launch — the immediate version is
-    // the "Start the relay now" button — and a handler that called
-    // EnsureStarted would start a real relay under any test that flipped it.
-    [AvaloniaFact]
-    public void TheServeOnLaunchSwitchOnlyWritesItsSetting() => Toggles(
-        (w, v) => w.OnServeOnLaunchToggled(v),
-        () => ClaudeBuddySettings.RemoteControlServeOnLaunch);
-
     // Not Toggles(), because these two are no longer switches: three answers
     // do not fit in a boolean, which is the whole reason the setting changed
     // shape. The handler is still the production one, driven through every

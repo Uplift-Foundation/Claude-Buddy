@@ -278,6 +278,64 @@ namespace ClaudeBuddy
             return null;
         }
 
+        // How to address a peer so SendMessage cannot come back asking which one.
+        //
+        // Buddy sends every frame and every message by typing a prompt into the
+        // relay's pane, and nobody is sitting there. So anything that raises a
+        // prompt *in that pane* does not merely fail — it stops the machine
+        // serving, because every later frame queues behind it, including mirror
+        // answers for completely unrelated sessions. CB-40 was that failure with
+        // a tool permission; this is the same failure with Buddy's own outbound
+        // message as the cause. A bare name that matches two live sessions makes
+        // SendMessage render a "which one?" picker and wait.
+        //
+        // The ref is the answer and it is already in the row: SendMessage
+        // documents "name [ref]" as the way to disambiguate, and RemoteAgent has
+        // carried Ref all along.
+        //
+        // Bare when the name is unique, which is nearly always, and which keeps
+        // the address identical to what has always been sent — a ref is only
+        // resolvable while it is listed, so spending one where it is not needed
+        // would trade a rare failure for a new one.
+        //
+        // Offline rows are not competition. A registration outlives its process,
+        // and one live session wearing three stale registrations of its own is
+        // exactly the case this was found on, so counting the dead ones would
+        // make a name look ambiguous that is not.
+        //
+        // When two genuinely live sessions share a name, the first is chosen
+        // rather than the send being refused. That can pick the wrong one — but
+        // Buddy's orb for that name was already ambiguous, since a name is all
+        // an orb has, so the user clicking it had no way to mean one over the
+        // other either. Refusing would leave that session permanently unusable;
+        // guessing reaches a real session, and neither one wedges the relay for
+        // every *other* session on the machine, which is what happens today.
+        public static string AddressFor(string peerName, IReadOnlyList<RemoteAgent>? peers)
+        {
+            if (peers is null || string.IsNullOrEmpty(peerName)) return peerName;
+
+            // The first live namesake's ref, kept as the string rather than as a
+            // nullable row: holding the row would need a null test below that
+            // `live >= 2` has already made unreachable, and an arm nothing can
+            // execute reads as an untested branch forever.
+            string? chosen = null;
+            var live = 0;
+
+            foreach (var peer in peers)
+            {
+                if (!peer.Name.Equals(peerName, StringComparison.OrdinalIgnoreCase)) continue;
+                if (peer.IsOffline) continue;
+
+                live++;
+                chosen ??= peer.Ref;
+            }
+
+            if (live < 2) return peerName;
+            if (string.IsNullOrWhiteSpace(chosen)) return peerName;
+
+            return $"{peerName} [{chosen}]";
+        }
+
         // --- the peer list ---
 
         // One row of ListAgents' output. Kind is kept as the raw label rather
@@ -319,7 +377,7 @@ namespace ClaudeBuddy
             // builds the name. It used to be a second copy of the literal here,
             // and the two decide whether a relay becomes an orb — the local scan
             // now asks the same question of a status file's cwd.
-            public bool IsOwnRelay => RemoteControlBridge.IsOwnRelayName(Name);
+            public bool IsOwnRelay => MachineNames.IsRelayName(Name);
 
             // A session that has gone away. Worth an orb only if it is actually
             // there — "offline" is the state a peer's registration sits in after
@@ -452,13 +510,42 @@ namespace ClaudeBuddy
         // writing: sometimes abridged, sometimes reworded, always a second
         // draft. Delivering those put paraphrases in the chat panel beside the
         // messages they paraphrased.
+        //
+        // The exception is a message the session never got to answer as a turn
+        // of its own. A message handed to a relay whose model is already
+        // mid-turn is queued rather than delivered, and Claude Code then folds
+        // it into the running turn — writing an `attachment` row of
+        // `attachment.type == "queued_command"` holding the text, followed by
+        // `queue-operation`/`remove` with `reason: "absorbed_mid_turn"`. There
+        // is no `user` row at all, so the rule above dropped it. Route coins
+        // AbsorbedRow for that shape, because the row's own type ("attachment")
+        // covers half a dozen unrelated things and says nothing about where the
+        // text came from.
+        //
+        // Safe to trust for the same reason a user row is: the prompt is the
+        // verbatim text the session was handed, not something a model wrote
+        // about it. That is not an assumption — the roster frames this was
+        // found on carry a SHA-256 of their own payload, and the ones recovered
+        // from a queued_command attachment verify against it byte for byte.
+        //
+        // It is also not a rare path. A relay is mid-turn most of the time,
+        // because Buddy's own poll keeps it working; on the machine this was
+        // diagnosed on, *every* cross-session message it had ever received was
+        // absorbed this way and therefore lost. See CB-41.
         public static IReadOnlyList<InboundMessage> ParseInboundMessagesFrom(string rowType, string rowText)
         {
-            if (!string.Equals(rowType, "user", StringComparison.Ordinal))
+            if (!string.Equals(rowType, "user", StringComparison.Ordinal)
+                && !string.Equals(rowType, AbsorbedRow, StringComparison.Ordinal))
                 return Array.Empty<InboundMessage>();
 
             return ParseInboundMessages(rowText);
         }
+
+        // The row type Route uses for a queued command absorbed into a turn
+        // already running. Named after the attachment that carries it rather
+        // than after the queue operation that retires it, since the attachment
+        // is the row the text actually lives in.
+        public const string AbsorbedRow = "queued_command";
 
         // Null when the text holds no such tag, which is the common case: most
         // rows in the bridge's transcript are its own turns.
@@ -544,9 +631,35 @@ namespace ClaudeBuddy
             @"Do you trust the files|trust the files in this folder",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // A session that came up logged out. Not first-run setup strictly
+        // speaking, but the same shape of dead end: the session runs, holds its
+        // pane, and answers every prompt Buddy types with this instead of an
+        // answer — measured on the user's MacBook at 22:06 UTC on 29 Aug 2026,
+        // where the whole of the relay's reply to ListAgents was "Not logged in
+        // · Please run /login". CB-42's forced config directory is what put it
+        // in a context with no credentials; this is what that looks like from
+        // the outside, and it is worth naming whatever put it there.
+        //
+        // Deliberately narrow, because there is a *healthy* banner a few lines
+        // above with the word login in it: "⚠ Your login expires in 3 days ·
+        // run /login to renew" is a working relay with a warning, which
+        // ReadHealth already surfaces as one, and treating it as a block would
+        // refuse to start a session that works. "Not logged in" and the
+        // capitalised "Please run /login" are the phrasings that mean there is
+        // no session to have.
+        private static readonly Regex LoggedOut = new(
+            @"Not logged in|Please run /login|Invalid API key",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public static string? ReadSetupBlock(string paneText)
         {
             if (string.IsNullOrEmpty(paneText)) return null;
+
+            if (LoggedOut.IsMatch(paneText))
+            {
+                return "this account is not logged in to Claude Code. Run `claude` in a "
+                     + "terminal once under that account and sign in, then try again.";
+            }
 
             if (ThemePrompt.IsMatch(paneText))
             {
@@ -572,6 +685,104 @@ namespace ClaudeBuddy
             var warning = login.Success ? Tidy(login.Groups["text"].Value) : null;
 
             return new BridgeHealth(RcActive.IsMatch(paneText), warning);
+        }
+
+        // --- a relay that is waiting rather than working -------------------------
+
+        // Why a relay has stopped serving, when the reason is a prompt nobody
+        // will ever answer.
+        //
+        // Every frame Buddy sends is typed into the relay's pane, so anything
+        // that raises a prompt there does not fail one send — it stops the
+        // machine serving, and every later frame queues behind it. Four separate
+        // causes were found and fixed in one day (CB-40's tool permission,
+        // CB-45's peer-name picker, CB-42's first-run wizard, and a held
+        // cross-session message that was only ever fixed by hand), and every one
+        // was found by a person reading a tmux pane over ssh. No user will do
+        // that, and there will be a fifth.
+        //
+        // So the general signature is what is matched first and the known causes
+        // second. Claude Code draws every one of these as the same select list
+        // with the same footer, which is what makes one guard possible instead
+        // of a fifth special case: an unrecognised prompt is still reported as a
+        // prompt, with the one instruction that clears all of them.
+        public readonly record struct RelayStall(string Kind, string Advice)
+        {
+            public string Describe() => $"waiting for an answer ({Kind}) — {Advice}";
+        }
+
+        // The footer Claude Code draws under any select list. Matched on the
+        // pieces rather than the whole line because the separators and their
+        // spacing are cosmetic and have already changed once.
+        private static readonly Regex SelectFooter = new(
+            @"(Esc to cancel|↑/↓ to navigate|Enter to select)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // A message the far side is holding rather than delivering, because the
+        // sender's permission mode differs from the receiver's. Not a select
+        // list at all, which is exactly why the generic test cannot be the only
+        // one: this one stalls a relay while drawing nothing that looks like a
+        // prompt.
+        private static readonly Regex HeldMessage = new(
+            @"not delivered to Claude|crossSessionInbound",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // First-run state: a config context nobody onboarded. Also not a select
+        // footer in the /login case, and the advice differs — Escape does not
+        // finish a wizard.
+        private static readonly Regex FirstRun = new(
+            @"Not logged in|run /login|Choose the text style|Light mode \(ANSI",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // A tool the relay's own model reached for. Kept narrow: "Do you want"
+        // is Claude Code's own permission wording, and matching anything looser
+        // would call a relay stalled because a transcript happened to quote it.
+        private static readonly Regex ToolPermission = new(
+            @"Do you want to (proceed|allow)|Allow this tool|permission to use",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // Why this relay is not answering, or null if nothing about the pane
+        // says it is stuck.
+        //
+        // Ordered most specific first, so the report names a cause when it can.
+        // The generic arm is the point of the whole function though: it is what
+        // catches the fifth shape, and "something is waiting, press Escape" is a
+        // far better answer than the silence this replaces.
+        public static RelayStall? ReadStall(string paneText)
+        {
+            if (string.IsNullOrEmpty(paneText)) return null;
+
+            if (HeldMessage.IsMatch(paneText))
+            {
+                return new RelayStall(
+                    "a message it is holding rather than delivering",
+                    "set crossSessionInbound to \"accept\" in that account's settings.json on the "
+                    + "other machine");
+            }
+
+            if (FirstRun.IsMatch(paneText))
+            {
+                return new RelayStall(
+                    "first-run setup it never got past",
+                    "open a terminal on that machine and finish setup — or sign in — for that "
+                    + "account, once");
+            }
+
+            if (ToolPermission.IsMatch(paneText))
+            {
+                return new RelayStall(
+                    "a tool-permission prompt",
+                    "press Escape in that relay's terminal to clear it");
+            }
+
+            if (SelectFooter.IsMatch(paneText))
+            {
+                return new RelayStall(
+                    "a prompt this app does not recognise",
+                    "press Escape in that relay's terminal to clear it");
+            }
+
+            return null;
         }
 
         // Banner lines carry a " · run /login to renew" tail that is an
