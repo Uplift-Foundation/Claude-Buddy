@@ -320,6 +320,12 @@ namespace ClaudeBuddy
         private readonly Dictionary<string, DateTime> _deadSince = new(StringComparer.Ordinal);
 
         private readonly Dictionary<string, OrbWindow> _windows = new();
+
+        // The account orbs, held apart from the session ones on purpose — see
+        // the header of AccountOrbs for why they are not entries in _windows.
+        // Kept here rather than owned by App so they ride the scan tick this
+        // class already runs, instead of starting a second timer.
+        private readonly AccountOrbs _accountOrbs = new(new UsagePoller());
         private readonly Dictionary<string, SessionStatus> _statuses = new();
         private readonly List<string> _order = new(); // stable stacking order
 
@@ -393,6 +399,12 @@ namespace ClaudeBuddy
             StartWatching();
 
             _pollTimer.Tick += (_, _) => ScanAndUpdate();
+
+            // Piggybacks the scan tick rather than adding a timer of its own.
+            // AccountOrbs decides whether there is anything to do — it holds the
+            // five-minute floor, which is the interval Claude Code's own cache
+            // makes meaningful, not this two-second one.
+            _pollTimer.Tick += (_, _) => _accountOrbs.Tick(DateTimeOffset.UtcNow);
             _pollTimer.Start();
 
             // Connects only if the user has turned it on and given it an
@@ -2277,6 +2289,11 @@ namespace ClaudeBuddy
             // visible arrow is a line from nowhere to nowhere.
             TeamLinks.SetVisible(visible);
 
+            // "Show orbs" means all of them. An account orb left floating over a
+            // cleared desktop would be the one thing the switch failed to turn
+            // off, which is worse than it never having been covered.
+            _accountOrbs.SetVisible(visible);
+
             if (visible) ReflowPositions();
             UpdateTray();
         }
@@ -2296,6 +2313,27 @@ namespace ClaudeBuddy
             }
 
             _tray?.ReapplyStateColors();
+        }
+
+        // Turning the account orbs on or off, said out loud by whoever changed
+        // the setting — the same convention as SetOrbsVisible and
+        // ReapplyStateColors above, and for the same reason: nothing on the scan
+        // path would otherwise notice, because a setting change is not a session
+        // change.
+        //
+        // Switching on does not poll immediately here. AccountOrbs.Tick runs
+        // within two seconds and owns the decision about when asking is
+        // worthwhile; duplicating that judgement at the call site is how two
+        // schedules end up disagreeing.
+        public void ReapplyAccountOrbs()
+        {
+            if (!ClaudeBuddySettings.AccountUsageEnabled)
+            {
+                _accountOrbs.CloseAll();
+                return;
+            }
+
+            _accountOrbs.SetVisible(OrbsVisible);
         }
 
         // Same shape as ReapplyStateColors, for the "Two-letter initials"
