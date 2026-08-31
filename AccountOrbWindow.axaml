@@ -1,0 +1,95 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ClaudeBuddy.AccountOrbWindow"
+        Width="72" Height="72"
+        SizeToContent="Manual"
+        WindowDecorations="None"
+        TransparencyLevelHint="Transparent"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        CanResize="False"
+        ShowActivated="False"
+        WindowStartupLocation="Manual">
+
+    <!-- One account's usage, as an orb wearing three rings.
+
+         Bigger than OrbWindow's 56 and centred at (36,36) rather than (28,28),
+         which is safe here and would not be there: the session orb's centre is
+         hardcoded in TeamLinks and ChatPanel, which reach for it by name, while
+         nothing reaches for an account orb. Three concentric rings plus two
+         legible letters do not fit in 36 device-independent pixels, and the
+         letters are what tell two accounts apart.
+
+         Root is pinned to 72x72 at the top left for the same reason OrbWindow's
+         is pinned to 56: Windows floors a top-level window at
+         SM_CXMINTRACK/SM_CYMINTRACK, so the window is wider than this on that
+         platform and the surplus is transparent slack to the right. Window size
+         can never be a layout input here.
+
+         The rings themselves are drawn in code — see AccountOrbWindow.axaml.cs —
+         because their sweep is the data. This is the first arc drawing in the
+         app; the arithmetic lives in UsageRingGeometry so it can be tested
+         without any of this. -->
+    <Canvas x:Name="Root"
+            Width="72" Height="72"
+            Background="Transparent"
+            Cursor="Hand"
+            HorizontalAlignment="Left" VerticalAlignment="Top">
+
+        <!-- The unfilled part of each ring, so a ring at 3% still reads as a
+             ring rather than as a stray tick floating above an orb. -->
+        <Ellipse x:Name="WeeklyTrack" Canvas.Left="4" Canvas.Top="4"
+                 Width="64" Height="64"
+                 Stroke="#17FFFFFF" StrokeThickness="5"/>
+        <Ellipse x:Name="SessionTrack" Canvas.Left="11" Canvas.Top="11"
+                 Width="50" Height="50"
+                 Stroke="#17FFFFFF" StrokeThickness="5"/>
+
+        <!-- The inner ring is a track only when there is something to track.
+             An account with extra usage switched off has no cap to be a
+             fraction of, and gets the dotted absence set up in code instead. -->
+        <Ellipse x:Name="ExtraTrack" Canvas.Left="18" Canvas.Top="18"
+                 Width="36" Height="36"
+                 Stroke="#17FFFFFF" StrokeThickness="5"/>
+
+        <Path x:Name="WeeklyArc" StrokeThickness="5" StrokeLineCap="Round"/>
+        <Path x:Name="SessionArc" StrokeThickness="5" StrokeLineCap="Round"/>
+        <Path x:Name="ExtraArc" StrokeThickness="5" StrokeLineCap="Round"/>
+
+        <Ellipse x:Name="Disc" Canvas.Left="22" Canvas.Top="22"
+                 Width="28" Height="28"
+                 Fill="#F51C1C1E" Stroke="#B8FFFFFF" StrokeThickness="1.5"/>
+
+        <TextBlock x:Name="Glyph"
+                   Canvas.Left="22" Canvas.Top="22"
+                   Width="28" Height="28"
+                   FontSize="12"
+                   FontWeight="SemiBold"
+                   TextAlignment="Center"
+                   Foreground="#F2FFFFFF"
+                   IsHitTestVisible="False">
+            <TextBlock.RenderTransform>
+                <TranslateTransform Y="5"/>
+            </TextBlock.RenderTransform>
+        </TextBlock>
+
+        <!-- Shown while this account's card is pinned. Top-right, which is free
+             here: the session orb's four badge corners are all spoken for, but
+             an account orb has no kind, no heartbeat and no presence to show. -->
+        <Border x:Name="PinBadge"
+                Canvas.Left="52" Canvas.Top="2"
+                Width="18" Height="18"
+                CornerRadius="9"
+                IsVisible="False"
+                Background="#F51C1C1E"
+                BorderBrush="#66FFFFFF"
+                BorderThickness="1">
+            <TextBlock Text="&#128204;"
+                       FontSize="9"
+                       TextAlignment="Center"
+                       VerticalAlignment="Center"
+                       IsHitTestVisible="False"/>
+        </Border>
+    </Canvas>
+</Window>
