@@ -496,7 +496,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
         // CB-79 that is five different mechanisms, and the far machine's own
         // reason never crosses the wire — a code is all that does.
         Assert.Contains(added, t => t.Role == ChatRole.System
-            && t.Text.Contains("terminal Buddy can type into", StringComparison.Ordinal));
+            && t.Text.Contains(TerminalTyping.CantTypePhrase, StringComparison.Ordinal));
     }
 
     [AvaloniaFact]

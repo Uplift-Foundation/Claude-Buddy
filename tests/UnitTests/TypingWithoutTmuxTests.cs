@@ -385,6 +385,28 @@ public class TypingWithoutTmuxTests
         Assert.Contains("Windows", why, StringComparison.Ordinal);
     }
 
+    // Every platform's refusal says the same recognisable thing.
+    //
+    // **This is the test that would have caught the CI failure that produced
+    // it.** The Windows arm was written as "Buddy couldn't find the console…"
+    // and nothing else — true, and it broke two UI tests that match on the
+    // shared phrase and run on both legs. On a Mac nothing looked wrong.
+    //
+    // Both platform flags, both directions, because a phrase that holds on one
+    // leg and not the other is exactly the bug.
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public void EveryPlatformSaysTheSameRecognisableThing(bool onMacOS, bool onWindows)
+    {
+        var why = TerminalTyping.WhyNot(
+            Claude(termProgram: "Ghostty"), onMacOS, onWindows);
+
+        Assert.Contains(TerminalTyping.CantTypePhrase, why, StringComparison.Ordinal);
+        Assert.Contains("Ghostty", why, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void SomethingWithNoTerminalHereSaysSo()
     {
