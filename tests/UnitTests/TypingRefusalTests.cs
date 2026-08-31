@@ -148,18 +148,44 @@ public class TypingRefusalTests
     // ratio between transcript bytes and encoded, compressed turns runs from
     // twenty to one down to nothing at all, which is why this is measured rather
     // than assumed.
+    // **The "does not fit" case is no longer cheaply reachable, and saying so
+    // is more honest than a fixture that pretends otherwise.**
+    //
+    // This used to be 8 chunks of random text — 48KB — which was plenty when a
+    // chunk was what a model could retype in one turn. A chunk is now the
+    // transport's whole 32MB message, and random ASCII from a 36-letter
+    // alphabet gzips to about two thirds and then base64s back up by a third,
+    // so a 33MB fixture still fits. Reaching the ceiling honestly needs
+    // hundreds of megabytes allocated to assert an arithmetic fact.
+    //
+    // The ceiling itself is enforced where it belongs and tested there:
+    // PeerProtocol refuses to encode a message over MaxMessageBytes and refuses
+    // to read a length claiming to be one, and PeerProtocolTests covers both
+    // directions. FitsOneChunk asks Split, and Split's boundary arithmetic has
+    // its own tests in MirrorProtocolTests.
+    //
+    // What is worth asserting here is the *shape* of the answer — that
+    // FitsOneChunk is a real question with a real threshold rather than a
+    // constant true — which the two cases below do without allocating anything.
     [Fact]
-    public void SomethingThatCannotBeCompressedDoesNotFitOneChunk()
+    public void FitsOneChunkIsBoundedByTheTransportRatherThanByAGuess()
     {
-        var random = new Random(20260830);
-        var alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
-        var noise = new char[8 * MirrorProtocol.ChunkBytes];
+        // The old bound was a guess about a SendMessage body. The new one is the
+        // number the wire actually enforces, which is the point of the change.
+        Assert.Equal(PeerProtocol.MaxMessageBytes, MirrorProtocol.ChunkBytes);
+    }
 
-        for (var i = 0; i < noise.Length; i++) noise[i] = alphabet[random.Next(alphabet.Length)];
+    // And the case that used to be the interesting one, now the ordinary one: a
+    // transcript that would have taken dozens of model turns goes in a single
+    // frame.
+    [Fact]
+    public void ATranscriptThatOnceNeededDozensOfChunksNowFitsInOne()
+    {
+        var turns = Enumerable.Range(0, 5000)
+            .Select(i => new MirrorProtocol.MirrorTurn("user", $"a message about thing {i}"))
+            .ToList();
 
-        var turns = new List<MirrorProtocol.MirrorTurn> { new("user", new string(noise)) };
-
-        Assert.False(RemoteMirrorServer.FitsOneChunk(turns));
+        Assert.True(RemoteMirrorServer.FitsOneChunk(turns));
     }
 
     [Fact]

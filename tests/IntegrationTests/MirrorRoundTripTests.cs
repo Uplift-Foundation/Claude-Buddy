@@ -65,25 +65,39 @@ public class MirrorRoundTripTests : IDisposable
     // A conversation big enough to need many frames, which is where chunking,
     // ordering and the whole-payload hash all have to hold at once.
     [Fact]
-    public async Task ALongTranscriptSurvivesBeingCutIntoManyFrames()
+    public async Task ALongTranscriptArrivesWholeAndUnbroken()
     {
-        // Large, because turns are a fraction of the rows they came from and
-        // it now takes a great deal of conversation to need a second frame —
-        // which is the entire point of shipping turns, and is measured in
-        // MirrorProtocol's note.
-        var rows = Conversation(6000);
+        // Large enough that the opening window cannot cover the file, so what
+        // is asserted below — an exact, unbroken suffix — is a real claim about
+        // where the window starts rather than about a small fixture.
+        var rows = Conversation(120_000);
         var path = WriteTranscript("long.jsonl", rows);
 
         var harness = new Harness(_dir);
         harness.AddSession("job-hunter", path);
 
         await harness.HandshakeAsync("job-hunter");
+
+        // Counted from after the handshake, because the roster is a transfer
+        // too — it goes through the same SendTransferAsync as a window does,
+        // which is why a total would say two and mean one.
+        var beforeOpen = harness.ChunkFrames;
+
         Assert.True(await harness.Client.OpenAsync("job-hunter"));
 
         var delivered = Assert.Single(harness.Windows);
         var all = MirrorProtocol.TurnsFrom(rows, MirrorProtocol.CliClaudeCode);
 
-        Assert.True(harness.ChunkFrames > 1, "this transcript should have needed more than one frame");
+        // **This used to assert `> 1`, and the transcript really did arrive in
+        // dozens of frames.** Each was ~8KB of base64 a far model retyped as
+        // tool input at roughly two minutes a turn, which is why chunking,
+        // per-chunk hashes and resends existed at all.
+        //
+        // The wire carries a message whole now, so the claim worth making is
+        // the opposite one — and the half that mattered is unchanged and
+        // asserted below: what arrives is an exact, unbroken suffix of the
+        // file, with no row dropped, duplicated or reworded.
+        Assert.Equal(1, harness.ChunkFrames - beforeOpen);
 
         // A tail, so the end of the file rather than all of it — the same
         // 512KB window a local panel opens on. What matters is that it is an
@@ -364,6 +378,13 @@ public class MirrorRoundTripTests : IDisposable
     [Fact]
     public async Task ALargeTranscriptOpensInASingleChunk()
     {
+        // Bigger than one opening window, so there is a backlog to page.
+        //
+        // Briefly sized to eight megabytes while the window grew until it
+        // stopped fitting a chunk — which, once a chunk became the whole 32MB
+        // message, meant growing to the cap every time. The window stops at
+        // enough conversation now rather than at what fits, so a megabyte is
+        // once again comfortably more than one window.
         var path = WriteTranscript("huge.jsonl", Rows(MirrorProtocol.InitialBytes * 8));
 
         var harness = new Harness(_dir);
@@ -388,6 +409,13 @@ public class MirrorRoundTripTests : IDisposable
     [Fact]
     public async Task WhatSurvivesIsTheNewestPartOfTheConversation()
     {
+        // Bigger than one opening window, so there is a backlog to page.
+        //
+        // Briefly sized to eight megabytes while the window grew until it
+        // stopped fitting a chunk — which, once a chunk became the whole 32MB
+        // message, meant growing to the cap every time. The window stops at
+        // enough conversation now rather than at what fits, so a megabyte is
+        // once again comfortably more than one window.
         var rows = Rows(MirrorProtocol.InitialBytes * 8);
         rows.Add(Row("assistant", "last", "the most recent thing said"));
 
@@ -455,6 +483,13 @@ public class MirrorRoundTripTests : IDisposable
         // Sized against the real constraint instead. Big enough that its turns
         // cannot fit one chunk however well they compress, and small enough that
         // the loop below can still reach the start of the file.
+        // Bigger than one opening window, so there is a backlog to page.
+        //
+        // Briefly sized to eight megabytes while the window grew until it
+        // stopped fitting a chunk — which, once a chunk became the whole 32MB
+        // message, meant growing to the cap every time. The window stops at
+        // enough conversation now rather than at what fits, so a megabyte is
+        // once again comfortably more than one window.
         var rows = Rows(MirrorProtocol.InitialBytes * 8);
         var path = WriteTranscript("deep.jsonl", rows);
 
@@ -920,6 +955,9 @@ public class MirrorRoundTripTests : IDisposable
     [Fact]
     public async Task PagingBackFurtherThanTheTransferTableKeepsStillWorks()
     {
+        // Past the window cap *and* far enough past it to need more pages than
+        // the table keeps. The window covers up to MaxTailBytes now, so a
+        // three-megabyte fixture arrives whole and there is nothing to page.
         var rows = Rows(MirrorProtocol.InitialBytes * 24);
         var path = WriteTranscript("verydeep.jsonl", rows);
 
@@ -1246,7 +1284,14 @@ public class MirrorRoundTripTests : IDisposable
                 {
                     Typed.Add((NameOf(status), text));
                     return Task.FromResult(true);
-                }));
+                },
+                // Who may ask, which the server no longer guesses. It used to fall
+                // back to a name test — anything called `claude-buddy-rc-…` was
+                // taken for another Buddy's relay — and a name is not a credential.
+                // It refuses by default now; the real transport answers properly,
+                // because a peer has completed a TLS handshake with a certificate
+                // somebody pinned by typing a code. A harness says yes explicitly.
+                PeerAllowed: _ => true));
 
             Client = new RemoteMirrorClient("acct", new RemoteMirrorClient.Seams(SendToServerAsync));
 

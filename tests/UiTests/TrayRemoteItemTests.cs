@@ -59,7 +59,9 @@ public class TrayRemoteItemTests
 
     private static NativeMenu? BuildMenuCore(bool remoteEnabled)
     {
-        ClaudeBuddySettings.RemoteControlEnabled = remoteEnabled;
+        // The menu item follows the link now rather than the relay, which is
+        // the only transport left for it to offer.
+        ClaudeBuddySettings.PeerLinkEnabled = remoteEnabled;
 
         TrayController tray;
         try

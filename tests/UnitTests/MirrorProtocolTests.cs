@@ -258,7 +258,33 @@ public class MirrorProtocolTests
 
         var round = Reassemble(payload, out var pieces);
 
-        Assert.True(pieces > 1, "this payload should need more than one frame");
+        // **This used to assert `pieces > 1`, and a transcript this size really
+        // did arrive in dozens of them.** Each was ~8KB of base64 that a far
+        // model retyped as tool input at roughly two minutes a turn, which is
+        // the entire reason chunking, per-chunk hashes and resends existed.
+        //
+        // The wire is a TLS socket now and carries a message whole, so the
+        // interesting claim is the opposite one: a transcript that once needed
+        // dozens of frames needs one. What has not changed, and is the half
+        // worth keeping, is that what comes out is exactly what went in.
+        Assert.Equal(1, pieces);
+        Assert.Equal(payload, round);
+    }
+
+    // The round trip still has to survive something genuinely large, or "it
+    // fits in one piece" is a claim about the test's fixture rather than about
+    // the transport.
+    [Fact]
+    public void ATranscriptSizedPayloadStillGoesWholeAndComesBackIntact()
+    {
+        var payload = Encoding.UTF8.GetBytes(string.Join("\n",
+            Enumerable.Range(0, 200_000).Select(i => $"{{\"type\":\"user\",\"n\":{i}}}")));
+
+        Assert.True(payload.Length > 4 * 1024 * 1024, "fixture should be megabytes");
+
+        var round = Reassemble(payload, out var pieces);
+
+        Assert.Equal(1, pieces);
         Assert.Equal(payload, round);
     }
 
@@ -273,10 +299,10 @@ public class MirrorProtocolTests
     [Fact]
     public void APayloadThatExactlyFillsItsChunksNeedsNoExtraOne()
     {
-        var payload = new byte[MirrorProtocol.ChunkBytes * 2];
+        var payload = new byte[TestChunkBytes * 2];
         Random.Shared.NextBytes(payload);
 
-        Assert.Equal(2, MirrorProtocol.Split(payload).Count);
+        Assert.Equal(2, MirrorProtocol.Split(payload, TestChunkBytes).Count);
         Assert.Equal(payload, Reassemble(payload, out _));
     }
 
@@ -284,10 +310,10 @@ public class MirrorProtocolTests
     [Fact]
     public void PiecesArrivingBackwardsStillReassemble()
     {
-        var payload = new byte[MirrorProtocol.ChunkBytes * 3 + 17];
+        var payload = new byte[TestChunkBytes * 3 + 17];
         Random.Shared.NextBytes(payload);
 
-        var frames = Frames(payload, "abcd1234");
+        var frames = Frames(payload, "abcd1234", TestChunkBytes);
         var assembly = new MirrorProtocol.MirrorAssembly();
 
         MirrorProtocol.AssemblyResult result = default;
@@ -301,10 +327,10 @@ public class MirrorProtocolTests
     [Fact]
     public void APieceArrivingTwiceIsNotCountedTwice()
     {
-        var payload = new byte[MirrorProtocol.ChunkBytes + 5];
+        var payload = new byte[TestChunkBytes + 5];
         Random.Shared.NextBytes(payload);
 
-        var frames = Frames(payload, "abcd1234");
+        var frames = Frames(payload, "abcd1234", TestChunkBytes);
         var assembly = new MirrorProtocol.MirrorAssembly();
 
         assembly.Offer(frames[0]);
@@ -320,10 +346,10 @@ public class MirrorProtocolTests
     [Fact]
     public void AMangledPieceNamesItselfSoItCanBeAskedForAgain()
     {
-        var payload = new byte[MirrorProtocol.ChunkBytes * 2];
+        var payload = new byte[TestChunkBytes * 2];
         Random.Shared.NextBytes(payload);
 
-        var frames = Frames(payload, "abcd1234");
+        var frames = Frames(payload, "abcd1234", TestChunkBytes);
         var assembly = new MirrorProtocol.MirrorAssembly();
 
         Assert.Equal(MirrorProtocol.AssemblyState.Incomplete, assembly.Offer(frames[0]).State);
@@ -349,10 +375,10 @@ public class MirrorProtocolTests
     [Fact]
     public void PiecesThatEachVerifyButDoNotAddUpAreRefused()
     {
-        var payload = new byte[MirrorProtocol.ChunkBytes * 2];
+        var payload = new byte[TestChunkBytes * 2];
         Random.Shared.NextBytes(payload);
 
-        var frames = Frames(payload, "abcd1234");
+        var frames = Frames(payload, "abcd1234", TestChunkBytes);
 
         // A genuine, correctly-hashed piece — from somewhere else.
         var other = new byte[MirrorProtocol.ChunkBytes];
@@ -403,10 +429,10 @@ public class MirrorProtocolTests
     [Fact]
     public void ATransferThatChangesItsOwnLengthMidFlightIsRefused()
     {
-        var payload = new byte[MirrorProtocol.ChunkBytes * 2];
+        var payload = new byte[TestChunkBytes * 2];
         Random.Shared.NextBytes(payload);
 
-        var frames = Frames(payload, "abcd1234");
+        var frames = Frames(payload, "abcd1234", TestChunkBytes);
 
         var relabelled = MirrorProtocol.TryParseFrame(MirrorProtocol.BuildFrame(
             MirrorProtocol.Chunk, "abcd1234",
@@ -660,9 +686,25 @@ public class MirrorProtocolTests
 
     // Builds the frames a real transfer would send, parsed back the way a client
     // receives them — so the tests above exercise the same path the wire does.
-    private static List<MirrorProtocol.MirrorFrame> Frames(byte[] payload, string id)
+    // **A chunk size for the arithmetic, not the one the wire uses.**
+    //
+    // Split takes its chunk size as a parameter, and these tests are about what
+    // it does at a boundary: an exact fill, a remainder, pieces arriving
+    // backwards or twice. That arithmetic is the same at any size, and the real
+    // one is now the whole 32MB message — so asserting it against the real one
+    // would mean allocating 96MB to prove something about division.
+    //
+    // Deliberately not the production value, and deliberately named so nobody
+    // reads a passing test here as evidence that a transfer is ever split.
+    private const int TestChunkBytes = 4 * 1024;
+
+    // The chunk size is a parameter so both questions can be asked: the
+    // boundary arithmetic wants several pieces from a small payload, and a real
+    // transfer wants the production size, where a transcript goes whole.
+    private static List<MirrorProtocol.MirrorFrame> Frames(
+        byte[] payload, string id, int chunkBytes = MirrorProtocol.ChunkBytes)
     {
-        var pieces = MirrorProtocol.Split(payload);
+        var pieces = MirrorProtocol.Split(payload, chunkBytes);
         var whole = MirrorProtocol.Hash(payload);
         var frames = new List<MirrorProtocol.MirrorFrame>();
 
@@ -683,9 +725,10 @@ public class MirrorProtocolTests
         return frames;
     }
 
-    private static byte[]? Reassemble(byte[] payload, out int pieces)
+    private static byte[]? Reassemble(
+        byte[] payload, out int pieces, int chunkBytes = MirrorProtocol.ChunkBytes)
     {
-        var frames = Frames(payload, "abcd1234");
+        var frames = Frames(payload, "abcd1234", chunkBytes);
         pieces = frames.Count;
 
         var assembly = new MirrorProtocol.MirrorAssembly();
