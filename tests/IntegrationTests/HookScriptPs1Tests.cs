@@ -14,7 +14,7 @@ namespace ClaudeBuddy.Tests;
 // live pwsh.
 //
 // Argv shape, from the script's param() block: -State <idle|generating|
-// waiting|ended> (mandatory), -Agent <claude|codex> (default claude),
+// waiting|ended> (mandatory), -Agent <claude|codex|grok> (default claude),
 // -TempDir <path> (default '' -> Path.GetTempPath()). The payload arrives on
 // stdin as JSON, same as the bash twin.
 public class HookScriptPs1Tests
@@ -63,6 +63,16 @@ public class HookScriptPs1Tests
         psi.ArgumentList.Add(agent);
         psi.ArgumentList.Add("-TempDir");
         psi.ArgumentList.Add(tempDir);
+
+        // Same isolation as the bash twin: Grok injects GROK_SESSION_ID into
+        // every child, and the hook treats that as stronger than -Agent. A
+        // test run from inside a Grok session would otherwise relabel every
+        // Claude and Codex case. Strip them; extraEnv puts them back when
+        // the test is about that override.
+        psi.Environment.Remove("GROK_SESSION_ID");
+        psi.Environment.Remove("GROK_HOOK_EVENT");
+        psi.Environment.Remove("GROK_WORKSPACE_ROOT");
+        psi.Environment.Remove("GROK_HOME");
 
         if (extraEnv is not null)
         {
@@ -165,14 +175,20 @@ public class HookScriptPs1Tests
     [WindowsFact]
     public void HookAlwaysExitsZeroWithNoOutput_ForEveryLiveStateAndAgent()
     {
-        foreach (var agent in new[] { "claude", "codex" })
+        foreach (var agent in new[] { "claude", "codex", "grok" })
         foreach (var state in new[] { "idle", "generating", "waiting" })
         {
             var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
             var payload = Payload(new { session_id = "s-" + agent + "-" + state, cwd = "C:\\proj", transcript_path = "" });
             var codexHome = Path.Combine(tempDir, "codex-home");
             Directory.CreateDirectory(codexHome);
-            var env = new Dictionary<string, string> { ["CODEX_HOME"] = codexHome };
+            var grokHome = Path.Combine(tempDir, "grok-home");
+            Directory.CreateDirectory(grokHome);
+            var env = new Dictionary<string, string>
+            {
+                ["CODEX_HOME"] = codexHome,
+                ["GROK_HOME"] = grokHome,
+            };
 
             var result = RunHook(agent, state, payload, tempDir, env);
 
@@ -264,6 +280,74 @@ public class HookScriptPs1Tests
         Assert.Contains(
             $"{{\"type\":\"agent-color\",\"agentColor\":\"{expectedColor}\",\"sessionId\":\"s1\"}}",
             transcriptContents);
+    }
+
+    [WindowsFact]
+    public void GrokEnvOverridesAClaudeArgvAndWritesCliGrok()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
+        Directory.CreateDirectory(Path.Combine(tempDir, "grok-home"));
+        var payload = Payload(new { session_id = "g1", cwd = "C:\\proj", transcript_path = "" });
+        var env = new Dictionary<string, string>
+        {
+            ["GROK_SESSION_ID"] = "g1",
+            ["GROK_HOOK_EVENT"] = "session_start",
+            ["GROK_HOME"] = Path.Combine(tempDir, "grok-home")
+        };
+
+        var result = RunHook("claude", "idle", payload, tempDir, env);
+        AssertSilentSuccess(result);
+
+        var status = File.ReadAllText(StatusFile(tempDir, "g1"));
+        Assert.Contains("\"cli\":\"grok\"", status);
+    }
+
+    [WindowsFact]
+    public void GrokCamelCasePayloadFieldsAreRead()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
+        var grokHome = Path.Combine(tempDir, "grok-home");
+        Directory.CreateDirectory(grokHome);
+        var payload = Payload(new { sessionId = "camel-1", cwd = "C:\\proj", transcriptPath = "" });
+        var env = new Dictionary<string, string> { ["GROK_HOME"] = grokHome };
+
+        var result = RunHook("grok", "idle", payload, tempDir, env);
+        AssertSilentSuccess(result);
+
+        Assert.True(File.Exists(StatusFile(tempDir, "camel-1")));
+        var status = File.ReadAllText(StatusFile(tempDir, "camel-1"));
+        Assert.Contains("\"cli\":\"grok\"", status);
+    }
+
+    [WindowsFact]
+    public void GrokAutoColorDoesNotAppendToTheTranscript()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("cb-hook-ps1-").FullName;
+        Directory.CreateDirectory(StatusDir(tempDir));
+        File.WriteAllText(Path.Combine(StatusDir(tempDir), ".auto-color"), "");
+
+        var sessionDir = Path.Combine(tempDir, "sess");
+        Directory.CreateDirectory(sessionDir);
+        var transcript = Path.Combine(sessionDir, "updates.jsonl");
+        File.WriteAllText(transcript, "{\"method\":\"session/update\"}\n");
+        File.WriteAllText(Path.Combine(sessionDir, "summary.json"),
+            """{"generated_title":"Grok title","title_is_manual":false}""");
+
+        const string cwd = "C:\\some\\fixed\\project\\path";
+        var payload = Payload(new { session_id = "g-color", cwd, transcript_path = transcript });
+        var env = new Dictionary<string, string>
+        {
+            ["GROK_HOME"] = Path.Combine(tempDir, "grok-home")
+        };
+
+        var result = RunHook("grok", "idle", payload, tempDir, env);
+        AssertSilentSuccess(result);
+
+        Assert.Equal("{\"method\":\"session/update\"}\n", File.ReadAllText(transcript));
+        var status = File.ReadAllText(StatusFile(tempDir, "g-color"));
+        Assert.Contains("\"cli\":\"grok\"", status);
+        Assert.Contains("\"title\":\"Grok title\"", status);
+        Assert.Contains($"\"color\":\"{ExpectedAutoColor(cwd)}\"", status);
     }
 
     [WindowsFact]

@@ -27,8 +27,17 @@ namespace ClaudeBuddy
             () => ClaudeBuddySettings.CodexChatEnabled,
             () => ClaudeBuddySettings.CodexReplyEnabled);
 
-        public static CliChatFormat For(SessionSource source) =>
-            source == SessionSource.Codex ? Codex : ClaudeCode;
+        public static readonly CliChatFormat Grok = new(
+            GrokTranscript.Map,
+            () => ClaudeBuddySettings.GrokChatEnabled,
+            () => ClaudeBuddySettings.GrokReplyEnabled);
+
+        public static CliChatFormat For(SessionSource source) => source switch
+        {
+            SessionSource.Codex => Codex,
+            SessionSource.Grok => Grok,
+            _ => ClaudeCode
+        };
 
         // --- what was expected to differ, and does not -----------------------
         //

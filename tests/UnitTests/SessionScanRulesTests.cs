@@ -348,6 +348,16 @@ public class SessionScanRulesTests
     }
 
     [Theory]
+    [InlineData("grok")]
+    [InlineData("GROK")]
+    [InlineData("Grok")]
+    public void SourceOf_MatchesGrokCaseInsensitively(string cli)
+    {
+        var status = new SessionStatus { Cli = cli };
+        Assert.Equal(SessionSource.Grok, SessionManager.SourceOf(status));
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData(null)]
     [InlineData("claude-code")]
