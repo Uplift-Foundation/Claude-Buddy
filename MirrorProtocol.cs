@@ -70,6 +70,19 @@ namespace ClaudeBuddy
         public const string ErrNoSession = "no-session";
         public const string ErrNoTranscript = "no-transcript";
         public const string ErrNoPane = "no-pane";
+
+        // A terminal Buddy *can* address, which then refused the text.
+        //
+        // **Split from ErrNoPane because collapsing the two sent a user
+        // looking for the wrong thing.** "There is nowhere to type" is a
+        // statement about the session's terminal and it is what a user acts
+        // on; saying it when the terminal was found and the delivery failed
+        // is a wrong answer that reads like a right one. The two have
+        // completely different fixes: one is "this terminal isn't supported",
+        // the other is almost always macOS Automation consent not yet given,
+        // or the window having been closed since the status file was written.
+        public const string ErrTypeFailed = "type-failed";
+
         public const string ErrReplyOff = "reply-off";
         public const string ErrBadHash = "bad-hash";
         public const string ErrUnsupported = "unsupported";

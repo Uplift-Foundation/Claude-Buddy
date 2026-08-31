@@ -1130,8 +1130,12 @@ namespace ClaudeBuddy
                 ? MirrorProtocol.BuildFrame(MirrorProtocol.Ok, frame.Id)
                 : MirrorProtocol.BuildFrame(MirrorProtocol.Err, frame.Id, new Dictionary<string, string>
                 {
-                    ["code"] = MirrorProtocol.ErrNoPane,
-                    ["msg"] = MirrorProtocol.Encode("couldn't type into the pane")
+                    // Not ErrNoPane. A route was found and it refused — see
+                    // that constant's comment for why saying "there is nowhere
+                    // to type" here is a wrong answer that reads like a right
+                    // one.
+                    ["code"] = MirrorProtocol.ErrTypeFailed,
+                    ["msg"] = MirrorProtocol.Encode("the terminal refused the text")
                 })).ConfigureAwait(false);
         }
 

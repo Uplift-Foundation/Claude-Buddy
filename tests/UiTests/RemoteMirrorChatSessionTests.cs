@@ -492,7 +492,11 @@ public class RemoteMirrorChatSessionTests : IDisposable
         // message that vanishes silently is the failure this panel has spent
         // six tickets learning not to produce.
         Assert.Contains(added, t => t.Role == ChatRole.User && t.Text == "are you there?");
-        Assert.Contains(added, t => t.Role == ChatRole.System && t.Text.Contains("tmux"));
+        // Says "a terminal Buddy can type into" rather than naming tmux: since
+        // CB-79 that is five different mechanisms, and the far machine's own
+        // reason never crosses the wire — a code is all that does.
+        Assert.Contains(added, t => t.Role == ChatRole.System
+            && t.Text.Contains(TerminalTyping.CantTypePhrase, StringComparison.Ordinal));
     }
 
     [AvaloniaFact]
