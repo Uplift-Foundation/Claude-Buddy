@@ -1111,11 +1111,18 @@ Some things the rings deliberately do not do:
 - **A window that has reset is not drawn.** Once a five-hour or weekly window
   passes its reset time its percentage is about a period that has ended, so the
   ring empties rather than showing yesterday's number.
-- **The inner ring is usually not a gauge.** Extra usage only has a percentage
-  when it is switched on *and* has a spending limit; otherwise there is no cap
-  to be a share of, and the ring is a dotted outline with the reason in the
-  card ("Extra usage is off for your organisation"). An empty gauge would claim
-  a budget you do not have.
+- **The inner ring has three states, not two.** Extra usage shows a real
+  percentage when it is switched on *and* has a spending limit. When the
+  month's limit has been **reached**, the ring is full — you have spent it, and
+  that is the opposite of not having any. When there is genuinely no extra
+  usage on the account, the ring is a dotted outline instead of a gauge sitting
+  at zero, because an empty gauge would claim a budget you do not have.
+- **The card never guesses why.** It says "Extra usage limit reached for this
+  month" or "switched off for this account" only when the API states those as
+  facts; any other reason is shown as the raw code the API sent, in
+  parentheses, rather than translated into a sentence. An earlier version did
+  translate one, and told somebody their organisation had disabled extra usage
+  when in truth they had simply spent that month's budget.
 - **An orb that could not be read goes dim** rather than dropping to zero, with
   how old the reading is in its card.
 

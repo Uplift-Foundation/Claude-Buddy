@@ -76,34 +76,65 @@ public class UsageCardTests
         Assert.Equal(string.Empty, card.ExtraNoteText);
     }
 
-    // The reason matters more than the absence. "Your organisation turned this
-    // off" and "you never switched it on" are different problems with different
-    // people to talk to, and the reason code is the only thing separating them.
+    // The regression this file exists to prevent.
+    //
+    // Shipped once: `disabled_reason: "org_level_disabled_until"` was rendered
+    // as "Extra usage is off for your organisation" and shown to a user whose
+    // organisation had switched nothing off. He had simply spent the month's
+    // budget — which the payload says outright, one field away, in
+    // `spend_limit_reached`. The fix is not a better translation of the code; it
+    // is to stop translating it and read the boolean that means something.
     [AvaloniaFact]
-    public void ExtraUsageWithoutACapGetsASentenceSayingWhy()
+    public void ASpentBudgetSaysSoRatherThanBlamingTheOrganisation()
     {
         var card = new UsageCard();
 
-        var off = new ExtraUsage(false, 0, null, "USD", 2, "org_level_disabled_until");
-        card.UpdateFrom(Usage(extra: off), null, Now);
+        // Exactly the shape the live account returns.
+        var spent = new ExtraUsage(
+            Enabled: false, UsedMinor: null, LimitMinor: null, Currency: "USD",
+            DecimalPlaces: 2, DisabledReason: "org_level_disabled_until",
+            UserDisabled: false, SpendLimitReached: true);
 
-        Assert.False(card.ShowsExtraBar);
-        Assert.Equal("Extra usage is off for your organisation.", card.ExtraNoteText);
+        card.UpdateFrom(Usage(extra: spent), null, Now);
+
+        Assert.Equal("Extra usage limit reached for this month.", card.ExtraNoteText);
+        Assert.DoesNotContain("organisation", card.ExtraNoteText);
     }
 
+    // The explicit booleans win over the opaque string, and they win in this
+    // order: a reached limit is the more specific fact, and the one a person can
+    // act on.
     [AvaloniaTheory]
-    [InlineData(null, "Extra usage is off.")]
-    [InlineData("", "Extra usage is off.")]
-    [InlineData("org_level_disabled_until", "Extra usage is off for your organisation.")]
-    [InlineData("something_new", "Extra usage is off (something_new).")]
-    public void AnUnfamiliarReasonIsShownRatherThanSwallowed(string? reason, string expected)
+    [InlineData(false, false, false, null, "Extra usage is not active.")]
+    [InlineData(false, false, false, "", "Extra usage is not active.")]
+    [InlineData(false, false, false, "org_level_disabled_until",
+        "Extra usage is not active right now (org_level_disabled_until).")]
+    [InlineData(false, false, false, "something_new",
+        "Extra usage is not active right now (something_new).")]
+    [InlineData(false, true, false, "org_level_disabled_until",
+        "Extra usage is switched off for this account.")]
+    [InlineData(false, false, true, "org_level_disabled_until",
+        "Extra usage limit reached for this month.")]
+    [InlineData(true, false, false, null, "Extra usage is on, with no limit set.")]
+    public void TheSentenceComesFromTheBooleansNotFromTheReasonCode(
+        bool enabled, bool userDisabled, bool limitReached, string? reason, string expected)
     {
-        // An unrecognised reason code is still the only information available
-        // about why the bar is missing. Printing it raw is ugly and beats
-        // "Extra usage is off" with no explanation for a state nobody has seen.
-        var extra = new ExtraUsage(false, null, null, "USD", 2, reason);
+        var extra = new ExtraUsage(
+            enabled, null, null, "USD", 2, reason, userDisabled, limitReached);
 
         Assert.Equal(expected, UsageCard.ExtraSentence(extra));
+    }
+
+    // An unrecognised code is still worth showing — verbatim, in parentheses, so
+    // it can be looked up — but never paraphrased into a claim.
+    [AvaloniaFact]
+    public void AnUnfamiliarReasonIsShownVerbatimRatherThanInterpreted()
+    {
+        var extra = new ExtraUsage(false, null, null, "USD", 2, "some_future_code");
+
+        var sentence = UsageCard.ExtraSentence(extra);
+
+        Assert.Contains("some_future_code", sentence);
     }
 
     [AvaloniaFact]

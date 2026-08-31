@@ -180,16 +180,18 @@ namespace ClaudeBuddy
             return colour;
         }
 
-        // The inner ring, which is the one that is usually not a gauge.
+        // The inner ring, which is the one that is often not a gauge.
         //
-        // Extra usage disabled — the state of every account this was built
-        // against — has no cap to be a share of, so the ring becomes a dotted
-        // outline saying "there is nothing here" rather than a solid arc at zero
-        // saying "you have spent none of your budget". Those are different
-        // claims and only one of them is true.
+        // Three states, not two, and the first version collapsed two of them.
+        // An account with no extra usage has no cap to be a share of, so its
+        // ring is a dotted outline saying "there is nothing here" rather than a
+        // solid arc at zero. But an account whose *limit has been reached* is
+        // the opposite of that — it is full — and drawing it as the same dotted
+        // absence made a spent budget look like a budget that never existed.
+        // RingPercent is where that distinction lives.
         private void ApplyExtra(ExtraUsage? extra)
         {
-            var percent = extra?.Percent;
+            var percent = extra?.RingPercent;
 
             ExtraIsAbsent = percent is null;
 

@@ -130,10 +130,28 @@ public class AccountOrbWindowTests
     {
         var orb = new AccountOrbWindow("k");
 
-        var off = new ExtraUsage(false, 0, null, "USD", 2, "org_level_disabled_until");
+        var off = new ExtraUsage(false, 0, null, "USD", 2, "never_enabled");
         orb.UpdateFrom(Usage(extra: off), Now);
 
         Assert.True(orb.ExtraIsAbsent);
+    }
+
+    // ...but a budget that has been *spent* is the opposite of an absent one,
+    // and the first version drew them the same. An account that had used every
+    // penny of its extra usage looked exactly like one that had never had any.
+    [AvaloniaFact]
+    public void ASpentBudgetIsAFullRingNotAnAbsentOne()
+    {
+        var orb = new AccountOrbWindow("k");
+
+        var spent = new ExtraUsage(
+            Enabled: false, UsedMinor: null, LimitMinor: null, Currency: "USD",
+            DecimalPlaces: 2, DisabledReason: "org_level_disabled_until",
+            UserDisabled: false, SpendLimitReached: true);
+
+        orb.UpdateFrom(Usage(extra: spent), Now);
+
+        Assert.False(orb.ExtraIsAbsent);
     }
 
     [AvaloniaFact]
