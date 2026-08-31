@@ -182,7 +182,7 @@ namespace ClaudeBuddy
 
                     var peer = Read(
                         got.Buffer, got.RemoteEndPoint.Address.ToString(),
-                        MachineNames.Tag(), DateTime.UtcNow);
+                        MachineNames.Mine(), DateTime.UtcNow);
 
                     if (peer is null) continue;
                     if (Note(peer)) Changed?.Invoke();
@@ -203,7 +203,7 @@ namespace ClaudeBuddy
             {
                 try
                 {
-                    var say = Say(MachineNames.Tag(), listenPort, PeerIdentity.OwnPin());
+                    var say = Say(MachineNames.Mine(), listenPort, PeerIdentity.OwnPin());
                     await _socket!.SendAsync(say, new IPEndPoint(Group, GroupPort), ct)
                         .ConfigureAwait(false);
                 }
