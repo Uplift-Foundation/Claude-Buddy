@@ -237,7 +237,7 @@ namespace ClaudeBuddy
         private readonly string _statusDir;
 
         public SessionManager()
-            : this(Path.Combine(Path.GetTempPath(), "claude_buddy"))
+            : this(StatusDirectory.Path())
         {
         }
 
@@ -410,17 +410,6 @@ namespace ClaudeBuddy
             // wherever the sessions are already indexed by name, which is here.
             RemoteControlSessions.MessageReceived += OnRemoteMessage;
             RemoteControlSessions.WorkingChanged += OnRemoteWorkingChanged;
-
-            // What this machine can show another machine's Buddy.
-            //
-            // Handed over as a delegate rather than read from over there: the
-            // sessions this app knows about live here, behind the scan, and a
-            // static relay class reaching into an orb list would invert the
-            // dependency for no benefit. Snapshotted on call rather than cached,
-            // because a mirror request is exactly when "what is running right
-            // now" has to be right.
-            RemoteControlSessions.ProvideLocalSessions(() =>
-                _statuses.Select(pair => (pair.Key, pair.Value)).ToList());
 
 
             _debounce.Tick += (_, _) =>
@@ -930,21 +919,29 @@ namespace ClaudeBuddy
             string? statusDir = null,
             Func<Dictionary<string, string>?>? jobListing = null,
             Func<int, bool>? isRunning = null,
-            DateTime? nowUtc = null)
+            DateTime? nowUtc = null,
+            bool honourOrbLifetime = true)
         {
-            statusDir ??= Path.Combine(Path.GetTempPath(), "claude_buddy");
+            statusDir ??= StatusDirectory.Path();
             var now = nowUtc ?? DateTime.UtcNow;
 
             IEnumerable<string> files;
             try
             {
-                files = Directory.EnumerateFiles(statusDir, "*.txt");
+                files = Directory.EnumerateFiles(statusDir, "*.txt").ToList();
             }
             catch
             {
                 // No directory yet means no sessions yet, which is an answer.
+                MirrorLog.SayOnce("headless-scan", $"dir={statusDir} unreadable");
                 return new List<(string, SessionStatus)>();
             }
+
+            // Says where it looked and what it found, once. Two halves of this
+            // app agreeing on a directory is not something either can check
+            // alone, and when they disagreed the symptom was a machine calmly
+            // reporting no sessions while running two.
+            MirrorLog.SayOnce("headless-scan", $"dir={statusDir} files={files.Count()}");
 
             var found = new List<ScanEntry>();
             foreach (var file in files)
@@ -1028,11 +1025,53 @@ namespace ClaudeBuddy
                     SessionPresence.CouldBeABackgroundedHusk(status, phase)
                     && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
 
+                // **Orb lifetime is a display preference and does not belong in
+                // an answer to another machine.** Its own definition says "how
+                // long an *orb* outlives its session's last hook write" — it
+                // exists so a screen full of yesterday's orbs tidies itself up.
+                // A far machine asking what sessions this one has is asking a
+                // question of fact, and "I have stopped drawing it" is not an
+                // answer to it.
+                //
+                // Measured on the mini, which is the whole point of the feature:
+                // two Claude Code sessions alive and idle, their status files
+                // last written when the user last typed into them, both dropped
+                // as Expired — so every roster it served said it had nothing,
+                // while the far panel showed a session it could not open.
+                //
+                // Everything else JudgeLiveness decides still applies, and the
+                // distinction is exactly right: superseded, process-gone and
+                // backgrounded-husk are *facts* about whether the session is
+                // there. Only expiry is a preference about how long to keep
+                // showing one, and only expiry is dropped here.
                 var verdict = JudgeLiveness(
                     entry.SessionId, entry.Status, entry.Written,
-                    now, StaleAfter, superseded, running, handedToBackground);
+                    now, honourOrbLifetime ? StaleAfter : null,
+                    superseded, running, handedToBackground);
+
                 if (verdict == ScanVerdict.Keep) kept.Add((entry.SessionId, entry.Status));
+                else
+                {
+                    // Per session and per verdict, so a machine reporting no
+                    // sessions says which rule dropped them. Every one of these
+                    // is a legitimate answer on its own and a mystery in
+                    // aggregate — "0 sessions" is the same output for a stale
+                    // file, a dead process, a superseded twin and a husk.
+                    // Sliced with a bound rather than a literal 8: a session id
+                    // is a uuid in the app and four characters in a fixture, and
+                    // a diagnostic that throws on the short one turns "explain
+                    // this drop" into "lose the whole scan".
+                    var shortId = entry.SessionId.Length > 8
+                        ? entry.SessionId[..8]
+                        : entry.SessionId;
+
+                    MirrorLog.SayOnce($"headless-drop:{entry.SessionId}",
+                        $"{shortId} {verdict} pid={entry.Status.SessionPid} "
+                        + $"written={entry.Written:HH:mm} phase={phase}");
+                }
             }
+
+            MirrorLog.SayOnce("headless-kept", $"found={found.Count} kept={kept.Count}");
 
             return kept;
         }

@@ -18,7 +18,7 @@ namespace ClaudeBuddy.UiTests;
 // something sensible.
 //
 // In the Settings collection: OnMessage below writes the process-wide relay
-// tables, and ProvideLocalSessions replaces a process-wide provider.
+// tables, and the local-session scan is memoised in a process-wide static.
 [Collection("Settings")]
 public class RouterAndSessionSurfacesTests : IDisposable
 {
@@ -62,21 +62,34 @@ public class RouterAndSessionSurfacesTests : IDisposable
     // ignored, or a SessionManager restarted mid-process would leave the mirror
     // answering out of a list nothing updates any more.
     [AvaloniaFact]
-    public void TheLocalSessionProviderCanBeReplaced()
+    public void TheLocalSessionListComesFromTheDisk()
     {
-        var first = new List<(string, SessionStatus)>();
-        var second = new List<(string, SessionStatus)>
+        // **There used to be a provider here, and removing it is the fix rather
+        // than a simplification.** SessionManager handed its orb list over, and
+        // the orb list is what is on screen — already filtered by the user's
+        // orb-lifetime preference, and on a headless Mac filled by a scan on a
+        // dispatcher that never pumps. So a machine served every other machine
+        // a list of what it happened to be drawing, which on the mini was
+        // nothing at all while it ran two sessions.
+        //
+        // Serving is a question of fact, so the scan answers directly.
+        RemoteControlSessions.ForgetLocalSessionsForTests();
+        var was = RemoteControlSessions.HeadlessFallback;
+        try
         {
-            ("s-1", new SessionStatus { Title = "zara", State = "idle" })
-        };
+            RemoteControlSessions.HeadlessFallback = () => new List<(string, SessionStatus)>
+            {
+                ("s-1", new SessionStatus { Title = "zara", State = "idle" })
+            };
 
-        RemoteControlSessions.ProvideLocalSessions(() => first);
-        RemoteControlSessions.ProvideLocalSessions(() => second);
-
-        // Read back through the only thing that reads it, rather than through a
-        // field: a provider that is stored and never consulted would pass any
-        // test that only checked the setter.
-        Assert.Contains("zara", RemoteControlSessions.LocalSessions().Select(s => s.Status.Title));
+            Assert.Contains(
+                "zara", RemoteControlSessions.LocalSessions().Select(s => s.Status.Title));
+        }
+        finally
+        {
+            RemoteControlSessions.HeadlessFallback = was;
+            RemoteControlSessions.ForgetLocalSessionsForTests();
+        }
     }
 
     // And with nothing provided at all — the state every process is in until

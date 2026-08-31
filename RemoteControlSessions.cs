@@ -142,11 +142,9 @@ namespace ClaudeBuddy
         // class is static and starts long before any window exists, and a
         // reference the other way would make the orb list a dependency of the
         // relay rather than the other way round.
-        private static Func<IReadOnlyList<(string SessionId, SessionStatus Status)>>? _localSessions;
 
-        public static void ProvideLocalSessions(
-            Func<IReadOnlyList<(string SessionId, SessionStatus Status)>> provider) =>
-            _localSessions = provider;
+
+
 
         // Named rather than written as a lambda at the one place a relay is
         // built, because the fallback is a real answer with a real consequence:
@@ -161,15 +159,63 @@ namespace ClaudeBuddy
         //
         // A relay is only built with a live bridge behind it, so this is also
         // the only way to ask what the provider currently says.
-        internal static IReadOnlyList<(string SessionId, SessionStatus Status)> LocalSessions() =>
-            _localSessions?.Invoke() ?? HeadlessFallback();
+        internal static IReadOnlyList<(string SessionId, SessionStatus Status)> LocalSessions()
+        {
+            lock (Gate)
+            {
+                if (_localSessionsAt is { } at && Now() - at < LocalSessionsFor)
+                    return _localSessionsWere;
+            }
 
-        // Swappable because the real fallback reads this machine's actual
-        // status directory, which a unit test has no business depending on.
+            var fresh = HeadlessFallback();
+
+            lock (Gate)
+            {
+                _localSessionsWere = fresh;
+                _localSessionsAt = Now();
+            }
+
+            return fresh;
+        }
+
+        // **This used to prefer the orb list and fall back to a scan, and the
+        // preference was the bug.** The orb list is what is on screen, and what
+        // is on screen has had the user's orb-lifetime preference applied to it
+        // — so an idle session that had stopped being drawn was reported to
+        // every other machine as not existing. On a headless Mac it was worse
+        // still: the orb list is filled by a scan on a dispatcher that never
+        // pumps, so the list was not merely filtered but empty.
+        //
+        // Serving is a question of fact and the disk is what knows the answer,
+        // so the disk is asked. See SessionManager.HeadlessSnapshot, which is
+        // told to ignore orb lifetime for exactly this call.
+        //
+        // Memoised for a moment because a peer asks every ten seconds and the
+        // scan reads a directory and a job listing. Two seconds is short enough
+        // that a session starting is noticed at once and long enough that
+        // several peers asking together cost one scan.
+        private static readonly TimeSpan LocalSessionsFor = TimeSpan.FromSeconds(2);
+
+        private static IReadOnlyList<(string SessionId, SessionStatus Status)> _localSessionsWere =
+            Array.Empty<(string, SessionStatus)>();
+
+        private static DateTime? _localSessionsAt;
+
+        // Swappable because the real scan reads this machine's actual status
+        // directory, which a unit test has no business depending on.
         internal static Func<IReadOnlyList<(string SessionId, SessionStatus Status)>>
-            HeadlessFallback = () => SessionManager.HeadlessSnapshot();
+            HeadlessFallback = () => SessionManager.HeadlessSnapshot(honourOrbLifetime: false);
 
-        internal static void ForgetLocalSessionsForTests() => _localSessions = null;
+        // Also clears the memo, or one test's answer is still being served two
+        // seconds into the next one.
+        internal static void ForgetLocalSessionsForTests()
+        {
+            lock (Gate)
+            {
+                _localSessionsWere = Array.Empty<(string, SessionStatus)>();
+                _localSessionsAt = null;
+            }
+        }
 
         // A session on another machine, as the orb scan wants it. Kept separate
         // from BridgeProtocol.RemoteAgent so the parser stays a parser: this one
@@ -591,6 +637,11 @@ namespace ClaudeBuddy
                 WorkingNow.Clear();
                 _snapshot = Array.Empty<Remote>();
                 _peerRows = Array.Empty<Remote>();
+
+                // The memoised local-session scan, or one test's answer is
+                // still being served two seconds into the next one.
+                _localSessionsWere = Array.Empty<(string, SessionStatus)>();
+                _localSessionsAt = null;
             }
 
             // Chat sessions subscribe to this in their constructor and are
