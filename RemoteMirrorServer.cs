@@ -252,13 +252,19 @@ namespace ClaudeBuddy
             }
         }
 
-        // Who is allowed to ask, deferring to the transport when it has an
-        // opinion. See Seams.PeerAllowed for why this is not a constant.
+        // Who is allowed to ask.
+        //
+        // **The default is now "nobody", and that is the right way round.** It
+        // used to fall back to a name test — anything called `claude-buddy-rc-…`
+        // was another Buddy's relay — which was a guess dressed as a check: a
+        // name is not a credential, and anyone on the account could pick one.
+        // The transport answers this properly now, because a peer has completed
+        // a TLS handshake with a certificate somebody pinned by typing a code.
+        //
+        // A server built with no PeerAllowed serves nothing, which is what a
+        // half-wired server should do.
         private bool MayAsk(string fromPeer) =>
-            _seams.PeerAllowed?.Invoke(fromPeer) ?? IsRelayName(fromPeer);
-
-        internal static bool IsRelayName(string name) =>
-            name.StartsWith("claude-buddy-rc-", StringComparison.OrdinalIgnoreCase);
+            _seams.PeerAllowed?.Invoke(fromPeer) ?? false;
 
         // What of this machine the asker can see.
         //
@@ -684,13 +690,36 @@ namespace ClaudeBuddy
         // past such a row is free in the only currency that matters here.
         private static Window Grow(FileStream fs, long length, long span, Window best, string cli)
         {
-            // From > 0 means there is still file behind this window; once it
-            // reaches the start there is nothing left to reach for.
-            while (span < MaxTailBytes && best.From > 0)
+            // **Stops when it has enough conversation, not when it stops
+            // fitting — and the difference is 27 seconds per panel open.**
+            //
+            // The old condition was "grow while it still fits one chunk", which
+            // terminated quickly only because a chunk was 6KB. A chunk is now
+            // the whole 32MB message, so everything fits and this doubled all
+            // the way to MaxTailBytes every time — six passes, each re-reading
+            // and re-gzipping up to eight megabytes. Measured at 27s on a
+            // transcript that does not compress, which is a panel that looks
+            // hung.
+            //
+            // The reason for growing at all survives intact and is the noise
+            // case: most of a transcript is rows no panel shows — tool results,
+            // file-history snapshots running to hundreds of kilobytes — and a
+            // window landing inside one is spent entirely on something
+            // invisible. So it grows while the window is *short of
+            // conversation*, which is what that fault actually looks like, and
+            // stops as soon as it has some. On an ordinary transcript the first
+            // read already has plenty and this does nothing at all.
+            while (span < MaxTailBytes
+                   && best.From > 0
+                   && best.Turns.Count < EnoughTurnsToOpenOn)
             {
                 span *= 2;
 
                 var bigger = ReadTail(fs, length, span, cli);
+
+                // Still bounded by what the wire can carry. It can no longer
+                // bind in practice, and leaving it costs nothing and keeps the
+                // guarantee true if the ceiling ever moves.
                 if (!FitsOneChunk(bigger.Turns)) break;
 
                 best = bigger;
@@ -698,6 +727,11 @@ namespace ClaudeBuddy
 
             return best;
         }
+
+        // Enough to fill a panel and give somebody something to scroll, without
+        // reaching for a whole conversation nobody asked for. Paging back
+        // supplies the rest on demand, which is what paging is for.
+        private const int EnoughTurnsToOpenOn = 40;
 
         // Smaller until it fits, halving from the newest end so what survives is
         // always the most recent conversation — the part somebody opening a
@@ -734,7 +768,10 @@ namespace ClaudeBuddy
         // A ceiling on the search rather than on the answer: each step re-reads
         // and re-parses, and past a few megabytes that is real CPU spent to
         // discover something a chunk was never going to hold anyway.
-        private const int MaxTailBytes = 8 * 1024 * 1024;
+        // Internal so a paging test can size its fixture against the real cap.
+        // It used to be sized against the chunk instead, which worked only while
+        // a chunk was small — see the note in MirrorRoundTripTests.
+        internal const int MaxTailBytes = 8 * 1024 * 1024;
 
         // Below this a window stops being a conversation. Four kilobytes is a
         // handful of turns, and if that still does not fit one chunk then no

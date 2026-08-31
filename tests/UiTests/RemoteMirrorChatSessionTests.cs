@@ -70,7 +70,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
         // it is exactly what bugfix/rc-tests-leak-remote-setting had to fix once
         // already.
         _remoteWasEnabled = ClaudeBuddySettings.RemoteControlEnabled;
-        ClaudeBuddySettings.RemoteControlEnabled = true;
+        ClaudeBuddySettings.PeerLinkEnabled = true;
 
         RemoteControlSessions.SendOverrideForTests = (_, name, text) =>
         {
@@ -457,196 +457,60 @@ public class RemoteMirrorChatSessionTests : IDisposable
         Assert.DoesNotContain(session.History, t => t.Text.Contains("Checking whether"));
     }
 
-    // --- CB-43: a live view must not cost the user the ability to send ---------
+    // --- CB-43, and what became of it -------------------------------------------
 
-    // The bug this replaces. A session running in a plain tty rather than under
-    // tmux has a transcript to mirror but no input line to type into, and the
-    // panel used to refuse — which made upgrading to a live view strictly worse
-    // than staying on the messaging channel it had already been using happily.
-    [AvaloniaFact]
-    public async Task ASessionWithNoPaneIsSentToRatherThanRefused()
-    {
-        Wire("a", "b");
-        _canType = false;
-
-        var session = await OpenAsync();
-        await session.SendAsync("hello");
-
-        // Nothing typed, because there is nowhere to type it...
-        Assert.Empty(_typed);
-
-        // ...but it went, through the channel that does work.
-        var sent = Assert.Single(_messaged);
-        Assert.Equal(Name, sent.Name);
-        Assert.Equal("hello", sent.Text);
-
-        // And the user is told which of the two happened, because the channels
-        // are not equivalent from where they sit.
-        var note = session.History[^1];
-        Assert.Equal(ChatRole.System, note.Role);
-        Assert.Contains("as a message", note.Text);
-        Assert.Contains("Slash commands", note.Text);
-    }
-
-    // The live view is the point and it survives the fallback: falling back is
-    // about the send, not about giving up on mirroring.
-    [AvaloniaFact]
-    public async Task FallingBackToAMessageKeepsTheLiveView()
-    {
-        Wire("a", "b");
-        _canType = false;
-
-        var session = await OpenAsync();
-        await session.SendAsync("hello");
-
-        Assert.True(session.IsMirroring);
-    }
-
-    // The echo, in its other shape. A message sent this way is *handed* to the
-    // far session, so its transcript holds the whole cross-session tag with the
-    // text inside it rather than the bare text a typed message leaves. An exact
-    // match misses that, and the panel would show the message twice.
+    // **The capability these tested is gone, and it went deliberately with the
+    // relay.** CB-43 fixed a real bug: a session running in a plain tty rather
+    // than under tmux has a transcript to mirror but no input line to type
+    // into, and the panel used to refuse — which made upgrading to a live view
+    // strictly worse than staying on the messaging channel it had been using
+    // happily. The fix was to fall back to that channel, which handed the text
+    // to the far session's model as a cross-session message.
     //
-    // The tag carries hop-chain, an attribute this app never wrote and does not
-    // read: a real one from a live relay has it, and an unknown attribute must
-    // not break the match.
+    // That channel was the relay, and the relay is deleted. A direct link types
+    // into the session's own input line and has nothing else to offer, so a
+    // session with no pane can now be read and not written to.
+    //
+    // Rewritten rather than removed, because a capability that disappears
+    // quietly is how a regression gets shipped. What follows asserts the new
+    // behaviour *and* that the user is told plainly, which is the part that
+    // keeps this from being the bug CB-43 was about.
     [AvaloniaFact]
-    public async Task TheEchoOfAMessageSentTheLongWayRoundAlsoSettlesItsTurn()
+    public async Task ASessionWithNoPaneIsRefusedAndToldWhy()
     {
-        Wire("a", "b");
         _canType = false;
 
+        Wire("a", "b");
         var session = await OpenAsync();
-        await session.SendAsync("run the tests");
+        var before = session.History.Count;
 
-        Append(UserRowEncoded("echo",
-            "Another Claude session sent a message:\n"
-            + "<cross-session-message from=\"bridge:session_01XkLE\" "
-            + "hop-chain=\"009be9b8f8643b328c2352dd\" from-name=\"warrens-mbp\" "
-            + "from-mode=\"prompting\">\nrun the tests\n</cross-session-message>"));
+        await session.SendAsync("are you there?");
 
-        await _server.TickAsync();
+        var added = session.History.Skip(before).ToList();
 
-        // Once, not twice: the wrapped echo adopted the bubble already there.
-        Assert.Single(Turns(session).Where(t => t.Role == ChatRole.User && t.Text.Contains("run the tests")));
-
-        // And it genuinely arrived rather than being skipped — the settled
-        // bubble now carries the transcript's own wording, which is the far
-        // session's version of the message and not the one typed here. Asserted
-        // because without it this case passes when the row never lands at all,
-        // which is how it was first written.
-        var settled = Assert.Single(Turns(session).Where(t => t.Role == ChatRole.User && t.Text.Contains("run the tests")));
-        Assert.Contains("cross-session-message", settled.Text);
-        Assert.Contains("hop-chain", settled.Text);
+        // The typed message stays on screen with the explanation under it. A
+        // message that vanishes silently is the failure this panel has spent
+        // six tickets learning not to produce.
+        Assert.Contains(added, t => t.Role == ChatRole.User && t.Text == "are you there?");
+        Assert.Contains(added, t => t.Role == ChatRole.System && t.Text.Contains("tmux"));
     }
 
-    // A far session that merely quotes the same sentence back is not the echo,
-    // and must not be swallowed by the pending turn — a message that silently
-    // disappears reads as a broken panel.
     [AvaloniaFact]
-    public async Task AQuotedSentenceIsNotMistakenForTheEchoOfAMessage()
+    public async Task TheRefusalNamesTheSessionRatherThanBlamingTheNetwork()
     {
-        Wire("a", "b");
+        // The fix is on the other machine, and this is the only place that will
+        // ever say so.
         _canType = false;
 
-        var session = await OpenAsync();
-        await session.SendAsync("run the tests");
-
-        Append(UserRow("other", "I will now run the tests as you asked"));
-        await _server.TickAsync();
-
-        Assert.Equal(
-            new[] { "a", "run the tests", "I will now run the tests as you asked" },
-            Turns(session).Where(t => t.Role == ChatRole.User).Select(t => t.Text));
-    }
-
-    // A different machine's message, arriving while this panel is still waiting
-    // for its own to come back. It carries the same kind of tag, so it reaches
-    // the body comparison rather than being turned away by the shape — and it
-    // must not be swallowed as the echo, which would silently delete somebody
-    // else's message from the panel.
-    [AvaloniaFact]
-    public async Task SomebodyElsesTaggedMessageIsNotMistakenForTheEchoEither()
-    {
         Wire("a", "b");
-        _canType = false;
-
         var session = await OpenAsync();
-        await session.SendAsync("run the tests");
+        await session.SendAsync("hello?");
 
-        Append(UserRowEncoded("other",
-            "Another Claude session sent a message:\n"
-            + "<cross-session-message from=\"bridge:session_01ZZZZ\" "
-            + "hop-chain=\"deadbeefdeadbeefdeadbeef\" from-name=\"someone-else\" "
-            + "from-mode=\"prompting\">\ndeploy the thing\n</cross-session-message>"));
-
-        await _server.TickAsync();
-
-        // Both are on screen: ours still pending, theirs added.
-        Assert.Contains(Turns(session), t => t.Text.Contains("run the tests"));
-        Assert.Contains(Turns(session), t => t.Text.Contains("deploy the thing"));
+        Assert.Contains(
+            session.History,
+            t => t.Role == ChatRole.System && t.Text.Contains(Name));
     }
 
-    // When the long way round fails too, the panel says why once. The relay's
-    // own failure is the cause; adding the typing refusal on top would name a
-    // second cause for one failure.
-    [AvaloniaFact]
-    public async Task AFallbackThatAlsoFailsSaysWhyOnceRatherThanTwice()
-    {
-        Wire("a", "b");
-        _canType = false;
-        _relayAccepts = false;
-
-        var session = await OpenAsync();
-        await session.SendAsync("hello");
-
-        Assert.Empty(_typed);
-        Assert.Empty(_messaged);
-
-        Assert.Contains("Couldn't reach", session.History[^1].Text);
-        Assert.DoesNotContain(session.History, t => t.Text.Contains("nowhere to type"));
-        Assert.DoesNotContain(session.History, t => t.Text.Contains("as a message"));
-    }
-
-    // A relay that throws rather than answering. The send is wrapped in a
-    // try/catch so a dead relay surfaces as a line in the panel rather than an
-    // unobserved exception on a background task, and the message stays on
-    // screen so the failure reads as "this did not go" rather than the text
-    // vanishing as the user watches.
-    [AvaloniaFact]
-    public async Task AFallbackThatThrowsIsReportedRatherThanLosingTheMessage()
-    {
-        Wire("a", "b");
-        _canType = false;
-        _relayThrows = true;
-
-        var session = await OpenAsync();
-        await session.SendAsync("hello");
-
-        Assert.Contains("Couldn't send", session.History[^1].Text);
-        Assert.Contains("the relay died mid-send", session.History[^1].Text);
-
-        // The user's own turn is still there.
-        Assert.Contains(Turns(session), t => t.Role == ChatRole.User && t.Text == "hello");
-    }
-
-    // The other refusal deliberately does NOT fall back. Replying-off is the far
-    // machine's owner having said something about their machine, and the
-    // messaging channel puts text into that session too — routing around it
-    // would defeat the setting rather than work around a missing pane.
-    [AvaloniaFact]
-    public async Task ReplyingBeingSwitchedOffOverThereIsNotRoutedAround()
-    {
-        Wire("a", "b");
-        _replyEnabled = false;
-
-        var session = await OpenAsync();
-        await session.SendAsync("hello");
-
-        Assert.Empty(_typed);
-        Assert.Empty(_messaged);
-        Assert.Contains("switched off", session.History[^1].Text);
-    }
 
     // --- keeping up ---------------------------------------------------------------
 
@@ -739,8 +603,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
         session.PanelOpened();
 
         await _client.DiscoverAsync(
-            new[] { new BridgeProtocol.RemoteAgent(Name, "94f106", "Remote Control", "idle") },
-            new[] { Name });
+            Array.Empty<string>(), new[] { Name });
 
         Assert.False(session.IsMirroring);
 
@@ -772,8 +635,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
 
         // No Buddy over there yet: the name settles as unavailable and says so.
         await _client.DiscoverAsync(
-            new[] { new BridgeProtocol.RemoteAgent(Name, "94f106", "Remote Control", "idle") },
-            new[] { Name });
+            Array.Empty<string>(), new[] { Name });
 
         Assert.False(session.IsMirroring);
         Assert.Contains(session.History, t => t.Text.Contains("No live view"));
@@ -819,7 +681,10 @@ public class RemoteMirrorChatSessionTests : IDisposable
         var session = NewSession();
         session.PanelOpened();
 
-        var peers = new[] { new BridgeProtocol.RemoteAgent(Name, "94f106", "Remote Control", "idle") };
+        // Nobody to ask, twice. Over the relay this was a peer list with the
+        // session but no Buddy on it; a link says the same thing by being
+        // connected to no machines.
+        var peers = Array.Empty<string>();
 
         await _client.DiscoverAsync(peers, new[] { Name });
         await _client.DiscoverAsync(peers, new[] { Name });
@@ -1152,15 +1017,20 @@ public class RemoteMirrorChatSessionTests : IDisposable
         // A long stretch of rows no panel shows, with a page back landing
         // entirely inside it.
         //
-        // The real conversation at the far end is doing work here, and CB-46 is
-        // why. The opening window now grows while its turns still fit one chunk,
-        // and a stretch of snapshots yields no turns at all — so it grows
-        // straight past them for free, which is the point of growing. With only
-        // one turn behind the stretch it would swallow the entire file, leave no
-        // backlog, and this test would have nothing to page into. Enough real
-        // conversation back there stops the growth on the chunk limit, which is
-        // both what a real transcript looks like and what puts the snapshots in
-        // the middle rather than at the edge.
+        // **Three layers, and the middle one is the subject.** The opening
+        // window grows until it has enough conversation to fill a panel, and a
+        // stretch of snapshots yields no turns at all — so it grows straight
+        // past them, which is exactly the point of growing.
+        //
+        // This used to end with a single turn, which was enough while growth
+        // stopped at what fit one chunk. Growth stops at enough *turns* now, so
+        // one turn at the end sends it hunting all the way through the
+        // snapshots and into the conversation behind them, swallowing the whole
+        // file and leaving nothing to page into.
+        //
+        // A real run of recent conversation stops the growth where a real
+        // transcript would, which puts the snapshots back in the middle — the
+        // only place they can be for this test to mean anything.
         var rows = new List<string>();
 
         for (var i = 0; i < 3000; i++)
@@ -1170,7 +1040,8 @@ public class RemoteMirrorChatSessionTests : IDisposable
             rows.Add("{\"type\":\"file-history-snapshot\",\"uuid\":\"h" + i + "\",\"blob\":\""
                      + new string('z', 600) + "\"}");
 
-        rows.Add(AssistantRow("a1", "the last thing said"));
+        for (var i = 0; i < 60; i++)
+            rows.Add(AssistantRow($"a{i}", $"the last thing said {i}"));
 
         WireRows(rows);
         var session = await OpenAsync();
@@ -1208,13 +1079,15 @@ public class RemoteMirrorChatSessionTests : IDisposable
         return session;
     }
 
-    private static IReadOnlyList<BridgeProtocol.RemoteAgent> Peers =>
-        new[]
-        {
-            new BridgeProtocol.RemoteAgent(FarRelay, "aa11bb", "Remote Control", "idle"),
-            new BridgeProtocol.RemoteAgent(Name, "94f106", "Remote Control", "idle")
-        };
-
+    // The machines to ask, by name.
+    //
+    // **This used to be a list of BridgeProtocol.RemoteAgent that the client
+    // filtered down to relays** — IsOwnRelay, IsOffline, IsRemoteControl — which
+    // is why the second entry below was the session itself and was expected to
+    // be dropped. A direct link has no such list and needs no such filter: it
+    // knows the machines it is connected to, which is the answer that filtering
+    // was working towards.
+    private static IReadOnlyList<string> Peers => new[] { FarRelay };
     private const string FarRelay = "claude-buddy-rc--claude-mini";
     private const string NearRelay = "claude-buddy-rc--claude-laptop";
 
@@ -1264,7 +1137,14 @@ public class RemoteMirrorChatSessionTests : IDisposable
             {
                 _typed.Add((status.Title, text));
                 return Task.FromResult(true);
-            }));
+            },
+            // Who may ask, which the server no longer guesses. It used to fall
+            // back to a name test — anything called `claude-buddy-rc-…` was
+            // taken for another Buddy's relay — and a name is not a credential.
+            // It refuses by default now; the real transport answers properly,
+            // because a peer has completed a TLS handshake with a certificate
+            // somebody pinned by typing a code. A harness says yes explicitly.
+            PeerAllowed: _ => true));
 
     private void BuildClient()
     {

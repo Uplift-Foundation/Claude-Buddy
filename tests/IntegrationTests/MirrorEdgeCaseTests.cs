@@ -536,14 +536,14 @@ public class MirrorEdgeCaseTests : IDisposable
     // transfer out and can ask again, and pushing the rest would spend turns
     // filling in something nobody can complete.
     [Fact]
-    public async Task ARelayThatStopsAcceptingMidTransferDoesNotKeepPushing()
+    public async Task AFarSideThatStopsAcceptingDoesNotLeaveThePanelWaiting()
     {
-        // Big enough to need several frames, so there is a middle to stop in —
-        // and since CB-46 that takes content, not row count. The server now
-        // sizes an opening window to fit one chunk, so four thousand rows of
-        // "line 1", "line 2" compress to nothing and arrive in a single frame
-        // with no middle at all. What spans chunks is payload that does not
-        // compress, so the rows carry incompressible text instead.
+        // **There is no longer a middle to stop in, which is why this is no
+        // longer named for one.** A transfer was dozens of frames, so a far
+        // side that stopped accepting halfway left one genuinely half-pushed.
+        // A message goes whole, so the only thing left to test — and the thing
+        // a user would actually feel — is that a send which cannot be delivered
+        // ends the wait rather than hanging the panel.
         AddSession(IncompressibleTranscript());
 
         await Handshake();
@@ -552,7 +552,7 @@ public class MirrorEdgeCaseTests : IDisposable
         // sending — so this is the other test that shortens it.
         _client.TimeoutOverrideForTests = TimeSpan.FromMilliseconds(250);
 
-        _refuseAfter = 2;
+        _refuseAfter = 0;
         _windows.Clear();
 
         Assert.False(await _client.OpenAsync(Name));
@@ -695,26 +695,32 @@ public class MirrorEdgeCaseTests : IDisposable
     // the machine was. That makes the mechanism assertable with no clock in it:
     // a flat deadline scores zero resets, which is the regression worth
     // catching, and the completion assertion below carries the rest.
+        // **This asserted deadline-extension across a multi-chunk transfer, and a
+    // multi-chunk transfer is no longer a thing that happens.**
+    //
+    // The mechanism was a real fix for a real fault: a transfer was dozens of
+    // chunks, each one a far model retyping ~8KB of base64 at roughly two
+    // minutes a turn, so a flat deadline killed transfers that were making
+    // perfectly good progress. RequestAsync pushed its deadline out on every
+    // intermediate chunk to answer that.
+    //
+    // A message now goes whole over a socket, so there are no intermediate
+    // chunks and nothing to extend. Rewritten rather than deleted, because the
+    // surviving question is the one that matters to a user: does an
+    // incompressible transcript — the case that used to need the most chunks —
+    // still arrive, and arrive in one piece?
     [Fact]
-    public async Task AMultiChunkTransferResetsItsWaitOnEveryPieceThatArrives()
+    public async Task AnIncompressibleTranscriptStillArrivesAndArrivesWhole()
     {
         AddSession(IncompressibleTranscript());
         await Handshake();
 
-        // The handshake has its own frames; only what this fetch does counts.
-        var before = _client.TimeoutExtensionsForTests;
         _windows.Clear();
 
-        // Left at the real timeout on purpose. Nothing here is trying to race a
-        // deadline, so there is no window for a slow runner to miss.
         Assert.True(await _client.OpenAsync(Name));
 
-        Assert.Single(_windows);
-
-        Assert.True(
-            _client.TimeoutExtensionsForTests > before,
-            "a multi-chunk transfer must push its deadline out as pieces arrive, "
-            + "or the wait is still a flat deadline");
+        var delivered = Assert.Single(_windows);
+        Assert.NotEmpty(delivered.Turns);
     }
 
     // The complement, and the case that was actually failing in the field.
@@ -892,7 +898,16 @@ public class MirrorEdgeCaseTests : IDisposable
         await Handshake();
 
         _client.TimeoutOverrideForTests = TimeSpan.FromMilliseconds(150);
-        _refuseAfter = 2;
+
+        // **Nothing gets through, where this used to let two frames past.** A
+        // transfer was dozens of chunks, so stopping after two left one
+        // genuinely half-delivered — there was a middle to stop in. A message
+        // goes whole now, so "goes quiet" can only mean the answer never comes,
+        // and letting the first frame through would let the transfer *finish*.
+        //
+        // The question this asks is unchanged and still the important one: a
+        // wait that no answer will ever end has to end by itself.
+        _refuseAfter = 0;
         _windows.Clear();
 
         Assert.False(await _client.OpenAsync(Name));
@@ -948,13 +963,15 @@ public class MirrorEdgeCaseTests : IDisposable
     private bool _typeSucceeds = true;
     private bool _typeThrows;
 
-    private static IReadOnlyList<BridgeProtocol.RemoteAgent> Peers =>
-        new[]
-        {
-            new BridgeProtocol.RemoteAgent(FarRelay, "aa11bb", "Remote Control", "idle"),
-            new BridgeProtocol.RemoteAgent(Name, "94f106", "Remote Control", "idle")
-        };
-
+    // The machines to ask, by name.
+    //
+    // **This used to be a list of BridgeProtocol.RemoteAgent that the client
+    // filtered down to relays** — IsOwnRelay, IsOffline, IsRemoteControl — which
+    // is why the second entry below was the session itself and was expected to
+    // be dropped. A direct link has no such list and needs no such filter: it
+    // knows the machines it is connected to, which is the answer that filtering
+    // was working towards.
+    private static IReadOnlyList<string> Peers => new[] { FarRelay };
     private Task Handshake() => _client.DiscoverAsync(Peers, new[] { Name });
 
     // A transcript whose turns cannot be squeezed into one chunk, however small
@@ -980,7 +997,15 @@ public class MirrorEdgeCaseTests : IDisposable
 
         for (var i = 0; i < 8; i++)
         {
-            var noise = new char[8 * MirrorProtocol.ChunkBytes];
+            // **A fixed size, not a multiple of ChunkBytes.** This was
+            // `8 * ChunkBytes`, which was 48KB a row when a chunk was 6KB and
+            // is two gigabytes now that a chunk is the whole 32MB message —
+            // twenty-six seconds of random character generation per test, for
+            // a property that needs only enough bytes to be worth compressing.
+            //
+            // What this fixture is *for* is content gzip cannot shrink, which
+            // is a fact about the bytes and not about their number.
+            var noise = new char[64 * 1024];
             for (var c = 0; c < noise.Length; c++) noise[c] = alphabet[random.Next(alphabet.Length)];
 
             rows.Add(UserRow($"u{i}", new string(noise)));
@@ -1029,7 +1054,19 @@ public class MirrorEdgeCaseTests : IDisposable
 
                 if (_typeSucceeds) _typed.Add((status.Title, text));
                 return Task.FromResult(_typeSucceeds);
-            }));
+            },
+            // **Who may ask, which is now a decision the caller has to make.**
+            // The server used to fall back to a name test — anything called
+            // `claude-buddy-rc-…` was another Buddy's relay — and that was a
+            // guess dressed as a check: a name is not a credential and anyone on
+            // the account could pick one. It defaults to refusing now, and the
+            // real transport answers properly, because a peer has completed a
+            // TLS handshake with a certificate somebody pinned by typing a code.
+            //
+            // A harness has no handshake to point at, so it says yes explicitly.
+            // That is the honest shape: this file is testing what the server
+            // does once a request is allowed, not who is allowed to make one.
+            PeerAllowed: _ => true));
 
         _client = new RemoteMirrorClient(Account, new RemoteMirrorClient.Seams(SendToServerAsync))
         {
