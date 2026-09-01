@@ -348,6 +348,54 @@ rewrote `hooks.json`, and every Codex orb quietly stopped appearing until the
 user happened to re-approve the hooks. Anything that toggles at runtime has to
 stay out of `hooks.json`.
 
+## Credits / usage
+
+Codex has no `codex usage` CLI. `/status` inside a live session shows the
+same numbers, and the usage dashboard at chatgpt.com/codex/settings/usage
+shows them too. Neither is a thing this app can ask without holding a
+session or a login token.
+
+What it *can* read, without either, is the `rate_limits` object Codex
+already writes onto every `token_count` event in the rollout. Measured on
+**codex-cli 0.151.0**, 31 Aug 2026, last snapshot of
+`rollout-2026-08-30T22-20-49-01a05643-….jsonl`:
+
+```json
+{
+  "limit_id": "codex",
+  "primary": {
+    "used_percent": 6.0,
+    "window_minutes": 300,
+    "resets_at": 1788239518
+  },
+  "secondary": {
+    "used_percent": 3.0,
+    "window_minutes": 10080,
+    "resets_at": 1788807866
+  },
+  "credits": {
+    "has_credits": false,
+    "unlimited": false,
+    "balance": null
+  },
+  "plan_type": "team"
+}
+```
+
+`window_minutes` 300 is the five-hour window; 10080 is the week. Older
+rollouts on this account (August 19–24) had only the week, as `primary`,
+with `secondary` null — the five-hour window was off for a stretch in July
+and those files predate it coming back. `used_percent` is 0–100, the same
+scale Claude Code's `utilization` uses. `resets_at` is unix seconds.
+
+`credits.has_credits` was false on every snapshot here. A remaining
+`credits.balance` without a cap is not a percentage and is not drawn as a
+ring.
+
+The usage orb reads the newest rollout's last such snapshot. Freshness is
+"as of the last Codex session". It does not call `/status`, does not hit
+chatgpt.com, and does not read `auth.json`'s `tokens` or `OPENAI_API_KEY`.
+
 ## Still unknown
 
 - On Windows: `install-codex-hooks.ps1`'s install path and the hook script's
@@ -371,3 +419,10 @@ Not measured. Do not write these down as facts until they are.
 - Whether a side conversation shares a pid or a session id with its parent.
 - Whether compaction rewrites a rollout in place — a reader that treats a
   shrinking file as "start over" depends on the answer.
+- How to poll Codex usage without a session or a token. Until that is
+  measured, usage orbs read the last `token_count` snapshot rather than
+  pretending a five-minute poll.
+- What `credits.balance` is denominated in, and whether a cap ever arrives
+  beside it. No snapshot here had `has_credits: true`.
+- Windows Codex and a second `CODEX_HOME` account, neither of which have
+  been run here.

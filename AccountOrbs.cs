@@ -83,8 +83,7 @@ namespace ClaudeBuddy
         // elapsed. Either way the switch wrote true and the screen stayed empty.
         internal void SyncToSettings(bool visible)
         {
-            if (!ClaudeBuddySettings.AccountUsageEnabled
-                && !ClaudeBuddySettings.GrokAccountUsageEnabled)
+            if (!AnyEnabled())
             {
                 CloseAll();
                 return;
@@ -104,8 +103,7 @@ namespace ClaudeBuddy
         // came on does not wait out a poll that ran for the other CLI.
         internal void Tick(DateTimeOffset now)
         {
-            if (!ClaudeBuddySettings.AccountUsageEnabled
-                && !ClaudeBuddySettings.GrokAccountUsageEnabled)
+            if (!AnyEnabled())
             {
                 if (_orbs.Count > 0) CloseAll();
                 return;
@@ -395,13 +393,23 @@ namespace ClaudeBuddy
             foreach (var key in _readings.Keys.ToList()) Remove(key);
         }
 
+        private static bool AnyEnabled() =>
+            ClaudeBuddySettings.AccountUsageEnabled
+            || ClaudeBuddySettings.GrokAccountUsageEnabled
+            || ClaudeBuddySettings.CodexAccountUsageEnabled;
+
+        private static bool SourceEnabled(AccountUsageSource source) => source switch
+        {
+            AccountUsageSource.Grok => ClaudeBuddySettings.GrokAccountUsageEnabled,
+            AccountUsageSource.Codex => ClaudeBuddySettings.CodexAccountUsageEnabled,
+            _ => ClaudeBuddySettings.AccountUsageEnabled
+        };
+
         private void PruneDisabledSources()
         {
             foreach (var key in _readings.Keys.ToList())
             {
-                var grok = _readings[key].Source == AccountUsageSource.Grok;
-                if (grok && !ClaudeBuddySettings.GrokAccountUsageEnabled) Remove(key);
-                else if (!grok && !ClaudeBuddySettings.AccountUsageEnabled) Remove(key);
+                if (!SourceEnabled(_readings[key].Source)) Remove(key);
             }
         }
 

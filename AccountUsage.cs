@@ -103,12 +103,13 @@ namespace ClaudeBuddy
     // accounts — perfectly healthy accounts that simply have no subscription
     // windows to report. Those get an orb that says so, rather than one that
     // looks like an error or no orb at all.
-    // Which CLI this reading came from. The two pollers share one orb
-    // collection, and turning one source off must not close the other's orbs —
-    // or leave them up after their switch went off. The keep-stale rule in
+
+    // Which CLI this reading came from. The pollers share one orb collection,
+    // and turning one source off must not close the others' orbs — or leave
+    // them up after their switch went off. The keep-stale rule in
     // AccountOrbs.Apply cannot tell "this source was not asked" from "this
     // source failed", so the reading itself has to say who produced it.
-    internal enum AccountUsageSource { ClaudeCode, Grok }
+    internal enum AccountUsageSource { ClaudeCode, Grok, Codex }
 
     internal sealed record AccountUsage(
         string? ConfigDir,

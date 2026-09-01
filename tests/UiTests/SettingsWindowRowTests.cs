@@ -101,6 +101,10 @@ public class SettingsWindowRowTests
         (w, v) => w.OnCodexReplyToggled(v), () => ClaudeBuddySettings.CodexReplyEnabled);
 
     [AvaloniaFact]
+    public void TheCodexUsageSwitchWritesItsOwnSetting() => Toggles(
+        (w, v) => w.OnCodexAccountUsageToggled(v), () => ClaudeBuddySettings.CodexAccountUsageEnabled);
+
+    [AvaloniaFact]
     public void TheGrokSwitchWritesItsOwnSetting() => Toggles(
         (w, v) => w.OnGrokEnabledToggled(v), () => ClaudeBuddySettings.GrokEnabled);
 
