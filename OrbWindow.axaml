@@ -202,6 +202,30 @@
                        IsHitTestVisible="False"/>
         </Border>
 
+        <!-- Which CLI this session is. Bottom-left, the corner the other three
+             badges left. Bigger than they are (22 against 16) because a logo
+             has to be read as a logo, and the 8pt punctuation those badges
+             carry would turn a spark into a speck.
+
+             Hidden unless the session is a local Claude, Codex or Grok CLI —
+             OpenClaw and remote-control orbs already have a kind badge, and
+             a mark on almost every remaining orb would distinguish nothing. -->
+        <Border x:Name="CliBadge"
+                Width="22" Height="22"
+                IsVisible="False"
+                CornerRadius="11"
+                BorderBrush="#73FFFFFF" BorderThickness="1"
+                HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                Margin="4,0,0,4"
+                IsHitTestVisible="False">
+            <Path x:Name="CliGlyph"
+                  Width="14" Height="14"
+                  Stretch="Uniform"
+                  Fill="#F2FFFFFF"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  IsHitTestVisible="False"/>
+        </Border>
+
         <!-- Folder initial so you can tell orbs apart at a glance
              (falls back to a dot until the session reports its cwd) -->
         <TextBlock x:Name="Glyph"

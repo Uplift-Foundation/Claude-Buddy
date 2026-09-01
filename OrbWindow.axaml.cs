@@ -313,6 +313,7 @@ namespace ClaudeBuddy
             // repeat — and without it a room orb is indistinguishable from an
             // ordinary one.
             ApplyKind(status.Kind);
+            ApplyCli(status.Source);
             ApplyHeartbeat(status.Heartbeat);
 
             // A room orb is named for its channel, like every other orb is named
@@ -535,6 +536,32 @@ namespace ClaudeBuddy
 
         private const double BadgeSize = 16;
 
+        // What the CLI mark shows, so a test can assert on the disc a person
+        // would have seen without reading a brush back off the control.
+        internal string? CliMarkName { get; private set; }
+
+        internal string? CliMarkFill { get; private set; }
+
+        internal bool CliMarkVisible => CliBadge.IsVisible;
+
+        private void ApplyCli(SessionSource source)
+        {
+            var mark = CliMark.For(source);
+            if (mark is null)
+            {
+                CliBadge.IsVisible = false;
+                CliMarkName = null;
+                CliMarkFill = null;
+                return;
+            }
+
+            CliBadge.Background = new SolidColorBrush(Color.Parse(mark.Value.FillHex));
+            CliGlyph.Data = StreamGeometry.Parse(mark.Value.GlyphPath);
+            CliBadge.IsVisible = true;
+            CliMarkName = mark.Value.Name;
+            CliMarkFill = mark.Value.FillHex;
+        }
+
         // A scheduled job, a private message, or a room with other people in
         // it. Nothing at all for a local session or for an agent's own main
         // session: every agent has a main, so badging it would put a mark on
@@ -677,6 +704,12 @@ namespace ClaudeBuddy
             PresenceBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
             PresenceGlyph.FontSize = 9 * scale;
             PresenceBadge.Margin = new Thickness(Math.Max(0, inset), Math.Max(0, inset), 0, 0);
+
+            CliBadge.Width = CliBadge.Height = CliMark.Size * scale;
+            CliBadge.CornerRadius = new CornerRadius(CliMark.Size * scale / 2);
+            CliGlyph.Width = CliGlyph.Height = CliMark.GlyphSize * scale;
+            var cliInset = 28 - (18 * scale * 0.7071) - (CliMark.Size * scale / 2);
+            CliBadge.Margin = new Thickness(Math.Max(0, cliInset), 0, 0, Math.Max(0, cliInset));
 
             Glyph.FontSize = BaseGlyphFontSize * scale;
             OrbRadius = 18 * scale;
