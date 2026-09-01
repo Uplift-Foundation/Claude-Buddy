@@ -73,16 +73,37 @@ namespace ClaudeBuddy
 
         internal IReadOnlyDictionary<string, UsageCard> Cards => _cards;
 
+        // A settings change, said out loud by whoever flipped the switch.
+        //
+        // **This used to look only at the Claude Code flag.** Turning Grok
+        // usage on while Claude Code usage was off closed every account orb
+        // and returned, and turning Grok usage on while Claude Code usage was
+        // already polling did not even ask — the five-minute floor had been
+        // started by the Claude Code poll, so the Grok orb waited until that
+        // elapsed. Either way the switch wrote true and the screen stayed empty.
+        internal void SyncToSettings(bool visible)
+        {
+            if (!AnyEnabled())
+            {
+                CloseAll();
+                return;
+            }
+
+            SetVisible(visible);
+            PruneDisabledSources();
+            _lastPoll = DateTimeOffset.MinValue;
+        }
+
         // Called on SessionManager's existing two-second tick.
         //
         // The floor is the point: Claude Code caches the underlying usage fetch
         // with a five-minute write guard, so polling faster cannot produce a
         // newer number — it only spends a process launch per account to be told
-        // the same thing.
+        // the same thing. SyncToSettings resets the floor so a switch that just
+        // came on does not wait out a poll that ran for the other CLI.
         internal void Tick(DateTimeOffset now)
         {
-            if (!ClaudeBuddySettings.AccountUsageEnabled
-                && !ClaudeBuddySettings.GrokAccountUsageEnabled)
+            if (!AnyEnabled())
             {
                 if (_orbs.Count > 0) CloseAll();
                 return;
@@ -369,17 +390,42 @@ namespace ClaudeBuddy
 
         internal void CloseAll()
         {
-            foreach (var key in _cards.Keys.ToList()) CloseCard(key);
+            foreach (var key in _readings.Keys.ToList()) Remove(key);
+        }
 
-            foreach (var orb in _orbs.Values)
+        private static bool AnyEnabled() =>
+            ClaudeBuddySettings.AccountUsageEnabled
+            || ClaudeBuddySettings.GrokAccountUsageEnabled
+            || ClaudeBuddySettings.CodexAccountUsageEnabled;
+
+        private static bool SourceEnabled(AccountUsageSource source) => source switch
+        {
+            AccountUsageSource.Grok => ClaudeBuddySettings.GrokAccountUsageEnabled,
+            AccountUsageSource.Codex => ClaudeBuddySettings.CodexAccountUsageEnabled,
+            _ => ClaudeBuddySettings.AccountUsageEnabled
+        };
+
+        private void PruneDisabledSources()
+        {
+            foreach (var key in _readings.Keys.ToList())
+            {
+                if (!SourceEnabled(_readings[key].Source)) Remove(key);
+            }
+        }
+
+        private void Remove(string key)
+        {
+            if (_cards.ContainsKey(key)) CloseCard(key);
+
+            if (_orbs.TryGetValue(key, out var orb))
             {
                 orb.Hide();
                 orb.Close();
+                _orbs.Remove(key);
             }
 
-            _orbs.Clear();
-            _pinned.Clear();
-            _readings.Clear();
+            _pinned.Remove(key);
+            _readings.Remove(key);
         }
     }
 }

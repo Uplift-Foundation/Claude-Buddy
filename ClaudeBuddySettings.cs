@@ -91,7 +91,7 @@ namespace ClaudeBuddy
             "openclawShowHeartbeats",
             "openclawHeartbeatMode", "openclawHeartbeatShape",
             "openclawCronMode", "openclawCronShape",
-            "codexChatEnabled", "codexReplyEnabled", "autoColorSessions",
+            "codexChatEnabled", "codexReplyEnabled", "codexAccountUsageEnabled", "autoColorSessions",
             "claudeCodeEnabled", "codexEnabled",
             "grokChatEnabled", "grokReplyEnabled", "grokEnabled", "grokAccountUsageEnabled",
             "clickAction", "doubleClickAction", "tripleClickAction",
@@ -289,6 +289,8 @@ namespace ClaudeBuddy
             public bool CodexChatEnabled { get; set; } = true;
 
             public bool CodexReplyEnabled { get; set; }
+
+            public bool CodexAccountUsageEnabled { get; set; }
 
             // Whether the hook gives a Claude Code session a colour of its own
             // when it has none. Off by default: it is the only setting in this
@@ -930,6 +932,12 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.CodexEnabled = value; Save(); }
         }
 
+        public static bool CodexAccountUsageEnabled
+        {
+            get { Load(); lock (Gate) return _model.CodexAccountUsageEnabled; }
+            set { Load(); lock (Gate) _model.CodexAccountUsageEnabled = value; Save(); }
+        }
+
         public static bool GrokChatEnabled
         {
             get { Load(); lock (Gate) return _model.GrokChatEnabled; }
@@ -1331,6 +1339,7 @@ namespace ClaudeBuddy
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
                         CodexReplyEnabled = root["codexReplyEnabled"]?.GetValue<bool>() ?? false,
+                        CodexAccountUsageEnabled = root["codexAccountUsageEnabled"]?.GetValue<bool>() ?? false,
                         AutoColorSessions = root["autoColorSessions"]?.GetValue<bool>() ?? false,
                         ClaudeCodeEnabled = root["claudeCodeEnabled"]?.GetValue<bool>() ?? true,
                         CodexEnabled = root["codexEnabled"]?.GetValue<bool>() ?? true,
@@ -1735,6 +1744,7 @@ namespace ClaudeBuddy
                         ["claudeCodeReplyEnabled"] = _model.ClaudeCodeReplyEnabled,
                         ["codexChatEnabled"] = _model.CodexChatEnabled,
                         ["codexReplyEnabled"] = _model.CodexReplyEnabled,
+                        ["codexAccountUsageEnabled"] = _model.CodexAccountUsageEnabled,
                         ["autoColorSessions"] = _model.AutoColorSessions,
                         ["claudeCodeEnabled"] = _model.ClaudeCodeEnabled,
                         ["codexEnabled"] = _model.CodexEnabled,

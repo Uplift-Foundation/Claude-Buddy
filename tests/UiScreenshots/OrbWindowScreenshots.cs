@@ -19,19 +19,46 @@ public class OrbWindowScreenshots
     };
 
     [AvaloniaFact]
-    public void ClaudeCodeAndCodexStatusesRenderIdenticallyOnTheOrb()
+    public void AClaudeCodeOrbWearsTheTerracottaSpark()
     {
-        // The source test asserts these two render identically — this
-        // captures the Claude Code one; a second image for Codex would show
-        // nothing a diff tool wouldn't call "no change" against this one.
-        var claudeCode = PlainStatus();
-        claudeCode.Cli = "";
-        claudeCode.Source = SessionManager.SourceOf(claudeCode);
-
+        var status = PlainStatus();
+        status.Cli = "";
+        status.Source = SessionManager.SourceOf(status);
         var orb = new OrbWindow(Guid.NewGuid().ToString());
-        orb.UpdateFrom(claudeCode);
+        orb.UpdateFrom(status);
+        ScreenshotHelper.Capture(orb, "orb-window-cli-mark-claude.png");
+    }
 
-        ScreenshotHelper.Capture(orb, "orb-window-claude-code-and-codex-render-identically.png");
+    [AvaloniaFact]
+    public void ACodexOrbWearsTheGreenStar()
+    {
+        var status = PlainStatus();
+        status.Cli = "codex";
+        status.Source = SessionManager.SourceOf(status);
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(status);
+        ScreenshotHelper.Capture(orb, "orb-window-cli-mark-codex.png");
+    }
+
+    [AvaloniaFact]
+    public void AGrokOrbWearsTheBlackX()
+    {
+        var status = PlainStatus();
+        status.Cli = "grok";
+        status.Source = SessionManager.SourceOf(status);
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(status);
+        ScreenshotHelper.Capture(orb, "orb-window-cli-mark-grok.png");
+    }
+
+    [AvaloniaFact]
+    public void AnOpenClawOrbWearsTheLobster()
+    {
+        var status = PlainStatus();
+        status.Source = SessionSource.OpenClaw;
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(status);
+        ScreenshotHelper.Capture(orb, "orb-window-cli-mark-openclaw.png");
     }
 
     [AvaloniaFact]

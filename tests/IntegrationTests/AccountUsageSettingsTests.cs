@@ -49,6 +49,7 @@ public class AccountUsageSettingsTests
         // it, behind a poll that starts a process per account. Neither is
         // something to begin doing to someone who has not asked.
         Assert.False(ClaudeBuddySettings.AccountUsageEnabled);
+        Assert.False(ClaudeBuddySettings.CodexAccountUsageEnabled);
     }
 
     [Fact]
