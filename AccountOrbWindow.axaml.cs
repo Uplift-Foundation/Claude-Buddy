@@ -121,6 +121,12 @@ namespace ClaudeBuddy
 
         internal bool IsPinned => _pinned;
 
+        internal string? CliMarkName { get; private set; }
+
+        internal string? CliMarkFill { get; private set; }
+
+        internal bool CliMarkVisible => CliBadge.IsVisible;
+
         internal void SetPinned(bool pinned)
         {
             _pinned = pinned;
@@ -147,8 +153,19 @@ namespace ClaudeBuddy
             SessionColour = ApplyRing(SessionArc, SessionTrack, SessionRadius, session?.Percent);
 
             ApplyExtra(usage.Extra);
+            ApplyCli(usage.Source);
 
             ToolTip.SetTip(Root, OrbWindow.ThoughtBubble(usage.Label, Summary(usage, now), compact: true));
+        }
+
+        private void ApplyCli(AccountUsageSource source)
+        {
+            var mark = CliMark.For(source);
+            CliBadge.Background = new SolidColorBrush(Color.Parse(mark.FillHex));
+            CliGlyph.Data = StreamGeometry.Parse(mark.GlyphPath);
+            CliBadge.IsVisible = true;
+            CliMarkName = mark.Name;
+            CliMarkFill = mark.FillHex;
         }
 
         // One ring: the arc, its colour, and whether it breathes.

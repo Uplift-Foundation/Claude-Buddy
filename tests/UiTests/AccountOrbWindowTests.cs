@@ -29,7 +29,8 @@ public class AccountOrbWindowTests
         ExtraUsage? extra = null,
         bool available = true,
         DateTimeOffset? readAt = null,
-        string label = "board") =>
+        string label = "board",
+        AccountUsageSource source = AccountUsageSource.ClaudeCode) =>
         new(
             ConfigDir: null,
             Label: label,
@@ -38,7 +39,8 @@ public class AccountOrbWindowTests
             Session: session is null ? null : new UsageWindow(session.Value, Now.AddHours(3)),
             Weekly: weekly is null ? null : new UsageWindow(weekly.Value, Now.AddDays(3)),
             Extra: extra,
-            ReadAt: readAt ?? Now);
+            ReadAt: readAt ?? Now,
+            Source: source);
 
     [AvaloniaFact]
     public void ConstructsHeadlessWithNoException()
@@ -59,6 +61,28 @@ public class AccountOrbWindowTests
         Assert.Equal(
             OrbGlyph.For("board", ClaudeBuddySettings.TwoLetterGlyphs),
             orb.GlyphText);
+    }
+
+    [AvaloniaFact]
+    public void WearsTheCliMarkForItsSource()
+    {
+        var claude = new AccountOrbWindow("c");
+        var codex = new AccountOrbWindow("x");
+        var grok = new AccountOrbWindow("g");
+
+        claude.UpdateFrom(Usage(source: AccountUsageSource.ClaudeCode), Now);
+        codex.UpdateFrom(Usage(source: AccountUsageSource.Codex), Now);
+        grok.UpdateFrom(Usage(source: AccountUsageSource.Grok), Now);
+
+        Assert.Equal("claude", claude.CliMarkName);
+        Assert.Equal("codex", codex.CliMarkName);
+        Assert.Equal("grok", grok.CliMarkName);
+        Assert.True(claude.CliMarkVisible);
+        Assert.True(codex.CliMarkVisible);
+        Assert.True(grok.CliMarkVisible);
+        Assert.NotEqual(claude.CliMarkFill, codex.CliMarkFill);
+        Assert.NotEqual(claude.CliMarkFill, grok.CliMarkFill);
+        Assert.NotEqual(codex.CliMarkFill, grok.CliMarkFill);
     }
 
     [AvaloniaTheory]

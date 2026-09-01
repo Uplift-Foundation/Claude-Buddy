@@ -313,6 +313,7 @@ namespace ClaudeBuddy
             // repeat — and without it a room orb is indistinguishable from an
             // ordinary one.
             ApplyKind(status.Kind);
+            ApplyCli(status.Source);
             ApplyHeartbeat(status.Heartbeat);
 
             // A room orb is named for its channel, like every other orb is named
@@ -533,7 +534,38 @@ namespace ClaudeBuddy
         // the same, and here it is: where it is *drawn* is what moved.
         private void RefreshAccent() => ApplyAccent(_lastColor, force: true);
 
-        private const double BadgeSize = 16;
+        // Same 22 DIP as the CLI mark. The kind/heart/presence discs used to
+        // be 16 against a 22px lobster, which is the size the user pointed at
+        // and said the right-hand icons looked tiny.
+        private const double BadgeSize = 22;
+
+        private const double BadgeGlyphSize = 13;
+
+        // What the CLI mark shows, so a test can assert on the disc a person
+        // would have seen without reading a brush back off the control.
+        internal string? CliMarkName { get; private set; }
+
+        internal string? CliMarkFill { get; private set; }
+
+        internal bool CliMarkVisible => CliBadge.IsVisible;
+
+        private void ApplyCli(SessionSource source)
+        {
+            var mark = CliMark.For(source);
+            if (mark is null)
+            {
+                CliBadge.IsVisible = false;
+                CliMarkName = null;
+                CliMarkFill = null;
+                return;
+            }
+
+            CliBadge.Background = new SolidColorBrush(Color.Parse(mark.Value.FillHex));
+            CliGlyph.Data = StreamGeometry.Parse(mark.Value.GlyphPath);
+            CliBadge.IsVisible = true;
+            CliMarkName = mark.Value.Name;
+            CliMarkFill = mark.Value.FillHex;
+        }
 
         // A scheduled job, a private message, or a room with other people in
         // it. Nothing at all for a local session or for an agent's own main
@@ -657,7 +689,7 @@ namespace ClaudeBuddy
             // member's smaller circle.
             KindBadge.Width = KindBadge.Height = BadgeSize * scale;
             KindBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
-            KindGlyph.FontSize = 9 * scale;
+            KindGlyph.FontSize = BadgeGlyphSize * scale;
 
             var inset = 28 - (18 * scale * 0.7071) - (BadgeSize * scale / 2);
             KindBadge.Margin = new Thickness(0, 0, Math.Max(0, inset), Math.Max(0, inset));
@@ -667,7 +699,7 @@ namespace ClaudeBuddy
             // same reason the kind badge does.
             HeartBadge.Width = HeartBadge.Height = BadgeSize * scale;
             HeartBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
-            HeartGlyph.FontSize = 9 * scale;
+            HeartGlyph.FontSize = BadgeGlyphSize * scale;
             HeartBadge.Margin = new Thickness(0, Math.Max(0, inset), Math.Max(0, inset), 0);
 
             // And mirrored once more into the corner this one lives in. Same sum
@@ -675,8 +707,13 @@ namespace ClaudeBuddy
             // a mark left at the full-size margin would float off its rim.
             PresenceBadge.Width = PresenceBadge.Height = BadgeSize * scale;
             PresenceBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
-            PresenceGlyph.FontSize = 9 * scale;
+            PresenceGlyph.FontSize = BadgeGlyphSize * scale;
             PresenceBadge.Margin = new Thickness(Math.Max(0, inset), Math.Max(0, inset), 0, 0);
+
+            CliBadge.Width = CliBadge.Height = CliMark.Size * scale;
+            CliBadge.CornerRadius = new CornerRadius(CliMark.Size * scale / 2);
+            CliGlyph.Width = CliGlyph.Height = CliMark.GlyphSize * scale;
+            CliBadge.Margin = new Thickness(Math.Max(0, inset), 0, 0, Math.Max(0, inset));
 
             Glyph.FontSize = BaseGlyphFontSize * scale;
             OrbRadius = 18 * scale;
