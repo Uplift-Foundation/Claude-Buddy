@@ -140,6 +140,37 @@ public class SettingsWindowScreenshots
         }
     }
 
+    // The Codex group, now with the usage-orb row. Same reason as Grok: the
+    // whole-window shot is the window's own height, and this section sits
+    // below Claude Code.
+    [AvaloniaFact]
+    public void CodexGroupShowsTheUsageRow()
+    {
+        var ctor = typeof(SettingsWindow).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            types: Type.EmptyTypes)
+            ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+        var window = (Avalonia.Controls.Window)ctor.Invoke(null);
+
+        window.Show();
+        ScreenshotHelper.Flush();
+
+        var anchor = window.GetLogicalDescendants()
+            .OfType<TextBlock>()
+            .FirstOrDefault(block => block.Text == "Show Codex sessions");
+
+        Assert.NotNull(anchor);
+
+        var group = anchor!.GetLogicalAncestors().OfType<Control>()
+            .FirstOrDefault(control => control.GetLogicalDescendants()
+                .OfType<TextBlock>()
+                .Any(block => block.Text == "Codex"))
+            ?? (Control)anchor;
+
+        ScreenshotHelper.CaptureControl(group, "settings-codex-group.png");
+    }
+
     // The Grok Build group. Same reason the Claude Desktop group is captured
     // on its own: the whole-window shot is the window's own height, and this
     // section sits below Codex. A reviewer comparing rids should see the new

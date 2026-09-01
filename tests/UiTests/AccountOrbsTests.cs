@@ -262,6 +262,7 @@ public class AccountOrbsTests
         ClaudeBuddySettings.ReloadForTests();
         ClaudeBuddySettings.AccountUsageEnabled = false;
         ClaudeBuddySettings.GrokAccountUsageEnabled = false;
+        ClaudeBuddySettings.CodexAccountUsageEnabled = false;
 
         var orbs = new AccountOrbs(new FakeUsageSource());
         orbs.Apply(new[]
@@ -273,6 +274,53 @@ public class AccountOrbsTests
         orbs.SyncToSettings(visible: true);
 
         Assert.Empty(orbs.Orbs);
+
+        orbs.CloseAll();
+        ClaudeBuddySettings.ReloadForTests();
+    }
+
+    [AvaloniaFact]
+    public void TurningCodexUsageOnDoesNotCloseTheOrbs()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.AccountUsageEnabled = false;
+        ClaudeBuddySettings.GrokAccountUsageEnabled = false;
+        ClaudeBuddySettings.CodexAccountUsageEnabled = true;
+
+        var orbs = new AccountOrbs(new FakeUsageSource());
+        orbs.Apply(new[]
+        {
+            Usage("/Users/x/.codex", "codex", source: AccountUsageSource.Codex)
+        }, Now);
+
+        orbs.SyncToSettings(visible: true);
+
+        Assert.Single(orbs.Orbs);
+        Assert.True(orbs.Orbs.ContainsKey("/Users/x/.codex"));
+
+        orbs.CloseAll();
+        ClaudeBuddySettings.ReloadForTests();
+    }
+
+    [AvaloniaFact]
+    public void TurningClaudeUsageOffLeavesTheCodexOrb()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.AccountUsageEnabled = false;
+        ClaudeBuddySettings.CodexAccountUsageEnabled = true;
+
+        var orbs = new AccountOrbs(new FakeUsageSource());
+        orbs.Apply(new[]
+        {
+            Usage(null, "wthompson"),
+            Usage("/Users/x/.codex", "codex", source: AccountUsageSource.Codex)
+        }, Now);
+
+        orbs.SyncToSettings(visible: true);
+
+        Assert.Single(orbs.Orbs);
+        Assert.True(orbs.Orbs.ContainsKey("/Users/x/.codex"));
+        Assert.False(orbs.Orbs.ContainsKey(string.Empty));
 
         orbs.CloseAll();
         ClaudeBuddySettings.ReloadForTests();

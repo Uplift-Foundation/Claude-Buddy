@@ -327,7 +327,7 @@ namespace ClaudeBuddy
         // Kept here rather than owned by App so they ride the scan tick this
         // class already runs, instead of starting a second timer.
         private readonly AccountOrbs _accountOrbs = new(
-            new CompositeUsageSource(new UsagePoller(), new GrokUsagePoller()));
+            new CompositeUsageSource(new UsagePoller(), new GrokUsagePoller(), new CodexUsagePoller()));
         private readonly Dictionary<string, SessionStatus> _statuses = new();
         private readonly List<string> _order = new(); // stable stacking order
 

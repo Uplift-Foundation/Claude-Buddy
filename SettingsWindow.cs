@@ -876,6 +876,13 @@ namespace ClaudeBuddy
                 + "are numbered the same way Claude Code's are, and a digit answers one "
                 + "outright. Sessions not running under tmux stay read-only either way."));
 
+            rows.Add(Row("Usage orbs for each Codex account",
+                Switch(ClaudeBuddySettings.CodexAccountUsageEnabled, OnCodexAccountUsageToggled),
+                "An orb per Codex account wearing its weekly credit ring and the five-hour "
+                + "window when Codex reports one. Hover for the numbers; click to keep the "
+                + "card up. The figures come from the last session's own rollout — Codex "
+                + "writes them on every turn — and nothing here reads your login token."));
+
             return rows.ToArray();
         }
 
@@ -940,6 +947,12 @@ namespace ClaudeBuddy
         internal void OnCodexReplyToggled(bool enabled)
         {
             ClaudeBuddySettings.CodexReplyEnabled = enabled;
+        }
+
+        internal void OnCodexAccountUsageToggled(bool enabled)
+        {
+            ClaudeBuddySettings.CodexAccountUsageEnabled = enabled;
+            SessionManager.Instance?.ReapplyAccountOrbs();
         }
 
         internal void OnGrokEnabledToggled(bool enabled)
