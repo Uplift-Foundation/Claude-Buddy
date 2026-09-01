@@ -27,7 +27,7 @@ public class OrbWindowUpdateFromTests
     };
 
     [AvaloniaFact]
-    public void ClaudeCodeCodexAndGrokWearDistinctCliMarks()
+    public void ClaudeCodeCodexGrokAndOpenClawWearDistinctCliMarks()
     {
         var claudeCode = PlainStatus();
         claudeCode.Cli = "";
@@ -41,45 +41,63 @@ public class OrbWindowUpdateFromTests
         grok.Cli = "grok";
         grok.Source = SessionManager.SourceOf(grok);
 
+        var openclaw = PlainStatus();
+        openclaw.Source = SessionSource.OpenClaw;
+
         var claudeOrb = new OrbWindow(Guid.NewGuid().ToString());
         var codexOrb = new OrbWindow(Guid.NewGuid().ToString());
         var grokOrb = new OrbWindow(Guid.NewGuid().ToString());
+        var openclawOrb = new OrbWindow(Guid.NewGuid().ToString());
 
         claudeOrb.UpdateFrom(claudeCode);
         codexOrb.UpdateFrom(codex);
         grokOrb.UpdateFrom(grok);
+        openclawOrb.UpdateFrom(openclaw);
 
         Assert.Equal("claude", claudeOrb.CliMarkName);
         Assert.Equal("codex", codexOrb.CliMarkName);
         Assert.Equal("grok", grokOrb.CliMarkName);
+        Assert.Equal("openclaw", openclawOrb.CliMarkName);
         Assert.True(claudeOrb.CliMarkVisible);
         Assert.True(codexOrb.CliMarkVisible);
         Assert.True(grokOrb.CliMarkVisible);
-        Assert.NotEqual(claudeOrb.CliMarkFill, codexOrb.CliMarkFill);
-        Assert.NotEqual(claudeOrb.CliMarkFill, grokOrb.CliMarkFill);
+        Assert.True(openclawOrb.CliMarkVisible);
+        Assert.NotEqual(claudeOrb.CliMarkFill, openclawOrb.CliMarkFill);
 
-        // Kind is still independent of CLI — a local session has no kind badge.
+        // Kind is still independent of CLI — a local session has no kind badge,
+        // and an OpenClaw main session doesn't either. The lobster is the
+        // OpenClaw signal; a channel/cron badge is extra when the kind is known.
         Assert.Null(claudeOrb.KindLabel);
         Assert.Null(codexOrb.KindLabel);
         Assert.Null(grokOrb.KindLabel);
+        Assert.Null(openclawOrb.KindLabel);
     }
 
     [AvaloniaFact]
-    public void OpenClawAndRemoteSessionsCarryNoCliMark()
+    public void AnOpenClawChannelKeepsBothTheLobsterAndTheKindBadge()
     {
-        var openclaw = PlainStatus();
-        openclaw.Source = SessionSource.OpenClaw;
+        var status = PlainStatus();
+        status.Source = SessionSource.OpenClaw;
+        status.Kind = SessionKind.Channel;
+
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(status);
+
+        Assert.Equal("openclaw", orb.CliMarkName);
+        Assert.True(orb.CliMarkVisible);
+        Assert.Equal("channel", orb.KindLabel);
+    }
+
+    [AvaloniaFact]
+    public void RemoteSessionsCarryNoCliMark()
+    {
         var remote = PlainStatus();
         remote.Source = SessionSource.RemoteControl;
 
-        var openclawOrb = new OrbWindow(Guid.NewGuid().ToString());
         var remoteOrb = new OrbWindow(Guid.NewGuid().ToString());
-        openclawOrb.UpdateFrom(openclaw);
         remoteOrb.UpdateFrom(remote);
 
-        Assert.False(openclawOrb.CliMarkVisible);
         Assert.False(remoteOrb.CliMarkVisible);
-        Assert.Null(openclawOrb.CliMarkName);
         Assert.Null(remoteOrb.CliMarkName);
     }
 

@@ -1,19 +1,20 @@
 namespace ClaudeBuddy
 {
-    // The little CLI mark an orb wears so Claude, Codex and Grok read apart
-    // from across the room.
+    // The little CLI mark an orb wears so Claude, Codex, Grok and OpenClaw
+    // read apart from across the room.
     //
     // A coloured disc with a white glyph, not a letter: the orb's own initials
     // already occupy the letter channel, and a "C" on a Claude orb would be
     // the session's name half the time. Colour is the long-range signal
-    // (terracotta / green / black); the glyph is what you get when you look
-    // closer. Bottom-left, because the other three corners are already spoken
-    // for (presence, heart, kind).
+    // (terracotta / green / black / lobster-red); the glyph is what you get
+    // when you look closer. Bottom-left, because the other three corners are
+    // already spoken for (presence, heart, kind).
     //
-    // Hidden for OpenClaw and remote-control orbs: those already have a kind
-    // badge, and a fourth logo on a gateway session would be a mark on almost
-    // every remaining orb, which is the thing KindBadge's own comment exists
-    // to prevent.
+    // Hidden for remote-control orbs: those are Claude Code on another
+    // machine, the kind badge already says they are not local, and a Claude
+    // spark on a remote session would look like a local one from across the
+    // room. OpenClaw keeps the lobster even when it also has a kind badge —
+    // kind says cron/channel/direct, the lobster says it is OpenClaw.
     internal readonly record struct CliMarkStyle(string Name, string FillHex, string GlyphPath);
 
     internal static class CliMark
@@ -53,17 +54,33 @@ namespace ClaudeBuddy
             "M3.2,2.4 L8,7.2 L12.8,2.4 L13.6,3.2 L8.8,8 L13.6,12.8 L12.8,13.6 "
             + "L8,8.8 L3.2,13.6 L2.4,12.8 L7.2,8 L2.4,3.2 Z");
 
+        // Cooked-lobster red, a top-down lobster: antennae, claws, body, tail.
+        // Saturated enough that it does not collapse into Claude's terracotta
+        // from across the room, which is the whole reason this disc exists.
+        internal static readonly CliMarkStyle OpenClaw = new(
+            "openclaw",
+            "#E23A2B",
+            "M7.2,3.8 L4.8,0.7 L5.6,0.5 L7.8,3.6 Z "
+            + "M8.8,3.8 L11.2,0.7 L10.4,0.5 L8.2,3.6 Z "
+            + "M4.4,5.0 C2.2,3.8 0.5,5.2 0.8,7.0 C1.1,8.4 2.8,8.8 4.4,7.8 "
+            + "C3.6,6.8 3.8,5.8 4.4,5.0 Z "
+            + "M11.6,5.0 C13.8,3.8 15.5,5.2 15.2,7.0 C14.9,8.4 13.2,8.8 11.6,7.8 "
+            + "C12.4,6.8 12.2,5.8 11.6,5.0 Z "
+            + "M8,4.2 C10.6,4.2 11.4,7.2 10.8,10.4 C10.2,12.2 8,13.0 8,13.0 "
+            + "C8,13.0 5.8,12.2 5.2,10.4 C4.6,7.2 5.4,4.2 8,4.2 Z "
+            + "M5.4,11.6 L3.8,14.4 L8,13.4 L12.2,14.4 L10.6,11.6 Z");
+
         internal static CliMarkStyle? For(SessionSource source) => source switch
         {
             SessionSource.ClaudeCode => Claude,
             SessionSource.Codex => Codex,
             SessionSource.Grok => Grok,
+            SessionSource.OpenClaw => OpenClaw,
             _ => null
         };
 
         // Every account source is a CLI, so this is never null — unlike
-        // SessionSource, which has OpenClaw and remote-control orbs that
-        // already wear a kind badge instead.
+        // SessionSource, which still has remote-control orbs with no mark.
         internal static CliMarkStyle For(AccountUsageSource source) => source switch
         {
             AccountUsageSource.Codex => Codex,

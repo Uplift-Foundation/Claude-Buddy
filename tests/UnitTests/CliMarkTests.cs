@@ -5,33 +5,36 @@ namespace ClaudeBuddy.UnitTests;
 public class CliMarkTests
 {
     [Fact]
-    public void ClaudeCodexAndGrokEachGetADistinctMark()
+    public void ClaudeCodexGrokAndOpenClawEachGetADistinctMark()
     {
         var claude = CliMark.For(SessionSource.ClaudeCode);
         var codex = CliMark.For(SessionSource.Codex);
         var grok = CliMark.For(SessionSource.Grok);
+        var openclaw = CliMark.For(SessionSource.OpenClaw);
 
         Assert.NotNull(claude);
         Assert.NotNull(codex);
         Assert.NotNull(grok);
+        Assert.NotNull(openclaw);
 
         Assert.Equal("claude", claude!.Value.Name);
         Assert.Equal("codex", codex!.Value.Name);
         Assert.Equal("grok", grok!.Value.Name);
+        Assert.Equal("openclaw", openclaw!.Value.Name);
 
         Assert.NotEqual(claude.Value.FillHex, codex.Value.FillHex);
         Assert.NotEqual(claude.Value.FillHex, grok.Value.FillHex);
+        Assert.NotEqual(claude.Value.FillHex, openclaw.Value.FillHex);
         Assert.NotEqual(codex.Value.FillHex, grok.Value.FillHex);
+        Assert.NotEqual(codex.Value.FillHex, openclaw.Value.FillHex);
+        Assert.NotEqual(grok.Value.FillHex, openclaw.Value.FillHex);
 
-        Assert.NotEqual(claude.Value.GlyphPath, codex.Value.GlyphPath);
-        Assert.NotEqual(claude.Value.GlyphPath, grok.Value.GlyphPath);
-        Assert.NotEqual(codex.Value.GlyphPath, grok.Value.GlyphPath);
+        Assert.NotEqual(claude.Value.GlyphPath, openclaw.Value.GlyphPath);
     }
 
     [Fact]
-    public void OpenClawAndRemoteCarryNoMark()
+    public void RemoteControlCarriesNoMark()
     {
-        Assert.Null(CliMark.For(SessionSource.OpenClaw));
         Assert.Null(CliMark.For(SessionSource.RemoteControl));
     }
 

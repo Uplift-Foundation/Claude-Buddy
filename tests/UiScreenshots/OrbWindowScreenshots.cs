@@ -52,6 +52,16 @@ public class OrbWindowScreenshots
     }
 
     [AvaloniaFact]
+    public void AnOpenClawOrbWearsTheLobster()
+    {
+        var status = PlainStatus();
+        status.Source = SessionSource.OpenClaw;
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(status);
+        ScreenshotHelper.Capture(orb, "orb-window-cli-mark-openclaw.png");
+    }
+
+    [AvaloniaFact]
     public void UnknownKindShowsNoBadge()
     {
         var orb = new OrbWindow(Guid.NewGuid().ToString());
