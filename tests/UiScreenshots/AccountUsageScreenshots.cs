@@ -30,7 +30,8 @@ public class AccountUsageScreenshots
         ExtraUsage? extra = null,
         bool available = true,
         DateTimeOffset? readAt = null,
-        string label = "board") =>
+        string label = "board",
+        AccountUsageSource source = AccountUsageSource.ClaudeCode) =>
         new(
             ConfigDir: null,
             Label: label,
@@ -39,7 +40,8 @@ public class AccountUsageScreenshots
             Session: session is null ? null : new UsageWindow(session.Value, Now.AddHours(3)),
             Weekly: weekly is null ? null : new UsageWindow(weekly.Value, Now.AddDays(3)),
             Extra: extra,
-            ReadAt: readAt ?? Now);
+            ReadAt: readAt ?? Now,
+            Source: source);
 
     private static AccountOrbWindow Orb(AccountUsage usage)
     {
@@ -53,6 +55,22 @@ public class AccountUsageScreenshots
     {
         ScreenshotHelper.Capture(
             Orb(Usage(12, 30)), "account-orb-calm.png");
+    }
+
+    [AvaloniaFact]
+    public void ACodexAccountWearsTheGreenStar()
+    {
+        ScreenshotHelper.Capture(
+            Orb(Usage(12, 30, source: AccountUsageSource.Codex)),
+            "account-orb-cli-mark-codex.png");
+    }
+
+    [AvaloniaFact]
+    public void AGrokAccountWearsTheBlackX()
+    {
+        ScreenshotHelper.Capture(
+            Orb(Usage(12, 30, source: AccountUsageSource.Grok)),
+            "account-orb-cli-mark-grok.png");
     }
 
     [AvaloniaFact]
