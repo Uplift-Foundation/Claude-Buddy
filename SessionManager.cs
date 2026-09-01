@@ -2359,22 +2359,10 @@ namespace ClaudeBuddy
         // the setting — the same convention as SetOrbsVisible and
         // ReapplyStateColors above, and for the same reason: nothing on the scan
         // path would otherwise notice, because a setting change is not a session
-        // change.
-        //
-        // Switching on does not poll immediately here. AccountOrbs.Tick runs
-        // within two seconds and owns the decision about when asking is
-        // worthwhile; duplicating that judgement at the call site is how two
-        // schedules end up disagreeing.
-        public void ReapplyAccountOrbs()
-        {
-            if (!ClaudeBuddySettings.AccountUsageEnabled)
-            {
-                _accountOrbs.CloseAll();
-                return;
-            }
-
-            _accountOrbs.SetVisible(OrbsVisible);
-        }
+        // change. The decision about which CLI's orbs stay lives in
+        // AccountOrbs.SyncToSettings; this used to look only at the Claude Code
+        // flag, which is how turning Grok usage on could close the orbs instead.
+        public void ReapplyAccountOrbs() => _accountOrbs.SyncToSettings(OrbsVisible);
 
         // Same shape as ReapplyStateColors, for the "Two-letter initials"
         // toggle: a cosmetic setting change isn't a session change, so

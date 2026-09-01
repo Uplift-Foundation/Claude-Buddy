@@ -53,7 +53,8 @@ namespace ClaudeBuddy
                     null,
                     weekly,
                     extra,
-                    readAt);
+                    readAt,
+                    AccountUsageSource.Grok);
             }
             catch (JsonException)
             {
