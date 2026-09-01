@@ -47,9 +47,9 @@ public class CliMarkTests
     }
 
     [Fact]
-    public void TheDiscIsBiggerThanTheKindBadge()
+    public void TheDiscIsBigEnoughToRead()
     {
-        Assert.True(CliMark.Size > 16);
+        Assert.Equal(22, CliMark.Size);
         Assert.True(CliMark.GlyphSize < CliMark.Size);
     }
 }

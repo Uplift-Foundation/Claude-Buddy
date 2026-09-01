@@ -86,6 +86,11 @@ public class OrbWindowUpdateFromTests
         Assert.Equal("openclaw", orb.CliMarkName);
         Assert.True(orb.CliMarkVisible);
         Assert.Equal("channel", orb.KindLabel);
+
+        var kind = orb.FindControl<Border>("KindBadge")!;
+        var cli = orb.FindControl<Border>("CliBadge")!;
+        Assert.Equal(cli.Width, kind.Width);
+        Assert.Equal(CliMark.Size, kind.Width);
     }
 
     [AvaloniaFact]
@@ -285,6 +290,7 @@ public class OrbWindowUpdateFromTests
 
         Assert.True(heart.IsVisible);
         Assert.Equal(kind.Width, heart.Width);
+        Assert.Equal(CliMark.Size * 0.72, heart.Width, precision: 6);
         Assert.Equal(kind.Margin.Right, heart.Margin.Right);
 
         // Mirrored: the kind badge hangs off the bottom, the heart off the top.

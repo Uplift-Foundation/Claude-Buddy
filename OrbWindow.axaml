@@ -119,16 +119,16 @@
              session and an agent's own main session carry nothing — a mark on
              almost every orb distinguishes nothing. -->
         <Border x:Name="KindBadge"
-                Width="15" Height="15"
+                Width="22" Height="22"
                 IsVisible="False"
-                CornerRadius="7.5"
+                CornerRadius="11"
                 Background="#F2202024"
                 BorderBrush="#59FFFFFF" BorderThickness="1"
                 HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                Margin="0,0,8,8"
+                Margin="0,0,4,4"
                 IsHitTestVisible="False">
             <TextBlock x:Name="KindGlyph"
-                       FontSize="8.5"
+                       FontSize="13"
                        Foreground="#F2FFFFFF"
                        HorizontalAlignment="Center" VerticalAlignment="Center"
                        IsHitTestVisible="False"/>
@@ -153,17 +153,17 @@
              rather than an Avalonia animation — see StartPulse for why that
              matters at one window per orb. -->
         <Border x:Name="HeartBadge"
-                Width="15" Height="15"
+                Width="22" Height="22"
                 IsVisible="False"
-                CornerRadius="7.5"
+                CornerRadius="11"
                 Background="#F2202024"
                 BorderBrush="#59FFFFFF" BorderThickness="1"
                 HorizontalAlignment="Right" VerticalAlignment="Top"
-                Margin="0,8,8,0"
+                Margin="0,4,4,0"
                 IsHitTestVisible="False">
             <TextBlock x:Name="HeartGlyph"
                        Text="&#x2665;"
-                       FontSize="9"
+                       FontSize="13"
                        Foreground="#FFFF6B81"
                        HorizontalAlignment="Center" VerticalAlignment="Center"
                        IsHitTestVisible="False"/>
@@ -187,25 +187,24 @@
              Same opaque fill as the others, and for the same reason: this sits on
              top of whatever the orb's fill is, including a photograph. -->
         <Border x:Name="PresenceBadge"
-                Width="15" Height="15"
+                Width="22" Height="22"
                 IsVisible="False"
-                CornerRadius="7.5"
+                CornerRadius="11"
                 Background="#F2202024"
                 BorderBrush="#59FFFFFF" BorderThickness="1"
                 HorizontalAlignment="Left" VerticalAlignment="Top"
-                Margin="8,8,0,0"
+                Margin="4,4,0,0"
                 IsHitTestVisible="False">
             <TextBlock x:Name="PresenceGlyph"
-                       FontSize="9"
+                       FontSize="13"
                        Foreground="#F2FFFFFF"
                        HorizontalAlignment="Center" VerticalAlignment="Center"
                        IsHitTestVisible="False"/>
         </Border>
 
         <!-- Which CLI this session is. Bottom-left, the corner the other three
-             badges left. Bigger than they are (22 against 16) because a logo
-             has to be read as a logo, and the 8pt punctuation those badges
-             carry would turn a spark into a speck.
+             badges left. Same 22px disc as kind, heart and presence so a
+             lobster next to an @ does not make the @ look like a speck.
 
              Hidden for remote-control orbs, which are Claude Code on another
              machine and already wear a kind badge. OpenClaw keeps the lobster
