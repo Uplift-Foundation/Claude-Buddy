@@ -38,6 +38,12 @@ from each of the first two words of that same name (`Menu UX` → `Mu`), or
 the first two letters of it when there's only one word. Off by default, so
 existing installs keep looking exactly as they always have.
 
+**Each local CLI orb wears a mark** in the bottom-left so Claude, Codex, Grok
+and OpenClaw read apart from across the room: a terracotta spark, a green
+star, a black X, a lobster. Remote-control orbs skip it — they are Claude
+Code on another machine and already have a kind badge. Usage orbs wear the
+same mark.
+
 **Left-click-drag an orb to put it wherever you want**, and it stays there:
 it holds that spot as other sessions come and go (the rest of the stack
 closes up behind it), and it's remembered across restarts of Claude Buddy —
@@ -1099,7 +1105,8 @@ is how much room is left rather than which account it is — green under 60%,
 amber to 85%, red above — so an account you do not need to think about is a
 quiet green outline and nothing else, and a row of them reads from across the
 room without a number on screen. Which account an orb *is* stays where it
-always is: the two letters in the middle.
+always is: the two letters in the middle, plus the same Claude / Codex /
+Grok mark the session orbs wear.
 
 Hover an orb for the numbers, the reset times and the extra-usage position.
 Click it to keep that card up — pin two and they sit side by side, which is the
@@ -1538,8 +1545,9 @@ Two differences from a Claude Code orb, both because Codex works differently
 rather than because the support is unfinished:
 
 - **No `/color`.** Codex has no equivalent, so a Codex orb keeps the plain ring
-  and carries a badge instead. Its *name* does come from Codex — `/rename` if
-  you've set one, otherwise Codex's own title, taken from your first message.
+  and wears the green star instead of a `/color` accent. Its *name* does come
+  from Codex — `/rename` if you've set one, otherwise Codex's own title, taken
+  from your first message.
 - **Usage orbs** (Settings → Codex sessions) draw the five-hour and weekly
   windows Codex already writes onto each turn of the rollout. The figure is as
   fresh as the last Codex session on this machine — Claude Buddy does not hold
