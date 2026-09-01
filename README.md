@@ -38,11 +38,11 @@ from each of the first two words of that same name (`Menu UX` → `Mu`), or
 the first two letters of it when there's only one word. Off by default, so
 existing installs keep looking exactly as they always have.
 
-**Each local CLI orb wears a mark** in the bottom-left so Claude, Codex and
-Grok read apart from across the room: a terracotta spark, a green star, a
-black X. OpenClaw and remote-control orbs skip it — they already have a kind
-badge, and a fourth logo on almost every remaining orb would distinguish
-nothing. Usage orbs wear the same mark.
+**Each local CLI orb wears a mark** in the bottom-left so Claude, Codex, Grok
+and OpenClaw read apart from across the room: a terracotta spark, a green
+star, a black X, a lobster. Remote-control orbs skip it — they are Claude
+Code on another machine and already have a kind badge. Usage orbs wear the
+same mark.
 
 **Left-click-drag an orb to put it wherever you want**, and it stays there:
 it holds that spot as other sessions come and go (the rest of the stack

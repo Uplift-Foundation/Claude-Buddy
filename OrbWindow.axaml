@@ -207,9 +207,10 @@
              has to be read as a logo, and the 8pt punctuation those badges
              carry would turn a spark into a speck.
 
-             Hidden unless the session is a local Claude, Codex or Grok CLI —
-             OpenClaw and remote-control orbs already have a kind badge, and
-             a mark on almost every remaining orb would distinguish nothing. -->
+             Hidden for remote-control orbs, which are Claude Code on another
+             machine and already wear a kind badge. OpenClaw keeps the lobster
+             even when it also has a kind badge — those two answer different
+             questions. -->
         <Border x:Name="CliBadge"
                 Width="22" Height="22"
                 IsVisible="False"
