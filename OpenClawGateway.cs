@@ -226,12 +226,20 @@ namespace ClaudeBuddy
                     ExplainConnectFailure(ex, OperatingSystem.IsMacOS()));
             }
 
-            _receiveLoop = Task.Run(() => ReceiveLoopAsync(_cts.Token));
-
             // The gateway speaks first: connect.challenge carries the nonce the
             // device signature has to cover, so there is nothing to send until
-            // it arrives.
-            var nonce = await WaitForChallengeAsync(_cts.Token);
+            // it arrives. Subscribe *before* the receive loop starts — the
+            // challenge is often already sitting on the socket (the test fake
+            // queues it; a real gateway can write it the instant the upgrade
+            // completes), and starting the loop first lets that frame fire
+            // EventReceived with nobody listening. The handshake then sits out
+            // its timeout and reports Unreachable. Windows CI failed that way
+            // in OpenClawRoomSendTests at exactly the two-second challenge
+            // timeout; OpenClawGatewayTests had already widened its own to
+            // thirty seconds to paper over the same miss.
+            var nonceTask = WaitForChallengeAsync(_cts.Token);
+            _receiveLoop = Task.Run(() => ReceiveLoopAsync(_cts.Token));
+            var nonce = await nonceTask;
             if (nonce is null) return new ConnectResult(Outcome.Unreachable, "no connect.challenge");
 
             var signedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();

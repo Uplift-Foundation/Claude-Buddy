@@ -154,6 +154,28 @@ public class OpenClawGatewayTests
             device.GetProperty("signature").GetString());
     }
 
+    // The challenge is already on the socket when ConnectAsync starts — that is
+    // how every fake here is written, and how a gateway that writes it the
+    // instant the upgrade completes looks. The two-second timeout is the one
+    // that failed on windows-latest when the receive loop consumed the frame
+    // before WaitForChallengeAsync subscribed. Passing at two seconds, not
+    // thirty, is the point: a lost event does not get faster if you wait.
+    [Fact]
+    public async Task AChallengeAlreadyOnTheSocketIsNotLost()
+    {
+        var socket = Accepting();
+        using var gateway = Gateway(
+            socket,
+            challengeTimeout: TimeSpan.FromSeconds(2),
+            requestTimeout: TimeSpan.FromSeconds(2));
+
+        var result = await gateway.ConnectAsync(null, CancellationToken.None);
+
+        Assert.Equal(OpenClawGateway.Outcome.Connected, result.Outcome);
+        Assert.Equal("nonce-1", socket.Requests[0].Params.GetProperty("device")
+            .GetProperty("nonce").GetString());
+    }
+
     // What the handshake's answer configures. All four are read back out of the
     // response rather than defaulted, and the payload ceiling in particular is
     // load-bearing: the receive loop bounds a frame by it, so a wrong value
