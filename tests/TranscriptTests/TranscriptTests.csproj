@@ -16,11 +16,12 @@
          RemoteChat comes along for ChatTurn, ChatRole and ChatPrompt, which is
          the whole of what ChatTranscript deals in.
 
-         No Avalonia reference, unlike ArrangementTests: nothing in either file
+         No Avalonia reference, unlike ArrangementTests: nothing in these files
          knows what a window is, which is the property that makes them testable
          at all. -->
     <Compile Include="../../ChatTranscript.cs" />
     <Compile Include="../../CodexTranscript.cs" />
+    <Compile Include="../../GrokTranscript.cs" />
     <Compile Include="../../ChatMarkdown.cs" />
     <Compile Include="../../AgentPalette.cs" />
     <Compile Include="../../OpenClawSessionKind.cs" />

@@ -312,6 +312,8 @@ namespace ClaudeBuddy
 
             root.Children.Add(Group("Codex", CodexSection()));
 
+            root.Children.Add(Group("Grok Build", GrokSection()));
+
             root.Children.Add(Group("OpenClaw agents", Card(OpenClawRows())));
 
             // Straight after the CLI sections and before the Desktop app,
@@ -742,6 +744,24 @@ namespace ClaudeBuddy
             return cards.ToArray();
         }
 
+        private Control[] GrokSection()
+        {
+            var cards = new List<Control> { Card(GrokChatRows()) };
+
+            if (!ClaudeBuddySettings.GrokEnabled) return cards.ToArray();
+
+            cards.Add(Card(ProfileDirsCard(
+                blurb: "Wire Claude Buddy hooks into additional Grok Build accounts managed via "
+                       + "GROK_HOME, alongside the default ~/.grok.",
+                watermark: ".grok-work",
+                current: () => ClaudeBuddySettings.GrokHomes,
+                add: ClaudeBuddySettings.AddGrokHome,
+                remove: ClaudeBuddySettings.RemoveGrokHome,
+                reapply: HookInstaller.ReapplyGrok)));
+
+            return cards.ToArray();
+        }
+
         // Switching a CLI off hides the rest of its section rather than greying
         // it out. A column of dead switches is a worse answer to "I only use
         // Claude Code" than a two-line section is: what remains is what still
@@ -859,6 +879,45 @@ namespace ClaudeBuddy
             return rows.ToArray();
         }
 
+        private Control[] GrokChatRows()
+        {
+            var rows = new List<Control>
+            {
+                Row("Show Grok Build sessions",
+                    Switch(ClaudeBuddySettings.GrokEnabled, OnGrokEnabledToggled),
+                    "Off, Grok Build sessions get no orbs and are left out of the menu bar. "
+                    + "Its hooks are left alone — they are your own config, and they keep "
+                    + "writing where the app will find them again the moment you switch this "
+                    + "back on.")
+            };
+
+            if (!ClaudeBuddySettings.GrokEnabled) return rows.ToArray();
+
+            rows.Add(Row("Chat panel on the orb",
+                Switch(ClaudeBuddySettings.GrokChatEnabled, OnGrokChatToggled),
+                "The same panel Claude Code sessions get, reading the updates.jsonl "
+                + "transcript Grok already writes. It is the same conversation as the "
+                + "terminal's, not a copy. Clicking the orb still goes to the terminal."));
+
+            if (!ClaudeBuddySettings.GrokChatEnabled) return rows.ToArray();
+
+            rows.Add(Row("Allow replying to sessions",
+                Switch(ClaudeBuddySettings.GrokReplyEnabled, OnGrokReplyToggled),
+                "Off, the panel shows what a session is doing. On, you can type into it, "
+                + "answer its permission prompts and interrupt it — by typing into its tmux "
+                + "pane. Sessions not running under tmux stay read-only either way."));
+
+            rows.Add(Row("Usage orbs for each Grok account",
+                Switch(ClaudeBuddySettings.GrokAccountUsageEnabled, OnGrokAccountUsageToggled),
+                "An orb per Grok Build account wearing its weekly credit ring, and "
+                + "on-demand spend when that is switched on. Grok has no five-hour window, "
+                + "so that ring is omitted rather than drawn at zero. Hover one for the "
+                + "numbers; click it to keep the card up. Nothing here reads your login "
+                + "token."));
+
+            return rows.ToArray();
+        }
+
         // Rebuild, because switching a CLI off removes the rest of its section.
         internal void OnClaudeCodeEnabledToggled(bool enabled)
         {
@@ -881,6 +940,29 @@ namespace ClaudeBuddy
         internal void OnCodexReplyToggled(bool enabled)
         {
             ClaudeBuddySettings.CodexReplyEnabled = enabled;
+        }
+
+        internal void OnGrokEnabledToggled(bool enabled)
+        {
+            ClaudeBuddySettings.GrokEnabled = enabled;
+            Rebuild();
+        }
+
+        internal void OnGrokChatToggled(bool enabled)
+        {
+            ClaudeBuddySettings.GrokChatEnabled = enabled;
+            Rebuild();
+        }
+
+        internal void OnGrokReplyToggled(bool enabled)
+        {
+            ClaudeBuddySettings.GrokReplyEnabled = enabled;
+        }
+
+        internal void OnGrokAccountUsageToggled(bool enabled)
+        {
+            ClaudeBuddySettings.GrokAccountUsageEnabled = enabled;
+            SessionManager.Instance?.ReapplyAccountOrbs();
         }
 
         internal Control[] OpenClawRows()

@@ -81,7 +81,8 @@ namespace ClaudeBuddy
         // the same thing.
         internal void Tick(DateTimeOffset now)
         {
-            if (!ClaudeBuddySettings.AccountUsageEnabled)
+            if (!ClaudeBuddySettings.AccountUsageEnabled
+                && !ClaudeBuddySettings.GrokAccountUsageEnabled)
             {
                 if (_orbs.Count > 0) CloseAll();
                 return;

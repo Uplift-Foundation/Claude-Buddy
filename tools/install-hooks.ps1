@@ -89,6 +89,15 @@ else { $skipped += 'Claude Code' }
 if (Test-Codex) { Invoke-One 'Codex' 'install-codex-hooks.ps1' @{} }
 else { $skipped += 'Codex' }
 
+function Test-Grok {
+    $home_ = if ($env:GROK_HOME) { $env:GROK_HOME } else { Join-Path $env:USERPROFILE '.grok' }
+    if (Test-Path $home_) { return $true }
+    return [bool](Get-Command grok -ErrorAction SilentlyContinue)
+}
+
+if (Test-Grok) { Invoke-One 'Grok Build' 'install-grok-hooks.ps1' @{} }
+else { $skipped += 'Grok Build' }
+
 foreach ($one in $skipped) {
     Write-Host "=== ${one}: not installed on this machine, nothing to wire."
     Write-Host '    Install it and run this again - that is all it takes.'
