@@ -534,7 +534,12 @@ namespace ClaudeBuddy
         // the same, and here it is: where it is *drawn* is what moved.
         private void RefreshAccent() => ApplyAccent(_lastColor, force: true);
 
-        private const double BadgeSize = 16;
+        // Same 22 DIP as the CLI mark. The kind/heart/presence discs used to
+        // be 16 against a 22px lobster, which is the size the user pointed at
+        // and said the right-hand icons looked tiny.
+        private const double BadgeSize = 22;
+
+        private const double BadgeGlyphSize = 13;
 
         // What the CLI mark shows, so a test can assert on the disc a person
         // would have seen without reading a brush back off the control.
@@ -684,7 +689,7 @@ namespace ClaudeBuddy
             // member's smaller circle.
             KindBadge.Width = KindBadge.Height = BadgeSize * scale;
             KindBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
-            KindGlyph.FontSize = 9 * scale;
+            KindGlyph.FontSize = BadgeGlyphSize * scale;
 
             var inset = 28 - (18 * scale * 0.7071) - (BadgeSize * scale / 2);
             KindBadge.Margin = new Thickness(0, 0, Math.Max(0, inset), Math.Max(0, inset));
@@ -694,7 +699,7 @@ namespace ClaudeBuddy
             // same reason the kind badge does.
             HeartBadge.Width = HeartBadge.Height = BadgeSize * scale;
             HeartBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
-            HeartGlyph.FontSize = 9 * scale;
+            HeartGlyph.FontSize = BadgeGlyphSize * scale;
             HeartBadge.Margin = new Thickness(0, Math.Max(0, inset), Math.Max(0, inset), 0);
 
             // And mirrored once more into the corner this one lives in. Same sum
@@ -702,14 +707,13 @@ namespace ClaudeBuddy
             // a mark left at the full-size margin would float off its rim.
             PresenceBadge.Width = PresenceBadge.Height = BadgeSize * scale;
             PresenceBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
-            PresenceGlyph.FontSize = 9 * scale;
+            PresenceGlyph.FontSize = BadgeGlyphSize * scale;
             PresenceBadge.Margin = new Thickness(Math.Max(0, inset), Math.Max(0, inset), 0, 0);
 
             CliBadge.Width = CliBadge.Height = CliMark.Size * scale;
             CliBadge.CornerRadius = new CornerRadius(CliMark.Size * scale / 2);
             CliGlyph.Width = CliGlyph.Height = CliMark.GlyphSize * scale;
-            var cliInset = 28 - (18 * scale * 0.7071) - (CliMark.Size * scale / 2);
-            CliBadge.Margin = new Thickness(Math.Max(0, cliInset), 0, 0, Math.Max(0, cliInset));
+            CliBadge.Margin = new Thickness(Math.Max(0, inset), 0, 0, Math.Max(0, inset));
 
             Glyph.FontSize = BaseGlyphFontSize * scale;
             OrbRadius = 18 * scale;
