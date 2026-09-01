@@ -27,48 +27,60 @@ public class OrbWindowUpdateFromTests
     };
 
     [AvaloniaFact]
-    public void ClaudeCodeAndCodexStatusesRenderIdenticallyOnTheOrb()
+    public void ClaudeCodeCodexAndGrokWearDistinctCliMarks()
     {
-        // The brief this suite was written from expected Cli="codex" vs
-        // Cli="" to change what KindLabel/KindGlyphText show. Reading
-        // OrbWindow.axaml.cs end to end shows that is not what those two
-        // properties key off — both are derived solely from status.Kind
-        // (BadgeFor: Cron/Direct/Channel/Unknown), which has nothing to do
-        // with which CLI wrote the status file. status.Cli only ever
-        // decides status.Source (via SessionManager.SourceOf, exercised
-        // below with the real production method rather than a hand-rolled
-        // copy of its rule), and Source only changes OrbWindow's behaviour
-        // at the OpenClaw boundary (ApplyAvatar's `status.Source !=
-        // SessionSource.OpenClaw` branch) — Codex and ClaudeCode both take
-        // that same non-OpenClaw path. So the honest claim to test is the
-        // opposite of what was assumed: a Codex session and a Claude Code
-        // session are visually indistinguishable on the orb itself, because
-        // OrbWindow has no reason to tell them apart — TerminalFocuser and
-        // TranscriptReader are where the actual CLI-specific behaviour
-        // lives, and both are out of scope here (process-spawning /
-        // transcript-file reads).
         var claudeCode = PlainStatus();
         claudeCode.Cli = "";
         claudeCode.Source = SessionManager.SourceOf(claudeCode);
-        Assert.Equal(SessionSource.ClaudeCode, claudeCode.Source);
 
         var codex = PlainStatus();
         codex.Cli = "codex";
         codex.Source = SessionManager.SourceOf(codex);
-        Assert.Equal(SessionSource.Codex, codex.Source);
+
+        var grok = PlainStatus();
+        grok.Cli = "grok";
+        grok.Source = SessionManager.SourceOf(grok);
 
         var claudeOrb = new OrbWindow(Guid.NewGuid().ToString());
         var codexOrb = new OrbWindow(Guid.NewGuid().ToString());
+        var grokOrb = new OrbWindow(Guid.NewGuid().ToString());
 
         claudeOrb.UpdateFrom(claudeCode);
         codexOrb.UpdateFrom(codex);
+        grokOrb.UpdateFrom(grok);
 
-        Assert.Equal(claudeOrb.KindLabel, codexOrb.KindLabel);
-        Assert.Equal(claudeOrb.KindGlyphText, codexOrb.KindGlyphText);
-        Assert.Equal(claudeOrb.GlyphText, codexOrb.GlyphText);
-        Assert.Equal(claudeOrb.AccentColor, codexOrb.AccentColor);
+        Assert.Equal("claude", claudeOrb.CliMarkName);
+        Assert.Equal("codex", codexOrb.CliMarkName);
+        Assert.Equal("grok", grokOrb.CliMarkName);
+        Assert.True(claudeOrb.CliMarkVisible);
+        Assert.True(codexOrb.CliMarkVisible);
+        Assert.True(grokOrb.CliMarkVisible);
+        Assert.NotEqual(claudeOrb.CliMarkFill, codexOrb.CliMarkFill);
+        Assert.NotEqual(claudeOrb.CliMarkFill, grokOrb.CliMarkFill);
+
+        // Kind is still independent of CLI — a local session has no kind badge.
         Assert.Null(claudeOrb.KindLabel);
         Assert.Null(codexOrb.KindLabel);
+        Assert.Null(grokOrb.KindLabel);
+    }
+
+    [AvaloniaFact]
+    public void OpenClawAndRemoteSessionsCarryNoCliMark()
+    {
+        var openclaw = PlainStatus();
+        openclaw.Source = SessionSource.OpenClaw;
+        var remote = PlainStatus();
+        remote.Source = SessionSource.RemoteControl;
+
+        var openclawOrb = new OrbWindow(Guid.NewGuid().ToString());
+        var remoteOrb = new OrbWindow(Guid.NewGuid().ToString());
+        openclawOrb.UpdateFrom(openclaw);
+        remoteOrb.UpdateFrom(remote);
+
+        Assert.False(openclawOrb.CliMarkVisible);
+        Assert.False(remoteOrb.CliMarkVisible);
+        Assert.Null(openclawOrb.CliMarkName);
+        Assert.Null(remoteOrb.CliMarkName);
     }
 
     [AvaloniaFact]
@@ -349,9 +361,17 @@ public class OrbWindowUpdateFromTests
         orb.UpdateFrom(status);
         Assert.Equal(18.0 * 0.72, orb.OrbRadius, precision: 6);
 
+        var badge = orb.FindControl<Border>("CliBadge")!;
+        var glyph = orb.FindControl<Avalonia.Controls.Shapes.Path>("CliGlyph")!;
+        Assert.Equal(CliMark.Size * 0.72, badge.Width, precision: 6);
+        Assert.Equal(CliMark.GlyphSize * 0.72, glyph.Width, precision: 6);
+        Assert.True(orb.CliMarkVisible);
+
         status.Lead = "";
         orb.UpdateFrom(status);
         Assert.Equal(18.0, orb.OrbRadius, precision: 6);
+        Assert.Equal(CliMark.Size, badge.Width, precision: 6);
+        Assert.Equal(CliMark.GlyphSize, glyph.Width, precision: 6);
     }
 
     [AvaloniaFact]

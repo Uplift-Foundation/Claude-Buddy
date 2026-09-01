@@ -74,6 +74,28 @@
             </TextBlock.RenderTransform>
         </TextBlock>
 
+        <!-- Which CLI this account is. Bottom-left of the 72 window, on the
+             weekly ring rather than on the 28px disc — a 22px mark on that
+             disc would cover the letters it is supposed to sit beside. Same
+             size as the session orb's mark so a mixed row reads as Claude /
+             Codex / Grok from across the desk. -->
+        <Border x:Name="CliBadge"
+                Canvas.Left="2" Canvas.Top="48"
+                Width="22" Height="22"
+                CornerRadius="11"
+                IsVisible="False"
+                BorderBrush="#73FFFFFF"
+                BorderThickness="1"
+                IsHitTestVisible="False">
+            <Path x:Name="CliGlyph"
+                  Width="14" Height="14"
+                  Stretch="Uniform"
+                  Fill="#F2FFFFFF"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Center"
+                  IsHitTestVisible="False"/>
+        </Border>
+
         <!-- Shown while this account's card is pinned. Top-right, which is free
              here: the session orb's four badge corners are all spoken for, but
              an account orb has no kind, no heartbeat and no presence to show. -->
