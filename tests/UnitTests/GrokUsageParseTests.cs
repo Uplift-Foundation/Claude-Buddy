@@ -39,6 +39,7 @@ public class GrokUsageParseTests
         Assert.NotNull(usage.Extra);
         Assert.False(usage.Extra!.Enabled);
         Assert.Null(usage.Extra.Percent);
+        Assert.Equal(AccountUsageSource.Grok, usage.Source);
     }
 
     [Fact]

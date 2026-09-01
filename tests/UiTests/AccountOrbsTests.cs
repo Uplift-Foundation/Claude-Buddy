@@ -38,7 +38,11 @@ public class AccountOrbsTests
         }
     }
 
-    private static AccountUsage Usage(string? configDir, string label, double weekly = 40) =>
+    private static AccountUsage Usage(
+        string? configDir,
+        string label,
+        double weekly = 40,
+        AccountUsageSource source = AccountUsageSource.ClaudeCode) =>
         new(
             ConfigDir: configDir,
             Label: label,
@@ -47,7 +51,8 @@ public class AccountOrbsTests
             Session: new UsageWindow(10, Now.AddHours(3)),
             Weekly: new UsageWindow(weekly, Now.AddDays(3)),
             Extra: null,
-            ReadAt: Now);
+            ReadAt: Now,
+            Source: source);
 
     // Namespaced the way the gateway and room ids are, so an account's saved
     // position can never collide with a session's — those are keyed by cwd, and
@@ -177,6 +182,100 @@ public class AccountOrbsTests
 
         Assert.Empty(orbs.Orbs);
         Assert.Empty(orbs.Cards);
+    }
+
+    // Turning Grok usage on used to close every account orb, because
+    // SyncToSettings' predecessor looked only at the Claude Code flag.
+    [AvaloniaFact]
+    public void TurningGrokUsageOnDoesNotCloseTheOrbs()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.AccountUsageEnabled = false;
+        ClaudeBuddySettings.GrokAccountUsageEnabled = true;
+
+        var orbs = new AccountOrbs(new FakeUsageSource());
+        orbs.Apply(new[]
+        {
+            Usage("/Users/x/.grok", "warren", source: AccountUsageSource.Grok)
+        }, Now);
+
+        orbs.SyncToSettings(visible: true);
+
+        Assert.Single(orbs.Orbs);
+        Assert.True(orbs.Orbs.ContainsKey("/Users/x/.grok"));
+
+        orbs.CloseAll();
+        ClaudeBuddySettings.ReloadForTests();
+    }
+
+    [AvaloniaFact]
+    public void TurningClaudeUsageOffLeavesTheGrokOrb()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.AccountUsageEnabled = false;
+        ClaudeBuddySettings.GrokAccountUsageEnabled = true;
+
+        var orbs = new AccountOrbs(new FakeUsageSource());
+        orbs.Apply(new[]
+        {
+            Usage(null, "wthompson"),
+            Usage("/Users/x/.grok", "warren", source: AccountUsageSource.Grok)
+        }, Now);
+
+        orbs.SyncToSettings(visible: true);
+
+        Assert.Single(orbs.Orbs);
+        Assert.True(orbs.Orbs.ContainsKey("/Users/x/.grok"));
+        Assert.False(orbs.Orbs.ContainsKey(string.Empty));
+
+        orbs.CloseAll();
+        ClaudeBuddySettings.ReloadForTests();
+    }
+
+    [AvaloniaFact]
+    public void TurningGrokUsageOffLeavesTheClaudeOrb()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.AccountUsageEnabled = true;
+        ClaudeBuddySettings.GrokAccountUsageEnabled = false;
+
+        var orbs = new AccountOrbs(new FakeUsageSource());
+        orbs.Apply(new[]
+        {
+            Usage(null, "wthompson"),
+            Usage("/Users/x/.grok", "warren", source: AccountUsageSource.Grok)
+        }, Now);
+
+        orbs.SyncToSettings(visible: true);
+
+        Assert.Single(orbs.Orbs);
+        Assert.True(orbs.Orbs.ContainsKey(string.Empty));
+        Assert.False(orbs.Orbs.ContainsKey("/Users/x/.grok"));
+
+        orbs.CloseAll();
+        ClaudeBuddySettings.ReloadForTests();
+    }
+
+    [AvaloniaFact]
+    public void TurningBothOffClosesEverything()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.AccountUsageEnabled = false;
+        ClaudeBuddySettings.GrokAccountUsageEnabled = false;
+
+        var orbs = new AccountOrbs(new FakeUsageSource());
+        orbs.Apply(new[]
+        {
+            Usage(null, "wthompson"),
+            Usage("/Users/x/.grok", "warren", source: AccountUsageSource.Grok)
+        }, Now);
+
+        orbs.SyncToSettings(visible: true);
+
+        Assert.Empty(orbs.Orbs);
+
+        orbs.CloseAll();
+        ClaudeBuddySettings.ReloadForTests();
     }
 
     // The floor is the whole reason the poll is affordable: Claude Code caches
