@@ -1540,6 +1540,10 @@ rather than because the support is unfinished:
 - **No `/color`.** Codex has no equivalent, so a Codex orb keeps the plain ring
   and carries a badge instead. Its *name* does come from Codex — `/rename` if
   you've set one, otherwise Codex's own title, taken from your first message.
+- **Usage orbs** (Settings → Codex sessions) draw the five-hour and weekly
+  windows Codex already writes onto each turn of the rollout. The figure is as
+  fresh as the last Codex session on this machine — Claude Buddy does not hold
+  Codex's login token. See `docs/codex-findings.md`.
 - **A Codex orb appears on the session's first message, not when Codex opens.**
   Codex fires no hooks until a thread exists, and a thread is created when you
   first speak to it — so an open-but-untouched session has no orb, and neither
