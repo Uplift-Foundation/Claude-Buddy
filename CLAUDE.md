@@ -221,6 +221,8 @@ So the sequence below runs to the end, in one go, by whoever started it:
 1. **Branch** `release/<version>` off `develop`.
 2. **Bump `<Version>`** in `ClaudeBuddy.csproj` — the single source of truth the
    packaging scripts and `release.yml`'s `check-version` gate both parse.
+   **Patch only** (`0.5.0-beta` → `0.5.1-beta`) unless you are told to bump
+   the minor or major.
 3. **Write `.github/release-notes/v<version>.md`**, which the workflow publishes
    with the tag. Without it the release gets generated notes and a warning.
 4. **Open the PR against `main`** and let CI go green on *both* rids.

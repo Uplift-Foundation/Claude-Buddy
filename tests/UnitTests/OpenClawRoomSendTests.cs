@@ -31,7 +31,8 @@ public class OpenClawRoomSendTests : IDisposable
         new("gw.local", 4443, "gw-token",
             (_, _, _, _) => Task.FromResult(
                 new OpenClawSocket.Connection(socket, Stream.Null, "fp-abc")),
-            TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+            // Same values, and the same comment, as OpenClawGatewayTests.
+            TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
 
     // A socket that completes the handshake and then answers whatever it is
     // asked, unless `refuse` names a method it should reject instead.
