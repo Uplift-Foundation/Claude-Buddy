@@ -1004,6 +1004,33 @@ namespace ClaudeBuddy.Tests
 
             Check("an empty list maps to nothing", CodexTranscript.Map(Array.Empty<string>()).Count == 0);
 
+            // --- grok ---
+            //
+            // Shapes from a live grok 1.0.13 updates.jsonl. Consecutive chunks of
+            // the same kind stitch; tool_call_update and the housekeeping kinds
+            // do not become turns. See docs/grok-findings.md.
+
+            static string GrokEnvelope(string update) =>
+                "{\"timestamp\":1788198313,\"method\":\"session/update\","
+                + "\"params\":{\"sessionId\":\"s1\",\"update\":" + update + "}}";
+
+            var grok = GrokTranscript.Map(new[]
+            {
+                GrokEnvelope("{\"sessionUpdate\":\"user_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"Hello \"}}"),
+                GrokEnvelope("{\"sessionUpdate\":\"user_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"world\"}}"),
+                GrokEnvelope("{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"t1\",\"title\":\"grep\",\"kind\":\"search\"}"),
+                GrokEnvelope("{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t1\",\"status\":\"completed\"}"),
+                GrokEnvelope("{\"sessionUpdate\":\"hook_execution\",\"event_name\":\"session_start\"}"),
+                GrokEnvelope("{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"done\"}}"),
+            });
+
+            Check("grok stitches chunks and drops housekeeping", grok.Count == 3,
+                "got " + grok.Count + ": " + string.Join(" | ", grok.Select(r => r.Turn.Role + ":" + Head(r.Turn.Text))));
+            Check("grok user chunks become one turn",
+                grok.Count == 3 && grok[0].Turn.Role == ChatRole.User && grok[0].Turn.Text == "Hello world");
+            Check("grok tool_call is a system line",
+                grok.Count == 3 && grok[1].Turn.Role == ChatRole.System && grok[1].Turn.Text == "· grep");
+
             // --- codex's approval dialog ---
 
             // Transcribed from `tmux capture-pane -p` against a real Codex 0.148 pane,

@@ -472,6 +472,7 @@ namespace ClaudeBuddy
 
         public const string CliClaudeCode = "claude";
         public const string CliCodex = "codex";
+        public const string CliGrok = "grok";
 
         private static readonly JsonSerializerOptions RosterJson = new()
         {
@@ -516,13 +517,17 @@ namespace ClaudeBuddy
         // paste megabytes nobody will ever see.
         public static List<string> SelectInterestingRows(IEnumerable<string> lines, string cli)
         {
+            var grok = string.Equals(cli, CliGrok, StringComparison.OrdinalIgnoreCase);
             var codex = string.Equals(cli, CliCodex, StringComparison.OrdinalIgnoreCase);
             var kept = new List<string>();
 
             foreach (var line in lines)
             {
                 if (line.Length == 0 || line[0] != '{') continue;
-                if (!(codex ? CodexTranscript.IsInteresting(line) : ChatTranscript.IsInteresting(line))) continue;
+                var interesting = grok ? GrokTranscript.IsInteresting(line)
+                    : codex ? CodexTranscript.IsInteresting(line)
+                    : ChatTranscript.IsInteresting(line);
+                if (!interesting) continue;
 
                 kept.Add(line);
             }
@@ -530,8 +535,12 @@ namespace ClaudeBuddy
             return kept;
         }
 
-        public static string CliFor(SessionSource source) =>
-            source == SessionSource.Codex ? CliCodex : CliClaudeCode;
+        public static string CliFor(SessionSource source) => source switch
+        {
+            SessionSource.Codex => CliCodex,
+            SessionSource.Grok => CliGrok,
+            _ => CliClaudeCode
+        };
 
         // Rows in, one blob out. Newline-joined because that is how they arrived
         // and how the far side will split them, and gzipped because a
@@ -599,9 +608,11 @@ namespace ClaudeBuddy
         // that is what keeps the two from drifting.
         public static List<MirrorTurn> TurnsFrom(IEnumerable<string> lines, string cli)
         {
-            var source = string.Equals(cli, CliCodex, StringComparison.OrdinalIgnoreCase)
-                ? SessionSource.Codex
-                : SessionSource.ClaudeCode;
+            var source = string.Equals(cli, CliGrok, StringComparison.OrdinalIgnoreCase)
+                ? SessionSource.Grok
+                : string.Equals(cli, CliCodex, StringComparison.OrdinalIgnoreCase)
+                    ? SessionSource.Codex
+                    : SessionSource.ClaudeCode;
 
             var mapped = CliChatFormat.For(source).Map(SelectInterestingRows(lines, cli));
 

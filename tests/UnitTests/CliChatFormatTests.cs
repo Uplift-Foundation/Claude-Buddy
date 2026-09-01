@@ -32,10 +32,18 @@ public class CliChatFormatTests
     }
 
     [Fact]
-    public void For_AnythingOtherThanCodexFallsBackToClaudeCode()
+    public void For_Grok_UsesGrokTranscriptMap()
     {
-        // "source == SessionSource.Codex ? Codex : ClaudeCode" — OpenClaw (a
-        // gateway conversation) falls through to the ClaudeCode shape too.
+        var format = CliChatFormat.For(SessionSource.Grok);
+        Assert.Equal((System.Delegate)(System.Func<System.Collections.Generic.IEnumerable<string>,
+            System.Collections.Generic.List<ChatTranscript.Row>>)GrokTranscript.Map, format.Map);
+    }
+
+    [Fact]
+    public void For_AnythingOtherThanALocalCliFallsBackToClaudeCode()
+    {
+        // OpenClaw (a gateway conversation) falls through to the ClaudeCode
+        // shape: it never uses this dispatch.
         Assert.Same(CliChatFormat.ClaudeCode, CliChatFormat.For(SessionSource.OpenClaw));
     }
 
@@ -43,6 +51,7 @@ public class CliChatFormatTests
     public void For_IsBackedByTheSameCachedRecordInstanceEveryCall()
     {
         Assert.Same(CliChatFormat.Codex, CliChatFormat.For(SessionSource.Codex));
+        Assert.Same(CliChatFormat.Grok, CliChatFormat.For(SessionSource.Grok));
         Assert.Same(CliChatFormat.ClaudeCode, CliChatFormat.For(SessionSource.ClaudeCode));
     }
 }

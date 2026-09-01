@@ -203,6 +203,9 @@ namespace ClaudeBuddy
 
         public IReadOnlyList<AccountUsage> Read()
         {
+            if (!ClaudeBuddySettings.AccountUsageEnabled)
+                return Array.Empty<AccountUsage>();
+
             var claude = ClaudeBinary.Path;
             if (claude is null) return Array.Empty<AccountUsage>();
 

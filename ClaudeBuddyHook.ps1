@@ -10,7 +10,7 @@ param(
     #
     # Almost nothing below cares. Finding the terminal, finding the session's
     # process and writing the status file are the same job whoever asked.
-    [ValidateSet('claude', 'codex')]
+    [ValidateSet('claude', 'codex', 'grok')]
     [string]$Agent = 'claude',
 
     # Baked in as a literal by install-windows-hooks.ps1 at wiring time,
@@ -32,9 +32,24 @@ $transcript = ''
 try {
     $payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
     if ($payload.session_id) { $sessionId = $payload.session_id }
+    elseif ($payload.sessionId) { $sessionId = $payload.sessionId }
     if ($payload.cwd) { $cwd = $payload.cwd }
     if ($payload.transcript_path) { $transcript = $payload.transcript_path }
+    elseif ($payload.transcriptPath) { $transcript = $payload.transcriptPath }
 } catch {}
+
+# Grok injects these on every hook, including ones loaded from Claude Code's
+# settings.json. That is a stronger signal than -Agent: a Grok session that
+# reached this script as claude is still a Grok session.
+if ($env:GROK_SESSION_ID -or $env:GROK_HOOK_EVENT) {
+    $Agent = 'grok'
+    if ($sessionId -eq 'unknown' -and $env:GROK_SESSION_ID) {
+        $sessionId = $env:GROK_SESSION_ID
+    }
+    if (-not $cwd -and $env:GROK_WORKSPACE_ROOT) {
+        $cwd = $env:GROK_WORKSPACE_ROOT
+    }
+}
 
 # What the chat is called and what color it's been given. Claude Code keeps
 # all three of these in the transcript, re-emitting them as the session goes:
@@ -172,7 +187,10 @@ if ($autoColor -and -not $color -and $cwd) {
             [System.IO.File]::AppendAllText($transcript, $record + "`n", (New-Object System.Text.UTF8Encoding($false)))
             $color = $picked
         }
-        elseif ($Agent -eq 'codex') {
+        elseif ($Agent -eq 'codex' -or $Agent -eq 'grok') {
+            # Codex and Grok have no per-session colour to write. Derive into
+            # the status file only — never append a Claude Code agent-color
+            # record into their transcripts.
             $color = $picked
         }
     } catch {}
@@ -310,6 +328,44 @@ if ($Agent -eq 'codex' -and $State -ne 'ended') {
                     $lastSpace = $title.LastIndexOf(' ')
                     if ($lastSpace -ge 30) { $title = $title.Substring(0, $lastSpace) }
                 }
+            }
+        }
+    } catch {}
+}
+
+# Grok's name lives in summary.json beside updates.jsonl. /rename sets
+# title_is_manual. Colour was already derived above without writing into the
+# transcript.
+if ($Agent -eq 'grok' -and $State -ne 'ended') {
+    try {
+        if (-not $transcript -and $sessionId -ne 'unknown') {
+            $grokHome = $env:GROK_HOME
+            if (-not $grokHome) { $grokHome = Join-Path $env:USERPROFILE '.grok' }
+            $sessions = Join-Path $grokHome 'sessions'
+            if (Test-Path $sessions) {
+                $match = Get-ChildItem -Path $sessions -Recurse -Filter 'updates.jsonl' -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Directory.Name -eq $sessionId } |
+                    Select-Object -First 1
+                if ($match) { $transcript = $match.FullName }
+            }
+        }
+
+        if ($transcript -and (Test-Path $transcript)) {
+            $summary = Join-Path (Split-Path $transcript) 'summary.json'
+            if (Test-Path $summary) {
+                $meta = Get-Content -Path $summary -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ($meta.title_is_manual -and $meta.title) { $title = [string]$meta.title }
+                if (-not $title -and $meta.generated_title) { $title = [string]$meta.generated_title }
+                if (-not $title -and $meta.session_summary) { $title = [string]$meta.session_summary }
+            }
+        }
+
+        if ($title) {
+            $title = ($title -replace '\\[nrt]', ' ' -replace '\\', '' -replace '\s+', ' ').Trim()
+            if ($title.Length -gt 60) {
+                $title = $title.Substring(0, 60)
+                $lastSpace = $title.LastIndexOf(' ')
+                if ($lastSpace -ge 30) { $title = $title.Substring(0, $lastSpace) }
             }
         }
     } catch {}

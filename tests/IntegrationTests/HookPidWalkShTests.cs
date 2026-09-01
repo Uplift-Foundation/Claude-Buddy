@@ -116,11 +116,14 @@ public class HookPidWalkShTests
         psi.ArgumentList.Add(state);
         foreach (var decoy in decoys) psi.ArgumentList.Add(decoy);
 
-        // TMPDIR is where the hook writes, and CODEX_HOME keeps a codex run off
-        // the developer's real ~/.codex — same reasoning as HookScriptShTests.
+        // TMPDIR is where the hook writes, and CODEX_HOME / GROK_HOME keep a
+        // run off the developer's real ~/.codex and ~/.grok — same reasoning
+        // as HookScriptShTests.
         psi.Environment["TMPDIR"] = tmp.FullName;
         psi.Environment["CODEX_HOME"] = Path.Combine(tmp.FullName, "codex-home");
         Directory.CreateDirectory(psi.Environment["CODEX_HOME"]!);
+        psi.Environment["GROK_HOME"] = Path.Combine(tmp.FullName, "grok-home");
+        Directory.CreateDirectory(psi.Environment["GROK_HOME"]!);
 
         // Inherited from a real terminal these would make the walk stop at a
         // tmux pane instead of climbing, so the staged tree has to be clean of
@@ -128,6 +131,13 @@ public class HookPidWalkShTests
         psi.Environment.Remove("TMUX");
         psi.Environment.Remove("TMUX_PANE");
         psi.Environment.Remove("ITERM_SESSION_ID");
+
+        // Grok injects these into every child. The hook treats GROK_SESSION_ID
+        // as stronger than argv, so a walk launched from inside a Grok session
+        // would relabel every Claude and Codex case and skip their pid match.
+        psi.Environment.Remove("GROK_SESSION_ID");
+        psi.Environment.Remove("GROK_HOOK_EVENT");
+        psi.Environment.Remove("GROK_WORKSPACE_ROOT");
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start python3");
@@ -256,9 +266,22 @@ public class HookPidWalkShTests
         Assert.Equal(titled.FakePid, titled.RecordedPid);
     }
 
+    [PythonUnixFact]
+    public void GrokSessionIsRecorded_TitledOrNot()
+    {
+        var plain = RunUnderFakeParent("grok", [], "grok-plain", agent: "grok");
+        AssertSilentSuccess(plain);
+        Assert.Equal(plain.FakePid, plain.RecordedPid);
+
+        var titled = RunUnderFakeParent("grok build", [], "grok-titled", agent: "grok");
+        AssertSilentSuccess(titled);
+        Assert.Equal(titled.FakePid, titled.RecordedPid);
+    }
+
     // A claude ancestor is not a codex session and vice versa: the two CLIs each
     // look for their own, which is what stops a nested `codex exec` landing in
-    // the Claude Code session's pid bucket and superseding its orb.
+    // the Claude Code session's pid bucket and superseding its orb. Grok is
+    // the same third party in that triangle.
     [PythonUnixFact]
     public void EachCliOnlyClaimsItsOwnProcess()
     {
@@ -269,5 +292,13 @@ public class HookPidWalkShTests
         var codexAskedForClaude = RunUnderFakeParent("codex", [], "x-claude", agent: "claude");
         AssertSilentSuccess(codexAskedForClaude);
         Assert.NotEqual(codexAskedForClaude.FakePid, codexAskedForClaude.RecordedPid);
+
+        var grokAskedForClaude = RunUnderFakeParent("grok", [], "x-grok-claude", agent: "claude");
+        AssertSilentSuccess(grokAskedForClaude);
+        Assert.NotEqual(grokAskedForClaude.FakePid, grokAskedForClaude.RecordedPid);
+
+        var claudeAskedForGrok = RunUnderFakeParent("claude", [], "x-claude-grok", agent: "grok");
+        AssertSilentSuccess(claudeAskedForGrok);
+        Assert.NotEqual(claudeAskedForGrok.FakePid, claudeAskedForGrok.RecordedPid);
     }
 }

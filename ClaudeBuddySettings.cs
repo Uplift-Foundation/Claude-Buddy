@@ -80,7 +80,7 @@ namespace ClaudeBuddy
             "speakVoice", "neuralVoiceEnabled", "neuralVoice",
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
-            "orbColors", "claudeCodeProfileDirs", "codexHomes", "profiles", "orbPositions",
+            "orbColors", "claudeCodeProfileDirs", "codexHomes", "grokHomes", "profiles", "orbPositions",
             "chatPanelSizes", "arrangeAnchor", "chatTextScale",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
@@ -93,6 +93,7 @@ namespace ClaudeBuddy
             "openclawCronMode", "openclawCronShape",
             "codexChatEnabled", "codexReplyEnabled", "autoColorSessions",
             "claudeCodeEnabled", "codexEnabled",
+            "grokChatEnabled", "grokReplyEnabled", "grokEnabled", "grokAccountUsageEnabled",
             "clickAction", "doubleClickAction", "tripleClickAction",
             "remoteControlEnabled", "remoteControlProfileDir", "remoteControlProfileDirs",
             "remoteControlIdleMinutes", "remoteControlServeOnLaunch",
@@ -304,6 +305,18 @@ namespace ClaudeBuddy
             public bool ClaudeCodeEnabled { get; set; } = true;
 
             public bool CodexEnabled { get; set; } = true;
+
+            // Grok Build's own pair, separate from Codex's for the same reason
+            // Codex is separate from Claude Code: seeing and controlling are
+            // per-CLI powers. Usage orbs have their own switch too, because
+            // someone can want Claude's rings and not Grok's.
+            public bool GrokChatEnabled { get; set; } = true;
+
+            public bool GrokReplyEnabled { get; set; }
+
+            public bool GrokEnabled { get; set; } = true;
+
+            public bool GrokAccountUsageEnabled { get; set; }
 
             // What clicking an orb does, per number of clicks. One of
             // "terminal", "chat", "speak" or "none" — strings rather than an
@@ -544,6 +557,9 @@ namespace ClaudeBuddy
             // above because they are separate products with separate configs,
             // and someone can easily have extras of one and not the other.
             public List<string> CodexHomes { get; init; } = new();
+
+            // GROK_HOME extra accounts, the same shape as CodexHomes.
+            public List<string> GrokHomes { get; init; } = new();
 
             // Auto-organize: which shape and how much space between orbs.
             public string ArrangeShape { get; set; } = DefaultArrangeShape;
@@ -914,6 +930,30 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.CodexEnabled = value; Save(); }
         }
 
+        public static bool GrokChatEnabled
+        {
+            get { Load(); lock (Gate) return _model.GrokChatEnabled; }
+            set { Load(); lock (Gate) _model.GrokChatEnabled = value; Save(); }
+        }
+
+        public static bool GrokReplyEnabled
+        {
+            get { Load(); lock (Gate) return _model.GrokReplyEnabled; }
+            set { Load(); lock (Gate) _model.GrokReplyEnabled = value; Save(); }
+        }
+
+        public static bool GrokEnabled
+        {
+            get { Load(); lock (Gate) return _model.GrokEnabled; }
+            set { Load(); lock (Gate) _model.GrokEnabled = value; Save(); }
+        }
+
+        public static bool GrokAccountUsageEnabled
+        {
+            get { Load(); lock (Gate) return _model.GrokAccountUsageEnabled; }
+            set { Load(); lock (Gate) _model.GrokAccountUsageEnabled = value; Save(); }
+        }
+
         public static string ClickAction
         {
             get { Load(); lock (Gate) return _model.ClickAction; }
@@ -1146,6 +1186,31 @@ namespace ClaudeBuddy
             Save();
         }
 
+        public static IReadOnlyList<string> GrokHomes
+        {
+            get { Load(); lock (Gate) return _model.GrokHomes.ToList(); }
+        }
+
+        public static void AddGrokHome(string dirName)
+        {
+            Load();
+            lock (Gate)
+            {
+                if (!_model.GrokHomes.Contains(dirName, StringComparer.Ordinal))
+                {
+                    _model.GrokHomes.Add(dirName);
+                }
+            }
+            Save();
+        }
+
+        public static void RemoveGrokHome(string dirName)
+        {
+            Load();
+            lock (Gate) { _model.GrokHomes.Remove(dirName); }
+            Save();
+        }
+
         // ---- per profile ----------------------------------------------------
 
         // A copy, so callers can't mutate the store without going through Update.
@@ -1269,6 +1334,10 @@ namespace ClaudeBuddy
                         AutoColorSessions = root["autoColorSessions"]?.GetValue<bool>() ?? false,
                         ClaudeCodeEnabled = root["claudeCodeEnabled"]?.GetValue<bool>() ?? true,
                         CodexEnabled = root["codexEnabled"]?.GetValue<bool>() ?? true,
+                        GrokChatEnabled = root["grokChatEnabled"]?.GetValue<bool>() ?? true,
+                        GrokReplyEnabled = root["grokReplyEnabled"]?.GetValue<bool>() ?? false,
+                        GrokEnabled = root["grokEnabled"]?.GetValue<bool>() ?? true,
+                        GrokAccountUsageEnabled = root["grokAccountUsageEnabled"]?.GetValue<bool>() ?? false,
                         ClickAction = root["clickAction"]?.GetValue<string>() ?? "terminal",
                         DoubleClickAction = root["doubleClickAction"]?.GetValue<string>() ?? "none",
                         TripleClickAction = root["tripleClickAction"]?.GetValue<string>() ?? "none",
@@ -1358,6 +1427,17 @@ namespace ClaudeBuddy
                             if (node?.GetValue<string>() is { Length: > 0 } dirName)
                             {
                                 model.CodexHomes.Add(dirName);
+                            }
+                        }
+                    }
+
+                    if (root["grokHomes"] is JsonArray grokHomes)
+                    {
+                        foreach (var node in grokHomes)
+                        {
+                            if (node?.GetValue<string>() is { Length: > 0 } dirName)
+                            {
+                                model.GrokHomes.Add(dirName);
                             }
                         }
                     }
@@ -1599,6 +1679,9 @@ namespace ClaudeBuddy
                     var codexHomeDirs = new JsonArray();
                     foreach (var dirName in _model.CodexHomes) codexHomeDirs.Add(dirName);
 
+                    var grokHomeDirs = new JsonArray();
+                    foreach (var dirName in _model.GrokHomes) grokHomeDirs.Add(dirName);
+
                     var speakArgs = new JsonArray();
                     foreach (var argument in _model.SpeakCommandArgs) speakArgs.Add(argument);
 
@@ -1655,6 +1738,10 @@ namespace ClaudeBuddy
                         ["autoColorSessions"] = _model.AutoColorSessions,
                         ["claudeCodeEnabled"] = _model.ClaudeCodeEnabled,
                         ["codexEnabled"] = _model.CodexEnabled,
+                        ["grokChatEnabled"] = _model.GrokChatEnabled,
+                        ["grokReplyEnabled"] = _model.GrokReplyEnabled,
+                        ["grokEnabled"] = _model.GrokEnabled,
+                        ["grokAccountUsageEnabled"] = _model.GrokAccountUsageEnabled,
                         ["clickAction"] = _model.ClickAction,
                         ["doubleClickAction"] = _model.DoubleClickAction,
                         ["tripleClickAction"] = _model.TripleClickAction,
@@ -1689,6 +1776,7 @@ namespace ClaudeBuddy
                         },
                         ["claudeCodeProfileDirs"] = profileDirs,
                         ["codexHomes"] = codexHomeDirs,
+                        ["grokHomes"] = grokHomeDirs,
                         ["profiles"] = profiles,
                         ["orbPositions"] = positions,
                         ["chatPanelSizes"] = panelSizes,
