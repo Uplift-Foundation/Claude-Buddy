@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 
@@ -42,7 +43,17 @@ namespace ClaudeBuddy
 
                 var weekly = Window(config);
                 var extra = Extra(config);
+
+                // The tier is a sibling of `config` inside `ctx`, not a member
+                // of it — so a lookup that tried config and then root walked
+                // straight past the one place it lives, and every real reading
+                // came back with a blank plan line. Try all three, config first,
+                // so a fixture that hands in a bare object still works.
                 var tier = Str(config, "subscriptionTier")
+                           ?? (root.TryGetProperty("ctx", out var envelope)
+                               && envelope.ValueKind == JsonValueKind.Object
+                                   ? Str(envelope, "subscriptionTier")
+                                   : null)
                            ?? Str(root, "subscriptionTier");
 
                 return new AccountUsage(
@@ -54,7 +65,8 @@ namespace ClaudeBuddy
                     weekly,
                     extra,
                     readAt,
-                    AccountUsageSource.Grok);
+                    AccountUsageSource.Grok,
+                    TimestampOf(root));
             }
             catch (JsonException)
             {
@@ -62,9 +74,40 @@ namespace ClaudeBuddy
             }
         }
 
+        // When Grok wrote the log line — the `ts` on the unified.jsonl envelope.
+        //
+        // This is the only honest answer to "how old is this number", and until
+        // CB-83 nobody asked. Grok appends a credits config when it starts, and
+        // never again until the next run, so a machine that has not run grok
+        // since Monday is holding Monday's percentage. Stamping the reading with
+        // the moment the *file* was read made that indistinguishable from a
+        // number taken a second ago; the orb could not dim and the card said
+        // "Last read 0m ago" about a figure 38 hours old. Null for a bare config
+        // object with no envelope, which is what the parse tests hand in.
+        internal static DateTimeOffset? TimestampOf(JsonElement root)
+        {
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            if (!root.TryGetProperty("ts", out var ts)
+                || ts.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            return DateTimeOffset.TryParse(
+                ts.GetString(),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
+                out var parsed)
+                ? parsed
+                : null;
+        }
+
         private static UsageWindow? Window(JsonElement config)
         {
+            // ValueKind first — TryGetDouble throws on a non-number. See the
+            // same guard in CodexUsageParse.Assign.
             if (!config.TryGetProperty("creditUsagePercent", out var percentEl)
+                || percentEl.ValueKind != JsonValueKind.Number
                 || !percentEl.TryGetDouble(out var percent))
             {
                 return null;

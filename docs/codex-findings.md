@@ -392,9 +392,45 @@ scale Claude Code's `utilization` uses. `resets_at` is unix seconds.
 `credits.balance` without a cap is not a percentage and is not drawn as a
 ring.
 
-The usage orb reads the newest rollout's last such snapshot. Freshness is
-"as of the last Codex session". It does not call `/status`, does not hit
-chatgpt.com, and does not read `auth.json`'s `tokens` or `OPENAI_API_KEY`.
+### The window-less snapshot, measured 2 Sep 2026 (CB-83)
+
+**Not every `token_count` carries a window, and the empty one is often the
+newest thing on disk.** When the workspace runs out of credits Codex sends a
+snapshot whose windows are both null, carrying only a reason:
+
+```json
+{
+  "limit_id": "premium",
+  "primary": null,
+  "secondary": null,
+  "credits": { "has_credits": false, "unlimited": false, "balance": null },
+  "plan_type": null,
+  "rate_limit_reached_type": "workspace_owner_credits_depleted"
+}
+```
+
+It goes to **every live session at once**. On this machine, four rollouts
+received it inside one second (18:57:26–18:57:45 UTC), and the line 0.3s before
+it in the same file read `primary` 98%, `secondary` 38%. So a reader that keeps
+the last `rate_limits` line, in the newest-modified file, gets null/null — and
+reports an account with no subscription limits while the account is at 99% of
+its five-hour window.
+
+Two rules follow, and both are load-bearing:
+
+- **Keep only snapshots that carry a window.** An empty one is legible but is
+  not a reading.
+- **Order by the snapshot's own `timestamp`, not by file mtime.** mtime says
+  which rollout was written to last, which on a machine running several
+  sessions is whichever one emitted any event last — not the one holding the
+  newest usage. mtime is still sound as an *upper bound*, since no line can
+  post-date its file's last write, and the scan uses it to stop early.
+
+The usage orb reads the newest windowed snapshot across the tree, and carries
+that snapshot's timestamp so the card can date the number rather than the read.
+Freshness is "as of the last Codex session" and is now stated as such. It does
+not call `/status`, does not hit chatgpt.com, and does not read `auth.json`'s
+`tokens` or `OPENAI_API_KEY`.
 
 ## Still unknown
 
