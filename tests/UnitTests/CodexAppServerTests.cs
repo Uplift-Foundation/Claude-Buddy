@@ -317,10 +317,13 @@ public class CodexAppServerTests : IDisposable
     }
 
     [Theory]
-    // Parses, carries "result", but the root is not an object.
+    // Not an object, and rejected before parsing by the leading-brace check.
     [InlineData("[\"result\"]")]
-    // Carries "result" only as a substring of another key.
-    [InlineData("""{"id":2,"notresult":1}""")]
+    // Carries the literal "result" as a *value*, so it survives the cheap
+    // substring reject and reaches the property lookup, which finds nothing.
+    // (`{"notresult":1}` would not: the quote sits before `not`, so the string
+    // `"result"` never appears and the row is dropped a step earlier.)
+    [InlineData("""{"id":2,"other":"result"}""")]
     // The id matches and `result` is present but is not an object.
     [InlineData("""{"id":2,"result":[1,2]}""")]
     public void ARowThatOnlyLooksLikeTheAnswerIsSkipped(string stdout)
@@ -373,5 +376,37 @@ public class CodexAppServerTests : IDisposable
         var usage = CodexUsageParse.FromRateLimits(json, null, "codex", DateTimeOffset.UtcNow);
 
         Assert.Equal(3.0, usage!.Session!.Percent);
+    }
+
+    // A duration that is a number but not an int — the arm between "no
+    // duration" and "a duration this understands". It counts as the week,
+    // because a window that cannot be read as short is not claimed to be.
+    [Fact]
+    public void AFractionalWindowDurationIsNotReadAsTheFiveHourRing()
+    {
+        var json = """
+        {"rateLimits":{"primary":{"usedPercent":9,"windowDurationMins":300.5}}}
+        """;
+
+        var usage = CodexUsageParse.FromRateLimits(json, null, "codex", DateTimeOffset.UtcNow);
+
+        Assert.Null(usage!.Session);
+        Assert.Equal(9.0, usage.Weekly!.Percent);
+    }
+
+    // A credits object with neither spelling of has_credits in it. "Not stated"
+    // is not "yes", so it reads as no extra usage rather than as a budget the
+    // account may not have.
+    [Fact]
+    public void CreditsThatDoNotSayWhetherThereAreAnyCountAsNone()
+    {
+        var json = """
+        {"rateLimits":{"primary":{"usedPercent":9,"windowDurationMins":300},"credits":{"unlimited":false}}}
+        """;
+
+        var usage = CodexUsageParse.FromRateLimits(json, null, "codex", DateTimeOffset.UtcNow);
+
+        Assert.Equal("no_credits", usage!.Extra!.DisabledReason);
+        Assert.False(usage.Extra.Enabled);
     }
 }

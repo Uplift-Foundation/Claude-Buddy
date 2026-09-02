@@ -125,6 +125,15 @@ namespace ClaudeBuddy
 
         // A PATH entry is the user's shell config rather than anything this app
         // controls, so a malformed one steps aside instead of throwing.
+        //
+        // Excluded from coverage for the reason ClaudeBinary.SafeCombine states
+        // at length: the catch is not reachable on .NET 10, because .NET Core
+        // dropped Path.Combine's invalid-character check — a PATH entry
+        // containing a NUL now combines happily and simply fails File.Exists.
+        // AMalformedPathEntryIsSteppedOver asserts the outcome (the good
+        // directory after it still answers) and reaches it without this catch.
+        // Kept anyway: the runtime's behaviour here has changed once already.
+        [ExcludeFromCodeCoverage]
         private static string? SafeCombine(string dir, string file)
         {
             try { return System.IO.Path.Combine(dir, file); }
@@ -193,9 +202,13 @@ namespace ClaudeBuddy
 
                 try
                 {
+                    // No ValueKind guard on the root: the line was already
+                    // required to start with '{', and a JSON text that starts
+                    // with '{' and parses is an object by construction. A check
+                    // for it reads as prudent and is dead — one the tests could
+                    // never reach, which is how it was found.
                     using var document = JsonDocument.Parse(trimmed);
                     var root = document.RootElement;
-                    if (root.ValueKind != JsonValueKind.Object) continue;
                     if (!root.TryGetProperty("id", out var id)
                         || id.ValueKind != JsonValueKind.Number
                         || !id.TryGetInt32(out var value)
