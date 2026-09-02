@@ -429,6 +429,16 @@ public class CodexUsageScanTests : IDisposable
     // empty list runs the defaulting and then nothing, which pins that omitting
     // the argument still resolves to something rather than throwing on a null
     // delegate, without a CLI being launched anywhere near this suite.
+    //
+    // The branch report counts **four** arms on `ask ??= LiveAsk` and only two
+    // are reachable from a test. The other two belong to the compiler: a
+    // method-group conversion is cached in a hidden static behind its own null
+    // check, and both of those arms are attributed to this source line. Calling
+    // the method twice was tried and did not move the number, so the arms are
+    // named in the PR rather than chased — walking a percentage up by adding
+    // calls that assert nothing is the habit this repo's coverage notes warn
+    // about. What *is* covered is the behaviour: a caller that supplies `ask`
+    // and a caller that does not.
     [Fact]
     public void TheDefaultLiveReaderIsResolvedWithoutBeingCalled()
     {
