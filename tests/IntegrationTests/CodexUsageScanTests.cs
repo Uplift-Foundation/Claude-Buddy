@@ -423,4 +423,16 @@ public class CodexUsageScanTests : IDisposable
         Assert.Equal(new[] { _root, second }, asked);
         Assert.Equal(new[] { _root, second }, readings.Select(r => r.ConfigDir).ToArray());
     }
+
+    // The default `ask` is the real subprocess, so it cannot be exercised by
+    // asking about a home — but it can be exercised by asking about none. An
+    // empty list runs the defaulting and then nothing, which pins that omitting
+    // the argument still resolves to something rather than throwing on a null
+    // delegate, without a CLI being launched anywhere near this suite.
+    [Fact]
+    public void TheDefaultLiveReaderIsResolvedWithoutBeingCalled()
+    {
+        Assert.Empty(CodexUsagePoller.ReadFrom(
+            Array.Empty<string>(), DateTimeOffset.Parse("2026-09-02T19:20:00Z")));
+    }
 }

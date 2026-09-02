@@ -242,4 +242,136 @@ public class CodexAppServerTests : IDisposable
         Assert.DoesNotContain($"\"id\":{CodexAppServerUsage.RequestId}",
                               CodexAppServerUsage.InitializeRequest);
     }
+
+    // The end of the search: a PATH that exists, is looked through, and holds
+    // nothing. Distinct from the empty-PATH case, which returns earlier.
+    [Fact]
+    public void APathWithNoCodexInItIsExhaustedAndAnswersNull()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "empty-dir"));
+
+        Assert.Null(CodexBinary.Locate(
+            Path.Combine(_root, "home"),
+            Path.Combine(_root, "empty-dir"),
+            NoSystemInstalls));
+    }
+
+    // A PATH entry is the user's shell config, not anything this app controls.
+    // On .NET 10 a NUL in one no longer throws from Path.Combine — it simply
+    // fails File.Exists — so what is asserted is the outcome: the good
+    // directory after it still answers.
+    [Fact]
+    public void AMalformedPathEntryIsSteppedOver()
+    {
+        var good = Touch("elsewhere", "codex");
+        var searchPath = "bad\0entry" + Path.PathSeparator + Path.Combine(_root, "elsewhere");
+
+        Assert.Equal(
+            good,
+            CodexBinary.Locate(Path.Combine(_root, "home"), searchPath, NoSystemInstalls));
+    }
+
+    // The cached lookup. What it finds depends on the machine and is therefore
+    // not asserted — see ANullSearchPathFallsBackToTheEnvironmentWithoutThrowing
+    // for why. That it looks once and keeps the answer is about the code.
+    [Fact]
+    public void ThePathPropertyIsLookedUpOnceAndCached()
+    {
+        var first = CodexBinary.Path;
+        var second = CodexBinary.Path;
+
+        Assert.Equal(first, second);
+    }
+
+    // The whole JSON-RPC line, handed straight to the parser without ResultFrom
+    // pulling the result out first. Unwrap claims to accept this shape, and a
+    // claim in a comment that nothing exercises is how the next person gets a
+    // silent null — the same class of gap CB-83 was.
+    [Fact]
+    public void TheWholeResponseLineIsUnwrappedWithoutHelp()
+    {
+        var line = """
+        {"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"usedPercent":73,"windowDurationMins":300},"planType":"pro"}}}
+        """;
+
+        var usage = CodexUsageParse.FromRateLimits(
+            line, null, "codex", DateTimeOffset.Parse("2026-09-02T22:30:00Z"));
+
+        Assert.True(usage!.Available);
+        Assert.Equal(73.0, usage.Session!.Percent);
+        Assert.Equal("pro", usage.SubscriptionType);
+    }
+
+    // Every arm of ResultFrom's guards. The stream is an experimental protocol
+    // that will grow rows this app has never seen, so "skipped" has to mean
+    // skipped rather than "threw" or "matched something else" — and each of
+    // these shapes reaches a different one of those guards.
+    [Theory]
+    // A blank line between real rows: the length check, not the brace check.
+    [InlineData("\n\n{\"id\":2,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":5}}}}\n\n")]
+    // Leading whitespace and a row that is not JSON at all, before the answer.
+    [InlineData("noise \"result\" noise\n  {\"id\":2,\"result\":{\"rateLimits\":{\"usedPercent\":0,\"primary\":{\"usedPercent\":5}}}}")]
+    public void TheAnswerIsStillFoundPastRowsThatAreNotIt(string stdout)
+    {
+        Assert.NotNull(CodexAppServerUsage.ResultFrom(stdout));
+    }
+
+    [Theory]
+    // Parses, carries "result", but the root is not an object.
+    [InlineData("[\"result\"]")]
+    // Carries "result" only as a substring of another key.
+    [InlineData("""{"id":2,"notresult":1}""")]
+    // The id matches and `result` is present but is not an object.
+    [InlineData("""{"id":2,"result":[1,2]}""")]
+    public void ARowThatOnlyLooksLikeTheAnswerIsSkipped(string stdout)
+    {
+        Assert.Null(CodexAppServerUsage.ResultFrom(stdout));
+    }
+
+    // ---- both spellings, and the arms either side of them ----------------
+
+    // `hasCredits: true` with no cap. A remaining balance is not a percentage,
+    // so it is a stated absence rather than a ring — and it is reached through
+    // the camelCase spelling here, the snake_case one in the rollout tests.
+    [Fact]
+    public void CreditsWithoutACapAreNotDrawnAsAGauge()
+    {
+        var json = """
+        {"rateLimits":{"primary":{"usedPercent":5,"windowDurationMins":300},"credits":{"hasCredits":true,"unlimited":false,"balance":4200}}}
+        """;
+
+        var usage = CodexUsageParse.FromRateLimits(json, null, "codex", DateTimeOffset.UtcNow);
+
+        Assert.Equal("credits_no_cap", usage!.Extra!.DisabledReason);
+        Assert.Null(usage.Extra.RingPercent);
+    }
+
+    // A window with no duration under either spelling is the week, not the
+    // five-hour ring: SessionWindowMinutes only claims a window that says it is
+    // short, and inventing "short" for a window that said nothing would put the
+    // wrong number on the inner ring.
+    [Theory]
+    [InlineData("""{"rateLimits":{"primary":{"usedPercent":9}}}""")]
+    [InlineData("""{"rateLimits":{"primary":{"usedPercent":9,"windowDurationMins":"soon"}}}""")]
+    public void AWindowThatDoesNotSayHowLongItIsCountsAsTheWeek(string json)
+    {
+        var usage = CodexUsageParse.FromRateLimits(json, null, "codex", DateTimeOffset.UtcNow);
+
+        Assert.Null(usage!.Session);
+        Assert.Equal(9.0, usage.Weekly!.Percent);
+    }
+
+    // The JSON-RPC envelope, but not the one this reads: a `result` that is not
+    // an object, and one with no rateLimits in it. Both fall through to the
+    // other shapes rather than being mistaken for an answer.
+    [Theory]
+    [InlineData("""{"id":2,"result":"nope","rate_limits":{"primary":{"used_percent":3,"window_minutes":300}}}""")]
+    [InlineData("""{"id":2,"result":{"userAgent":"x"},"rate_limits":{"primary":{"used_percent":3,"window_minutes":300}}}""")]
+    [InlineData("""{"result":{"rateLimits":"not an object"},"rate_limits":{"primary":{"used_percent":3,"window_minutes":300}}}""")]
+    public void AResultThatIsNotAnAnswerFallsThroughToTheOtherShapes(string json)
+    {
+        var usage = CodexUsageParse.FromRateLimits(json, null, "codex", DateTimeOffset.UtcNow);
+
+        Assert.Equal(3.0, usage!.Session!.Percent);
+    }
 }
