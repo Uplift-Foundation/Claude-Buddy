@@ -171,4 +171,88 @@ public class GrokUsageParseTests
         public System.Collections.Generic.IReadOnlyList<AccountUsage> Read() =>
             throw new InvalidOperationException("boom");
     }
+
+    // CB-83 ------------------------------------------------------------------
+    //
+    // Verbatim from ~/.grok/logs/unified.jsonl on this machine — the whole
+    // envelope this time, not just ctx.config, because the envelope is where
+    // both of the things this ticket fixes actually live: `ts` (how old the
+    // number is) and `subscriptionTier` (which sits beside `config` inside
+    // `ctx`, not inside it, and so was never found).
+    private const string LiveLogLine = """
+    {"ts":"2026-09-01T05:05:24.996Z","src":"shell","pid":88551,"ver":"1.0.13","lvl":"info","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":44.0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-08-31T06:30:23.778489+00:00","end":"2026-09-07T06:30:23.778489+00:00"},"onDemandCap":{"val":0},"onDemandUsed":{"val":0},"prepaidBalance":{"val":0},"isUnifiedBillingUser":true},"onDemandEnabled":null,"subscriptionTier":"SuperGrok"}}
+    """;
+
+    [Fact]
+    public void TheTierIsFoundBesideTheConfigRatherThanInsideIt()
+    {
+        var usage = GrokUsageParse.FromCreditsConfig(
+            LiveLogLine, "/Users/w/.grok", "warren", DateTimeOffset.Parse("2026-09-01T06:00:00Z"));
+
+        Assert.Equal("SuperGrok", usage!.SubscriptionType);
+        Assert.Equal(44.0, usage.Weekly!.Percent);
+    }
+
+    // Grok appends a credits config when it starts and never again until the
+    // next run. A machine that last ran grok on Monday is holding Monday's
+    // percentage, and the reading has to say so rather than be dated by the
+    // moment this app happened to read the log.
+    [Fact]
+    public void TheLogTimestampIsTheReadingsAgeNotTheMomentItWasRead()
+    {
+        var readAt = DateTimeOffset.Parse("2026-09-02T21:07:29Z");
+
+        var usage = GrokUsageParse.FromCreditsConfig(LiveLogLine, null, "g", readAt);
+
+        Assert.Equal(DateTimeOffset.Parse("2026-09-01T05:05:24.996Z").ToUniversalTime(), usage!.AsOf);
+        Assert.True(usage.IsStale(readAt));
+        Assert.True(readAt - usage.AsOf > TimeSpan.FromHours(38));
+    }
+
+    [Theory]
+    [InlineData("""{"creditUsagePercent":5}""")]
+    [InlineData("""{"ts":42,"creditUsagePercent":5}""")]
+    [InlineData("""{"ts":"whenever","creditUsagePercent":5}""")]
+    public void ALineThatDoesNotSayWhenItWasWrittenIsDatedByTheRead(string json)
+    {
+        var readAt = DateTimeOffset.Parse("2026-09-02T21:07:29Z");
+
+        var usage = GrokUsageParse.FromCreditsConfig(json, null, "g", readAt);
+
+        Assert.Null(usage!.ObservedAt);
+        Assert.Equal(readAt, usage.AsOf);
+        Assert.False(usage.IsStale(readAt));
+    }
+
+    [Fact]
+    public void ATierOnTheBareRootIsStillFound()
+    {
+        var json = """{"creditUsagePercent":5,"subscriptionTier":"SuperGrokHeavy"}""";
+
+        var usage = GrokUsageParse.FromCreditsConfig(json, null, "g", DateTimeOffset.UtcNow);
+
+        Assert.Equal("SuperGrokHeavy", usage!.SubscriptionType);
+    }
+
+    [Fact]
+    public void ANonObjectCtxDoesNotStopTheParse()
+    {
+        var json = """{"ctx":"nope","creditUsagePercent":5}""";
+
+        var usage = GrokUsageParse.FromCreditsConfig(json, null, "g", DateTimeOffset.UtcNow);
+
+        Assert.Null(usage!.SubscriptionType);
+        Assert.Equal(5.0, usage.Weekly!.Percent);
+    }
+
+    [Fact]
+    public void ACreditPercentageThatIsNotANumberIsNoReadingRatherThanAThrow()
+    {
+        var usage = GrokUsageParse.FromCreditsConfig(
+            """{"creditUsagePercent":"most of it"}""", null, "g", DateTimeOffset.UtcNow);
+
+        Assert.NotNull(usage);
+        Assert.False(usage!.Available);
+        Assert.Null(usage.Weekly);
+    }
 }
