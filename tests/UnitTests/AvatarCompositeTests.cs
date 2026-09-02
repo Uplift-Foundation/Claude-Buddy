@@ -103,6 +103,19 @@ namespace ClaudeBuddy.Tests
             Same(new SKColor(0x55, 0x55, 0x55), pie!.GetPixel(Size * 3 / 4, Size / 2), "the grey wedge");
         }
 
+        // A colour that is not a colour is the same answer as no colour. The
+        // palette only ever produces "#RRGGBB", so this is about the string
+        // arriving from somewhere else entirely rather than about the palette
+        // being wrong — and a wedge of nothing would be a hole in the orb.
+        [Fact]
+        public void AColourThatWillNotParseGetsGreyToo()
+        {
+            using var pie = OpenClawAvatars.Render(new[] { Part(null, "not a colour"), Part(Red) });
+
+            Assert.NotNull(pie);
+            Same(new SKColor(0x55, 0x55, 0x55), pie!.GetPixel(Size * 3 / 4, Size / 2), "the grey wedge");
+        }
+
         // Cut at the size the chat panel's portrait needs, and downsampled to
         // 36pt by the orb — the same bargain a single avatar already makes.
         [Fact]
@@ -154,6 +167,26 @@ namespace ClaudeBuddy.Tests
                         $"({x}, {y}) was left transparent with {members} members");
                 }
             }
+        }
+
+        // One picture is not a division of anything: it fills the frame, corners
+        // and all, with no seam drawn across it.
+        //
+        // A room never asks for this — a channel with one member hands back that
+        // member's own avatar instead, which keeps whatever animation it has —
+        // but Render is what decides that a single part is a picture rather than
+        // a wedge with three quarters of nothing beside it, and that decision is
+        // worth holding still.
+        [Fact]
+        public void OneMemberFillsTheWholeOrb()
+        {
+            using var pie = OpenClawAvatars.Render(new[] { Part(Red) });
+
+            Assert.NotNull(pie);
+
+            Same(new SKColor(0xE0, 0x20, 0x20), pie!.GetPixel(Size / 2, Size / 2), "the middle");
+            Same(new SKColor(0xE0, 0x20, 0x20), pie.GetPixel(1, 1), "the top left corner");
+            Same(new SKColor(0xE0, 0x20, 0x20), pie.GetPixel(Size - 2, Size - 2), "the bottom right corner");
         }
 
         // --- what does not get drawn ----------------------------------------

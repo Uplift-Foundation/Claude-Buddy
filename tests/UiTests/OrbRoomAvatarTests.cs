@@ -226,6 +226,55 @@ public class OrbRoomAvatarTests
         Assert.Null(OpenClawSessions.RoomAvatar(Room()));
     }
 
+    // An agent standing in the room that agents.list has not described yet —
+    // the ordinary state in the seconds between a gateway connecting and its
+    // identities arriving, since sessions.list answers first. No picture and no
+    // colour is nothing to draw, and the channel keeps its initials until the
+    // identities land.
+    [AvaloniaFact]
+    public void AMemberWithNoIdentityYetIsNothingToDraw()
+    {
+        try
+        {
+            var room = Room();
+            PublishNothing();
+            Standing(room, Agent("stranger"));
+
+            Assert.Null(OpenClawSessions.RoomAvatar(room));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // One agent, two sessions, one room. The gateway does list an agent more
+    // than once in a channel, and a member counted twice would take two wedges
+    // of a pie divided between the same face.
+    [AvaloniaFact]
+    public void AnAgentInARoomTwiceStillTakesOneWedge()
+    {
+        try
+        {
+            var room = Room();
+            var zara = Agent("zara");
+
+            Publish((zara, Png(0xE0, 0x20, 0x20)));
+            Standing(room, zara, zara);
+
+            var roomAvatar = OpenClawSessions.RoomAvatar(room);
+            var agentAvatar = OpenClawSessions.AvatarForSession(
+                $"openclaw:agent:{zara}:discord:channel:1");
+
+            Assert.NotNull(roomAvatar);
+            Assert.Same(agentAvatar, roomAvatar);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
     // --- who gets a wedge -------------------------------------------------
 
     // Four wedges, and they are the four most recently active — not the four
