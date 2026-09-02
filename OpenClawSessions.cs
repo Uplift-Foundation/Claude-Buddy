@@ -125,11 +125,81 @@ namespace ClaudeBuddy
         // the cache is keyed by agent, so both surfaces draw the same objects.
         public static OpenClawAvatars.Avatar? AvatarForSession(string sessionId)
         {
+            // A room is not an agent and has no picture of its own, so it wears
+            // its members' — see RoomAvatar. Handled here rather than by each
+            // caller so the orb and the chat panel's header cannot disagree
+            // about what a room looks like; both already ask this one function.
+            if (sessionId.StartsWith(RoomPrefix, StringComparison.Ordinal))
+                return RoomAvatar(sessionId[RoomPrefix.Length..]);
+
             var identity = IdentityForSession(sessionId);
             if (identity is null) return null;
 
             var agent = AgentIdOf(sessionId);
             return agent is null ? null : OpenClawAvatars.For(agent, identity.Avatar);
+        }
+
+        // Minted by SessionManager.RoomId. Named here as well because this is
+        // the other end of it — a room id is the one session id that names no
+        // gateway session at all, and both halves have to agree on the shape.
+        private const string RoomPrefix = "openclaw:room:";
+
+        // The people in a channel, drawn as one picture: the orb cut into a
+        // wedge each.
+        //
+        // A room orb used to be the only orb in its own cluster with nothing on
+        // it — every agent pointing at it wore a face, and the thing they were
+        // all pointing at wore two letters. The channel's initials say *which*
+        // conversation, which the ring's colour also says; who is in it was said
+        // nowhere.
+        //
+        // Ordering is the part worth being careful about. The members arrive
+        // most-recently-active first, which is how the four that get a wedge are
+        // chosen — a channel with seven agents in it should show the four who
+        // are actually talking. They are then sorted by agent id, so the wedges
+        // stay put: chosen *and* ordered by recency, two agents in a fast
+        // exchange would swap halves of the orb every time either of them spoke.
+        public static OpenClawAvatars.Avatar? RoomAvatar(string roomKey)
+        {
+            var agents = new List<string>();
+
+            foreach (var key in MembersOfRoom(roomKey))
+            {
+                var agent = AgentIdOf(key);
+                if (agent is null || agents.Contains(agent, StringComparer.OrdinalIgnoreCase)) continue;
+
+                agents.Add(agent);
+                if (agents.Count == AvatarPie.MaxParts) break;
+            }
+
+            if (agents.Count == 0) return null;
+
+            agents.Sort(StringComparer.OrdinalIgnoreCase);
+
+            // One member is not a composite. Returning their avatar directly
+            // rather than a one-wedge pie keeps the animation an animated
+            // avatar has — a composite is a still — and means a channel only
+            // one agent talks in looks exactly like that agent, which is true.
+            if (agents.Count == 1)
+            {
+                var only = IdentityOf(agents[0]);
+                return only is null ? null : OpenClawAvatars.For(agents[0], only.Avatar);
+            }
+
+            var colours = agents.Select(ColourForAgent).ToList();
+
+            var parts = agents
+                .Select((agent, i) => new OpenClawAvatars.Part(IdentityOf(agent)?.Avatar, colours[i]))
+                .ToList();
+
+            // The colours are in the cache key as well as the agents, because
+            // the palette deals its colours across *every* agent the gateway
+            // knows — so an agent joining a different channel can recolour a
+            // wedge here without this room's membership changing at all.
+            var cacheKey = RoomPrefix + roomKey + "|" + string.Join(
+                '|', agents.Select((agent, i) => agent + "=" + colours[i]));
+
+            return OpenClawAvatars.Composite(cacheKey, parts);
         }
 
         public static string? AgentIdOf(string sessionId)
@@ -870,7 +940,14 @@ namespace ClaudeBuddy
             var asOf = now ?? DateTime.UtcNow;
             var result = new List<Session>();
 
-            var roomMembers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            // Carried with each member's last activity, because the order this
+            // ends up in is load-bearing: a room orb draws the four members it
+            // is given first (see RoomAvatar), and "the four the gateway
+            // happened to list first" is not an answer anyone can read. Sorted
+            // once below rather than by each caller, so the room's chat and the
+            // room's picture are built from the same order.
+            var roomMembers = new Dictionary<string, List<(string Key, DateTime Activity)>>(
+                StringComparer.Ordinal);
             var deliveries = new Dictionary<string, Delivery?>(StringComparer.Ordinal);
 
             // Every agent the gateway knows of, filtered or not, so that a
@@ -910,9 +987,9 @@ namespace ClaudeBuddy
                 if (roomKey is not null)
                 {
                     if (!roomMembers.TryGetValue(roomKey, out var members))
-                        roomMembers[roomKey] = members = new List<string>();
+                        roomMembers[roomKey] = members = new List<(string, DateTime)>();
 
-                    members.Add(key);
+                    members.Add((key, activity));
                 }
 
                 // ...and where it delivers, on the same terms and for the same
@@ -976,9 +1053,23 @@ namespace ClaudeBuddy
                 .ToDictionary(pair => pair.Key["room:".Length..], pair => pair.Value,
                     StringComparer.Ordinal);
 
+            // Most recently active first, and ties broken on the key so the
+            // answer is the same twice running. A gateway lists its sessions in
+            // whatever order it likes and that order does move between polls;
+            // an unstable one here would reshuffle a room orb's wedges under a
+            // conversation that had not changed at all.
+            var ordered = roomMembers.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value
+                    .OrderByDescending(member => member.Activity)
+                    .ThenBy(member => member.Key, StringComparer.Ordinal)
+                    .Select(member => member.Key)
+                    .ToList(),
+                StringComparer.Ordinal);
+
             lock (Gate)
             {
-                _roomMembers = roomMembers;
+                _roomMembers = ordered;
                 _roomColours = roomColours;
                 _deliveries = deliveries;
             }
