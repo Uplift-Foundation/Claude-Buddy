@@ -974,6 +974,16 @@ rather than a fourth M. The second half says which conversation it is, because
 one agent commonly has a DM with you, a DM with someone else and two channels
 going at once.
 
+**An agent's picture is its orb, and a channel's orb is everyone in it.** An
+agent with an avatar set in OpenClaw wears it instead of its letters, with the
+state moving out to the ring. The orb Claude Buddy draws for a *channel* — the
+one every agent talking in that channel points at — is cut into a wedge per
+member: half each for two agents, quarters for four. Someone with no picture
+still takes a wedge, in the colour their ring wears everywhere else, and a
+channel where nobody has one keeps the channel's initials. At most four are
+drawn, and they are the four most recently active; the wedges are ordered so
+that somebody speaking does not move anyone's face.
+
 **Only recently active sessions get orbs.** A gateway remembers every
 conversation it has ever had — 59 of them on the machine this was developed
 against — so an orb per session would bury the screen. **Show sessions active

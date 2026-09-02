@@ -321,7 +321,11 @@ namespace ClaudeBuddy
             // instead said only "this is a channel", which is true of the badge
             // on every member orb too and so distinguished one room from
             // another not at all.
-            if (status.IsRoom)
+            // ...unless it has a picture, which it does as soon as anyone in
+            // the channel has one: the composite is the better answer to both
+            // "which channel" and "who is in it", and letters drawn over it
+            // would be unreadable anyway.
+            if (status.IsRoom && !_hasAvatar)
             {
                 Glyph.IsVisible = true;
             }
@@ -770,7 +774,13 @@ namespace ClaudeBuddy
             var identity = OpenClawSessions.IdentityForSession(SessionId);
             _agentEmoji = identity?.Emoji;
 
-            var avatar = identity is null ? null : OpenClawAvatars.For(IdOf(SessionId), identity.Avatar);
+            // Asked of OpenClawSessions rather than assembled here, because a
+            // room's picture is not an agent's picture — it is a composite of
+            // everyone in the channel, and that is a question about who is in
+            // the room, which this window has no business knowing. The chat
+            // panel's header asks the same function, so the two cannot end up
+            // wearing different faces for the same session.
+            var avatar = OpenClawSessions.AvatarForSession(SessionId);
             if (avatar is null)
             {
                 ClearAvatar();
@@ -813,17 +823,6 @@ namespace ClaudeBuddy
             RefreshAccent();
 
             StartAvatarAnimation();
-        }
-
-        private static string IdOf(string sessionId)
-        {
-            const string Prefix = "openclaw:";
-            var key = sessionId.StartsWith(Prefix, StringComparison.Ordinal)
-                ? sessionId[Prefix.Length..]
-                : sessionId;
-
-            var parts = key.Split(':');
-            return parts.Length >= 2 ? parts[1] : key;
         }
 
         private void ClearAvatar()
