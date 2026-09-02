@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Xunit;
 
@@ -65,6 +66,16 @@ public class CodexUsageScanTests : IDisposable
         File.SetLastWriteTimeUtc(path, modified.UtcDateTime);
         return path;
     }
+
+    // No live answer, so these exercise the rollout path they were written for.
+    //
+    // **Explicit, never omitted.** CB-85 gave ReadFrom a default that spawns
+    // `codex app-server` for real, so a call that leaves the argument off runs
+    // the CLI: a second per case, a different result on a machine that has Codex
+    // than on one that does not, and a test asserting about a rollout while
+    // something else answered. Passing it costs one argument and removes all
+    // three.
+    private static readonly Func<string, string?> NoLiveAnswer = _ => null;
 
     private static AccountUsage? Read(CodexSnapshot? snapshot) =>
         CodexUsageParse.FromRateLimits(
@@ -243,7 +254,7 @@ public class CodexUsageScanTests : IDisposable
             Windowed("2026-09-02T18:58:00Z", 62, 34));
 
         var readings = CodexUsagePoller.ReadFrom(
-            new[] { _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"));
+            new[] { _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"), NoLiveAnswer);
 
         var usage = Assert.Single(readings);
         Assert.Equal("warren", usage.Label);
@@ -265,7 +276,7 @@ public class CodexUsageScanTests : IDisposable
             Windowed("2026-09-02T18:58:00Z", 5, 9));
 
         var readings = CodexUsagePoller.ReadFrom(
-            new[] { empty, _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"));
+            new[] { empty, _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"), NoLiveAnswer);
 
         var usage = Assert.Single(readings);
         Assert.Equal(_root, usage.ConfigDir);
@@ -280,7 +291,7 @@ public class CodexUsageScanTests : IDisposable
             Windowed("2026-09-02T18:58:00Z", 5, 9));
 
         var readings = CodexUsagePoller.ReadFrom(
-            new[] { _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"));
+            new[] { _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"), NoLiveAnswer);
 
         Assert.Equal(
             CodexUsageAccounts.FallbackLabel(_root),
@@ -296,5 +307,120 @@ public class CodexUsageScanTests : IDisposable
         Assert.False(ClaudeBuddySettings.CodexAccountUsageEnabled);
 
         Assert.Empty(new CodexUsagePoller().Read());
+    }
+
+    // ---- CB-85: live first, rollout when live says nothing ----------------
+    //
+    // `ask` stands in for the `codex app-server` subprocess, which is the only
+    // part of the live path that cannot be driven from a test. Everything on
+    // either side of it — choosing between the two answers, dating them, the
+    // fallback — is here.
+
+    private const string LiveResult = """
+    {"rateLimits":{"limitId":"codex","primary":{"usedPercent":100,"windowDurationMins":300,"resetsAt":1788391232},"secondary":{"usedPercent":38,"windowDurationMins":10080,"resetsAt":1788807866},"credits":{"hasCredits":false,"unlimited":false},"planType":"team"}}
+    """;
+
+    // Both answers available and they disagree, which is the normal case rather
+    // than a contrived one: the rollout holds whatever the last session wrote
+    // and the live call holds what is true now. Measured on the machine this
+    // was built on as 99% on disk against 100% live, three hours apart.
+    [Fact]
+    public void TheLiveAnswerWinsOverTheRolloutOnDisk()
+    {
+        Rollout("stale", DateTimeOffset.Parse("2026-09-02T16:00:00Z"),
+            Windowed("2026-09-02T15:58:00Z", 61, 30));
+
+        var readings = CodexUsagePoller.ReadFrom(
+            new[] { _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"), _ => LiveResult);
+
+        var usage = Assert.Single(readings);
+        Assert.Equal(100.0, usage.Session!.Percent);
+        Assert.Equal(38.0, usage.Weekly!.Percent);
+        Assert.Equal("team", usage.SubscriptionType);
+    }
+
+    // A live number is current, so it carries no ObservedAt and the orb does not
+    // dim. CB-83's rule pointing the other way — that ticket was about a number
+    // pretending to be fresh; this is a number that genuinely is.
+    [Fact]
+    public void TheLiveAnswerIsDatedByTheReadAndIsNotStale()
+    {
+        var readAt = DateTimeOffset.Parse("2026-09-02T19:20:00Z");
+
+        var usage = Assert.Single(
+            CodexUsagePoller.ReadFrom(new[] { _root }, readAt, _ => LiveResult));
+
+        Assert.Null(usage.ObservedAt);
+        Assert.Equal(readAt, usage.AsOf);
+        Assert.False(usage.IsStale(readAt));
+    }
+
+    // Codex not installed where CodexBinary looks, an app-server too old to know
+    // the method, a spawn that failed: the rollout still answers, and still says
+    // how old it is.
+    [Fact]
+    public void NoLiveAnswerFallsBackToTheRolloutAndKeepsItsAge()
+    {
+        Rollout("stale", DateTimeOffset.Parse("2026-09-02T16:00:00Z"),
+            Windowed("2026-09-02T15:58:00Z", 61, 30));
+
+        var readAt = DateTimeOffset.Parse("2026-09-02T19:20:00Z");
+        var usage = Assert.Single(
+            CodexUsagePoller.ReadFrom(new[] { _root }, readAt, _ => null));
+
+        Assert.Equal(61.0, usage.Session!.Percent);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-02T15:58:00Z"), usage.AsOf);
+        Assert.True(usage.IsStale(readAt));
+    }
+
+    // The live call can answer with both windows null when the workspace has run
+    // out of credits — the same shape CB-83 found in the rollouts, arriving over
+    // the other transport. A real number from an hour ago beats an account drawn
+    // as having no limits.
+    [Fact]
+    public void AWindowlessLiveAnswerFallsBackRatherThanBlankingTheOrb()
+    {
+        Rollout("real", DateTimeOffset.Parse("2026-09-02T16:00:00Z"),
+            Windowed("2026-09-02T15:58:00Z", 61, 30));
+
+        var depleted = """
+        {"rateLimits":{"limitId":"premium","primary":null,"secondary":null,"rateLimitReachedType":"workspace_owner_credits_depleted"}}
+        """;
+
+        var usage = Assert.Single(CodexUsagePoller.ReadFrom(
+            new[] { _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"), _ => depleted));
+
+        Assert.True(usage.Available);
+        Assert.Equal(61.0, usage.Session!.Percent);
+    }
+
+    // Neither transport has anything: no orb, rather than an empty one.
+    [Fact]
+    public void NoLiveAnswerAndNoRolloutIsNoReading()
+    {
+        Directory.CreateDirectory(Sessions);
+
+        Assert.Empty(CodexUsagePoller.ReadFrom(
+            new[] { _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"), _ => null));
+    }
+
+    // Each home is asked about itself. Getting this wrong would report one
+    // account's usage under another's name, which is worse than reporting none.
+    [Fact]
+    public void EachHomeIsAskedAboutItself()
+    {
+        var second = Path.Combine(_root, "second-home");
+        Directory.CreateDirectory(second);
+        Directory.CreateDirectory(_root);
+
+        var asked = new System.Collections.Generic.List<string>();
+
+        var readings = CodexUsagePoller.ReadFrom(
+            new[] { _root, second },
+            DateTimeOffset.Parse("2026-09-02T19:20:00Z"),
+            home => { asked.Add(home); return LiveResult; });
+
+        Assert.Equal(new[] { _root, second }, asked);
+        Assert.Equal(new[] { _root, second }, readings.Select(r => r.ConfigDir).ToArray());
     }
 }
