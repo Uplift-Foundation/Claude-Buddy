@@ -244,7 +244,9 @@ namespace ClaudeBuddy
 
     // Last-resort read: the latest `billing: fetched credits config` line in
     // $GROK_HOME/logs/unified.jsonl. No token, no process. Freshness is "as of
-    // the last Grok session", which the card already shows via ReadAt.
+    // the last Grok session", which the reading states outright by carrying the
+    // log line's own `ts` as ObservedAt — the card said this via ReadAt before
+    // CB-83, which meant it did not say it at all.
     internal sealed class GrokUsagePoller : IUsageSource
     {
         public IReadOnlyList<AccountUsage> Read()
