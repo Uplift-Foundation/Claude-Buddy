@@ -227,4 +227,74 @@ public class CodexUsageScanTests : IDisposable
 
         Assert.Null(CodexUsagePoller.LatestSnapshotFrom(Sessions));
     }
+
+    // The whole per-account path, from a directory to a reading: the label out
+    // of auth.json, the snapshot out of the rollout tree, and the two dated
+    // together. Driven against a temp $CODEX_HOME rather than the real one —
+    // see the comment on ReadFrom.
+    [Fact]
+    public void AHomeBecomesOneReadingLabelledFromItsAuthFile()
+    {
+        Directory.CreateDirectory(_root);
+        File.WriteAllText(
+            Path.Combine(_root, "auth.json"),
+            """{"tokens":{"access_token":"never-read"},"email":"warren@example.org"}""");
+        Rollout("live", DateTimeOffset.Parse("2026-09-02T19:00:00Z"),
+            Windowed("2026-09-02T18:58:00Z", 62, 34));
+
+        var readings = CodexUsagePoller.ReadFrom(
+            new[] { _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"));
+
+        var usage = Assert.Single(readings);
+        Assert.Equal("warren", usage.Label);
+        Assert.Equal(_root, usage.ConfigDir);
+        Assert.Equal(AccountUsageSource.Codex, usage.Source);
+        Assert.Equal(62.0, usage.Session!.Percent);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-02T18:58:00Z"), usage.AsOf);
+    }
+
+    // A configured home that has never run Codex contributes nothing rather
+    // than an empty orb, and does not stop the homes after it being read.
+    [Fact]
+    public void AHomeWithNoRolloutsIsSkippedWithoutStoppingTheRest()
+    {
+        var empty = Path.Combine(_root, "unused-home");
+        Directory.CreateDirectory(empty);
+        Directory.CreateDirectory(_root);
+        Rollout("live", DateTimeOffset.Parse("2026-09-02T19:00:00Z"),
+            Windowed("2026-09-02T18:58:00Z", 5, 9));
+
+        var readings = CodexUsagePoller.ReadFrom(
+            new[] { empty, _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"));
+
+        var usage = Assert.Single(readings);
+        Assert.Equal(_root, usage.ConfigDir);
+    }
+
+    // No auth.json at all: the label falls back to the directory name, and the
+    // reading still stands.
+    [Fact]
+    public void AHomeWithNoAuthFileIsLabelledByItsDirectory()
+    {
+        Rollout("live", DateTimeOffset.Parse("2026-09-02T19:00:00Z"),
+            Windowed("2026-09-02T18:58:00Z", 5, 9));
+
+        var readings = CodexUsagePoller.ReadFrom(
+            new[] { _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"));
+
+        Assert.Equal(
+            CodexUsageAccounts.FallbackLabel(_root),
+            Assert.Single(readings).Label);
+    }
+
+    // The switch is off by default, and off means no reading rather than an
+    // empty one — the distinction AccountOrbs.Apply's keep-stale rule depends
+    // on to tell "not asked" from "asked and failed".
+    [Fact]
+    public void TheSwitchBeingOffMeansNoReadingsAtAll()
+    {
+        Assert.False(ClaudeBuddySettings.CodexAccountUsageEnabled);
+
+        Assert.Empty(new CodexUsagePoller().Read());
+    }
 }

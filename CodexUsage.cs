@@ -349,14 +349,30 @@ namespace ClaudeBuddy
                 return Array.Empty<AccountUsage>();
 
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return ReadFrom(
+                CodexUsageAccounts.Homes(home, ClaudeBuddySettings.CodexHomes),
+                DateTimeOffset.UtcNow);
+        }
+
+        // One reading per $CODEX_HOME it is handed.
+        //
+        // Split out of Read so the per-account path can be driven against a
+        // temp directory: Read itself can only ever be pointed at this
+        // machine's real home, and a test that scanned it would be reading
+        // whatever rollouts the developer happens to have — slow, different on
+        // every machine, and unrunnable on a CI leg with no Codex installed.
+        // What is left in Read is the two lines that are genuinely about this
+        // machine, the switch and where home is.
+        internal static IReadOnlyList<AccountUsage> ReadFrom(
+            IEnumerable<string> homes, DateTimeOffset readAt)
+        {
             var readings = new List<AccountUsage>();
-            foreach (var codexHome in CodexUsageAccounts.Homes(home, ClaudeBuddySettings.CodexHomes))
+            foreach (var codexHome in homes)
             {
                 var label = CodexUsageAccounts.LabelFrom(ReadAuth(codexHome), codexHome);
-                var snapshot = LatestSnapshot(codexHome);
+                var snapshot = LatestSnapshotFrom(Path.Combine(codexHome, "sessions"));
                 var usage = CodexUsageParse.FromRateLimits(
-                    snapshot?.Json, codexHome, label, DateTimeOffset.UtcNow,
-                    snapshot?.WrittenAt);
+                    snapshot?.Json, codexHome, label, readAt, snapshot?.WrittenAt);
                 if (usage is not null) readings.Add(usage);
             }
 
@@ -458,11 +474,6 @@ namespace ClaudeBuddy
             catch (UnauthorizedAccessException) { return null; }
         }
 
-        [ExcludeFromCodeCoverage]
-        private static CodexSnapshot? LatestSnapshot(string codexHome) =>
-            LatestSnapshotFrom(Path.Combine(codexHome, "sessions"));
-
-        [ExcludeFromCodeCoverage]
         private static string? ReadAuth(string codexHome)
         {
             try
