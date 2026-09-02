@@ -441,4 +441,61 @@ public class HeadlessSnapshotTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    // A pid-less Claude Code record is not proof of a live session. It is kept
+    // only while the daemon still names it as a background job; otherwise a
+    // headless machine would offer every abandoned subagent to its peers forever
+    // when the remote-serving path ignores the display lifetime.
+    [Fact]
+    public void APidlessStatusTheDaemonDoesNotKnowIsNotOfferedWithLifetimeIgnored()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "leftover", new SessionStatus
+            {
+                State = "idle",
+                Cwd = "/tmp/somewhere",
+                Source = SessionSource.ClaudeCode,
+                SessionPid = 0
+            });
+
+            Assert.Empty(SessionManager.HeadlessSnapshot(
+                dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                honourOrbLifetime: false));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // The inverse keeps the fail-safe intact: a pid-less background worker is
+    // real when the daemon names it, even though it has no terminal pid for the
+    // headless scan to probe.
+    [Fact]
+    public void APidlessStatusTheDaemonStillNamesIsOfferedWithLifetimeIgnored()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "background", new SessionStatus
+            {
+                State = "idle",
+                Cwd = "/tmp/somewhere",
+                Source = SessionSource.ClaudeCode,
+                SessionPid = 0
+            });
+
+            var jobs = new Dictionary<string, string> { ["background"] = "blocked" };
+
+            Assert.Equal("background", Assert.Single(SessionManager.HeadlessSnapshot(
+                dir, () => jobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                honourOrbLifetime: false)).SessionId);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

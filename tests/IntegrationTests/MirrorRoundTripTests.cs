@@ -1282,6 +1282,64 @@ public class MirrorRoundTripTests : IDisposable
             harness.Client.StateFor("job-hunter").Availability);
     }
 
+    // An open-ended roster is a complete snapshot of one machine, not an
+    // append-only notification. The second answer deliberately has no entries:
+    // this is the unplugged Mini case that used to leave its last orb on screen
+    // forever.
+    [Fact]
+    public async Task AnEmptyLaterRosterRemovesSessionsThePeerNoLongerOffers()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("first", WriteTranscript("first.jsonl", Conversation(2)));
+        harness.AddSession("second", WriteTranscript("second.jsonl", Conversation(2)));
+        var rosterUpdates = 0;
+        harness.Client.RosterUpdated += () => rosterUpdates++;
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+        Assert.Equal(2, harness.Client.Known().Count);
+        Assert.Equal(1, rosterUpdates);
+
+        harness.RemoveSession("first");
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.Equal("second", Assert.Single(harness.Client.Known()).Entry.Name);
+        Assert.Equal(
+            RemoteMirrorClient.MirrorAvailability.Unavailable,
+            harness.Client.StateFor("first").Availability);
+        Assert.Equal(2, rosterUpdates);
+
+        harness.RemoveSession("second");
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+
+        Assert.Empty(harness.Client.Known());
+        Assert.Equal(3, rosterUpdates);
+        Assert.Equal(
+            RemoteMirrorClient.MirrorAvailability.Unavailable,
+            harness.Client.StateFor("second").Availability);
+    }
+
+    // A failed refresh is not a roster saying "none": keep the last answer
+    // until the peer either sends a verified replacement or disconnects.
+    [Fact]
+    public async Task AFailedRosterRefreshKeepsTheLastGoodAnswerUntilThePeerDisconnects()
+    {
+        var harness = new Harness(_dir);
+        harness.AddSession("still-there", WriteTranscript("still.jsonl", Conversation(2)));
+
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+        Assert.Single(harness.Client.Known());
+
+        harness.CourierThrows = true;
+        await harness.Client.AskWhatTheyHaveAsync(harness.Peers);
+        Assert.Single(harness.Client.Known());
+
+        await harness.Client.AskWhatTheyHaveAsync(Array.Empty<string>());
+        Assert.Empty(harness.Client.Known());
+        Assert.Equal(
+            RemoteMirrorClient.MirrorAvailability.Unavailable,
+            harness.Client.StateFor("still-there").Availability);
+    }
+
     private sealed class Harness
     {
         public const string FarRelay = "claude-buddy-rc--claude-mini";
