@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
+using System.Globalization;
 using System.Text.Json;
 
 namespace ClaudeBuddy
@@ -21,7 +22,8 @@ namespace ClaudeBuddy
         private const int SessionWindowMinutes = 12 * 60;
 
         internal static AccountUsage? FromRateLimits(
-            string? json, string? codexHome, string label, DateTimeOffset readAt)
+            string? json, string? codexHome, string label, DateTimeOffset readAt,
+            DateTimeOffset? observedAt = null)
         {
             if (string.IsNullOrWhiteSpace(json)) return null;
 
@@ -48,7 +50,75 @@ namespace ClaudeBuddy
                     weekly,
                     extra,
                     readAt,
-                    AccountUsageSource.Codex);
+                    AccountUsageSource.Codex,
+                    observedAt);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        }
+
+        // Whether a line is worth keeping at all: does it carry a window with a
+        // percentage in it?
+        //
+        // The same lenience as everything else here — an unparseable line, or
+        // one whose windows are both null, is not a reading. See the comment on
+        // CodexUsagePoller.LatestSnapshotFrom for why the null/null case is the
+        // one that matters and is not rare.
+        internal static bool HasWindow(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return false;
+
+            try
+            {
+                using var document = JsonDocument.Parse(json);
+                var limits = Unwrap(document.RootElement);
+                if (limits is null) return false;
+
+                return HasPercent(limits.Value, "primary")
+                       || HasPercent(limits.Value, "secondary");
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
+        private static bool HasPercent(JsonElement limits, string name) =>
+            limits.TryGetProperty(name, out var window)
+            && window.ValueKind == JsonValueKind.Object
+            && window.TryGetProperty("used_percent", out var percent)
+            && percent.ValueKind == JsonValueKind.Number
+            && percent.TryGetDouble(out _);
+
+        // The moment Codex wrote the line, off the JSONL envelope.
+        //
+        // Null for anything without one, which is deliberate: guessing an age
+        // for a snapshot that did not state one would put a fabricated number
+        // in front of the very rule this exists to serve.
+        internal static DateTimeOffset? TimestampOf(string? json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return null;
+
+            try
+            {
+                using var document = JsonDocument.Parse(json);
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object) return null;
+                if (!root.TryGetProperty("timestamp", out var stamp)
+                    || stamp.ValueKind != JsonValueKind.String)
+                {
+                    return null;
+                }
+
+                return DateTimeOffset.TryParse(
+                    stamp.GetString(),
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
+                    out var parsed)
+                    ? parsed
+                    : null;
             }
             catch (JsonException)
             {
@@ -93,7 +163,14 @@ namespace ClaudeBuddy
                 return;
             }
 
+            // ValueKind before TryGetDouble, which throws rather than
+            // returning false when the element is not a number at all. Every
+            // other field here degrades to null on a surprise, and this one
+            // would have taken the whole reading down with an
+            // InvalidOperationException that FromRateLimits does not catch —
+            // the one shape in a deliberately lenient parser that was not.
             if (!window.TryGetProperty("used_percent", out var percentEl)
+                || percentEl.ValueKind != JsonValueKind.Number
                 || !percentEl.TryGetDouble(out var percent))
             {
                 return;
@@ -248,9 +325,20 @@ namespace ClaudeBuddy
         }
     }
 
+    // One token_count line, and the moment Codex wrote it.
+    //
+    // The timestamp travels with the JSON because it is the only thing that can
+    // order snapshots across files, and because the reading it becomes has to
+    // say how old it is. Null means the envelope carried no timestamp — a bare
+    // rate_limits object handed in by a test, or a shape Codex has changed —
+    // in which case the caller falls back to the file's own mtime for ordering
+    // and the reading falls back to ReadAt for its age.
+    internal readonly record struct CodexSnapshot(string Json, DateTimeOffset? WrittenAt);
+
     // Last-resort read: the newest token_count rate_limits snapshot in
     // $CODEX_HOME/sessions/**/rollout-*.jsonl. No token, no process. Freshness
-    // is "as of the last Codex session", which the card already shows via ReadAt.
+    // is "as of the last Codex session", which the reading now states outright
+    // by carrying the snapshot's own timestamp as ObservedAt.
     internal sealed class CodexUsagePoller : IUsageSource
     {
         internal const int MaxLineBytes = 32_768;
@@ -261,44 +349,109 @@ namespace ClaudeBuddy
                 return Array.Empty<AccountUsage>();
 
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return ReadFrom(
+                CodexUsageAccounts.Homes(home, ClaudeBuddySettings.CodexHomes),
+                DateTimeOffset.UtcNow);
+        }
+
+        // One reading per $CODEX_HOME it is handed.
+        //
+        // Split out of Read so the per-account path can be driven against a
+        // temp directory: Read itself can only ever be pointed at this
+        // machine's real home, and a test that scanned it would be reading
+        // whatever rollouts the developer happens to have — slow, different on
+        // every machine, and unrunnable on a CI leg with no Codex installed.
+        // What is left in Read is the two lines that are genuinely about this
+        // machine, the switch and where home is.
+        internal static IReadOnlyList<AccountUsage> ReadFrom(
+            IEnumerable<string> homes, DateTimeOffset readAt)
+        {
             var readings = new List<AccountUsage>();
-            foreach (var codexHome in CodexUsageAccounts.Homes(home, ClaudeBuddySettings.CodexHomes))
+            foreach (var codexHome in homes)
             {
                 var label = CodexUsageAccounts.LabelFrom(ReadAuth(codexHome), codexHome);
-                var json = LatestRateLimitsJson(codexHome);
+                var snapshot = LatestSnapshotFrom(Path.Combine(codexHome, "sessions"));
                 var usage = CodexUsageParse.FromRateLimits(
-                    json, codexHome, label, DateTimeOffset.UtcNow);
+                    snapshot?.Json, codexHome, label, readAt, snapshot?.WrittenAt);
                 if (usage is not null) readings.Add(usage);
             }
 
             return readings;
         }
 
-        // Newest file first; first snapshot found wins. A session that has not
-        // yet received a token_count is skipped rather than treated as zero.
-        internal static string? LatestRateLimitsJsonFrom(string sessionsDir)
+        // The newest snapshot that actually carries a window, across every
+        // rollout in the tree.
+        //
+        // Two things here were wrong before CB-83 and are worth stating, since
+        // both looked reasonable and both produced a confidently wrong orb.
+        //
+        // **A file's mtime is not its newest snapshot's timestamp.** The old
+        // scan took the newest-modified rollout and stopped there, which is only
+        // the same thing when one session is running. Several are, routinely,
+        // and the file touched last is whichever one wrote *anything* last — a
+        // tool result, an agent message — not the one holding the latest usage.
+        //
+        // **A snapshot with no windows is not a reading.** Codex emits
+        // `primary: null, secondary: null` alongside a rate_limit_reached_type,
+        // and emits it to every live session at once, so on a busy machine the
+        // newest line in the newest file is reliably the empty one. Taking it
+        // handed the card an Available:false reading, which it renders as "No
+        // subscription limits on this account." — said about a Team account
+        // measured at 99% of its five-hour window, from a line 0.3 seconds
+        // earlier in the very same file.
+        //
+        // So: keep only lines with a window, and order by what the snapshot says
+        // about itself. mtime survives as a *bound* rather than an answer — no
+        // line in a file can post-date the file's last write, so once the best
+        // snapshot so far is newer than the next file's mtime, nothing further
+        // down the list can beat it and the scan stops. That keeps the common
+        // case at roughly the cost of the old one-file read.
+        internal static CodexSnapshot? LatestSnapshotFrom(string sessionsDir)
         {
             if (!Directory.Exists(sessionsDir)) return null;
 
-            IEnumerable<string> files;
+            List<(string Path, DateTimeOffset Modified)> files;
             try
             {
-                files = Directory.EnumerateFiles(sessionsDir, "rollout-*.jsonl",
-                    SearchOption.AllDirectories);
+                files = Directory
+                    .EnumerateFiles(sessionsDir, "rollout-*.jsonl", SearchOption.AllDirectories)
+                    .Select(p => (Path: p, Modified: new DateTimeOffset(File.GetLastWriteTimeUtc(p))))
+                    .OrderByDescending(f => f.Modified)
+                    .ToList();
             }
             catch (IOException) { return null; }
             catch (UnauthorizedAccessException) { return null; }
 
-            foreach (var file in files.OrderByDescending(File.GetLastWriteTimeUtc))
+            CodexSnapshot? best = null;
+            DateTimeOffset bestAt = DateTimeOffset.MinValue;
+
+            foreach (var (path, modified) in files)
             {
-                var line = LatestTokenCountLine(file);
-                if (line is not null) return line;
+                if (best is not null && bestAt >= modified) break;
+
+                var line = LatestWindowedLine(path);
+                if (line is null) continue;
+
+                var writtenAt = CodexUsageParse.TimestampOf(line);
+                var at = writtenAt ?? modified;
+                if (best is not null && at <= bestAt) continue;
+
+                best = new CodexSnapshot(line, writtenAt);
+                bestAt = at;
             }
 
-            return null;
+            return best;
         }
 
-        internal static string? LatestTokenCountLine(string path)
+        // The last line in one rollout that carries a usable snapshot.
+        //
+        // Last rather than best-by-timestamp because a rollout is append-only
+        // and written by one process, so its lines are already in order; the
+        // cross-file pass is where ordering has to be reasoned about. The
+        // substring tests stay as a cheap reject before parsing — most lines in
+        // a multi-megabyte rollout are not this one, and JSON-parsing every line
+        // to find that out is work for nothing on a poll that runs all day.
+        internal static string? LatestWindowedLine(string path)
         {
             try
             {
@@ -306,11 +459,13 @@ namespace ClaudeBuddy
                 foreach (var line in File.ReadLines(path))
                 {
                     if (line.Length > MaxLineBytes) continue;
-                    if (line.Contains("\"token_count\"", StringComparison.Ordinal)
-                        && line.Contains("\"rate_limits\"", StringComparison.Ordinal))
+                    if (!line.Contains("\"token_count\"", StringComparison.Ordinal)
+                        || !line.Contains("\"rate_limits\"", StringComparison.Ordinal))
                     {
-                        last = line;
+                        continue;
                     }
+
+                    if (CodexUsageParse.HasWindow(line)) last = line;
                 }
 
                 return last;
@@ -319,11 +474,6 @@ namespace ClaudeBuddy
             catch (UnauthorizedAccessException) { return null; }
         }
 
-        [ExcludeFromCodeCoverage]
-        private static string? LatestRateLimitsJson(string codexHome) =>
-            LatestRateLimitsJsonFrom(Path.Combine(codexHome, "sessions"));
-
-        [ExcludeFromCodeCoverage]
         private static string? ReadAuth(string codexHome)
         {
             try

@@ -1,0 +1,300 @@
+using System;
+using System.Globalization;
+using System.IO;
+using System.Text;
+using Xunit;
+
+namespace ClaudeBuddy.Tests;
+
+// CodexUsagePoller's walk of $CODEX_HOME/sessions, against real files on disk.
+//
+// Integration rather than unit because the defect this covers was never in the
+// parsing — every line involved parsed perfectly. It was in the *choosing*: two
+// files, two mtimes, two timestamps, and a rule that used the wrong one. That
+// is a seam with the filesystem, and it needs real files with real mtimes to
+// mean anything. The fixtures below are copied from this machine's rollouts on
+// 2 Sep 2026, per the repo's rule that fixtures come from captures rather than
+// from memory.
+public class CodexUsageScanTests : IDisposable
+{
+    private readonly string _root = Path.Combine(
+        Path.GetTempPath(), "cb-codex-scan-" + Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_root, recursive: true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    // A real token_count with both windows.
+    //
+    // Built by substitution rather than interpolation: a rollout line ends in a
+    // run of closing braces, and a raw interpolated literal would need more '$'
+    // than it has characters worth reading.
+    private static string Windowed(string timestamp, double primary, double weekly) =>
+        """
+        {"timestamp":"@TS@","ordinal":183,"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":@P@,"window_minutes":300,"resets_at":1788391232},"secondary":{"used_percent":@W@,"window_minutes":10080,"resets_at":1788807866},"plan_type":"team"}}}
+        """
+            .Replace("@TS@", timestamp)
+            .Replace("@P@", primary.ToString(CultureInfo.InvariantCulture))
+            .Replace("@W@", weekly.ToString(CultureInfo.InvariantCulture));
+
+    // The one Codex broadcasts to every live session when the workspace runs
+    // out of credits. A legible snapshot carrying no usage at all.
+    private static string Depleted(string timestamp) =>
+        """
+        {"timestamp":"@TS@","ordinal":184,"type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"premium","primary":null,"secondary":null,"credits":{"has_credits":false,"unlimited":false,"balance":null},"plan_type":null,"rate_limit_reached_type":"workspace_owner_credits_depleted"}}}
+        """.Replace("@TS@", timestamp);
+
+    private static string Chatter(string timestamp) =>
+        """
+        {"timestamp":"@TS@","ordinal":12,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":[{"type":"Text","text":"done"}]}}}
+        """.Replace("@TS@", timestamp);
+
+    private string Sessions => Path.Combine(_root, "sessions");
+
+    // Rollouts really do live under sessions/<yyyy>/<mm>/<dd>/, so write them
+    // there — the walk is recursive and a flat directory would not prove it.
+    private string Rollout(string name, DateTimeOffset modified, params string[] lines)
+    {
+        var dir = Path.Combine(Sessions, "2026", "09", "02");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, $"rollout-{name}.jsonl");
+        File.WriteAllText(path, string.Join('\n', lines) + '\n');
+        File.SetLastWriteTimeUtc(path, modified.UtcDateTime);
+        return path;
+    }
+
+    private static AccountUsage? Read(CodexSnapshot? snapshot) =>
+        CodexUsageParse.FromRateLimits(
+            snapshot?.Json, "/Users/w/.codex", "codex",
+            DateTimeOffset.Parse("2026-09-02T19:20:00Z"), snapshot?.WrittenAt);
+
+    // The exact situation on the machine that reported this: four sessions
+    // running, all four handed the same credits-depleted event within a second
+    // of each other, so the newest-modified rollout holds nothing but that. The
+    // old scan stopped at that file and reported an account with no limits,
+    // while a file one place down the mtime list held 99% of a five-hour window.
+    [Fact]
+    public void AWindowlessNewestFileDoesNotHideTheRealReading()
+    {
+        var t = DateTimeOffset.Parse("2026-09-02T18:57:00Z");
+
+        Rollout("busy", t.AddMinutes(-1),
+            Windowed("2026-09-02T18:55:00Z", 97, 38),
+            Windowed("2026-09-02T18:56:00Z", 99, 38),
+            Depleted("2026-09-02T18:56:30Z"));
+        Rollout("depleted-only", t,
+            Chatter("2026-09-02T18:56:50Z"),
+            Depleted("2026-09-02T18:57:00Z"));
+
+        var usage = Read(CodexUsagePoller.LatestSnapshotFrom(Sessions));
+
+        Assert.True(usage!.Available);
+        Assert.Equal(99.0, usage.Session!.Percent);
+        Assert.Equal(38.0, usage.Weekly!.Percent);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-02T18:56:00Z"), usage.AsOf);
+    }
+
+    // Same rule inside one file: a rollout that ends on a depleted event still
+    // has its real snapshot two lines up.
+    [Fact]
+    public void ATrailingDepletedLineDoesNotBlankTheFileItIsIn()
+    {
+        var path = Rollout("single", DateTimeOffset.Parse("2026-09-02T18:57:00Z"),
+            Windowed("2026-09-02T18:55:00Z", 12, 30),
+            Windowed("2026-09-02T18:56:00Z", 44, 31),
+            Depleted("2026-09-02T18:57:00Z"));
+
+        var line = CodexUsagePoller.LatestWindowedLine(path);
+
+        Assert.NotNull(line);
+        Assert.Contains("\"used_percent\":44", line);
+    }
+
+    // mtime says which file was touched last, which is not the same question as
+    // which file holds the newest usage — several sessions write constantly and
+    // only some of them are being told about rate limits.
+    [Fact]
+    public void TheNewestSnapshotWinsEvenWhenTheNewestFileIsAnother()
+    {
+        var t = DateTimeOffset.Parse("2026-09-02T19:00:00Z");
+
+        Rollout("touched-last", t, Windowed("2026-09-02T18:00:00Z", 20, 25));
+        Rollout("knows-most", t.AddMinutes(-30), Windowed("2026-09-02T18:50:00Z", 71, 33));
+
+        var usage = Read(CodexUsagePoller.LatestSnapshotFrom(Sessions));
+
+        Assert.Equal(71.0, usage!.Session!.Percent);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-02T18:50:00Z"), usage.AsOf);
+    }
+
+    // The scan stops early, and this is the assumption that lets it: no line in
+    // a file can post-date the file's last write, so once the best snapshot so
+    // far is newer than the next file's mtime, nothing further down can beat
+    // it. The fixture below is physically impossible on purpose — a snapshot an
+    // hour in the future of the file holding it — because that is the only way
+    // to prove the older file was skipped rather than read and rejected.
+    [Fact]
+    public void AFileOlderThanTheBestSnapshotIsNotOpenedAtAll()
+    {
+        var t = DateTimeOffset.Parse("2026-09-02T19:00:00Z");
+
+        Rollout("recent", t, Windowed("2026-09-02T18:59:00Z", 55, 30));
+        Rollout("ancient", t.AddHours(-2), Windowed("2026-09-02T20:00:00Z", 99, 99));
+
+        var usage = Read(CodexUsagePoller.LatestSnapshotFrom(Sessions));
+
+        Assert.Equal(55.0, usage!.Session!.Percent);
+    }
+
+    // A snapshot with no timestamp cannot be ordered by one, so the file's
+    // mtime stands in for the comparison — but the reading still carries no
+    // ObservedAt, because dating a number by when its file was touched would be
+    // inventing the very thing this ticket removed.
+    [Fact]
+    public void ASnapshotWithNoTimestampIsOrderedByItsFileAndDatedByTheRead()
+    {
+        var t = DateTimeOffset.Parse("2026-09-02T19:00:00Z");
+
+        Rollout("stamped", t.AddMinutes(-10), Windowed("2026-09-02T18:40:00Z", 20, 25));
+        Rollout("bare", t,
+            """{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":66,"window_minutes":300}}}}""");
+
+        var snapshot = CodexUsagePoller.LatestSnapshotFrom(Sessions);
+        var usage = Read(snapshot);
+
+        Assert.Null(snapshot!.Value.WrittenAt);
+        Assert.Equal(66.0, usage!.Session!.Percent);
+        Assert.Null(usage.ObservedAt);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-02T19:20:00Z"), usage.AsOf);
+    }
+
+    [Fact]
+    public void ARolloutWithNothingButChatterIsSkipped()
+    {
+        Rollout("quiet", DateTimeOffset.Parse("2026-09-02T19:00:00Z"),
+            Chatter("2026-09-02T18:58:00Z"),
+            Chatter("2026-09-02T18:59:00Z"));
+
+        Assert.Null(CodexUsagePoller.LatestSnapshotFrom(Sessions));
+    }
+
+    // A rollout carries whole tool outputs, and a single line can run to
+    // megabytes. The cap is there so the scan cannot be made to hold one in
+    // memory; a snapshot past it is skipped rather than read.
+    [Fact]
+    public void ALineBeyondTheCapIsSkippedAndTheOneBeforeItStands()
+    {
+        var padded = Windowed("2026-09-02T18:59:00Z", 88, 40)
+            .Replace("\"plan_type\":\"team\"",
+                     "\"plan_type\":\"" + new string('x', CodexUsagePoller.MaxLineBytes) + "\"");
+
+        var path = Rollout("huge", DateTimeOffset.Parse("2026-09-02T19:00:00Z"),
+            Windowed("2026-09-02T18:58:00Z", 15, 22),
+            padded);
+
+        var line = CodexUsagePoller.LatestWindowedLine(path);
+
+        Assert.NotNull(line);
+        Assert.Contains("\"used_percent\":15", line);
+    }
+
+    [Fact]
+    public void AMissingSessionsDirectoryIsNoReadingRatherThanAThrow()
+    {
+        Assert.Null(CodexUsagePoller.LatestSnapshotFrom(
+            Path.Combine(_root, "never-existed")));
+    }
+
+    [Fact]
+    public void AnEmptySessionsDirectoryIsNoReading()
+    {
+        Directory.CreateDirectory(Sessions);
+
+        Assert.Null(CodexUsagePoller.LatestSnapshotFrom(Sessions));
+    }
+
+    [Fact]
+    public void AFileThatIsNotARolloutIsIgnoredEvenWithASnapshotInIt()
+    {
+        Directory.CreateDirectory(Sessions);
+        File.WriteAllText(
+            Path.Combine(Sessions, "history.jsonl"),
+            Windowed("2026-09-02T18:59:00Z", 90, 40) + "\n",
+            Encoding.UTF8);
+
+        Assert.Null(CodexUsagePoller.LatestSnapshotFrom(Sessions));
+    }
+
+    // The whole per-account path, from a directory to a reading: the label out
+    // of auth.json, the snapshot out of the rollout tree, and the two dated
+    // together. Driven against a temp $CODEX_HOME rather than the real one —
+    // see the comment on ReadFrom.
+    [Fact]
+    public void AHomeBecomesOneReadingLabelledFromItsAuthFile()
+    {
+        Directory.CreateDirectory(_root);
+        File.WriteAllText(
+            Path.Combine(_root, "auth.json"),
+            """{"tokens":{"access_token":"never-read"},"email":"warren@example.org"}""");
+        Rollout("live", DateTimeOffset.Parse("2026-09-02T19:00:00Z"),
+            Windowed("2026-09-02T18:58:00Z", 62, 34));
+
+        var readings = CodexUsagePoller.ReadFrom(
+            new[] { _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"));
+
+        var usage = Assert.Single(readings);
+        Assert.Equal("warren", usage.Label);
+        Assert.Equal(_root, usage.ConfigDir);
+        Assert.Equal(AccountUsageSource.Codex, usage.Source);
+        Assert.Equal(62.0, usage.Session!.Percent);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-02T18:58:00Z"), usage.AsOf);
+    }
+
+    // A configured home that has never run Codex contributes nothing rather
+    // than an empty orb, and does not stop the homes after it being read.
+    [Fact]
+    public void AHomeWithNoRolloutsIsSkippedWithoutStoppingTheRest()
+    {
+        var empty = Path.Combine(_root, "unused-home");
+        Directory.CreateDirectory(empty);
+        Directory.CreateDirectory(_root);
+        Rollout("live", DateTimeOffset.Parse("2026-09-02T19:00:00Z"),
+            Windowed("2026-09-02T18:58:00Z", 5, 9));
+
+        var readings = CodexUsagePoller.ReadFrom(
+            new[] { empty, _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"));
+
+        var usage = Assert.Single(readings);
+        Assert.Equal(_root, usage.ConfigDir);
+    }
+
+    // No auth.json at all: the label falls back to the directory name, and the
+    // reading still stands.
+    [Fact]
+    public void AHomeWithNoAuthFileIsLabelledByItsDirectory()
+    {
+        Rollout("live", DateTimeOffset.Parse("2026-09-02T19:00:00Z"),
+            Windowed("2026-09-02T18:58:00Z", 5, 9));
+
+        var readings = CodexUsagePoller.ReadFrom(
+            new[] { _root }, DateTimeOffset.Parse("2026-09-02T19:20:00Z"));
+
+        Assert.Equal(
+            CodexUsageAccounts.FallbackLabel(_root),
+            Assert.Single(readings).Label);
+    }
+
+    // The switch is off by default, and off means no reading rather than an
+    // empty one — the distinction AccountOrbs.Apply's keep-stale rule depends
+    // on to tell "not asked" from "asked and failed".
+    [Fact]
+    public void TheSwitchBeingOffMeansNoReadingsAtAll()
+    {
+        Assert.False(ClaudeBuddySettings.CodexAccountUsageEnabled);
+
+        Assert.Empty(new CodexUsagePoller().Read());
+    }
+}
