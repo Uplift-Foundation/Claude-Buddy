@@ -332,6 +332,56 @@ namespace ClaudeBuddy.Tests
             Assert.Contains("agent:main:discord:channel:1474", members);
         }
 
+        // Most recently active first, which is what decides who gets a wedge
+        // on the room's orb when more agents are in the channel than an orb can
+        // hold — see OpenClawSessions.RoomAvatar. The gateway's own order is
+        // whatever it likes and does move between polls, so this is the one
+        // place the answer is made stable.
+        [Fact]
+        public void ARoomsMembersComeBackMostRecentlyActiveFirst()
+        {
+            Parse($$"""
+                {"sessions":[
+                  {"key":"agent:amber:discord:channel:1474","lastActivityAt":{{Ms(Now.AddMinutes(-30))}}},
+                  {"key":"agent:zara:discord:channel:1474","lastActivityAt":{{JustNow}}},
+                  {"key":"agent:main:discord:channel:1474","lastActivityAt":{{Ms(Now.AddMinutes(-5))}}}
+                ]}
+                """);
+
+            Assert.Equal(
+                new[]
+                {
+                    "agent:zara:discord:channel:1474",
+                    "agent:main:discord:channel:1474",
+                    "agent:amber:discord:channel:1474",
+                },
+                OpenClawSessions.MembersOfRoom("discord:1474"));
+        }
+
+        // Two members whose last activity is the same instant — which a gateway
+        // reporting whole seconds produces all the time. Broken on the key, so
+        // the order is the same twice running rather than however the list
+        // happened to arrive; an unstable answer here reshuffles a room orb's
+        // wedges under a conversation that has not changed.
+        [Fact]
+        public void MembersTiedOnActivityAreOrderedByKey()
+        {
+            Parse($$"""
+                {"sessions":[
+                  {"key":"agent:zara:discord:channel:1474","lastActivityAt":{{JustNow}}},
+                  {"key":"agent:amber:discord:channel:1474","lastActivityAt":{{JustNow}}}
+                ]}
+                """);
+
+            Assert.Equal(
+                new[]
+                {
+                    "agent:amber:discord:channel:1474",
+                    "agent:zara:discord:channel:1474",
+                },
+                OpenClawSessions.MembersOfRoom("discord:1474"));
+        }
+
         // --- where a session delivers ---
 
         // The same rule as the two above, applied to the address: a member the
