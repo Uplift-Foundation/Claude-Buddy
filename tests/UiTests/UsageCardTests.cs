@@ -30,7 +30,8 @@ public class UsageCardTests
         double? weekly = 84,
         ExtraUsage? extra = null,
         bool available = true,
-        DateTimeOffset? readAt = null) =>
+        DateTimeOffset? readAt = null,
+        DateTimeOffset? observedAt = null) =>
         new(
             ConfigDir: null,
             Label: "board",
@@ -39,7 +40,8 @@ public class UsageCardTests
             Session: session is null ? null : new UsageWindow(session.Value, Now.AddHours(3)),
             Weekly: weekly is null ? null : new UsageWindow(weekly.Value, Now.AddDays(3)),
             Extra: extra,
-            ReadAt: readAt ?? Now);
+            ReadAt: readAt ?? Now,
+            ObservedAt: observedAt);
 
     private static void Flush()
     {
@@ -177,7 +179,24 @@ public class UsageCardTests
         card.UpdateFrom(Usage(readAt: Now.AddHours(-2)), null, Now);
 
         Assert.True(card.ShowsStaleNote);
-        Assert.Equal("Last read 2h ago.", card.StaleText);
+        Assert.Equal("Usage as of 2h ago.", card.StaleText);
+    }
+
+    // CB-83. A Codex or Grok reading is taken from a file its CLI wrote
+    // whenever it last ran, so the read is always "now" and the number can be
+    // days old. The card has to date the number, not the read — this one is
+    // read a second ago and was true 38 hours ago, which is exactly the shape
+    // that used to render as "Last read 0m ago" with no dimming anywhere.
+    [AvaloniaFact]
+    public void AFreshlyReadButOldSnapshotIsDatedByTheSnapshot()
+    {
+        var card = new UsageCard();
+
+        card.UpdateFrom(
+            Usage(readAt: Now.AddSeconds(-1), observedAt: Now.AddHours(-38)), null, Now);
+
+        Assert.True(card.ShowsStaleNote);
+        Assert.Equal("Usage as of 1d ago.", card.StaleText);
     }
 
     [AvaloniaFact]

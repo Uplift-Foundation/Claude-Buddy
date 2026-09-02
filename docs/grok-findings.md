@@ -89,7 +89,18 @@ A SuperGrok unified-billing account on this machine reported:
 }
 ```
 
-`subscriptionTier` is beside that (`SuperGrok`). There is no five-hour
+`subscriptionTier` is beside that (`SuperGrok`) — **beside**, meaning a sibling
+of `config` inside `ctx`, not a member of `config`. A parser that looks in
+`config` and then at the envelope root misses it in both places and leaves the
+plan line blank, which is exactly what shipped until CB-83.
+
+The envelope's `ts` is the age of the number. Grok writes this line **once, at
+startup**, and never again for the life of the process, so a machine that last
+ran `grok` two days ago is holding a two-day-old percentage — measured here at
+38 hours. Read the reading's age off `ts`, never off the moment the log file
+was read.
+
+There is no five-hour
 window. There is no public `grok usage` CLI. Asking Grok for this without
 holding its refresh token is **still unknown**; the log line is a last-resort
 read and is only as fresh as the last Grok process.

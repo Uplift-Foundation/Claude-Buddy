@@ -1131,7 +1131,11 @@ Some things the rings deliberately do not do:
   translate one, and told somebody their organisation had disabled extra usage
   when in truth they had simply spent that month's budget.
 - **An orb that could not be read goes dim** rather than dropping to zero, with
-  how old the reading is in its card.
+  how old the reading is in its card. Age means the age of the *number*, not of
+  the read: a Codex or Grok figure comes out of a file its CLI last wrote
+  whenever it last ran, so the card dates it "Usage as of 2h ago" and the orb
+  dims once that number is more than fifteen minutes old, even though Claude
+  Buddy re-read the file seconds ago.
 
 **Where the numbers come from.** Claude Buddy asks Claude Code itself, once
 every five minutes per account, over the same control protocol its SDK uses —
@@ -1524,7 +1528,10 @@ Two differences from a Claude Code orb, both because Grok works differently:
 - **Usage orbs** (Settings → Grok Build) draw the weekly credit window Grok
   already fetches. Grok has no five-hour cap, so that ring is omitted rather
   than drawn at zero. The figure is as fresh as the last Grok session on this
-  machine — Claude Buddy does not hold Grok's login token.
+  machine — Claude Buddy does not hold Grok's login token — and the orb says so
+  rather than implying otherwise: Grok writes its credit figure once, at
+  startup, so a machine that last ran `grok` on Monday shows a dimmed orb and a
+  card reading "Usage as of 2d ago".
 
 See `docs/grok-findings.md` for what was measured on a real session.
 
@@ -1549,9 +1556,13 @@ rather than because the support is unfinished:
   from Codex — `/rename` if you've set one, otherwise Codex's own title, taken
   from your first message.
 - **Usage orbs** (Settings → Codex sessions) draw the five-hour and weekly
-  windows Codex already writes onto each turn of the rollout. The figure is as
-  fresh as the last Codex session on this machine — Claude Buddy does not hold
-  Codex's login token. See `docs/codex-findings.md`.
+  windows Codex already writes onto each turn of the rollout — the newest
+  snapshot that carries a window, across every rollout, which is not the same as
+  the newest line in the newest file: Codex sends a *window-less* snapshot to
+  every live session when the workspace runs out of credits, and that one is
+  routinely the most recent thing on disk. The figure is as fresh as the last
+  Codex session on this machine — Claude Buddy does not hold Codex's login
+  token — and the card dates it. See `docs/codex-findings.md`.
 - **A Codex orb appears on the session's first message, not when Codex opens.**
   Codex fires no hooks until a thread exists, and a thread is created when you
   first speak to it — so an open-but-untouched session has no orb, and neither

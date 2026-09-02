@@ -133,7 +133,13 @@ namespace ClaudeBuddy
             else if (usage.IsStale(now))
             {
                 StaleNote.IsVisible = true;
-                StaleNote.Text = $"Last read {Ago(now - usage.ReadAt)} ago.";
+                // "As of", not "last read", because for two of the three
+                // sources those are different moments. Claude Code is asked and
+                // answers about now; Codex and Grok are read out of a file their
+                // CLI last wrote whenever it last ran, so the age that matters
+                // to someone looking at a percentage is the age of the number,
+                // not of the file read. See AccountUsage.AsOf.
+                StaleNote.Text = $"Usage as of {Ago(now - usage.AsOf)} ago.";
             }
             else if (session is null && weekly is null)
             {
