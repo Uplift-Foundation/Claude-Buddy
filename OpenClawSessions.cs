@@ -153,17 +153,32 @@ namespace ClaudeBuddy
         // conversation, which the ring's colour also says; who is in it was said
         // nowhere.
         //
-        // Ordering is the part worth being careful about. The members arrive
+        // Cut from the channel's *participants* — the members with an orb — and
+        // not from its membership, which is deliberately every agent the gateway
+        // lists there however long ago it last spoke. Membership is what the
+        // room's chat merges and it is right for that; using it here drew
+        // #social-media as four faces while two agents were talking in it.
+        //
+        // The fallback to the full membership is for a room orb outliving its
+        // sessions: "Keep orbs for" can hold one on screen after every member
+        // has dropped out of the recency window, and the faces of who was in it
+        // are still true. Reverting to the channel's initials at that moment
+        // would be a change on screen with no event behind it.
+        //
+        // Ordering is the part worth being careful about. They arrive
         // most-recently-active first, which is how the four that get a wedge are
-        // chosen — a channel with seven agents in it should show the four who
-        // are actually talking. They are then sorted by agent id, so the wedges
-        // stay put: chosen *and* ordered by recency, two agents in a fast
-        // exchange would swap halves of the orb every time either of them spoke.
+        // chosen — a channel with seven agents talking in it should show the
+        // four most recent. They are then sorted by agent id, so the wedges stay
+        // put: chosen *and* ordered by recency, two agents in a fast exchange
+        // would swap halves of the orb every time either of them spoke.
         public static OpenClawAvatars.Avatar? RoomAvatar(string roomKey)
         {
+            var standing = ParticipantsOfRoom(roomKey);
+            if (standing.Count == 0) standing = MembersOfRoom(roomKey);
+
             var agents = new List<string>();
 
-            foreach (var key in MembersOfRoom(roomKey))
+            foreach (var key in standing)
             {
                 var agent = AgentIdOf(key);
                 if (agent is null || agents.Contains(agent, StringComparer.OrdinalIgnoreCase)) continue;
@@ -431,6 +446,30 @@ namespace ClaudeBuddy
             lock (Gate)
                 return _roomMembers.TryGetValue(roomKey, out var members)
                     ? members.ToList()
+                    : Array.Empty<string>();
+        }
+
+        // Everyone in the channel who has an orb right now: the members that
+        // came through the recency and cluster filters rather than every agent
+        // the gateway has ever listed there.
+        //
+        // The narrower of the two answers, and the one the room's *picture*
+        // wants. A conversation that is happening between two agents should not
+        // be drawn as four because two more have a session in the channel and
+        // nothing to say — which is what shipping the wide answer to the orb
+        // did on #social-media.
+        //
+        // The wide one stays exactly as it was for the room's chat, which needs
+        // a quiet agent's transcript to merge (CB-27). Neither is the "right"
+        // list; they answer different questions.
+        private static Dictionary<string, List<string>> _roomParticipants =
+            new(StringComparer.Ordinal);
+
+        public static IReadOnlyList<string> ParticipantsOfRoom(string roomKey)
+        {
+            lock (Gate)
+                return _roomParticipants.TryGetValue(roomKey, out var standing)
+                    ? standing.ToList()
                     : Array.Empty<string>();
         }
 
@@ -948,6 +987,12 @@ namespace ClaudeBuddy
             // room's picture are built from the same order.
             var roomMembers = new Dictionary<string, List<(string Key, DateTime Activity)>>(
                 StringComparer.Ordinal);
+
+            // The subset of those that got an orb — see where this is filled,
+            // below the filters rather than above them.
+            var roomParticipants = new Dictionary<string, List<(string Key, DateTime Activity)>>(
+                StringComparer.Ordinal);
+
             var deliveries = new Dictionary<string, Delivery?>(StringComparer.Ordinal);
 
             // Every agent the gateway knows of, filtered or not, so that a
@@ -1034,6 +1079,27 @@ namespace ClaudeBuddy
                         OrbClusters.Of(heartbeat, kind), HeartbeatMode, CronMode))
                     continue;
 
+                // Recorded here, past every filter above, rather than beside
+                // the membership at the top of the loop — which is the whole
+                // difference between the two, and the point this file already
+                // makes twice: "who is in this channel" and "who is worth
+                // drawing" are different questions with different answers.
+                //
+                // The room's *picture* wants the second one. Membership is
+                // deliberately generous, holding every agent the gateway lists
+                // for the channel however long ago it last spoke, because the
+                // room's chat needs their transcript to merge. Cutting the pie
+                // from that list put four faces on #social-media while two
+                // agents were talking in it — the other two had sessions there
+                // and nothing to say.
+                if (roomKey is not null)
+                {
+                    if (!roomParticipants.TryGetValue(roomKey, out var standing))
+                        roomParticipants[roomKey] = standing = new List<(string, DateTime)>();
+
+                    standing.Add((key, activity));
+                }
+
                 result.Add(new Session(
                     key,
                     TitleFor(s, origin, key),
@@ -1058,18 +1124,21 @@ namespace ClaudeBuddy
             // whatever order it likes and that order does move between polls;
             // an unstable one here would reshuffle a room orb's wedges under a
             // conversation that had not changed at all.
-            var ordered = roomMembers.ToDictionary(
-                pair => pair.Key,
-                pair => pair.Value
-                    .OrderByDescending(member => member.Activity)
-                    .ThenBy(member => member.Key, StringComparer.Ordinal)
-                    .Select(member => member.Key)
-                    .ToList(),
-                StringComparer.Ordinal);
+            static Dictionary<string, List<string>> Ordered(
+                Dictionary<string, List<(string Key, DateTime Activity)>> rooms) =>
+                rooms.ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value
+                        .OrderByDescending(member => member.Activity)
+                        .ThenBy(member => member.Key, StringComparer.Ordinal)
+                        .Select(member => member.Key)
+                        .ToList(),
+                    StringComparer.Ordinal);
 
             lock (Gate)
             {
-                _roomMembers = ordered;
+                _roomParticipants = Ordered(roomParticipants);
+                _roomMembers = Ordered(roomMembers);
                 _roomColours = roomColours;
                 _deliveries = deliveries;
             }

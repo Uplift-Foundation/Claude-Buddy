@@ -984,6 +984,14 @@ channel where nobody has one keeps the channel's initials. At most four are
 drawn, and they are the four most recently active; the wedges are ordered so
 that somebody speaking does not move anyone's face.
 
+**Only agents with an orb of their own get a wedge** — so a channel two agents
+are working in is drawn as two, not as everyone who has ever spoken there. An
+agent that has been quiet for longer than **Show sessions active within** is
+still in the channel's *conversation*, and its messages still appear when you
+open the room, but it is no longer one of the faces on it. That setting is the
+dial: widen it and more of the channel's regulars count as present, narrow it
+and the orb tracks who is talking right now.
+
 **Only recently active sessions get orbs.** A gateway remembers every
 conversation it has ever had — 59 of them on the machine this was developed
 against — so an orb per session would bury the screen. **Show sessions active
