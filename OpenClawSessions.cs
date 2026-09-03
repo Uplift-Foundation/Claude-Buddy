@@ -173,21 +173,13 @@ namespace ClaudeBuddy
         // would swap halves of the orb every time either of them spoke.
         public static OpenClawAvatars.Avatar? RoomAvatar(string roomKey)
         {
-            var standing = ParticipantsOfRoom(roomKey);
-            if (standing.Count == 0) standing = MembersOfRoom(roomKey);
-
-            var agents = new List<string>();
-
-            foreach (var key in standing)
-            {
-                var agent = AgentIdOf(key);
-                if (agent is null || agents.Contains(agent, StringComparer.OrdinalIgnoreCase)) continue;
-
-                agents.Add(agent);
-                if (agents.Count == AvatarPie.MaxParts) break;
-            }
+            var agents = AgentsInRoom(roomKey);
+            if (agents.Count == 0) agents = Distinct(MembersOfRoom(roomKey));
 
             if (agents.Count == 0) return null;
+
+            if (agents.Count > AvatarPie.MaxParts)
+                agents = agents.Take(AvatarPie.MaxParts).ToList();
 
             agents.Sort(StringComparer.OrdinalIgnoreCase);
 
@@ -471,6 +463,32 @@ namespace ClaudeBuddy
                 return _roomParticipants.TryGetValue(roomKey, out var standing)
                     ? standing.ToList()
                     : Array.Empty<string>();
+        }
+
+        // How many *people* are in a channel, rather than how many sessions —
+        // still most-recently-active first.
+        //
+        // The two differ: one agent can hold more than one session in the same
+        // channel, and counting sessions would call that a crowd. Which matters
+        // now that the count decides whether a room orb exists at all, and it
+        // already mattered to the picture, where the same agent twice would have
+        // divided the orb between two copies of one face.
+        public static List<string> AgentsInRoom(string roomKey) =>
+            Distinct(ParticipantsOfRoom(roomKey));
+
+        private static List<string> Distinct(IReadOnlyList<string> sessionKeys)
+        {
+            var agents = new List<string>();
+
+            foreach (var key in sessionKeys)
+            {
+                var agent = AgentIdOf(key);
+                if (agent is null || agents.Contains(agent, StringComparer.OrdinalIgnoreCase)) continue;
+
+                agents.Add(agent);
+            }
+
+            return agents;
         }
 
         public static IRemoteChatSession? RoomChatFor(
