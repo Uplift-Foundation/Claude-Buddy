@@ -1069,6 +1069,19 @@ namespace ClaudeBuddy
                     now, honourOrbLifetime ? StaleAfter : null,
                     superseded, running, handedToBackground);
 
+                // Ignoring orb lifetime answers a narrower question than
+                // "keep every file forever". A positively live pid is evidence
+                // that an old idle terminal still exists, but a pid-less
+                // Claude status has no such proof: it is either a current
+                // daemon job or a leftover from a finished subagent. Apply the
+                // same daemon-backed reachability rule the visible scan uses so
+                // a headless machine never advertises the latter to a peer.
+                if (verdict == ScanVerdict.Keep && entry.Status.SessionPid <= 0)
+                {
+                    verdict = JudgeReachability(
+                        entry.SessionId, entry.Status, new HashSet<string>(), phase, FileExists);
+                }
+
                 if (verdict == ScanVerdict.Keep) kept.Add((entry.SessionId, entry.Status));
                 else
                 {

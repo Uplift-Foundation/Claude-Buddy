@@ -176,6 +176,29 @@ namespace ClaudeBuddy
         // there is no way to learn one.
         public async Task AskWhatTheyHaveAsync(IReadOnlyList<string> peers)
         {
+            // A direct-link roster is a complete answer from each connected
+            // machine, not a stream of additions. Forgetting a peer that is no
+            // longer connected is therefore safe; retaining it made its last
+            // roster permanent after a machine was switched off.
+            var connected = new HashSet<string>(peers, StringComparer.OrdinalIgnoreCase);
+            var disconnectedChanged = false;
+
+            lock (_gate)
+            {
+                foreach (var name in _servedBy
+                    .Where(pair => !connected.Contains(pair.Value))
+                    .Select(pair => pair.Key)
+                    .ToList())
+                {
+                    _servedBy.Remove(name);
+                    _roster.Remove(name);
+                    _answeredNo.Add(name);
+                    disconnectedChanged = true;
+                }
+            }
+
+            if (disconnectedChanged) RosterUpdated?.Invoke();
+
             foreach (var peer in peers)
             {
                 lock (_gate)
@@ -206,22 +229,47 @@ namespace ClaudeBuddy
                 var entries = MirrorProtocol.DecodeRoster(reply.Payload);
                 if (entries is null) continue;
 
+                var offered = new Dictionary<string, MirrorProtocol.MirrorRosterEntry>(
+                    StringComparer.OrdinalIgnoreCase);
+                foreach (var entry in entries)
+                {
+                    if (entry.HasTranscript) offered[entry.Name] = entry;
+                }
+
                 var changed = false;
 
                 lock (_gate)
                 {
-                    foreach (var entry in entries)
+                    // This reply is authoritative for this peer alone. A
+                    // similarly named session may have been answered by a
+                    // different connected machine, so it must not be removed
+                    // merely because this peer did not mention it.
+                    foreach (var name in _servedBy
+                        .Where(pair => string.Equals(pair.Value, peer,
+                            StringComparison.OrdinalIgnoreCase)
+                            && !offered.ContainsKey(pair.Key))
+                        .Select(pair => pair.Key)
+                        .ToList())
                     {
-                        // Unlike the named ask, nothing is settled as
-                        // unavailable here. A machine that did not mention a
-                        // session is not saying it does not have one — it was
-                        // never asked about anything in particular.
-                        if (!entry.HasTranscript) continue;
+                        _roster.Remove(name);
+                        _servedBy.Remove(name);
+                        _answeredNo.Add(name);
+                        changed = true;
+                    }
+
+                    foreach (var entry in offered.Values)
+                    {
+                        if (!_roster.TryGetValue(entry.Name, out var previous)
+                            || previous != entry
+                            || !_servedBy.TryGetValue(entry.Name, out var servedBy)
+                            || !string.Equals(servedBy, peer, StringComparison.OrdinalIgnoreCase))
+                        {
+                            changed = true;
+                        }
 
                         _roster[entry.Name] = entry;
                         _servedBy[entry.Name] = peer;
                         _answeredNo.Remove(entry.Name);
-                        changed = true;
                     }
                 }
 

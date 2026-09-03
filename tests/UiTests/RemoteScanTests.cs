@@ -89,6 +89,33 @@ public class RemoteScanTests
         }
     }
 
+    // The roster reconciliation above this scan removes rows the peer no
+    // longer offers. A later scan must remove the already-created window too;
+    // otherwise the wire is clean while its ghost remains visible.
+    [AvaloniaFact]
+    public void ARemoteSessionMissingFromTheNextSnapshotLosesItsOrb()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Remote("gone-mini"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+            Assert.Contains("rc:.claude:gone-mini", Orbs(manager).Keys);
+
+            PublishNothing();
+            manager.ScanAndUpdate();
+
+            Assert.DoesNotContain("rc:.claude:gone-mini", Orbs(manager).Keys);
+            Assert.Null(manager.StatusFor("rc:.claude:gone-mini"));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
     // Two accounts can hold identically-named sessions — the same person naming
     // things the same way twice is the normal case — so the account is part of the
     // key. Without it they collapse onto one orb and one chat panel, with messages
