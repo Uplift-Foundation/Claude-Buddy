@@ -237,6 +237,21 @@ public class ScanVerdictTests
     }
 
     [Fact]
+    public void AnIdleWindowThatParkedItsConversationAlsoLosesItsOrb()
+    {
+        // The case TranscriptHandoff alone could not see, and the reason
+        // SessionPark exists (CB-30). Opening agents mode from an idle
+        // conversation forks it exactly as backgrounding a running turn does,
+        // but writes no transcript marker — the CLI's own name for that arm is
+        // "idle-fork". So this husk is not frozen mid-generation the way every
+        // case above is: it is an ordinary *idle* session, which is precisely
+        // what made the duplicate pair impossible to tell apart on screen.
+        Assert.Equal(
+            SessionManager.ScanVerdict.Backgrounded,
+            Liveness(Healthy(state: "idle"), handedToBackground: () => true));
+    }
+
+    [Fact]
     public void BackgroundedOutranksExpiredSoTheFileGetsSweptNotJustHidden()
     {
         // Both verdicts hide the orb; only Backgrounded is evidence the sweep
