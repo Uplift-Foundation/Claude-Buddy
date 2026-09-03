@@ -283,7 +283,6 @@ namespace ClaudeBuddy
             if (client is null) return;
 
             var connected = host.Link.ConnectedMachines();
-            if (connected.Count == 0) return;
 
             try
             {
