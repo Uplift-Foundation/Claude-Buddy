@@ -70,6 +70,24 @@ public class OrbRoomAvatarTests
         OpenClawSessions.Parse(JsonDocument.Parse(json).RootElement, DateTime.UtcNow);
     }
 
+    // The same, with a recency window and each agent's last activity given in
+    // minutes ago — so a case can put somebody in the channel who is plainly not
+    // talking in it.
+    private static void StandingSince(string room, int windowMinutes,
+        params (string Agent, int MinutesAgo)[] agents)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var rows = agents.Select(a =>
+            $$"""{"key":"{{Key(a.Agent, room)}}","lastActivityAt":{{now - a.MinutesAgo * 60_000L}}}""");
+
+        var json = $$"""{"sessions":[{{string.Join(",", rows)}}]}""";
+
+        ClaudeBuddySettings.OpenClawActiveWithinMinutes = windowMinutes;
+        OpenClawSessions.Parse(JsonDocument.Parse(json).RootElement, DateTime.UtcNow);
+        ClaudeBuddySettings.OpenClawActiveWithinMinutes = ClaudeBuddySettings.OpenClawActiveWithinAll;
+    }
+
     private static SessionStatus RoomStatus() => new()
     {
         Source = SessionSource.OpenClaw,
@@ -268,6 +286,119 @@ public class OrbRoomAvatarTests
 
             Assert.NotNull(roomAvatar);
             Assert.Same(agentAvatar, roomAvatar);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // --- who counts as being in the room ----------------------------------
+
+    // The bug this file was extended for. #social-media was drawn as four faces
+    // while two agents were talking in it: the other two had a session in the
+    // channel and had said nothing for hours.
+    //
+    // A member the recency filter dropped has no orb, so it has no wedge.
+    // Asserted through who has a picture: only the two quiet ones do, so there
+    // is nothing left to draw.
+    [AvaloniaFact]
+    public void AMemberWithNoOrbGetsNoWedge()
+    {
+        try
+        {
+            var room = Room();
+            var talking = Agent("talking");
+            var alsoTalking = Agent("also");
+            var quiet = Agent("quiet");
+            var alsoQuiet = Agent("alsoquiet");
+
+            Publish(
+                (talking, null),
+                (alsoTalking, null),
+                (quiet, Png(0xE0, 0x20, 0x20)),
+                (alsoQuiet, Png(0x20, 0x20, 0xE0)));
+
+            StandingSince(room, 60,
+                (talking, 1), (alsoTalking, 2), (quiet, 300), (alsoQuiet, 400));
+
+            Assert.Null(OpenClawSessions.RoomAvatar(room));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // ...and the two who are talking are the ones drawn, so the assertion above
+    // is about *which* members rather than about the room having emptied.
+    [AvaloniaFact]
+    public void TheMembersWithOrbsAreTheOnesDrawn()
+    {
+        try
+        {
+            var room = Room();
+            var talking = Agent("talking");
+            var alsoTalking = Agent("also");
+            var quiet = Agent("quiet");
+
+            Publish(
+                (talking, Png(0xE0, 0x20, 0x20)),
+                (alsoTalking, Png(0x20, 0x20, 0xE0)),
+                (quiet, Png(0x20, 0xE0, 0x20)));
+
+            StandingSince(room, 60, (talking, 1), (alsoTalking, 2), (quiet, 300));
+
+            Assert.NotNull(OpenClawSessions.RoomAvatar(room));
+
+            // Two of the three, named rather than counted. Deliberately not
+            // asserted as "the same picture object as after the quiet one
+            // leaves": dropping a member re-deals the whole palette, so the
+            // colours in the cache key can move even though the faces have not.
+            Assert.Equal(
+                new[] { Key(talking, room), Key(alsoTalking, room) },
+                OpenClawSessions.ParticipantsOfRoom(room));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // The room's *chat* is unchanged by all of the above, and has to be: it
+    // merges a quiet agent's transcript, and building it from who is currently
+    // talking is exactly the bug CB-27 fixed. Two lists, two questions.
+    [AvaloniaFact]
+    public void AQuietMemberIsStillInTheRoomForItsChat()
+    {
+        var room = Room();
+        var talking = Agent("talking");
+        var quiet = Agent("quiet");
+
+        StandingSince(room, 60, (talking, 1), (quiet, 300));
+
+        Assert.Contains(Key(quiet, room), OpenClawSessions.MembersOfRoom(room));
+        Assert.DoesNotContain(Key(quiet, room), OpenClawSessions.ParticipantsOfRoom(room));
+    }
+
+    // A room orb outliving its sessions — "Keep orbs for" holds one on screen
+    // after every member has dropped out of the window. The faces of who was in
+    // it are still true, and reverting to the channel's initials at that moment
+    // would be a change on screen with nothing behind it.
+    [AvaloniaFact]
+    public void ARoomWhoseMembersHaveAllGoneQuietKeepsItsFaces()
+    {
+        try
+        {
+            var room = Room();
+            var one = Agent("one");
+            var two = Agent("two");
+
+            Publish((one, Png(0xE0, 0x20, 0x20)), (two, Png(0x20, 0x20, 0xE0)));
+            StandingSince(room, 60, (one, 300), (two, 400));
+
+            Assert.Empty(OpenClawSessions.ParticipantsOfRoom(room));
+            Assert.NotNull(OpenClawSessions.RoomAvatar(room));
         }
         finally
         {
