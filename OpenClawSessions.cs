@@ -1659,8 +1659,18 @@ namespace ClaudeBuddy
         // the answer — the two are, at most, one round trip apart. Pure and
         // taking plain HistoryTurns rather than a page fetch, so
         // TryResolveLiveImage's actual gateway call is the only excluded half.
-        internal static HistoryTurn? BestImageMatch(IEnumerable<HistoryTurn> turns, DateTimeOffset near) =>
-            turns.Where(t => !string.IsNullOrEmpty(t.ImageUrl))
+        //
+        // Filtered to the live turn's own role first: a session's chat.history
+        // mixes that agent's own replies with everyone else's messages
+        // arriving as its input (a room's other agents, or a real person —
+        // see OpenClawRoomChat's own header comment on that shape), and the
+        // nearest picture in time is not necessarily the agent's own picture
+        // once other traffic can land on the same page. Restricting to the
+        // matching role is what keeps a busy room from occasionally handing
+        // an agent's reply somebody else's attachment.
+        internal static HistoryTurn? BestImageMatch(
+            IEnumerable<HistoryTurn> turns, ChatRole role, DateTimeOffset near) =>
+            turns.Where(t => t.Role == role && !string.IsNullOrEmpty(t.ImageUrl))
                  .OrderBy(t => Math.Abs((t.At - near).Ticks))
                  // HistoryTurn is a struct, so a plain FirstOrDefault on an
                  // empty sequence returns a zeroed HistoryTurn — a real value,

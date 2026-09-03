@@ -233,6 +233,11 @@ namespace ClaudeBuddy
         // nothing in a live "agent" event ties back to a chat.history message
         // — see BestImageMatch's own comment.
         //
+        // No try/catch around the fetch: FetchPageAsync already swallows a
+        // gateway that will not answer and returns null, the same contract
+        // LoadOlderAsync already trusts without one of its own — adding a
+        // second catch here would only ever guard against nothing.
+        //
         // No explicit Dispatcher.Post after the await: this runs under the
         // app's own Avalonia SynchronizationContext, which already resumes an
         // await's continuation on the UI thread — the same reason TurnView's
@@ -241,28 +246,28 @@ namespace ClaudeBuddy
         {
             if (!_pendingImageChecks.Add(turn)) return;
 
-            try
-            {
-                var page = await OpenClawSessions.FetchPageAsync(this, 0, CancellationToken.None);
-                if (page is null) return;
+            var page = await OpenClawSessions.FetchPageAsync(this, 0, CancellationToken.None);
+            if (page is null) return;
 
-                var match = OpenClawSessions.BestImageMatch(page.Value.Turns, turn.At);
-                if (match?.ImageUrl is null) return;
+            // Restricted to this turn's own role: a session's own
+            // chat.history mixes the agent's replies with everyone else's
+            // messages arriving as input to it (see OpenClawRoomChat's own
+            // header comment), and a picture someone else posted moments
+            // before or after the agent's reply is not the agent's picture —
+            // matching across roles would occasionally attribute the wrong
+            // one in a busy room.
+            var match = OpenClawSessions.BestImageMatch(page.Value.Turns, turn.Role, turn.At);
+            if (match?.ImageUrl is null) return;
 
-                turn.ImageUrl = match.Value.ImageUrl;
-                turn.ImageAlt = match.Value.ImageAlt;
+            turn.ImageUrl = match.Value.ImageUrl;
+            turn.ImageAlt = match.Value.ImageAlt;
 
-                // OpenClawRoomChat only rebuilds a room's merged view on this
-                // event (see its chat.TurnUpdated subscription) — the
-                // PropertyChanged the setters above already raised reaches a
-                // direct (non-room) panel through TurnView's own subscription,
-                // but a room's Rebuild() has to be asked separately.
-                TurnUpdated?.Invoke(turn);
-            }
-            catch
-            {
-                // Nothing to fall back to — the text is already on screen.
-            }
+            // OpenClawRoomChat only rebuilds a room's merged view on this
+            // event (see its chat.TurnUpdated subscription) — the
+            // PropertyChanged the setters above already raised reaches a
+            // direct (non-room) panel through TurnView's own subscription,
+            // but a room's Rebuild() has to be asked separately.
+            TurnUpdated?.Invoke(turn);
         }
 
         private void OnTool(JsonElement payload)
