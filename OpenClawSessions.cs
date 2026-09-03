@@ -1766,6 +1766,98 @@ namespace ClaudeBuddy
                  .Select(t => (HistoryTurn?)t)
                  .FirstOrDefault();
 
+        // A picture an agent generated itself and references by its own path
+        // on the gateway host — a second convention alongside
+        // MediaAttachedMarker, and a different one: that marker names
+        // something a *person* attached, staged under the gateway's own
+        // inbound directory and already reachable through FetchMediaAsync's
+        // ordinary URL fetch. This is an agent's own local file, named by
+        // "MEDIA:<path>" in CB-88's captured real traffic (confirmed via
+        // tools/openclaw-probe against a live gateway, not assumed), and it
+        // has no URL to fetch — only FetchLocalMediaAsync's media.get RPC can
+        // read it.
+        //
+        // The second arm — the whole message being nothing but a path — is a
+        // real observed shape too: the same automation's duplicate-post bug
+        // (before Warren asked it fixed) left a bare path as an entire
+        // assistant turn, with no MEDIA: prefix at all. Matched only when the
+        // ENTIRE trimmed text is the path, so an ordinary sentence that
+        // happens to mention a ".png" in passing is never mistaken for one.
+        internal const string LocalMediaMarker = "MEDIA:";
+
+        private static readonly string[] ImageExtensions =
+            { ".png", ".jpg", ".jpeg", ".gif", ".webp" };
+
+        internal static string? LocalMediaPathFrom(string text)
+        {
+            // A line of its own, not necessarily the first line: the real
+            // captured example (CB-88) has two paragraphs of in-character
+            // reply before the MEDIA: line, so anchoring on the start of the
+            // whole message would miss the one real case this exists for.
+            foreach (var rawLine in text.Split('\n'))
+            {
+                var line = rawLine.Trim();
+                if (!line.StartsWith(LocalMediaMarker, StringComparison.Ordinal)) continue;
+
+                var path = line[LocalMediaMarker.Length..].Trim();
+                return path.Length == 0 ? null : path;
+            }
+
+            var trimmed = text.Trim();
+            return LooksLikeAnImagePath(trimmed) ? trimmed : null;
+        }
+
+        private static bool LooksLikeAnImagePath(string text) =>
+            text.StartsWith('/') && !text.Contains(' ') && !text.Contains('\n')
+            && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+
+        // Excluded from coverage: a media.get request over the live socket.
+        //
+        // The response shape below is the one genuinely unverified piece of
+        // CB-88 — media.get requires operator.admin, which this device did
+        // not hold and the gateway refused to grant when asked (a real
+        // "device token rotation denied" from the gateway itself, not a
+        // syntax problem), so no successful response was ever captured this
+        // session. Built from the nearest confirmed-real precedent in this
+        // codebase: agents.list's own avatarUrl field, a genuine
+        // data:image/...;base64,... URI that DecodeDataUri already decodes.
+        // The moment the scope lands, check this against
+        // `tools/openclaw-probe -- raw media.get '{"path":"..."}'` and adjust
+        // the field names below to match — do not trust this shape until then.
+        [ExcludeFromCodeCoverage]
+        internal static async Task<byte[]?> FetchLocalMediaAsync(
+            OpenClawChatSession chat, string path, CancellationToken ct)
+        {
+            OpenClawGateway? gateway;
+            lock (Gate) gateway = _gateway;
+            if (gateway is null) return null;
+
+            JsonElement res;
+            try
+            {
+                res = await gateway.RequestAsync(
+                    "media.get", new Dictionary<string, object> { ["path"] = path }, ct);
+            }
+            catch
+            {
+                return null;
+            }
+
+            foreach (var field in new[] { "dataUrl", "url", "data", "base64" })
+            {
+                var value = Str(res, field);
+                if (string.IsNullOrEmpty(value)) continue;
+
+                var decoded = DecodeDataUri(value);
+                if (decoded is not null) return decoded;
+
+                try { return Convert.FromBase64String(value); }
+                catch { /* not bare base64 either — try the next field */ }
+            }
+
+            return null;
+        }
+
         internal static string Readable(string text) => Readable(text, out _);
 
         internal static string Readable(string text, out string? speakerId)
