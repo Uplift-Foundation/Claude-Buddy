@@ -1145,7 +1145,10 @@ Some things the rings deliberately do not do:
   the read: a Codex or Grok figure comes out of a file its CLI last wrote
   whenever it last ran, so the card dates it "Usage as of 2h ago" and the orb
   dims once that number is more than fifteen minutes old, even though Claude
-  Buddy re-read the file seconds ago.
+  Buddy re-read the file seconds ago. A Codex orb usually escapes this, because
+  Codex can be asked for its usage directly and answers about now; a Grok orb
+  cannot, because Grok writes its credit figure once when it starts and never
+  again for the life of that process.
 
 **Where the numbers come from.** Claude Buddy asks Claude Code itself, once
 every five minutes per account, over the same control protocol its SDK uses —
@@ -1566,13 +1569,16 @@ rather than because the support is unfinished:
   from Codex — `/rename` if you've set one, otherwise Codex's own title, taken
   from your first message.
 - **Usage orbs** (Settings → Codex sessions) draw the five-hour and weekly
-  windows Codex already writes onto each turn of the rollout — the newest
-  snapshot that carries a window, across every rollout, which is not the same as
-  the newest line in the newest file: Codex sends a *window-less* snapshot to
-  every live session when the workspace runs out of credits, and that one is
-  routinely the most recent thing on disk. The figure is as fresh as the last
-  Codex session on this machine — Claude Buddy does not hold Codex's login
-  token — and the card dates it. See `docs/codex-findings.md`.
+  windows, and they are **live**: Claude Buddy asks `codex app-server` for them
+  directly, which costs no model call, needs no session open, and never touches
+  Codex's login token. If Codex cannot be reached that way it falls back to the
+  windows Codex writes onto each turn of the rollout — the newest snapshot that
+  carries a window, across every rollout, which is not the same as the newest
+  line in the newest file: Codex sends a *window-less* snapshot to every live
+  session when the workspace runs out of credits, and that one is routinely the
+  most recent thing on disk. A fallback figure is only as fresh as the last
+  Codex session, and the orb dims and the card dates it when that is what you
+  are looking at. See `docs/codex-findings.md`.
 - **A Codex orb appears on the session's first message, not when Codex opens.**
   Codex fires no hooks until a thread exists, and a thread is created when you
   first speak to it — so an open-but-untouched session has no orb, and neither

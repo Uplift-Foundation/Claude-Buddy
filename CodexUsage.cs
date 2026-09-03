@@ -38,7 +38,7 @@ namespace ClaudeBuddy
                 Assign(limits.Value, "primary", ref session, ref weekly);
                 Assign(limits.Value, "secondary", ref session, ref weekly);
 
-                var plan = Str(limits.Value, "plan_type");
+                var plan = Str(limits.Value, "plan_type") ?? Str(limits.Value, "planType");
                 var extra = Extra(limits.Value);
 
                 return new AccountUsage(
@@ -88,7 +88,7 @@ namespace ClaudeBuddy
         private static bool HasPercent(JsonElement limits, string name) =>
             limits.TryGetProperty(name, out var window)
             && window.ValueKind == JsonValueKind.Object
-            && window.TryGetProperty("used_percent", out var percent)
+            && Field(window, "used_percent", "usedPercent", out var percent)
             && percent.ValueKind == JsonValueKind.Number
             && percent.TryGetDouble(out _);
 
@@ -126,10 +126,16 @@ namespace ClaudeBuddy
             }
         }
 
-        // The snapshot is nested three different ways in the wild: a bare
-        // rate_limits object (what the tests hand this), payload.rate_limits on
-        // a token_count event, and a token_count event wrapped in the JSONL
-        // envelope. Unwrap rather than requiring the caller to know which.
+        // The snapshot is nested five different ways in the wild, and the two
+        // added by CB-85 come from a different transport rather than a
+        // different nesting of the same one.
+        //
+        // From the rollout: a bare rate_limits object (what the tests hand
+        // this), payload.rate_limits on a token_count event, and a token_count
+        // event inside the JSONL envelope. From `codex app-server`: the JSON-RPC
+        // `result` carrying `rateLimits`, and that `result` unwrapped. Unwrap
+        // rather than requiring the caller to know which — the caller knows
+        // which transport it used, but nothing else here needs to.
         private static JsonElement? Unwrap(JsonElement root)
         {
             if (root.ValueKind != JsonValueKind.Object) return null;
@@ -142,16 +148,45 @@ namespace ClaudeBuddy
                 return nested;
             }
 
+            if (root.TryGetProperty("result", out var result)
+                && result.ValueKind == JsonValueKind.Object
+                && Obj(result, "rateLimits") is { } fromResult)
+            {
+                return fromResult;
+            }
+
             if (root.TryGetProperty("rate_limits", out var mid)
                 && mid.ValueKind == JsonValueKind.Object)
             {
                 return mid;
             }
 
+            if (Obj(root, "rateLimits") is { } live) return live;
+
             if (root.TryGetProperty("primary", out _)) return root;
 
             return null;
         }
+
+        private static JsonElement? Obj(JsonElement parent, string name) =>
+            parent.TryGetProperty(name, out var value)
+            && value.ValueKind == JsonValueKind.Object
+                ? value
+                : null;
+
+        // One field under either of its two spellings.
+        //
+        // The rollout writes snake_case (`used_percent`) and the app-server
+        // answers camelCase (`usedPercent`) — the same numbers over two
+        // transports, and the difference is not something either end will
+        // reconcile for us. Asking for both here rather than translating a whole
+        // document keeps one parser for one meaning, which matters because the
+        // window-selection rule and the credits rules below are the subtle part
+        // and nobody wants two copies of them.
+        private static bool Field(
+            JsonElement parent, string snake, string camel, out JsonElement value) =>
+            parent.TryGetProperty(snake, out value)
+            || parent.TryGetProperty(camel, out value);
 
         private static void Assign(
             JsonElement limits, string name,
@@ -169,7 +204,7 @@ namespace ClaudeBuddy
             // would have taken the whole reading down with an
             // InvalidOperationException that FromRateLimits does not catch —
             // the one shape in a deliberately lenient parser that was not.
-            if (!window.TryGetProperty("used_percent", out var percentEl)
+            if (!Field(window, "used_percent", "usedPercent", out var percentEl)
                 || percentEl.ValueKind != JsonValueKind.Number
                 || !percentEl.TryGetDouble(out var percent))
             {
@@ -177,7 +212,7 @@ namespace ClaudeBuddy
             }
 
             DateTimeOffset? resets = null;
-            if (window.TryGetProperty("resets_at", out var at)
+            if (Field(window, "resets_at", "resetsAt", out var at)
                 && at.ValueKind == JsonValueKind.Number
                 && at.TryGetInt64(out var unix))
             {
@@ -186,7 +221,8 @@ namespace ClaudeBuddy
 
             var parsed = new UsageWindow(percent, resets);
 
-            var minutes = window.TryGetProperty("window_minutes", out var minEl)
+            var minutes = Field(window, "window_minutes", "windowDurationMins", out var minEl)
+                          && minEl.ValueKind == JsonValueKind.Number
                           && minEl.TryGetInt32(out var m)
                 ? m
                 : (int?)null;
@@ -208,7 +244,7 @@ namespace ClaudeBuddy
             if (unlimited)
                 return new ExtraUsage(false, null, null, "", 0, "unlimited");
 
-            var has = credits.TryGetProperty("has_credits", out var hasEl)
+            var has = Field(credits, "has_credits", "hasCredits", out var hasEl)
                       && hasEl.ValueKind == JsonValueKind.True;
             if (!has)
                 return new ExtraUsage(false, null, null, "", 0, "no_credits");
@@ -354,7 +390,8 @@ namespace ClaudeBuddy
                 DateTimeOffset.UtcNow);
         }
 
-        // One reading per $CODEX_HOME it is handed.
+        // One reading per $CODEX_HOME it is handed, live if Codex will say and
+        // out of the rollout if it will not.
         //
         // Split out of Read so the per-account path can be driven against a
         // temp directory: Read itself can only ever be pointed at this
@@ -363,13 +400,48 @@ namespace ClaudeBuddy
         // every machine, and unrunnable on a CI leg with no Codex installed.
         // What is left in Read is the two lines that are genuinely about this
         // machine, the switch and where home is.
+        //
+        // `ask` is the app-server call, a parameter so both branches are
+        // reachable without a subprocess: a test hands it a captured payload,
+        // or null to force the fallback. Null here means "use the real one",
+        // which is the same defaulting ClaudeBinary.Locate uses for the same
+        // reason.
+        //
+        // **The order matters and is not a preference.** The live answer is
+        // current; the rollout is whatever the last session wrote, which CB-83
+        // established can be hours old. So the live read is tried first and the
+        // rollout answers only when it returns nothing usable — Codex not
+        // installed where CodexBinary can find it, an app-server too old to know
+        // the method, a machine where spawning it fails. "Usable" is
+        // Available, not merely parseable, for CB-83's reason exactly: the live
+        // call can answer with both windows null when the workspace has run out
+        // of credits, and falling through to a real number from an hour ago is
+        // better than drawing an account with no limits. A stale number honestly
+        // dated beats no orb, which is why the fallback stays rather than being
+        // deleted the moment something better exists.
         internal static IReadOnlyList<AccountUsage> ReadFrom(
-            IEnumerable<string> homes, DateTimeOffset readAt)
+            IEnumerable<string> homes, DateTimeOffset readAt,
+            Func<string, string?>? ask = null)
         {
+            ask ??= LiveAsk;
+
             var readings = new List<AccountUsage>();
             foreach (var codexHome in homes)
             {
                 var label = CodexUsageAccounts.LabelFrom(ReadAuth(codexHome), codexHome);
+
+                // ObservedAt is left null on the live answer, so AsOf falls back
+                // to the read: the number *is* current, and stamping it with a
+                // snapshot time it does not have would be the CB-83 mistake
+                // pointing the other way.
+                var live = CodexUsageParse.FromRateLimits(
+                    ask(codexHome), codexHome, label, readAt);
+                if (live is { Available: true })
+                {
+                    readings.Add(live);
+                    continue;
+                }
+
                 var snapshot = LatestSnapshotFrom(Path.Combine(codexHome, "sessions"));
                 var usage = CodexUsageParse.FromRateLimits(
                     snapshot?.Json, codexHome, label, readAt, snapshot?.WrittenAt);
@@ -377,6 +449,15 @@ namespace ClaudeBuddy
             }
 
             return readings;
+        }
+
+        // The real app-server call, behind the same null-object shape the rest
+        // of this file uses: no binary means no live answer, not an exception.
+        [ExcludeFromCodeCoverage]
+        private static string? LiveAsk(string codexHome)
+        {
+            var codex = CodexBinary.Path;
+            return codex is null ? null : CodexAppServerUsage.Ask(codex, codexHome);
         }
 
         // The newest snapshot that actually carries a window, across every
