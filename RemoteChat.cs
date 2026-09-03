@@ -64,12 +64,31 @@ namespace ClaudeBuddy
         // overwritten from the backlog for one that wasn't.
         public DateTimeOffset At { get; init; } = DateTimeOffset.Now;
 
+        private string? _imageUrl;
+
         // A picture sent in the conversation, as a path on the gateway rather
         // than bytes: a transcript can hold a dozen of them and only the ones
         // actually scrolled to are worth a megabyte each. The panel resolves it.
-        public string? ImageUrl { get; init; }
+        //
+        // Settable rather than init-only: a live turn can start with no
+        // picture and gain one once OpenClawChatSession resolves a
+        // "[media attached: ...]" marker against the gateway's own history
+        // (see TryResolveLiveImage) — the same reason Text is mutable rather
+        // than the row being recreated.
+        public string? ImageUrl
+        {
+            get => _imageUrl;
+            set
+            {
+                if (_imageUrl == value) return;
+                _imageUrl = value;
+                Raise();
+            }
+        }
 
-        public string ImageAlt { get; init; } = "";
+        public string ImageAlt { get; set; } = "";
+
+        private byte[]? _imageBytes;
 
         // A picture already decoded, for the two cases where there is no
         // gateway to resolve ImageUrl against: a local CLI's own transcript
@@ -78,7 +97,16 @@ namespace ClaudeBuddy
         // wrote to disk is read straight back rather than round-tripped
         // through a fetch it would only fail. Never both this and ImageUrl
         // on the same turn.
-        public byte[]? ImageBytes { get; init; }
+        public byte[]? ImageBytes
+        {
+            get => _imageBytes;
+            set
+            {
+                if (_imageBytes == value) return;
+                _imageBytes = value;
+                Raise();
+            }
+        }
 
         // Who said this, when that is someone other than the two ends of the
         // conversation. In a channel an agent's transcript carries messages from

@@ -208,6 +208,52 @@ public class ChatPanelMarkdownTests : IDisposable
         Assert.NotNull(picture!.Source);
     }
 
+    // A live "agent" reply is drawn with no picture at all — TurnsFromHistory
+    // is the only parser that ever sees a structured image block, per
+    // OpenClawChatSession.OnAgentText's own comment — and only gains one once
+    // OpenClawChatSession.TryResolveLiveImage resolves a "[media attached:
+    // ...]" marker against the gateway's own history, well after this row
+    // already exists. This is the half of that fix TurnView owns: reacting to
+    // ImageUrl arriving on a turn it already drew, rather than only reading it
+    // once at construction.
+    [AvaloniaFact]
+    public async Task ATurnThatGainsAnImageUrlAfterItIsAlreadyOnScreenLoadsIt()
+    {
+        var bytes = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==");
+
+        var url = "https://gateway.invalid/media/" + Guid.NewGuid();
+        SeedMediaCache(url, bytes);
+
+        var turn = new ChatTurn { Role = ChatRole.Assistant, Text = "working on it", IsComplete = true };
+        var fake = NewFake(new[] { turn });
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Assert.Null(panel.GetVisualDescendants().OfType<Avalonia.Controls.Image>()
+            .FirstOrDefault(im => im.Width == 228)?.Source);
+
+        // The resolution itself — asking the gateway, matching the nearest
+        // picture — is OpenClawLiveImageResolutionTests' job (tests/UnitTests);
+        // this only has to prove the row notices once ImageUrl lands, the same
+        // way it already notices Text changing under a streaming reply.
+        turn.ImageUrl = url;
+
+        Avalonia.Controls.Image? picture = null;
+        for (var i = 0; i < 40; i++)
+        {
+            FlushRender();
+            picture = panel.GetVisualDescendants().OfType<Avalonia.Controls.Image>()
+                .FirstOrDefault(im => im.Width == 228);
+            if (picture?.Source is not null) break;
+            await Task.Delay(10);
+        }
+
+        Assert.NotNull(picture);
+        Assert.NotNull(picture!.Source);
+    }
+
     // A cached "no bytes" answer (a gateway that answered with nothing) must
     // not throw trying to decode zero bytes as a picture — it just leaves
     // the turn as the text it already has.
