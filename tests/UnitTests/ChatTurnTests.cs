@@ -52,4 +52,19 @@ public class ChatTurnTests
         Assert.Equal(new byte[] { 1, 2, 3 }, turn.ImageBytes);
         Assert.Contains(nameof(ChatTurn.ImageBytes), names);
     }
+
+    // ImageBytes compares by reference (it's a byte[]), unlike ImageUrl's
+    // string equality — setting it back to the exact same array is the no-op
+    // arm of that check.
+    [Fact]
+    public void SettingImageBytesToTheSameReferenceRaisesNothing()
+    {
+        var bytes = new byte[] { 1, 2, 3 };
+        var turn = new ChatTurn { Role = ChatRole.User, ImageBytes = bytes };
+        var names = Names(turn);
+
+        turn.ImageBytes = bytes;
+
+        Assert.Empty(names);
+    }
 }
