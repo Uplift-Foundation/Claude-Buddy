@@ -1505,8 +1505,23 @@ namespace ClaudeBuddy
                 // file path.
                 // Which room this is standing in, if any. The room orb itself is
                 // added below, once, however many agents point at it.
+                // ...but only once there is more than one agent in it. One agent
+                // talking in a channel drew two orbs wearing the same face, an
+                // arrow between them, and a merged conversation with one member
+                // — every one of which says "these are the same thing" about a
+                // thing that was never two. The room orb earns its place by
+                // gathering several agents; with one, the agent's own orb
+                // already is the channel, and its # badge already says so.
+                //
+                // Counted in agents rather than sessions, since one agent can
+                // hold two sessions in the same channel and that is still one
+                // face. Asked of the participants, so an agent that has been
+                // quiet for longer than the recency window does not conjure a
+                // room orb around somebody who is on their own — the same list
+                // the picture is cut from, so the arrows and the faces cannot
+                // disagree about who is here.
                 var room = OpenClawSessionKind.RoomOf(session.Key);
-                if (room is not null)
+                if (room is not null && OpenClawSessions.AgentsInRoom(room).Count > 1)
                 {
                     status.Lead = RoomId(room);
 
