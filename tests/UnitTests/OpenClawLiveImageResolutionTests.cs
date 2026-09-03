@@ -106,6 +106,24 @@ public class OpenClawLiveImageResolutionTests : IDisposable
         Assert.Contains(session.History[0], updated);
     }
 
+    // No gateway configured at all — the state TryResolveLiveImage is in the
+    // moment a session is created, or after a connection drops.
+    // FetchPageAsync returns null before ever touching a socket, and this is
+    // the only way to reach that arm: every other test in this file connects
+    // a working fake gateway first.
+    [Fact]
+    public async Task AMarkerWithNoGatewayConnectedLeavesTheTurnAsTextOnly()
+    {
+        OpenClawSessions.SetGatewayForTests(null);
+
+        var session = new OpenClawChatSession("openclaw:agent:main:main", "agent:main:main", "main");
+
+        session.OnAgentEvent("agent", AgentText("Here you go " + Marker));
+        await Task.Delay(50);
+
+        Assert.Null(session.History[0].ImageUrl);
+    }
+
     // A session's own chat.history mixes the agent's own replies with
     // everyone else's messages arriving as its input (OpenClawRoomChat's own
     // header comment). A picture someone else posted a second before the
