@@ -106,6 +106,57 @@ public class OpenClawLiveImageResolutionTests : IDisposable
         Assert.Contains(session.History[0], updated);
     }
 
+    // A session's own chat.history mixes the agent's own replies with
+    // everyone else's messages arriving as its input (OpenClawRoomChat's own
+    // header comment). A picture someone else posted a second before the
+    // agent's own reply is nearer in time, but is not the agent's picture —
+    // QA (CB-87) found the pre-role-filter version could hand it over anyway.
+    // Timestamps given explicitly (rather than relying on incidental "now"
+    // proximity) so the "nearer in time" half of the claim is actually true,
+    // not just role-filtered around.
+    [Fact]
+    public async Task APictureFromSomeoneElseInTheSamePageIsNeverAttributedToTheAgentsOwnReply()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var aSecondAgo = now.AddSeconds(-1).ToUnixTimeMilliseconds();
+        var aMinuteAgo = now.AddMinutes(-1).ToUnixTimeMilliseconds();
+
+        var (_, session) = await ConnectedAsync(request => FakeGatewaySocket.Ok(request.Id, new
+        {
+            messages = new object[]
+            {
+                new
+                {
+                    role = "user",
+                    timestamp = aSecondAgo,
+                    content = new object[]
+                    {
+                        new { type = "image", url = "https://x/someone-elses.png" }
+                    }
+                },
+                new
+                {
+                    role = "assistant",
+                    timestamp = aMinuteAgo,
+                    content = new object[]
+                    {
+                        new { type = "image", url = "https://x/the-agents-own.png", alt = "a graph" }
+                    }
+                }
+            }
+        }));
+
+        // The live turn is created "now" too, so the user's picture (a
+        // second ago) really is nearer in time than the agent's own (a
+        // minute ago) — only the role filter is what keeps it out.
+        session.OnAgentEvent("agent", AgentText("Here you go " + Marker));
+
+        for (var i = 0; i < 50 && session.History[0].ImageUrl is null; i++)
+            await Task.Delay(10);
+
+        Assert.Equal("https://x/the-agents-own.png", session.History[0].ImageUrl);
+    }
+
     [Fact]
     public async Task ATurnWithNoMarkerNeverAsksTheGateway()
     {
