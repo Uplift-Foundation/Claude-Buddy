@@ -148,6 +148,27 @@ public class AccountOrbWindowTests
         Assert.False(orb.IsDimmed);
     }
 
+    // CB-85. A Codex reading now arrives two ways, and only one of them has an
+    // age: the app-server answers about *now* and carries no ObservedAt, while
+    // a rollout snapshot carries the moment the last session wrote it. Same
+    // percentage, same orb, opposite verdicts — and dimming is the only thing
+    // on screen that tells the two apart, so it is worth pinning rather than
+    // inferring from the AsOf tests.
+    [AvaloniaFact]
+    public void ALiveCodexReadingIsNotDimmedWhereTheSameSnapshotWouldBe()
+    {
+        var live = new AccountOrbWindow("k");
+        var fromDisk = new AccountOrbWindow("k");
+
+        var reading = Usage(readAt: Now) with { Source = AccountUsageSource.Codex };
+
+        live.UpdateFrom(reading, Now);
+        fromDisk.UpdateFrom(reading with { ObservedAt = Now - AccountUsage.StaleAfter }, Now);
+
+        Assert.False(live.IsDimmed);
+        Assert.True(fromDisk.IsDimmed);
+    }
+
     // The inner ring is a gauge only when there is a cap to be a share of.
     [AvaloniaFact]
     public void ExtraUsageDisabledDrawsAnAbsenceRatherThanAZero()
