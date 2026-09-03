@@ -57,6 +57,11 @@ namespace ClaudeBuddy
         // paragraph that says the same thing twice in different voices.
         private string? _streamingKind;
 
+        // Turns already asked about, or being asked about — so a streaming
+        // snapshot that still carries the marker on its next delta doesn't
+        // fire a second gateway round trip for the same picture.
+        private readonly HashSet<ChatTurn> _pendingImageChecks = new();
+
         public OpenClawChatSession(string sessionId, string gatewayKey, string displayName)
         {
             SessionId = sessionId;
@@ -203,11 +208,66 @@ namespace ClaudeBuddy
                 };
                 _streamingKind = kind;
                 Add(_streaming);
-                return;
+            }
+            else
+            {
+                _streaming.Text = text;
+                TurnUpdated?.Invoke(_streaming);
             }
 
-            _streaming.Text = text;
-            TurnUpdated?.Invoke(_streaming);
+            // A live snapshot never carries the picture itself — only a
+            // TurnsFromHistory read of chat.history does (see
+            // OpenClawSessions.BestImageMatch) — so a reply that mentions an
+            // attachment is worth asking the gateway about, once, rather than
+            // leaving it as text-only until the panel happens to reload.
+            if (text.Contains(OpenClawSessions.MediaAttachedMarker, StringComparison.Ordinal))
+            {
+                TryResolveLiveImage(_streaming);
+            }
+        }
+
+        // Best-effort and one-shot per turn, the same shape as TurnView's own
+        // LoadImage: a picture that doesn't resolve is a picture that doesn't
+        // resolve, and the text beside it still reads. Fetching the newest
+        // page rather than matching on anything in the event itself, because
+        // nothing in a live "agent" event ties back to a chat.history message
+        // — see BestImageMatch's own comment.
+        //
+        // No try/catch around the fetch: FetchPageAsync already swallows a
+        // gateway that will not answer and returns null, the same contract
+        // LoadOlderAsync already trusts without one of its own — adding a
+        // second catch here would only ever guard against nothing.
+        //
+        // No explicit Dispatcher.Post after the await: this runs under the
+        // app's own Avalonia SynchronizationContext, which already resumes an
+        // await's continuation on the UI thread — the same reason TurnView's
+        // LoadImage sets its own bound property directly.
+        private async void TryResolveLiveImage(ChatTurn turn)
+        {
+            if (!_pendingImageChecks.Add(turn)) return;
+
+            var page = await OpenClawSessions.FetchPageAsync(this, 0, CancellationToken.None);
+            if (page is null) return;
+
+            // Restricted to this turn's own role: a session's own
+            // chat.history mixes the agent's replies with everyone else's
+            // messages arriving as input to it (see OpenClawRoomChat's own
+            // header comment), and a picture someone else posted moments
+            // before or after the agent's reply is not the agent's picture —
+            // matching across roles would occasionally attribute the wrong
+            // one in a busy room.
+            var match = OpenClawSessions.BestImageMatch(page.Value.Turns, turn.Role, turn.At);
+            if (match?.ImageUrl is null) return;
+
+            turn.ImageUrl = match.Value.ImageUrl;
+            turn.ImageAlt = match.Value.ImageAlt;
+
+            // OpenClawRoomChat only rebuilds a room's merged view on this
+            // event (see its chat.TurnUpdated subscription) — the
+            // PropertyChanged the setters above already raised reaches a
+            // direct (non-room) panel through TurnView's own subscription,
+            // but a room's Rebuild() has to be asked separately.
+            TurnUpdated?.Invoke(turn);
         }
 
         private void OnTool(JsonElement payload)
