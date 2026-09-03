@@ -984,6 +984,12 @@ channel where nobody has one keeps the channel's initials. At most four are
 drawn, and they are the four most recently active; the wedges are ordered so
 that somebody speaking does not move anyone's face.
 
+**A channel gets its own orb only once a second agent is in it.** One agent
+talking in a channel is drawn as that agent — its own orb, wearing its own face,
+with the `#` badge saying which kind of conversation it is. A second agent
+joining is what makes the channel a thing in its own right, and that is when the
+room orb appears with both of them pointing at it.
+
 **Only agents with an orb of their own get a wedge** — so a channel two agents
 are working in is drawn as two, not as everyone who has ever spoken there. An
 agent that has been quiet for longer than **Show sessions active within** is

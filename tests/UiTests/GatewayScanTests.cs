@@ -132,6 +132,133 @@ public class GatewayScanTests
 
     // --- the room orb ---
 
+    // One agent in a channel is not a room. It used to get one anyway: two orbs
+    // wearing the same face, an arrow between them, and a merged conversation
+    // with a single member in it — three ways of saying "these are the same
+    // thing" about a thing that was never two.
+    //
+    // The room orb earns its place by gathering several agents. With one, that
+    // agent's own orb already is the channel, and its # badge already says so.
+    [AvaloniaFact]
+    public void ASingleAgentInAChannelGetsNoRoomOrb()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish($$"""
+                {"sessions":[{"key":"agent:zara:discord:channel:1474","chatType":"channel",
+                              "groupChannel":"#general","lastActivityAt":{{JustNow}}}]}
+                """);
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var orbs = Orbs(manager);
+
+            Assert.DoesNotContain(orbs.Keys, id => id.Contains(":room:"));
+            Assert.Single(orbs.Keys);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // ...and it points at nothing, which is what stops the arrow being drawn.
+    [AvaloniaFact]
+    public void ASingleAgentInAChannelPointsAtNothing()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish($$"""
+                {"sessions":[{"key":"agent:zara:discord:channel:1474","chatType":"channel",
+                              "groupChannel":"#general","lastActivityAt":{{JustNow}}}]}
+                """);
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var status = manager.StatusFor("openclaw:agent:zara:discord:channel:1474");
+
+            Assert.NotNull(status);
+            Assert.True(string.IsNullOrEmpty(status!.Lead), "a lone agent has no room to point at");
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // One agent, two sessions in the same channel — still one agent, so still no
+    // room orb. Counting sessions instead of people would call this a crowd and
+    // draw a room around somebody standing on their own.
+    [AvaloniaFact]
+    public void OneAgentWithTwoSessionsInAChannelIsStillNotARoom()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish($$"""
+                {"sessions":[
+                  {"key":"agent:zara:discord:channel:1474","chatType":"channel",
+                   "groupChannel":"#general","lastActivityAt":{{JustNow}}},
+                  {"key":"agent:zara:discord:channel:1474","chatType":"channel",
+                   "groupChannel":"#general","lastActivityAt":{{JustNow}}}
+                ]}
+                """);
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            Assert.DoesNotContain(Orbs(manager).Keys, id => id.Contains(":room:"));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // The moment a second agent joins, the room appears and both point at it —
+    // which is the whole of what the arrow is for.
+    [AvaloniaFact]
+    public void ASecondAgentJoiningBringsTheRoomOrb()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish($$"""
+                {"sessions":[{"key":"agent:zara:discord:channel:1474","chatType":"channel",
+                              "groupChannel":"#general","lastActivityAt":{{JustNow}}}]}
+                """);
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            Assert.DoesNotContain(Orbs(manager).Keys, id => id.Contains(":room:"));
+
+            Publish($$"""
+                {"sessions":[
+                  {"key":"agent:zara:discord:channel:1474","chatType":"channel",
+                   "groupChannel":"#general","lastActivityAt":{{JustNow}}},
+                  {"key":"agent:annabel:discord:channel:1474","chatType":"channel",
+                   "groupChannel":"#general","lastActivityAt":{{JustNow}}}
+                ]}
+                """);
+
+            manager.ScanAndUpdate();
+
+            Assert.Contains(SessionManager.RoomId("discord:1474"), Orbs(manager).Keys);
+            Assert.Equal(
+                SessionManager.RoomId("discord:1474"),
+                manager.StatusFor("openclaw:agent:zara:discord:channel:1474")!.Lead);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
     // Two agents standing in one channel produce three orbs: one each, and one
     // for the room. The gateway has no notion of a room as a thing, so this is
     // the only place it exists.
@@ -239,11 +366,18 @@ public class GatewayScanTests
         using var scratch = new Scratch();
         try
         {
+            // Two agents in each channel, since one no longer makes a room orb.
+            // The same pair in both, which is the case a "group by agent" rule
+            // would collapse into one room and is what this asserts against.
             Publish($$"""
                 {"sessions":[
                   {"key":"agent:main:discord:channel:1","chatType":"channel",
                    "groupChannel":"#one","lastActivityAt":{{JustNow}}},
+                  {"key":"agent:zara:discord:channel:1","chatType":"channel",
+                   "groupChannel":"#one","lastActivityAt":{{JustNow}}},
                   {"key":"agent:main:discord:channel:2","chatType":"channel",
+                   "groupChannel":"#two","lastActivityAt":{{JustNow}}},
+                  {"key":"agent:zara:discord:channel:2","chatType":"channel",
                    "groupChannel":"#two","lastActivityAt":{{JustNow}}}
                 ]}
                 """);
@@ -297,9 +431,16 @@ public class GatewayScanTests
         using var scratch = new Scratch();
         try
         {
+            // Two agents, because one no longer makes a room orb at all — see
+            // ASingleAgentInAChannelGetsNoRoomOrb below. This case is about the
+            // flag on the orb, not about how few members can produce one.
             Publish($$"""
-                {"sessions":[{"key":"agent:main:discord:channel:1474","chatType":"channel",
-                              "groupChannel":"#general","lastActivityAt":{{JustNow}}}]}
+                {"sessions":[
+                  {"key":"agent:main:discord:channel:1474","chatType":"channel",
+                   "groupChannel":"#general","lastActivityAt":{{JustNow}}},
+                  {"key":"agent:zara:discord:channel:1474","chatType":"channel",
+                   "groupChannel":"#general","lastActivityAt":{{JustNow}}}
+                ]}
                 """);
 
             var manager = Manager(scratch.Dir);
