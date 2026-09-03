@@ -2203,6 +2203,18 @@ namespace ClaudeBuddy
                         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Body)));
                     }
 
+                    // A live turn can start with no picture and gain one once
+                    // OpenClawChatSession.TryResolveLiveImage resolves it
+                    // against the gateway's own history — this row already
+                    // exists by then, so it has to notice rather than being
+                    // recreated. !HasImage guards against loading twice were
+                    // ImageUrl to change again after already resolving once.
+                    if (e.PropertyName == nameof(ChatTurn.ImageUrl) && !HasImage
+                        && !string.IsNullOrEmpty(turn.ImageUrl))
+                    {
+                        LoadImage();
+                    }
+
                     PropertyChanged?.Invoke(this, e);
                 };
 

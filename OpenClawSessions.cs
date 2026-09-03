@@ -1652,6 +1652,23 @@ namespace ClaudeBuddy
             return turns;
         }
 
+        // Which of a freshly-fetched page's turns is the picture a live reply
+        // was talking about. There is nothing to join on but time: a live
+        // "agent" event carries no id that also appears in a chat.history
+        // message, so the turn whose timestamp is nearest the live one's is
+        // the answer — the two are, at most, one round trip apart. Pure and
+        // taking plain HistoryTurns rather than a page fetch, so
+        // TryResolveLiveImage's actual gateway call is the only excluded half.
+        internal static HistoryTurn? BestImageMatch(IEnumerable<HistoryTurn> turns, DateTimeOffset near) =>
+            turns.Where(t => !string.IsNullOrEmpty(t.ImageUrl))
+                 .OrderBy(t => Math.Abs((t.At - near).Ticks))
+                 // HistoryTurn is a struct, so a plain FirstOrDefault on an
+                 // empty sequence returns a zeroed HistoryTurn — a real value,
+                 // not null. Boxing into the nullable first is what makes "no
+                 // match" actually come back as null.
+                 .Select(t => (HistoryTurn?)t)
+                 .FirstOrDefault();
+
         internal static string Readable(string text) => Readable(text, out _);
 
         internal static string Readable(string text, out string? speakerId)
@@ -1809,9 +1826,16 @@ namespace ClaudeBuddy
         // The path is a detail of where the gateway put the file, and it is
         // longer than most messages. The filename is the only part worth
         // showing, and even that mostly to say something was attached at all.
+        //
+        // internal rather than private to this method: OpenClawChatSession's
+        // live path (OnAgentText) needs to recognise the same marker to know
+        // a streaming reply is worth resolving against history — see
+        // TryResolveLiveImage.
+        internal const string MediaAttachedMarker = "[media attached: ";
+
         private static string WithShortAttachments(string text)
         {
-            const string Marker = "[media attached: ";
+            const string Marker = MediaAttachedMarker;
 
             var start = text.IndexOf(Marker, StringComparison.Ordinal);
             while (start >= 0)
@@ -1974,8 +1998,13 @@ namespace ClaudeBuddy
         // the half LoadOlderAsync's tests assert through — reaching the other
         // half means a chat.history request over a live socket, which is the
         // reason FetchHistoryPageAsync below is excluded too.
+        //
+        // internal rather than private: OpenClawChatSession.TryResolveLiveImage
+        // reaches for the newest page (offset 0) the same way LoadOlderAsync
+        // reaches for an older one, rather than opening a second request shape
+        // for the same "one page of chat.history" idea.
         [ExcludeFromCodeCoverage]
-        private static async Task<(List<HistoryTurn> Turns, int Messages)?>
+        internal static async Task<(List<HistoryTurn> Turns, int Messages)?>
             FetchPageAsync(OpenClawChatSession chat, int offset, CancellationToken ct)
         {
             OpenClawGateway? gateway;
