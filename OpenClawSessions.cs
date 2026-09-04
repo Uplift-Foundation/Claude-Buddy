@@ -1656,9 +1656,17 @@ namespace ClaudeBuddy
                         // one branch, other deployments (or a later gateway)
                         // may well send it, and nothing here can tell which
                         // it is going to get.
+                        // Whitespace is not a url, and normalising it to null
+                        // here rather than leaving it for the panel matters:
+                        // the panel asks IsNullOrEmpty, so a "   " would send
+                        // it fetching nothing and it would never look at the
+                        // bytes sitting beside it. One spelling of "no url"
+                        // for both this parser and everything downstream.
                         var url = Str(block, "url");
-                        var bytes = string.IsNullOrWhiteSpace(url) ? InlineImageBytes(block) : null;
-                        if (string.IsNullOrWhiteSpace(url) && bytes is null) continue;
+                        if (string.IsNullOrWhiteSpace(url)) url = null;
+
+                        var bytes = url is null ? InlineImageBytes(block) : null;
+                        if (url is null && bytes is null) continue;
 
                         var ms2 = Num(message, "timestamp");
                         turns.Add(new HistoryTurn(role, "", url, Str(block, "alt") ?? "",
@@ -1767,13 +1775,10 @@ namespace ClaudeBuddy
             var data = Str(block, "data");
             if (string.IsNullOrWhiteSpace(data)) return null;
 
-            var viaUri = DecodeDataUri(data);
-            if (viaUri is not null) return viaUri;
-
+            byte[]? bytes;
             try
             {
-                var bytes = Convert.FromBase64String(data!);
-                return bytes.Length == 0 ? null : bytes;
+                bytes = DecodeDataUri(data) ?? Convert.FromBase64String(data!);
             }
             catch
             {
@@ -1781,6 +1786,18 @@ namespace ClaudeBuddy
                 // does not show; the turn's text still does.
                 return null;
             }
+
+            // Zero bytes is not a picture, and the guard belongs here rather
+            // than on the bare-base64 arm alone. `data:image/png;base64,` — an
+            // empty payload — decodes through DecodeDataUri to a real,
+            // zero-length array, and that is the *only* way this is reachable:
+            // Convert.FromBase64String skips exactly ' ', tab, CR and LF, every
+            // one of which IsNullOrWhiteSpace above already rejects, so the bare
+            // path can never hand back an empty array. Guarding only that arm
+            // therefore let the real case through as a turn with no text, no url
+            // and no drawable picture — an empty bubble — while making the guard
+            // itself unexecutable.
+            return bytes.Length == 0 ? null : bytes;
         }
 
         // Which of a freshly-fetched page's turns is the picture a live reply
@@ -1823,9 +1840,11 @@ namespace ClaudeBuddy
         // inbound directory and already reachable through FetchMediaAsync's
         // ordinary URL fetch. This is an agent's own local file, named by
         // "MEDIA:<path>" in CB-88's captured real traffic (confirmed via
-        // tools/openclaw-probe against a live gateway, not assumed), and it
-        // has no URL to fetch — only FetchLocalMediaAsync's media.get RPC can
-        // read it.
+        // tools/openclaw-probe against a live gateway, not assumed). It names
+        // a file rather than a url, so FetchLocalMediaAsync reads it through
+        // the gateway's own read-scoped media route — see that method for why
+        // the admin-gated media.get RPC this used to call was the wrong
+        // endpoint (CB-90).
         //
         // The second arm — the whole message being nothing but a path — is a
         // real observed shape too: the same automation's duplicate-post bug

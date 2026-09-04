@@ -290,6 +290,36 @@ public class OpenClawHistoryTurnTests
         """));
     }
 
+    // A data: URI with an empty payload decodes to a real, zero-length array
+    // rather than to null, so it reached the turn list as a picture that
+    // cannot be drawn — no text, no url, nothing to show. Zero bytes is no
+    // more a picture than a missing url is, which is what
+    // BestImageMatch already says about the same value.
+    [Fact]
+    public void AnImageBlockWhoseDataUriCarriesNoPayloadIsSkipped()
+    {
+        Assert.Empty(Turns("""
+        [{"role":"assistant","content":[{"type":"image","data":"data:image/png;base64,"}]}]
+        """));
+    }
+
+    // QA (CB-91): a whitespace-only url used to survive alongside decoded
+    // bytes, and the panel — which asks IsNullOrEmpty rather than
+    // IsNullOrWhiteSpace — would then try to fetch "   " and never draw the
+    // bytes sitting right beside it. One spelling of "no url" now.
+    [Fact]
+    public void AWhitespaceOnlyUrlIsNotAUrlAndTheInlineBytesAreUsed()
+    {
+        var turns = Turns($$"""
+        [{"role":"assistant","content":[
+            {"type":"image","url":"   ","data":"{{PixelBase64}}"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Null(turn.ImageUrl);
+        Assert.Equal(Convert.FromBase64String(PixelBase64), turn.ImageBytes);
+    }
+
     [Fact]
     public void SeveralInlineImagesBecomeSeveralTurns()
     {

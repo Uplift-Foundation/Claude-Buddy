@@ -175,4 +175,35 @@ public class OpenClawLocalMediaResolutionTests : IDisposable
 
         Assert.Null(session.History[0].ImageBytes);
     }
+
+    // ---- failing closed -------------------------------------------------
+    //
+    // Restored after QA (CB-91) pointed out that rewriting this file onto the
+    // cache seam had dropped both of them. They need no transport at all:
+    // with nothing seeded and no gateway configured, FetchMediaAsync reaches
+    // its own host/token guard and answers null, which is the same shape a
+    // refusal takes. What they pin is that a failure leaves the turn alone
+    // rather than throwing out of an async void or half-setting a picture.
+
+    [Fact]
+    public async Task AnUnservedPathLeavesTheTurnUntouchedRatherThanThrowing()
+    {
+        var session = Session();
+        session.OnAgentEvent("agent", AgentText(
+            "MEDIA:/Users/warrenthompson/.openclaw/media/never-seeded.png"));
+        await Task.Delay(50);
+
+        Assert.Null(session.History[0].ImageBytes);
+        Assert.Null(session.History[0].ImageUrl);
+        Assert.Contains("MEDIA:", session.History[0].Text);
+    }
+
+    [Fact]
+    public async Task FetchLocalMediaReturnsNullRatherThanThrowingWhenNothingAnswers()
+    {
+        var bytes = await OpenClawSessions.FetchLocalMediaAsync(
+            "/Users/warrenthompson/.openclaw/media/nothing-here.png", CancellationToken.None);
+
+        Assert.Null(bytes);
+    }
 }
