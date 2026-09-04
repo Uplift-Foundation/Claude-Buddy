@@ -292,6 +292,41 @@ namespace ClaudeBuddy.Tests
                 ChatRole.Assistant, t, null, "", DateTimeOffset.UnixEpoch,
                 "main", "#7f7")).ToList();
 
+        // CB-91: a backlog turn whose picture came inline has to reach the
+        // panel as bytes. Both loading paths map HistoryTurn onto ChatTurn
+        // field by field, so a field left out of either one is a picture that
+        // silently never appears.
+        [Fact]
+        public void SetHistoryCarriesInlinePictureBytesThrough()
+        {
+            var session = Session();
+            var bytes = new byte[] { 1, 2, 3, 4 };
+
+            session.SetHistory(new[]
+            {
+                new HistoryTurn(ChatRole.Assistant, "", null, "", DateTimeOffset.UnixEpoch,
+                    null, null, false, bytes)
+            });
+
+            Assert.Equal(bytes, Assert.Single(session.History).ImageBytes);
+        }
+
+        [Fact]
+        public void PrependHistoryCarriesInlinePictureBytesThrough()
+        {
+            var session = Session();
+            var bytes = new byte[] { 5, 6, 7 };
+
+            session.SetHistory(Turns("newer"));
+            session.PrependHistory(new[]
+            {
+                new HistoryTurn(ChatRole.Assistant, "", null, "", DateTimeOffset.UnixEpoch,
+                    null, null, false, bytes)
+            });
+
+            Assert.Equal(bytes, session.History[0].ImageBytes);
+        }
+
         [Fact]
         public void SettingHistoryReplacesEverythingAndSaysSo()
         {

@@ -254,10 +254,11 @@ public class ChatPanelMarkdownTests : IDisposable
         Assert.NotNull(picture!.Source);
     }
 
-    // Same shape as the ImageUrl case above, for CB-88's ImageBytes path: an
-    // agent's own generated picture, resolved via OpenClawSessions.
-    // FetchLocalMediaAsync (media.get) rather than a URL. The resolution
-    // itself is OpenClawLocalMediaResolutionTests' job (tests/UnitTests);
+    // Same shape as the ImageUrl case above, for the ImageBytes path: a
+    // picture that arrives as bytes rather than as something to fetch from a
+    // url — either decoded from an inline chat.history block (CB-91) or read
+    // through the gateway's read-scoped media route (CB-88/CB-90). The
+    // resolution itself is the unit suites' job;
     // this only has to prove the row notices once ImageBytes lands after
     // construction, the same way it already notices Text and ImageUrl.
     [AvaloniaFact]

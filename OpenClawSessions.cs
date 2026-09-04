@@ -1644,15 +1644,36 @@ namespace ClaudeBuddy
                     {
                         if (Str(block, "type") != "image") continue;
 
+                        // Two shapes, and the inline one is the shape this
+                        // gateway actually emits: every real image block in
+                        // its own stored transcripts is
+                        // `{type:"image", data:"<base64>", mimeType:...}`
+                        // with no url whatsoever. Reading only the url form
+                        // silently dropped every picture the gateway ever
+                        // sent — CB-91, and the oldest of the picture bugs.
+                        //
+                        // The url form is kept rather than replaced: it costs
+                        // one branch, other deployments (or a later gateway)
+                        // may well send it, and nothing here can tell which
+                        // it is going to get.
+                        // Whitespace is not a url, and normalising it to null
+                        // here rather than leaving it for the panel matters:
+                        // the panel asks IsNullOrEmpty, so a "   " would send
+                        // it fetching nothing and it would never look at the
+                        // bytes sitting beside it. One spelling of "no url"
+                        // for both this parser and everything downstream.
                         var url = Str(block, "url");
-                        if (string.IsNullOrWhiteSpace(url)) continue;
+                        if (string.IsNullOrWhiteSpace(url)) url = null;
+
+                        var bytes = url is null ? InlineImageBytes(block) : null;
+                        if (url is null && bytes is null) continue;
 
                         var ms2 = Num(message, "timestamp");
-                        turns.Add(new HistoryTurn(role, "", url!, Str(block, "alt") ?? "",
+                        turns.Add(new HistoryTurn(role, "", url, Str(block, "alt") ?? "",
                             ms2 <= 0
                                 ? DateTimeOffset.Now
                                 : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
-                            null, null));
+                            null, null, false, bytes));
                     }
                 }
 
@@ -1739,6 +1760,46 @@ namespace ClaudeBuddy
             return turns;
         }
 
+        // The picture out of an image block that carried it inline. Real
+        // blocks from this gateway put the whole thing in `data` as base64
+        // with a `mimeType` beside it (CB-91).
+        //
+        // mimeType is deliberately not read: Avalonia's decoder sniffs the
+        // format off the bytes themselves, so trusting a declared type would
+        // only add a way to be wrong. Both the bare-base64 and the
+        // `data:image/...;base64,` spellings are accepted, because this
+        // gateway genuinely uses both — bare in these blocks, the data: form
+        // in agents.list's avatarUrl, which DecodeDataUri already exists for.
+        internal static byte[]? InlineImageBytes(JsonElement block)
+        {
+            var data = Str(block, "data");
+            if (string.IsNullOrWhiteSpace(data)) return null;
+
+            byte[]? bytes;
+            try
+            {
+                bytes = DecodeDataUri(data) ?? Convert.FromBase64String(data!);
+            }
+            catch
+            {
+                // Not base64 at all. A block we cannot read is a picture that
+                // does not show; the turn's text still does.
+                return null;
+            }
+
+            // Zero bytes is not a picture, and the guard belongs here rather
+            // than on the bare-base64 arm alone. `data:image/png;base64,` — an
+            // empty payload — decodes through DecodeDataUri to a real,
+            // zero-length array, and that is the *only* way this is reachable:
+            // Convert.FromBase64String skips exactly ' ', tab, CR and LF, every
+            // one of which IsNullOrWhiteSpace above already rejects, so the bare
+            // path can never hand back an empty array. Guarding only that arm
+            // therefore let the real case through as a turn with no text, no url
+            // and no drawable picture — an empty bubble — while making the guard
+            // itself unexecutable.
+            return bytes.Length == 0 ? null : bytes;
+        }
+
         // Which of a freshly-fetched page's turns is the picture a live reply
         // was talking about. There is nothing to join on but time: a live
         // "agent" event carries no id that also appears in a chat.history
@@ -1755,9 +1816,15 @@ namespace ClaudeBuddy
         // once other traffic can land on the same page. Restricting to the
         // matching role is what keeps a busy room from occasionally handing
         // an agent's reply somebody else's attachment.
+        // Either kind of picture counts as a match, not just a url-bearing
+        // one: CB-87 was written filtering on ImageUrl alone, which on this
+        // gateway can never match, because its blocks carry bytes inline and
+        // no url at all (CB-91). A live reply reconciling against "the
+        // nearest picture" has to mean either shape or it means nothing here.
         internal static HistoryTurn? BestImageMatch(
             IEnumerable<HistoryTurn> turns, ChatRole role, DateTimeOffset near) =>
-            turns.Where(t => t.Role == role && !string.IsNullOrEmpty(t.ImageUrl))
+            turns.Where(t => t.Role == role
+                             && (!string.IsNullOrEmpty(t.ImageUrl) || t.ImageBytes is { Length: > 0 }))
                  .OrderBy(t => Math.Abs((t.At - near).Ticks))
                  // HistoryTurn is a struct, so a plain FirstOrDefault on an
                  // empty sequence returns a zeroed HistoryTurn — a real value,
@@ -1773,9 +1840,11 @@ namespace ClaudeBuddy
         // inbound directory and already reachable through FetchMediaAsync's
         // ordinary URL fetch. This is an agent's own local file, named by
         // "MEDIA:<path>" in CB-88's captured real traffic (confirmed via
-        // tools/openclaw-probe against a live gateway, not assumed), and it
-        // has no URL to fetch — only FetchLocalMediaAsync's media.get RPC can
-        // read it.
+        // tools/openclaw-probe against a live gateway, not assumed). It names
+        // a file rather than a url, so FetchLocalMediaAsync reads it through
+        // the gateway's own read-scoped media route — see that method for why
+        // the admin-gated media.get RPC this used to call was the wrong
+        // endpoint (CB-90).
         //
         // The second arm — the whole message being nothing but a path — is a
         // real observed shape too: the same automation's duplicate-post bug
@@ -1817,52 +1886,39 @@ namespace ClaudeBuddy
             text.StartsWith('/') && !text.Contains(' ') && !text.Contains('\n')
             && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
 
-        // Excluded from coverage: a media.get request over the live socket.
+        // The gateway route that serves a file the agent named by path.
         //
-        // The response shape below is the one genuinely unverified piece of
-        // CB-88 — media.get requires operator.admin, which this device did
-        // not hold and the gateway refused to grant when asked (a real
-        // "device token rotation denied" from the gateway itself, not a
-        // syntax problem), so no successful response was ever captured this
-        // session. Built from the nearest confirmed-real precedent in this
-        // codebase: agents.list's own avatarUrl field, a genuine
-        // data:image/...;base64,... URI that DecodeDataUri already decodes.
-        // The moment the scope lands, check this against
-        // `tools/openclaw-probe -- raw media.get '{"path":"..."}'` and adjust
-        // the field names below to match — do not trust this shape until then.
-        [ExcludeFromCodeCoverage]
-        internal static async Task<byte[]?> FetchLocalMediaAsync(
-            OpenClawChatSession chat, string path, CancellationToken ct)
-        {
-            OpenClawGateway? gateway;
-            lock (Gate) gateway = _gateway;
-            if (gateway is null) return null;
+        // CB-88 originally asked the `media.get` RPC for this, concluded from
+        // its refusal that the feature needed `operator.admin`, and shipped
+        // against a guessed response shape. All three were wrong. Read out of
+        // the gateway's own descriptor table:
+        //
+        //     { name: "assistant.media.get", scope: "operator.read",
+        //       advertise: false }
+        //
+        // It is an HTTP route rather than a WS method — asking for it over
+        // RPC answers "unknown method" — and it needs only the scope this app
+        // already pairs with. `advertise: false` is why it appears in neither
+        // the docs nor `openclaw docs`, and why the admin-tier `media.get`
+        // was the one that turned up first. That one is the read-any-path
+        // version, which is exactly why it is gated the way it is.
+        //
+        // Verified against the live gateway with this device's own read
+        // token: 200, 716535 bytes, image/png, for both a raw and a
+        // percent-encoded source. Adding `&meta=1` asks whether a path is
+        // servable at all and answers with a reason — a path outside the
+        // gateway's hardcoded media allowlist comes back
+        // `{"available":false,"code":"outside-allowed-folders"}`, which is
+        // what an agent's picture written into *another* agent's workspace
+        // does (CB-90).
+        internal const string AssistantMediaRoute = "/__openclaw__/assistant-media?source=";
 
-            JsonElement res;
-            try
-            {
-                res = await gateway.RequestAsync(
-                    "media.get", new Dictionary<string, object> { ["path"] = path }, ct);
-            }
-            catch
-            {
-                return null;
-            }
-
-            foreach (var field in new[] { "dataUrl", "url", "data", "base64" })
-            {
-                var value = Str(res, field);
-                if (string.IsNullOrEmpty(value)) continue;
-
-                var decoded = DecodeDataUri(value);
-                if (decoded is not null) return decoded;
-
-                try { return Convert.FromBase64String(value); }
-                catch { /* not bare base64 either — try the next field */ }
-            }
-
-            return null;
-        }
+        // Delegating rather than opening a second fetch path: FetchMediaAsync
+        // already speaks this exact transport and keys a bounded cache by the
+        // url it is handed, so routing through it means a picture scrolled
+        // past twice is fetched once.
+        internal static Task<byte[]?> FetchLocalMediaAsync(string path, CancellationToken ct) =>
+            FetchMediaAsync(AssistantMediaRoute + Uri.EscapeDataString(path), ct);
 
         internal static string Readable(string text) => Readable(text, out _);
 

@@ -218,6 +218,121 @@ public class OpenClawHistoryTurnTests
         Assert.Equal("", Assert.Single(turns).ImageAlt);
     }
 
+    // ---- pictures carried inline (CB-91) ---------------------------------
+
+    // The shape this gateway actually sends. Every real image block in its
+    // own stored transcripts is data+mimeType with no url at all, and the
+    // parser used to require a url and so dropped all of them silently.
+    //
+    // The base64 here is a one-pixel PNG, the same fixture the rest of this
+    // repo's image tests use.
+    private const string PixelBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==";
+
+    [Fact]
+    public void AnImageBlockCarryingItsBytesInlineBecomesATurnWithThoseBytes()
+    {
+        var turns = Turns($$"""
+        [{"role":"assistant","content":[
+            {"type":"image","data":"{{PixelBase64}}","mimeType":"image/png"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Equal(Convert.FromBase64String(PixelBase64), turn.ImageBytes);
+        Assert.Null(turn.ImageUrl);
+        Assert.Equal("", turn.Text);
+    }
+
+    // The gateway spells inline bytes both ways in different places — bare
+    // base64 in these blocks, a data: URI in agents.list's avatarUrl — so
+    // both are accepted here.
+    [Fact]
+    public void AnImageBlockCarryingADataUriAlsoBecomesBytes()
+    {
+        var turns = Turns($$"""
+        [{"role":"assistant","content":[
+            {"type":"image","data":"data:image/png;base64,{{PixelBase64}}"}]}]
+        """);
+
+        Assert.Equal(Convert.FromBase64String(PixelBase64), Assert.Single(turns).ImageBytes);
+    }
+
+    // A url still wins where one is given, so a deployment that sends the
+    // url form keeps working exactly as before.
+    [Fact]
+    public void AUrlIsStillPreferredWhenTheBlockCarriesOne()
+    {
+        var turns = Turns($$"""
+        [{"role":"assistant","content":[
+            {"type":"image","url":"https://x/a.png","data":"{{PixelBase64}}"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Equal("https://x/a.png", turn.ImageUrl);
+        Assert.Null(turn.ImageBytes);
+    }
+
+    [Fact]
+    public void AnImageBlockWithNeitherUrlNorDataIsSkipped()
+    {
+        Assert.Empty(Turns("""
+        [{"role":"assistant","content":[{"type":"image","mimeType":"image/png"}]}]
+        """));
+    }
+
+    // Data that is not base64 at all is a picture that cannot be shown, not
+    // an exception and not an empty bubble.
+    [Fact]
+    public void AnImageBlockWhoseDataIsNotBase64IsSkipped()
+    {
+        Assert.Empty(Turns("""
+        [{"role":"assistant","content":[{"type":"image","data":"not base64 !!!"}]}]
+        """));
+    }
+
+    // A data: URI with an empty payload decodes to a real, zero-length array
+    // rather than to null, so it reached the turn list as a picture that
+    // cannot be drawn — no text, no url, nothing to show. Zero bytes is no
+    // more a picture than a missing url is, which is what
+    // BestImageMatch already says about the same value.
+    [Fact]
+    public void AnImageBlockWhoseDataUriCarriesNoPayloadIsSkipped()
+    {
+        Assert.Empty(Turns("""
+        [{"role":"assistant","content":[{"type":"image","data":"data:image/png;base64,"}]}]
+        """));
+    }
+
+    // QA (CB-91): a whitespace-only url used to survive alongside decoded
+    // bytes, and the panel — which asks IsNullOrEmpty rather than
+    // IsNullOrWhiteSpace — would then try to fetch "   " and never draw the
+    // bytes sitting right beside it. One spelling of "no url" now.
+    [Fact]
+    public void AWhitespaceOnlyUrlIsNotAUrlAndTheInlineBytesAreUsed()
+    {
+        var turns = Turns($$"""
+        [{"role":"assistant","content":[
+            {"type":"image","url":"   ","data":"{{PixelBase64}}"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Null(turn.ImageUrl);
+        Assert.Equal(Convert.FromBase64String(PixelBase64), turn.ImageBytes);
+    }
+
+    [Fact]
+    public void SeveralInlineImagesBecomeSeveralTurns()
+    {
+        var turns = Turns($$"""
+        [{"role":"assistant","content":[
+            {"type":"image","data":"{{PixelBase64}}"},
+            {"type":"image","data":"{{PixelBase64}}"}]}]
+        """);
+
+        Assert.Equal(2, turns.Count);
+        Assert.All(turns, t => Assert.NotNull(t.ImageBytes));
+    }
+
     // ---- timestamps ------------------------------------------------------
 
     [Fact]
