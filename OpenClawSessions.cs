@@ -1794,13 +1794,19 @@ namespace ClaudeBuddy
             // captured example (CB-88) has two paragraphs of in-character
             // reply before the MEDIA: line, so anchoring on the start of the
             // whole message would miss the one real case this exists for.
+            //
+            // Validated the same way as the bare-path arm below rather than
+            // trusting anything after the prefix — QA (CB-88) found that an
+            // ordinary sentence starting a line with "MEDIA:" ("MEDIA: is a
+            // broad term...") would otherwise extract "is a broad term..." as
+            // a "path" and fire a real request for it.
             foreach (var rawLine in text.Split('\n'))
             {
                 var line = rawLine.Trim();
                 if (!line.StartsWith(LocalMediaMarker, StringComparison.Ordinal)) continue;
 
                 var path = line[LocalMediaMarker.Length..].Trim();
-                return path.Length == 0 ? null : path;
+                return LooksLikeAnImagePath(path) ? path : null;
             }
 
             var trimmed = text.Trim();

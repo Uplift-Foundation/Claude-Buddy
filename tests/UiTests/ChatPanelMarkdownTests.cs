@@ -304,18 +304,24 @@ public class ChatPanelMarkdownTests : IDisposable
     }
 
     // The other arm of the same guard: ImageBytes changing to something that
-    // still isn't a picture (empty, same as never having resolved one) while
-    // the row has no image yet — distinct from the "already has one" arm
-    // above, since here HasImage is still false when the property changes.
+    // still isn't a picture while the row has no image yet — distinct from
+    // the "already has one" arm above, since here HasImage is still false
+    // when the property changes. Two changes (empty, then null) rather than
+    // one: QA (CB-88) found the single-empty-value version left one IL-level
+    // arc of the pattern-match still unexercised, and this closes it.
     [AvaloniaFact]
-    public void ATurnWhoseImageBytesChangeToEmptyNeverLoadsAnything()
+    public void ATurnWhoseImageBytesChangeToEmptyOrNullNeverLoadsAnything()
     {
-        var turn = new ChatTurn { Role = ChatRole.Assistant, Text = "no picture yet", IsComplete = true };
+        var turn = new ChatTurn
+        {
+            Role = ChatRole.Assistant, Text = "no picture yet", IsComplete = true,
+            ImageBytes = Array.Empty<byte>()
+        };
         var fake = NewFake(new[] { turn });
         ChatPanel.OpenFor(NewOrb(), fake);
         FlushRender();
 
-        turn.ImageBytes = Array.Empty<byte>();
+        turn.ImageBytes = null;
         FlushRender();
 
         var panel = ChatPanelTestAccess.Instance!;
