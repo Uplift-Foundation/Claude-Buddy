@@ -106,6 +106,39 @@ public class OpenClawLiveImageResolutionTests : IDisposable
         Assert.Contains(session.History[0], updated);
     }
 
+    // CB-91: the shape this gateway actually returns — bytes inline, no url.
+    // Before BestImageMatch and this resolution learned about that form, a
+    // marker-bearing reply here reconciled against nothing and stayed text.
+    [Fact]
+    public async Task AMatchCarryingBytesInsteadOfAUrlResolvesToThoseBytes()
+    {
+        const string pixel =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==";
+
+        var (_, session) = await ConnectedAsync(request => FakeGatewaySocket.Ok(request.Id, new
+        {
+            messages = new object[]
+            {
+                new
+                {
+                    role = "assistant",
+                    content = new object[]
+                    {
+                        new { type = "image", data = pixel, mimeType = "image/png" }
+                    }
+                }
+            }
+        }));
+
+        session.OnAgentEvent("agent", AgentText("Here you go " + Marker));
+
+        for (var i = 0; i < 50 && session.History[0].ImageBytes is null; i++)
+            await Task.Delay(10);
+
+        Assert.Equal(Convert.FromBase64String(pixel), session.History[0].ImageBytes);
+        Assert.Null(session.History[0].ImageUrl);
+    }
+
     // No gateway configured at all — the state TryResolveLiveImage is in the
     // moment a session is created, or after a connection drops.
     // FetchPageAsync returns null before ever touching a socket, and this is
