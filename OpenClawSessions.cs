@@ -1654,7 +1654,12 @@ namespace ClaudeBuddy
             // Indices rather than turn values because a HistoryTurn is a
             // struct: two identical mirror turns would be equal by value and
             // there would be no way to say which one to remove.
-            var namedSources = new HashSet<string>(StringComparer.Ordinal);
+            // Counted rather than a set, because one named turn cancels one
+            // mirror and not every mirror of that file. A page carrying two
+            // deliveries of a picture the agent also named by path has one
+            // cross-arm pair and one genuine second delivery, and a set would
+            // swallow both.
+            var namedSources = new Dictionary<string, int>(StringComparer.Ordinal);
             var mirrorDrawn = new List<(int Index, string Source)>();
 
             foreach (var message in messages.EnumerateArray())
@@ -1842,7 +1847,7 @@ namespace ClaudeBuddy
                 var named = LocalMediaPathFrom(text);
                 if (named is not null)
                 {
-                    namedSources.Add(named);
+                    namedSources[named] = namedSources.GetValueOrDefault(named) + 1;
 
                     // Text kept and the picture beside it, which is the shape
                     // the live path already produces — TryResolveLocalMedia
@@ -1883,13 +1888,30 @@ namespace ClaudeBuddy
             // (36 seconds apart in one measured case, 47 minutes in another),
             // and collapsing them would hide an event the gateway recorded.
             // Only a cross-arm pair is one event seen twice.
+            // One named turn cancels one mirror. Written as a budget rather
+            // than a membership test because "drop every mirror of this file"
+            // would silently eat a real second delivery on a page that has
+            // both — the very thing the paragraph above preserves. QA found
+            // that edge by reading the rule rather than the corpus, where it
+            // does not occur.
+            //
+            // Chosen earliest-first, so the mirror that pairs with the named
+            // turn is the one that goes and any later delivery keeps its own
+            // timestamp. Removed highest-index-first afterwards so no earlier
+            // index is invalidated on the way.
             if (namedSources.Count > 0)
             {
-                for (var i = mirrorDrawn.Count - 1; i >= 0; i--)
+                var doomed = new List<int>();
+
+                foreach (var (index, source) in mirrorDrawn)
                 {
-                    if (namedSources.Contains(mirrorDrawn[i].Source))
-                        turns.RemoveAt(mirrorDrawn[i].Index);
+                    if (namedSources.GetValueOrDefault(source) == 0) continue;
+
+                    namedSources[source]--;
+                    doomed.Add(index);
                 }
+
+                for (var i = doomed.Count - 1; i >= 0; i--) turns.RemoveAt(doomed[i]);
             }
 
             return turns;
