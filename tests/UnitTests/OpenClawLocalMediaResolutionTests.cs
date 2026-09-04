@@ -78,12 +78,16 @@ public class OpenClawLocalMediaResolutionTests : IDisposable
             dataUrl = $"data:image/png;base64,{OnePixelPngBase64}"
         }));
 
+        var updated = new System.Collections.Generic.List<ChatTurn>();
+        session.TurnUpdated += updated.Add;
+
         session.OnAgentEvent("agent", AgentText("here's the drop 🌸\n\nMEDIA:/tmp/pic.png"));
 
         for (var i = 0; i < 50 && session.History[0].ImageBytes is null; i++)
             await Task.Delay(10);
 
         Assert.Equal(Convert.FromBase64String(OnePixelPngBase64), session.History[0].ImageBytes);
+        Assert.Contains(session.History[0], updated);
     }
 
     [Fact]

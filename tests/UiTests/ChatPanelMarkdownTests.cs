@@ -289,6 +289,18 @@ public class ChatPanelMarkdownTests : IDisposable
 
         Assert.NotNull(picture);
         Assert.NotNull(picture!.Source);
+
+        // A turn that already resolved a picture gaining ImageBytes again
+        // (the guard's !HasImage arm being false) must not reload — the
+        // point of the guard is exactly this: to fire once, not once per
+        // property change forever.
+        var reloadCountBefore = picture.Source;
+        turn.ImageBytes = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        FlushRender();
+
+        Assert.Same(reloadCountBefore, panel.GetVisualDescendants().OfType<Avalonia.Controls.Image>()
+            .FirstOrDefault(im => im.Width == 228)?.Source);
     }
 
     // A cached "no bytes" answer (a gateway that answered with nothing) must
