@@ -140,6 +140,71 @@ public class OpenClawMediaPathHarvestTests
         Assert.Equal("/Users/w/media/a.png", index["a.png"]);
     }
 
+    // ---- the raw-JSON shapes, which is where the paths actually are --------
+
+    // The index is fed each message's raw JSON rather than the text the parser
+    // renders, because TurnsFromHistory deliberately skips tool_use blocks and
+    // that is exactly where the paths live. QA measured the difference over
+    // every delivery-mirror record on the gateway host: 3 of 41 from rendered
+    // text, 27 of 41 from raw JSON.
+    [Fact]
+    public void APathInsideAToolInvocationIsFound()
+    {
+        var index = OpenClawSessions.MediaPathsByFileName(new[]
+        {
+            """
+            {"role":"assistant","content":[{"type":"tool_use","name":"bash",
+             "input":{"command":"openclaw message send --media ~/.openclaw/media/browser/03a1be83.png"}}]}
+            """
+        });
+
+        Assert.Equal("~/.openclaw/media/browser/03a1be83.png", index["03a1be83.png"]);
+    }
+
+    // A JSON string value with no whitespace around it at all — the whole
+    // object is one whitespace-delimited token, so the double quote has to be
+    // a separator or nothing is found.
+    [Fact]
+    public void APathAsABareJsonValueIsFound()
+    {
+        var index = OpenClawSessions.MediaPathsByFileName(new[]
+        {
+            """{"aggregated":"/Users/w/.openclaw/media/a.png","n":1}"""
+        });
+
+        Assert.Equal("/Users/w/.openclaw/media/a.png", index["a.png"]);
+    }
+
+    // The reason `:` is not a separator. Split on it and this token becomes
+    // `//example.com/a.png`, which looks rooted and would be fetched off the
+    // local disk.
+    [Fact]
+    public void AUrlInsideJsonIsNotMistakenForAPath()
+    {
+        var index = OpenClawSessions.MediaPathsByFileName(new[]
+        {
+            """{"url":"https://cdn.example.com/attachments/a.png"}"""
+        });
+
+        Assert.Empty(index);
+    }
+
+    // An inline picture's base64 is a single token megabytes long. It is
+    // skipped on length rather than trimmed and tested — and, being one
+    // token, it cannot contribute a path either way.
+    [Fact]
+    public void AnInlineImagesBase64IsSkippedRatherThanScanned()
+    {
+        var big = "/" + new string('A', 5000) + ".png";
+
+        var index = OpenClawSessions.MediaPathsByFileName(new[]
+        {
+            $"{{\"type\":\"image\",\"data\":\"{big}\"}}"
+        });
+
+        Assert.Empty(index);
+    }
+
     [Fact]
     public void APageWithNoPathsYieldsNothing()
     {

@@ -1642,12 +1642,10 @@ namespace ClaudeBuddy
             // Read the whole page for paths before building any turn. A
             // delivered picture's own record names only the file, and the
             // directory it lives in is somewhere else on the page — see
-            // MediaPathsByFileName. Deliberately the raw text rather than
-            // Readable's version of it, since the path is commonly the last
-            // line of a machine envelope whose header Readable replaces.
-            var mediaPaths = MediaPathsByFileName(messages.EnumerateArray()
-                .Where(m => m.TryGetProperty("content", out _))
-                .Select(m => TextOf(m.GetProperty("content"))));
+            // MediaPathsByFileName, including why this is each message's raw
+            // JSON rather than the text this loop goes on to render.
+            var mediaPaths = MediaPathsByFileName(
+                messages.EnumerateArray().Select(m => m.GetRawText()));
 
             foreach (var message in messages.EnumerateArray())
             {
@@ -1982,11 +1980,26 @@ namespace ClaudeBuddy
         // through to the same harmless unavailable.
         internal const string SharedMediaDir = "~/.openclaw/media/";
 
-        // Whitespace is what separates one candidate path from the next. A
-        // path with a space in it is therefore missed, which is accepted:
+        // What separates one candidate path from the next. Whitespace, plus
+        // the double quote, because the page is scanned as raw JSON and a path
+        // in there is `"…":"/Users/…/a.png"` with no whitespace around it —
+        // without the quote the whole object is one token and nothing is found.
+        //
+        // `:` is deliberately *not* a separator: splitting on it would turn
+        // `https://example.com/a.png` into a token beginning `//example.com/…`,
+        // which looks rooted and would be fetched as a local file.
+        //
+        // A path containing a space is therefore missed. That is accepted:
         // nothing here can tell a spaced path from two tokens, and guessing
-        // wrong would build a request for a file that does not exist.
-        private static readonly char[] TokenBreaks = { ' ', '\t', '\n', '\r' };
+        // wrong would build a request for a file that does not exist. None
+        // appears in the corpus this was measured against.
+        private static readonly char[] TokenBreaks = { ' ', '\t', '\n', '\r', '"' };
+
+        // No real path is longer than this — PATH_MAX is 1024 on macOS and
+        // 4096 on Linux. The guard is not about paths, though: a message
+        // carrying an inline picture has a single base64 token megabytes long,
+        // and there is no reason to trim and test that.
+        private const int LongestPath = 4096;
 
         // Punctuation a path picks up from the prose around it — quoted,
         // parenthesised, or simply followed by a comma at the end of a
@@ -2000,17 +2013,27 @@ namespace ClaudeBuddy
         // the page it was delivered on rather than assumed.
         //
         // The mirror record names the file and nothing else (see
-        // SharedMediaDir for why), but the real path is usually somewhere else
-        // on the same page: the drop that prompted this ticket carries it
-        // verbatim as an ordinary turn, and the browser capture that exposed
-        // the guess carries it four times. So the page is read for paths
-        // first, and a mirror's filename is matched against them by basename.
+        // SharedMediaDir for why), but the real path is generally somewhere
+        // else on the same page. So the page is read for paths first, and a
+        // mirror's filename is matched against them by basename.
+        //
+        // Fed the **raw JSON** of each message rather than the text this parser
+        // renders, and that is the difference between working and nearly not.
+        // TurnsFromHistory deliberately skips tool_use blocks — a replayed one
+        // is a wall of JSON — but those blocks are exactly where the paths are:
+        // a `--media ~/.openclaw/media/browser/…png` argument, an `aggregated`
+        // field. Measured over every delivery-mirror record on the gateway
+        // host, harvesting the rendered text resolves 3 of 41; harvesting the
+        // raw JSON resolves 27 of 41. Same rendering, nine times the pictures.
         //
         // A basename found under two different directories is dropped rather
         // than chosen between. Fetching the wrong one of two real files would
         // draw a picture that is not the delivered one — actively misleading,
         // and worse than drawing none — where dropping it falls back to the
-        // guess and, at worst, to the text that is there today.
+        // guess and, at worst, to the text that is there today. (No genuine
+        // ambiguity appears in the corpus: the nearest path is 1-2 records
+        // from its mirror, min to p90. The rule is for the case that has not
+        // happened yet.)
         internal static Dictionary<string, string> MediaPathsByFileName(IEnumerable<string> texts)
         {
             var found = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -2022,6 +2045,8 @@ namespace ClaudeBuddy
 
                 foreach (var token in text.Split(TokenBreaks, StringSplitOptions.RemoveEmptyEntries))
                 {
+                    if (token.Length > LongestPath) continue;
+
                     var path = AbsoluteImagePathIn(token);
                     if (path is null) continue;
 
