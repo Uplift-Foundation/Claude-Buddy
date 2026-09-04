@@ -18,8 +18,22 @@ namespace ClaudeBuddy.Tests;
 // way the live scan's constructor defaults are.
 //
 // The two LocalSessions cases mutate process-wide statics (the provider and
-// the fallback), so they live in this one class — classes are xunit's
-// parallelism unit — and put both back in a finally.
+// the fallback) and put both back in a finally.
+//
+// Keeping them in one class is not enough, which is what the collection below
+// is for. A class is xunit's parallelism unit, so same-class cases cannot race
+// each other — but HeadlessSessionsTests mutates these same two statics, and
+// nothing stopped the two classes running at once. That is a real flake, not a
+// theoretical one: LocalSessionsAsksTheDiskRatherThanTheOrbList failed once
+// here in 1ms while another class held the fallback, then passed on a rerun
+// over an identical binary.
+//
+// "Settings" rather than a collection of its own, deliberately:
+// HeadlessSessionsTests is already in it, and a new name would serialise this
+// class against nothing. The collection is the repo's existing answer to
+// process-wide statics — see SettingsCollection's own comment — and a static
+// delegate is the same hazard as a static settings object.
+[Collection("Settings")]
 public class HeadlessSnapshotTests
 {
     private static readonly Func<Dictionary<string, string>?> NoJobs =

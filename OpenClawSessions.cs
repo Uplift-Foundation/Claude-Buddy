@@ -1616,9 +1616,36 @@ namespace ClaudeBuddy
         // here controls, so it is the half that has to be tested against
         // fixtures — the same reasoning that keeps ChatTranscript and
         // CodexTranscript pure.
+        // The text of one message, whichever of the three shapes its content
+        // arrived in. Factored out because the page has to be read twice: once
+        // for the paths in it, before any turn is built, and then again to
+        // build them. Two spellings of "the text of this message" would be two
+        // things to keep in step.
+        internal static string TextOf(JsonElement content) => content.ValueKind switch
+        {
+            JsonValueKind.String => content.GetString() ?? "",
+
+            JsonValueKind.Array => string.Join("\n", content.EnumerateArray()
+                .Where(b => Str(b, "type") == "text")
+                .Select(b => Str(b, "text"))
+                .Where(t => !string.IsNullOrWhiteSpace(t))),
+
+            JsonValueKind.Object => Str(content, "text") ?? "",
+
+            _ => ""
+        };
+
         internal static List<HistoryTurn> TurnsFromHistory(JsonElement messages)
         {
             var turns = new List<HistoryTurn>();
+
+            // Read the whole page for paths before building any turn. A
+            // delivered picture's own record names only the file, and the
+            // directory it lives in is somewhere else on the page — see
+            // MediaPathsByFileName, including why this is each message's raw
+            // JSON rather than the text this loop goes on to render.
+            var mediaPaths = MediaPathsByFileName(
+                messages.EnumerateArray().Select(m => m.GetRawText()));
 
             foreach (var message in messages.EnumerateArray())
             {
@@ -1677,19 +1704,7 @@ namespace ClaudeBuddy
                     }
                 }
 
-                var text = content.ValueKind switch
-                {
-                    JsonValueKind.String => content.GetString() ?? "",
-
-                    JsonValueKind.Array => string.Join("\n", content.EnumerateArray()
-                        .Where(b => Str(b, "type") == "text")
-                        .Select(b => Str(b, "text"))
-                        .Where(t => !string.IsNullOrWhiteSpace(t))),
-
-                    JsonValueKind.Object => Str(content, "text") ?? "",
-
-                    _ => ""
-                };
+                var text = TextOf(content);
 
                 if (string.IsNullOrWhiteSpace(text)) continue;
 
@@ -1752,6 +1767,46 @@ namespace ClaudeBuddy
                 }
 
                 if (string.IsNullOrWhiteSpace(text)) continue;
+
+                // A picture the gateway actually delivered somewhere. Its own
+                // record of having done so is all a client ever sees of it —
+                // see DeliveredPictureName for why that record, rather than
+                // anything the agent wrote, is the signal worth trusting.
+                var delivered = DeliveredPictureName(Str(message, "model"), text);
+                if (delivered is not null)
+                {
+                    // Carried as the route rather than as a path, because that
+                    // is what ImageUrl already means to everything downstream:
+                    // FetchMediaAsync uses it as the GET path and the panel
+                    // needs no new branch to draw it.
+                    //
+                    // The path off the page where the page has one, and the
+                    // shared media directory only where it does not. The
+                    // difference is not cosmetic: the mirror record's filename
+                    // is a basename with the directory stripped, so the
+                    // fallback is a guess that is right for a file an agent
+                    // copied into the shared directory and wrong for one that
+                    // lives anywhere else.
+                    var source = mediaPaths.TryGetValue(delivered, out var known)
+                        ? known
+                        : SharedMediaDir + delivered;
+
+                    // The filename is kept as the turn's text, not dropped for
+                    // a cleaner picture-only bubble. Nothing here can know
+                    // whether the fetch will succeed — the fallback may be
+                    // wrong, a gateway under --profile has a different media
+                    // root, and a file can be cleaned up — and a turn with an
+                    // unresolvable url and no text is an empty bubble, which is
+                    // worse than the bare filename this shows today. So it
+                    // degrades to exactly today's appearance instead. Text
+                    // beside a thumbnail is already what CB-88's MEDIA:
+                    // pictures render as.
+                    turns.Add(new HistoryTurn(
+                        role, delivered,
+                        AssistantMediaRoute + Uri.EscapeDataString(source),
+                        delivered, at, speaker, colour, mine));
+                    continue;
+                }
 
                 turns.Add(new HistoryTurn(role, text.Trim(), null, "", at,
                     speaker, colour, mine));
@@ -1885,6 +1940,220 @@ namespace ClaudeBuddy
         private static bool LooksLikeAnImagePath(string text) =>
             text.StartsWith('/') && !text.Contains(' ') && !text.Contains('\n')
             && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+
+        // The gateway writes one of these whenever it actually delivers a
+        // message somewhere, and for a picture it is the only trace a client
+        // gets: content is the bare filename, with no directory and no url
+        // (CB-94, read out of the gateway's own stored transcript).
+        //
+        // Keyed on this record rather than on anything the agent said, and
+        // that is the point. CB-88's MEDIA: convention works, but it depends
+        // on the agent remembering to write it — the automation here skipped
+        // it twice in a row while delivering pictures perfectly well. The
+        // mirror is written by the gateway, so it cannot be forgotten.
+        internal const string DeliveryMirrorModel = "delivery-mirror";
+
+        // The last resort for a delivered picture whose real directory is
+        // nowhere on the page — a guess, and named as one.
+        //
+        // It is a guess because the gateway builds the mirror text as
+        // `mediaUrls.map(basename).join(", ")`
+        // (`resolveMirroredTranscriptText`, read out of the running gateway's
+        // own bundle): the directory is *deliberately* stripped, so the bare
+        // filename says nothing whatsoever about where the file is. This was
+        // originally written as though it did, and QA measured the cost —
+        // right for the drop that prompted the ticket, wrong for a browser
+        // capture living one directory deeper in
+        // `~/.openclaw/media/browser/`, which 404s here.
+        //
+        // Kept as a fallback rather than deleted because it is right for the
+        // common case an agent is told to arrange (copy the file into the
+        // shared media directory, which is what Lilibeth's own runbook says),
+        // and because a wrong guess costs nothing: the fetch comes back
+        // unavailable and the filename stays as the turn's text. See
+        // MediaPathsByFileName for the answer that is not a guess.
+        //
+        // `~` deliberately: resolveUserPath expands it on the *gateway* side,
+        // so a client that only ever learns a filename never has to know the
+        // host's absolute paths. It does assume the default state-directory
+        // name, so a gateway under --profile or OPENCLAW_STATE_DIR falls
+        // through to the same harmless unavailable.
+        internal const string SharedMediaDir = "~/.openclaw/media/";
+
+        // What separates one candidate path from the next. Whitespace, plus
+        // the double quote, because the page is scanned as raw JSON and a path
+        // in there is `"…":"/Users/…/a.png"` with no whitespace around it —
+        // without the quote the whole object is one token and nothing is found.
+        //
+        // `:` is deliberately *not* a separator: splitting on it would turn
+        // `https://example.com/a.png` into a token beginning `//example.com/…`,
+        // which looks rooted. That token shape is refused explicitly instead
+        // (see AbsoluteImagePathIn), because a *literal* `//host/…` can appear
+        // in text without a scheme in front of it.
+        //
+        // A path containing a space is therefore missed. That is accepted:
+        // nothing here can tell a spaced path from two tokens, and guessing
+        // wrong would build a request for a file that does not exist. None
+        // appears in the corpus this was measured against.
+        private static readonly char[] TokenBreaks = { ' ', '\t', '\n', '\r', '"' };
+
+        // The whitespace escapes, which have to be handled separately because
+        // the page is scanned as raw JSON: in there a newline is the *two
+        // characters* `\` and `n`, not a newline, so TokenBreaks never splits
+        // on it however many real newlines it lists.
+        //
+        // That is not a hypothetical. The first version of the raw-JSON scan
+        // lost the very picture this ticket was filed about: its path is on a
+        // line of its own inside a text block, so the escape glued it to the
+        // sentence in front of it and nothing matched. The fallback happened
+        // to be right for that one file, which is exactly the kind of luck
+        // this ticket exists to stop relying on.
+        private static readonly string[] EscapedWhitespace = { "\\n", "\\r", "\\t" };
+
+        // No real path is longer than this — PATH_MAX is 1024 on macOS and
+        // 4096 on Linux. The guard is not about paths, though: a message
+        // carrying an inline picture has a single base64 token megabytes long,
+        // and there is no reason to trim and test that.
+        private const int LongestPath = 4096;
+
+        // Punctuation a path picks up from the prose around it — quoted,
+        // parenthesised, or ending a sentence. Trimmed from both ends before
+        // the shape test, since otherwise a perfectly good path fails it for
+        // having been written inside a sentence.
+        //
+        // `.`, `!` and `?` are in here for the sentence-final case, and are
+        // safe rather than merely convenient: a path's last character is part
+        // of its extension, so trimming cannot damage one, and a *leading*
+        // full stop cannot survive the rooted-prefix test below anyway. The
+        // backslash is here for JSON's escaped quote, which otherwise leaves
+        // one clinging to a token.
+        private static readonly char[] PathWrappers =
+        {
+            '"', '\'', '`', '(', ')', '[', ']', '{', '}', '<', '>',
+            ',', ';', ':', '.', '!', '?', '\\'
+        };
+
+        // The directory a delivered picture actually lives in, recovered from
+        // the page it was delivered on rather than assumed.
+        //
+        // The mirror record names the file and nothing else (see
+        // SharedMediaDir for why), but the real path is generally somewhere
+        // else on the same page. So the page is read for paths first, and a
+        // mirror's filename is matched against them by basename.
+        //
+        // Fed the **raw JSON** of each message rather than the text this parser
+        // renders, and that is the difference between working and nearly not.
+        // TurnsFromHistory deliberately skips tool_use blocks — a replayed one
+        // is a wall of JSON — but those blocks are exactly where the paths are:
+        // a `--media ~/.openclaw/media/browser/…png` argument, an `aggregated`
+        // field. Measured over every delivery-mirror record on the gateway
+        // host, harvesting the rendered text resolves 3 of 41; harvesting the
+        // raw JSON resolves 27 of 41. Same rendering, nine times the pictures.
+        //
+        // A basename found under two different directories is dropped rather
+        // than chosen between. Fetching the wrong one of two real files would
+        // draw a picture that is not the delivered one — actively misleading,
+        // and worse than drawing none — where dropping it falls back to the
+        // guess and, at worst, to the text that is there today. (No genuine
+        // ambiguity appears in the corpus: the nearest path is 1-2 records
+        // from its mirror, min to p90. The rule is for the case that has not
+        // happened yet.)
+        internal static Dictionary<string, string> MediaPathsByFileName(IEnumerable<string> texts)
+        {
+            var found = new Dictionary<string, string>(StringComparer.Ordinal);
+            var ambiguous = new List<string>();
+
+            foreach (var text in texts)
+            {
+                if (string.IsNullOrEmpty(text)) continue;
+
+                // See EscapedWhitespace: a raw-JSON newline is two characters
+                // and would otherwise glue a line-initial path to the line
+                // before it.
+                var scannable = text;
+                foreach (var escape in EscapedWhitespace)
+                {
+                    if (scannable.Contains(escape, StringComparison.Ordinal))
+                        scannable = scannable.Replace(escape, " ", StringComparison.Ordinal);
+                }
+
+                foreach (var token in scannable.Split(TokenBreaks, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (token.Length > LongestPath) continue;
+
+                    var path = AbsoluteImagePathIn(token);
+                    if (path is null) continue;
+
+                    var name = path[(path.LastIndexOf('/') + 1)..];
+
+                    if (!found.TryGetValue(name, out var seen)) found[name] = path;
+                    else if (!string.Equals(seen, path, StringComparison.Ordinal)) ambiguous.Add(name);
+                }
+            }
+
+            foreach (var name in ambiguous) found.Remove(name);
+            return found;
+        }
+
+        // What counts as a path worth fetching, and the answer is deliberately
+        // narrow. Rooted at `/` or `~/`, a known image extension, and no `..`
+        // anywhere.
+        //
+        // That last one is not decoration. This builds a gateway request out
+        // of a string an agent wrote into a transcript, and traversal is the
+        // open question on the sibling path (CB-89) — refusing `..` outright
+        // is cheaper than reasoning about what it would resolve to on a host
+        // this process cannot see. A relative path is refused for the related
+        // reason that there is nothing here to resolve it against.
+        internal static string? AbsoluteImagePathIn(string token)
+        {
+            var path = token.Trim(PathWrappers);
+
+            if (!path.StartsWith('/') && !path.StartsWith("~/", StringComparison.Ordinal)) return null;
+
+            // A protocol-relative URL — `//cdn.example.com/…/a.png`, which is
+            // how a Discord attachment can appear in a transcript with the
+            // scheme left off. It is rooted-looking and it is not a path.
+            //
+            // The gateway would refuse it anyway (`outside-allowed-folders`),
+            // so the reason to reject it here is subtler: accepting it puts a
+            // second directory under a basename, and the ambiguity rule then
+            // *drops* the real path that was sitting next to it. A bogus
+            // candidate does not just fail, it takes a good one with it.
+            if (path.StartsWith("//", StringComparison.Ordinal)) return null;
+
+            if (path.Contains("..", StringComparison.Ordinal)) return null;
+
+            return Array.Exists(ImageExtensions, ext => path.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                ? path
+                : null;
+        }
+
+        // Both conditions are load-bearing. delivery-mirror is *not* only used
+        // for pictures — an ordinary text message sent through this app is
+        // mirrored the same way ("**(via Claude Buddy)** try send me a
+        // picture", observed live) — so the model alone would send perfectly
+        // good prose off to be fetched as a file. And a bare filename alone is
+        // no signal either: an agent can simply mention one mid-conversation.
+        // Only the two together mean "a picture was delivered".
+        internal static string? DeliveredPictureName(string? model, string text)
+        {
+            if (model != DeliveryMirrorModel) return null;
+
+            // No emptiness guard, deliberately. The one caller has already
+            // skipped a whitespace-only text, and an empty name is refused by
+            // the extension test at the bottom anyway — "" ends with none of
+            // them — so a check here would be a line no input can change the
+            // answer of. Same reasoning that removed the third arm of the
+            // live-image resolution rather than writing a test around it.
+            var name = text.Trim();
+            if (name.Contains('/') || name.Contains('\\')) return null;
+            if (name.Contains(' ') || name.Contains('\n')) return null;
+
+            return Array.Exists(ImageExtensions, ext => name.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                ? name
+                : null;
+        }
 
         // The gateway route that serves a file the agent named by path.
         //
