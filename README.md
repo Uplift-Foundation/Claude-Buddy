@@ -1559,6 +1559,16 @@ Two differences from a Claude Code orb, both because Grok works differently:
   rather than implying otherwise: Grok writes its credit figure once, at
   startup, so a machine that last ran `grok` on Monday shows a dimmed orb and a
   card reading "Usage as of 2d ago".
+- **Keep Grok usage fresh automatically** (same section, off by default) starts
+  and stops Grok in the background roughly every twenty minutes purely to force
+  that number to refresh, since there is no lighter way to ask Grok for it —
+  confirmed against `grok models`, `doctor`, `inspect`, `sessions` and `grok
+  agent stdio`, none of which trigger it. It runs in a scratch folder rather
+  than one of your projects, needs macOS (Windows would need a pty API this
+  app does not wrap, so it no-ops there rather than guessing), and is
+  deliberately a second switch from the orb itself: reading a log file and
+  starting your real terminal app in the background are different classes of
+  action.
 
 See `docs/grok-findings.md` for what was measured on a real session.
 

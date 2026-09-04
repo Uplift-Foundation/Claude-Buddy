@@ -328,6 +328,13 @@ namespace ClaudeBuddy
         // class already runs, instead of starting a second timer.
         private readonly AccountOrbs _accountOrbs = new(
             new CompositeUsageSource(new UsagePoller(), new GrokUsagePoller(), new CodexUsagePoller()));
+
+        // Whether it is time to start and stop Grok to force a fresh usage
+        // reading — see GrokUsageRefresh.cs for why that is the only way to
+        // get one. Held apart from _accountOrbs because it runs on its own,
+        // much longer floor: GrokUsageRefresher.MinimumInterval, not the five
+        // minutes the account-orb read itself uses.
+        private readonly GrokUsageRefreshScheduler _grokRefresh = new();
         private readonly Dictionary<string, SessionStatus> _statuses = new();
         private readonly List<string> _order = new(); // stable stacking order
 
@@ -407,6 +414,23 @@ namespace ClaudeBuddy
             // five-minute floor, which is the interval Claude Code's own cache
             // makes meaningful, not this two-second one.
             _pollTimer.Tick += (_, _) => _accountOrbs.Tick(DateTimeOffset.UtcNow);
+
+            // Off the UI thread for the reason AccountOrbs.Tick already is:
+            // this starts a real process — the user's actual Grok Build
+            // application — and holds it open for several seconds. On the
+            // dispatcher that would freeze every orb on screen for the whole
+            // hold.
+            _pollTimer.Tick += (_, _) =>
+            {
+                if (_grokRefresh.Tick(
+                        DateTimeOffset.UtcNow,
+                        ClaudeBuddySettings.GrokAccountUsageEnabled,
+                        ClaudeBuddySettings.GrokAutoRefreshEnabled))
+                {
+                    Task.Run(GrokUsageRefresher.Refresh);
+                }
+            };
+
             _pollTimer.Start();
 
             // Connects only if the user has turned it on and given it an
