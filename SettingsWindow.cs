@@ -987,6 +987,19 @@ namespace ClaudeBuddy
         internal void OnGrokAccountUsageToggled(bool enabled)
         {
             ClaudeBuddySettings.GrokAccountUsageEnabled = enabled;
+
+            // Turning this off also turns auto-refresh off, rather than
+            // leaving it true underneath a row that just vanished. Auto-refresh
+            // starts the user's real Grok app in the background and is
+            // deliberately a second, separate opt-in for exactly that reason —
+            // leaving it flagged on while hidden would mean a later re-enable of
+            // this switch silently resumes it with no fresh consent, which is
+            // the one thing that separate-switch design was supposed to
+            // prevent. Only on-to-off writes anything here; turning usage orbs
+            // back on never flips auto-refresh back on, only makes its own row
+            // visible again.
+            if (!enabled) ClaudeBuddySettings.GrokAutoRefreshEnabled = false;
+
             SessionManager.Instance?.ReapplyAccountOrbs();
             Rebuild();
         }
