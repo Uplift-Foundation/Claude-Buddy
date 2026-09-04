@@ -182,6 +182,33 @@ public class OpenClawNamedPictureOnHistoryTests
         Assert.All(turns, t => Assert.NotNull(t.ImageUrl));
     }
 
+    // The edge QA found by reading the rule rather than the corpus: a page
+    // with a named turn AND two mirrors of the same file. One named turn
+    // cancels one mirror — the cross-arm pair — and the second delivery keeps
+    // its own bubble. A membership test instead of a budget would have eaten
+    // both, silently losing a real delivery.
+    [Fact]
+    public void ANamedTurnCancelsOneMirrorAndNotEveryMirror()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","content":[{"type":"text","text":"~/.openclaw/media/browser/03a1be83.png"}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"03a1be83.png"}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"03a1be83.png"}]}]
+        """);
+
+        // The named turn plus the surviving second delivery.
+        Assert.Equal(2, turns.Count);
+        Assert.All(turns, t => Assert.NotNull(t.ImageUrl));
+
+        // The named turn is the one that kept its prose.
+        Assert.Contains(turns, t => t.Text.Contains("browser"));
+
+        // And exactly one bare-filename mirror bubble is left.
+        Assert.Single(turns, t => t.Text == "03a1be83.png");
+    }
+
     // A mirror for a *different* file is untouched by the collapse.
     [Fact]
     public void AMirrorForADifferentFileIsNotCollapsed()
