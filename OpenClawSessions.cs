@@ -1808,6 +1808,38 @@ namespace ClaudeBuddy
                     continue;
                 }
 
+                // A picture the agent named by path — CB-101.
+                //
+                // CB-88 taught LocalMediaPathFrom to recognise this and wired
+                // it into the live stream only, so the convention worked while
+                // a reply was arriving and not when the same message was read
+                // back. That is every reopen, every reconnect and every scroll
+                // — which is to say, almost always.
+                //
+                // Warren's two screenshots caught the asymmetry three minutes
+                // apart: a delivered picture drew a thumbnail (the branch
+                // above) and a MEDIA: line drew its own text. The file was on
+                // disk and the gateway served it on request; only this parser
+                // never asked.
+                //
+                // After the delivery-mirror branch and never competing with
+                // it: a mirror's text is a bare filename, which
+                // LooksLikeAnImagePath refuses for not being rooted.
+                var named = LocalMediaPathFrom(text);
+                if (named is not null)
+                {
+                    // Text kept and the picture beside it, which is the shape
+                    // the live path already produces — TryResolveLocalMedia
+                    // sets bytes on a turn that keeps its prose. So a fetch
+                    // that cannot succeed degrades to exactly what this
+                    // rendered before, rather than to an empty bubble.
+                    turns.Add(new HistoryTurn(role, text.Trim(),
+                        AssistantMediaRoute + Uri.EscapeDataString(named),
+                        named[(named.LastIndexOf('/') + 1)..],
+                        at, speaker, colour, mine));
+                    continue;
+                }
+
                 turns.Add(new HistoryTurn(role, text.Trim(), null, "", at,
                     speaker, colour, mine));
             }
@@ -1937,8 +1969,28 @@ namespace ClaudeBuddy
             return LooksLikeAnImagePath(trimmed) ? trimmed : null;
         }
 
+        // `~/` as well as `/` (CB-97). The gateway expands a leading tilde
+        // itself — `resolveLocalMediaPath` calls `resolveUserPath` on one —
+        // and it is the form an agent naturally writes, so rejecting it threw
+        // away pictures the gateway would have served happily. Confirmed by
+        // probe: `~/.openclaw/media/browser/03a1be83-….png` answers
+        // `available:true`.
+        //
+        // `..` refused outright (CB-89), and `//` with it. This builds a
+        // gateway request out of a string an agent wrote into a transcript,
+        // and refusing traversal is cheaper than reasoning about what it
+        // resolves to on a host this process cannot see. `//host/a.png` is a
+        // protocol-relative URL wearing a path's clothes.
+        //
+        // The gateway's own allowlist is the control that actually matters
+        // here and these are defence in depth — but a client that sends a
+        // traversal and waits to be told no is a client asking the wrong
+        // question.
         private static bool LooksLikeAnImagePath(string text) =>
-            text.StartsWith('/') && !text.Contains(' ') && !text.Contains('\n')
+            (text.StartsWith('/') || text.StartsWith("~/", StringComparison.Ordinal))
+            && !text.StartsWith("//", StringComparison.Ordinal)
+            && !text.Contains("..", StringComparison.Ordinal)
+            && !text.Contains(' ') && !text.Contains('\n')
             && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
 
         // The gateway writes one of these whenever it actually delivers a
