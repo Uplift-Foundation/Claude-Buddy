@@ -156,6 +156,25 @@ public class OpenClawLocalMediaResolutionTests : IDisposable
         Assert.Null(session.History[0].ImageBytes);
     }
 
+    // QA (CB-88): a sentence that happens to start a line with the word
+    // "MEDIA:" is not the marker — end to end, not just at the pure parser.
+    [Fact]
+    public async Task AnOrdinarySentenceStartingWithMediaNeverAsksTheGateway()
+    {
+        var asked = false;
+        var session = await ConnectedAsync(request =>
+        {
+            asked = true;
+            return FakeGatewaySocket.Ok(request.Id, new { });
+        });
+
+        session.OnAgentEvent("agent", AgentText("MEDIA: is a broad term for a lot of things"));
+        await Task.Delay(50);
+
+        Assert.False(asked);
+        Assert.Null(session.History[0].ImageBytes);
+    }
+
     [Fact]
     public async Task NoGatewayConfiguredLeavesTheTurnAsTextOnly()
     {

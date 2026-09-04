@@ -57,6 +57,25 @@ public class OpenClawLocalMediaPathTests
         Assert.Null(OpenClawSessions.LocalMediaPathFrom("the SOCIAL MEDIA:/path.png thing you mentioned"));
     }
 
+    // QA (CB-88) found this real gap: an ordinary sentence that happens to
+    // start a line with "MEDIA:" would otherwise have everything after the
+    // colon extracted as a "path" and fired at the gateway as one. The text
+    // after the prefix now has to pass the same shape check the bare-path
+    // arm already required.
+    [Fact]
+    public void AnOrdinarySentenceStartingWithTheWordMediaIsNotAMarker()
+    {
+        Assert.Null(OpenClawSessions.LocalMediaPathFrom("MEDIA: is a broad term for a lot of things"));
+    }
+
+    // The prefix alone doesn't make it a picture — a relative-looking path
+    // after it is rejected the same way a bare relative path already is.
+    [Fact]
+    public void AMediaLineWithARelativePathIsNotAPicture()
+    {
+        Assert.Null(OpenClawSessions.LocalMediaPathFrom("MEDIA:outputs/lilibeth/pic.png"));
+    }
+
     // The other real shape: the same automation's duplicate-post bug (before
     // it was fixed) left a bare path as an entire assistant turn, no MEDIA:
     // prefix at all.
