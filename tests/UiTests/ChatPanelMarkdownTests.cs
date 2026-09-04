@@ -303,6 +303,26 @@ public class ChatPanelMarkdownTests : IDisposable
             .FirstOrDefault(im => im.Width == 228)?.Source);
     }
 
+    // The other arm of the same guard: ImageBytes changing to something that
+    // still isn't a picture (empty, same as never having resolved one) while
+    // the row has no image yet — distinct from the "already has one" arm
+    // above, since here HasImage is still false when the property changes.
+    [AvaloniaFact]
+    public void ATurnWhoseImageBytesChangeToEmptyNeverLoadsAnything()
+    {
+        var turn = new ChatTurn { Role = ChatRole.Assistant, Text = "no picture yet", IsComplete = true };
+        var fake = NewFake(new[] { turn });
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        turn.ImageBytes = Array.Empty<byte>();
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Assert.Null(panel.GetVisualDescendants().OfType<Avalonia.Controls.Image>()
+            .FirstOrDefault(im => im.Width == 228)?.Source);
+    }
+
     // A cached "no bytes" answer (a gateway that answered with nothing) must
     // not throw trying to decode zero bytes as a picture — it just leaves
     // the turn as the text it already has.
