@@ -2215,6 +2215,16 @@ namespace ClaudeBuddy
                         LoadImage();
                     }
 
+                    // Same shape, for a picture resolved via
+                    // OpenClawChatSession.TryResolveLocalMedia (CB-88) rather
+                    // than a URL — an agent's own generated file, fetched as
+                    // bytes rather than fetched from one.
+                    if (e.PropertyName == nameof(ChatTurn.ImageBytes) && !HasImage
+                        && turn.ImageBytes is { Length: > 0 } lateBytes)
+                    {
+                        LoadImageBytes(lateBytes);
+                    }
+
                     PropertyChanged?.Invoke(this, e);
                 };
 

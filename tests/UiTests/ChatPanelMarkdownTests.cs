@@ -254,6 +254,81 @@ public class ChatPanelMarkdownTests : IDisposable
         Assert.NotNull(picture!.Source);
     }
 
+    // Same shape as the ImageUrl case above, for CB-88's ImageBytes path: an
+    // agent's own generated picture, resolved via OpenClawSessions.
+    // FetchLocalMediaAsync (media.get) rather than a URL. The resolution
+    // itself is OpenClawLocalMediaResolutionTests' job (tests/UnitTests);
+    // this only has to prove the row notices once ImageBytes lands after
+    // construction, the same way it already notices Text and ImageUrl.
+    [AvaloniaFact]
+    public async Task ATurnThatGainsImageBytesAfterItIsAlreadyOnScreenLoadsIt()
+    {
+        var bytes = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==");
+
+        var turn = new ChatTurn { Role = ChatRole.Assistant, Text = "here's the drop", IsComplete = true };
+        var fake = NewFake(new[] { turn });
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Assert.Null(panel.GetVisualDescendants().OfType<Avalonia.Controls.Image>()
+            .FirstOrDefault(im => im.Width == 228)?.Source);
+
+        turn.ImageBytes = bytes;
+
+        Avalonia.Controls.Image? picture = null;
+        for (var i = 0; i < 40; i++)
+        {
+            FlushRender();
+            picture = panel.GetVisualDescendants().OfType<Avalonia.Controls.Image>()
+                .FirstOrDefault(im => im.Width == 228);
+            if (picture?.Source is not null) break;
+            await Task.Delay(10);
+        }
+
+        Assert.NotNull(picture);
+        Assert.NotNull(picture!.Source);
+
+        // A turn that already resolved a picture gaining ImageBytes again
+        // (the guard's !HasImage arm being false) must not reload — the
+        // point of the guard is exactly this: to fire once, not once per
+        // property change forever.
+        var reloadCountBefore = picture.Source;
+        turn.ImageBytes = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        FlushRender();
+
+        Assert.Same(reloadCountBefore, panel.GetVisualDescendants().OfType<Avalonia.Controls.Image>()
+            .FirstOrDefault(im => im.Width == 228)?.Source);
+    }
+
+    // The other arm of the same guard: ImageBytes changing to something that
+    // still isn't a picture while the row has no image yet — distinct from
+    // the "already has one" arm above, since here HasImage is still false
+    // when the property changes. Two changes (empty, then null) rather than
+    // one: QA (CB-88) found the single-empty-value version left one IL-level
+    // arc of the pattern-match still unexercised, and this closes it.
+    [AvaloniaFact]
+    public void ATurnWhoseImageBytesChangeToEmptyOrNullNeverLoadsAnything()
+    {
+        var turn = new ChatTurn
+        {
+            Role = ChatRole.Assistant, Text = "no picture yet", IsComplete = true,
+            ImageBytes = Array.Empty<byte>()
+        };
+        var fake = NewFake(new[] { turn });
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        turn.ImageBytes = null;
+        FlushRender();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Assert.Null(panel.GetVisualDescendants().OfType<Avalonia.Controls.Image>()
+            .FirstOrDefault(im => im.Width == 228)?.Source);
+    }
+
     // A cached "no bytes" answer (a gateway that answered with nothing) must
     // not throw trying to decode zero bytes as a picture — it just leaves
     // the turn as the text it already has.
