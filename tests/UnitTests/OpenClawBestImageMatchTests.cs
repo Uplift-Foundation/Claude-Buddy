@@ -15,6 +15,12 @@ public class OpenClawBestImageMatchTests
         string? imageUrl, DateTimeOffset at, ChatRole role = ChatRole.Assistant, string alt = "") =>
         new(role, "", imageUrl, alt, at, null, null);
 
+    // A turn carrying its picture inline instead of by url — the shape this
+    // gateway actually sends (CB-91).
+    private static HistoryTurn BytesTurn(
+        byte[]? bytes, DateTimeOffset at, ChatRole role = ChatRole.Assistant) =>
+        new(role, "", null, "", at, null, null, false, bytes);
+
     [Fact]
     public void PicksTheTurnNearestInTime()
     {
@@ -95,5 +101,60 @@ public class OpenClawBestImageMatchTests
 
         Assert.Equal("https://x/system.png",
             OpenClawSessions.BestImageMatch(turns, ChatRole.System, near)!.Value.ImageUrl);
+    }
+
+    // ---- turns carrying their picture inline (CB-91) ---------------------
+
+    // The one that mattered: filtering on ImageUrl alone meant this gateway's
+    // own shape could never match, so a live reply reconciled against
+    // nothing at all.
+    [Fact]
+    public void ATurnCarryingBytesInsteadOfAUrlIsAMatch()
+    {
+        var near = DateTimeOffset.Parse("2026-01-01T12:00:00Z");
+        var turns = new List<HistoryTurn> { BytesTurn(new byte[] { 1, 2, 3 }, near) };
+
+        var match = OpenClawSessions.BestImageMatch(turns, ChatRole.Assistant, near);
+        Assert.Equal(new byte[] { 1, 2, 3 }, match!.Value.ImageBytes);
+    }
+
+    [Fact]
+    public void ABytesTurnIsStillChosenByNearestTime()
+    {
+        var near = DateTimeOffset.Parse("2026-01-01T12:00:00Z");
+        var turns = new List<HistoryTurn>
+        {
+            BytesTurn(new byte[] { 1 }, near.AddMinutes(-10)),
+            BytesTurn(new byte[] { 2 }, near.AddSeconds(2)),
+        };
+
+        Assert.Equal(new byte[] { 2 },
+            OpenClawSessions.BestImageMatch(turns, ChatRole.Assistant, near)!.Value.ImageBytes);
+    }
+
+    // An empty byte array is no more a picture than a missing url is.
+    [Fact]
+    public void ATurnWithEmptyBytesIsNotAMatch()
+    {
+        var near = DateTimeOffset.Parse("2026-01-01T12:00:00Z");
+        var turns = new List<HistoryTurn> { BytesTurn(Array.Empty<byte>(), near) };
+
+        Assert.Null(OpenClawSessions.BestImageMatch(turns, ChatRole.Assistant, near));
+    }
+
+    // The role filter applies to bytes-bearing turns the same way, so
+    // somebody else's inline picture is not handed to an agent's reply.
+    [Fact]
+    public void ABytesTurnFromAnotherRoleIsNeverPicked()
+    {
+        var near = DateTimeOffset.Parse("2026-01-01T12:00:00Z");
+        var turns = new List<HistoryTurn>
+        {
+            BytesTurn(new byte[] { 1 }, near.AddSeconds(1), ChatRole.User),
+            BytesTurn(new byte[] { 2 }, near.AddMinutes(3), ChatRole.Assistant),
+        };
+
+        Assert.Equal(new byte[] { 2 },
+            OpenClawSessions.BestImageMatch(turns, ChatRole.Assistant, near)!.Value.ImageBytes);
     }
 }
