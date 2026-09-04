@@ -1647,6 +1647,21 @@ namespace ClaudeBuddy
             var mediaPaths = MediaPathsByFileName(
                 messages.EnumerateArray().Select(m => m.GetRawText()));
 
+            // Which sources each picture-drawing arm claimed, so a file drawn
+            // by both can be collapsed once the page is read. See the end of
+            // this method for why the mirror copy is the one that goes.
+            //
+            // Indices rather than turn values because a HistoryTurn is a
+            // struct: two identical mirror turns would be equal by value and
+            // there would be no way to say which one to remove.
+            // Counted rather than a set, because one named turn cancels one
+            // mirror and not every mirror of that file. A page carrying two
+            // deliveries of a picture the agent also named by path has one
+            // cross-arm pair and one genuine second delivery, and a set would
+            // swallow both.
+            var namedSources = new Dictionary<string, int>(StringComparer.Ordinal);
+            var mirrorDrawn = new List<(int Index, string Source)>();
+
             foreach (var message in messages.EnumerateArray())
             {
                 var role = Str(message, "role") == "user" ? ChatRole.User : ChatRole.Assistant;
@@ -1801,6 +1816,7 @@ namespace ClaudeBuddy
                     // degrades to exactly today's appearance instead. Text
                     // beside a thumbnail is already what CB-88's MEDIA:
                     // pictures render as.
+                    mirrorDrawn.Add((turns.Count, source));
                     turns.Add(new HistoryTurn(
                         role, delivered,
                         AssistantMediaRoute + Uri.EscapeDataString(source),
@@ -1808,8 +1824,94 @@ namespace ClaudeBuddy
                     continue;
                 }
 
+                // A picture the agent named by path — CB-101.
+                //
+                // CB-88 taught LocalMediaPathFrom to recognise this and wired
+                // it into the live stream only, so the convention worked while
+                // a reply was arriving and not when the same message was read
+                // back. That is every reopen, every reconnect and every scroll
+                // — which is to say, almost always.
+                //
+                // Warren's two screenshots caught the asymmetry three minutes
+                // apart: a delivered picture drew a thumbnail (the branch
+                // above) and a MEDIA: line drew its own text. The file was on
+                // disk and the gateway served it on request; only this parser
+                // never asked.
+                //
+                // After the delivery-mirror branch. The two arms cannot both
+                // fire for one *message* — a mirror's text is a bare filename,
+                // which LooksLikeAnImagePath refuses for not being rooted —
+                // but they can each fire on a different message of the same
+                // page and land on the same file. That is what namedSources
+                // below is for.
+                var named = LocalMediaPathFrom(text);
+                if (named is not null)
+                {
+                    namedSources[named] = namedSources.GetValueOrDefault(named) + 1;
+
+                    // Text kept and the picture beside it, which is the shape
+                    // the live path already produces — TryResolveLocalMedia
+                    // sets bytes on a turn that keeps its prose. So a fetch
+                    // that cannot succeed degrades to exactly what this
+                    // rendered before, rather than to an empty bubble.
+                    turns.Add(new HistoryTurn(role, text.Trim(),
+                        AssistantMediaRoute + Uri.EscapeDataString(named),
+                        named[(named.LastIndexOf('/') + 1)..],
+                        at, speaker, colour, mine));
+                    continue;
+                }
+
                 turns.Add(new HistoryTurn(role, text.Trim(), null, "", at,
                     speaker, colour, mine));
+            }
+
+            // One delivery, two arms, one bubble — CB-98's cross-arm case,
+            // which turned out to be live rather than latent.
+            //
+            // A page can carry both an agent's own message naming a file and
+            // the gateway's mirror of having delivered it. CB-94 recovers the
+            // mirror's directory from that very path, so the two arms resolve
+            // to the *identical* source and draw the same picture twice, back
+            // to back. QA measured two instances in the real corpus and both
+            // load — this is not the refused-and-degraded case CB-98 first
+            // described.
+            //
+            // The mirror copy is the one dropped, not the named one. In the
+            // general shape the named turn carries the agent's prose — "here
+            // you go", a question about the picture — where the mirror turn's
+            // entire content is the filename the picture above already shows.
+            // Dropping the richer bubble to keep the barer one would be the
+            // wrong way round.
+            //
+            // Two *mirrors* for one file are deliberately left alone: those are
+            // two separate deliveries with distinct records and timestamps
+            // (36 seconds apart in one measured case, 47 minutes in another),
+            // and collapsing them would hide an event the gateway recorded.
+            // Only a cross-arm pair is one event seen twice.
+            // One named turn cancels one mirror. Written as a budget rather
+            // than a membership test because "drop every mirror of this file"
+            // would silently eat a real second delivery on a page that has
+            // both — the very thing the paragraph above preserves. QA found
+            // that edge by reading the rule rather than the corpus, where it
+            // does not occur.
+            //
+            // Chosen earliest-first, so the mirror that pairs with the named
+            // turn is the one that goes and any later delivery keeps its own
+            // timestamp. Removed highest-index-first afterwards so no earlier
+            // index is invalidated on the way.
+            if (namedSources.Count > 0)
+            {
+                var doomed = new List<int>();
+
+                foreach (var (index, source) in mirrorDrawn)
+                {
+                    if (namedSources.GetValueOrDefault(source) == 0) continue;
+
+                    namedSources[source]--;
+                    doomed.Add(index);
+                }
+
+                for (var i = doomed.Count - 1; i >= 0; i--) turns.RemoveAt(doomed[i]);
             }
 
             return turns;
@@ -1937,8 +2039,28 @@ namespace ClaudeBuddy
             return LooksLikeAnImagePath(trimmed) ? trimmed : null;
         }
 
+        // `~/` as well as `/` (CB-97). The gateway expands a leading tilde
+        // itself — `resolveLocalMediaPath` calls `resolveUserPath` on one —
+        // and it is the form an agent naturally writes, so rejecting it threw
+        // away pictures the gateway would have served happily. Confirmed by
+        // probe: `~/.openclaw/media/browser/03a1be83-….png` answers
+        // `available:true`.
+        //
+        // `..` refused outright (CB-89), and `//` with it. This builds a
+        // gateway request out of a string an agent wrote into a transcript,
+        // and refusing traversal is cheaper than reasoning about what it
+        // resolves to on a host this process cannot see. `//host/a.png` is a
+        // protocol-relative URL wearing a path's clothes.
+        //
+        // The gateway's own allowlist is the control that actually matters
+        // here and these are defence in depth — but a client that sends a
+        // traversal and waits to be told no is a client asking the wrong
+        // question.
         private static bool LooksLikeAnImagePath(string text) =>
-            text.StartsWith('/') && !text.Contains(' ') && !text.Contains('\n')
+            (text.StartsWith('/') || text.StartsWith("~/", StringComparison.Ordinal))
+            && !text.StartsWith("//", StringComparison.Ordinal)
+            && !text.Contains("..", StringComparison.Ordinal)
+            && !text.Contains(' ') && !text.Contains('\n')
             && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
 
         // The gateway writes one of these whenever it actually delivers a
