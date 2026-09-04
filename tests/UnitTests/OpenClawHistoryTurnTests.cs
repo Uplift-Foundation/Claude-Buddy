@@ -333,6 +333,73 @@ public class OpenClawHistoryTurnTests
         Assert.All(turns, t => Assert.NotNull(t.ImageBytes));
     }
 
+    // ---- a picture the gateway delivered (CB-94) -------------------------
+
+    // The exact record shape read off the gateway's own stored transcript for
+    // the drop Warren screenshotted: a delivery-mirror whose content is the
+    // bare filename. It becomes a picture turn pointing at the shared media
+    // directory through the read-scoped route.
+    [Fact]
+    public void ADeliveredPictureBecomesAPictureTurnRatherThanItsFilename()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","api":"openclaw-transcript","provider":"openclaw",
+          "model":"delivery-mirror",
+          "content":[{"type":"text","text":"lilibeth_cozy_621662447.png"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Contains("/__openclaw__/assistant-media?source=", turn.ImageUrl);
+        Assert.Contains("lilibeth_cozy_621662447.png", Uri.UnescapeDataString(turn.ImageUrl!));
+        Assert.Contains("~/.openclaw/media/", Uri.UnescapeDataString(turn.ImageUrl!));
+        Assert.Equal("lilibeth_cozy_621662447.png", turn.ImageAlt);
+    }
+
+    // And it keeps its filename as text, so a fetch that cannot succeed — a
+    // gateway whose media root is somewhere else, a file since cleaned up —
+    // leaves the reader exactly what they see today rather than an empty
+    // bubble. The picture is the improvement; the text is the floor.
+    [Fact]
+    public void ADeliveredPictureStillReadsAsItsFilenameIfTheFetchFails()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"lilibeth_cozy_621662447.png"}]}]
+        """);
+
+        Assert.Equal("lilibeth_cozy_621662447.png", Assert.Single(turns).Text);
+    }
+
+    // A mirrored *text* message stays text. This is the same record type, and
+    // this exact string was observed live, so getting it wrong would turn
+    // ordinary messages into fetch attempts.
+    [Fact]
+    public void AMirroredTextMessageStaysText()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"**(via Claude Buddy)** try send me a picture"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Null(turn.ImageUrl);
+        Assert.Contains("try send me a picture", turn.Text);
+    }
+
+    // An agent that merely says a filename is not delivering a picture.
+    [Fact]
+    public void AnOrdinaryTurnNamingAFileStaysText()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","model":"claude-sonnet-4-6",
+          "content":[{"type":"text","text":"lilibeth_cozy_621662447.png"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Null(turn.ImageUrl);
+        Assert.Equal("lilibeth_cozy_621662447.png", turn.Text);
+    }
+
     // ---- timestamps ------------------------------------------------------
 
     [Fact]
