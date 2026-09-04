@@ -45,6 +45,36 @@ public class OpenClawMediaPathHarvestTests
         Assert.Null(OpenClawSessions.AbsoluteImagePathIn(token));
     }
 
+    // Sentence-final punctuation. A path written at the end of a sentence is
+    // an ordinary prose shape, and `,;:` were trimmed while `.!?` were not.
+    [Theory]
+    [InlineData("/Users/w/a.png.", "/Users/w/a.png")]
+    [InlineData("/Users/w/a.png!", "/Users/w/a.png")]
+    [InlineData("~/pics/a.png?", "~/pics/a.png")]
+    public void SentenceFinalPunctuationIsTrimmedToo(string token, string expected)
+    {
+        Assert.Equal(expected, OpenClawSessions.AbsoluteImagePathIn(token));
+    }
+
+    // JSON's escaped quote leaves a backslash clinging to the token.
+    [Fact]
+    public void AnEscapedQuotesBackslashIsTrimmed()
+    {
+        Assert.Equal("/Users/w/a.png", OpenClawSessions.AbsoluteImagePathIn("\\/Users/w/a.png\\"));
+    }
+
+    // A protocol-relative URL is rooted-looking and is not a path. Rejecting
+    // it matters beyond its own uselessness: accepted, it puts a second
+    // directory under the basename and the ambiguity rule then discards the
+    // real path beside it.
+    [Theory]
+    [InlineData("//cdn.discordapp.com/attachments/1/2/a.png")]
+    [InlineData("//example.com/a.png")]
+    public void AProtocolRelativeUrlIsRefused(string token)
+    {
+        Assert.Null(OpenClawSessions.AbsoluteImagePathIn(token));
+    }
+
     [Theory]
     [InlineData("media/a.png")]         // relative — nothing here to resolve it against
     [InlineData("a.png")]               // a bare name is the mirror's own shape, not a path
@@ -173,6 +203,32 @@ public class OpenClawMediaPathHarvestTests
         });
 
         Assert.Equal("/Users/w/.openclaw/media/a.png", index["a.png"]);
+    }
+
+    // The regression the raw-JSON scan introduced and QA caught: in JSON a
+    // newline is the two characters `\` and `n`, so a real-newline separator
+    // never fires and a path starting a line is glued to the sentence before
+    // it. This is the shape the picture in the ticket actually has, and the
+    // first version of the scan lost it — masked because the fallback happens
+    // to be right for that one file.
+    [Fact]
+    public void APathOnItsOwnLineIsFoundThroughAJsonEscapedNewline()
+    {
+        var index = OpenClawSessions.MediaPathsByFileName(new[]
+        {
+            """{"content":"here you go\n/Users/w/.openclaw/media/lilibeth_cozy.png"}"""
+        });
+
+        Assert.Equal("/Users/w/.openclaw/media/lilibeth_cozy.png", index["lilibeth_cozy.png"]);
+    }
+
+    [Theory]
+    [InlineData(@"a\r/Users/w/a.png")]
+    [InlineData(@"a\t/Users/w/a.png")]
+    public void TheOtherWhitespaceEscapesSplitToo(string raw)
+    {
+        Assert.Equal("/Users/w/a.png",
+            OpenClawSessions.MediaPathsByFileName(new[] { raw })["a.png"]);
     }
 
     // The reason `:` is not a separator. Split on it and this token becomes

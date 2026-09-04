@@ -1987,13 +1987,28 @@ namespace ClaudeBuddy
         //
         // `:` is deliberately *not* a separator: splitting on it would turn
         // `https://example.com/a.png` into a token beginning `//example.com/…`,
-        // which looks rooted and would be fetched as a local file.
+        // which looks rooted. That token shape is refused explicitly instead
+        // (see AbsoluteImagePathIn), because a *literal* `//host/…` can appear
+        // in text without a scheme in front of it.
         //
         // A path containing a space is therefore missed. That is accepted:
         // nothing here can tell a spaced path from two tokens, and guessing
         // wrong would build a request for a file that does not exist. None
         // appears in the corpus this was measured against.
         private static readonly char[] TokenBreaks = { ' ', '\t', '\n', '\r', '"' };
+
+        // The whitespace escapes, which have to be handled separately because
+        // the page is scanned as raw JSON: in there a newline is the *two
+        // characters* `\` and `n`, not a newline, so TokenBreaks never splits
+        // on it however many real newlines it lists.
+        //
+        // That is not a hypothetical. The first version of the raw-JSON scan
+        // lost the very picture this ticket was filed about: its path is on a
+        // line of its own inside a text block, so the escape glued it to the
+        // sentence in front of it and nothing matched. The fallback happened
+        // to be right for that one file, which is exactly the kind of luck
+        // this ticket exists to stop relying on.
+        private static readonly string[] EscapedWhitespace = { "\\n", "\\r", "\\t" };
 
         // No real path is longer than this — PATH_MAX is 1024 on macOS and
         // 4096 on Linux. The guard is not about paths, though: a message
@@ -2002,12 +2017,21 @@ namespace ClaudeBuddy
         private const int LongestPath = 4096;
 
         // Punctuation a path picks up from the prose around it — quoted,
-        // parenthesised, or simply followed by a comma at the end of a
-        // sentence. Trimmed from both ends before the shape test, since
-        // otherwise a perfectly good path fails it for being inside a
-        // sentence.
+        // parenthesised, or ending a sentence. Trimmed from both ends before
+        // the shape test, since otherwise a perfectly good path fails it for
+        // having been written inside a sentence.
+        //
+        // `.`, `!` and `?` are in here for the sentence-final case, and are
+        // safe rather than merely convenient: a path's last character is part
+        // of its extension, so trimming cannot damage one, and a *leading*
+        // full stop cannot survive the rooted-prefix test below anyway. The
+        // backslash is here for JSON's escaped quote, which otherwise leaves
+        // one clinging to a token.
         private static readonly char[] PathWrappers =
-            { '"', '\'', '`', '(', ')', '[', ']', '{', '}', '<', '>', ',', ';', ':' };
+        {
+            '"', '\'', '`', '(', ')', '[', ']', '{', '}', '<', '>',
+            ',', ';', ':', '.', '!', '?', '\\'
+        };
 
         // The directory a delivered picture actually lives in, recovered from
         // the page it was delivered on rather than assumed.
@@ -2043,7 +2067,17 @@ namespace ClaudeBuddy
             {
                 if (string.IsNullOrEmpty(text)) continue;
 
-                foreach (var token in text.Split(TokenBreaks, StringSplitOptions.RemoveEmptyEntries))
+                // See EscapedWhitespace: a raw-JSON newline is two characters
+                // and would otherwise glue a line-initial path to the line
+                // before it.
+                var scannable = text;
+                foreach (var escape in EscapedWhitespace)
+                {
+                    if (scannable.Contains(escape, StringComparison.Ordinal))
+                        scannable = scannable.Replace(escape, " ", StringComparison.Ordinal);
+                }
+
+                foreach (var token in scannable.Split(TokenBreaks, StringSplitOptions.RemoveEmptyEntries))
                 {
                     if (token.Length > LongestPath) continue;
 
@@ -2076,6 +2110,18 @@ namespace ClaudeBuddy
             var path = token.Trim(PathWrappers);
 
             if (!path.StartsWith('/') && !path.StartsWith("~/", StringComparison.Ordinal)) return null;
+
+            // A protocol-relative URL — `//cdn.example.com/…/a.png`, which is
+            // how a Discord attachment can appear in a transcript with the
+            // scheme left off. It is rooted-looking and it is not a path.
+            //
+            // The gateway would refuse it anyway (`outside-allowed-folders`),
+            // so the reason to reject it here is subtler: accepting it puts a
+            // second directory under a basename, and the ambiguity rule then
+            // *drops* the real path that was sitting next to it. A bogus
+            // candidate does not just fail, it takes a good one with it.
+            if (path.StartsWith("//", StringComparison.Ordinal)) return null;
+
             if (path.Contains("..", StringComparison.Ordinal)) return null;
 
             return Array.Exists(ImageExtensions, ext => path.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
