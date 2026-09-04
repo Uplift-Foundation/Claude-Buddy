@@ -94,6 +94,7 @@ namespace ClaudeBuddy
             "codexChatEnabled", "codexReplyEnabled", "codexAccountUsageEnabled", "autoColorSessions",
             "claudeCodeEnabled", "codexEnabled",
             "grokChatEnabled", "grokReplyEnabled", "grokEnabled", "grokAccountUsageEnabled",
+            "grokAutoRefreshEnabled",
             "clickAction", "doubleClickAction", "tripleClickAction",
             "remoteControlEnabled", "remoteControlProfileDir", "remoteControlProfileDirs",
             "remoteControlIdleMinutes", "remoteControlServeOnLaunch",
@@ -319,6 +320,13 @@ namespace ClaudeBuddy
             public bool GrokEnabled { get; set; } = true;
 
             public bool GrokAccountUsageEnabled { get; set; }
+
+            // Off even when GrokAccountUsageEnabled is on. Reading a log file
+            // and starting the user's real terminal app in the background are
+            // different classes of action — see GrokUsageRefresher's own
+            // comment for why booting Grok is the only way to get a fresh
+            // number, and why that is not something to do without asking.
+            public bool GrokAutoRefreshEnabled { get; set; }
 
             // What clicking an orb does, per number of clicks. One of
             // "terminal", "chat", "speak" or "none" — strings rather than an
@@ -962,6 +970,12 @@ namespace ClaudeBuddy
             set { Load(); lock (Gate) _model.GrokAccountUsageEnabled = value; Save(); }
         }
 
+        public static bool GrokAutoRefreshEnabled
+        {
+            get { Load(); lock (Gate) return _model.GrokAutoRefreshEnabled; }
+            set { Load(); lock (Gate) _model.GrokAutoRefreshEnabled = value; Save(); }
+        }
+
         public static string ClickAction
         {
             get { Load(); lock (Gate) return _model.ClickAction; }
@@ -1347,6 +1361,7 @@ namespace ClaudeBuddy
                         GrokReplyEnabled = root["grokReplyEnabled"]?.GetValue<bool>() ?? false,
                         GrokEnabled = root["grokEnabled"]?.GetValue<bool>() ?? true,
                         GrokAccountUsageEnabled = root["grokAccountUsageEnabled"]?.GetValue<bool>() ?? false,
+                        GrokAutoRefreshEnabled = root["grokAutoRefreshEnabled"]?.GetValue<bool>() ?? false,
                         ClickAction = root["clickAction"]?.GetValue<string>() ?? "terminal",
                         DoubleClickAction = root["doubleClickAction"]?.GetValue<string>() ?? "none",
                         TripleClickAction = root["tripleClickAction"]?.GetValue<string>() ?? "none",
@@ -1752,6 +1767,7 @@ namespace ClaudeBuddy
                         ["grokReplyEnabled"] = _model.GrokReplyEnabled,
                         ["grokEnabled"] = _model.GrokEnabled,
                         ["grokAccountUsageEnabled"] = _model.GrokAccountUsageEnabled,
+                        ["grokAutoRefreshEnabled"] = _model.GrokAutoRefreshEnabled,
                         ["clickAction"] = _model.ClickAction,
                         ["doubleClickAction"] = _model.DoubleClickAction,
                         ["tripleClickAction"] = _model.TripleClickAction,
