@@ -120,6 +120,20 @@ public class SettingsWindowRowTests
     public void TheGrokUsageSwitchWritesItsOwnSetting() => Toggles(
         (w, v) => w.OnGrokAccountUsageToggled(v), () => ClaudeBuddySettings.GrokAccountUsageEnabled);
 
+    // CB-96. Its row only exists when GrokAccountUsageEnabled is already on —
+    // Toggles() rebuilds the page after every call, which is what makes the
+    // row reachable at all on the second (off-to-on-and-back) half of the
+    // drive, and is exactly the case this file's own header comment calls out
+    // as the reason rebuilding matters.
+    [AvaloniaFact]
+    public void TheGrokAutoRefreshSwitchWritesItsOwnSetting()
+    {
+        ClaudeBuddySettings.GrokAccountUsageEnabled = true;
+
+        Toggles(
+            (w, v) => w.OnGrokAutoRefreshToggled(v), () => ClaudeBuddySettings.GrokAutoRefreshEnabled);
+    }
+
     // Not Toggles(), because these two are no longer switches: three answers
     // do not fit in a boolean, which is the whole reason the setting changed
     // shape. The handler is still the production one, driven through every

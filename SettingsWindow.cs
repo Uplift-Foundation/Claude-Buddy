@@ -922,6 +922,18 @@ namespace ClaudeBuddy
                 + "numbers; click it to keep the card up. Nothing here reads your login "
                 + "token."));
 
+            if (!ClaudeBuddySettings.GrokAccountUsageEnabled) return rows.ToArray();
+
+            rows.Add(Row("Keep Grok usage fresh automatically",
+                Switch(ClaudeBuddySettings.GrokAutoRefreshEnabled, OnGrokAutoRefreshToggled),
+                "Grok only reports its own usage once, when it starts, and never again for "
+                + "the life of that process — there is no lighter way to ask it. On, this "
+                + "starts and stops Grok in the background roughly every twenty minutes "
+                + "purely to force a fresh number, in a scratch folder rather than one of "
+                + "your projects. Off, the orb keeps showing whatever the last real Grok "
+                + "session reported, dimming and dating it once that is more than fifteen "
+                + "minutes old."));
+
             return rows.ToArray();
         }
 
@@ -976,6 +988,12 @@ namespace ClaudeBuddy
         {
             ClaudeBuddySettings.GrokAccountUsageEnabled = enabled;
             SessionManager.Instance?.ReapplyAccountOrbs();
+            Rebuild();
+        }
+
+        internal void OnGrokAutoRefreshToggled(bool enabled)
+        {
+            ClaudeBuddySettings.GrokAutoRefreshEnabled = enabled;
         }
 
         internal Control[] OpenClawRows()
