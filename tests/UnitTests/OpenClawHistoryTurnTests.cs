@@ -430,12 +430,19 @@ public class OpenClawHistoryTurnTests
     // them and be wrong half the time, the ambiguity is dropped and the
     // fallback takes over — the picture may not load, but it is never the
     // wrong picture.
+    //
+    // The two paths are written as prose mentions rather than as messages
+    // whose whole text is a path. That is deliberate since CB-101: a message
+    // that *is* only a path is now drawn as its own picture (CB-88's bare-path
+    // arm, which the history parser finally honours), so path-only fixtures
+    // would produce three picture turns and say nothing about ambiguity. A
+    // mention still feeds the index, which is what this case is about.
     [Fact]
     public void AnAmbiguousFileNameFallsBackRatherThanDrawingTheWrongPicture()
     {
         var turns = Turns("""
-        [{"role":"assistant","model":"m","content":[{"type":"text","text":"/one/a.png"}]},
-         {"role":"assistant","model":"m","content":[{"type":"text","text":"/two/a.png"}]},
+        [{"role":"assistant","model":"m","content":[{"type":"text","text":"wrote it to /one/a.png just now"}]},
+         {"role":"assistant","model":"m","content":[{"type":"text","text":"and a copy at /two/a.png as well"}]},
          {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
           "content":[{"type":"text","text":"a.png"}]}]
         """);
