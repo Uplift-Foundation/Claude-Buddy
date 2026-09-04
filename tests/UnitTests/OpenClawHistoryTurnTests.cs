@@ -375,6 +375,28 @@ public class OpenClawHistoryTurnTests
         Assert.Equal("~/.openclaw/media/browser/03a1be83.png", source);
     }
 
+    // The same recovery, but with the path where it usually really is: inside
+    // a tool_use block this parser never renders. Nine times as many pictures
+    // resolve this way as from the rendered text alone (3 of 41 versus 27 of
+    // 41, measured over the gateway host's whole corpus).
+    [Fact]
+    public void ADeliveredPictureFindsItsPathInsideAToolBlockItNeverRenders()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","content":[{"type":"tool_use","name":"bash",
+          "input":{"command":"openclaw message send --media ~/.openclaw/media/browser/03a1be83.png"}}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"03a1be83.png"}]}]
+        """);
+
+        // The tool block itself renders nothing, so the picture is the only
+        // turn — the paths are read without the wall of JSON being shown.
+        var picture = Assert.Single(turns);
+        var source = Uri.UnescapeDataString(picture.ImageUrl!.Split('=')[^1]);
+
+        Assert.Equal("~/.openclaw/media/browser/03a1be83.png", source);
+    }
+
     // With no path anywhere on the page, the shared media directory is the
     // fallback — right for a file an agent copied there, as Lilibeth's own
     // runbook tells her to, and harmlessly wrong otherwise.
