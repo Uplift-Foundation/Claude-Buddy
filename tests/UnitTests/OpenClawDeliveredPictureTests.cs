@@ -75,6 +75,38 @@ public class OpenClawDeliveredPictureTests
         Assert.Null(OpenClawSessions.DeliveredPictureName(Mirror, "my holiday.png"));
     }
 
+    // The newline half of that same rejection, which nothing reached before:
+    // the trimming case above hands the check a string whose newline Trim has
+    // already taken off, so the arm was never actually asked a question.
+    //
+    // It is not a hypothetical arm. A mirrored *text* message carries whatever
+    // the sender wrote — the gateway mirrors `text.trim()` verbatim — so a
+    // reply whose last line happens to end in an extension is the shape this
+    // stops, and without it a paragraph of prose would be sent off to be
+    // fetched as a file.
+    [Fact]
+    public void AMultiLineMessageEndingInAFilenameIsNotAccepted()
+    {
+        Assert.Null(OpenClawSessions.DeliveredPictureName(
+            Mirror, "here you go\nlilibeth_cozy_621662447.png"));
+    }
+
+    // Two pictures in one delivery. The gateway builds the mirror text as
+    // `mediaUrls.map(basename).join(", ")` (resolveMirroredTranscriptText, read
+    // out of the running gateway's own bundle), so a two-picture drop mirrors
+    // as one record naming both.
+    //
+    // Rejected, and asserted here so the limit is written down rather than
+    // discovered: the comma-and-space form is not a filename, and picking one
+    // of the two names would draw one picture and silently drop the other.
+    // Both stay as text, which is what they do today.
+    [Fact]
+    public void AMultiPictureDeliveryNamesBothAndIsNotAccepted()
+    {
+        Assert.Null(OpenClawSessions.DeliveredPictureName(
+            Mirror, "lilibeth_cozy_621662447.png, lilibeth_y2k_799321457.png"));
+    }
+
     [Fact]
     public void SomethingThatIsNotAPictureIsNotAccepted()
     {

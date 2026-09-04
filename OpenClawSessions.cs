@@ -1948,8 +1948,13 @@ namespace ClaudeBuddy
         {
             if (model != DeliveryMirrorModel) return null;
 
+            // No emptiness guard, deliberately. The one caller has already
+            // skipped a whitespace-only text, and an empty name is refused by
+            // the extension test at the bottom anyway — "" ends with none of
+            // them — so a check here would be a line no input can change the
+            // answer of. Same reasoning that removed the third arm of the
+            // live-image resolution rather than writing a test around it.
             var name = text.Trim();
-            if (name.Length == 0) return null;
             if (name.Contains('/') || name.Contains('\\')) return null;
             if (name.Contains(' ') || name.Contains('\n')) return null;
 
