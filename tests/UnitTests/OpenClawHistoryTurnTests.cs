@@ -333,6 +333,18 @@ public class OpenClawHistoryTurnTests
         Assert.All(turns, t => Assert.NotNull(t.ImageBytes));
     }
 
+    // An object-shaped content with no text in it at all. Worth a case
+    // because it is the one arm of TextOf's switch that a real page never
+    // seems to produce, and without it the `?? ""` there is a branch nothing
+    // asks about — the same gap that hid a live defect twice on this feature.
+    [Fact]
+    public void AnObjectContentWithNoTextProducesNoTurn()
+    {
+        Assert.Empty(Turns("""
+        [{"role":"assistant","content":{"mimeType":"image/png"}}]
+        """));
+    }
+
     // ---- a picture the gateway delivered (CB-94) -------------------------
 
     // The exact record shape read off the gateway's own stored transcript for
