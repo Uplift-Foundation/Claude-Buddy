@@ -83,12 +83,13 @@ public class OpenClawNamedPictureOnHistoryTests
         Assert.Equal("~/.openclaw/media/browser/03a1be83.png", SourceOf(turn));
     }
 
-    // The inter-session envelope stays text. Its path is on the last line with
-    // no MEDIA: prefix, and the bare-path arm needs the *whole* message to be
-    // the path — so the picture is not drawn on the handoff turn, which would
-    // put it on the wrong bubble and then again on the real one.
+    // An inter-session envelope whose path is a bare last line stays text. The
+    // bare-path arm needs the *whole* trimmed message to be the path, and this
+    // has two lines of machine preamble above it — so the picture is not drawn
+    // on the handoff turn, which would put it on the wrong bubble and then
+    // again on the real one.
     [Fact]
-    public void TheInterSessionEnvelopeStillStaysText()
+    public void AnEnvelopeWhoseLastLineIsABarePathStaysText()
     {
         var turn = Assert.Single(Turns("""
         [{"role":"assistant","content":[{"type":"text","text":
@@ -96,6 +97,103 @@ public class OpenClawNamedPictureOnHistoryTests
         """));
 
         Assert.Null(turn.ImageUrl);
+    }
+
+    // But an envelope carrying a MEDIA: line DOES draw, and this test exists
+    // because the PR for CB-101 originally claimed otherwise. QA found the
+    // real case: LocalMediaPathFrom's *first* arm scans every line for the
+    // marker and does not require the whole message to be the path, so the
+    // preamble above it is no obstacle.
+    //
+    // Asserted as the actual behaviour rather than the behaviour that was
+    // claimed, because it is defensible on its own terms — a relayed message
+    // carrying an agent's own picture should show that picture — and because
+    // an assertion that quietly disagrees with the code is worse than either.
+    [Fact]
+    public void AnEnvelopeCarryingAMediaLineDoesDraw()
+    {
+        var turn = Assert.Single(Turns("""
+        [{"role":"user","content":
+          "content was routed by OpenClaw from another session or internal tool.\nMEDIA:/Users/w/.openclaw/workspace-social-annabel/tmp/opusclip/frame.jpg\nFill re-render is done — does this framing look right?"}]
+        """));
+
+        Assert.Equal(
+            "/Users/w/.openclaw/workspace-social-annabel/tmp/opusclip/frame.jpg",
+            SourceOf(turn));
+    }
+
+    // ---- one delivery, two arms, one bubble (CB-98, live not latent) -------
+
+    // The defect QA measured at df3974d. A page carries the agent's own
+    // path-only message *and* the gateway's mirror of delivering that file;
+    // CB-94 recovers the mirror's directory from that very path, so both arms
+    // resolve to the identical source and drew the same picture twice.
+    //
+    // The mirror copy is the one dropped: in the general shape the named turn
+    // carries the agent's prose where the mirror's whole content is the
+    // filename the picture already shows.
+    [Fact]
+    public void AFileDrawnByBothArmsIsDrawnOnce()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","content":[{"type":"text","text":"~/.openclaw/media/browser/03a1be83.png"}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"03a1be83.png"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Equal("~/.openclaw/media/browser/03a1be83.png", SourceOf(turn));
+
+        // The named turn survived, not the mirror: its text is the path it
+        // named, where the mirror's would have been the bare filename.
+        Assert.Contains("browser", turn.Text);
+    }
+
+    // Same collapse when the mirror comes first on the page, so the rule does
+    // not depend on the order the two arms happen to appear in.
+    [Fact]
+    public void TheCollapseDoesNotDependOnWhichArmComesFirst()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"03a1be83.png"}]},
+         {"role":"assistant","content":[{"type":"text","text":"~/.openclaw/media/browser/03a1be83.png"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Equal("~/.openclaw/media/browser/03a1be83.png", SourceOf(turn));
+    }
+
+    // Two *mirrors* of one file are two deliveries and stay two bubbles —
+    // distinct records with distinct timestamps, measured 36 seconds apart in
+    // one real case and 47 minutes in another. Collapsing them would hide an
+    // event the gateway recorded, which is the opposite mistake.
+    [Fact]
+    public void TwoMirrorsOfOneFileStayTwoTurns()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"countdown_mar12.png"}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"countdown_mar12.png"}]}]
+        """);
+
+        Assert.Equal(2, turns.Count);
+        Assert.All(turns, t => Assert.NotNull(t.ImageUrl));
+    }
+
+    // A mirror for a *different* file is untouched by the collapse.
+    [Fact]
+    public void AMirrorForADifferentFileIsNotCollapsed()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","content":[{"type":"text","text":"~/.openclaw/media/browser/one.png"}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"two.png"}]}]
+        """);
+
+        Assert.Equal(2, turns.Count);
+        Assert.All(turns, t => Assert.NotNull(t.ImageUrl));
     }
 
     // CB-89: traversal refused, so nothing here builds a request out of one.

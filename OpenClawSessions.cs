@@ -1647,6 +1647,16 @@ namespace ClaudeBuddy
             var mediaPaths = MediaPathsByFileName(
                 messages.EnumerateArray().Select(m => m.GetRawText()));
 
+            // Which sources each picture-drawing arm claimed, so a file drawn
+            // by both can be collapsed once the page is read. See the end of
+            // this method for why the mirror copy is the one that goes.
+            //
+            // Indices rather than turn values because a HistoryTurn is a
+            // struct: two identical mirror turns would be equal by value and
+            // there would be no way to say which one to remove.
+            var namedSources = new HashSet<string>(StringComparer.Ordinal);
+            var mirrorDrawn = new List<(int Index, string Source)>();
+
             foreach (var message in messages.EnumerateArray())
             {
                 var role = Str(message, "role") == "user" ? ChatRole.User : ChatRole.Assistant;
@@ -1801,6 +1811,7 @@ namespace ClaudeBuddy
                     // degrades to exactly today's appearance instead. Text
                     // beside a thumbnail is already what CB-88's MEDIA:
                     // pictures render as.
+                    mirrorDrawn.Add((turns.Count, source));
                     turns.Add(new HistoryTurn(
                         role, delivered,
                         AssistantMediaRoute + Uri.EscapeDataString(source),
@@ -1822,12 +1833,17 @@ namespace ClaudeBuddy
                 // disk and the gateway served it on request; only this parser
                 // never asked.
                 //
-                // After the delivery-mirror branch and never competing with
-                // it: a mirror's text is a bare filename, which
-                // LooksLikeAnImagePath refuses for not being rooted.
+                // After the delivery-mirror branch. The two arms cannot both
+                // fire for one *message* — a mirror's text is a bare filename,
+                // which LooksLikeAnImagePath refuses for not being rooted —
+                // but they can each fire on a different message of the same
+                // page and land on the same file. That is what namedSources
+                // below is for.
                 var named = LocalMediaPathFrom(text);
                 if (named is not null)
                 {
+                    namedSources.Add(named);
+
                     // Text kept and the picture beside it, which is the shape
                     // the live path already produces — TryResolveLocalMedia
                     // sets bytes on a turn that keeps its prose. So a fetch
@@ -1842,6 +1858,38 @@ namespace ClaudeBuddy
 
                 turns.Add(new HistoryTurn(role, text.Trim(), null, "", at,
                     speaker, colour, mine));
+            }
+
+            // One delivery, two arms, one bubble — CB-98's cross-arm case,
+            // which turned out to be live rather than latent.
+            //
+            // A page can carry both an agent's own message naming a file and
+            // the gateway's mirror of having delivered it. CB-94 recovers the
+            // mirror's directory from that very path, so the two arms resolve
+            // to the *identical* source and draw the same picture twice, back
+            // to back. QA measured two instances in the real corpus and both
+            // load — this is not the refused-and-degraded case CB-98 first
+            // described.
+            //
+            // The mirror copy is the one dropped, not the named one. In the
+            // general shape the named turn carries the agent's prose — "here
+            // you go", a question about the picture — where the mirror turn's
+            // entire content is the filename the picture above already shows.
+            // Dropping the richer bubble to keep the barer one would be the
+            // wrong way round.
+            //
+            // Two *mirrors* for one file are deliberately left alone: those are
+            // two separate deliveries with distinct records and timestamps
+            // (36 seconds apart in one measured case, 47 minutes in another),
+            // and collapsing them would hide an event the gateway recorded.
+            // Only a cross-arm pair is one event seen twice.
+            if (namedSources.Count > 0)
+            {
+                for (var i = mirrorDrawn.Count - 1; i >= 0; i--)
+                {
+                    if (namedSources.Contains(mirrorDrawn[i].Source))
+                        turns.RemoveAt(mirrorDrawn[i].Index);
+                }
             }
 
             return turns;
