@@ -355,6 +355,79 @@ public class OpenClawHistoryTurnTests
         Assert.Equal("lilibeth_cozy_621662447.png", turn.ImageAlt);
     }
 
+    // The defect QA measured, end to end. A browser capture lives one
+    // directory below the shared media root, so gluing its bare name to that
+    // root fetched a 404 for a file that was on disk and servable the whole
+    // time. The real path is on the same page, and now it is what gets used.
+    [Fact]
+    public void ADeliveredPictureUsesTheRealPathFromThePageRatherThanAGuess()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","model":"claude-sonnet-4-6",
+          "content":[{"type":"text","text":"saved it to ~/.openclaw/media/browser/03a1be83.png"}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"03a1be83.png"}]}]
+        """);
+
+        var picture = Assert.Single(turns, t => t.ImageUrl is not null);
+        var source = Uri.UnescapeDataString(picture.ImageUrl!.Split('=')[^1]);
+
+        Assert.Equal("~/.openclaw/media/browser/03a1be83.png", source);
+    }
+
+    // With no path anywhere on the page, the shared media directory is the
+    // fallback — right for a file an agent copied there, as Lilibeth's own
+    // runbook tells her to, and harmlessly wrong otherwise.
+    [Fact]
+    public void ADeliveredPictureFallsBackToTheSharedMediaDirectory()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"lilibeth_cozy_621662447.png"}]}]
+        """);
+
+        var source = Uri.UnescapeDataString(
+            Assert.Single(turns).ImageUrl!.Split('=')[^1]);
+
+        Assert.Equal("~/.openclaw/media/lilibeth_cozy_621662447.png", source);
+    }
+
+    // Two real files of the same name on one page. Rather than draw one of
+    // them and be wrong half the time, the ambiguity is dropped and the
+    // fallback takes over — the picture may not load, but it is never the
+    // wrong picture.
+    [Fact]
+    public void AnAmbiguousFileNameFallsBackRatherThanDrawingTheWrongPicture()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","model":"m","content":[{"type":"text","text":"/one/a.png"}]},
+         {"role":"assistant","model":"m","content":[{"type":"text","text":"/two/a.png"}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"a.png"}]}]
+        """);
+
+        var picture = Assert.Single(turns, t => t.ImageUrl is not null);
+        var source = Uri.UnescapeDataString(picture.ImageUrl!.Split('=')[^1]);
+
+        Assert.Equal("~/.openclaw/media/a.png", source);
+    }
+
+    // The envelope carrying the path is still not the picture's turn. It stays
+    // text, on its own bubble, and only the mirror record draws — otherwise
+    // one delivered picture would appear twice.
+    [Fact]
+    public void TheEnvelopeThatCarriesThePathIsNotItselfAPicture()
+    {
+        var turns = Turns("""
+        [{"role":"user","content":"[Inter-session message] sourceSession=agent:comfyui:main\nrouted by OpenClaw\n/Users/w/.openclaw/media/pic.png"},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"pic.png"}]}]
+        """);
+
+        Assert.Single(turns, t => t.ImageUrl is not null);
+        Assert.Equal(2, turns.Count);
+    }
+
     // And it keeps its filename as text, so a fetch that cannot succeed — a
     // gateway whose media root is somewhere else, a file since cleaned up —
     // leaves the reader exactly what they see today rather than an empty
