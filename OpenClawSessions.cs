@@ -1753,6 +1753,34 @@ namespace ClaudeBuddy
 
                 if (string.IsNullOrWhiteSpace(text)) continue;
 
+                // A picture the gateway actually delivered somewhere. Its own
+                // record of having done so is all a client ever sees of it —
+                // see DeliveredPictureName for why that record, rather than
+                // anything the agent wrote, is the signal worth trusting.
+                var delivered = DeliveredPictureName(Str(message, "model"), text);
+                if (delivered is not null)
+                {
+                    // Carried as the route rather than as a path, because that
+                    // is what ImageUrl already means to everything downstream:
+                    // FetchMediaAsync uses it as the GET path and the panel
+                    // needs no new branch to draw it.
+                    //
+                    // The filename is kept as the turn's text, not dropped for
+                    // a cleaner picture-only bubble. Nothing here can know
+                    // whether the fetch will succeed — a gateway under
+                    // --profile has a different media root, and a file can be
+                    // cleaned up — and a turn with an unresolvable url and no
+                    // text is an empty bubble, which is worse than the bare
+                    // filename this shows today. So it degrades to exactly
+                    // today's appearance instead. Text beside a thumbnail is
+                    // already what CB-88's MEDIA: pictures render as.
+                    turns.Add(new HistoryTurn(
+                        role, delivered,
+                        AssistantMediaRoute + Uri.EscapeDataString(SharedMediaDir + delivered),
+                        delivered, at, speaker, colour, mine));
+                    continue;
+                }
+
                 turns.Add(new HistoryTurn(role, text.Trim(), null, "", at,
                     speaker, colour, mine));
             }
@@ -1885,6 +1913,50 @@ namespace ClaudeBuddy
         private static bool LooksLikeAnImagePath(string text) =>
             text.StartsWith('/') && !text.Contains(' ') && !text.Contains('\n')
             && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+
+        // The gateway writes one of these whenever it actually delivers a
+        // message somewhere, and for a picture it is the only trace a client
+        // gets: content is the bare filename, with no directory and no url
+        // (CB-94, read out of the gateway's own stored transcript).
+        //
+        // Keyed on this record rather than on anything the agent said, and
+        // that is the point. CB-88's MEDIA: convention works, but it depends
+        // on the agent remembering to write it — the automation here skipped
+        // it twice in a row while delivering pictures perfectly well. The
+        // mirror is written by the gateway, so it cannot be forgotten.
+        internal const string DeliveryMirrorModel = "delivery-mirror";
+
+        // Every agent can read this one, and it is where a delivered picture
+        // is expected to live. `~` deliberately: resolveLocalMediaPath expands
+        // it on the *gateway* side, so a client that only ever learns a
+        // filename never has to know the host's absolute paths.
+        //
+        // This does assume the default state-directory name. A gateway under
+        // --profile or OPENCLAW_STATE_DIR has a different media root, the
+        // fetch comes back unavailable, and the turn stays exactly as it is
+        // today — so being wrong here costs nothing that is not already lost.
+        internal const string SharedMediaDir = "~/.openclaw/media/";
+
+        // Both conditions are load-bearing. delivery-mirror is *not* only used
+        // for pictures — an ordinary text message sent through this app is
+        // mirrored the same way ("**(via Claude Buddy)** try send me a
+        // picture", observed live) — so the model alone would send perfectly
+        // good prose off to be fetched as a file. And a bare filename alone is
+        // no signal either: an agent can simply mention one mid-conversation.
+        // Only the two together mean "a picture was delivered".
+        internal static string? DeliveredPictureName(string? model, string text)
+        {
+            if (model != DeliveryMirrorModel) return null;
+
+            var name = text.Trim();
+            if (name.Length == 0) return null;
+            if (name.Contains('/') || name.Contains('\\')) return null;
+            if (name.Contains(' ') || name.Contains('\n')) return null;
+
+            return Array.Exists(ImageExtensions, ext => name.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                ? name
+                : null;
+        }
 
         // The gateway route that serves a file the agent named by path.
         //
