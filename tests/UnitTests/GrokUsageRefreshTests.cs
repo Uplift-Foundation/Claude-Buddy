@@ -75,6 +75,20 @@ public class GrokUsageRefreshTests : IDisposable
         Assert.Null(GrokBinary.Locate(Path.Combine(_root, "home"), "", NoSystemInstalls));
     }
 
+    // The end of the search: a PATH that exists, is looked through, and holds
+    // nothing. Distinct from the empty-PATH case above, which returns before
+    // ever entering the loop.
+    [Fact]
+    public void APathWithNoGrokInItIsExhaustedAndAnswersNull()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "empty-dir"));
+
+        Assert.Null(GrokBinary.Locate(
+            Path.Combine(_root, "home"),
+            Path.Combine(_root, "empty-dir"),
+            NoSystemInstalls));
+    }
+
     // Same reasoning as CodexBinary's equivalent test: what a null searchPath
     // resolves to on this machine is not asserted, only that resolving it does
     // not throw — a real answer here depends on whether this developer's Mac
@@ -186,5 +200,17 @@ public class GrokUsageRefreshTests : IDisposable
         Assert.False(scheduler.Tick(Now, accountUsageEnabled: false, autoRefreshEnabled: true));
         Assert.True(scheduler.Tick(
             Now.AddSeconds(2), accountUsageEnabled: true, autoRefreshEnabled: true));
+    }
+
+    // Not exercised anywhere else: Refresh() itself is excluded from coverage
+    // because it starts a real process, so nothing else in the suite ever
+    // reads this property.
+    [Fact]
+    public void TheScratchDirectoryIsUnderTempAndNamedForThisApp()
+    {
+        var dir = GrokUsageRefresher.ScratchDirectory;
+
+        Assert.StartsWith(Path.GetTempPath(), dir);
+        Assert.EndsWith("claude-buddy-grok-refresh", dir);
     }
 }
