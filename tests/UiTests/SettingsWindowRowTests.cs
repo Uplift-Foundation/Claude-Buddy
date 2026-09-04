@@ -120,6 +120,58 @@ public class SettingsWindowRowTests
     public void TheGrokUsageSwitchWritesItsOwnSetting() => Toggles(
         (w, v) => w.OnGrokAccountUsageToggled(v), () => ClaudeBuddySettings.GrokAccountUsageEnabled);
 
+    // CB-96. Its row only exists when GrokAccountUsageEnabled is already on —
+    // Toggles() rebuilds the page after every call, which is what makes the
+    // row reachable at all on the second (off-to-on-and-back) half of the
+    // drive, and is exactly the case this file's own header comment calls out
+    // as the reason rebuilding matters.
+    [AvaloniaFact]
+    public void TheGrokAutoRefreshSwitchWritesItsOwnSetting()
+    {
+        ClaudeBuddySettings.GrokAccountUsageEnabled = true;
+
+        Toggles(
+            (w, v) => w.OnGrokAutoRefreshToggled(v), () => ClaudeBuddySettings.GrokAutoRefreshEnabled);
+    }
+
+    // Auto-refresh starts the user's real Grok app in the background and is
+    // deliberately a second, separate opt-in from "usage orbs for each Grok
+    // account" for exactly that reason. Turning the first switch off has to
+    // turn the second off too, or a later re-enable would silently resume
+    // background launches the user never freshly agreed to — the row would
+    // reappear unchecked in the UI while the setting underneath it was still
+    // true the whole time. Found in review rather than written the first time.
+    [AvaloniaFact]
+    public void TurningUsageOrbsOffAlsoTurnsAutoRefreshOff()
+    {
+        var window = NewWindow();
+
+        window.OnGrokAccountUsageToggled(true);
+        window.OnGrokAutoRefreshToggled(true);
+        Assert.True(ClaudeBuddySettings.GrokAutoRefreshEnabled);
+
+        window.OnGrokAccountUsageToggled(false);
+        Assert.False(ClaudeBuddySettings.GrokAutoRefreshEnabled);
+    }
+
+    // Turning usage orbs back on is not the same gesture as turning auto
+    // refresh on — it only makes that row visible again, never flips the
+    // setting for someone. Re-enabling should not have any memory of what the
+    // switch was set to the last time the row happened to be visible.
+    [AvaloniaFact]
+    public void TurningUsageOrbsBackOnDoesNotResumeAutoRefreshOnItsOwn()
+    {
+        var window = NewWindow();
+
+        window.OnGrokAccountUsageToggled(true);
+        window.OnGrokAutoRefreshToggled(true);
+        window.OnGrokAccountUsageToggled(false);
+
+        window.OnGrokAccountUsageToggled(true);
+
+        Assert.False(ClaudeBuddySettings.GrokAutoRefreshEnabled);
+    }
+
     // Not Toggles(), because these two are no longer switches: three answers
     // do not fit in a boolean, which is the whole reason the setting changed
     // shape. The handler is still the production one, driven through every
