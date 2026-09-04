@@ -223,6 +223,17 @@ namespace ClaudeBuddy
             if (text.Contains(OpenClawSessions.MediaAttachedMarker, StringComparison.Ordinal))
             {
                 TryResolveLiveImage(_streaming);
+                return;
+            }
+
+            // A picture the agent generated itself and named by its own path
+            // on the gateway host — see LocalMediaPathFrom's own comment for
+            // why this is a second, distinct convention from the marker
+            // above rather than the same one.
+            var localPath = OpenClawSessions.LocalMediaPathFrom(text);
+            if (localPath is not null)
+            {
+                TryResolveLocalMedia(_streaming, localPath);
             }
         }
 
@@ -267,6 +278,28 @@ namespace ClaudeBuddy
             // PropertyChanged the setters above already raised reaches a
             // direct (non-room) panel through TurnView's own subscription,
             // but a room's Rebuild() has to be asked separately.
+            TurnUpdated?.Invoke(turn);
+        }
+
+        // CB-88: an agent's own generated picture, named by its own path on
+        // the gateway host rather than fetchable by URL — see
+        // OpenClawSessions.FetchLocalMediaAsync for why the response shape
+        // here is unverified, and LocalMediaPathFrom for the two shapes of
+        // reference this resolves. Same one-shot-per-turn guard as
+        // TryResolveLiveImage; the two never fire for the same turn since
+        // OnAgentText only ever detects one marker or the other.
+        private async void TryResolveLocalMedia(ChatTurn turn, string path)
+        {
+            if (!_pendingImageChecks.Add(turn)) return;
+
+            var bytes = await OpenClawSessions.FetchLocalMediaAsync(this, path, CancellationToken.None);
+            if (bytes is null || bytes.Length == 0) return;
+
+            turn.ImageBytes = bytes;
+
+            // See TryResolveLiveImage's identical comment: OpenClawRoomChat
+            // needs its own nudge to rebuild, beyond the PropertyChanged the
+            // setter above already raised.
             TurnUpdated?.Invoke(turn);
         }
 
