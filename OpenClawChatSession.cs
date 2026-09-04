@@ -282,18 +282,12 @@ namespace ClaudeBuddy
             // gateway it is always the inline bytes (CB-91); the url arm is
             // kept for a deployment that sends one instead. Setting only
             // ImageUrl, as this did before, resolved to nothing at all here.
-            if (match.Value.ImageBytes is { Length: > 0 } matchedBytes)
-            {
-                turn.ImageBytes = matchedBytes;
-            }
-            else if (!string.IsNullOrEmpty(match.Value.ImageUrl))
-            {
-                turn.ImageUrl = match.Value.ImageUrl;
-            }
-            else
-            {
-                return;
-            }
+            //
+            // No third arm for "neither": BestImageMatch only returns a turn
+            // that has one or the other, so restating that here would be a
+            // branch nothing could ever take.
+            if (match.Value.ImageBytes is { Length: > 0 } matchedBytes) turn.ImageBytes = matchedBytes;
+            else turn.ImageUrl = match.Value.ImageUrl;
 
             turn.ImageAlt = match.Value.ImageAlt;
 
