@@ -1,6 +1,6 @@
 using System;
-using System.IO;
-using System.Net.WebSockets;
+using System.Collections.Generic;
+using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,200 +8,202 @@ using Xunit;
 
 namespace ClaudeBuddy.Tests;
 
-// CB-88: an agent's own generated picture, resolved via the gateway's
-// media.get RPC rather than a fetchable URL — see
-// OpenClawSessions.FetchLocalMediaAsync's own comment for why the success
-// response shape here is the one genuinely unverified piece of this feature
-// (media.get requires operator.admin, which was never obtainable to capture
-// a real response against). These tests exercise everything that IS
-// verifiable without one: the marker detection reaching the fetch, the
-// one-shot guard, and graceful failure when the gateway refuses the scope —
-// which is exactly what a real gateway does today.
+// CB-88/CB-90: an agent's own generated picture, named by path in its reply
+// and fetched through the gateway's read-scoped media route.
+//
+// Driven through FetchMediaAsync's own url-keyed cache rather than a fake
+// socket. That is not a shortcut around the transport — it is the seam that
+// makes the interesting half assertable: whether the route is built correctly
+// from the path. FetchMediaAsync checks the cache before it reads host or
+// token, so seeding the exact route these tests expect and finding the bytes
+// come back *is* the assertion that the route matches. Get the escaping or
+// the prefix wrong and the seeded entry is simply never found.
 [Collection("Settings")]
 public class OpenClawLocalMediaResolutionTests : IDisposable
 {
-    public void Dispose() => OpenClawSessions.SetGatewayForTests(null);
+    private readonly List<string> _seeded = new();
 
-    private static OpenClawGateway Gateway(WebSocket socket) =>
-        new("gw.local", 4443, "gw-token",
-            (_, _, _, _) => Task.FromResult(
-                new OpenClawSocket.Connection(socket, Stream.Null, "fp-abc")),
-            TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
-
-    private static FakeGatewaySocket Socket(Func<FakeGatewaySocket.Request, object?> onMediaGet)
+    private static Dictionary<string, byte[]?> MediaCache()
     {
-        var socket = new FakeGatewaySocket();
-        socket.PushEvent("connect.challenge", new { nonce = "nonce-1" });
-
-        socket.OnRequest = request =>
-            request.Method == "connect"
-                ? FakeGatewaySocket.Ok(request.Id, new
-                {
-                    protocol = 4,
-                    server = new { version = "1.2.3" },
-                    auth = new { scopes = new[] { "operator.read" } },
-                    policy = new { tickIntervalMs = 15_000, maxPayload = 1_048_576 }
-                })
-                : request.Method == "media.get"
-                    ? onMediaGet(request)
-                    : FakeGatewaySocket.Ok(request.Id, new { });
-
-        return socket;
+        var field = typeof(OpenClawSessions).GetField("Media", BindingFlags.NonPublic | BindingFlags.Static)!;
+        return (Dictionary<string, byte[]?>)field.GetValue(null)!;
     }
 
-    private static async Task<OpenClawChatSession> ConnectedAsync(
-        Func<FakeGatewaySocket.Request, object?> onMediaGet)
+    // The route the code under test is expected to build for a path.
+    private static string RouteFor(string path) =>
+        OpenClawSessions.AssistantMediaRoute + Uri.EscapeDataString(path);
+
+    private void Seed(string path, byte[]? bytes)
     {
-        var socket = Socket(onMediaGet);
-        var gateway = Gateway(socket);
-
-        var result = await gateway.ConnectAsync(null, CancellationToken.None);
-        Assert.Equal(OpenClawGateway.Outcome.Connected, result.Outcome);
-
-        OpenClawSessions.SetGatewayForTests(gateway);
-
-        return new OpenClawChatSession("openclaw:agent:main:main", "agent:main:main", "main");
+        var key = RouteFor(path);
+        _seeded.Add(key);
+        MediaCache()[key] = bytes;
     }
+
+    public void Dispose()
+    {
+        var cache = MediaCache();
+        foreach (var key in _seeded) cache.Remove(key);
+    }
+
+    private static OpenClawChatSession Session() =>
+        new("openclaw:agent:main:main", "agent:main:main", "main");
 
     private static JsonElement AgentText(string text) =>
         JsonDocument.Parse($"{{\"data\":{{\"text\":{JsonSerializer.Serialize(text)}}}}}").RootElement;
 
     // A one-pixel PNG, the same fixture this repo's other image tests use.
-    private const string OnePixelPngBase64 =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==";
+    private static byte[] Pixel() => Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==");
 
-    [Fact]
-    public async Task AMediaLineResolvesToImageBytesViaDataUrl()
+    private static async Task<byte[]?> WaitForBytes(OpenClawChatSession session)
     {
-        var session = await ConnectedAsync(request => FakeGatewaySocket.Ok(request.Id, new
-        {
-            dataUrl = $"data:image/png;base64,{OnePixelPngBase64}"
-        }));
-
-        var updated = new System.Collections.Generic.List<ChatTurn>();
-        session.TurnUpdated += updated.Add;
-
-        session.OnAgentEvent("agent", AgentText("here's the drop 🌸\n\nMEDIA:/tmp/pic.png"));
-
         for (var i = 0; i < 50 && session.History[0].ImageBytes is null; i++)
             await Task.Delay(10);
 
-        Assert.Equal(Convert.FromBase64String(OnePixelPngBase64), session.History[0].ImageBytes);
+        return session.History[0].ImageBytes;
+    }
+
+    [Fact]
+    public async Task AMediaLineResolvesToImageBytes()
+    {
+        const string path = "/Users/warrenthompson/.openclaw/media/lilibeth_drop.png";
+        Seed(path, Pixel());
+
+        var session = Session();
+        var updated = new List<ChatTurn>();
+        session.TurnUpdated += updated.Add;
+
+        session.OnAgentEvent("agent", AgentText("here's the drop 🌸\n\nMEDIA:" + path));
+
+        Assert.Equal(Pixel(), await WaitForBytes(session));
         Assert.Contains(session.History[0], updated);
     }
 
     [Fact]
     public async Task ABareFullPathAlsoResolves()
     {
-        var session = await ConnectedAsync(request => FakeGatewaySocket.Ok(request.Id, new
-        {
-            dataUrl = $"data:image/png;base64,{OnePixelPngBase64}"
-        }));
+        const string path = "/Users/warrenthompson/.openclaw/media/bare.png";
+        Seed(path, Pixel());
 
-        session.OnAgentEvent("agent", AgentText("/tmp/pic.png"));
+        var session = Session();
+        session.OnAgentEvent("agent", AgentText(path));
 
-        for (var i = 0; i < 50 && session.History[0].ImageBytes is null; i++)
-            await Task.Delay(10);
-
-        Assert.NotNull(session.History[0].ImageBytes);
+        Assert.NotNull(await WaitForBytes(session));
     }
 
-    // A plain "data" field with no data: prefix — one of FetchLocalMediaAsync's
-    // fallback field names, in case the real response doesn't use dataUrl.
+    // The escaping is the part most likely to be wrong, so it gets its own
+    // case: a path with a space and a non-ASCII character resolves only if
+    // the route was percent-encoded the way the gateway expects.
     [Fact]
-    public async Task ABareBase64DataFieldIsAlsoDecoded()
+    public async Task ThePathIsPercentEncodedIntoTheRoute()
     {
-        var session = await ConnectedAsync(request => FakeGatewaySocket.Ok(request.Id, new
-        {
-            data = OnePixelPngBase64
-        }));
+        const string path = "/Users/warrenthompson/.openclaw/media/a drop ünicode.png";
+        Seed(path, Pixel());
 
-        session.OnAgentEvent("agent", AgentText("MEDIA:/tmp/pic.png"));
+        Assert.Contains("%20", RouteFor(path));
 
-        for (var i = 0; i < 50 && session.History[0].ImageBytes is null; i++)
-            await Task.Delay(10);
-
-        Assert.Equal(Convert.FromBase64String(OnePixelPngBase64), session.History[0].ImageBytes);
-    }
-
-    // The real, current state of the world: the gateway refuses media.get
-    // for a device that doesn't hold operator.admin. Confirmed live against
-    // the actual gateway this session (CB-88) — not a hypothetical case.
-    [Fact]
-    public async Task AMissingScopeErrorLeavesTheTurnAsTextOnly()
-    {
-        var session = await ConnectedAsync(request => FakeGatewaySocket.Error(
-            request.Id, "forbidden", "missing scope: operator.admin", null));
-
-        session.OnAgentEvent("agent", AgentText("MEDIA:/tmp/pic.png"));
-        await Task.Delay(50);
-
-        Assert.Null(session.History[0].ImageBytes);
+        var bytes = await OpenClawSessions.FetchLocalMediaAsync(path, CancellationToken.None);
+        Assert.Equal(Pixel(), bytes);
     }
 
     [Fact]
-    public async Task ATurnWithNoMarkerNeverAsksTheGateway()
+    public void TheRouteIsTheGatewaysOwnReadScopedMediaEndpoint()
     {
-        var asked = false;
-        var session = await ConnectedAsync(request =>
-        {
-            asked = true;
-            return FakeGatewaySocket.Ok(request.Id, new { });
-        });
+        Assert.Equal("/__openclaw__/assistant-media?source=", OpenClawSessions.AssistantMediaRoute);
+    }
 
+    [Fact]
+    public async Task ATurnWithNoMarkerNeverResolves()
+    {
+        var session = Session();
         session.OnAgentEvent("agent", AgentText("just an ordinary reply, nothing attached"));
         await Task.Delay(50);
 
-        Assert.False(asked);
         Assert.Null(session.History[0].ImageBytes);
     }
 
     // QA (CB-88): a sentence that happens to start a line with the word
-    // "MEDIA:" is not the marker — end to end, not just at the pure parser.
+    // "MEDIA:" is not the marker.
     [Fact]
-    public async Task AnOrdinarySentenceStartingWithMediaNeverAsksTheGateway()
+    public async Task AnOrdinarySentenceStartingWithMediaNeverResolves()
     {
-        var asked = false;
-        var session = await ConnectedAsync(request =>
-        {
-            asked = true;
-            return FakeGatewaySocket.Ok(request.Id, new { });
-        });
-
+        var session = Session();
         session.OnAgentEvent("agent", AgentText("MEDIA: is a broad term for a lot of things"));
         await Task.Delay(50);
 
-        Assert.False(asked);
         Assert.Null(session.History[0].ImageBytes);
     }
 
+    // The one-shot guard, proven by observation rather than by counting
+    // requests: resolve once, then change what the route would return and
+    // send the same marker again. Still holding the first picture means the
+    // second snapshot never went looking.
     [Fact]
-    public async Task NoGatewayConfiguredLeavesTheTurnAsTextOnly()
+    public async Task ASecondSnapshotStillCarryingTheMarkerDoesNotFetchAgain()
     {
-        OpenClawSessions.SetGatewayForTests(null);
+        const string path = "/Users/warrenthompson/.openclaw/media/once.png";
+        Seed(path, Pixel());
 
-        var session = new OpenClawChatSession("openclaw:agent:main:main", "agent:main:main", "main");
+        var session = Session();
+        session.OnAgentEvent("agent", AgentText("here it comes\n\nMEDIA:" + path));
 
-        session.OnAgentEvent("agent", AgentText("MEDIA:/tmp/pic.png"));
+        var first = await WaitForBytes(session);
+        Assert.NotNull(first);
+
+        var different = new byte[] { 9, 9, 9, 9 };
+        Seed(path, different);
+
+        session.OnAgentEvent("agent", AgentText("here it is now\n\nMEDIA:" + path));
+        await Task.Delay(50);
+
+        Assert.Equal(first, session.History[0].ImageBytes);
+        Assert.NotEqual(different, session.History[0].ImageBytes);
+    }
+
+    // A path the gateway will not serve (outside its media allowlist, which
+    // answers with a non-200 and so a null here) leaves the turn as text.
+    [Fact]
+    public async Task APathTheGatewayWillNotServeLeavesTheTurnAsTextOnly()
+    {
+        const string path = "/Users/warrenthompson/.openclaw/workspace-comfyui-zara/outputs/nope.png";
+        Seed(path, null);
+
+        var session = Session();
+        session.OnAgentEvent("agent", AgentText("MEDIA:" + path));
         await Task.Delay(50);
 
         Assert.Null(session.History[0].ImageBytes);
     }
 
-    [Fact]
-    public async Task ASecondSnapshotStillCarryingTheMarkerAsksOnlyOnce()
-    {
-        var requests = 0;
-        var session = await ConnectedAsync(request =>
-        {
-            Interlocked.Increment(ref requests);
-            return FakeGatewaySocket.Ok(request.Id, new { });
-        });
+    // ---- failing closed -------------------------------------------------
+    //
+    // Restored after QA (CB-91) pointed out that rewriting this file onto the
+    // cache seam had dropped both of them. They need no transport at all:
+    // with nothing seeded and no gateway configured, FetchMediaAsync reaches
+    // its own host/token guard and answers null, which is the same shape a
+    // refusal takes. What they pin is that a failure leaves the turn alone
+    // rather than throwing out of an async void or half-setting a picture.
 
-        session.OnAgentEvent("agent", AgentText("here it comes\n\nMEDIA:/tmp/pic.png"));
-        session.OnAgentEvent("agent", AgentText("here it comes now\n\nMEDIA:/tmp/pic.png"));
+    [Fact]
+    public async Task AnUnservedPathLeavesTheTurnUntouchedRatherThanThrowing()
+    {
+        var session = Session();
+        session.OnAgentEvent("agent", AgentText(
+            "MEDIA:/Users/warrenthompson/.openclaw/media/never-seeded.png"));
         await Task.Delay(50);
 
-        Assert.Equal(1, requests);
+        Assert.Null(session.History[0].ImageBytes);
+        Assert.Null(session.History[0].ImageUrl);
+        Assert.Contains("MEDIA:", session.History[0].Text);
+    }
+
+    [Fact]
+    public async Task FetchLocalMediaReturnsNullRatherThanThrowingWhenNothingAnswers()
+    {
+        var bytes = await OpenClawSessions.FetchLocalMediaAsync(
+            "/Users/warrenthompson/.openclaw/media/nothing-here.png", CancellationToken.None);
+
+        Assert.Null(bytes);
     }
 }

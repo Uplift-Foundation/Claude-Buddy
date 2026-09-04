@@ -32,7 +32,15 @@ namespace ClaudeBuddy
         // value this becomes. Defaulted, because only the OpenClaw history
         // parser is in a position to answer it and every other producer of a
         // HistoryTurn would otherwise have to write `false` to say nothing.
-        bool Mine = false);
+        bool Mine = false,
+
+        // The picture itself, when the block carried it inline rather than
+        // naming somewhere to fetch it from. This is the shape this gateway
+        // actually emits — `{type:"image", data:"<base64>", mimeType:...}`
+        // with no url at all (CB-91) — so a turn generally has *either* this
+        // or ImageUrl, never both. Defaulted for the same reason Mine is:
+        // only TurnsFromHistory is in a position to fill it in.
+        byte[]? ImageBytes = null);
 
     // One OpenClaw session, as something the chat panel can talk to.
     //
@@ -268,9 +276,19 @@ namespace ClaudeBuddy
             // matching across roles would occasionally attribute the wrong
             // one in a busy room.
             var match = OpenClawSessions.BestImageMatch(page.Value.Turns, turn.Role, turn.At);
-            if (match?.ImageUrl is null) return;
+            if (match is null) return;
 
-            turn.ImageUrl = match.Value.ImageUrl;
+            // Whichever form the matched turn actually carries. On this
+            // gateway it is always the inline bytes (CB-91); the url arm is
+            // kept for a deployment that sends one instead. Setting only
+            // ImageUrl, as this did before, resolved to nothing at all here.
+            //
+            // No third arm for "neither": BestImageMatch only returns a turn
+            // that has one or the other, so restating that here would be a
+            // branch nothing could ever take.
+            if (match.Value.ImageBytes is { Length: > 0 } matchedBytes) turn.ImageBytes = matchedBytes;
+            else turn.ImageUrl = match.Value.ImageUrl;
+
             turn.ImageAlt = match.Value.ImageAlt;
 
             // OpenClawRoomChat only rebuilds a room's merged view on this
@@ -282,17 +300,17 @@ namespace ClaudeBuddy
         }
 
         // CB-88: an agent's own generated picture, named by its own path on
-        // the gateway host rather than fetchable by URL — see
-        // OpenClawSessions.FetchLocalMediaAsync for why the response shape
-        // here is unverified, and LocalMediaPathFrom for the two shapes of
-        // reference this resolves. Same one-shot-per-turn guard as
-        // TryResolveLiveImage; the two never fire for the same turn since
-        // OnAgentText only ever detects one marker or the other.
+        // the gateway host rather than fetchable by URL — fetched through the
+        // gateway's own read-scoped media route (see
+        // OpenClawSessions.FetchLocalMediaAsync), with LocalMediaPathFrom
+        // deciding what counts as such a reference. Same one-shot-per-turn
+        // guard as TryResolveLiveImage; the two never fire for the same turn
+        // since OnAgentText only ever detects one marker or the other.
         private async void TryResolveLocalMedia(ChatTurn turn, string path)
         {
             if (!_pendingImageChecks.Add(turn)) return;
 
-            var bytes = await OpenClawSessions.FetchLocalMediaAsync(this, path, CancellationToken.None);
+            var bytes = await OpenClawSessions.FetchLocalMediaAsync(path, CancellationToken.None);
             if (bytes is null || bytes.Length == 0) return;
 
             turn.ImageBytes = bytes;
@@ -388,6 +406,7 @@ namespace ClaudeBuddy
                 Role = t.Role,
                 Text = t.Text,
                 ImageUrl = t.ImageUrl,
+                ImageBytes = t.ImageBytes,
                 ImageAlt = t.ImageAlt,
                 At = t.At,
                 Speaker = t.Speaker,
@@ -418,6 +437,7 @@ namespace ClaudeBuddy
                     Role = turn.Role,
                     Text = turn.Text,
                     ImageUrl = turn.ImageUrl,
+                    ImageBytes = turn.ImageBytes,
                     ImageAlt = turn.ImageAlt,
                     At = turn.At,
                     Speaker = turn.Speaker,
