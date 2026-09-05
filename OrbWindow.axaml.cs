@@ -64,6 +64,8 @@ namespace ClaudeBuddy
         private string _lastColor = "";
         private Color? _accentColor;
         private string _lastGlyphName = "";
+        private string? _lastTipTitle;
+        private string? _lastTipPath;
 
         // Colour for the team arrow leaving this orb, when it has one. Follows
         // /color so several members pointing at one lead stay apart; sessions
@@ -291,7 +293,19 @@ namespace ClaudeBuddy
             }
 
             var tipPath = string.IsNullOrEmpty(status.Cwd) ? null : status.Cwd;
-            ToolTip.SetTip(Root, ThoughtBubble(tipTitle, tipPath));
+
+            // UpdateFrom runs on every session poll, but SetTip always builds
+            // a fresh Border. Doing that while the pointer is resting on the
+            // orb and the tooltip is already open made Avalonia close and
+            // reopen the popup on every poll tick — a flicker, not a redraw,
+            // for as long as the mouse stayed still. Content is small and
+            // cheap to compare, so skip the rebuild when nothing changed.
+            if (tipTitle != _lastTipTitle || tipPath != _lastTipPath)
+            {
+                ToolTip.SetTip(Root, ThoughtBubble(tipTitle, tipPath));
+                _lastTipTitle = tipTitle;
+                _lastTipPath = tipPath;
+            }
 
             ToolTip.SetPlacement(Root, PlacementMode.Top);
 
@@ -552,6 +566,12 @@ namespace ClaudeBuddy
         internal string? CliMarkFill { get; private set; }
 
         internal bool CliMarkVisible => CliBadge.IsVisible;
+
+        // Reference identity of the tooltip's current content, so a test can
+        // assert the flicker fix without a real popup: UpdateFrom must reuse
+        // this instance across polls whose title/path didn't change, and
+        // swap it for a new one when they did.
+        internal Control? CurrentThoughtBubble => ToolTip.GetTip(Root) as Control;
 
         private void ApplyCli(SessionSource source)
         {
