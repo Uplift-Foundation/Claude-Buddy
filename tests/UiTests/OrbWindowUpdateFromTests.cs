@@ -398,6 +398,63 @@ public class OrbWindowUpdateFromTests
         Assert.Equal(CliMark.GlyphSize, glyph.Width, precision: 6);
     }
 
+    // --- the thought bubble tooltip --------------------------------------
+    // UpdateFrom used to call ToolTip.SetTip with a brand-new Border on every
+    // poll, whether or not the title/path had changed. With the tooltip
+    // already open (pointer resting on the orb), replacing its content object
+    // makes Avalonia close and reopen the popup — a visible flicker for as
+    // long as the mouse stayed still, since polls keep arriving. CB-104.
+
+    [AvaloniaFact]
+    public void RepeatedIdenticalUpdatesReuseTheSameTooltipInstance()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+
+        orb.UpdateFrom(status);
+        var first = orb.CurrentThoughtBubble;
+        Assert.NotNull(first);
+
+        // Same title, same path, same everything the tooltip reads — a
+        // typical re-poll with nothing new to say.
+        orb.UpdateFrom(status);
+        var second = orb.CurrentThoughtBubble;
+
+        Assert.Same(first, second);
+    }
+
+    [AvaloniaFact]
+    public void ATitleChangeRebuildsTheTooltip()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+
+        orb.UpdateFrom(status);
+        var first = orb.CurrentThoughtBubble;
+
+        status.Title = "renamed";
+        orb.UpdateFrom(status);
+        var second = orb.CurrentThoughtBubble;
+
+        Assert.NotSame(first, second);
+    }
+
+    [AvaloniaFact]
+    public void ACwdChangeRebuildsTheTooltip()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        var status = PlainStatus();
+
+        orb.UpdateFrom(status);
+        var first = orb.CurrentThoughtBubble;
+
+        status.Cwd = "/Users/test/other-project";
+        orb.UpdateFrom(status);
+        var second = orb.CurrentThoughtBubble;
+
+        Assert.NotSame(first, second);
+    }
+
     [AvaloniaFact]
     public void AgentNameOverridesTitleInTheGlyphSource()
     {
