@@ -10,6 +10,7 @@ using Avalonia.Layout;
 using Avalonia.Controls.Documents;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 
 namespace ClaudeBuddy
@@ -1338,20 +1339,53 @@ namespace ClaudeBuddy
             // Width and Height are the resize target (see the XAML comment),
             // so unlike the old SizeToContent world these are already final —
             // no need to wait on Root's laid-out bounds.
-            var width = (int)(Width * scale);
-            var height = (int)(Height * scale);
+            var size = new PixelSize((int)(Width * scale), (int)(Height * scale));
             var gap = (int)(Gap * scale);
 
-            // Below by default, flipped above when it would run off the bottom.
-            // Flipped rather than clamped upward: a clamped panel ends up
-            // covering the orb you just clicked.
-            var y = anchor.Y + gap;
-            if (y + height > work.Bottom) y = anchor.Y - gap - height;
+            // Below the orb, flipped above when below would run off the bottom,
+            // clamped into the work area — the maths this method used to do
+            // inline, now in ChatPanelPlacement so it can be swept by a unit
+            // test and so it has somewhere to put the part that is new: not
+            // landing on top of a panel somebody pinned there.
+            Position = ChatPanelPlacement.Resolve(anchor, size, gap, work, OccupiedBy(screen));
+        }
 
-            var x = Math.Clamp(anchor.X - width / 2, work.X, Math.Max(work.X, work.Right - width));
-            y = Math.Clamp(y, work.Y, Math.Max(work.Y, work.Bottom - height));
+        // The pinned panels already on this screen, as physical rectangles.
+        //
+        // Pinned only. The transient is the panel being placed in every case
+        // that reaches here, and a panel cannot be asked to avoid itself; and
+        // there is never a second unpinned one to avoid, which is the first
+        // invariant in the class comment doing a job rather than just being
+        // true.
+        //
+        // Same screen only: a rectangle on another display can never overlap
+        // this one, and including it would push a panel sideways to dodge
+        // something the user cannot see beside it. Decided by whether the
+        // screen's bounds hold the panel's top-left rather than by comparing
+        // two Screen objects, which is a question about identity that Avalonia
+        // does not promise an answer to.
+        private IReadOnlyList<PixelRect> OccupiedBy(Screen screen)
+        {
+            var occupied = new List<PixelRect>();
 
-            Position = new PixelPoint(x, y);
+            foreach (var panel in Panels)
+            {
+                if (!panel._pinned || !panel.IsVisible) continue;
+                if (ReferenceEquals(panel, this)) continue;
+                if (!screen.Bounds.Contains(panel.Position)) continue;
+
+                // Width and Height are DIPs and Position is physical, the same
+                // mismatch Reposition converts across a few lines above. This
+                // panel is on `screen` by the test just made, so its scaling is
+                // the right one to convert with.
+                occupied.Add(new PixelRect(
+                    panel.Position,
+                    new PixelSize(
+                        (int)(panel.Width * screen.Scaling),
+                        (int)(panel.Height * screen.Scaling))));
+            }
+
+            return occupied;
         }
 
         private void OnInputKeyDown(object? sender, KeyEventArgs e)
