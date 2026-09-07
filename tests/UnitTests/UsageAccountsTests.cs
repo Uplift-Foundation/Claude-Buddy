@@ -54,7 +54,7 @@ public class UsageAccountsTests
                          "organizationName":"The UPLIFT Foundation"}}
         """;
 
-        Assert.Equal("board", UsageAccounts.LabelFrom(json, null));
+        Assert.Equal("owner", UsageAccounts.LabelFrom(json, null));
     }
 
     [Fact]
