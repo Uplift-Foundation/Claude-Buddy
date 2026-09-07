@@ -16,6 +16,17 @@ namespace ClaudeBuddy.Tests;
 // The stand-in is a script rather than a mock because the seam being tested is
 // the process boundary itself. Nothing here needs the real CLI, which is the
 // point: this asserts the launch, and ParseAgentsJson asserts the answer.
+//
+// In the "ConfigDirEnv" collection (CB-113) even though nothing here calls
+// SetEnvironmentVariable: The_default_account_leaves_the_child_with_what_this_process_has
+// reads CLAUDE_CONFIG_DIR, then launches a child that snapshots it a moment
+// later, and asserts the two agree. A sibling test elsewhere in that
+// collection that sets the variable between the read and the launch would
+// make this fail with no exception and nothing to point at — a flake that
+// looks like a regression in a file this branch never touched. See
+// ConfigDirEnvCollection.cs for why a read-then-observe like this one
+// belongs in the collection even though a bare read would not.
+[Collection("ConfigDirEnv")]
 public class AgentRosterEnvironmentTests : IDisposable
 {
     private readonly string _dir;
