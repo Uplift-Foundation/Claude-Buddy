@@ -56,6 +56,13 @@ namespace ClaudeBuddy
         private AccountOrbWindow? _pendingShow;
 
         private DateTimeOffset _lastPoll = DateTimeOffset.MinValue;
+
+        // How long to wait before the next poll, which is no longer a constant.
+        // Starts fast: a freshly launched app knows nothing about whether this
+        // account is mid-burst, and that is the one moment it must not assume
+        // calm. See UsagePollCadence for why it moves at all.
+        private TimeSpan _interval = UsagePollCadence.Fast;
+
         private bool _polling;
         private bool _visible = true;
 
@@ -72,6 +79,12 @@ namespace ClaudeBuddy
         internal IReadOnlyDictionary<string, AccountOrbWindow> Orbs => _orbs;
 
         internal IReadOnlyDictionary<string, UsageCard> Cards => _cards;
+
+        // What the last Apply decided the cadence should be, exposed for the
+        // same reason AccountOrbWindow.WeeklyColour is: a headless test can then
+        // assert on the decision itself rather than on how long a real poll
+        // happened to wait, which is not a thing a test can sit through.
+        internal TimeSpan PollInterval => _interval;
 
         // A settings change, said out loud by whoever flipped the switch.
         //
@@ -92,15 +105,31 @@ namespace ClaudeBuddy
             SetVisible(visible);
             PruneDisabledSources();
             _lastPoll = DateTimeOffset.MinValue;
+
+            // ...and back to the fast cadence alongside it, for the same reason
+            // the floor is cleared: a switch that just came on is a user
+            // watching for something to appear, and whatever backing-off the
+            // previous source had earned says nothing about the new one.
+            _interval = UsagePollCadence.Fast;
         }
 
         // Called on SessionManager's existing two-second tick.
         //
-        // The floor is the point: Claude Code caches the underlying usage fetch
-        // with a five-minute write guard, so polling faster cannot produce a
-        // newer number — it only spends a process launch per account to be told
-        // the same thing. SyncToSettings resets the floor so a switch that just
-        // came on does not wait out a poll that ran for the other CLI.
+        // The floor is the point, but it is no longer a constant and no longer
+        // rests on the claim it used to. That claim — that Claude Code caches
+        // the underlying fetch behind a five-minute write guard, so polling
+        // faster could not produce a newer number — is false, measured
+        // (CB-122): a fresher figure came back twelve seconds later. So the
+        // interval is now whatever the readings themselves justify, fast while
+        // they move and settling back to the old five minutes when they stop.
+        // UsagePollCadence holds that rule and nothing else.
+        //
+        // The cost is bounded by _polling below rather than by the interval: a
+        // poll already in flight is never joined by a second one, so a sixty-
+        // second cadence against a read measured at median 5.6s and p90 7.4s is
+        // about a 10% duty cycle with no way to stack up. SyncToSettings resets
+        // both the floor and the cadence so a switch that just came on does not
+        // wait out a poll that ran for the other CLI.
         internal void Tick(DateTimeOffset now)
         {
             if (!AnyEnabled())
@@ -109,7 +138,7 @@ namespace ClaudeBuddy
                 return;
             }
 
-            if (_polling || now - _lastPoll < UsagePoller.MinimumInterval) return;
+            if (_polling || now - _lastPoll < _interval) return;
 
             _lastPoll = now;
             _polling = true;
@@ -133,11 +162,25 @@ namespace ClaudeBuddy
 
         internal void Apply(IReadOnlyList<AccountUsage> readings, DateTimeOffset now)
         {
+            // Whether anything a person can see actually moved, decided before
+            // the new readings overwrite the old ones — after that the evidence
+            // is gone. Any one account moving is enough to keep the whole poll
+            // fast: the sources are read together, so there is no such thing as
+            // polling one of them harder than the others.
+            var changed = false;
+
             foreach (var reading in readings)
             {
                 var key = reading.ConfigDir ?? string.Empty;
+
+                changed |= UsagePollCadence.DrawnValuesDiffer(
+                    _readings.TryGetValue(key, out var before) ? before : null,
+                    reading);
+
                 _readings[key] = reading;
             }
+
+            _interval = UsagePollCadence.Next(_interval, changed);
 
             // Accounts that answered nothing keep the orb they had. A poll that
             // failed is not news about usage, and removing the orb would make a

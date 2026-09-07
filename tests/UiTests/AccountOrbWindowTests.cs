@@ -270,7 +270,7 @@ public class AccountOrbWindowTests
     // separate window class from OrbWindow (see the class comment at the top
     // of this file) and so carried its own, unfixed copy of the same call —
     // CB-104's first round only touched OrbWindow. An account orb's poll is
-    // five minutes apart (UsagePoller.MinimumInterval) rather than two
+    // a minute to five minutes apart (UsagePollCadence) rather than two
     // seconds, so the same flicker was real here too, just far rarer.
 
     [AvaloniaFact]

@@ -930,9 +930,16 @@ namespace ClaudeBuddy
                 + "the life of that process — there is no lighter way to ask it. On, this "
                 + "starts and stops Grok in the background roughly every twenty minutes "
                 + "purely to force a fresh number, in a scratch folder rather than one of "
-                + "your projects. Off, the orb keeps showing whatever the last real Grok "
-                + "session reported, dimming and dating it once that is more than fifteen "
-                + "minutes old."));
+                + "your projects. It runs for about eight seconds each time and shows no "
+                + "window: three cycles an hour, some twenty-four seconds of Grok running "
+                + "in total, and nothing appears on your screen or in your dock. Off, the "
+                + "orb keeps showing whatever the last real Grok session reported, dimming "
+                + "and dating it once that is more than fifteen minutes old — which, if you "
+                + "have not run Grok today, can be hours.\n\n"
+                + "This buys freshness, not movement. If you are not using Grok, a refresh "
+                + "will report the same percentage it did before, and that is the right "
+                + "answer rather than a failed one: the orb simply stops being dimmed and "
+                + "starts claiming the number is current."));
 
             return rows.ToArray();
         }
