@@ -18,17 +18,69 @@ namespace ClaudeBuddy
     // type in, and a mic. Opened by clicking an orb that represents a session
     // with no terminal to jump to — for those, this is where the click goes.
     //
-    // One instance, reused. Two panels would be two windows competing to be the
-    // key window, each one's dismiss-on-deactivate closing the other; a
-    // singleton makes "opening B closes A" correct by construction rather than
-    // emergent. What is worth keeping per session is the draft and the scroll
-    // position, and those live in a dictionary — a window is not a storage
-    // mechanism. The draft store isn't a nicety either: the panel hides whenever
-    // you switch apps, so without it every alt-tab would eat a half-typed
-    // sentence.
+    // One *transient* panel, reused. The rule used to be one panel full stop,
+    // and the argument for it was that two panels would be two windows
+    // competing to be the key window, each one's dismiss-on-deactivate closing
+    // the other. Read again, that argument is about dismiss-on-deactivate and
+    // not about windows: what it forbids is a second panel that hides the
+    // instant it loses focus. It says nothing about one that has been told to
+    // stay. So a pinned panel keeps its own window and opts out of Deactivated
+    // entirely, and everything not pinned still shares the single transient
+    // instance — "opening B closes A" remains correct by construction for
+    // exactly the panels it was ever true of.
+    //
+    // Two invariants hold the registry together, and every static entry point
+    // below is one of them being enforced somewhere. At most one unpinned
+    // panel: that is the paragraph above. At most one panel per session id:
+    // that is why OpenFor activates an existing pinned panel rather than
+    // binding the transient to a conversation already on screen, which would
+    // put one transcript in two windows that then disagree about it.
+    //
+    // What is worth keeping per session is the draft and the scroll position,
+    // and those live in a dictionary — a window is not a storage mechanism, and
+    // now that there can be several of them, one store keyed by session is what
+    // keeps a draft with its conversation rather than with whichever window
+    // happened to be typing it. The draft store isn't a nicety either: an
+    // unpinned panel hides whenever you switch apps, so without it every
+    // alt-tab would eat a half-typed sentence.
     public partial class ChatPanel : Window
     {
-        private static ChatPanel? _instance;
+        // Every live panel, pinned or not, in the order they were built.
+        //
+        // A list rather than the old single field because "which panel" is now
+        // a question with several answers — the transient one, the one showing
+        // a given session, the one a given orb owns — and each of those is a
+        // query over this rather than another field to keep in step with it.
+        // Panels add themselves at construction and drop out when their window
+        // closes; hiding the transient deliberately does not remove it, since
+        // the whole point of the transient is that it is reused.
+        private static readonly List<ChatPanel> Panels = new();
+
+        // Whether this panel has been told to stay. Almost the entire feature
+        // is this flag and the handful of places that read it: Deactivated,
+        // HideFor, RepositionFor, the header's drag, and what the close button
+        // means.
+        private bool _pinned;
+
+        // The panel that dismiss-on-deactivate still applies to, if there is
+        // one. Every caller that used to say "the panel" and mean the singleton
+        // means this: an orb about to move under it, an arrangement animation,
+        // a hide.
+        internal static ChatPanel? Transient => Panels.FirstOrDefault(p => !p._pinned);
+
+        // The panel showing a conversation, wherever it is. Distinct from
+        // Transient because a pinned panel is still the one place that session
+        // is on screen, and a caller asking "where is this conversation" must
+        // not be answered with a different one.
+        internal static ChatPanel? PanelFor(string sessionId) =>
+            Panels.FirstOrDefault(p => p._session?.SessionId == sessionId);
+
+        // For the calls that are genuinely about all of them — speech state and
+        // the text-scale slider, both of which are one global number that every
+        // open panel draws.
+        internal static IReadOnlyList<ChatPanel> All => Panels;
+
+        internal bool IsPinned => _pinned;
 
         private static readonly Dictionary<string, string> Drafts = new(StringComparer.Ordinal);
 
@@ -151,15 +203,42 @@ namespace ClaudeBuddy
                 foreach (var turn in _turns) turn.AvailableWidth = width;
             };
 
-            CloseButton.PointerPressed += (_, e) => { e.Handled = true; HideNow(); };
+            // Dismiss rather than HideNow: what the button means depends on
+            // whether this panel was told to stay. See Dismiss.
+            CloseButton.PointerPressed += (_, e) => { e.Handled = true; Dismiss(); };
+
+            PinButton.PointerPressed += (_, e) => { e.Handled = true; TogglePin(); };
+
+            // A pinned panel is a window the user placed, so it has to be
+            // movable, and with WindowDecorations="None" there is no title bar
+            // to drag it by — the header is the title bar.
+            //
+            // Only when pinned. An unpinned panel is recentred on its orb by
+            // RepositionFor every time the arrangement moves, so a drag would
+            // be silently undone somewhere between the next frame and the next
+            // scan; offering a gesture that gets reverted is worse than not
+            // offering it. Presses the header's own controls claimed are
+            // already marked handled and never arrive here.
+            HeaderRow.PointerPressed += (_, e) =>
+            {
+                if (!_pinned) return;
+
+                BeginMoveDrag(e);
+            };
 
             // The portrait opens at four times the size, centred on itself.
-            // Handled so the click doesn't also travel on to anything behind it.
+            // Handled so the click doesn't also travel on to anything behind it
+            // — and handled before the null check now, not after. The portrait
+            // is a control whether or not a picture has arrived in it yet, and
+            // the header behind it starts a window drag: leaving an empty
+            // portrait's press unhandled would make one gesture mean "enlarge
+            // this" or "move the window" depending on whether a download had
+            // finished, which is the worse of the two inconsistencies.
             AvatarBox.PointerPressed += (_, e) =>
             {
-                if (_avatar is null) return;
-
                 e.Handled = true;
+
+                if (_avatar is null) return;
 
                 var centre = AvatarBox.Bounds.Center;
                 AvatarPopup.Show(_avatar, this.PointToScreen(new Point(
@@ -239,6 +318,14 @@ namespace ClaudeBuddy
                 // panel behind it would take the menu with it.
                 if (ContextMenuIsOpen) return;
 
+                // The fourth carve-out, and the only one that is permanent
+                // rather than about this instant. The three above are "not
+                // yet"; this one is "not this panel". A pinned panel was told
+                // to stay, and dismiss-on-deactivate is the whole of what
+                // pinning turns off — see the class comment on why that is the
+                // rule the old singleton was really enforcing.
+                if (_pinned) return;
+
                 HideNow();
             }, DispatcherPriority.Background);
 
@@ -283,45 +370,92 @@ namespace ClaudeBuddy
 
                 _ = LoadOlderAsync();
             };
+
+            // Whatever closes this window, the registry stops holding it. On
+            // the event rather than beside the one Close() call, because a
+            // stale entry is not a visible bug — it is Transient or PanelFor
+            // handing out a panel whose window is gone, which shows up later
+            // and somewhere else.
+            Closed += (_, _) => Panels.Remove(this);
+
+            ApplyPinAffordance();
+
+            // Last, so a panel is never in the registry before it is built.
+            Panels.Add(this);
         }
 
+        // Any visible panel showing this conversation, not just the transient
+        // one. The callers are asking "is this session already on screen" —
+        // dictation looking for somewhere to land, a backlog test — and a
+        // pinned panel is as much on screen as the transient is.
         public static bool IsOpenFor(string sessionId) =>
-            _instance is { IsVisible: true } panel
-            && panel._session?.SessionId == sessionId;
+            Panels.Any(p => p.IsVisible && p._session?.SessionId == sessionId);
 
         public static void OpenFor(OrbWindow orb, IRemoteChatSession session)
         {
-            _instance ??= new ChatPanel();
-            _instance.Bind(orb, session);
+            // Already pinned somewhere: raise that window rather than binding
+            // this conversation into the transient as well. Two windows on one
+            // transcript is the second invariant in the class comment, and it
+            // is not a tidiness rule — both would subscribe to the session, and
+            // the one you were not looking at would answer a permission prompt
+            // out from under the one you were.
+            if (PanelFor(session.SessionId) is { _pinned: true } pinned)
+            {
+                // The orb's arc stays available. Pinning gave it back (see
+                // Pin), and clicking the orb again must not take it away for a
+                // panel that is not sitting in that space.
+                orb.SetChatOpen(false);
+                pinned.Activate();
+                return;
+            }
+
+            var panel = Transient ?? new ChatPanel();
+            panel.Bind(orb, session);
         }
 
-        // Used when the orb goes away, or is about to move under the panel —
-        // an arrangement animation, or the orb's own close.
+        // Used when the orb is about to move under the panel — an arrangement
+        // animation. The transient only, deliberately: a pinned panel is
+        // somewhere the user put it, and an orb sliding across the screen has
+        // no business taking it along. An orb that is actually going away is a
+        // different question and asks CloseFor instead.
         public static void HideFor(string sessionId)
         {
-            if (_instance is null) return;
-            if (_instance._session?.SessionId != sessionId) return;
+            if (Transient is not { } panel) return;
+            if (panel._session?.SessionId != sessionId) return;
 
-            _instance.HideNow();
+            panel.HideNow();
+        }
+
+        // The orb this conversation belongs to has gone. Unlike HideFor this
+        // reaches a pinned panel too — a chat with no session behind it any
+        // more is not something pinning should be able to keep on screen.
+        public static void CloseFor(string sessionId)
+        {
+            if (PanelFor(sessionId) is not { } panel) return;
+
+            panel.Dismiss();
         }
 
         public static void RepositionFor(OrbWindow orb)
         {
-            if (_instance is not { IsVisible: true } panel) return;
+            if (Transient is not { IsVisible: true } panel) return;
             if (!ReferenceEquals(panel._owner, orb)) return;
 
             panel.Reposition();
         }
 
         // Speech is global rather than per-orb, so the panel is told about it
-        // the same way the flyout is, from one place.
-        public static void SetSpeakState(TextToSpeech.SpeakState state) =>
-            _instance?.ApplySpeakState(state);
+        // the same way the flyout is, from one place — and now every panel is,
+        // because the button says whether the one voice is talking and they
+        // would otherwise disagree about it.
+        public static void SetSpeakState(TextToSpeech.SpeakState state)
+        {
+            foreach (var panel in Panels) panel.ApplySpeakState(state);
+        }
 
         public static void SetRecording(OrbWindow orb, bool recording)
         {
-            if (_instance is not { IsVisible: true } panel) return;
-            if (!ReferenceEquals(panel._owner, orb)) return;
+            if (OwnedBy(orb) is not { } panel) return;
 
             panel.MicFill.Fill = recording ? RecordingFill : IdleFill;
         }
@@ -330,15 +464,27 @@ namespace ClaudeBuddy
         // TerminalFocuser.SendText has always followed and explains at its own
         // definition: transcription is a typing aid, and it does not get to
         // decide that you meant it.
-        public static void AppendToInput(string text)
+        //
+        // Takes the orb now. It used to mean "the one panel", which was
+        // unambiguous while there was one; with several open, words spoken at
+        // one orb landing in whichever panel happened to be transient is the
+        // worst kind of wrong — silent, and in someone else's message box.
+        public static void AppendToInput(OrbWindow orb, string text)
         {
-            if (_instance is not { IsVisible: true } panel) return;
+            if (OwnedBy(orb) is not { } panel) return;
 
             var existing = panel.Input.Text ?? "";
             panel.Input.Text = existing.Length == 0 ? text : existing.TrimEnd() + " " + text;
             panel.Input.CaretIndex = panel.Input.Text.Length;
             panel.Input.Focus();
         }
+
+        // The visible panel a given orb opened, pinned or not. One orb shows
+        // one session and one session has one panel, so this is a lookup rather
+        // than a choice — but it is written once here because three callers
+        // used to spell it out and all three had to be kept in step.
+        private static ChatPanel? OwnedBy(OrbWindow orb) =>
+            Panels.FirstOrDefault(p => p.IsVisible && ReferenceEquals(p._owner, orb));
 
         private static readonly IBrush IdleFill = new SolidColorBrush(Color.Parse("#E0202024"));
         private static readonly IBrush RecordingFill = new SolidColorBrush(Color.Parse("#E0D93B3B"));
@@ -409,13 +555,14 @@ namespace ClaudeBuddy
                 previousRemote.PanelClosed();
             }
 
-            // The last good name is per session, not per panel. The panel is a
-            // singleton and the box outlives a session, so leaving it set meant
-            // the *next* conversation inherited it — and because "we already
-            // knew a name" beats "we do not know one yet", a session whose
-            // title had not arrived would wear the previous session's initials
-            // on every bubble rather than none. Wrong is worse than absent
-            // here: the chip is there to say who is talking.
+            // The last good name is per session, not per panel. The transient
+            // panel outlives the sessions bound into it and so does this box,
+            // so leaving it set meant the *next* conversation inherited it —
+            // and because "we already knew a name" beats "we do not know one
+            // yet", a session whose title had not arrived would wear the
+            // previous session's initials on every bubble rather than none.
+            // Wrong is worse than absent here: the chip is there to say who is
+            // talking.
             _soleSpeaker.Name = null;
         }
 
@@ -548,14 +695,15 @@ namespace ClaudeBuddy
             // ScrollToEndIfPinned and that is why a panel sometimes opened
             // halfway up a conversation.
             //
-            // There is one ChatPanel for every orb (its own comment above says
-            // why: two of them would fight over being the key window), so the
-            // scroll position this instance is carrying belongs to whichever
-            // session you had open last. Asking whether *that* offset is at the
-            // bottom is asking a question about a transcript that is no longer
-            // on screen: scroll up in one chat, click a different orb, and the
-            // answer is "no", so the new chat opens at the old offset with the
-            // newest message somewhere below the fold.
+            // The transient panel is reused across orbs (the class comment
+            // says why: two panels that both hide on deactivate would fight
+            // over being the key window), so the scroll position this instance
+            // is carrying belongs to whichever session you had open last.
+            // Asking whether *that* offset is at the bottom is asking a
+            // question about a transcript that is no longer on screen: scroll
+            // up in one chat, click a different orb, and the answer is "no",
+            // so the new chat opens at the old offset with the newest message
+            // somewhere below the fold.
             //
             // Same reasoning as OnHistoryReplaced: a transcript that was just
             // loaded wholesale has no read position worth preserving, and the
@@ -643,8 +791,7 @@ namespace ClaudeBuddy
         // panel, the panel checks the message is from the orb it is showing.
         public static void RefreshIdentityFor(OrbWindow orb)
         {
-            if (_instance is not { IsVisible: true } panel) return;
-            if (!ReferenceEquals(panel._owner, orb)) return;
+            if (OwnedBy(orb) is not { } panel) return;
 
             panel.ApplyBorrowedIdentity();
             panel.RefreshSoleSpeaker();
@@ -1696,10 +1843,16 @@ namespace ClaudeBuddy
         }
 
         // The settings slider changes the same number this window's keyboard
-        // does, so an open panel has to hear about it. Null-safe and
-        // visibility-blind on purpose: a panel that exists but is hidden still
-        // holds rows that will be shown again without being rebuilt.
-        internal static void ReapplyTextScale() => _instance?.ApplyTextScale();
+        // does, so every open panel has to hear about it — the scale is one
+        // global setting, and two panels drawing it at different sizes would
+        // be a bug you could only see by putting them side by side, which
+        // pinning now makes easy. Visibility-blind on purpose: a panel that
+        // exists but is hidden still holds rows that will be shown again
+        // without being rebuilt.
+        internal static void ReapplyTextScale()
+        {
+            foreach (var panel in Panels) panel.ApplyTextScale();
+        }
 
         private void OnPanelKeyDown(object? sender, KeyEventArgs e)
         {
@@ -1720,7 +1873,7 @@ namespace ClaudeBuddy
                 return;
             }
 
-            HideNow();
+            Dismiss();
         }
 
         private void Send()
@@ -2083,7 +2236,12 @@ namespace ClaudeBuddy
             // Dismissed, because this asked to be somewhere else. Leaving the
             // panel up over the terminal it just brought forward would be
             // covering the dialog it sent you to answer.
-            HideNow();
+            //
+            // Dismiss rather than HideNow so a pinned panel goes away properly
+            // rather than being hidden: a hidden pinned panel is in the
+            // registry, is not the transient, and holds no session, so nothing
+            // would ever show it again.
+            Dismiss();
         }
 
         // Whether the view is sitting at the bottom — read *now*, on the same
@@ -2132,6 +2290,94 @@ namespace ClaudeBuddy
             }, DispatcherPriority.Loaded);
         }
 
+        // The pin toggle, exposed so a test can drive the state change without
+        // synthesizing a click on the header — the same reason UpdateFrom is
+        // reachable on OrbWindow. The button calls this too, so there is one
+        // path rather than a test-only one beside the real one.
+        internal void TogglePin()
+        {
+            if (_pinned) Unpin();
+            else Pin();
+        }
+
+        private void Pin()
+        {
+            _pinned = true;
+            ApplyPinAffordance();
+
+            // The window does not move. "Pin" means leave this exactly where
+            // it is, and a panel that relocated itself to some placement of its
+            // own the moment it was told to stay would be answering a question
+            // nobody asked. Where the *next* panel opens is a different problem
+            // and lives in ChatPanelPlacement.
+            //
+            // The orb gets its hover arc back, which reads backwards until you
+            // say the rule out loud. The arc is suppressed while a chat is open
+            // because the panel is drawn a Gap away from the orb's centre —
+            // over exactly the radius the arc wants. So the rule is not "a chat
+            // is open", it is "the panel has that space", and a pinned panel
+            // does not: it can be dragged to the other side of the screen, and
+            // the next click on this orb opens a transient beside it anyway.
+            _owner?.SetChatOpen(false);
+        }
+
+        private void Unpin()
+        {
+            // At most one unpinned panel, so whatever holds that role now has
+            // to give it up before this window takes it. Dissolved rather than
+            // hidden: a hidden unpinned panel is still unpinned, so Transient
+            // would go on handing *it* out — every orb click, every arrangement
+            // hide — while this window sat in front of the user believing it
+            // was the transient. Two panels claiming one role is worse than
+            // building a window again on the next orb click.
+            if (Transient is { } other && !ReferenceEquals(other, this)) other.Dissolve();
+
+            _pinned = false;
+            ApplyPinAffordance();
+
+            // In place, not repositioned: unpinning says "this one can behave
+            // normally again", not "put it back". It stays where it was dragged
+            // until the next Reposition moves it, and the orb goes back to
+            // treating the arc's space as spoken for.
+            _owner?.SetChatOpen(true);
+        }
+
+        private void ApplyPinAffordance()
+        {
+            // The same blue the speak button wears while it is doing something,
+            // for the same reason: a filled circle in this header means "this
+            // control is currently on".
+            PinFill.Fill = _pinned ? SpeakActiveFill : IdleFill;
+
+            ToolTip.SetTip(PinButton, _pinned ? "Unpin" : "Pin — keep this chat open");
+        }
+
+        // What the close button and Escape mean, which is not the same thing
+        // for the two kinds of panel. The transient is hidden and kept, because
+        // it is the window every future orb click reuses. A pinned one is gone
+        // for good — it was a window the user deliberately created, and hiding
+        // it would leave something in the registry that nothing can ever show
+        // again.
+        private void Dismiss()
+        {
+            if (_pinned) Dissolve();
+            else HideNow();
+        }
+
+        // Tear-down for a panel that is not coming back: unbound and hidden the
+        // ordinary way first, so nothing is left subscribed, then out of the
+        // registry and closed.
+        private void Dissolve()
+        {
+            HideNow();
+
+            // Before Close() as well as on the Closed event, so a caller that
+            // reads Transient on the very next line sees the truth even if the
+            // platform defers the event.
+            Panels.Remove(this);
+            Close();
+        }
+
         private void HideNow()
         {
             if (_session is not null) Drafts[_session.SessionId] = Input.Text ?? "";
@@ -2151,8 +2397,8 @@ namespace ClaudeBuddy
             PromptBox.IsVisible = false;
             PromptOptions.ItemsSource = null;
 
-            // Detached while hidden. The panel is a singleton that stays alive
-            // between openings, and a hidden panel left subscribed goes on
+            // Detached while hidden. The transient panel stays alive between
+            // openings, and a hidden panel left subscribed goes on
             // appending a row per event for a conversation nobody is watching —
             // the session's own history is bounded, this collection was not.
             // Bind rebuilds from History anyway, so there is nothing to keep.
