@@ -183,10 +183,53 @@ namespace ClaudeBuddy
     {
         // The floor between polls.
         //
-        // Claude Code caches the underlying fetch with a five-minute write
-        // guard, so asking more often than this cannot produce a newer number —
-        // it only spends a process launch to be told the same thing. The rings
-        // are not a live readout and were never designed to be.
+        // Five minutes is a deliberate trade against process launches, and this
+        // comment says so plainly because the sentence it replaces did not. That
+        // sentence claimed Claude Code caches the underlying fetch behind a
+        // five-minute write guard, so that asking more often "cannot produce a
+        // newer number". **That is measurably false**, and it mattered: it reads
+        // like a finding, so nobody weighed the cadence against a real cost —
+        // they deferred to a fact that was never checked, and a later
+        // investigation into orbs that looked frozen lost hours to it.
+        //
+        // What is actually true, measured under the app's own environment by
+        // calling exactly the command below in a loop (CB-122):
+        //
+        //   - A fresher figure comes back far sooner than five minutes. The
+        //     default account's five-hour utilization read 24 and then 23
+        //     **twelve seconds later**, and 15 at 12:19:24 against 18 at
+        //     12:20:29 — sixty-five seconds. A second account moved 48 to 49
+        //     across that same gap, so it is not one account behaving oddly.
+        //   - The figure moves in **one-point steps**, because the API reports
+        //     an integer utilization. The twelve-second 24-to-23 is that integer
+        //     flipping either side of 23.5, which is itself proof the value
+        //     behind it is being re-read on that timescale rather than frozen.
+        //   - The steps are bursty, not periodic. Idle, the account sat at
+        //     exactly 19 for ten straight minutes. Busy, it went 19 to 23 inside
+        //     fifty-six seconds. So the staleness this interval buys is a few
+        //     points most of the time and worse during a burst.
+        //
+        // And what it costs, on the machine that prompted the question — load
+        // average 5.5 across 14 cores, twenty-plus `claude` processes alive:
+        // one full CompositeUsageSource.Read() is three subprocesses (a
+        // `claude -p` per Claude account plus one `codex app-server`; Grok is
+        // read off disk) and ran 4.5s to 7.7s of wall clock across thirteen
+        // rounds, median 5.6s. That is the real price of a poll, and the reason
+        // to keep the floor — not a cache that would make a faster poll
+        // pointless, because it would not.
+        //
+        // Anyone tightening this should also weigh the tail rather than the
+        // median: RunOne gives up at 20s and CodexAppServerUsage.Ask at 15s, and
+        // a dropped source is not a gap on screen — AccountOrbs.Apply keeps the
+        // reading it already had. A cadence fast enough to start missing its own
+        // deadline would make the orb *less* truthful, not more. Measured
+        // headroom today is comfortable (worst round 38% of the 20s ceiling,
+        // zero dropped readings in thirteen rounds), but that was one machine on
+        // one afternoon.
+        //
+        // The rings are not a live readout and were never designed to be. That
+        // is still the reason for a floor; it is now the honest one rather than
+        // a consequence of a fiction.
         internal static readonly TimeSpan MinimumInterval = TimeSpan.FromMinutes(5);
 
         // Generous, and deliberately not the five seconds BackgroundJobs uses
