@@ -28,19 +28,19 @@ public class OpenClawLocalMediaPathTests
         Assert.Equal(
             "/Users/sample/.openclaw/workspace-render-quill/outputs/"
             + "gallery/sample_drop_100200300_400500600_00001_.png",
-            OpenClawSessions.LocalMediaPathFrom(text));
+            OpenClawSessions.LocalMediaPathFrom(text)?.Path);
     }
 
     [Fact]
     public void AMediaLineAsTheWholeMessageIsFound()
     {
-        Assert.Equal("/tmp/pic.png", OpenClawSessions.LocalMediaPathFrom("MEDIA:/tmp/pic.png"));
+        Assert.Equal("/tmp/pic.png", OpenClawSessions.LocalMediaPathFrom("MEDIA:/tmp/pic.png")?.Path);
     }
 
     [Fact]
     public void WhitespaceAroundTheMediaLineIsTrimmed()
     {
-        Assert.Equal("/tmp/pic.png", OpenClawSessions.LocalMediaPathFrom("MEDIA:  /tmp/pic.png  "));
+        Assert.Equal("/tmp/pic.png", OpenClawSessions.LocalMediaPathFrom("MEDIA:  /tmp/pic.png  ")?.Path);
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public class OpenClawLocalMediaPathTests
         Assert.Equal(
             "/Users/sample/.openclaw/workspace-render-quill/outputs/gallery/sample_drop.png",
             OpenClawSessions.LocalMediaPathFrom(
-                "/Users/sample/.openclaw/workspace-render-quill/outputs/gallery/sample_drop.png"));
+                "/Users/sample/.openclaw/workspace-render-quill/outputs/gallery/sample_drop.png")?.Path);
     }
 
     [Theory]
@@ -104,7 +104,7 @@ public class OpenClawLocalMediaPathTests
     [InlineData("/tmp/pic.webp")]
     public void EveryKnownImageExtensionIsRecognisedAsABarePath(string path)
     {
-        Assert.Equal(path, OpenClawSessions.LocalMediaPathFrom(path));
+        Assert.Equal(path, OpenClawSessions.LocalMediaPathFrom(path)?.Path);
     }
 
     // A relative-looking path is not what this matches — every real example
@@ -141,7 +141,7 @@ public class OpenClawLocalMediaPathTests
             "/Users/w/.openclaw/workspace-example/outputs/agent/photo_275866713.png",
             OpenClawSessions.LocalMediaPathFrom(
                 "here's the shot   /Users/w/.openclaw/"
-                + "workspace-example/outputs/agent/photo_275866713.png"));
+                + "workspace-example/outputs/agent/photo_275866713.png")?.Path);
     }
 
     // A bare filename with no directory at all has nothing to fetch on its
@@ -154,7 +154,7 @@ public class OpenClawLocalMediaPathTests
             "photo_773311913.png",
             OpenClawSessions.LocalMediaPathFrom(
                 "here's this morning's shot\n"
-                + "photo_773311913.png"));
+                + "photo_773311913.png")?.Path);
     }
 
     // Video is a real shape in the same corpus, but a deliberately separate
@@ -176,6 +176,41 @@ public class OpenClawLocalMediaPathTests
     {
         Assert.Null(OpenClawSessions.LocalMediaPathFrom(
             "just an ordinary reply that ends in a word"));
+    }
+
+    // ---- CB-116: which arm produced a candidate, carried on the result ----
+    //
+    // Explicit is true only for a "MEDIA:" line — an agent asserting a
+    // picture — and false for both other arms, which are provenance the
+    // parser itself has no access to (see LocalMediaCandidate's own header).
+    // Pinned here, at the level that actually decides the flag, rather than
+    // only inferred from the tiering tests downstream.
+
+    [Fact]
+    public void AMediaLineCandidateIsExplicit()
+    {
+        var candidate = OpenClawSessions.LocalMediaPathFrom("MEDIA:/tmp/pic.png");
+
+        Assert.NotNull(candidate);
+        Assert.True(candidate!.Value.Explicit);
+    }
+
+    [Fact]
+    public void ABarePathAsTheWholeMessageIsNotExplicit()
+    {
+        var candidate = OpenClawSessions.LocalMediaPathFrom("/tmp/pic.png");
+
+        Assert.NotNull(candidate);
+        Assert.False(candidate!.Value.Explicit);
+    }
+
+    [Fact]
+    public void ACaptionedTrailingTokenIsNotExplicit()
+    {
+        var candidate = OpenClawSessions.LocalMediaPathFrom("here's the shot\n/tmp/pic.png");
+
+        Assert.NotNull(candidate);
+        Assert.False(candidate!.Value.Explicit);
     }
 }
 

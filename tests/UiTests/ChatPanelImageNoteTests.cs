@@ -390,4 +390,148 @@ public class ChatPanelImageNoteTests : IDisposable
         Assert.NotNull(block);
         Assert.Equal(detail, ToolTip.GetTip(block!));
     }
+
+    // ---- CB-116: the note is gated on confidence, not just on failure -----
+    //
+    // LocalMediaPathFrom's caption-plus-trailing-token arm (CB-107) matches
+    // any caption-shaped prose ending in something extension-shaped — which
+    // is right for finding real pictures and wrong for deciding whether a
+    // *failed* fetch is worth a visible "picture not shown" note.
+    // "I deleted photo.png" matches the identical shape as a real delivery,
+    // and unlike a real delivery, the population of ordinary messages that
+    // happen to end in a filename is unbounded. The fetch is still attempted
+    // (ImageUrl is still set below) — only the note is suppressed.
+
+    // The positive witness this suite's own header comment asks for: a Low
+    // turn stays silent on the *same page*, failing the *same way*, as a
+    // High turn that does get its note — so the silence is proven to be the
+    // gate actually running, not an accident of the panel never having
+    // looked at the row at all.
+    [AvaloniaFact]
+    public async Task ALowConfidenceCandidateStaysSilentOnAFailedFetch()
+    {
+        var lowPath = "/Users/w/.openclaw/media/" + Guid.NewGuid() + ".png";
+        var lowSource = new OpenClawMediaSource(lowPath, "agent:comfyui:discord:direct:1");
+        SeedMediaCache(lowSource.Route, Array.Empty<byte>());
+
+        var lowTurn = new ChatTurn
+        {
+            Role = ChatRole.Assistant,
+            Text = "I deleted photo.png",
+            IsComplete = true,
+            ImageSourcePath = lowPath,
+            ImageUrl = lowSource.Route,
+            Confidence = MediaConfidence.Low
+        };
+
+        var highPath = "/Users/w/.openclaw/media/" + Guid.NewGuid() + ".png";
+        var highSource = new OpenClawMediaSource(highPath, "agent:comfyui:discord:direct:1");
+        SeedMediaCache(highSource.Route, Array.Empty<byte>());
+
+        var highTurn = new ChatTurn
+        {
+            Role = ChatRole.Assistant,
+            Text = "MEDIA:" + highPath,
+            IsComplete = true,
+            ImageSourcePath = highPath,
+            ImageUrl = highSource.Route
+
+            // Confidence left at its default (High) deliberately — this is
+            // what every real MEDIA: line producer sets, and the point of
+            // this turn is to be the ordinary case beside the extraordinary
+            // one, not to be specially configured to pass.
+        };
+
+        var fake = NewFake(new[] { lowTurn, highTurn });
+        ChatPanel.OpenFor(NewOrb(), fake);
+
+        for (var i = 0; i < 40 && highTurn.ImageNote is null; i++)
+        {
+            Flush();
+            await Task.Delay(10);
+        }
+
+        Flush();
+
+        // The sibling proves the machinery ran at all...
+        Assert.Equal("Picture not shown — couldn't ask the gateway why.", highTurn.ImageNote);
+
+        // ...which is what makes this absence meaningful rather than vacuous.
+        Assert.Null(lowTurn.ImageNote);
+        Assert.Null(lowTurn.ImageNoteDetail);
+    }
+
+    // The regression guard for CB-93/CB-108: an explicit "MEDIA:" line keeps
+    // explaining a failure, wording unchanged, with Confidence pinned to
+    // High explicitly rather than only relying on the default.
+    [AvaloniaFact]
+    public async Task AnExplicitMediaLineCandidateStillExplainsAFailure()
+    {
+        var path = "/Users/w/.openclaw/media/" + Guid.NewGuid() + ".png";
+        var source = new OpenClawMediaSource(path, "agent:comfyui:discord:direct:1");
+        SeedMediaCache(source.Route, Array.Empty<byte>());
+
+        var turn = new ChatTurn
+        {
+            Role = ChatRole.Assistant,
+            Text = "MEDIA:" + path,
+            IsComplete = true,
+            ImageSourcePath = path,
+            ImageUrl = source.Route,
+            Confidence = MediaConfidence.High
+        };
+
+        var fake = NewFake(new[] { turn });
+        ChatPanel.OpenFor(NewOrb(), fake);
+
+        for (var i = 0; i < 40 && turn.ImageNote is null; i++)
+        {
+            Flush();
+            await Task.Delay(10);
+        }
+
+        Flush();
+
+        Assert.Equal("Picture not shown — couldn't ask the gateway why.", turn.ImageNote);
+        Assert.Equal(path, turn.ImageNoteDetail);
+    }
+
+    // The regression guard for provenance-vs-shape — the case a naive "bare
+    // filename means low confidence" fix would have broken. A delivery-
+    // mirror's own text (see OpenClawSessions.TurnsFromHistory's mirror arm)
+    // is just the bare filename with no caption around it at all, and it is
+    // still High: TurnsFromHistory sets that from the gateway's own record,
+    // never from the text's shape (see
+    // OpenClawMediaConfidenceTests.ADeliveryMirrorsBareFilenameShapeDoesNotMakeItLowConfidence
+    // for the pure half of this same guard).
+    [AvaloniaFact]
+    public async Task ADeliveryMirrorShapedCandidateStillExplainsAFailure()
+    {
+        var path = "/Users/w/.openclaw/media/" + Guid.NewGuid() + ".png";
+        var source = new OpenClawMediaSource(path, "agent:comfyui:discord:direct:1");
+        SeedMediaCache(source.Route, Array.Empty<byte>());
+
+        var turn = new ChatTurn
+        {
+            Role = ChatRole.Assistant,
+            Text = path[(path.LastIndexOf('/') + 1)..], // the bare filename alone
+            IsComplete = true,
+            ImageSourcePath = path,
+            ImageUrl = source.Route,
+            Confidence = MediaConfidence.High
+        };
+
+        var fake = NewFake(new[] { turn });
+        ChatPanel.OpenFor(NewOrb(), fake);
+
+        for (var i = 0; i < 40 && turn.ImageNote is null; i++)
+        {
+            Flush();
+            await Task.Delay(10);
+        }
+
+        Flush();
+
+        Assert.Equal("Picture not shown — couldn't ask the gateway why.", turn.ImageNote);
+    }
 }

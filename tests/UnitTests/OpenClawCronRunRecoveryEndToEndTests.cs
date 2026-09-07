@@ -131,6 +131,41 @@ public class OpenClawCronRunRecoveryEndToEndTests : IDisposable
         Assert.Equal("poster_sunset_1.png", turn.ImageAlt);
     }
 
+    // CB-116: a path recovered from the cron run that produced the delivery
+    // is the most confirmed of the five provenance tiers — High, and
+    // restated explicitly by FetchHistoryPageAsync's own override rather
+    // than left to whatever TurnsFromHistory already set. This is that
+    // override's own regression pin, distinct from the (already-High, by
+    // construction) pre-recovery value: a recovered turn's Automation is
+    // always non-null, so TurnsFromHistory's own tiering would already say
+    // High here without the override — this test exists so that if a future
+    // change ever lets recovery run on a turn TurnsFromHistory tiered Low,
+    // the override still wins rather than silently inheriting it.
+    [Fact]
+    public async Task ARecoveredPathIsHighConfidence()
+    {
+        var (_, session) = await ConnectedAsync(
+            onHistory: request => FakeGatewaySocket.Ok(request.Id, new
+            {
+                messages = new[]
+                {
+                    AutomationMessage("job-bare-confidence",
+                        "sunset over the harbour today\nposter_sunset_2.png")
+                }
+            }),
+            onCronRuns: request => FakeGatewaySocket.Ok(request.Id, CronRunsPage(new[]
+            {
+                CronRun("job-bare-confidence", "sunset over the harbour today\n"
+                                + "MEDIA:/home/agent/outputs/posters/poster_sunset_2.png")
+            })));
+
+        var page = await OpenClawSessions.FetchPageAsync(session, 0, CancellationToken.None);
+
+        var turn = Assert.Single(page!.Value.Turns);
+        Assert.Equal("/home/agent/outputs/posters/poster_sunset_2.png", turn.ImageSourcePath);
+        Assert.Equal(MediaConfidence.High, turn.Confidence);
+    }
+
     // ---- efficiency: the two things that must cost nothing -----------------
 
     // The most valuable assertion in this ticket, per its own brief: a turn

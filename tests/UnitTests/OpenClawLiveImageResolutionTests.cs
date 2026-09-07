@@ -253,4 +253,65 @@ public class OpenClawLiveImageResolutionTests : IDisposable
 
         Assert.Equal(1, requests);
     }
+
+    // CB-116: TryResolveLiveImage sets ImageUrl (and ImageSourcePath) off the
+    // matched history turn's own values, and Confidence has to travel the
+    // same way — setting ImageUrl below is what wakes TurnView.LoadImage up,
+    // which is where Confidence actually gets read. The matched turn here is
+    // an ordinary (non-automation) caption-plus-trailing-path message, tiered
+    // Low by TurnsFromHistory; if the live turn kept its own default High
+    // instead, a failed fetch on the live path would explain itself when the
+    // identical text read back through history would not.
+    [Fact]
+    public async Task ALiveMatchCarriesTheMatchedTurnsLowConfidence()
+    {
+        var (_, session) = await ConnectedAsync(request => FakeGatewaySocket.Ok(request.Id, new
+        {
+            messages = new object[]
+            {
+                new
+                {
+                    role = "assistant",
+                    content = "here you go /Users/x/media/inbound/staged-low.png"
+                }
+            }
+        }));
+
+        session.OnAgentEvent("agent", AgentText("Here you go " + Marker));
+
+        for (var i = 0; i < 50 && session.History[0].ImageUrl is null; i++)
+            await Task.Delay(10);
+
+        Assert.NotNull(session.History[0].ImageUrl);
+        Assert.Equal(MediaConfidence.Low, session.History[0].Confidence);
+    }
+
+    // The High-tier twin: a matched turn the gateway itself confirmed as a
+    // delivery keeps that tier on the live turn too, rather than every live
+    // match flattening to one value.
+    [Fact]
+    public async Task ALiveMatchCarriesTheMatchedTurnsHighConfidence()
+    {
+        var (_, session) = await ConnectedAsync(request => FakeGatewaySocket.Ok(request.Id, new
+        {
+            messages = new object[]
+            {
+                new
+                {
+                    role = "assistant",
+                    provider = "openclaw",
+                    model = "delivery-mirror",
+                    content = new object[] { new { type = "text", text = "staged-high.png" } }
+                }
+            }
+        }));
+
+        session.OnAgentEvent("agent", AgentText("Here you go " + Marker));
+
+        for (var i = 0; i < 50 && session.History[0].ImageUrl is null; i++)
+            await Task.Delay(10);
+
+        Assert.NotNull(session.History[0].ImageUrl);
+        Assert.Equal(MediaConfidence.High, session.History[0].Confidence);
+    }
 }

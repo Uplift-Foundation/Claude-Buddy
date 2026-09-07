@@ -276,9 +276,10 @@ namespace ClaudeBuddy
                 if (run.JobId != jobId) continue;
                 if (run.Summary is null) continue;
 
-                var path = OpenClawSessions.LocalMediaPathFrom(run.Summary);
-                if (path is null) continue;
+                var candidate = OpenClawSessions.LocalMediaPathFrom(run.Summary);
+                if (candidate is null) continue;
 
+                var path = candidate.Value.Path;
                 var basename = BasenameOf(path);
                 if (!byBasename.TryGetValue(basename, out var paths))
                 {
