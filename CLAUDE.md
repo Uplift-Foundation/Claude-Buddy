@@ -334,6 +334,35 @@ one of the six reached the user as "your infrastructure is dead, shall I operate
 on it", and was wrong. And **retract in the channel the claim travelled**: that
 same one had already propagated to a second agent before it was withdrawn.
 
+**And don't reimplement the rule you're measuring — run it.** One of the six was
+a restatement of `LocalMediaPathFrom`'s rule that drifted from it: "names a
+picture" was approximated as "contains a token with an image extension", where
+the actual rule is "the *trailing* token is one". The paraphrase counted three
+turns that the parser would never have offered a candidate for, and missed that
+the three real ones carried rooted paths. A plausible paraphrase of a rule is far
+easier to get wrong than a file read, and the parsers here are pure and cheap to
+call precisely so you don't have to guess.
+
+**The sixth instance is different from the other five, and it is the dangerous
+one.** The other five were caught by checking the evidence harder. That one was
+not — it *evaded* that check. Three agents were rigorous about where each claim's
+evidence came from, every claim was correctly sourced to the chat transcript,
+correctly labelled and correctly caveated, and the conclusion — "these pictures
+cannot be fixed from the client" — was still wrong, because nobody asked whether
+the transcript was the whole world. It was not: the path the transcript had lost
+was sitting in the cron run record all along, reachable over an RPC this app
+already speaks (CB-115).
+
+So: **rigour inside a wrong frame produces confident error, and that is worse
+than sloppiness because it arrives with receipts.** Provenance discipline
+validates that a claim is well-sourced. It cannot tell you the source was the
+whole source. When a conclusion says something is impossible, the question to
+ask is not "is my evidence sound" but "what else knows about this?" — the
+gateway, the producer, the run record, another client that manages it already.
+Owner's own objection was the check that broke the frame here, and no amount of
+internal rigour would have produced it.
+
+
 ## Commits
 
 Messages here are prose, not changelog lines: a short summary in the
