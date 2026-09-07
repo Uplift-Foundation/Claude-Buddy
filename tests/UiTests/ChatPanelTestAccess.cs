@@ -61,6 +61,43 @@ internal static class ChatPanelTestAccess
         });
     }
 
+    // Takes focus away from a panel, which is the gesture the whole of pinning
+    // is defined against: an unpinned panel hides when it loses focus and a
+    // pinned one does not, and neither half can be tested without a way to
+    // make it happen.
+    //
+    // Reflection, and the second thing here that has to be. Nothing a test can
+    // legitimately do deactivates a headless window — confirmed by trying:
+    // showing a second Window and calling Activate() on it leaves the panel's
+    // IsActive true, because Avalonia's headless platform has no window
+    // manager to move focus between windows and never raises the callback.
+    // What it does have is the callback itself: HeadlessWindowImpl exposes the
+    // same `Deactivated` action every real backend invokes, and firing that is
+    // the platform doing to the window exactly what a click on another app
+    // would do — IsActive goes false and ChatPanel's own handler runs with all
+    // four of its carve-outs live. Calling ChatPanel's handler directly
+    // instead would skip the IsActive re-check that handler opens with, which
+    // is one of the things worth covering.
+    public static void Deactivate(ChatPanel panel)
+    {
+        var impl = ImplProperty.GetValue(panel)
+            ?? throw new InvalidOperationException("panel has no PlatformImpl — is it shown?");
+
+        var deactivated = impl.GetType().GetProperty(
+            "Deactivated", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+        var action = deactivated?.GetValue(impl) as Action
+            ?? throw new InvalidOperationException(
+                "no Deactivated callback on " + impl.GetType().FullName);
+
+        action();
+    }
+
+    private static readonly PropertyInfo ImplProperty =
+        typeof(Avalonia.Controls.TopLevel).GetProperty(
+            "PlatformImpl", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+        ?? throw new MissingMemberException("TopLevel", "PlatformImpl");
+
     private static readonly FieldInfo PanelsField =
         typeof(ChatPanel).GetField("Panels", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new MissingFieldException("ChatPanel", "Panels");

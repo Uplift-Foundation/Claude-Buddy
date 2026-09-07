@@ -2,6 +2,8 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.VisualTree;
 
 namespace ClaudeBuddy.Tests;
@@ -91,9 +93,14 @@ public class ChatPanelScreenshots : IDisposable
             ChatPanelTestAccess.Instance!, "chat-panel-parked-attach.png");
     }
 
+    // CloseFor rather than HideFor since CB-110. On a transient panel the two
+    // are the same call, which is every capture above; on a pinned one HideFor
+    // deliberately does nothing at all, so a capture that pinned something
+    // would leave a live window in the registry for whichever class runs next
+    // to trip over.
     public void Dispose()
     {
-        foreach (var id in _sessionIdsToClean) ChatPanel.HideFor(id);
+        foreach (var id in _sessionIdsToClean) ChatPanel.CloseFor(id);
     }
 
     [AvaloniaFact]
@@ -490,6 +497,154 @@ public class ChatPanelScreenshots : IDisposable
             // and the suite shares one process.
             ClaudeBuddySettings.ChatTextScale = was;
             ChatPanel.ReapplyTextScale();
+        }
+    }
+
+    // --- CB-110: a chat that has been told to stay ---
+
+    // The pin itself. One panel, pinned, so a reviewer can see what the new
+    // control looks like in the row it joined — three 24pt circles, the
+    // newcomer first, filled with the same blue the speak button wears while
+    // it is doing something. Whether that reads as "on" rather than as a
+    // fourth kind of button is a judgement made from the image and not from
+    // an assertion about a brush.
+    [AvaloniaFact]
+    public void APinnedPanelWearsAFilledPinInItsHeader()
+    {
+        var fake = NewFake(new[]
+        {
+            new ChatTurn { Role = ChatRole.User, Text = "keep this one open while I read it" },
+            new ChatTurn
+            {
+                Role = ChatRole.Assistant,
+                Text = "Pinned. This panel stays put now — it will not hide when you switch apps.",
+                IsComplete = true,
+            },
+        }, displayName: "Pinned Session");
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        ScreenshotHelper.Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        panel.TogglePin();
+        ScreenshotHelper.Flush();
+
+        ScreenshotHelper.CaptureAlreadyShown(panel, "chat-panel-pinned-header.png");
+    }
+
+    // The feature's actual subject: more than one chat on screen at once, and
+    // the new one not landing on top of the ones already there.
+    //
+    // Every panel's position here is the one Reposition() computed — the real
+    // seam, ChatPanelPlacement.Resolve, running inside Bind. What headless
+    // cannot supply is *different* anchors: an OrbWindow that is never shown
+    // answers PointToScreen with its own client origin whatever its Position
+    // is set to, so all three orbs anchor at the same point and all three
+    // panels ask for the same rectangle. That turns out to be the case worth
+    // photographing rather than a limitation to work around — it is exactly
+    // the collision Resolve exists for, and the picture is of Resolve sliding
+    // the second and third panels clear of the first rather than of three
+    // panels that were never going to overlap anyway.
+    //
+    // Composited rather than captured, because a screenshot is of one window
+    // and the thing being reviewed is where three of them sit relative to each
+    // other. Each panel is rendered on its own and then drawn onto one bitmap
+    // at its real screen position, so the gaps and the abutments in the image
+    // are the app's arithmetic and not this test's.
+    [AvaloniaFact]
+    public void ANewPanelOpensClearOfTheOnesAlreadyPinned()
+    {
+        var first = NewFake(new[]
+        {
+            new ChatTurn { Role = ChatRole.Assistant, Text = "First pinned chat.", IsComplete = true },
+        }, displayName: "Pinned One");
+
+        ChatPanel.OpenFor(NewOrb(), first);
+        ScreenshotHelper.Flush();
+        var one = ChatPanelTestAccess.Instance!;
+        one.TogglePin();
+        ScreenshotHelper.Flush();
+
+        var second = NewFake(new[]
+        {
+            new ChatTurn { Role = ChatRole.Assistant, Text = "Second pinned chat.", IsComplete = true },
+        }, displayName: "Pinned Two");
+
+        ChatPanel.OpenFor(NewOrb(), second);
+        ScreenshotHelper.Flush();
+        var two = ChatPanelTestAccess.Instance!;
+        two.TogglePin();
+        ScreenshotHelper.Flush();
+
+        // The third is left unpinned — the one transient panel, placed by
+        // Resolve clear of both pinned rectangles. Its header is the one with
+        // an unfilled pin, which is the other half of what the first capture
+        // shows.
+        var third = NewFake(new[]
+        {
+            new ChatTurn { Role = ChatRole.Assistant, Text = "And the transient one.", IsComplete = true },
+        }, displayName: "Transient");
+
+        ChatPanel.OpenFor(NewOrb(), third);
+        ScreenshotHelper.Flush();
+        var three = ChatPanelTestAccess.Instance!;
+
+        Composite(new[] { one, two, three }, "chat-panels-two-pinned.png");
+    }
+
+    // Draws several panels onto one bitmap at their own screen positions.
+    //
+    // The ground is the same near-black OrbClusterScreenshots plots its
+    // arrangements on, and there is a margin, so the rounded corner of each
+    // panel is visible against it — which is how a reader tells three abutting
+    // cards from one wide one.
+    private static void Composite(IReadOnlyList<ChatPanel> panels, string fileName)
+    {
+        const int Margin = 24;
+
+        var minX = panels.Min(p => p.Position.X);
+        var minY = panels.Min(p => p.Position.Y);
+        var maxX = panels.Max(p => p.Position.X + (int)p.Width);
+        var maxY = panels.Max(p => p.Position.Y + (int)p.Height);
+
+        var size = new PixelSize(maxX - minX + Margin * 2, maxY - minY + Margin * 2);
+
+        // Rendered up front and disposed after the drawing context has been
+        // flushed: a RenderTargetBitmap handed to DrawImage is read while the
+        // context is still open, so disposing each one inside the loop would
+        // be a use-after-free at the point the target is saved.
+        var shots = new List<RenderTargetBitmap>();
+
+        try
+        {
+            using var target = new RenderTargetBitmap(size);
+
+            using (var ctx = target.CreateDrawingContext())
+            {
+                ctx.FillRectangle(
+                    new SolidColorBrush(Color.FromRgb(0x1b, 0x1b, 0x1f)),
+                    new Rect(0, 0, size.Width, size.Height));
+
+                foreach (var panel in panels)
+                {
+                    var shot = new RenderTargetBitmap(
+                        new PixelSize((int)panel.Width, (int)panel.Height));
+                    shots.Add(shot);
+                    shot.Render(panel);
+
+                    ctx.DrawImage(shot, new Rect(
+                        panel.Position.X - minX + Margin,
+                        panel.Position.Y - minY + Margin,
+                        panel.Width,
+                        panel.Height));
+                }
+            }
+
+            target.Save(Path.Combine(ScreenshotHelper.OutputDir, fileName));
+        }
+        finally
+        {
+            foreach (var shot in shots) shot.Dispose();
         }
     }
 }
