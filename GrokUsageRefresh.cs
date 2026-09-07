@@ -139,9 +139,9 @@ namespace ClaudeBuddy
 
         // The floor between refreshes.
         //
-        // Not UsagePoller.MinimumInterval's five minutes. That floor exists for
-        // a network read that costs a process launch; this is a process launch
-        // of the user's actual application. Twenty minutes is three cycles an
+        // Not UsagePollCadence's sixty seconds to five minutes. That range
+        // paces a network read that costs a subprocess of the *CLI*; this is a
+        // launch of the user's actual application. Twenty minutes is three cycles an
         // hour — often enough that the number is never far from true for
         // someone glancing at the orb, rare enough that it reads as an
         // occasional background chore rather than Grok visibly starting and
