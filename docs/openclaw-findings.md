@@ -1,8 +1,8 @@
 # OpenClaw gateway — spike findings
 
 Everything here was measured against one real gateway — OpenClaw **2026.7.1-2**
-(`0790d9f`), protocol **4**, running on a Mac mini at `198.51.100.127`, probed
-from a MacBook at `198.51.100.189` on the same subnet — unless it says otherwise.
+(`0790d9f`), protocol **4**, running on a Mac mini on the LAN, probed
+from a MacBook on the same subnet — unless it says otherwise.
 Where something is assumed rather than observed, it says so.
 
 The short version, in the order it was discovered:
@@ -31,11 +31,11 @@ The plan assumed a loopback-only gateway reached through
 | `gateway.mode` | `local` |
 | `gateway.tls.enabled` | `true`, cert `~/.openclaw/tls-cert.pem` |
 | TCP from the laptop | open, ~3 ms |
-| `https://198.51.100.127:18789/` | 200, serves the Control UI |
+| `https://198.51.100.10:18789/` | 200, serves the Control UI |
 | `http://…` (plain) | `curl: (52) Empty reply` — TLS only |
 | WebSocket upgrade | **101 on every path tried** (`/`, `/ws`, `/gateway`, `/api/ws`, `/socket`) |
 
-So the client connects directly to `wss://198.51.100.127:18789/`. No child
+So the client connects directly to `wss://198.51.100.10:18789/`. No child
 process, no port allocation, no orphan sweep, no `ControlMaster`/
 `ExitOnForwardFailure` hazards — the entire `SshTunnel` component and its
 shutdown-hook story can be deleted from the plan.
@@ -87,7 +87,7 @@ Ed25519 — with the WebSocket upgrade hand-rolled over it and handed to
 ### The served certificate is not the configured one
 
 `gateway.tls.cert` points at `~/.openclaw/tls-cert.pem`, an mkcert leaf
-(`O=mkcert development certificate`, SAN `localhost, 198.51.100.127, 127.0.0.1`,
+(`O=mkcert development certificate`, SAN `localhost, 198.51.100.10, 127.0.0.1`,
 sha256 `48911757…`). **The listener does not serve it.** What it actually
 presents is self-signed with no SAN at all:
 
@@ -122,7 +122,7 @@ development, so a literal in the code would have shipped broken. The client
 trusts what it sees on the first connection and stores it in
 `openclawFingerprint`, which is why this change cost nothing to absorb. Skipping
 name validation also still stands, and for a second reason now — the mkcert leaf
-does carry a SAN, but it names `198.51.100.127`, so validation would break the
+does carry a SAN, but it names `198.51.100.10`, so validation would break the
 moment the gateway moved to another address.
 
 Both fingerprints are kept above because the *variability* is the finding.
@@ -352,7 +352,7 @@ here. A session with `hasActiveRun` should be exempt from pruning, the same way
 ### The fields that matter
 
 ```
-sessionKey        agent:main:discord:direct:100000000000000001
+sessionKey        agent:main:discord:direct:200000000000000001
                   agent:alexis:main | agent:main:cron:<uuid>
                   -> "agent:<name>:<surface>[:<type>:<id>]"; the agent name is
                      in the key and nowhere else useful
@@ -486,8 +486,8 @@ matters.
 Names alone still under-identify: one agent commonly holds a DM with you, a DM
 with someone else and two channels at once, all `agent:<id>:discord:*`. The
 distinguishing part is `origin.label`, which is written for a log —
-`"#general channel id:100000000000000003"`, `"wtvamp user id:2467…"` — and
-cleans up to `#general` and `wtvamp` by cutting at `" id:"` and dropping the
+`"#general channel id:1900000000000000001"`, `"riverbend user id:2000…"` — and
+cleans up to `#general` and `riverbend` by cutting at `" id:"` and dropping the
 noun before it.
 
 ## Replying to a cron session works
@@ -575,9 +575,9 @@ everything it has in the first page and says so:
 
 | session | limit | returned | `totalMessages` | `hasMore` | span |
 | --- | --- | --- | --- | --- | --- |
-| `agent:kubernetes:…:100000000000000004` | 40 | 33 | — | false | 10–16 Aug |
+| `agent:kubernetes:…:1900000000000000003` | 40 | 33 | — | false | 10–16 Aug |
 | same | 500 | **33** | — | false | 10–16 Aug |
-| `agent:social:…:100000000000000003` | 500 | **56** | **104** | false | 17–18 Aug |
+| `agent:social:…:1900000000000000001` | 500 | **56** | **104** | false | 17–18 Aug |
 
 Asking for 500 returns the same 33 as asking for 40, and any `offset` past the
 end returns zero. So the client already receives the whole of what exists after
@@ -607,7 +607,7 @@ Read off the same probe, and better than what is currently derived:
 chatType      "channel" | "direct"     -- top level, not only inside origin
 kind          "group" | …              -- the gateway's own classification
 groupChannel  "#general"               -- the channel name, plainly
-displayName   "discord:100000000000000002#general"
+displayName   "discord:1900000000000000004#general"
 archived, unread, pinned, space, startedAt, endedAt, status
 ```
 

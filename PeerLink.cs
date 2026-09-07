@@ -196,7 +196,7 @@ namespace ClaudeBuddy
                     // until the far end speaks — so it files the connection
                     // under the address and this is what corrects it. Without
                     // that, a machine added by hand would appear on screen as
-                    // "198.51.100.127".
+                    // "198.51.100.10".
                     if (message.Type == PeerProtocol.Ok && IsGreetingAnswer(machine, message))
                     {
                         machine = Settle(machine, message.Name);

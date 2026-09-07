@@ -126,9 +126,9 @@ public class PeerPairingWithoutAScreenTests
     [Fact]
     public void ABareAddressGetsTheDefaultPort()
     {
-        var address = PeerSessions.Address("198.51.100.127", PeerLink.DefaultPort);
+        var address = PeerSessions.Address("198.51.100.10", PeerLink.DefaultPort);
 
-        Assert.Equal(("198.51.100.127", PeerLink.DefaultPort), address);
+        Assert.Equal(("198.51.100.10", PeerLink.DefaultPort), address);
     }
 
     [Fact]
@@ -146,7 +146,7 @@ public class PeerPairingWithoutAScreenTests
     [Fact]
     public void AnExplicitPortWins()
     {
-        Assert.Equal(("198.51.100.127", 9000), PeerSessions.Address("198.51.100.127:9000", 7677));
+        Assert.Equal(("198.51.100.10", 9000), PeerSessions.Address("198.51.100.10:9000", 7677));
     }
 
     [Theory]

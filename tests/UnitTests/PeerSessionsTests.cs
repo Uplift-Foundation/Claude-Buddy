@@ -73,13 +73,13 @@ public class PeerSessionsTests
     {
         var worth = PeerSessions.WorthDialling(
             Array.Empty<PeerDiscovery.Seen>(),
-            PairedAt("avatar", "198.51.100.127:7677"),
+            PairedAt("avatar", "198.51.100.10:7677"),
             connected: _ => false);
 
         var peer = Assert.Single(worth);
 
         Assert.Equal("avatar", peer.Machine);
-        Assert.Equal("198.51.100.127", peer.Address);
+        Assert.Equal("198.51.100.10", peer.Address);
         Assert.Equal(7677, peer.Port);
     }
 
@@ -88,7 +88,7 @@ public class PeerSessionsTests
     {
         var peer = Assert.Single(PeerSessions.WorthDialling(
             Array.Empty<PeerDiscovery.Seen>(),
-            PairedAt("avatar", "198.51.100.127"),
+            PairedAt("avatar", "198.51.100.10"),
             connected: _ => false));
 
         Assert.Equal(PeerLink.DefaultPort, peer.Port);

@@ -53,7 +53,7 @@ namespace ClaudeBuddy.Tests
         {
             const string cronKey = "agent:main:cron:8f2c1e4a";
             const string mainKey = "agent:alexis:main";
-            const string channelKey = "agent:main:discord:channel:100000000000000003";
+            const string channelKey = "agent:main:discord:channel:1900000000000000001";
 
             OrbCluster Classify(string key, string? label = null)
                 => OrbClusters.Of(

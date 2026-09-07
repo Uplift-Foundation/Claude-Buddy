@@ -204,10 +204,10 @@ namespace ClaudeBuddy.Tests
         }
 
         // origin.label is the fallback, and it needs unpicking: it is written as
-        // "#general channel id:100000000000000003" and only the front is useful.
+        // "#general channel id:1900000000000000001" and only the front is useful.
         [Theory]
-        [InlineData("#general channel id:100000000000000003", "#general")]
-        [InlineData("wtvamp user id:100000000000000001", "wtvamp")]
+        [InlineData("#general channel id:1900000000000000001", "#general")]
+        [InlineData("riverbend user id:200000000000000001", "riverbend")]
         [InlineData("discord:amber", "amber")]
         [InlineData("engineering group id:99", "engineering")]
         public void TheLogLabelIsCutBackToTheUsefulPart(string label, string want)

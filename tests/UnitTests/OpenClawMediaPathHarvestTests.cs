@@ -12,7 +12,7 @@ public class OpenClawMediaPathHarvestTests
     // ---- AbsoluteImagePathIn: what counts as a path worth fetching --------
 
     [Theory]
-    [InlineData("/Users/w/.openclaw/media/aurora_scene_100000001.png")]
+    [InlineData("/Users/w/.openclaw/media/sample_sunrise_100200300.png")]
     [InlineData("~/.openclaw/media/browser/03a1be83-aaaa-bbbb-cccc-ddddddddddddd.png")]
     [InlineData("/tmp/a.JPEG")]
     public void ARootedPathToAPictureIsAccepted(string token)
@@ -111,12 +111,12 @@ public class OpenClawMediaPathHarvestTests
     {
         var index = OpenClawSessions.MediaPathsByFileName(new[]
         {
-            "/Users/user/.openclaw/media/aurora_scene_100000001.png"
+            "/Users/user/.openclaw/media/sample_sunrise_100200300.png"
         });
 
         Assert.Equal(
-            "/Users/user/.openclaw/media/aurora_scene_100000001.png",
-            index["aurora_scene_100000001.png"]);
+            "/Users/user/.openclaw/media/sample_sunrise_100200300.png",
+            index["sample_sunrise_100200300.png"]);
     }
 
     // The inter-session envelope, whose last line is the path. Its own turn is
@@ -130,13 +130,13 @@ public class OpenClawMediaPathHarvestTests
         {
             "[Inter-session message] sourceSession=agent:comfyui:main\n"
             + "This content was routed by OpenClaw from another session.\n"
-            + "/Users/user/.openclaw/media/aurora_scene_100000001.png"
+            + "/Users/user/.openclaw/media/sample_sunrise_100200300.png"
         });
 
         Assert.Single(index);
         Assert.Equal(
-            "/Users/user/.openclaw/media/aurora_scene_100000001.png",
-            index["aurora_scene_100000001.png"]);
+            "/Users/user/.openclaw/media/sample_sunrise_100200300.png",
+            index["sample_sunrise_100200300.png"]);
     }
 
     // Two real files with the same name in different directories. Choosing
@@ -216,10 +216,10 @@ public class OpenClawMediaPathHarvestTests
     {
         var index = OpenClawSessions.MediaPathsByFileName(new[]
         {
-            """{"content":"here you go\n/Users/w/.openclaw/media/aurora_scene.png"}"""
+            """{"content":"here you go\n/Users/w/.openclaw/media/sample_sunrise.png"}"""
         });
 
-        Assert.Equal("/Users/w/.openclaw/media/aurora_scene.png", index["aurora_scene.png"]);
+        Assert.Equal("/Users/w/.openclaw/media/sample_sunrise.png", index["sample_sunrise.png"]);
     }
 
     [Theory]

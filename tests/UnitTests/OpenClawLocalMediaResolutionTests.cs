@@ -67,7 +67,7 @@ public class OpenClawLocalMediaResolutionTests : IDisposable
     [Fact]
     public async Task AMediaLineResolvesToImageBytes()
     {
-        const string path = "/Users/user/.openclaw/media/aurora_batch.png";
+        const string path = "/Users/user/.openclaw/media/sample_drop.png";
         Seed(path, Pixel());
 
         var session = Session();
@@ -166,7 +166,7 @@ public class OpenClawLocalMediaResolutionTests : IDisposable
     [Fact]
     public async Task APathTheGatewayWillNotServeLeavesTheTurnAsTextOnly()
     {
-        const string path = "/Users/user/.openclaw/workspace-render-nova/outputs/nope.png";
+        const string path = "/Users/user/.openclaw/workspace-render-quill/outputs/nope.png";
         Seed(path, null);
 
         var session = Session();

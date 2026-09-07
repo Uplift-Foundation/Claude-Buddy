@@ -226,10 +226,10 @@ public class ChatPanelScreenshots : IDisposable
             new ChatTurn
             {
                 Role = ChatRole.Assistant,
-                Text = "here you go\n\nMEDIA:/Users/user/.openclaw/workspace-render-nova/outputs/render.png",
+                Text = "here you go\n\nMEDIA:/Users/user/.openclaw/workspace-render-quill/outputs/render.png",
                 ImageNote = "Picture not shown — the gateway won't serve files from that folder. "
                           + "Ask the agent to write it to ~/.openclaw/media/, which is allowed for every agent.",
-                ImageNoteDetail = "/Users/user/.openclaw/workspace-render-nova/outputs/render.png"
+                ImageNoteDetail = "/Users/user/.openclaw/workspace-render-quill/outputs/render.png"
                                 + " — outside-allowed-folders",
             },
         });

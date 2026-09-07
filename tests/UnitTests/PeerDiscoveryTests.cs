@@ -26,11 +26,11 @@ public class PeerDiscoveryTests
     [Fact]
     public void AWellFormedAnnouncementIsHeard()
     {
-        var peer = PeerDiscovery.Read(Announcement(), "198.51.100.127", "host-mbp", Now);
+        var peer = PeerDiscovery.Read(Announcement(), "198.51.100.10", "host-mbp", Now);
 
         Assert.NotNull(peer);
         Assert.Equal("avatar", peer!.Machine);
-        Assert.Equal("198.51.100.127", peer.Address);
+        Assert.Equal("198.51.100.10", peer.Address);
         Assert.Equal(PeerLink.DefaultPort, peer.Port);
         Assert.Equal("abc", peer.Pin);
     }
@@ -54,7 +54,7 @@ public class PeerDiscoveryTests
     [Fact]
     public void AnAnnouncementFromAnotherVersionIsIgnored() =>
         Assert.Null(PeerDiscovery.Read(
-            Announcement(version: PeerProtocol.Version + 1), "198.51.100.127", "host-mbp", Now));
+            Announcement(version: PeerProtocol.Version + 1), "198.51.100.10", "host-mbp", Now));
 
     // Anything malformed is dropped. This parses a datagram from an unknown
     // sender, so every one of these is reachable by anybody on the network.
@@ -68,7 +68,7 @@ public class PeerDiscoveryTests
     [InlineData("{\"v\":1,\"machine\":\"   \",\"port\":7677}")]
     public void RubbishIsIgnored(string body) =>
         Assert.Null(PeerDiscovery.Read(
-            Encoding.UTF8.GetBytes(body), "198.51.100.127", "host-mbp", Now));
+            Encoding.UTF8.GetBytes(body), "198.51.100.10", "host-mbp", Now));
 
     // A port outside the range cannot be connected to, so a peer offering one
     // is not worth listing.
@@ -79,7 +79,7 @@ public class PeerDiscoveryTests
     [InlineData(999999)]
     public void AnImpossiblePortIsIgnored(int port) =>
         Assert.Null(PeerDiscovery.Read(
-            Announcement(port: port), "198.51.100.127", "host-mbp", Now));
+            Announcement(port: port), "198.51.100.10", "host-mbp", Now));
 
     // The announcement carries a pin, but hearing one is not trusting it — the
     // pin that matters is the certificate actually presented during the
@@ -90,7 +90,7 @@ public class PeerDiscoveryTests
     {
         var peer = PeerDiscovery.Read(
             Encoding.UTF8.GetBytes("{\"v\":1,\"machine\":\"avatar\",\"port\":7677}"),
-            "198.51.100.127", "host-mbp", Now);
+            "198.51.100.10", "host-mbp", Now);
 
         Assert.NotNull(peer);
         Assert.Equal("", peer!.Pin);
@@ -104,7 +104,7 @@ public class PeerDiscoveryTests
     public void WhatWeSayIsWhatAnotherMachineHears()
     {
         var said = PeerDiscovery.Say("avatar", 7677, "deadbeef");
-        var heard = PeerDiscovery.Read(said, "198.51.100.127", "host-mbp", Now);
+        var heard = PeerDiscovery.Read(said, "198.51.100.10", "host-mbp", Now);
 
         Assert.NotNull(heard);
         Assert.Equal("avatar", heard!.Machine);
@@ -165,13 +165,13 @@ public class PeerDiscoveryTests
     [Fact]
     public void AFirstSightingIsNews() =>
         Assert.True(new PeerDiscovery().Note(
-            new PeerDiscovery.Seen("avatar", "198.51.100.127", 7677, "pin", Now)));
+            new PeerDiscovery.Seen("avatar", "198.51.100.10", 7677, "pin", Now)));
 
     [Fact]
     public void TheSameMachineSayingTheSameThingIsNot()
     {
         var discovery = new PeerDiscovery();
-        var peer = new PeerDiscovery.Seen("avatar", "198.51.100.127", 7677, "pin", Now);
+        var peer = new PeerDiscovery.Seen("avatar", "198.51.100.10", 7677, "pin", Now);
 
         Assert.True(discovery.Note(peer));
         Assert.False(discovery.Note(peer with { At = Now.AddSeconds(20) }));
@@ -183,7 +183,7 @@ public class PeerDiscoveryTests
     public void AMachineThatChangedAddressIsNews()
     {
         var discovery = new PeerDiscovery();
-        var peer = new PeerDiscovery.Seen("avatar", "198.51.100.127", 7677, "pin", Now);
+        var peer = new PeerDiscovery.Seen("avatar", "198.51.100.10", 7677, "pin", Now);
 
         Assert.True(discovery.Note(peer));
         Assert.True(discovery.Note(peer with { Address = "10.0.0.4" }));
@@ -196,7 +196,7 @@ public class PeerDiscoveryTests
     public void AMachineOfferingANewCertificateIsNews()
     {
         var discovery = new PeerDiscovery();
-        var peer = new PeerDiscovery.Seen("avatar", "198.51.100.127", 7677, "old", Now);
+        var peer = new PeerDiscovery.Seen("avatar", "198.51.100.10", 7677, "old", Now);
 
         Assert.True(discovery.Note(peer));
         Assert.True(discovery.Note(peer with { Pin = "new" }));

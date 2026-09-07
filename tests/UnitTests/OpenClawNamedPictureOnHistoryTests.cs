@@ -10,14 +10,16 @@ namespace ClaudeBuddy.UnitTests;
 // path alone. Read the same message back — reopen the panel, reconnect, scroll
 // — and the MEDIA: line was just text.
 //
-// The fixtures here are the real message Owner screenshotted, not an invented
-// one: the file was on disk and the gateway answered `available:true` for it,
-// so the only thing that failed was this parser never asking.
+// The fixtures here reproduce the *shape* of the message that failed — prose
+// wrapped around a MEDIA: line naming a content-addressed file — with invented
+// text and paths. The real one had the file on disk and the gateway answering
+// `available:true` for it, so the only thing that failed was this parser never
+// asking. Keep the shape; do not paste real captured output back in.
 public class OpenClawNamedPictureOnHistoryTests
 {
     private const string RealPath =
-        "/Users/user/.openclaw/workspace-manager-aurora/.openclaw-cli-images/"
-        + "ff8ca57e874675a6c539e612448971ca25f907bcab3e1eee860587df5bf79836.jpg";
+        "/Users/sample/.openclaw/workspace-manager-aster/.openclaw-cli-images/"
+        + "3c1f90ab7d2e4658b0c9d31a5e7f8240c6b4a9e15d38f072a1bc6e9034d5f871.jpg";
 
     private static System.Collections.Generic.List<HistoryTurn> Turns(string json)
         => OpenClawSessions.TurnsFromHistory(JsonDocument.Parse(json).RootElement);
@@ -25,13 +27,13 @@ public class OpenClawNamedPictureOnHistoryTests
     private static string SourceOf(HistoryTurn turn)
         => Uri.UnescapeDataString(turn.ImageUrl!.Split('=')[^1]);
 
-    // The exact reply that rendered as bare text at 12:49.
+    // The reply shape that rendered as bare text: prose, MEDIA: line, prose.
     [Fact]
     public void AMediaLineOnAHistoryReadNowDrawsThePicture()
     {
         var turns = Turns($$"""
         [{"role":"assistant","content":[{"type":"text","text":
-          "Hey friend 🌸 I'm here! Here is the picture Nova generated earlier.\nMEDIA:{{RealPath}}\nWhat's up? 😊"}]}]
+          "Hello there 🌸 I'm here! Nice render, right? That's the one the render agent finished earlier.\nMEDIA:{{RealPath}}\nAnything else? 😊"}]}]
         """);
 
         var turn = Assert.Single(turns);
@@ -39,7 +41,7 @@ public class OpenClawNamedPictureOnHistoryTests
 
         // Alt text is the filename, which is all there is to say about it.
         Assert.Equal(
-            "ff8ca57e874675a6c539e612448971ca25f907bcab3e1eee860587df5bf79836.jpg",
+            "3c1f90ab7d2e4658b0c9d31a5e7f8240c6b4a9e15d38f072a1bc6e9034d5f871.jpg",
             turn.ImageAlt);
     }
 
@@ -124,11 +126,11 @@ public class OpenClawNamedPictureOnHistoryTests
     {
         var turn = Assert.Single(Turns("""
         [{"role":"user","content":
-          "content was routed by OpenClaw from another session or internal tool.\nMEDIA:/Users/w/.openclaw/workspace-social-annabel/tmp/opusclip/frame.jpg\nFill re-render is done — does this framing look right?"}]
+          "content was routed by OpenClaw from another session or internal tool.\nMEDIA:/Users/w/.openclaw/workspace-social-vale/tmp/clipper/frame.jpg\nFill re-render is done — does this framing look right?"}]
         """));
 
         Assert.Equal(
-            "/Users/w/.openclaw/workspace-social-annabel/tmp/opusclip/frame.jpg",
+            "/Users/w/.openclaw/workspace-social-vale/tmp/clipper/frame.jpg",
             SourceOf(turn));
     }
 
@@ -289,9 +291,9 @@ public class OpenClawNamedPictureOnHistoryTests
     {
         var turn = Assert.Single(Turns("""
         [{"role":"assistant","provider":"openclaw","model":"delivery-mirror",
-          "content":[{"type":"text","text":"aurora_scene_100000001.png"}]}]
+          "content":[{"type":"text","text":"sample_sunrise_100200300.png"}]}]
         """));
 
-        Assert.Contains("~/.openclaw/media/aurora_scene_100000001.png", SourceOf(turn));
+        Assert.Contains("~/.openclaw/media/sample_sunrise_100200300.png", SourceOf(turn));
     }
 }
