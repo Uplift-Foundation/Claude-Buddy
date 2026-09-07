@@ -156,4 +156,69 @@ public class UsageRingGeometryTests
     {
         Assert.Equal(expected, UsageRingGeometry.ShouldBreathe(percent));
     }
+
+    // --- what to do about it (CB-121) ---------------------------------------
+    // ShouldBreathe above answers whether a reading has earned motion.
+    // BreathChangeFor answers the question the window used to answer for itself:
+    // given a ring that is or is not already breathing, what should change.
+    //
+    // Worth its own function rather than an `if` at the call site because the
+    // interesting answer is the one that does nothing. A ring already breathing
+    // must be left strictly alone — restarting it resets the animation's phase,
+    // and an account orb polls five minutes apart, so the result is a stutter at
+    // no explicable interval rather than anything a reader would connect to a
+    // poll. That rule was previously implicit in a dictionary lookup, and later
+    // in Classes.Set happening to be a no-op; here it is a named outcome with a
+    // case of its own.
+
+    [Theory]
+    // Not breathing, and the reading says it should be: the only Start.
+    [InlineData(false, 85d, UsageRingGeometry.BreathChange.Start)]
+    [InlineData(false, 92d, UsageRingGeometry.BreathChange.Start)]
+    [InlineData(false, 140d, UsageRingGeometry.BreathChange.Start)]
+    // Already breathing and still should be. This is the no-restart rule.
+    [InlineData(true, 85d, UsageRingGeometry.BreathChange.Leave)]
+    [InlineData(true, 92d, UsageRingGeometry.BreathChange.Leave)]
+    // Breathing, and the reading has come back down. A green ring left pulsing
+    // like an emergency is a worse lie than one that never pulsed, and every
+    // account crosses this boundary downwards when its week resets.
+    [InlineData(true, 84.99d, UsageRingGeometry.BreathChange.Stop)]
+    [InlineData(true, 0d, UsageRingGeometry.BreathChange.Stop)]
+    // Calm and staying calm: the overwhelmingly common poll, and it must be
+    // free of writes to a shape.
+    [InlineData(false, 0d, UsageRingGeometry.BreathChange.Leave)]
+    [InlineData(false, 84.99d, UsageRingGeometry.BreathChange.Leave)]
+    // No reading at all — expired, or never sent. The ring is not drawn, so it
+    // must not be breathing either.
+    [InlineData(true, null, UsageRingGeometry.BreathChange.Stop)]
+    [InlineData(false, null, UsageRingGeometry.BreathChange.Leave)]
+    // NaN is not a small number, and ShouldBreathe already refuses it; this
+    // pins that the refusal survives the wrapper rather than being re-derived.
+    [InlineData(true, double.NaN, UsageRingGeometry.BreathChange.Stop)]
+    [InlineData(false, double.NaN, UsageRingGeometry.BreathChange.Leave)]
+    internal void BreathChangeCoversEveryOutcome(
+        bool breathing, double? percent, UsageRingGeometry.BreathChange expected)
+    {
+        Assert.Equal(expected, UsageRingGeometry.BreathChangeFor(breathing, percent));
+    }
+
+    // The whole point of the enum, stated once on its own: asking twice with
+    // nothing changed in between must never produce a second Start. A window
+    // acting on Start twice is a phase reset; acting on Leave twice is nothing
+    // at all, which is what a re-poll answering the same reading deserves.
+    [Fact]
+    public void APollThatChangesNothingAsksForNothing()
+    {
+        Assert.Equal(UsageRingGeometry.BreathChange.Start,
+            UsageRingGeometry.BreathChangeFor(breathing: false, percent: 92));
+
+        // ...and now it is breathing, so the same reading arriving again, and
+        // again, and a slightly higher one after that, all leave it alone.
+        Assert.Equal(UsageRingGeometry.BreathChange.Leave,
+            UsageRingGeometry.BreathChangeFor(breathing: true, percent: 92));
+        Assert.Equal(UsageRingGeometry.BreathChange.Leave,
+            UsageRingGeometry.BreathChangeFor(breathing: true, percent: 92));
+        Assert.Equal(UsageRingGeometry.BreathChange.Leave,
+            UsageRingGeometry.BreathChangeFor(breathing: true, percent: 99));
+    }
 }

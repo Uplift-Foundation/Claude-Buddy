@@ -109,5 +109,38 @@ namespace ClaudeBuddy
         // the resting state.
         internal static bool ShouldBreathe(double percent) =>
             !double.IsNaN(percent) && percent >= DangerAtPercent;
+
+        // What to do to a ring that is currently breathing, or currently not,
+        // now that this reading has arrived.
+        //
+        // Three answers rather than two, and Leave is the one that earns the
+        // enum. "Should this ring breathe?" is already answered by ShouldBreathe
+        // above; the question this file did not answer, and the window therefore
+        // had to, is what to *do* about it — and the interesting case is a ring
+        // that should breathe and already is. Restarting it there resets the
+        // animation's phase on every poll, five minutes apart, which is not
+        // visible as a restart so much as a stutter nobody can explain.
+        internal enum BreathChange
+        {
+            // Already in the right state. The only correct action is none: not a
+            // harmless re-set, because for a running animation there is no such
+            // thing.
+            Leave,
+            Start,
+            Stop
+        }
+
+        // Null percent is a ring with no reading — expired, or never sent. It is
+        // not drawn at all, and a ring that is not drawn must not still be
+        // breathing: an invisible arc animating its opacity is a shape with no
+        // colour moving nothing, and the moment a reading came back it would
+        // come back mid-phase.
+        internal static BreathChange BreathChangeFor(bool breathing, double? percent)
+        {
+            var wanted = percent is { } value && ShouldBreathe(value);
+
+            if (wanted == breathing) return BreathChange.Leave;
+            return wanted ? BreathChange.Start : BreathChange.Stop;
+        }
     }
 }

@@ -12,6 +12,66 @@
         ShowActivated="False"
         WindowStartupLocation="Manual">
 
+    <!-- A ring in the danger band breathes, and this is the whole of how.
+         Code does nothing but add or remove the class — see StartBreathing in
+         AccountOrbWindow.axaml.cs.
+
+         Declarative because Avalonia's contract leaves no choice: an animation
+         with IterationCount="Infinite" is *applied* by a style, never *run*.
+         Animation.RunAsync rejects one outright with
+         InvalidOperationException("Looping animations must not use the Run
+         method."), and building one and calling RunAsync on it is exactly what
+         the first version of this did — fire-and-forget, so the throw never
+         reached the dispatcher and landed instead in the crash log as an
+         unobserved task exception — twenty-two entries across twelve separate
+         runs of the app, counted on 7 Sep 2026. See the same note in
+         AccountOrbWindow.axaml.cs, which is where that count is explained. It
+         appears in three files — here, there, and
+         tests/UiTests/AccountOrbWindowTests.cs — and all three move together.
+
+         Be precise about what that cost, because measuring it changed the
+         answer. On Avalonia 12.1.1 RunAsync faults the *returned task* rather
+         than throwing before it acts: it applies the animation anyway and then
+         awaits a task it has already failed. So the pre-fix ring did breathe —
+         confirmed over five scenarios on a real Mac, including the exact
+         reading that was reported (a weekly ring at 92% beside an extra-usage
+         ring at 100%), shown before and after the reading arrived, and hidden
+         and reshown mid-cycle. What was actually broken was the contract: a
+         call the framework has already declared invalid, kept working only by
+         the order in which that particular version happens to give up, plus a
+         faulted task per ring left for the finalizer to complain about. That is
+         a thing that stops working on a bump with nothing in the release notes
+         to warn you, which is the argument for the supported path rather than
+         for a symptom.
+
+         The animation lives on the window rather than in App.axaml because
+         nothing outside this window has a ring to breathe, and a `Path.breathing`
+         selector at application scope would silently claim every Path in the app
+         — the CLI marks on the session orbs among them.
+
+         2600ms alternating with a sine ease is a breath rather than a blink: fast
+         enough to catch the eye in peripheral vision, slow enough that a row of
+         orbs at 100% is not a strobe. 0.55 rather than 0 at the far end because a
+         ring that vanishes is a ring you cannot read the sweep of, and the sweep
+         is the number. -->
+    <Window.Styles>
+        <Style Selector="Path.breathing">
+            <Style.Animations>
+                <Animation Duration="0:0:2.6"
+                           IterationCount="Infinite"
+                           PlaybackDirection="Alternate"
+                           Easing="SineEaseInOut">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Opacity" Value="1.0"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Opacity" Value="0.55"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+    </Window.Styles>
+
     <!-- One account's usage, as an orb wearing three rings.
 
          Bigger than OrbWindow's 56 and centred at (36,36) rather than (28,28),

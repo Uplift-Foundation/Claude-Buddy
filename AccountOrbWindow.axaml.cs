@@ -1,16 +1,11 @@
 using System;
-using System.Collections.Generic;
-using System.Threading;
 using Avalonia;
-using Avalonia.Animation;
-using Avalonia.Animation.Easings;
 using Avalonia.Collections;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
-using Avalonia.Styling;
 
 // Shapes.Path against System.IO.Path, which the project's implicit usings bring
 // in. Aliased rather than fully qualified because this file names the type a
@@ -62,11 +57,12 @@ namespace ClaudeBuddy
         // stale 94% is exactly the reading someone needs to be able to see.
         private const double StaleOpacity = 0.45;
 
-        // One cancellation per breathing ring. Without it a ring that drops out
-        // of the danger band keeps breathing forever: RunAsync's only stop is
-        // its token, and an animation left running on a shape whose reading has
-        // since gone calm is a green ring pulsing like an emergency.
-        private readonly Dictionary<Path, CancellationTokenSource> _breathing = new();
+        // The class the breathing animation in AccountOrbWindow.axaml selects on.
+        // Named here rather than spelled out at its three call sites so the code
+        // and the XAML cannot drift apart in the one way that would be invisible:
+        // a typo in a selector is not a compile error, it is a ring that stops
+        // breathing and says nothing about why.
+        private const string BreathingClass = "breathing";
 
         private bool _pinned;
 
@@ -142,6 +138,18 @@ namespace ClaudeBuddy
 
         internal bool ExtraIsAbsent { get; private set; }
 
+        // Which rings are breathing, read back off the shapes themselves rather
+        // than off a flag kept beside them. The distinction is the whole point:
+        // a bool this class set would only prove StartBreathing was reached,
+        // which the broken version also managed. The class is what the style
+        // matches on, so asserting on it is asserting on the thing that actually
+        // decides whether anything moves.
+        internal bool WeeklyIsBreathing => WeeklyArc.Classes.Contains(BreathingClass);
+
+        internal bool SessionIsBreathing => SessionArc.Classes.Contains(BreathingClass);
+
+        internal bool ExtraIsBreathing => ExtraArc.Classes.Contains(BreathingClass);
+
         internal bool IsDimmed { get; private set; }
 
         internal bool IsPinned => _pinned;
@@ -205,6 +213,8 @@ namespace ClaudeBuddy
         // without reading a brush back off a shape.
         private string? ApplyRing(Path arc, Ellipse track, double radius, double? percent)
         {
+            ApplyBreath(arc, percent);
+
             if (percent is not { } value)
             {
                 // No reading for this window — expired, or never sent. The track
@@ -212,7 +222,6 @@ namespace ClaudeBuddy
                 arc.Data = null;
                 arc.Stroke = null;
                 track.IsVisible = true;
-                StopBreathing(arc);
                 return null;
             }
 
@@ -221,9 +230,6 @@ namespace ClaudeBuddy
             arc.Data = ArcGeometry(radius, value);
             arc.Stroke = new SolidColorBrush(Color.Parse(colour));
             track.IsVisible = true;
-
-            if (UsageRingGeometry.ShouldBreathe(value)) StartBreathing(arc);
-            else StopBreathing(arc);
 
             return colour;
         }
@@ -243,11 +249,12 @@ namespace ClaudeBuddy
 
             ExtraIsAbsent = percent is null;
 
+            ApplyBreath(ExtraArc, percent);
+
             if (percent is null)
             {
                 ExtraArc.Data = null;
                 ExtraArc.Stroke = null;
-                StopBreathing(ExtraArc);
 
                 ExtraTrack.StrokeThickness = 2;
                 ExtraTrack.StrokeDashArray = new AvaloniaList<double> { 0.25, 2.5 };
@@ -264,9 +271,6 @@ namespace ClaudeBuddy
 
             ExtraArc.Data = ArcGeometry(ExtraRadius, percent.Value);
             ExtraArc.Stroke = new SolidColorBrush(Color.Parse(colour));
-
-            if (UsageRingGeometry.ShouldBreathe(percent.Value)) StartBreathing(ExtraArc);
-            else StopBreathing(ExtraArc);
         }
 
         // The tested arithmetic, turned into something Avalonia will draw.
@@ -308,58 +312,67 @@ namespace ClaudeBuddy
             return geometry;
         }
 
-        // A ring in the danger band breathes.
+        // A ring in the danger band breathes, and this is the whole of the
+        // window's part in that: ask UsageRingGeometry what to do, then do it.
         //
-        // A per-shape opacity animation rather than joining OrbWindow's shared
-        // 20fps ticker, which is the right instrument for dozens of session orbs
-        // and the wrong one to reach into from here: its roster and its
-        // _breathing flag are OrbWindow's private business, and there are at
-        // most a handful of account orbs. The cost is a compositor animation on
-        // a single Path, which is not measurable against the blur this app
-        // already refused to use.
-        private void StartBreathing(Path arc)
+        // The decision is deliberately not made here. Which rings breathe, and
+        // more importantly which rings must be *left alone*, is a rule about
+        // readings rather than about shapes, and it is worth the same treatment
+        // OrbArrangement, OrbGlyph and the transcript parsers already get: a
+        // pure function with no window behind it, so every outcome can be named
+        // in tests/UnitTests instead of being inferred from what a Path ended up
+        // wearing. What is left below is the part that genuinely needs a shape.
+        //
+        // The animation itself is declared in AccountOrbWindow.axaml against the
+        // `breathing` class, so this method only ever adds or removes that class.
+        // That split is not a matter of taste: Avalonia refuses to *run* a
+        // looping animation, and the first version of this built an
+        // IterationCount.Infinite animation and called Animation.RunAsync on it —
+        // which is answered with InvalidOperationException("Looping animations
+        // must not use the Run method."). Fire-and-forget meant the throw never
+        // reached the dispatcher; it landed in the crash log as an unobserved
+        // task exception — twenty-two entries across twelve separate runs of the
+        // app on the machine this was written against, counted on 7 Sep 2026,
+        // and still arriving while the fix was being reviewed. The count is
+        // dated because it only ever grows: every ring that enters the danger
+        // band leaves another one behind.
+        //
+        // The comment this replaces claimed the visible cost was a ring that
+        // never moved. It was not, and the difference is worth writing down
+        // rather than quietly fixing. On 12.1.1 RunAsync faults the task it
+        // returns instead of throwing before it acts — it applies the animation,
+        // then awaits a task it has already failed — so the ring breathed, in
+        // every scenario it was driven through on a real Mac. What was broken
+        // was the contract and not the pixels: a call the framework has already
+        // declared invalid, working only by the order in which this particular
+        // version gives up, and a faulted task per ring left behind. The reason
+        // to fix it is that nothing about that survives a bump on purpose.
+        // See the XAML for the measurements.
+        private void ApplyBreath(Path arc, double? percent)
         {
-            // Already breathing: leave it alone. Restarting on every poll would
-            // reset the phase every five minutes, which is not visible as a
-            // restart so much as a stutter nobody can explain.
-            if (_breathing.ContainsKey(arc)) return;
+            var breathing = arc.Classes.Contains(BreathingClass);
 
-            var cancel = new CancellationTokenSource();
-            _breathing[arc] = cancel;
-
-            var breath = new Animation
+            switch (UsageRingGeometry.BreathChangeFor(breathing, percent))
             {
-                Duration = TimeSpan.FromMilliseconds(2600),
-                IterationCount = IterationCount.Infinite,
-                PlaybackDirection = PlaybackDirection.Alternate,
-                Easing = new SineEaseInOut(),
-                Children =
-                {
-                    new KeyFrame
-                    {
-                        Cue = new Cue(0),
-                        Setters = { new Setter(OpacityProperty, 1d) }
-                    },
-                    new KeyFrame
-                    {
-                        Cue = new Cue(1),
-                        Setters = { new Setter(OpacityProperty, 0.55d) }
-                    }
-                }
-            };
+                case UsageRingGeometry.BreathChange.Start:
+                    arc.Classes.Add(BreathingClass);
+                    break;
 
-            breath.RunAsync(arc, cancel.Token);
-        }
+                case UsageRingGeometry.BreathChange.Stop:
+                    arc.Classes.Remove(BreathingClass);
 
-        private void StopBreathing(Path arc)
-        {
-            if (_breathing.Remove(arc, out var cancel))
-            {
-                cancel.Cancel();
-                cancel.Dispose();
+                    // The one place opacity has to be put back, and the only
+                    // path from breathing to not, so putting it here rather than
+                    // on every poll is not a shortcut. An animation outranks a
+                    // local value while it runs, so this cannot fight a ring
+                    // that is still breathing; what it does is stop a ring being
+                    // abandoned at whatever fraction of a breath it had reached.
+                    arc.Opacity = 1;
+                    break;
+
+                // Leave: a ring already in the state it should be in. Doing
+                // nothing is the behaviour, not the absence of it — see the enum.
             }
-
-            arc.Opacity = 1;
         }
 
         // The tooltip's second line: what the rings are saying, in words, for
