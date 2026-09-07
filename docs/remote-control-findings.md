@@ -1,8 +1,8 @@
 # Remote Control (`/rc`) sessions — spike findings
 
 Everything here was measured on 23 Aug 2026 against two real machines on one
-account: a MacBook at `198.51.100.189` running the bridge, and a Mac mini
-(`avatar.internal`, `198.51.100.127`) running the session being controlled.
+account: a MacBook at `198.51.100.11` running the bridge, and a Mac mini
+(`avatar.internal`, `198.51.100.10`) running the session being controlled.
 Both used Claude Code `2.1.241` and the `~/.claude-board` CLI profile
 (`CLAUDE_CONFIG_DIR`), which is a second Anthropic account on the same box.
 Where something is assumed rather than observed, it says so.

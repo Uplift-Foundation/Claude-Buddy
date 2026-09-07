@@ -35,7 +35,7 @@ internal static class Program
             Console.Error.WriteLine(
                 "usage: peer-probe <host[:port]> <machine-name> [session-name]\n" +
                 "\n" +
-                "  host          where to dial, e.g. 198.51.100.127 or mini:7677\n" +
+                "  host          where to dial, e.g. 198.51.100.10 or mini:7677\n" +
                 "  machine-name  what that machine calls itself, as paired\n" +
                 "  session-name  optional; fetch this session's transcript\n" +
                 "\n" +

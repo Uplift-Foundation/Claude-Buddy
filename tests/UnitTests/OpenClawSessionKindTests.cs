@@ -121,8 +121,8 @@ namespace ClaudeBuddy.Tests
         public void ARoomIsTheSurfaceAndTheChannelId()
         {
             Assert.Equal(
-                "discord:100000000000000003",
-                OpenClawSessionKind.RoomOf("agent:main:discord:channel:100000000000000003"));
+                "discord:1900000000000000001",
+                OpenClawSessionKind.RoomOf("agent:main:discord:channel:1900000000000000001"));
         }
 
         // Two agents in the same room must produce the same room key — that is

@@ -1251,7 +1251,7 @@ namespace ClaudeBuddy
         }
 
         // origin.label is written for a log, not for a person: "#general channel
-        // id:100000000000000003", "wtvamp user id:100000000000000001",
+        // id:1900000000000000001", "riverbend user id:200000000000000001",
         // "discord:amber". The useful part is always at the front, so cut at the
         // id and drop the noun that introduces it.
         internal static string? Where(JsonElement origin)

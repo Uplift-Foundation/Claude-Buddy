@@ -15,8 +15,8 @@ public class OpenClawDeliveredPictureTests
     [Fact]
     public void ADeliveryMirrorCarryingABareImageFilenameIsADeliveredPicture()
     {
-        Assert.Equal("aurora_scene_100000001.png",
-            OpenClawSessions.DeliveredPictureName(Mirror, "aurora_scene_100000001.png"));
+        Assert.Equal("sample_sunrise_100200300.png",
+            OpenClawSessions.DeliveredPictureName(Mirror, "sample_sunrise_100200300.png"));
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public class OpenClawDeliveredPictureTests
     public void AMultiLineMessageEndingInAFilenameIsNotAccepted()
     {
         Assert.Null(OpenClawSessions.DeliveredPictureName(
-            Mirror, "here you go\naurora_scene_100000001.png"));
+            Mirror, "here you go\nsample_sunrise_100200300.png"));
     }
 
     // Two pictures in one delivery. The gateway builds the mirror text as
@@ -104,7 +104,7 @@ public class OpenClawDeliveredPictureTests
     public void AMultiPictureDeliveryNamesBothAndIsNotAccepted()
     {
         Assert.Null(OpenClawSessions.DeliveredPictureName(
-            Mirror, "aurora_scene_100000001.png, aurora_style_100000004.png"));
+            Mirror, "sample_sunrise_100200300.png, sample_meadow_400500600.png"));
     }
 
     [Fact]

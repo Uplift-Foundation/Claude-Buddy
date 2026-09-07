@@ -357,14 +357,14 @@ public class OpenClawHistoryTurnTests
         var turns = Turns("""
         [{"role":"assistant","api":"openclaw-transcript","provider":"openclaw",
           "model":"delivery-mirror",
-          "content":[{"type":"text","text":"aurora_scene_100000001.png"}]}]
+          "content":[{"type":"text","text":"sample_sunrise_100200300.png"}]}]
         """);
 
         var turn = Assert.Single(turns);
         Assert.Contains("/__openclaw__/assistant-media?source=", turn.ImageUrl);
-        Assert.Contains("aurora_scene_100000001.png", Uri.UnescapeDataString(turn.ImageUrl!));
+        Assert.Contains("sample_sunrise_100200300.png", Uri.UnescapeDataString(turn.ImageUrl!));
         Assert.Contains("~/.openclaw/media/", Uri.UnescapeDataString(turn.ImageUrl!));
-        Assert.Equal("aurora_scene_100000001.png", turn.ImageAlt);
+        Assert.Equal("sample_sunrise_100200300.png", turn.ImageAlt);
     }
 
     // The defect QA measured, end to end. A browser capture lives one
@@ -417,13 +417,13 @@ public class OpenClawHistoryTurnTests
     {
         var turns = Turns("""
         [{"role":"assistant","provider":"openclaw","model":"delivery-mirror",
-          "content":[{"type":"text","text":"aurora_scene_100000001.png"}]}]
+          "content":[{"type":"text","text":"sample_sunrise_100200300.png"}]}]
         """);
 
         var source = Uri.UnescapeDataString(
             Assert.Single(turns).ImageUrl!.Split('=')[^1]);
 
-        Assert.Equal("~/.openclaw/media/aurora_scene_100000001.png", source);
+        Assert.Equal("~/.openclaw/media/sample_sunrise_100200300.png", source);
     }
 
     // Two real files of the same name on one page. Rather than draw one of
@@ -481,10 +481,10 @@ public class OpenClawHistoryTurnTests
     {
         var turns = Turns("""
         [{"role":"assistant","provider":"openclaw","model":"delivery-mirror",
-          "content":[{"type":"text","text":"aurora_scene_100000001.png"}]}]
+          "content":[{"type":"text","text":"sample_sunrise_100200300.png"}]}]
         """);
 
-        Assert.Equal("aurora_scene_100000001.png", Assert.Single(turns).Text);
+        Assert.Equal("sample_sunrise_100200300.png", Assert.Single(turns).Text);
     }
 
     // A mirrored *text* message stays text. This is the same record type, and
@@ -509,12 +509,12 @@ public class OpenClawHistoryTurnTests
     {
         var turns = Turns("""
         [{"role":"assistant","model":"claude-sonnet-4-6",
-          "content":[{"type":"text","text":"aurora_scene_100000001.png"}]}]
+          "content":[{"type":"text","text":"sample_sunrise_100200300.png"}]}]
         """);
 
         var turn = Assert.Single(turns);
         Assert.Null(turn.ImageUrl);
-        Assert.Equal("aurora_scene_100000001.png", turn.Text);
+        Assert.Equal("sample_sunrise_100200300.png", turn.Text);
     }
 
     // ---- timestamps ------------------------------------------------------

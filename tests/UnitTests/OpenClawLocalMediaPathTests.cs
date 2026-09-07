@@ -4,24 +4,30 @@ using Xunit;
 namespace ClaudeBuddy.UnitTests;
 
 // CB-88: an agent's own generated picture, named by its own path on the
-// gateway host rather than a fetchable URL. Two real shapes, both captured
-// from a live gateway via tools/openclaw-probe rather than assumed — see
+// gateway host rather than a fetchable URL. Two real shapes, both taken from
+// a live gateway via tools/openclaw-probe rather than assumed — see
 // OpenClawSessions.LocalMediaPathFrom's own comment.
+//
+// The *shapes* below are the real ones; the message text, paths and filenames
+// are invented stand-ins. Fidelity is owed to the structure — how many
+// paragraphs sit above the MEDIA: line, where the marker falls, how deep the
+// path runs — never to the wording, so do not paste real captured output back
+// in here on the theory that the values matter.
 public class OpenClawLocalMediaPathTests
 {
-    // The real captured example: two paragraphs of in-character reply, then
-    // the MEDIA: line last — not the first line of the message.
+    // The captured shape: two paragraphs of in-character reply, then the
+    // MEDIA: line last — not the first line of the message.
     [Fact]
     public void AMediaLineAfterOtherParagraphsIsFound()
     {
-        var text = "got her path — delivering now 🌸\n\n"
-                  + "here is the latest render ✨\n\n"
-                  + "MEDIA:/Users/user/.openclaw/workspace-render-nova/outputs/"
-                  + "aurora/aurora_batch_100000002_100000003_00001_.png";
+        var text = "got the path — queuing the render 🌸\n\n"
+                  + "here it is, straight off the batch 💛✨\n\n"
+                  + "MEDIA:/Users/sample/.openclaw/workspace-render-quill/outputs/"
+                  + "gallery/sample_drop_100200300_400500600_00001_.png";
 
         Assert.Equal(
-            "/Users/user/.openclaw/workspace-render-nova/outputs/"
-            + "aurora/aurora_batch_100000002_100000003_00001_.png",
+            "/Users/sample/.openclaw/workspace-render-quill/outputs/"
+            + "gallery/sample_drop_100200300_400500600_00001_.png",
             OpenClawSessions.LocalMediaPathFrom(text));
     }
 
@@ -74,7 +80,7 @@ public class OpenClawLocalMediaPathTests
     [Fact]
     public void AMediaLineWithARelativePathIsNotAPicture()
     {
-        Assert.Null(OpenClawSessions.LocalMediaPathFrom("MEDIA:outputs/aurora/pic.png"));
+        Assert.Null(OpenClawSessions.LocalMediaPathFrom("MEDIA:outputs/gallery/pic.png"));
     }
 
     // The other real shape: the same automation's duplicate-post bug (before
@@ -84,9 +90,9 @@ public class OpenClawLocalMediaPathTests
     public void ABarePathThatIsTheWholeMessageIsFound()
     {
         Assert.Equal(
-            "/Users/user/.openclaw/workspace-render-nova/outputs/aurora/aurora_batch.png",
+            "/Users/sample/.openclaw/workspace-render-quill/outputs/gallery/sample_drop.png",
             OpenClawSessions.LocalMediaPathFrom(
-                "/Users/user/.openclaw/workspace-render-nova/outputs/aurora/aurora_batch.png"));
+                "/Users/sample/.openclaw/workspace-render-quill/outputs/gallery/sample_drop.png"));
     }
 
     [Theory]
@@ -102,12 +108,12 @@ public class OpenClawLocalMediaPathTests
     }
 
     // A relative-looking path is not what this matches — every real example
-    // captured is absolute, and a relative one is more likely a citation or
+    // observed was absolute, and a relative one is more likely a citation or
     // a filename mentioned in conversation than a picture to fetch.
     [Fact]
     public void ARelativeBarePathIsNotAPicture()
     {
-        Assert.Null(OpenClawSessions.LocalMediaPathFrom("outputs/aurora/pic.png"));
+        Assert.Null(OpenClawSessions.LocalMediaPathFrom("outputs/gallery/pic.png"));
     }
 
     // A sentence that happens to end in something that looks like a
