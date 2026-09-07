@@ -58,7 +58,22 @@ namespace ClaudeBuddy
         // that became a record precisely so a tenth field would not mean
         // rewriting every producer; this is that cost being paid rather than
         // worked around.
-        string? ImageSourcePath = null);
+        string? ImageSourcePath = null,
+
+        // CB-115: which cron job might be able to recover this turn's
+        // picture, when the message named `openclawAutomation` with kind
+        // "cron" and neither arm above resolved anything — the delivered-
+        // mirror and named-path arms both `continue` before this field is
+        // ever set, so a turn only ever carries it alongside no picture,
+        // never instead of one it already has. Whether the message's text is
+        // actually worth a lookup (the trigger's second conjunct — an
+        // image-shaped trailing token, not just any cron reply) is decided
+        // later, in OpenClawSessions.FetchHistoryPageAsync, against this same
+        // Text — kept out of TurnsFromHistory so that method stays a pure
+        // read of one message with no opinion on what counts as
+        // image-shaped. See OpenClawCronRecovery's header for the full
+        // trigger and why it is gated this way.
+        OpenClawAutomation? Automation = null);
 
     // One OpenClaw session, as something the chat panel can talk to.
     //
@@ -263,7 +278,48 @@ namespace ClaudeBuddy
                 // (see ResolveLocalMediaPath's own comment) — a bare filename
                 // gets the shared-media-directory guess, the same one the
                 // history read falls back to when its own harvest misses.
-                TryResolveLocalMedia(_streaming, OpenClawSessions.ResolveLocalMediaPath(localPath, null));
+                // CB-115: only when that resolved to a real path. A bare
+                // filename resolves to the shared-media *guess*, and asking
+                // for it here would be worse than useless — TryResolveLocalMedia
+                // and TryResolveLiveImage share the one-shot _pendingImageChecks
+                // guard, so a guess that is about to 404 would consume this
+                // turn's single attempt and the run-record recovery below would
+                // never run. That is exactly how this feature was inert for the
+                // pictures it exists for.
+                //
+                // So the authoritative source goes first: a rooted path is
+                // fetched directly, a bare filename falls through to the run
+                // record, and nothing is lost either way — if the recovery
+                // finds nothing, the refetched page's own named-path arm
+                // applies the same guess this branch would have.
+                var resolved = OpenClawSessions.ResolveLocalMediaPath(localPath, null);
+                if (resolved != OpenClawSessions.SharedMediaDir + localPath)
+                {
+                    TryResolveLocalMedia(_streaming, resolved);
+                    return;
+                }
+            }
+
+            // CB-115: a cron-delivered picture whose transcript has already
+            // lost its directory — neither arm above could have resolved it,
+            // since it either shares its line with a caption (failing
+            // LocalMediaPathFrom's whole-trimmed-text rule) or carries no
+            // MEDIA: prefix at all (the delivery route strips both). Reusing
+            // TryResolveLiveImage rather than adding a fourth live-path arm:
+            // the real recovery — reading openclawAutomation.kind off the
+            // *actual* chat.history message, calling cron.runs, matching the
+            // basename — happens identically whether this page is fetched
+            // for the marker above or for this, inside
+            // OpenClawSessions.FetchHistoryPageAsync's turn-by-turn pass (see
+            // OpenClawCronRecovery's header for the full trigger). This check
+            // only decides whether asking is worth it at all — the same job
+            // the marker check above already does for its own case — so a
+            // reply that merely ends in something image-shaped costs one
+            // chat.history refetch and nothing more if it turns out not to be
+            // a recoverable cron picture.
+            if (OpenClawCronRecovery.CandidateBasenameFrom(text) is not null)
+            {
+                TryResolveLiveImage(_streaming);
             }
         }
 

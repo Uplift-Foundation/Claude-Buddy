@@ -11,6 +11,7 @@ using ClaudeBuddy;
 //
 //   dotnet run --project tools/openclaw-probe -- sessions
 //   dotnet run --project tools/openclaw-probe -- history <sessionKey> [limit] [offset]
+//   dotnet run --project tools/openclaw-probe -- cron-runs <jobId> [limit] [offset]
 //   dotnet run --project tools/openclaw-probe -- raw <method> [jsonParams]
 //
 // Read-only by construction: it never calls chat.send, and it requests whatever
@@ -77,6 +78,35 @@ try
             };
 
             var res = await gateway.RequestAsync("chat.history", parameters, CancellationToken.None);
+            Console.WriteLine(JsonSerializer.Serialize(res, pretty));
+            break;
+        }
+
+        // CB-115: cron.runs, which recovers a cron-delivered picture's real
+        // path once OpenClaw's delivery route has stripped it out of the
+        // transcript. `raw` already reaches this method, but a named
+        // subcommand is what makes a capture reproducible without retyping
+        // the jsonParams shape — the same reasoning `history` above exists
+        // for. Limit defaults higher than history's, on purpose: an earlier
+        // capture of this ticket's real job at limit:5 silently held only 4
+        // of its 35 real MEDIA: paths, and 60 is what actually captured all
+        // of them in one page (see OpenClawCronRecovery's header).
+        case "cron-runs":
+        {
+            if (args.Length < 2)
+            {
+                Console.Error.WriteLine("cron-runs needs a jobId");
+                return 1;
+            }
+
+            var parameters = new Dictionary<string, object>
+            {
+                ["jobId"] = args[1],
+                ["limit"] = args.Length > 2 ? int.Parse(args[2]) : 60,
+                ["offset"] = args.Length > 3 ? int.Parse(args[3]) : 0
+            };
+
+            var res = await gateway.RequestAsync("cron.runs", parameters, CancellationToken.None);
             Console.WriteLine(JsonSerializer.Serialize(res, pretty));
             break;
         }
