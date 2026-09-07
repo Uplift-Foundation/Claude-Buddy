@@ -645,3 +645,47 @@ nouns. `chatType` at the top level is a more reliable source for
 `gateway.tailscale.mode: "off"`. Neither affects this design, but the first
 suggests OpenClaw's own remote story is ssh-based, which is presumably where the
 plan's original assumption came from.
+
+## Non-goals — measured, and deliberately not chased
+
+Two categories of residue PR #168 left behind on purpose, re-measured here so
+the number stops drifting between mentions. Both are occurrence counts — a
+plain `grep -c` undercounts a line that repeats the value, so these are `grep
+-o | wc -l` — taken against a named ref rather than "the tree", which the
+second entry below shows matters just as much.
+
+**Home paths.** `/Users/user` still appears in the tree:
+
+| Ref | Files (any type) | Of which `.cs` | Occurrences |
+| --- | --- | --- | --- |
+| `933ffb9` | 11 | 8 | 28 |
+| `808119c` | 12 | 9 | 29 |
+
+It moved by one file and one occurrence across two merges in between — neither
+a scrub nor a regression, just ordinary development touching path examples.
+That drift is the argument for citing the ref alongside any count at all: a
+number with no ref attached is already stale by the time it's read, and three
+different figures for this exact residue have circulated for that reason.
+
+Not chased, and not going to be: a home path reveals a local account name, not
+a credential — it grants nothing on its own. It appears mostly in path examples
+that are useful documentation of real shapes (`workspace-<agent>/outputs/...`
+depths, for instance), and the repository's commit metadata already carries the
+author's real name and email on every commit, permanently — scrubbing it from
+path strings conceals nothing `git log` doesn't already disclose. Chasing it
+across a dozen files would churn far more diff than it protects.
+
+**Machine hostnames.** LAN hostnames of a private network, measured on
+`808119c`:
+
+| Hostname | Files | Occurrences |
+| --- | --- | --- |
+| `avatar.internal` | 6 | 9 |
+| `host-mbp` | 6 | 17 |
+| `host-mac-mini` | 2 | 7 |
+
+Same reasoning as the home paths: a LAN hostname is not a credential, it names
+a machine on a private network with no route to it from outside, and it is
+load-bearing in examples about peer discovery and multi-machine behaviour —
+including the mkcert issuer strings quoted earlier in this file. Left alone for
+the same cost/benefit reason.
