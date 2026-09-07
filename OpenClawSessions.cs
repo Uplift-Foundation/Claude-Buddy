@@ -1603,7 +1603,7 @@ namespace ClaudeBuddy
         // One agent messaging another arrives as a user turn with a machine
         // header glued to the front:
         //
-        //   [Inter-session message] sourceSession=agent:comfyui:discord:direct:2467…
+        //   [Inter-session message] sourceSession=agent:comfyui:discord:direct:1000…
         //   sourceChannel=discord sourceTool=sessions_send isUser=false <the actual message>
         //
         // Left as-is, a transcript in a multi-agent setup is mostly routing

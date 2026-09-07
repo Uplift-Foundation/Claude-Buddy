@@ -374,7 +374,7 @@ colliding with a local checkout of the same path — an OpenClaw session has no
 directory to collide with.
 
 Naming an orb: `origin.label` first, then `label`, then the agent name parsed out
-of `sessionKey`. The raw labels are workmanlike (`wtvamp user id:2467…`), so the
+of `sessionKey`. The raw labels are workmanlike (`some-user user id:1000…`), so the
 agent name plus surface (`alexis · discord`) may read better than either.
 
 ## A live turn: the state signal is the event stream, not the session list

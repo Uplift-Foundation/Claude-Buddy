@@ -80,7 +80,7 @@ namespace ClaudeBuddy
             }
 
             // The key's fourth segment carries the same word when origin is
-            // absent: "agent:main:discord:direct:2467…".
+            // absent: "agent:main:discord:direct:1000…".
             var type = string.IsNullOrWhiteSpace(chatType)
                 ? parts.Length >= 4 ? parts[3] : null
                 : chatType;
