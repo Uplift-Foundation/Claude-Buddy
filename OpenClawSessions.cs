@@ -1636,7 +1636,21 @@ namespace ClaudeBuddy
             _ => ""
         };
 
-        internal static List<HistoryTurn> TurnsFromHistory(JsonElement messages)
+        // sessionKey is whose conversation this page is — the gateway key, not
+        // this app's own "openclaw:" prefixed session id, though
+        // OpenClawMediaSource copes with either. It goes onto every picture
+        // route this builds, because the gateway resolves its media policy
+        // against the agent behind that key and answers a fetch that omits it
+        // against a default agent instead (CB-109, and see
+        // OpenClawMediaSource's header for the measurements).
+        //
+        // Passed in rather than read off anything here: this method is pure
+        // and takes a page of JSON, and the only thing that knows which
+        // session asked for that page is the caller that asked
+        // (FetchHistoryPageAsync, which has chat.GatewayKey in hand). Nullable
+        // so a fixture or a caller with genuinely no session gets exactly the
+        // routes this built before.
+        internal static List<HistoryTurn> TurnsFromHistory(JsonElement messages, string? sessionKey)
         {
             var turns = new List<HistoryTurn>();
 
@@ -1712,11 +1726,21 @@ namespace ClaudeBuddy
                         if (url is null && bytes is null) continue;
 
                         var ms2 = Num(message, "timestamp");
+
+                        // ImageSourcePath stays null here, deliberately and
+                        // explicitly. This `url` is the gateway's own — it
+                        // came out of the image block, not out of
+                        // AssistantMediaRoute — so there is no local path and
+                        // no media policy for a sessionKey to be resolved
+                        // against. Attaching an identity to it would claim
+                        // this is an assistant-media fetch when it is not, and
+                        // asking `&meta=1` about it later would be a wasted
+                        // round trip against a route that cannot answer.
                         turns.Add(new HistoryTurn(role, "", url, Str(block, "alt") ?? "",
                             ms2 <= 0
                                 ? DateTimeOffset.Now
                                 : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
-                            null, null, false, bytes));
+                            null, null, false, bytes, ImageSourcePath: null));
                     }
                 }
 
@@ -1817,11 +1841,19 @@ namespace ClaudeBuddy
                     // degrades to exactly today's appearance instead. Text
                     // beside a thumbnail is already what CB-88's MEDIA:
                     // pictures render as.
+                    // The route comes off the media value rather than being
+                    // concatenated here, so the sessionKey cannot be left off
+                    // one arm and remembered on the others — which is exactly
+                    // the class of bug CB-109 was, three call sites each
+                    // building the same string slightly differently. What goes
+                    // on the turn is the finished url plus the clean path
+                    // beside it; the builder itself is not stored anywhere.
+                    var media = new OpenClawMediaSource(source, sessionKey);
+
                     mirrorDrawn.Add((turns.Count, source));
                     turns.Add(new HistoryTurn(
-                        role, delivered,
-                        AssistantMediaRoute + Uri.EscapeDataString(source),
-                        delivered, at, speaker, colour, mine));
+                        role, delivered, media.Route,
+                        delivered, at, speaker, colour, mine, null, media.Path));
                     continue;
                 }
 
@@ -1859,10 +1891,14 @@ namespace ClaudeBuddy
                     // sets bytes on a turn that keeps its prose. So a fetch
                     // that cannot succeed degrades to exactly what this
                     // rendered before, rather than to an empty bubble.
-                    turns.Add(new HistoryTurn(role, text.Trim(),
-                        AssistantMediaRoute + Uri.EscapeDataString(named),
+                    // Same media value as the mirror arm above, and for the
+                    // same reason: one place builds the route, so one place
+                    // decides what identity goes on it.
+                    var namedMedia = new OpenClawMediaSource(named, sessionKey);
+
+                    turns.Add(new HistoryTurn(role, text.Trim(), namedMedia.Route,
                         named[(named.LastIndexOf('/') + 1)..],
-                        at, speaker, colour, mine));
+                        at, speaker, colour, mine, null, namedMedia.Path));
                     continue;
                 }
 
@@ -2123,10 +2159,25 @@ namespace ClaudeBuddy
         // resolves to on a host this process cannot see. `//host/a.png` is a
         // protocol-relative URL wearing a path's clothes.
         //
-        // The gateway's own allowlist is the control that actually matters
-        // here and these are defence in depth — but a client that sends a
-        // traversal and waits to be told no is a client asking the wrong
-        // question.
+        // These two checks used to be described here as defence in depth
+        // behind the gateway's own allowlist, which was the control that
+        // actually mattered. CB-109 measured that the other way round:
+        // supplying the asking session — which every fetch now does — does
+        // not narrow the allowlist to that agent's own folders, it switches
+        // the folder check off, and a path is then judged only on whether it
+        // exists and is an image. Owner signed that trust model off
+        // deliberately.
+        //
+        // So these are no longer the outer layer of two. They are the only
+        // structural guard left on this side, and the reason to keep them is
+        // no longer that they are cheap — it is that nothing else refuses a
+        // traversal at all. Do not remove them as redundant; they stopped
+        // being redundant when the session started travelling with the
+        // request.
+        //
+        // The original point still stands on its own terms: a client that
+        // sends a traversal and waits to be told no is a client asking the
+        // wrong question.
         private static bool LooksLikeAnImagePath(string text) =>
             (text.StartsWith('/') || text.StartsWith("~/", StringComparison.Ordinal))
             && !text.StartsWith("//", StringComparison.Ordinal)
@@ -2373,14 +2424,43 @@ namespace ClaudeBuddy
         // `{"available":false,"code":"outside-allowed-folders"}`, which is
         // what an agent's picture written into *another* agent's workspace
         // does (CB-90).
-        internal const string AssistantMediaRoute = "/__openclaw__/assistant-media?source=";
+        // The endpoint without any parameter, for *recognising* one of these
+        // urls rather than building one.
+        //
+        // Split out by CB-109 because the two jobs had been sharing one
+        // string: AssistantMediaRoute below ends in `?source=`, so a
+        // StartsWith against it is really a test that `source` is the first
+        // parameter. It is today, deliberately (see OpenClawMediaSource.Route
+        // for why), but that made parameter order silently load-bearing for
+        // something unrelated to parameter order — reorder the query and every
+        // CB-93 explanation vanishes, with no test failing and no picture
+        // visibly breaking, because the note is the only thing that depends on
+        // the recognition. This is what ShouldAskWhy gates on instead.
+        internal const string AssistantMediaPathPrefix = "/__openclaw__/assistant-media?";
+
+        // Composed from the prefix above rather than restated, but the
+        // composed *value* must stay exactly what it always was —
+        // OpenClawLocalMediaResolutionTests asserts the literal string.
+        internal const string AssistantMediaRoute = AssistantMediaPathPrefix + "source=";
 
         // Delegating rather than opening a second fetch path: FetchMediaAsync
         // already speaks this exact transport and keys a bounded cache by the
         // url it is handed, so routing through it means a picture scrolled
         // past twice is fetched once.
-        internal static Task<byte[]?> FetchLocalMediaAsync(string path, CancellationToken ct) =>
-            FetchMediaAsync(AssistantMediaRoute + Uri.EscapeDataString(path), ct);
+        //
+        // Takes the whole OpenClawMediaSource rather than a bare path, so the
+        // originating session travels with the file it belongs to (CB-109).
+        // A path on its own was the bug: the route it built asked the gateway
+        // about a file without saying whose conversation named it, and the
+        // gateway answered against a default agent's media policy instead.
+        //
+        // FetchMediaAsync's cache is keyed by the url, which now carries the
+        // sessionKey — so the same file asked about by two different agents is
+        // two cache entries. That is right rather than wasteful: the two
+        // requests can legitimately get different answers, which is the whole
+        // point of sending the key.
+        internal static Task<byte[]?> FetchLocalMediaAsync(OpenClawMediaSource source, CancellationToken ct) =>
+            FetchMediaAsync(source.Route, ct);
 
         internal static string Readable(string text) => Readable(text, out _);
 
@@ -2590,6 +2670,14 @@ namespace ClaudeBuddy
         // Cached by url: a transcript is re-read every time its panel opens, and
         // refetching a megabyte per image per open would be wasteful and slow
         // in exactly the moment the user is waiting to see something.
+        //
+        // By the *whole* url, which since CB-109 carries the asking session —
+        // so a cache entry can never serve bytes fetched under one session to
+        // a request made under another. That safety came free with the fix and
+        // keying this on the path instead would give it away: the cost of
+        // keeping it is two of the 24 entries below for a file referenced from
+        // two sessions, which is a fine price. This is the place the collapse
+        // looks tempting; it is a behaviour change, not a tidy-up.
         private static readonly Dictionary<string, byte[]?> Media = new(StringComparer.Ordinal);
 
         // Excluded from coverage: an HTTP GET against the gateway host.
@@ -2649,12 +2737,25 @@ namespace ClaudeBuddy
         // reason — asked with `&meta=1` on the same route rather than opened
         // as a second fetch path, so a refusal is one round trip and not two.
         //
-        // Cached by path rather than through Media above: a capability
-        // answer is JSON text, not a decoded picture, and Media's cache is
-        // keyed by url for values that are megabytes each — mixing the two
+        // Cached separately from Media above rather than through it: a
+        // capability answer is JSON text, not a decoded picture, and Media's
+        // cache is keyed for values that are megabytes each — mixing the two
         // would mean either caching a refusal as an empty byte array
         // (indistinguishable from "no image") or growing that cache's value
         // type for a return shape only this caller uses.
+        //
+        // Keyed by the meta *route* and not by the path (CB-109), which is the
+        // same rule Media above now lives by and for the same reason: the whole
+        // premise of sending a session is that the answer depends on who asked.
+        // A path-keyed cache would hand the second asker the first asker's
+        // answer, and since a refusal is the thing being cached, this fix would
+        // appear not to work at all on the second panel opened.
+        //
+        // The temptation to collapse the key to the path is real — the same
+        // file referenced from two sessions costs two of the 24 entries — and
+        // it should be resisted rather than engineered around. Two entries is
+        // a fine price for an answer that cannot be attributed to the wrong
+        // asker, and no machinery is warranted here.
         private static readonly Dictionary<string, string> MediaMeta = new(StringComparer.Ordinal);
 
         // Excluded from coverage: an HTTP GET against the gateway host, the
@@ -2662,11 +2763,23 @@ namespace ClaudeBuddy
         // reason. The decisions that matter — which route to ask, and what
         // the answer means — live in OpenClawMediaRefusal, which is covered.
         [ExcludeFromCodeCoverage]
-        public static async Task<string?> FetchLocalMediaMetaAsync(string path, CancellationToken ct)
+        // requestUrl is the fully-formed url whose *bytes* were just asked
+        // for and refused — not a path, and not something to rebuild. The meta
+        // flag is appended to that exact string, so the explanation is asked
+        // with the identity the fetch used. An explanation asked with a
+        // different identity than the fetch does not fail: it lies, which is
+        // worse than the silence CB-93 set out to remove. Before CB-109 that
+        // was not hypothetical — the meta call sent no session at all, so once
+        // a fetch with a session succeeds an identity-less explanation would
+        // have described a refusal that never happened.
+        public static async Task<string?> FetchLocalMediaMetaAsync(
+            string requestUrl, CancellationToken ct)
         {
+            var route = OpenClawMediaSource.MetaOf(requestUrl);
+
             lock (Gate)
             {
-                if (MediaMeta.TryGetValue(path, out var cached)) return cached;
+                if (MediaMeta.TryGetValue(route, out var cached)) return cached;
             }
 
             var host = ClaudeBuddySettings.OpenClawHost;
@@ -2680,7 +2793,7 @@ namespace ClaudeBuddy
                 var pinned = ClaudeBuddySettings.OpenClawFingerprint;
 
                 var bytes = await OpenClawSocket.GetAsync(
-                    host, ClaudeBuddySettings.OpenClawPort, OpenClawMediaRefusal.MetaRoute(path), token!,
+                    host, ClaudeBuddySettings.OpenClawPort, route, token!,
                     string.IsNullOrEmpty(pinned) ? null : pinned, ct);
 
                 if (bytes is { Length: > 0 }) json = Encoding.UTF8.GetString(bytes);
@@ -2703,7 +2816,7 @@ namespace ClaudeBuddy
                 // "not now" would.
                 if (string.IsNullOrEmpty(json)) return null;
 
-                MediaMeta[path] = json;
+                MediaMeta[route] = json;
 
                 const int Keep = 24;
                 while (MediaMeta.Count > Keep)
@@ -2826,7 +2939,11 @@ namespace ClaudeBuddy
                     return null;
                 }
 
-                var turns = TurnsFromHistory(messages);
+                // The same key the request above was made with. The page's
+                // pictures are fetched over a separate HTTP route that has to
+                // be told whose conversation they belong to (CB-109), and
+                // this is the one place that knows.
+                var turns = TurnsFromHistory(messages, chat.GatewayKey);
                 // The message count, not the turn count: it is what the next
                 // page's offset is measured in, and one message can produce
                 // several turns or none.

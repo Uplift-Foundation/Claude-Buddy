@@ -29,9 +29,20 @@ public class OpenClawLocalMediaResolutionTests : IDisposable
         return (Dictionary<string, byte[]?>)field.GetValue(null)!;
     }
 
-    // The route the code under test is expected to build for a path.
-    private static string RouteFor(string path) =>
-        OpenClawSessions.AssistantMediaRoute + Uri.EscapeDataString(path);
+    // The gateway key the session below is built with, spelled out here
+    // because CB-109 made it part of every route this file seeds: the live
+    // path sends the originating session with the file it is asking about, so
+    // a seed against the bare path-only route is no longer the route the code
+    // under test asks for. AnAgentsOwnSessionIsSentWithTheFetch below is the
+    // case that pins that directly.
+    private const string GatewayKey = "agent:main:main";
+
+    // The source the code under test is expected to build for a path — the
+    // file *and* whose conversation named it.
+    private static OpenClawMediaSource SourceFor(string path) => new(path, GatewayKey);
+
+    // The route it is expected to build out of that.
+    private static string RouteFor(string path) => SourceFor(path).Route;
 
     private void Seed(string path, byte[]? bytes)
     {
@@ -83,7 +94,7 @@ public class OpenClawLocalMediaResolutionTests : IDisposable
     [Fact]
     public async Task ABareFullPathAlsoResolves()
     {
-        const string path = "/Users/user/.openclaw/media/bare.png";
+        const string path = "/Users/w/.openclaw/media/bare.png";
         Seed(path, Pixel());
 
         var session = Session();
@@ -98,12 +109,13 @@ public class OpenClawLocalMediaResolutionTests : IDisposable
     [Fact]
     public async Task ThePathIsPercentEncodedIntoTheRoute()
     {
-        const string path = "/Users/user/.openclaw/media/a drop ünicode.png";
+        const string path = "/Users/w/.openclaw/media/a drop ünicode.png";
         Seed(path, Pixel());
 
         Assert.Contains("%20", RouteFor(path));
 
-        var bytes = await OpenClawSessions.FetchLocalMediaAsync(path, CancellationToken.None);
+        var bytes = await OpenClawSessions.FetchLocalMediaAsync(
+            SourceFor(path), CancellationToken.None);
         Assert.Equal(Pixel(), bytes);
     }
 
@@ -142,7 +154,7 @@ public class OpenClawLocalMediaResolutionTests : IDisposable
     [Fact]
     public async Task ASecondSnapshotStillCarryingTheMarkerDoesNotFetchAgain()
     {
-        const string path = "/Users/user/.openclaw/media/once.png";
+        const string path = "/Users/w/.openclaw/media/once.png";
         Seed(path, Pixel());
 
         var session = Session();
@@ -190,7 +202,7 @@ public class OpenClawLocalMediaResolutionTests : IDisposable
     {
         var session = Session();
         session.OnAgentEvent("agent", AgentText(
-            "MEDIA:/Users/user/.openclaw/media/never-seeded.png"));
+            "MEDIA:/Users/w/.openclaw/media/never-seeded.png"));
         await Task.Delay(50);
 
         Assert.Null(session.History[0].ImageBytes);
@@ -202,8 +214,48 @@ public class OpenClawLocalMediaResolutionTests : IDisposable
     public async Task FetchLocalMediaReturnsNullRatherThanThrowingWhenNothingAnswers()
     {
         var bytes = await OpenClawSessions.FetchLocalMediaAsync(
-            "/Users/user/.openclaw/media/nothing-here.png", CancellationToken.None);
+            new OpenClawMediaSource("/Users/w/.openclaw/media/nothing-here.png", null),
+            CancellationToken.None);
 
         Assert.Null(bytes);
+    }
+
+    // ---- CB-109: the identity actually goes out with the request ---------
+    //
+    // The same cache seam this whole file is built on, used as a negative:
+    // seed the route the app used to build — path only, no session — and the
+    // live path must *not* find it, because the route it now asks for carries
+    // the session key. If someone drops the identity again, this is the test
+    // that goes red, and it goes red for the right reason: the fetch asked a
+    // different question from the one that was answered.
+    //
+    // Worth having as well as OpenClawMediaSourceTests' string assertions,
+    // because those prove the route is built correctly and this proves it is
+    // the route the session actually reaches for.
+    [Fact]
+    public async Task AnAgentsOwnSessionIsSentWithTheFetch()
+    {
+        const string path = "/Users/w/.openclaw/media/identity.png";
+
+        var bare = OpenClawSessions.AssistantMediaRoute + Uri.EscapeDataString(path);
+        _seeded.Add(bare);
+        MediaCache()[bare] = Pixel();
+
+        var session = Session();
+        session.OnAgentEvent("agent", AgentText("MEDIA:" + path));
+        await Task.Delay(50);
+
+        Assert.Null(session.History[0].ImageBytes);
+
+        // And with the session-bearing route seeded, the same marker resolves
+        // — so the miss above is about the identity and not about the path.
+        Seed(path, Pixel());
+
+        var second = Session();
+        second.OnAgentEvent("agent", AgentText("MEDIA:" + path));
+
+        Assert.Equal(Pixel(), await WaitForBytes(second));
+        Assert.Contains("sessionKey=", RouteFor(path));
+        Assert.DoesNotContain("agentId", RouteFor(path));
     }
 }

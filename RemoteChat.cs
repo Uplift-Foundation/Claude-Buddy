@@ -88,6 +88,35 @@ namespace ClaudeBuddy
 
         public string ImageAlt { get; set; } = "";
 
+        // The file behind ImageUrl, for the OpenClaw case (CB-109).
+        //
+        // Null on a turn with no picture at all, and on a picture that did not
+        // come from the assistant-media route — an image block carrying its
+        // own url, a local CLI's inline bytes. It is **never** null on a turn
+        // whose ImageUrl *is* an assistant-media request: both producers set
+        // the two together, and TurnView.LoadImage's null check is a refusal
+        // to caption a note with a guess rather than a media case to handle.
+        // Do not read this nullability as a picture scenario needing a
+        // fallback; there isn't one.
+        //
+        // A plain string on purpose. This model is deliberately
+        // transport-agnostic — it does not know what a gateway is, which is
+        // what lets a Codex transcript and a room merge share it — so the
+        // structured request lives in OpenClawMediaSource, is used where the
+        // url is built, and is not stored here. What a turn needs afterwards
+        // is not the request: it is the readable path for the tooltip on a
+        // refusal, which is the same category of value ImageAlt above already
+        // holds, only whole rather than reduced to a basename.
+        //
+        // Set by whoever built ImageUrl, which is the point: before CB-109 the
+        // panel had nothing but the url and had to unescape the path back out
+        // of it, and the one place that knew the answer had thrown it away.
+        //
+        // Plain rather than notifying on its own, like ImageNoteDetail below:
+        // it is always set immediately *before* ImageUrl, whose Raise() is
+        // what tells the row to look again.
+        public string? ImageSourcePath { get; set; }
+
         private string? _imageNote;
 
         // Why a picture that should have shown didn't — CB-93. Set once a

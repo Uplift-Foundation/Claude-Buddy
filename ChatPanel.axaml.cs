@@ -2838,6 +2838,11 @@ namespace ClaudeBuddy
             {
                 if (string.IsNullOrEmpty(_turn.ImageUrl)) return;
 
+                // Fetched verbatim. Since CB-109 the url is a fully-formed
+                // request — path, session and agent — built where the turn was
+                // built, by whoever knew which session it belonged to. This
+                // row reconstructs nothing and has no business knowing what is
+                // in it.
                 var url = _turn.ImageUrl!;
                 var bytes = await OpenClawSessions.FetchMediaAsync(url, CancellationToken.None);
                 if (bytes is { Length: > 0 })
@@ -2853,12 +2858,27 @@ namespace ClaudeBuddy
                 // this exact row with nothing in it and no explanation.
                 if (!OpenClawMediaRefusal.ShouldAskWhy(bytes, url)) return;
 
-                // Never null here: ShouldAskWhy already confirmed url starts
-                // with AssistantMediaRoute, which is the one thing
-                // PathFromUrl checks before unescaping the rest.
-                var path = OpenClawMediaRefusal.PathFromUrl(url)!;
+                // The path is read, never recovered. CB-93 had to unescape it
+                // back out of the url because a ChatTurn carried nothing else;
+                // it is now set alongside ImageUrl by both producers
+                // (TurnsFromHistory's arms, TryResolveLocalMedia), so there is
+                // nothing left to reverse.
+                //
+                // A null here means an assistant-media url arrived on a turn
+                // whose path was not set with it, which no producer does. The
+                // note is skipped rather than captioned with a guess — the
+                // whole point of CB-93 is that a wrong reason is worse than
+                // none — and ATurnWithNoSourcePathIsNeverAskedWhy pins it.
+                var path = _turn.ImageSourcePath;
+                if (path is null) return;
 
-                var json = await OpenClawSessions.FetchLocalMediaMetaAsync(path, CancellationToken.None);
+                // Asked against the very url that just failed, plus the flag.
+                // An explanation asked with a different identity than the
+                // fetch does not fail — it *lies*, which is worse than the
+                // silence CB-93 set out to remove. Before CB-109 the meta call
+                // sent no session at all, which was harmless only because the
+                // fetch didn't either.
+                var json = await OpenClawSessions.FetchLocalMediaMetaAsync(url, CancellationToken.None);
                 _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path);
                 _turn.ImageNote = OpenClawMediaRefusal.Explain(json);
             }

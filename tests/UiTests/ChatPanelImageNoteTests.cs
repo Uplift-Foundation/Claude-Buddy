@@ -146,6 +146,228 @@ public class ChatPanelImageNoteTests : IDisposable
         Assert.False(block!.IsVisible);
     }
 
+    // ---- CB-109: the row reads the structured source, not the url -------
+    //
+    // Seeded through FetchMediaAsync's own url-keyed cache, the same seam
+    // ChatPanelMarkdownTests uses to drive the decode path without a socket
+    // ever opening.
+    private static void SeedMediaCache(string url, byte[]? bytes)
+    {
+        var field = typeof(OpenClawSessions).GetField(
+            "Media", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        ((Dictionary<string, byte[]?>)field.GetValue(null)!)[url] = bytes;
+    }
+
+    private static byte[] Pixel() => Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==");
+
+    // The url is fetched verbatim. Since CB-109 it is a fully-formed request
+    // carrying the asking session, built where the turn was built; the row
+    // reconstructs nothing and must not strip or rebuild any part of it.
+    //
+    // Proven by seeding only the identity-bearing url and, separately,
+    // checking that the same picture behind the *bare* path-only url is not
+    // found — a row that rebuilt the request from ImageSourcePath, or trimmed
+    // the query, would draw the second one.
+    [AvaloniaFact]
+    public async Task TheFullyFormedUrlIsFetchedVerbatim()
+    {
+        var path = "/Users/w/.openclaw/workspace-sample-agent/outputs/" + Guid.NewGuid() + ".png";
+        var source = new OpenClawMediaSource(path, "agent:comfyui:discord:direct:100000000000000001");
+
+        Assert.Contains("&sessionKey=", source.Route, StringComparison.Ordinal);
+        SeedMediaCache(source.Route, Pixel());
+
+        var turn = new ChatTurn
+        {
+            Role = ChatRole.Assistant,
+            Text = "here you go",
+            IsComplete = true,
+            ImageSourcePath = path,
+            ImageUrl = source.Route
+        };
+
+        var fake = NewFake(new[] { turn });
+        ChatPanel.OpenFor(NewOrb(), fake);
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Avalonia.Controls.Image? picture = null;
+
+        for (var i = 0; i < 40; i++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+
+            picture = panel.GetVisualDescendants().OfType<Avalonia.Controls.Image>()
+                .FirstOrDefault(im => im.Width == 228);
+            if (picture?.Source is not null) break;
+            await Task.Delay(10);
+        }
+
+        Assert.NotNull(picture);
+        Assert.NotNull(picture!.Source);
+
+        // Nothing succeeded, so nothing explained itself.
+        Assert.Null(turn.ImageNote);
+    }
+
+    // The other half of that: a row whose url carries the session finds
+    // nothing when only the identity-free url has bytes behind it. This is
+    // what would fail if anybody reintroduced the pre-CB-109 request shape at
+    // the fetch, or "simplified" LoadImage into rebuilding one from the path.
+    [AvaloniaFact]
+    public async Task ThePathOnlyUrlIsNotWhatGetsFetched()
+    {
+        var path = "/Users/w/.openclaw/media/" + Guid.NewGuid() + ".png";
+        var source = new OpenClawMediaSource(path, "agent:comfyui:discord:direct:1");
+
+        SeedMediaCache(OpenClawSessions.AssistantMediaRoute + Uri.EscapeDataString(path), Pixel());
+
+        var turn = new ChatTurn
+        {
+            Role = ChatRole.Assistant,
+            Text = "MEDIA:" + path,
+            IsComplete = true,
+            ImageSourcePath = path,
+            ImageUrl = source.Route
+        };
+
+        var fake = NewFake(new[] { turn });
+        ChatPanel.OpenFor(NewOrb(), fake);
+
+        for (var i = 0; i < 20; i++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+            await Task.Delay(10);
+        }
+
+        var panel = ChatPanelTestAccess.Instance!;
+        Assert.Null(panel.GetVisualDescendants().OfType<Avalonia.Controls.Image>()
+            .FirstOrDefault(im => im.Width == 228)?.Source);
+    }
+
+    // And when the fetch comes back empty, the note's tooltip carries the
+    // path off the structured source. CB-93 had to unescape that path back
+    // out of the url because a ChatTurn carried nothing else; the tooltip is
+    // where that recovered string was visible, so it is where reading it from
+    // the right place is worth asserting.
+    //
+    // No gateway is configured in this suite, so FetchLocalMediaMetaAsync
+    // reaches its own host/token guard and answers null without a socket —
+    // which is Explain's honest "couldn't ask" line and Detail's path-alone
+    // tooltip. That is the assertion: the path, unmangled, with none of the
+    // route's escaping left on it.
+    [AvaloniaFact]
+    public async Task ARefusedPicturesTooltipIsThePathFromTheSource()
+    {
+        // Deliberately awkward, so a path recovered by unescaping a url would
+        // still pass and a path recovered wrongly would not.
+        var path = "/Users/w/.openclaw/media/a drop & 100% " + Guid.NewGuid() + ".png";
+
+        var source = new OpenClawMediaSource(path, "agent:comfyui:discord:direct:1");
+        SeedMediaCache(source.Route, Array.Empty<byte>());
+
+        var turn = new ChatTurn
+        {
+            Role = ChatRole.Assistant,
+            Text = "MEDIA:" + path,
+            IsComplete = true,
+            ImageSourcePath = path,
+            ImageUrl = source.Route
+        };
+
+        var fake = NewFake(new[] { turn });
+        ChatPanel.OpenFor(NewOrb(), fake);
+
+        for (var i = 0; i < 40 && turn.ImageNote is null; i++)
+        {
+            Flush();
+            await Task.Delay(10);
+        }
+
+        Flush();
+
+        Assert.Equal("Picture not shown — couldn't ask the gateway why.", turn.ImageNote);
+        Assert.Equal(path, turn.ImageNoteDetail);
+
+        var block = NoteTextBlockIn(ChatPanelTestAccess.Instance!);
+        Assert.NotNull(block);
+        Assert.True(block!.IsVisible);
+        Assert.Equal(path, ToolTip.GetTip(block));
+    }
+
+    // An assistant-media url arriving on a turn whose path was not set with
+    // it. No producer does that — both set the two together — so this is the
+    // refusal to caption a note with a guess rather than a media case with a
+    // fallback. ShouldAskWhy says yes here (it recognises the url); it is
+    // LoadImage's own null-path check that declines, and the whole point of
+    // CB-93 is that a wrong reason is worse than none.
+    [AvaloniaFact]
+    public async Task ATurnWithNoSourcePathIsNeverAskedWhy()
+    {
+        var url = OpenClawSessions.AssistantMediaRoute
+            + Uri.EscapeDataString("/Users/w/.openclaw/media/" + Guid.NewGuid() + ".png");
+
+        SeedMediaCache(url, Array.Empty<byte>());
+
+        var turn = new ChatTurn
+        {
+            Role = ChatRole.Assistant,
+            Text = "an attachment with no path recorded",
+            IsComplete = true,
+            ImageUrl = url
+        };
+
+        var fake = NewFake(new[] { turn });
+        ChatPanel.OpenFor(NewOrb(), fake);
+
+        for (var i = 0; i < 10; i++)
+        {
+            Flush();
+            await Task.Delay(10);
+        }
+
+        Assert.Null(turn.ImageNote);
+        Assert.Null(turn.ImageNoteDetail);
+
+        var block = NoteTextBlockIn(ChatPanelTestAccess.Instance!);
+        Assert.NotNull(block);
+        Assert.False(block!.IsVisible);
+    }
+
+    // And a url from somewhere with no `&meta=1` variant at all — an inbound
+    // attachment — is not asked either, which is the guard ShouldAskWhy
+    // itself still carries.
+    [AvaloniaFact]
+    public async Task AnOrdinaryAttachmentUrlIsNeverAskedWhy()
+    {
+        var url = "/__openclaw__/inbound?source=" + Guid.NewGuid();
+        SeedMediaCache(url, Array.Empty<byte>());
+
+        var turn = new ChatTurn
+        {
+            Role = ChatRole.User,
+            Text = "a photo someone sent",
+            IsComplete = true,
+            ImageUrl = url,
+            ImageSourcePath = "/inbound/whatever.png"
+        };
+
+        var fake = NewFake(new[] { turn });
+        ChatPanel.OpenFor(NewOrb(), fake);
+
+        for (var i = 0; i < 10; i++)
+        {
+            Flush();
+            await Task.Delay(10);
+        }
+
+        Assert.Null(turn.ImageNote);
+    }
+
     [AvaloniaFact]
     public void ImageNoteDetailReachesTheTooltip()
     {

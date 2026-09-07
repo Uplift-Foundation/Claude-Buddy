@@ -51,56 +51,33 @@ public class OpenClawMediaRefusalTests
         Assert.False(OpenClawMediaRefusal.ShouldAskWhy(null, null));
     }
 
-    // ---- MetaRoute --------------------------------------------------------
-
+    // The one that matters after CB-109, and the reason this guard was moved
+    // off AssistantMediaRoute onto AssistantMediaPathPrefix.
+    //
+    // A real request now carries a second parameter. The guard has to
+    // recognise it, and has to keep doing so if the query is ever reordered —
+    // because the failure mode is not a broken picture or a red test, it is
+    // every refusal note in the app silently ceasing to appear. One line here
+    // catches that whole class.
     [Fact]
-    public void MetaRouteAppendsTheMetaFlag()
+    public void AFullyFormedRequestCarryingASessionStillAsksWhy()
     {
-        Assert.EndsWith("&meta=1", OpenClawMediaRefusal.MetaRoute("/a/b.png"), StringComparison.Ordinal);
+        var url = new OpenClawMediaSource(
+            "/Users/w/.openclaw/workspace-sample-agent/outputs/sample_40.png",
+            "agent:comfyui:discord:direct:100000000000000001").Route;
+
+        Assert.Contains("&sessionKey=", url, StringComparison.Ordinal);
+        Assert.True(OpenClawMediaRefusal.ShouldAskWhy(Array.Empty<byte>(), url));
     }
 
+    // And the meta url built from it is still recognised as one of these
+    // routes, since it is the same string with a flag on the end.
     [Fact]
-    public void MetaRoutePercentEncodesASpace()
+    public void TheMetaUrlOfAFullyFormedRequestIsStillRecognised()
     {
-        var route = OpenClawMediaRefusal.MetaRoute("/a drop/b.png");
-        Assert.Contains("%20", route, StringComparison.Ordinal);
-    }
+        var source = new OpenClawMediaSource("/a/b.png", "agent:quill:discord:channel:9");
 
-    [Fact]
-    public void MetaRoutePercentEncodesAHash()
-    {
-        var route = OpenClawMediaRefusal.MetaRoute("/a#b.png");
-        Assert.Contains("%23", route, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void MetaRouteStartsWithTheAssistantMediaRoute()
-    {
-        var route = OpenClawMediaRefusal.MetaRoute("/a/b.png");
-        Assert.StartsWith(OpenClawSessions.AssistantMediaRoute, route, StringComparison.Ordinal);
-    }
-
-    // ---- PathFromUrl --------------------------------------------------------
-
-    [Fact]
-    public void PathFromUrlRecoversAnEscapedPath()
-    {
-        const string path = "/a drop/b.png";
-        var url = OpenClawSessions.AssistantMediaRoute + Uri.EscapeDataString(path);
-
-        Assert.Equal(path, OpenClawMediaRefusal.PathFromUrl(url));
-    }
-
-    [Fact]
-    public void PathFromUrlIsNullForAUrlOutsideTheRoute()
-    {
-        Assert.Null(OpenClawMediaRefusal.PathFromUrl("/__openclaw__/inbound?source=x"));
-    }
-
-    [Fact]
-    public void PathFromUrlIsNullForANullUrl()
-    {
-        Assert.Null(OpenClawMediaRefusal.PathFromUrl(null));
+        Assert.True(OpenClawMediaRefusal.ShouldAskWhy(null, source.MetaRoute));
     }
 
     // ---- Explain ------------------------------------------------------------

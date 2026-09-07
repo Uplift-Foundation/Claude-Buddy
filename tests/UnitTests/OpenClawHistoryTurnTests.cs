@@ -25,8 +25,13 @@ public class OpenClawHistoryTurnTests
     private static JsonElement Messages(string json) =>
         JsonDocument.Parse(json).RootElement;
 
+    // No session key, deliberately: these cases are about what the parser
+    // reads out of a page, and a null key makes the picture routes come out
+    // byte-identical to what this file asserted before CB-109 threaded the
+    // originating session through them. The threading itself is covered where
+    // it belongs, in OpenClawMediaSourceTests.
     private static System.Collections.Generic.List<HistoryTurn> Turns(string json) =>
-        OpenClawSessions.TurnsFromHistory(Messages(json));
+        OpenClawSessions.TurnsFromHistory(Messages(json), null);
 
     // ---- the two role shapes --------------------------------------------
 
