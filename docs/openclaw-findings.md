@@ -127,6 +127,17 @@ moment the gateway moved to another address.
 
 Both fingerprints are kept above because the *variability* is the finding.
 
+**Correcting PR #168's scrub claim.** That PR's description said "no credential,
+token, key or fingerprint was found anywhere in the tree." Read next to this
+section, that is too wide: the two sha256 fingerprints just above are exactly
+what the phrase says isn't here. They are not the mistake — a certificate
+fingerprint is public key material, the value you pin *against*, not a value
+that grants access on its own; publishing one is how pinning gets verified, not
+a leak. What the scrub actually found and removed was **secrets** — an account
+id, message text, filenames tied to a real conversation — and the claim should
+have said that, not the broader word "fingerprint." Nothing here was rescrubbed
+as a result; the fingerprints stay, on purpose, for the reason two paragraphs up.
+
 **Method note:** an earlier round of these probes used `timeout 10 openssl …`.
 macOS has no `timeout`, so those commands never ran and their empty output read
 as "no TLS handshake". Two conclusions were briefly drawn from that and both
