@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
@@ -533,5 +534,93 @@ public class ChatPanelImageNoteTests : IDisposable
         Flush();
 
         Assert.Equal("Picture not shown — couldn't ask the gateway why.", turn.ImageNote);
+    }
+
+    // ---- CB-120: a cross-arm merge must carry the mirror's confidence too -
+    //
+    // TurnsFromHistory can match one delivered picture with both the
+    // delivery-mirror arm (always High — the gateway's own word that it
+    // delivered something) and the named-path arm (Low when the agent's own
+    // message is ordinary prose with no MEDIA: line and no automation tag).
+    // CB-98 collapses the pair into the named turn's bubble, because that is
+    // the one carrying the agent's prose — but before this fix it kept the
+    // named turn's own, weaker Confidence along with its text, so a
+    // gateway-confirmed delivery landed in the Low tier and lost CB-116's
+    // explanation the moment its fetch failed.
+    //
+    // Same silence template as ALowConfidenceCandidateStaysSilentOnAFailedFetch
+    // above, built through TurnsFromHistory itself rather than a hand-built
+    // ChatTurn: a merged (was-Low, now-High) turn and a genuinely Low-only
+    // turn on the *same* history page, both cache entries seeded empty so
+    // both fail identically. Asserting the merged turn's note *before* the
+    // Low-only turn's absence is what makes that absence meaningful rather
+    // than an accident of the panel never having looked.
+    [AvaloniaFact]
+    public async Task ACrossArmMergedTurnKeepsItsNoteEvenThoughTheNamedTurnAloneWouldHaveBeenSilent()
+    {
+        var mergedFile = Guid.NewGuid() + ".png";
+        var lowOnlyFile = Guid.NewGuid() + ".png";
+
+        // One delivery named by the agent's own path (Low on its own — no
+        // MEDIA: line, no openclawAutomation) and mirrored by the gateway
+        // (always High); a second, unrelated turn that is genuinely Low with
+        // nothing to raise it. Exactly the fixture
+        // OpenClawNamedPictureOnHistoryTests.
+        // AFileDrawnByBothArmsKeepsHighConfidenceEvenThoughTheNamedTurnAloneWouldBeLow
+        // proves at the pure level; this is the same page carried through to
+        // what the panel actually shows.
+        var historyTurns = OpenClawSessions.TurnsFromHistory(JsonDocument.Parse($$"""
+        [{"role":"assistant","content":[{"type":"text","text":"~/.openclaw/media/browser/{{mergedFile}}"}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"{{mergedFile}}"}]},
+         {"role":"assistant","content":"I deleted {{lowOnlyFile}}"}]
+        """).RootElement, null);
+
+        Assert.Equal(2, historyTurns.Count);
+
+        var mergedHistoryTurn = historyTurns.Single(t => t.Text.Contains("browser"));
+        var lowOnlyHistoryTurn = historyTurns.Single(t => t.Text.Contains("I deleted"));
+
+        Assert.Equal(MediaConfidence.High, mergedHistoryTurn.Confidence);
+        Assert.Equal(MediaConfidence.Low, lowOnlyHistoryTurn.Confidence);
+
+        // The same shape OpenClawChatSession.SetHistory builds a ChatTurn
+        // with — Confidence travels with the turn TurnsFromHistory already
+        // decided it for, never re-derived here.
+        static ChatTurn ToChatTurn(HistoryTurn t) => new()
+        {
+            Role = t.Role,
+            Text = t.Text,
+            ImageSourcePath = t.ImageSourcePath,
+            Confidence = t.Confidence,
+            ImageUrl = t.ImageUrl,
+            ImageAlt = t.ImageAlt,
+            At = t.At,
+            IsComplete = true
+        };
+
+        var mergedTurn = ToChatTurn(mergedHistoryTurn);
+        var lowOnlyTurn = ToChatTurn(lowOnlyHistoryTurn);
+
+        SeedMediaCache(mergedTurn.ImageUrl!, Array.Empty<byte>());
+        SeedMediaCache(lowOnlyTurn.ImageUrl!, Array.Empty<byte>());
+
+        var fake = NewFake(new[] { mergedTurn, lowOnlyTurn });
+        ChatPanel.OpenFor(NewOrb(), fake);
+
+        for (var i = 0; i < 40 && mergedTurn.ImageNote is null; i++)
+        {
+            Flush();
+            await Task.Delay(10);
+        }
+
+        Flush();
+
+        // The sibling proves the machinery ran at all...
+        Assert.Equal("Picture not shown — couldn't ask the gateway why.", mergedTurn.ImageNote);
+
+        // ...which is what makes this absence meaningful rather than vacuous.
+        Assert.Null(lowOnlyTurn.ImageNote);
+        Assert.Null(lowOnlyTurn.ImageNoteDetail);
     }
 }
