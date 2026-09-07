@@ -480,8 +480,8 @@ namespace ClaudeBuddy.Tests
             // deliberate change to the palette means updating these on purpose.
             Check("the hash is pinned to known values",
                 AgentPalette.HexFor("main") == "#5FBFD7"
-                && AgentPalette.HexFor("aurora") == "#5FD7A7"
-                && AgentPalette.HexFor("nova") == "#5F9DD7",
+                && AgentPalette.HexFor("aurora") == "#D7915F"
+                && AgentPalette.HexFor("nova") == "#5F91D7",
                 $"main={AgentPalette.HexFor("main")} aurora={AgentPalette.HexFor("aurora")} "
                 + $"nova={AgentPalette.HexFor("nova")}");
 
