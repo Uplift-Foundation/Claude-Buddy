@@ -302,32 +302,6 @@ per-method scopes in `dist/method-scopes-*.js` — but the two are peers: the
 table can't prove your credential lacks admin, your probe can't prove the
 requirement survives the next release.
 
-**Name the range you audited, and whether it was per-commit or net.** A PR is
-audited against the base it merges into, not against your own commit's parent —
-and net-zero across a range is not the same as never present, because a scrub
-committed *on top of* an introduction cancels it in the net diff while both
-commits stay in history:
-
-```bash
-for c in $(git rev-list upstream/develop..HEAD); do
-  tools/audit-diff.sh $c | grep "^+" | grep -i "<pattern>"  # code
-  git log -1 --format=%B $c | grep -i "<pattern>"           # message
-done
-```
-
-`tools/audit-diff.sh` is `git show` with one extra check: it refuses a commit
-with two or more parents instead of silently handing back the empty diff
-`git show <merge-sha>` returns, which examines nothing and looks exactly like
-a clean pass. That trap has bitten three times in this project in one
-evening, once against someone who had written this very rule down an hour
-earlier — use the wrapper rather than a bare `git show` for any per-commit
-audit.
-
-Better still, **prefer un-stacking over remembering you're stacked**: while a
-branch sits on someone else's unmerged commit, "my added lines" and "this PR's
-diff" are different ranges. Rebasing onto merged `develop` collapses them and
-the audit is right by construction. A structural fix beats a discipline.
-
 **A confident negative ends the inquiry, so it earns more suspicion than a
 confident error.** "We can't test that from here" and "I already scrubbed that"
 were both false and both stopped anyone looking again; a wrong positive gets
@@ -342,6 +316,60 @@ what *else* knows about this — not whether your evidence is sound.
 child element.** `$xml.assembly.errors` in CB-119's guard silently resolved to
 an object array, so the check read healthy against a report that said
 `errors="1"`. Use `GetAttribute()` / `SelectNodes()`.
+
+**Naming a real value is necessary in a non-goal record and gratuitous in a
+report.** A non-goal nobody can check against is a shrug, not a decision — so
+"we are deliberately not chasing X, measured at N on ref R" has to name X. A
+body reporting a finding needs only the category — "a home path", "a
+four-digit id prefix" — because the value adds nothing a reader can act on.
+
+## Auditing a diff: range, scope, and refusals
+
+**Name the range you audited, and whether it was per-commit or net.** A PR is
+audited against the base it merges into, not against your own commit's parent —
+and net-zero across a range is not the same as never present, because a scrub
+committed *on top of* an introduction cancels it in the net diff while both
+commits stay in history:
+
+```bash
+for c in $(git rev-list upstream/develop..HEAD); do
+  tools/audit-diff.sh $c | grep "^+" | grep -i "<pattern>"  # code
+  git log -1 --format=%B $c | grep -i "<pattern>"           # message
+done
+```
+
+**Name the file you checked, not just the pattern, counter and ref — three of
+four looks exactly like four.** A check with the right pattern, the right
+counter (`grep -io`, not `grep -c`) and the right ref, run against the wrong
+file, returns a clean zero that reads exactly like a refutation. It happened
+twice while this section's own hostname counts were being confirmed:
+querying `CLAUDE.md`/`AGENTS.md` for them returns 0 in both, because the
+record lives in `docs/openclaw-findings.md`, not the convention files.
+
+**Audit the commit message before you commit, not the PR body after you
+push.** Reading a body back is a step someone remembers to do; nobody
+re-reads a commit message once it exists. The reflex of quoting a scrubbed
+value while explaining that it was scrubbed has needed correcting in a PR
+body three times in this project, and landed uncorrected in a merged commit
+message once — where it can't be fixed without a history rewrite.
+
+`tools/audit-diff.sh` is `git show` with one extra check: it refuses a commit
+with two or more parents instead of silently handing back the empty diff
+`git show <merge-sha>` returns, which examines nothing and looks exactly like
+a clean pass. That trap has bitten three times in this project in one
+evening, once against someone who had written this very rule down an hour
+earlier — use the wrapper rather than a bare `git show` for any per-commit
+audit. **And treat its refusal as a refusal, not a zero:** a wrapper that
+pipes the tool's error into a counter turns a correct refusal into `0 hits`,
+which is what happened the first time this wrapper caught an
+accidentally-amended merge commit — the guard worked and the harness
+discarded the signal. Fail loudly on a refusal; "no output" is not "no
+problem."
+
+Better still, **prefer un-stacking over remembering you're stacked**: while a
+branch sits on someone else's unmerged commit, "my added lines" and "this PR's
+diff" are different ranges. Rebasing onto merged `develop` collapses them and
+the audit is right by construction. A structural fix beats a discipline.
 
 ## Commits
 
@@ -429,15 +457,21 @@ where the change happens to live:
   automatically.
 
 A change to geometry, transcript parsing or orb initials extends the three
-Also run `dotnet test tests/UiTests -c Release` before pushing. `dotnet test`
-defaults to Debug and CI builds Release, and Release is not just faster code — it
+Also run `dotnet test tests/UiTests -c Release` before pushing, and run
+CB-119's guard on the report it writes (`tools/check-xunit-report.ps1` —
+see `.github/workflows/ci.yml`) rather than trusting `dotnet test`'s own exit
+code: it fired three times unnoticed during CB-120's work alone, each time a
+test count one short with zero failures, because the guard only ran in CI.
+`dotnet test` defaults to Debug and CI builds Release, and Release is not just faster code — it
 reorders a parallel suite and tightens the gaps between writes to a scratch
 directory. CB-3 landed six SessionScanTests green in Debug and red in Release on
 both CI legs, every attempt. The other suites have been clean in both; it is the
 UI one, with a dispatcher and real timers and process-wide statics, that is worth
 the extra half-minute. A test that passes in one configuration and not the other
 gets made independent of what else is running — never a sleep, never a widened
-tolerance.
+tolerance. That advice is only for a flake that *fails*; a flake that silently
+drops the test count has nothing to chase until CB-119's guard turns it back
+into an ordinary failure.
 
 Remember the three console suites too — `dotnet test tests/Tests.sln` does not run them. CI runs
 every suite on both runners, so a test that only passes on your machine blocks
