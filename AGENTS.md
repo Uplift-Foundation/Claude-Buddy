@@ -457,6 +457,11 @@ where the change happens to live:
   automatically.
 
 A change to geometry, transcript parsing or orb initials extends the three
+console suites too — `dotnet test tests/Tests.sln` does not run them, and CI
+failing on `ArrangementTests` after a green `dotnet test` is a bad way to find
+that out. CI runs every suite on both runners, so a test that only passes on
+the machine you wrote it on blocks the build.
+
 Also run `dotnet test tests/UiTests -c Release` before pushing, and run
 CB-119's guard on the report it writes (`tools/check-xunit-report.ps1` —
 see `.github/workflows/ci.yml`) rather than trusting `dotnet test`'s own exit
