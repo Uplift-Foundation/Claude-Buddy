@@ -121,7 +121,12 @@ public class OpenClawMediaRefusalTests
         var line = OpenClawMediaRefusal.Explain(
             "{\"available\":false,\"code\":\"some-other-code\",\"reason\":\"not on this host\"}");
 
-        Assert.Equal("Picture not shown — the gateway refused it: not on this host", line);
+        // CB-108: an unmapped code no longer says "refused" — that word
+        // asserts a permission decision the gateway may not actually have
+        // made, and this code isn't in the table this file's Explain
+        // consults first.
+        Assert.Equal("Picture not shown — the gateway wouldn't serve it: not on this host", line);
+        Assert.DoesNotContain("refused", line, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -129,7 +134,8 @@ public class OpenClawMediaRefusalTests
     {
         var line = OpenClawMediaRefusal.Explain("{\"available\":false,\"code\":\"nope\"}");
 
-        Assert.Equal("Picture not shown — the gateway refused it (nope).", line);
+        Assert.Equal("Picture not shown — the gateway wouldn't serve it (nope).", line);
+        Assert.DoesNotContain("refused", line, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -137,7 +143,8 @@ public class OpenClawMediaRefusalTests
     {
         var line = OpenClawMediaRefusal.Explain("{\"available\":false}");
 
-        Assert.Equal("Picture not shown — the gateway refused it.", line);
+        Assert.Equal("Picture not shown — the gateway wouldn't serve it.", line);
+        Assert.DoesNotContain("refused", line, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -165,7 +172,7 @@ public class OpenClawMediaRefusalTests
     {
         var line = OpenClawMediaRefusal.Explain("{\"code\":\"nope\"}");
 
-        Assert.Equal("Picture not shown — the gateway refused it (nope).", line);
+        Assert.Equal("Picture not shown — the gateway wouldn't serve it (nope).", line);
     }
 
     [Fact]
@@ -173,7 +180,7 @@ public class OpenClawMediaRefusalTests
     {
         var line = OpenClawMediaRefusal.Explain("{\"available\":false,\"code\":\"nope\",\"reason\":\"   \"}");
 
-        Assert.Equal("Picture not shown — the gateway refused it (nope).", line);
+        Assert.Equal("Picture not shown — the gateway wouldn't serve it (nope).", line);
     }
 
     [Fact]
@@ -183,7 +190,7 @@ public class OpenClawMediaRefusalTests
         // the wrong JSON kind should read as "no code" rather than throw.
         var line = OpenClawMediaRefusal.Explain("{\"available\":false,\"code\":123}");
 
-        Assert.Equal("Picture not shown — the gateway refused it.", line);
+        Assert.Equal("Picture not shown — the gateway wouldn't serve it.", line);
     }
 
     [Fact]
@@ -193,7 +200,7 @@ public class OpenClawMediaRefusalTests
         var line = OpenClawMediaRefusal.Explain(
             $"{{\"available\":false,\"code\":\"nope\",\"reason\":\"{reason}\"}}");
 
-        Assert.Equal("Picture not shown — the gateway refused it: " + new string('x', 200), line);
+        Assert.Equal("Picture not shown — the gateway wouldn't serve it: " + new string('x', 200), line);
     }
 
     [Fact]
@@ -202,7 +209,61 @@ public class OpenClawMediaRefusalTests
         var line = OpenClawMediaRefusal.Explain(
             "{\"available\":false,\"code\":\"nope\",\"somethingElse\":123,\"nested\":{\"a\":1}}");
 
-        Assert.Equal("Picture not shown — the gateway refused it (nope).", line);
+        Assert.Equal("Picture not shown — the gateway wouldn't serve it (nope).", line);
+    }
+
+    // ---- CB-108: per-code sentences, one row per table entry -----------------
+    //
+    // "outside-allowed-folders" and "available:true" already have cases above
+    // (OutsideAllowedFoldersGetsTheActionableRemedy, AvailableTrueSaysTheFetch-
+    // DidNotFinish) and are untouched by this ticket — it only widens the set
+    // of codes with their own sentence and neutralizes the fallback. Every
+    // code below was measured against a real gateway; a code that hasn't been
+    // seen live is deliberately left off the table and falls through to the
+    // neutral generic arm instead of a guessed sentence (covered above by
+    // AnyOtherCodeWithAReasonReportsTheReason and its neighbors). The negative
+    // "refused" assertion is the regression guard: the bug this ticket fixes
+    // was a fall-through to a "refused" sentence for codes that are not
+    // permission decisions, so a test that only checked the new string would
+    // still pass against the broken build.
+
+    [Fact]
+    public void FileNotFoundGetsItsOwnSentence()
+    {
+        // Measured: OpenClawSessions.ResolveLocalMediaPath's bare-filename
+        // guess (~/.openclaw/media/<basename>) is allowlisted, so every
+        // wrong guess lands here — this was the most common wrong wording.
+        var line = OpenClawMediaRefusal.Explain(
+            "{\"available\":false,\"code\":\"file-not-found\",\"reason\":\"File not found\"}");
+
+        Assert.Equal("Picture not shown — the gateway couldn't find that file.", line);
+        Assert.DoesNotContain("refused", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NotAFileGetsItsOwnSentence()
+    {
+        // Measured.
+        var line = OpenClawMediaRefusal.Explain(
+            "{\"available\":false,\"code\":\"not-a-file\",\"reason\":\"Not a file\"}");
+
+        Assert.Equal("Picture not shown — that path isn't a file.", line);
+        Assert.DoesNotContain("refused", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnsupportedMediaTypeGetsItsOwnSentence()
+    {
+        // Measured — this is the gateway's own body, verbatim, for
+        // /etc/passwd with a session supplied: it clears the folder check
+        // and is turned away for not being an image. Note the reason is
+        // "Not an image" and not a restatement of the code, which is why
+        // the sentence here comes from the table rather than from `reason`.
+        var line = OpenClawMediaRefusal.Explain(
+            "{\"available\":false,\"code\":\"unsupported-media-type\",\"reason\":\"Not an image\"}");
+
+        Assert.Equal("Picture not shown — that file isn't a picture this app can show.", line);
+        Assert.DoesNotContain("refused", line, StringComparison.Ordinal);
     }
 
     // ---- Detail (tooltip) ----------------------------------------------------

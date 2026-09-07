@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json;
 
 namespace ClaudeBuddy
@@ -59,6 +60,30 @@ namespace ClaudeBuddy
         // or two at the note's own small font size.
         private const int MaxReasonLength = 200;
 
+        // CB-108: the gateway's codes for a media fetch that didn't come
+        // back with bytes, most of which are not permission decisions at
+        // all — a missing file and a refused folder are different problems
+        // and read wrong when both come out as "refused". Kept as data
+        // rather than a stack of `if`s off `code` because the shape of
+        // "one code, one sentence" is exactly what OpenClawMediaRefusalTests
+        // walks row for row: adding a code here is adding a row there, with
+        // nothing else in this method to touch.
+        //
+        // Every code below (like outside-allowed-folders, handled separately
+        // below because it alone carries a remedy) was measured against a
+        // real gateway — none of these sentences is a guess. A code that
+        // hasn't been seen live is deliberately left off this table rather
+        // than mapped from the gateway's handler source: it falls through to
+        // the neutral generic arm below, which is exactly what that arm is
+        // for, instead of this file inventing a specific sentence it can't
+        // back up.
+        private static readonly Dictionary<string, string> CodeSentences = new(StringComparer.Ordinal)
+        {
+            ["file-not-found"] = "the gateway couldn't find that file.",
+            ["not-a-file"] = "that path isn't a file.",
+            ["unsupported-media-type"] = "that file isn't a picture this app can show.",
+        };
+
         // The gateway's meta answer, as one sentence. json is the raw HTTP
         // body — null when the meta request itself never got an answer
         // (gateway down, no token, TLS refused), which gets the honest "don't
@@ -81,15 +106,25 @@ namespace ClaudeBuddy
                     + "write it to ~/.openclaw/media/, which is allowed for every agent.";
             }
 
+            if (code is not null && CodeSentences.TryGetValue(code, out var sentence))
+                return Prefix + sentence;
+
+            // Below here the code (if any) isn't one this app has a specific
+            // sentence for. "Refused" used to be the word for all of these,
+            // but it asserts a permission decision — the gateway saying no
+            // on purpose — and most unmapped codes are not that: a bug in
+            // this app's own path-guessing, a stale attachment, a file that
+            // moved. "Wouldn't serve it" is true regardless of why, which a
+            // word this app can't back up for an unknown code should be.
             if (!string.IsNullOrEmpty(reason))
             {
                 var trimmed = reason!.Length > MaxReasonLength ? reason[..MaxReasonLength] : reason;
-                return Prefix + "the gateway refused it: " + trimmed;
+                return Prefix + "the gateway wouldn't serve it: " + trimmed;
             }
 
             return string.IsNullOrEmpty(code)
-                ? Prefix + "the gateway refused it."
-                : Prefix + $"the gateway refused it ({code}).";
+                ? Prefix + "the gateway wouldn't serve it."
+                : Prefix + $"the gateway wouldn't serve it ({code}).";
         }
 
         // The tooltip on that line: the path the agent named, plus the
