@@ -331,7 +331,11 @@ namespace ClaudeBuddy
         // which is answered with InvalidOperationException("Looping animations
         // must not use the Run method."). Fire-and-forget meant the throw never
         // reached the dispatcher; it landed in the crash log as an unobserved
-        // task exception, seven times over four days.
+        // task exception — twenty-two entries across twelve separate runs of the
+        // app on the machine this was written against, counted on 7 Sep 2026,
+        // and still arriving while the fix was being reviewed. The count is
+        // dated because it only ever grows: every ring that enters the danger
+        // band leaves another one behind.
         //
         // The comment this replaces claimed the visible cost was a ring that
         // never moved. It was not, and the difference is worth writing down
