@@ -285,6 +285,55 @@ rather than assuming:
   the canonical repo `upstream`. Older branches still track the fork; don't add
   to them.
 
+## Reading the code: never from this clone
+
+**The checkout you are probably standing in is not `develop`.**
+`/Users/user/Source/Claude-Buddy` is Owner's own working clone and is
+routinely parked on an in-progress branch — so a file read from it describes
+*that branch's* behaviour, and whoever reads it goes on to describe that as
+current. Read from the ref you actually mean:
+
+```bash
+git show upstream/develop:OpenClawSessions.cs    # a one-off check
+git worktree add /tmp/wt upstream/develop        # several files
+```
+
+And **don't switch this clone's branch to make reading convenient.** It holds
+uncommitted work that isn't yours; an agent did exactly that once and had it
+reverted within the hour.
+
+This is not hypothetical and it was not cheap. CB-109 was planned for hours
+against `LocalMediaPathFrom` as read from this clone, which was sitting on
+CB-107's branch — so the plan described a parser arm `develop` does not have,
+and the corpus it measured was selected by a rule the app does not use. The
+gateway measurements survived, being real requests against a real server; every
+statement about *what the app does today* had to be withdrawn.
+
+**That failure has a general shape worth recognising by sight: a claim
+inheriting confidence from evidence about something adjacent.** Across
+CB-93/108/109/112/115 in one evening it appeared six times, committed by three
+different agents:
+
+| the claim | what the evidence was actually about |
+| --- | --- |
+| "the same file" | a byte count from a different file in a sibling directory |
+| "the gateway is gone, a restart won't fix it" | one hung request, plus another agent's stale process table |
+| "this is what the app does today" | source read from a feature branch |
+| "these turns name a picture" | a reimplementation of the parser's rule, not the rule |
+| "harvesting recovers most of them" | files existing on disk, not the transcript saying where |
+| "no client-side fix exists" | the transcript alone, never asking what else the gateway knew |
+
+Each time the evidence was real and about the wrong thing. The remedy was always
+the same — re-derive from the authoritative source rather than the convenient
+one: `git show <ref>:<path>` rather than the working tree, the running gateway
+rather than a remembered `pgrep`, the parser itself rather than a paraphrase of
+it, and the producer's own record rather than whatever survived delivery.
+
+Two habits follow. **Re-measure before reporting, especially service state** —
+one of the six reached the user as "your infrastructure is dead, shall I operate
+on it", and was wrong. And **retract in the channel the claim travelled**: that
+same one had already propagated to a second agent before it was withdrawn.
+
 ## Commits
 
 Messages here are prose, not changelog lines: a short summary in the
