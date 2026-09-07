@@ -44,9 +44,9 @@ namespace ClaudeBuddy.Tests
 
             // All three dashes, spaced or not. Spaced already worked; unspaced
             // did not.
-            new("dashes",         "Aurora — wtvamp",  true,  "Lw"),
-            new("dashes",         "Aurora—wtvamp",    true,  "Lw"),
-            new("dashes",         "Aurora–wtvamp",    true,  "Lw"),
+            new("dashes",         "Aurora — wtvamp",  true,  "Aw"),
+            new("dashes",         "Aurora—wtvamp",    true,  "Aw"),
+            new("dashes",         "Aurora–wtvamp",    true,  "Aw"),
 
             // A separator that leads or repeats contributes no word of its own.
             new("empty words",    "-leading",           true,  "Le"),
@@ -100,7 +100,7 @@ namespace ClaudeBuddy.Tests
             new("claude-buddy",    "CB"),
             new("Ada Lovelace",    "AL"),
             new("Annabel Lee",     "AL"),
-            new("Aurora",        "LI"),
+            new("Aurora",        "AU"),
             new("my_cool_project", "MC"),
             new("x",               "X"),
             new("",                ""),
