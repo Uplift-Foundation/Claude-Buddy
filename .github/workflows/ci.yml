@@ -86,12 +86,48 @@ jobs:
       # here too: a genuinely broken test fails identically on every
       # attempt, retried or not, so this can only mask a flake that no
       # longer exists, never a real regression.
+      #
+      # CB-119: the retry loop above used to trust `dotnet test`'s own exit
+      # code, and that is exactly what a short run defeats. An [AvaloniaFact]
+      # in [Collection("Settings")] occasionally passes and then throws
+      # InvalidOperationException out of its *cleanup*
+      # (Avalonia.Headless.HeadlessUnitTestSession.EnsureIsolatedApplication);
+      # xUnit v3 records that as an assembly ERROR, not a test failure, which
+      # REPLACES the test's own result — so the report's `errors` attribute
+      # goes to 1, the total test count drops by one, and `dotnet test`
+      # still exits 0. Two runs out of 28 instrumented did exactly this,
+      # unnoticed, because nothing printed it. tools/check-xunit-report.ps1
+      # is the fix: it reads the plain xUnit report (`--report-xunit`, kept
+      # alongside the existing `--report-xunit-trx` because the TRX schema
+      # has no per-error name to print) and is now the thing this loop's
+      # `break` actually depends on — not `dotnet test`'s exit code alone.
+      # `--minimum-expected-tests` is a second, independent belt from the
+      # test host itself; the floor is set BELOW the real total (1010 on
+      # 4d2c87f — PR #172 will raise it to 1013) on purpose, so this doesn't
+      # need editing every time the suite grows by a test or two. Bump it
+      # only as a deliberate edit when the real total moves meaningfully,
+      # never to make a red run pass.
+      #
+      # All filename options use space-separated `--flag value`, not
+      # `--flag=value`: the MTP CLI parser mis-consumes arguments when two or
+      # more `--report-*-filename=...` options appear together in the `=`
+      # form (confirmed locally — each works alone with `=`, combining two
+      # does not), so `=` is avoided here entirely rather than relied on for
+      # some flags and not others.
       - name: UI tests (xUnit, headless)
         shell: pwsh
         run: |
+          # Real total on 4d2c87f is 1010 (1013 once #172 merges) — set below
+          # that so the suite can grow without touching this file; see the
+          # step comment above for what this is a belt against.
+          $minimumExpectedTests = 1005
           for ($attempt = 1; $attempt -le 3; $attempt++) {
-            dotnet test tests/UiTests -c Release -- --report-xunit-trx --report-xunit-trx-filename=ui-tests.trx
-            if ($LASTEXITCODE -eq 0) { break }
+            dotnet test tests/UiTests -c Release -- --report-xunit --report-xunit-filename ui-tests.xunit.xml --report-xunit-trx --report-xunit-trx-filename ui-tests.trx --minimum-expected-tests $minimumExpectedTests
+            $testExitCode = $LASTEXITCODE
+            $reportPath = "tests/UiTests/bin/Release/net10.0/${{ matrix.rid }}/TestResults/ui-tests.xunit.xml"
+            & ./tools/check-xunit-report.ps1 -ReportPath $reportPath -SuiteName "UiTests" -MinimumExpectedTests $minimumExpectedTests -Attempt $attempt -MaxAttempts 3
+            $guardExitCode = $LASTEXITCODE
+            if ($testExitCode -eq 0 -and $guardExitCode -eq 0) { break }
             Write-Host "UI tests failed on attempt $attempt of 3"
             if ($attempt -eq 3) {
               # Copy the report BEFORE giving up. It used to be copied only after
@@ -117,12 +153,27 @@ jobs:
       # own csproj comment) was specifically to fix that race, not just
       # paper over it. Same trx/copy dance as UI tests above, same retry
       # loop for the same not-yet-Windows-CI-proven reason.
+      #
+      # CB-119: this step's shape matches "UI tests" above exactly — same
+      # 3-attempt retry, same trx-copy-before-giving-up — so it gets the same
+      # treatment for the same reason: a test-case-cleanup race here would be
+      # just as invisible as it is in that suite. See that step's comment for
+      # the full explanation of why `dotnet test`'s own exit code can't be
+      # trusted alone and why the filename options are space-separated.
       - name: UI screenshots
         shell: pwsh
         run: |
+          # Real total on 4d2c87f is 105 — set below that so the suite can
+          # grow without touching this file; see the "UI tests" step above
+          # for what this is a belt against.
+          $minimumExpectedTests = 100
           for ($attempt = 1; $attempt -le 3; $attempt++) {
-            dotnet test tests/UiScreenshots -c Release -- --report-xunit-trx --report-xunit-trx-filename=ui-screenshots.trx
-            if ($LASTEXITCODE -eq 0) { break }
+            dotnet test tests/UiScreenshots -c Release -- --report-xunit --report-xunit-filename ui-screenshots.xunit.xml --report-xunit-trx --report-xunit-trx-filename ui-screenshots.trx --minimum-expected-tests $minimumExpectedTests
+            $testExitCode = $LASTEXITCODE
+            $reportPath = "tests/UiScreenshots/bin/Release/net10.0/${{ matrix.rid }}/TestResults/ui-screenshots.xunit.xml"
+            & ./tools/check-xunit-report.ps1 -ReportPath $reportPath -SuiteName "UiScreenshots" -MinimumExpectedTests $minimumExpectedTests -Attempt $attempt -MaxAttempts 3
+            $guardExitCode = $LASTEXITCODE
+            if ($testExitCode -eq 0 -and $guardExitCode -eq 0) { break }
             Write-Host "UI screenshots failed on attempt $attempt of 3"
             if ($attempt -eq 3) {
               # Copy the report BEFORE giving up. It used to be copied only after

@@ -350,10 +350,18 @@ commits stay in history:
 
 ```bash
 for c in $(git rev-list upstream/develop..HEAD); do
-  git show $c | grep "^+" | grep -i "<pattern>"    # code
-  git log -1 --format=%B $c | grep -i "<pattern>"  # message
+  tools/audit-diff.sh $c | grep "^+" | grep -i "<pattern>"  # code
+  git log -1 --format=%B $c | grep -i "<pattern>"           # message
 done
 ```
+
+`tools/audit-diff.sh` is `git show` with one extra check: it refuses a commit
+with two or more parents instead of silently handing back the empty diff
+`git show <merge-sha>` returns, which examines nothing and looks exactly like
+a clean pass. That trap has bitten three times in this project in one
+evening, once against someone who had written this very rule down an hour
+earlier — use the wrapper rather than a bare `git show` for any per-commit
+audit.
 
 Better still, **prefer un-stacking over remembering you're stacked**: while a
 branch sits on someone else's unmerged commit, "my added lines" and "this PR's
