@@ -100,7 +100,7 @@ public class OpenClawCronRecoveryTests
     public void ARootedPathOnItsOwnTrailingLineIsTheCandidateByItsBasename()
     {
         var text = "here you go\n"
-                 + "/Users/user/.openclaw/workspace-agent-two/outputs/"
+                 + "/Users/sample/.openclaw/workspace-agent-two/outputs/"
                  + "poster/poster_barn_porch_10000002.png";
 
         Assert.Equal(

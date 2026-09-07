@@ -378,6 +378,11 @@ the whole world. **Rigour inside a wrong frame produces confident error, and it
 arrives with receipts.** When a conclusion says something is impossible, ask
 what *else* knows about this — not whether your evidence is sound.
 
+**In `pwsh`, a bare property path can't tell an XML attribute from a same-named
+child element.** `$xml.assembly.errors` in CB-119's guard silently resolved to
+an object array, so the check read healthy against a report that said
+`errors="1"`. Use `GetAttribute()` / `SelectNodes()`.
+
 ## Commits
 
 Messages here are prose, not changelog lines: a short summary in the
