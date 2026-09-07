@@ -289,98 +289,86 @@ rather than assuming:
 
 **The checkout you are probably standing in is not `develop`.**
 `/Users/user/Source/Claude-Buddy` is Owner's own working clone and is
-routinely parked on an in-progress branch — so a file read from it describes
-*that branch's* behaviour, and whoever reads it goes on to describe that as
-current. Read from the ref you actually mean:
+routinely parked on an in-progress branch, so a file read from it describes
+*that branch's* behaviour — and whoever reads it goes on to describe that as
+current. Read from the ref you mean:
 
 ```bash
 git show upstream/develop:OpenClawSessions.cs    # a one-off check
 git worktree add /tmp/wt upstream/develop        # several files
 ```
 
-And **don't switch this clone's branch to make reading convenient.** It holds
-uncommitted work that isn't yours; an agent did exactly that once and had it
-reverted within the hour.
+**Don't switch this clone's branch to make reading convenient.** It holds
+uncommitted work that isn't yours; an agent did that once and had it reverted
+within the hour.
 
-This is not hypothetical and it was not cheap. CB-109 was planned for hours
-against `LocalMediaPathFrom` as read from this clone, which was sitting on
-CB-107's branch — so the plan described a parser arm `develop` does not have,
-and the corpus it measured was selected by a rule the app does not use. The
-gateway measurements survived, being real requests against a real server; every
-statement about *what the app does today* had to be withdrawn.
+CB-109 paid for this: it was planned for hours against `LocalMediaPathFrom` as
+read from this clone, which was sitting on CB-107's branch, so the plan
+described a parser arm `develop` does not have. Everything measured against the
+live gateway survived; every statement about *what the app does today* had to be
+withdrawn.
 
-**That failure has a general shape worth recognising by sight: a claim
-inheriting confidence from evidence about something adjacent.** Across
-CB-93/108/109/112/115 in one evening it appeared six times, committed by three
-different agents:
+## Claims, and the checks that are worth their cost
+
+The failure above has a general shape, and it appeared six times in one evening
+across CB-93/108/109/112/115/116, from three different agents: **a claim
+inheriting confidence from evidence about something adjacent.**
 
 | the claim | what the evidence was actually about |
 | --- | --- |
 | "the same file" | a byte count from a different file in a sibling directory |
 | "the gateway is gone, a restart won't fix it" | one hung request, plus another agent's stale process table |
 | "this is what the app does today" | source read from a feature branch |
-| "these turns name a picture" | a reimplementation of the parser's rule, not the rule |
+| "these turns name a picture" | a paraphrase of the parser's rule, not the rule |
 | "harvesting recovers most of them" | files existing on disk, not the transcript saying where |
 | "no client-side fix exists" | the transcript alone, never asking what else the gateway knew |
 
-Each time the evidence was real and about the wrong thing. The remedy was always
-the same — re-derive from the authoritative source rather than the convenient
-one: `git show <ref>:<path>` rather than the working tree, the running gateway
-rather than a remembered `pgrep`, the parser itself rather than a paraphrase of
-it, and the producer's own record rather than whatever survived delivery.
+Each time the evidence was real and about the wrong thing. Four checks that cost
+seconds and each of which has already cost hours by being skipped:
 
-Two habits follow. **Re-measure before reporting, especially service state** —
-one of the six reached the user as "your infrastructure is dead, shall I operate
-on it", and was wrong. And **retract in the channel the claim travelled**: that
-same one had already propagated to a second agent before it was withdrawn.
+**Don't reimplement the rule you're measuring — run it.** "Names a picture" got
+paraphrased as "contains an image-extension token" where the rule is "the
+*trailing* token is one" — wrong in both directions at once. The parsers here are
+pure and cheap to call, precisely so nobody has to paraphrase them. Related:
+"a message mentioning a `.png`" and "a picture turn" are different counts.
 
-**And don't reimplement the rule you're measuring — run it.** One of the six was
-a restatement of `LocalMediaPathFrom`'s rule that drifted from it: "names a
-picture" was approximated as "contains a token with an image extension", where
-the actual rule is "the *trailing* token is one". The paraphrase counted three
-turns that the parser would never have offered a candidate for, and missed that
-the three real ones carried rooted paths. A plausible paraphrase of a rule is far
-easier to get wrong than a file read, and the parsers here are pure and cheap to
-call precisely so you don't have to guess.
+**Pair every positive result with a negative control that would have failed if
+your setup were wrong.** `cron.runs → data` alongside `tasks.flows → missing
+scope: operator.admin`, on one token, is what makes "this works at read scope" a
+measurement rather than a hope. Without the paired refusal you cannot tell it
+from *I happen to be over-privileged*, which nearly invalidated two tickets.
+**Prefer a declaration where the system publishes one** — the gateway states
+per-method scopes in `dist/method-scopes-*.js` — but the two are peers: the
+table can't prove your credential lacks admin, your probe can't prove the
+requirement survives the next release.
 
-**When a result depends on holding a particular privilege, assert in the same
-breath that a method requiring *more* privilege refuses.** One token,
-`cron.runs → data` alongside `tasks.flows → missing scope: operator.admin`,
-turns "I have the right credential" from an assumption into a control. Without
-the paired refusal a passing call cannot distinguish *this works at read scope*
-from *I happen to be over-privileged* — and that exact confound nearly
-invalidated two tickets in one evening, because a probe run with a
-gateway-owner token proves nothing about what the app can do. It generalises
-past scopes: **any time a measurement's validity rests on a property of the
-environment, measure that property in the same run rather than assuming it.**
+**Name the range you audited, and whether it was per-commit or net.** A PR is
+audited against the base it merges into, not against your own commit's parent —
+and net-zero across a range is not the same as never present, because a scrub
+committed *on top of* an introduction cancels it in the net diff while both
+commits stay in history:
 
-Prefer a **declaration** to an observation where the system publishes one — the
-gateway states its per-method scopes in `dist/method-scopes-*.js`, and that
-tells you what a method demands of *anyone*, where a probe only tells you it
-did not refuse *you*. The two are complementary rather than redundant, and
-neither is sufficient alone: the table cannot prove your credential lacks
-admin, and your probe cannot prove the requirement won't change in the next
-release.
+```bash
+for c in $(git rev-list upstream/develop..HEAD); do
+  git show $c | grep "^+" | grep -i "<pattern>"    # code
+  git log -1 --format=%B $c | grep -i "<pattern>"  # message
+done
+```
 
-**The sixth instance is different from the other five, and it is the dangerous
-one.** The other five were caught by checking the evidence harder. That one was
-not — it *evaded* that check. Three agents were rigorous about where each claim's
-evidence came from, every claim was correctly sourced to the chat transcript,
-correctly labelled and correctly caveated, and the conclusion — "these pictures
-cannot be fixed from the client" — was still wrong, because nobody asked whether
-the transcript was the whole world. It was not: the path the transcript had lost
-was sitting in the cron run record all along, reachable over an RPC this app
-already speaks (CB-115).
+Better still, **prefer un-stacking over remembering you're stacked**: while a
+branch sits on someone else's unmerged commit, "my added lines" and "this PR's
+diff" are different ranges. Rebasing onto merged `develop` collapses them and
+the audit is right by construction. A structural fix beats a discipline.
 
-So: **rigour inside a wrong frame produces confident error, and that is worse
-than sloppiness because it arrives with receipts.** Provenance discipline
-validates that a claim is well-sourced. It cannot tell you the source was the
-whole source. When a conclusion says something is impossible, the question to
-ask is not "is my evidence sound" but "what else knows about this?" — the
-gateway, the producer, the run record, another client that manages it already.
-Owner's own objection was the check that broke the frame here, and no amount of
-internal rigour would have produced it.
-
+**A confident negative ends the inquiry, so it earns more suspicion than a
+confident error.** "We can't test that from here" and "I already scrubbed that"
+were both false and both stopped anyone looking again; a wrong positive gets
+contradicted by the next measurement. The sixth row above is the dangerous
+version of this: every claim was correctly sourced and correctly caveated, and
+the conclusion was still wrong because nobody asked whether the transcript was
+the whole world. **Rigour inside a wrong frame produces confident error, and it
+arrives with receipts.** When a conclusion says something is impossible, ask
+what *else* knows about this — not whether your evidence is sound.
 
 ## Commits
 
