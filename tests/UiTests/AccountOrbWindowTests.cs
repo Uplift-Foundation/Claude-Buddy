@@ -1,5 +1,14 @@
 using System;
+using System.Linq;
+using Avalonia;
+using Avalonia.Animation;
+using Avalonia.Animation.Easings;
+using Avalonia.Data;
+using Avalonia.Diagnostics;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Styling;
+using Avalonia.Threading;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -311,5 +320,270 @@ public class AccountOrbWindowTests
         var second = orb.CurrentThoughtBubble;
 
         Assert.NotSame(first, second);
+    }
+
+    // --- breathing ---------------------------------------------------------
+    // A ring in the danger band pulses. It used to do so through
+    // Animation.RunAsync on an IterationCount.Infinite animation, which Avalonia
+    // answers with InvalidOperationException("Looping animations must not use
+    // the Run method.") — a looping animation is *applied* by a style, never
+    // run. Fire-and-forget, so the throw reached only
+    // ~/Library/Logs/ClaudeBuddy/crash.log, as an unobserved task exception,
+    // seven times over four days.
+    //
+    // The *decision* — which readings breathe, and which rings must be left
+    // strictly alone — is not tested here at all. It lives in
+    // UsageRingGeometry.BreathChangeFor, with a case per outcome in
+    // tests/UnitTests, for the same reason OrbArrangement and OrbGlyph do. What
+    // is left for this file is the half that needs a window: that the class
+    // actually lands on the right Path through a real UpdateFrom, and that
+    // Avalonia's own styling really hands the arc's opacity to an animation
+    // when it does.
+    //
+    // What no test here can see is the pulse *advancing*. Avalonia's headless
+    // clock never moves, so a breathing arc sits on its first frame however long
+    // you pump the render timer — measured over 1.2 seconds of real time — and
+    // the clock cannot be replaced either: both IClock and ClockBase are
+    // internal to Avalonia 12.1.1, so a test cannot supply one it can step. That
+    // the ring visibly breathes, and stops, was measured instead by running the
+    // real window on a real compositor; see AccountOrbWindow.axaml, which also
+    // records the part that measurement corrected. Nothing below covers it.
+
+    [AvaloniaFact]
+    public void ARingEnteringTheDangerBandBreathes()
+    {
+        var orb = new AccountOrbWindow("k");
+
+        orb.UpdateFrom(Usage(session: 20, weekly: 90), Now);
+
+        // Only the ring that earned it. Two rings breathing out of phase on one
+        // orb is noise, and the calm one has nothing to say.
+        Assert.True(orb.WeeklyIsBreathing);
+        Assert.False(orb.SessionIsBreathing);
+    }
+
+    // The boundary itself, on both sides. DangerAtPercent is 85 and the rule is
+    // >=, so 85 breathes and 84.9 does not — the same off-by-one the ring's
+    // colour already has a case for.
+    [AvaloniaTheory]
+    [InlineData(84.9, false)]
+    [InlineData(85, true)]
+    [InlineData(100, true)]
+    public void BreathingStartsWhereTheDangerBandDoes(double weekly, bool expected)
+    {
+        var orb = new AccountOrbWindow("k");
+
+        orb.UpdateFrom(Usage(weekly: weekly), Now);
+
+        Assert.Equal(expected, orb.WeeklyIsBreathing);
+    }
+
+    // The half that matters more. A green ring left pulsing like an emergency is
+    // a worse lie than one that never pulsed, and it is what happens if stopping
+    // is forgotten — a weekly window resets to near zero every seven days, so
+    // every account eventually crosses this boundary downwards.
+    [AvaloniaFact]
+    public void ARingLeavingTheDangerBandStopsAndComesBackToFullOpacity()
+    {
+        var orb = new AccountOrbWindow("k");
+
+        orb.UpdateFrom(Usage(weekly: 92), Now);
+        Assert.True(orb.WeeklyIsBreathing);
+
+        orb.UpdateFrom(Usage(weekly: 40), Now);
+
+        Assert.False(orb.WeeklyIsBreathing);
+        Assert.Equal(1, orb.WeeklyArc.Opacity);
+    }
+
+    // Five minutes apart, the poll answers with the same reading it did last
+    // time, which is the ordinary case rather than the exception. Restarting the
+    // animation on each of those would reset its phase every five minutes — not
+    // visible as a restart so much as a stutter nobody can explain.
+    //
+    // Asserted by watching the class collection rather than by reading the class
+    // back, because "still breathing" is true either way. Nothing may change on
+    // the second update.
+    [AvaloniaFact]
+    public void ARingAlreadyBreathingIsNotRestartedOnTheNextPoll()
+    {
+        var orb = new AccountOrbWindow("k");
+
+        orb.UpdateFrom(Usage(weekly: 92), Now);
+        Assert.True(orb.WeeklyIsBreathing);
+
+        var churn = 0;
+        orb.WeeklyArc.Classes.CollectionChanged += (_, _) => churn++;
+
+        orb.UpdateFrom(Usage(weekly: 92), Now);
+        orb.UpdateFrom(Usage(weekly: 93), Now);
+
+        Assert.Equal(0, churn);
+        Assert.True(orb.WeeklyIsBreathing);
+    }
+
+    // A window past its reset stops being drawn at all (AnExpiredWindowIsNotDrawn
+    // above), and a ring that is not drawn must not still be breathing — an
+    // invisible arc pulsing its opacity is a shape with no colour animating
+    // nothing, and the moment a reading came back it would come back mid-phase.
+    [AvaloniaFact]
+    public void AReadingThatGoesAbsentStopsBreathing()
+    {
+        var orb = new AccountOrbWindow("k");
+
+        orb.UpdateFrom(Usage(weekly: 92), Now);
+        Assert.True(orb.WeeklyIsBreathing);
+
+        orb.UpdateFrom(Usage(weekly: null), Now);
+
+        Assert.False(orb.WeeklyIsBreathing);
+        Assert.Null(orb.WeeklyColour);
+        Assert.Equal(1, orb.WeeklyArc.Opacity);
+    }
+
+    // The inner ring gets there by a different road, and it is the road the bug
+    // was reported on: `spend_limit_reached` maps to a full ring rather than to a
+    // percentage anybody sent, so an account that has spent its extra-usage
+    // budget sits at 100% and is exactly the orb that was reported as frozen.
+    [AvaloniaFact]
+    public void ASpentExtraUsageBudgetBreathes()
+    {
+        var orb = new AccountOrbWindow("k");
+
+        var spent = new ExtraUsage(
+            Enabled: false, UsedMinor: null, LimitMinor: null, Currency: "USD",
+            DecimalPlaces: 2, DisabledReason: "org_level_disabled_until",
+            UserDisabled: false, SpendLimitReached: true);
+
+        orb.UpdateFrom(Usage(extra: spent), Now);
+
+        Assert.True(orb.ExtraIsBreathing);
+    }
+
+    [AvaloniaFact]
+    public void AnExtraUsageRingWithHeadroomDoesNotBreathe()
+    {
+        var orb = new AccountOrbWindow("k");
+
+        orb.UpdateFrom(Usage(extra: new ExtraUsage(true, 1000, 2000, "USD", 2, null)), Now);
+
+        Assert.False(orb.ExtraIsBreathing);
+    }
+
+    // Extra usage being switched off is the inner ring's own version of a
+    // reading going absent: the arc is cleared and the track becomes a dotted
+    // outline, and a cleared arc must not be left breathing.
+    [AvaloniaFact]
+    public void ExtraUsageGoingAbsentStopsBreathing()
+    {
+        var orb = new AccountOrbWindow("k");
+
+        var spent = new ExtraUsage(
+            Enabled: false, UsedMinor: null, LimitMinor: null, Currency: "USD",
+            DecimalPlaces: 2, DisabledReason: "org_level_disabled_until",
+            UserDisabled: false, SpendLimitReached: true);
+
+        orb.UpdateFrom(Usage(extra: spent), Now);
+        Assert.True(orb.ExtraIsBreathing);
+
+        orb.UpdateFrom(Usage(extra: new ExtraUsage(false, 0, null, "USD", 2, "never_enabled")), Now);
+
+        Assert.True(orb.ExtraIsAbsent);
+        Assert.False(orb.ExtraIsBreathing);
+        Assert.Equal(1, orb.ExtraArc.Opacity);
+    }
+
+    // The seam between the two halves of the fix, and the only place it can be
+    // checked. A selector is compiled against nothing: misspell the class in
+    // either file and the code still runs, every test above still passes, and
+    // the ring silently never moves again — which is exactly the failure being
+    // fixed here, arriving through a different door.
+    [AvaloniaFact]
+    public void TheBreathingStyleSelectsWhatTheCodeSetsAndLoops()
+    {
+        var orb = new AccountOrbWindow("k");
+
+        var style = Assert.IsType<Style>(Assert.Single(orb.Styles));
+
+        // The two spellings that have to agree, compared as text because that is
+        // all a selector is until something matches it.
+        Assert.Equal("Path.breathing", style.Selector?.ToString());
+
+        var breath = Assert.IsType<Animation>(Assert.Single(style.Animations));
+
+        // Infinite is the whole reason this had to become a style rather than a
+        // RunAsync call: Avalonia refuses to run a looping animation at all.
+        // Alternate is what makes it a breath rather than a sawtooth snapping
+        // back to full at the end of every cycle.
+        Assert.Equal(IterationCount.Infinite, breath.IterationCount);
+        Assert.Equal(PlaybackDirection.Alternate, breath.PlaybackDirection);
+        Assert.Equal(TimeSpan.FromMilliseconds(2600), breath.Duration);
+        Assert.IsType<SineEaseInOut>(breath.Easing);
+
+        // 1.0 down to 0.55, not to 0: a ring that vanishes is a ring whose sweep
+        // cannot be read, and the sweep is the number.
+        var opacities = breath.Children
+            .SelectMany(frame => frame.Setters.Cast<Setter>())
+            .Select(setter => setter.Value)
+            .ToArray();
+        Assert.Equal(new object?[] { 1.0, 0.55 }, opacities);
+    }
+
+    // ...and that the style declared on the *window* actually reaches a Path
+    // several levels down inside its Canvas, which is the one assumption the
+    // declarative approach rests on and the one nothing above would catch. A
+    // breathing arc's Opacity ends up owned by an animation; a calm one's is an
+    // ordinary local value this class wrote.
+    //
+    // Read this for exactly what it says. It proves the style was found, matched
+    // and applied — it does **not** prove the loop advances, because Avalonia's
+    // headless clock never moves: the opacity of a breathing arc sits on its
+    // first frame for as long as you pump the render timer, measured here over
+    // 1.2 seconds of real time. Worse, the broken RunAsync version reported
+    // Animation priority too, because RunAsync applies the first keyframe before
+    // it gets as far as throwing. So this is a guard against the style silently
+    // not reaching the shape, and nothing more; that the ring visibly pulses was
+    // confirmed by running the built app, and cannot be confirmed from here.
+    [AvaloniaFact]
+    public void TheWindowsStyleReachesTheArcsInsideItsCanvas()
+    {
+        var orb = new AccountOrbWindow("k");
+
+        orb.UpdateFrom(Usage(session: 20, weekly: 92), Now);
+        Pump();
+
+        Assert.Equal(
+            BindingPriority.Animation,
+            orb.WeeklyArc.GetDiagnostic(Visual.OpacityProperty).Priority);
+
+        // The calm ring is not merely un-animated, it is untouched: nothing has
+        // written its opacity at all, because BreathChangeFor answered Leave and
+        // the window did nothing. A ring that has never breathed should carry no
+        // value of ours whatsoever.
+        Assert.Equal(
+            BindingPriority.Unset,
+            orb.SessionArc.GetDiagnostic(Visual.OpacityProperty).Priority);
+        Assert.Equal(1, orb.SessionArc.Opacity);
+
+        orb.UpdateFrom(Usage(session: 20, weekly: 10), Now);
+        Pump();
+
+        // And on the way back down the animation lets go rather than holding the
+        // property at whatever fraction of a breath it had reached — which is
+        // what the local 1 written by the Stop arm is for.
+        Assert.Equal(
+            BindingPriority.LocalValue,
+            orb.WeeklyArc.GetDiagnostic(Visual.OpacityProperty).Priority);
+        Assert.Equal(1, orb.WeeklyArc.Opacity);
+    }
+
+    // Styles are applied on the dispatcher, so nothing above is true until it
+    // has run. The render tick is what makes an applied animation write its
+    // first frame; it does not advance the animation's own clock.
+    private static void Pump()
+    {
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        Dispatcher.UIThread.RunJobs();
     }
 }
