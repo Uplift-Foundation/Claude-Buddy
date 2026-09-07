@@ -26,7 +26,7 @@ namespace ClaudeBuddy
         // All three dashes, because an em dash separates words whether or not
         // someone put spaces around it. Spaced, it already worked — "Aurora —
         // wtvamp" split into three tokens and Initial() dropped the lone dash —
-        // but "Aurora—wtvamp" was one word and gave "Li". Both give "Lw".
+        // but "Aurora—wtvamp" was one word and gave "Au". Both give "Aw".
         //
         // Not '.' or '/', deliberately. Those show up in paths and version
         // numbers, where what follows the separator is rarely a word anyone
