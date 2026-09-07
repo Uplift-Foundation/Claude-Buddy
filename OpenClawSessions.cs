@@ -1669,12 +1669,16 @@ namespace ClaudeBuddy
             // Indices rather than turn values because a HistoryTurn is a
             // struct: two identical mirror turns would be equal by value and
             // there would be no way to say which one to remove.
-            // Counted rather than a set, because one named turn cancels one
-            // mirror and not every mirror of that file. A page carrying two
-            // deliveries of a picture the agent also named by path has one
-            // cross-arm pair and one genuine second delivery, and a set would
-            // swallow both.
-            var namedSources = new Dictionary<string, int>(StringComparer.Ordinal);
+            // A list of turn indices per source rather than a bare count
+            // (CB-120): the merge below has to write the surviving turn's
+            // *own* Confidence, so it needs to know which named turn a given
+            // mirror pairs with, not just how many are left to pair. The list
+            // still behaves as the same budget the count used to be — one
+            // named turn cancels one mirror and not every mirror of that
+            // file, so a page carrying two deliveries of a picture the agent
+            // also named by path still has one cross-arm pair and one genuine
+            // second delivery, never both swallowed.
+            var namedIndices = new Dictionary<string, List<int>>(StringComparer.Ordinal);
             var mirrorDrawn = new List<(int Index, string Source)>();
 
             foreach (var message in messages.EnumerateArray())
@@ -1940,7 +1944,6 @@ namespace ClaudeBuddy
                     // harvested paths (CB-94) before falling back to a guess
                     // — see ResolveLocalMediaPath's own comment.
                     var named = ResolveLocalMediaPath(candidate.Path, mediaPaths);
-                    namedSources[named] = namedSources.GetValueOrDefault(named) + 1;
 
                     // Text kept and the picture beside it, which is the shape
                     // the live path already produces — TryResolveLocalMedia
@@ -1956,6 +1959,13 @@ namespace ClaudeBuddy
                         named[(named.LastIndexOf('/') + 1)..],
                         at, speaker, colour, mine, null, namedMedia.Path,
                         Automation: cronAutomation, Confidence: confidence));
+
+                    // Recorded after the Add, as the index of the turn just
+                    // pushed — see the merge below for why this needs the
+                    // index and not just a count.
+                    if (!namedIndices.TryGetValue(named, out var indices))
+                        namedIndices[named] = indices = new List<int>();
+                    indices.Add(turns.Count - 1);
                     continue;
                 }
 
@@ -1986,7 +1996,8 @@ namespace ClaudeBuddy
             // you go", a question about the picture — where the mirror turn's
             // entire content is the filename the picture above already shows.
             // Dropping the richer bubble to keep the barer one would be the
-            // wrong way round.
+            // wrong way round. That choice is about which *text* survives and
+            // stays exactly as it was — CB-120 below does not revisit it.
             //
             // Two *mirrors* for one file are deliberately left alone: those are
             // two separate deliveries with distinct records and timestamps
@@ -2004,15 +2015,38 @@ namespace ClaudeBuddy
             // turn is the one that goes and any later delivery keeps its own
             // timestamp. Removed highest-index-first afterwards so no earlier
             // index is invalidated on the way.
-            if (namedSources.Count > 0)
+            if (namedIndices.Count > 0)
             {
                 var doomed = new List<int>();
 
                 foreach (var (index, source) in mirrorDrawn)
                 {
-                    if (namedSources.GetValueOrDefault(source) == 0) continue;
+                    if (!namedIndices.TryGetValue(source, out var indices) || indices.Count == 0)
+                        continue;
 
-                    namedSources[source]--;
+                    var namedIndex = indices[0];
+                    indices.RemoveAt(0);
+
+                    // CB-120: the mirror arm is always High (CB-116 kept it
+                    // unconditional) and the named arm can be Low, so merging
+                    // the two used to keep the named turn's text and silently
+                    // drop the mirror's confirmed-delivery provenance with it
+                    // — a gateway-confirmed picture landing in the Low tier
+                    // and losing CB-116's explanation on a failed fetch. The
+                    // merge already knows, right here, that both turns are
+                    // one delivery — that is the entire basis on which it
+                    // merges them — so the provenance is in hand at the exact
+                    // moment it would otherwise be thrown away with the turn
+                    // that carried it. Carry it onto the survivor instead.
+                    //
+                    // Never downgraded, only ever raised: a named turn that
+                    // was already High (an explicit MEDIA: line, its own
+                    // cron-automation tag) stays exactly as High as it was.
+                    if (turns[namedIndex].Confidence != MediaConfidence.High)
+                    {
+                        turns[namedIndex] = turns[namedIndex] with { Confidence = MediaConfidence.High };
+                    }
+
                     doomed.Add(index);
                 }
 

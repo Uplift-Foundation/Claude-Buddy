@@ -239,6 +239,67 @@ public class OpenClawNamedPictureOnHistoryTests
         Assert.All(turns, t => Assert.NotNull(t.ImageUrl));
     }
 
+    // ---- CB-120: the merge must not drop the mirror's provenance with it ---
+    //
+    // The mirror arm is unconditionally High (it is the gateway's own word
+    // that it delivered something); the named arm above is Low whenever its
+    // candidate is a bare path with no automation behind it — exactly the
+    // shape AFileDrawnByBothArmsIsDrawnOnce already uses. Before CB-120 the
+    // merge kept the named turn's *text* (right) but also its own, weaker
+    // Confidence (wrong): a gateway-confirmed delivery landed in the Low tier
+    // and lost CB-116's explanation the moment a fetch for it failed. The fix
+    // transfers the dropped mirror's High onto the survivor.
+    [Fact]
+    public void AFileDrawnByBothArmsKeepsHighConfidenceEvenThoughTheNamedTurnAloneWouldBeLow()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","content":[{"type":"text","text":"~/.openclaw/media/browser/03a1be83.png"}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"03a1be83.png"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+
+        // On its own — no MEDIA: line, no openclawAutomation — this candidate
+        // is exactly OpenClawMediaConfidenceTests' Low shape. The mirror is
+        // what raises it.
+        Assert.Equal(MediaConfidence.High, turn.Confidence);
+    }
+
+    // CB-98's own display choice — the named turn's prose survives, not the
+    // mirror's bare filename — must be exactly as true after CB-120 as
+    // before it. The fix changes which *Confidence* survives the merge, not
+    // which *turn* does; reversing that choice (keeping the mirror turn
+    // instead, since it is the one that was already High) would be the wrong
+    // fix, and this is the guard against it.
+    [Fact]
+    public void TheSurvivingCrossArmTurnStillCarriesTheAgentsProse()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","content":[{"type":"text","text":"here you go: ~/.openclaw/media/browser/03a1be83.png"}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"03a1be83.png"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Contains("here you go", turn.Text);
+        Assert.Equal(MediaConfidence.High, turn.Confidence);
+    }
+
+    // The transfer must not leak: a named turn with the identical Low shape
+    // but no mirror on the page — no confirmed delivery behind it at all —
+    // stays exactly as Low as OpenClawMediaConfidenceTests already proves for
+    // this shape.
+    [Fact]
+    public void ANamedOnlyTurnWithNoMirrorStaysLow()
+    {
+        var turn = Assert.Single(Turns("""
+        [{"role":"assistant","content":[{"type":"text","text":"~/.openclaw/media/browser/03a1be83.png"}]}]
+        """));
+
+        Assert.Equal(MediaConfidence.Low, turn.Confidence);
+    }
+
     // CB-89: traversal refused, so nothing here builds a request out of one.
     [Fact]
     public void ATraversalIsRefused()
