@@ -50,7 +50,16 @@
                  top-heavy and wasted the height the portrait had already spent.
                  Two lines fill it and read faster — the name is what you look
                  for, the place is what you check. -->
-            <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="10">
+            <!-- Named and given a background because it is the drag handle
+                 for a pinned panel: WindowDecorations is None, so there is no
+                 title bar, and a Grid with no Background is not hit-testable
+                 in the gaps between its children. Transparent draws nothing
+                 and catches everything, which is exactly a title bar. See the
+                 HeaderRow handler in ChatPanel.axaml.cs for why the drag is
+                 offered only while pinned. -->
+            <Grid x:Name="HeaderRow" Grid.Row="0"
+                  Background="Transparent"
+                  ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="10">
                 <Grid x:Name="AvatarBox" Grid.Column="0" Width="68" Height="68"
                       VerticalAlignment="Center" Cursor="Hand"
                       Background="Transparent">
@@ -122,14 +131,30 @@
                     </StackPanel>
                 </StackPanel>
 
-                <Grid x:Name="SpeakButton" Grid.Column="2" Width="24" Height="24"
+                <!-- Keep this chat open. First of the three because it is the
+                     one that changes what the other two mean: pinned, the
+                     close button closes for good rather than hiding, and the
+                     header becomes a drag handle. Same 24x24 circle as its
+                     neighbours — this is a row of toggles and the newcomer
+                     should not announce itself as anything else. The fill is
+                     what says whether the pin is on, so the ellipse is named
+                     for the pin tests to read while Close's is not. -->
+                <Grid x:Name="PinButton" Grid.Column="2" Width="24" Height="24"
+                      VerticalAlignment="Center" Cursor="Hand"
+                      ToolTip.Tip="Pin — keep this chat open">
+                    <Ellipse x:Name="PinFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
+                    <TextBlock x:Name="PinGlyph" Text="&#128204;" FontSize="11"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsHitTestVisible="False"/>
+                </Grid>
+                <Grid x:Name="SpeakButton" Grid.Column="3" Width="24" Height="24"
                       VerticalAlignment="Center" Cursor="Hand">
                     <Ellipse x:Name="SpeakFill" Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
                     <TextBlock x:Name="SpeakGlyph" Text="&#128264;" FontSize="11"
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                IsHitTestVisible="False"/>
                 </Grid>
-                <Grid x:Name="CloseButton" Grid.Column="3" Width="24" Height="24"
+                <Grid x:Name="CloseButton" Grid.Column="4" Width="24" Height="24"
                       VerticalAlignment="Center" Cursor="Hand">
                     <Ellipse Fill="#E0202024" Stroke="#80FFFFFF" StrokeThickness="1.5"/>
                     <TextBlock Text="&#10005;" FontSize="10" Foreground="#DDFFFFFF"

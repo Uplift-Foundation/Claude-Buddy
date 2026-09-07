@@ -235,7 +235,14 @@ namespace ClaudeBuddy
             {
                 Pulsing.Remove(this);
                 StopAvatarAnimation();
-                ChatPanel.HideFor(SessionId);
+
+                // CloseFor, not HideFor: the session behind this orb is gone,
+                // and a pinned panel is the one thing HideFor deliberately
+                // will not touch. Pinning is "keep this chat open", not "keep
+                // this chat open after the conversation ends" — a panel left
+                // behind here would be a transcript nothing can add to and no
+                // orb can reopen.
+                ChatPanel.CloseFor(SessionId);
             };
 
             // A session going away mid-dictation (the window closing) must
@@ -1891,7 +1898,7 @@ namespace ClaudeBuddy
             // contract, and it is the same one either way.
             if (ChatPanel.IsOpenFor(SessionId))
             {
-                ChatPanel.AppendToInput(text);
+                ChatPanel.AppendToInput(this, text);
                 return;
             }
 
@@ -1906,7 +1913,7 @@ namespace ClaudeBuddy
                     _chatOpen = true;
                     HideFlyoutNow();
                     ChatPanel.OpenFor(this, chat);
-                    ChatPanel.AppendToInput(text);
+                    ChatPanel.AppendToInput(this, text);
                 }
 
                 return;

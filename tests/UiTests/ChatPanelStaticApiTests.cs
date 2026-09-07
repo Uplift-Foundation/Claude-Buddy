@@ -9,12 +9,18 @@ namespace ClaudeBuddy.Tests;
 // The static half of ChatPanel: the calls the rest of the app makes to a panel it
 // does not hold a reference to.
 //
-// ChatPanel is a singleton — its own comment explains why, two panels would fight
-// over being the key window — so OpenFor, HideFor, RepositionFor, SetSpeakState,
-// SetRecording, AppendToInput and RefreshIdentityFor are all static and all gate
-// on which orb the one live panel is currently bound to. That gate is the whole
-// substance of them, and getting it wrong means an orb's mic light, or somebody's
-// dictation, landing on a different session's panel.
+// There is one *transient* panel — ChatPanel's own comment explains why, two
+// panels that both hide on deactivate would fight over being the key window — so
+// OpenFor, HideFor, CloseFor, RepositionFor, SetSpeakState, SetRecording,
+// AppendToInput and RefreshIdentityFor are all static, and each one gates on
+// either which orb a panel is bound to or which session it is showing. That gate
+// is the whole substance of them, and getting it wrong means an orb's mic light,
+// or somebody's dictation, landing on a different session's panel.
+//
+// Nothing here pins anything: these are the rules as they apply to the transient
+// panel, which is the only kind that existed before CB-110 and still the only
+// kind most of the app ever produces. What changes once a panel is pinned is
+// ChatPanelPinTests' subject, not this file's.
 //
 // Conventions inherited from ChatPanelTests next door rather than reinvented:
 // orbs are never closed (closing one corrupts a process-wide font resource shared
@@ -92,7 +98,12 @@ public class ChatPanelStaticApiTests : IDisposable
         Assert.False(ChatPanel.IsOpenFor(first.SessionId));
     }
 
-    // --- HideFor: only the session that asked ---
+    // --- HideFor: only the session that asked, and only the transient ---
+    //
+    // HideFor is what an orb about to slide across the screen calls, so that the
+    // panel does not travel with it. It reaches the transient panel only —
+    // ChatPanelPinTests covers the other half, that a pinned panel ignores it —
+    // and nothing in this file pins, so every case below is the transient.
 
     [AvaloniaFact]
     public void HidingBySessionIdClosesThatPanel()
@@ -131,6 +142,47 @@ public class ChatPanelStaticApiTests : IDisposable
         Assert.False(ChatPanel.IsOpenFor(fake.SessionId));
     }
 
+    // --- CloseFor: the orb has gone ---
+
+    // The stronger of the two, called from OrbWindow's Closed handler. On the
+    // transient it is indistinguishable from HideFor, which is the point: the
+    // difference only shows up on a pinned panel, and an orb that is actually
+    // going away must be able to take one of those with it.
+    [AvaloniaFact]
+    public void ClosingBySessionIdDismissesThatPanel()
+    {
+        var fake = NewFake();
+        Open(NewOrb(), fake);
+
+        ChatPanel.CloseFor(fake.SessionId);
+        Flush();
+
+        Assert.False(ChatPanel.IsOpenFor(fake.SessionId));
+    }
+
+    [AvaloniaFact]
+    public void ClosingAnotherSessionLeavesThePanelAlone()
+    {
+        var shown = NewFake();
+        var other = NewFake();
+        Open(NewOrb(), shown);
+
+        ChatPanel.CloseFor(other.SessionId);
+        Flush();
+
+        Assert.True(ChatPanel.IsOpenFor(shown.SessionId));
+    }
+
+    [AvaloniaFact]
+    public void ClosingWhenNothingIsOpenIsHarmless()
+    {
+        var fake = NewFake();
+
+        ChatPanel.CloseFor(fake.SessionId);
+
+        Assert.False(ChatPanel.IsOpenFor(fake.SessionId));
+    }
+
     // --- AppendToInput: where dictation lands ---
 
     // Dictation lands in the box rather than being sent, the same rule
@@ -140,10 +192,11 @@ public class ChatPanelStaticApiTests : IDisposable
     public void DictationLandsInTheInputBox()
     {
         var fake = NewFake();
-        var panel = Open(NewOrb(), fake);
+        var orb = NewOrb();
+        var panel = Open(orb, fake);
         panel.Input.Text = "";
 
-        ChatPanel.AppendToInput("fix the arrangement test");
+        ChatPanel.AppendToInput(orb, "fix the arrangement test");
         Flush();
 
         Assert.Equal("fix the arrangement test", panel.Input.Text);
@@ -155,11 +208,12 @@ public class ChatPanelStaticApiTests : IDisposable
     public void ASecondPhraseIsAppendedWithOneSpace()
     {
         var fake = NewFake();
-        var panel = Open(NewOrb(), fake);
+        var orb = NewOrb();
+        var panel = Open(orb, fake);
         panel.Input.Text = "";
 
-        ChatPanel.AppendToInput("first sentence.");
-        ChatPanel.AppendToInput("second sentence.");
+        ChatPanel.AppendToInput(orb, "first sentence.");
+        ChatPanel.AppendToInput(orb, "second sentence.");
         Flush();
 
         Assert.Equal("first sentence. second sentence.", panel.Input.Text);
@@ -171,10 +225,11 @@ public class ChatPanelStaticApiTests : IDisposable
     public void ExistingTrailingSpaceIsNotDoubled()
     {
         var fake = NewFake();
-        var panel = Open(NewOrb(), fake);
+        var orb = NewOrb();
+        var panel = Open(orb, fake);
         panel.Input.Text = "typed already   ";
 
-        ChatPanel.AppendToInput("dictated");
+        ChatPanel.AppendToInput(orb, "dictated");
         Flush();
 
         Assert.Equal("typed already dictated", panel.Input.Text);
@@ -186,10 +241,11 @@ public class ChatPanelStaticApiTests : IDisposable
     public void TheCaretEndsUpAfterTheDictatedText()
     {
         var fake = NewFake();
-        var panel = Open(NewOrb(), fake);
+        var orb = NewOrb();
+        var panel = Open(orb, fake);
         panel.Input.Text = "";
 
-        ChatPanel.AppendToInput("dictated words");
+        ChatPanel.AppendToInput(orb, "dictated words");
         Flush();
 
         Assert.Equal(panel.Input.Text!.Length, panel.Input.CaretIndex);
@@ -201,14 +257,32 @@ public class ChatPanelStaticApiTests : IDisposable
     public void DictationWithNoPanelOpenIsDropped()
     {
         var fake = NewFake();
-        var panel = Open(NewOrb(), fake);
+        var orb = NewOrb();
+        var panel = Open(orb, fake);
         ChatPanel.HideFor(fake.SessionId);
         Flush();
 
         panel.Input.Text = "before";
-        ChatPanel.AppendToInput("should not arrive");
+        ChatPanel.AppendToInput(orb, "should not arrive");
 
         Assert.Equal("before", panel.Input.Text);
+    }
+
+    // Addressed to an orb rather than to "the panel", which is the whole reason
+    // the signature changed. Words spoken at one orb must not land in another
+    // conversation's box — a failure that would be silent, and in someone else's
+    // message.
+    [AvaloniaFact]
+    public void DictationAtAnotherOrbDoesNotLandHere()
+    {
+        var fake = NewFake();
+        var panel = Open(NewOrb(), fake);
+        panel.Input.Text = "typed here";
+
+        ChatPanel.AppendToInput(NewOrb(), "spoken elsewhere");
+        Flush();
+
+        Assert.Equal("typed here", panel.Input.Text);
     }
 
     // --- SetRecording: the mic light ---

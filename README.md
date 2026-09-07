@@ -1078,6 +1078,19 @@ half-typed draft survives being dismissed. Enter sends, Shift+Enter starts a new
 line, and with voice input on the mic drops what you said into the box rather
 than sending it, exactly as dictation into a terminal already does.
 
+**The pin in the header keeps a chat open.** A panel normally hides the moment
+you click anywhere else — that is what makes it feel like part of the orb rather
+than a window you have to tidy up — but it also means you cannot watch two
+agents at once, or leave one conversation up while you work in another. Pin it
+and it stops hiding: it stays where it is, its close button now closes it for
+good rather than tucking it away, and its header becomes a title bar you can
+drag it anywhere by. Pin as many as you like. The next orb you click opens the
+ordinary come-and-go panel beside them, placed so it does not land on top of
+anything you pinned, and the pinned panel's orb gets its hover arc back, since
+the panel is no longer sitting in that space. Click the pin again to unpin: that
+panel becomes the come-and-go one, in place, and whichever panel was playing
+that part goes away.
+
 Drag any edge or corner and the panel resizes — new turns then scroll inside it
 rather than growing it out from under your hands. **The size belongs to the
 agent, not to the window**: each one reopens at whatever you last dragged its
