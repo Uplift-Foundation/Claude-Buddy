@@ -303,6 +303,25 @@ the three real ones carried rooted paths. A plausible paraphrase of a rule is fa
 easier to get wrong than a file read, and the parsers here are pure and cheap to
 call precisely so you don't have to guess.
 
+**When a result depends on holding a particular privilege, assert in the same
+breath that a method requiring *more* privilege refuses.** One token,
+`cron.runs → data` alongside `tasks.flows → missing scope: operator.admin`,
+turns "I have the right credential" from an assumption into a control. Without
+the paired refusal a passing call cannot distinguish *this works at read scope*
+from *I happen to be over-privileged* — and that exact confound nearly
+invalidated two tickets in one evening, because a probe run with a
+gateway-owner token proves nothing about what the app can do. It generalises
+past scopes: **any time a measurement's validity rests on a property of the
+environment, measure that property in the same run rather than assuming it.**
+
+Prefer a **declaration** to an observation where the system publishes one — the
+gateway states its per-method scopes in `dist/method-scopes-*.js`, and that
+tells you what a method demands of *anyone*, where a probe only tells you it
+did not refuse *you*. The two are complementary rather than redundant, and
+neither is sufficient alone: the table cannot prove your credential lacks
+admin, and your probe cannot prove the requirement won't change in the next
+release.
+
 **The sixth instance is different from the other five, and it is the dangerous
 one.** The other five were caught by checking the evidence harder. That one was
 not — it *evaded* that check. Three agents were rigorous about where each claim's
