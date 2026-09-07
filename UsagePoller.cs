@@ -251,50 +251,104 @@ namespace ClaudeBuddy
             }
         }
 
+        // How this account's poll is set up, split out for the reason
+        // AgentRoster.AgentsProcess is: the environment it does *not* carry is
+        // as load-bearing as the environment it does, and until this was its
+        // own function the only way to check either was to run a real `claude`
+        // against a real account.
+        //
+        // **This is not AgentRoster.AgentsProcess's rule, on purpose, even
+        // though the shape looks identical.** CB-42's "a null configDir leaves
+        // the variable alone" is about *launching a session on the user's
+        // behalf* — a relay, a background agents query — where inheriting
+        // whatever account the user's environment already names is the
+        // correct default, because the user is the one who chose it. A usage
+        // poll is not launching anything on anyone's behalf; it is answering
+        // a specific question an orb has already committed to: "how is
+        // *this* named account doing?" The name half of that claim is pinned
+        // to disk — UsageAccounts.AccountFilePath reads `~/.claude.json` for
+        // the default account regardless of what the environment says — so
+        // pinning the data half to the same file is what makes the orb's
+        // claim true. Leaving the variable to inherit gives one orb a name
+        // from one source and numbers from another, and nothing here would
+        // ever notice the two had drifted apart. That drift is CB-113: the
+        // default orb was labelled from `~/.claude.json` and reporting
+        // whatever `CLAUDE_CONFIG_DIR` the app process happened to be started
+        // under — a different, real account's numbers under this account's
+        // name.
+        //
+        // So the null case is explicit here, not merely absent: it removes
+        // the variable rather than leaving it. `psi.Environment` starts out
+        // seeded from this process's own environment, so a plain assignment
+        // for the named case is not enough to sever inheritance for the
+        // default one — `Remove` is the only thing that actually does. This
+        // is *not* the CB-42 hazard repeated: with no variable at all, Claude
+        // Code reads `$HOME/.claude.json` — the very file
+        // UsageAccounts.LabelFrom already read the label from — and not the
+        // separate, frequently un-onboarded `$HOME/.claude/.claude.json` that
+        // ClaudeProfile's comment warns about. Naming that directory
+        // explicitly would be the trap; removing the variable lands on the
+        // same file the label came from.
+        //
+        // The one user-visible consequence: someone who runs the whole app
+        // under a non-default CLAUDE_CONFIG_DIR sees their default orb's
+        // numbers change. Nothing is newly wrong for them — that orb was
+        // already labelled from `~/.claude.json`, so this makes an existing,
+        // mislabelled reading correct rather than pointing the orb at an
+        // account it wasn't already claiming to be.
+        internal static ProcessStartInfo UsageProcess(string claude, string? configDir)
+        {
+            var psi = new ProcessStartInfo(claude)
+            {
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+
+            psi.ArgumentList.Add("-p");
+
+            // Mandatory alongside `-p --output-format stream-json`; the CLI
+            // refuses the combination without it.
+            psi.ArgumentList.Add("--verbose");
+
+            // Keeps a poll that runs every five minutes forever out of
+            // ~/.claude/projects, where it would otherwise leave a transcript
+            // per account per poll for a conversation that never happened.
+            psi.ArgumentList.Add("--no-session-persistence");
+
+            // Stops the user's own SessionStart hooks firing on every poll —
+            // **including this app's own**, which would otherwise have the
+            // poller manufacturing the orbs it is measuring.
+            psi.ArgumentList.Add("--settings");
+            psi.ArgumentList.Add("{\"disableAllHooks\":true}");
+
+            psi.ArgumentList.Add("--input-format");
+            psi.ArgumentList.Add("stream-json");
+            psi.ArgumentList.Add("--output-format");
+            psi.ArgumentList.Add("stream-json");
+
+            if (configDir is not null) psi.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+            else psi.Environment.Remove("CLAUDE_CONFIG_DIR");
+
+            return psi;
+        }
+
         // One account's answer, as raw stdout.
         //
         // Excluded from coverage: starts the `claude` CLI as a real subprocess.
         // What is excluded is the launch, its timeout and the kill for a CLI that
         // never answers — the JSON it prints is parsed by UsageParse, which is
         // covered against real captured payloads. The same split, for the same
-        // reason, as BackgroundJobs.ReadOne.
+        // reason, as BackgroundJobs.ReadOne. UsageProcess above is the testable
+        // seam; nothing about *what* it builds is excluded, only the running of it.
         [ExcludeFromCodeCoverage]
         private static string? RunOne(string claude, string? configDir)
         {
             try
             {
-                var psi = new ProcessStartInfo(claude)
-                {
-                    UseShellExecute = false,
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
-
-                psi.ArgumentList.Add("-p");
-
-                // Mandatory alongside `-p --output-format stream-json`; the CLI
-                // refuses the combination without it.
-                psi.ArgumentList.Add("--verbose");
-
-                // Keeps a poll that runs every five minutes forever out of
-                // ~/.claude/projects, where it would otherwise leave a transcript
-                // per account per poll for a conversation that never happened.
-                psi.ArgumentList.Add("--no-session-persistence");
-
-                // Stops the user's own SessionStart hooks firing on every poll —
-                // **including this app's own**, which would otherwise have the
-                // poller manufacturing the orbs it is measuring.
-                psi.ArgumentList.Add("--settings");
-                psi.ArgumentList.Add("{\"disableAllHooks\":true}");
-
-                psi.ArgumentList.Add("--input-format");
-                psi.ArgumentList.Add("stream-json");
-                psi.ArgumentList.Add("--output-format");
-                psi.ArgumentList.Add("stream-json");
-
-                if (configDir is not null) psi.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+                var psi = UsageProcess(claude, configDir);
 
                 using var process = Process.Start(psi);
                 if (process is null) return null;
