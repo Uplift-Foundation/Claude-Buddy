@@ -1877,6 +1877,32 @@ namespace ClaudeBuddy
                 // but they can each fire on a different message of the same
                 // page and land on the same file. That is what namedSources
                 // below is for.
+                // CB-115: the first conjunct of the cron-recovery trigger,
+                // computed before the named-path arm rather than after it.
+                //
+                // It lived in the fallback arm below and was wrong there. Once
+                // CB-107 landed, LocalMediaPathFrom recognises `caption\n<bare
+                // filename>` — so the arm below `continue`s, the fallback is
+                // never reached, and the turn was never tagged. The recovery
+                // pass then skipped every one of Owner's cron pictures and
+                // made this whole feature inert, with eight tests as the only
+                // witness.
+                //
+                // The deeper reason is that the arm below resolves a bare
+                // filename by *guessing* ~/.openclaw/media/<basename>, which
+                // sets a route that will 404. A guess is a resolution in name
+                // only, so "did something already resolve this" was never the
+                // right question to gate on. Tagging regardless lets the async
+                // pass consult the run record — the authoritative source —
+                // and override the guess when it answers, which is the same
+                // rule that retired PathFromUrl and client-side agentId:
+                // never prefer a downstream re-derivation to what the
+                // producer already knows.
+                var automation = OpenClawCronRecovery.AutomationOf(message);
+                var cronAutomation = automation is { Kind: OpenClawCronRecovery.CronKind }
+                    ? automation
+                    : (OpenClawAutomation?)null;
+
                 var namedCandidate = LocalMediaPathFrom(text);
                 if (namedCandidate is not null)
                 {
@@ -1898,12 +1924,13 @@ namespace ClaudeBuddy
 
                     turns.Add(new HistoryTurn(role, text.Trim(), namedMedia.Route,
                         named[(named.LastIndexOf('/') + 1)..],
-                        at, speaker, colour, mine, null, namedMedia.Path));
+                        at, speaker, colour, mine, null, namedMedia.Path,
+                        Automation: cronAutomation));
                     continue;
                 }
 
                 turns.Add(new HistoryTurn(role, text.Trim(), null, "", at,
-                    speaker, colour, mine));
+                    speaker, colour, mine, Automation: cronAutomation));
             }
 
             // One delivery, two arms, one bubble — CB-98's cross-arm case,
@@ -2178,7 +2205,13 @@ namespace ClaudeBuddy
         // The original point still stands on its own terms: a client that
         // sends a traversal and waits to be told no is a client asking the
         // wrong question.
-        private static bool LooksLikeAnImagePath(string text) =>
+        //
+        // Internal rather than private since CB-115: OpenClawCronRecovery's
+        // trigger reuses this exact rule for the rooted-path half of "is this
+        // trailing token image-shaped", rather than restating it — see that
+        // file's header for why only the bare-filename half needed a new
+        // predicate.
+        internal static bool LooksLikeAnImagePath(string text) =>
             (text.StartsWith('/') || text.StartsWith("~/", StringComparison.Ordinal))
             && !text.StartsWith("//", StringComparison.Ordinal)
             && !text.Contains("..", StringComparison.Ordinal)
@@ -2828,6 +2861,139 @@ namespace ClaudeBuddy
             }
         }
 
+        // CB-115: jobId -> every basename that job's cron.runs history can
+        // account for, mapped to the MEDIA: path behind it (or to null for a
+        // refused collision — see OpenClawCronRecovery.MediaPathsByBasenameForJob).
+        // Bounded the same way Media above is: a handful of active cron jobs
+        // stay warm, and a job pushed out simply costs one more page fetch
+        // rather than anything visibly wrong.
+        private static readonly Dictionary<string, Dictionary<string, string?>> CronRunsByJob =
+            new(StringComparer.Ordinal);
+
+        // CB-115: basenames a fresh fetch of that job could not account for.
+        //
+        // Needed because the cache above is keyed by *job*, and a job outlives
+        // the pictures in it. Reading a cached miss as "absent" meant only the
+        // first picture per job per process ever recovered: Owner opens the
+        // panel, fourteen recover, the job is cached — and the next cron
+        // delivery, twenty-five minutes later, silently gets the wrong-directory
+        // guess instead. The paging above was designed for runs falling off the
+        // *back* of the window; nothing considered new runs not being in a
+        // cache populated before they existed.
+        //
+        // So a cached miss now means *unresolved*, and re-asks once. This set
+        // is what stops that becoming a fetch on every render: a basename a
+        // fresh fetch genuinely did not know is remembered as absent. Per
+        // basename rather than per job, because per job is the same bug
+        // inverted — one unknown name would suppress every later picture.
+        private static readonly Dictionary<string, HashSet<string>> CronMissesByJob =
+            new(StringComparer.Ordinal);
+
+        // Matches the real job this was measured against — 51 runs answers
+        // in a single page at this size — while staying bounded for one that
+        // grows well past it. See OpenClawCronRecovery's header for why a
+        // small limit is actively dangerous here: an early capture of that
+        // same job at limit:5 silently held only 4 of the 35 real paths, no
+        // error and no empty result to notice.
+        private const int CronRunsPageLimit = 60;
+        private const int CronRunsMaxPages = 5;
+
+        // Excluded from coverage: the cron.runs request itself and the
+        // paging loop around it. Everything it hands off to — RunsFrom,
+        // MediaPathsByBasenameForJob — is pure and covered against fixtures;
+        // this is only the asking, cached so a whole page of pictures from
+        // one job costs exactly one round trip (or a few, for a job long
+        // enough to need paging) no matter how many turns on the history
+        // page need recovering.
+        [ExcludeFromCodeCoverage]
+        internal static async Task<string?> RecoverCronMediaPathAsync(
+            string jobId, string basename, CancellationToken ct)
+        {
+            lock (Gate)
+            {
+                // A key that is present answers, even when its value is null —
+                // that null is MediaPathsByBasenameForJob refusing a collision,
+                // which is a decision and not a gap, so it must not re-ask.
+                if (CronRunsByJob.TryGetValue(jobId, out var cached)
+                    && cached.TryGetValue(basename, out var cachedPath))
+                {
+                    return cachedPath;
+                }
+
+                if (CronMissesByJob.TryGetValue(jobId, out var known)
+                    && known.Contains(basename))
+                {
+                    return null;
+                }
+            }
+
+            OpenClawGateway? gateway;
+            lock (Gate) gateway = _gateway;
+            if (gateway is null) return null;
+
+            var runs = new List<OpenClawCronRun>();
+
+            try
+            {
+                var offset = 0;
+                for (var page = 0; page < CronRunsMaxPages; page++)
+                {
+                    var res = await gateway.RequestAsync("cron.runs", new Dictionary<string, object>
+                    {
+                        ["jobId"] = jobId,
+                        ["limit"] = CronRunsPageLimit,
+                        ["offset"] = offset
+                    }, ct);
+
+                    runs.AddRange(OpenClawCronRecovery.RunsFrom(res));
+
+                    if (!OpenClawCronRecovery.HasMore(res)) break;
+
+                    var next = OpenClawCronRecovery.NextOffset(res);
+                    if (next is null) break;
+
+                    offset = next.Value;
+                }
+            }
+            catch
+            {
+                // A run history that will not answer is not a reason to
+                // refuse the conversation — same rule FetchHistoryPageAsync's
+                // own catch follows, one level up.
+                return null;
+            }
+
+            var map = OpenClawCronRecovery.MediaPathsByBasenameForJob(runs, jobId);
+
+            lock (Gate)
+            {
+                CronRunsByJob[jobId] = map;
+
+                // This fetch was fresh, so a basename still missing from it is
+                // one this job has never delivered. Remember that, or the
+                // re-ask above becomes a fetch per render.
+                if (!map.ContainsKey(basename))
+                {
+                    if (!CronMissesByJob.TryGetValue(jobId, out var misses))
+                    {
+                        CronMissesByJob[jobId] = misses = new HashSet<string>(StringComparer.Ordinal);
+                    }
+
+                    misses.Add(basename);
+                }
+
+                const int KeepJobs = 8;
+                while (CronRunsByJob.Count > KeepJobs)
+                {
+                    var oldest = CronRunsByJob.Keys.First();
+                    CronRunsByJob.Remove(oldest);
+                    CronMissesByJob.Remove(oldest);
+                }
+            }
+
+            return map.TryGetValue(basename, out var path) ? path : null;
+        }
+
         internal static List<OpenClawChatSession> OpenChats()
         {
             lock (Gate) return Chats.Values.ToList();
@@ -2944,6 +3110,45 @@ namespace ClaudeBuddy
                 // be told whose conversation they belong to (CB-109), and
                 // this is the one place that knows.
                 var turns = TurnsFromHistory(messages, chat.GatewayKey);
+
+                // CB-115: recover a cron-delivered picture whose transcript
+                // lost its directory. Only turns TurnsFromHistory tagged with
+                // Automation reach this loop at all, which is the efficiency
+                // half of the trigger in OpenClawCronRecovery's header. Note a
+                // tagged turn may already carry a route: the named-path arm's
+                // ~/.openclaw/media/<basename> guess sets one that will 404,
+                // and overriding it with the run record's answer is the point
+                // rather than a special case — a successful recovery replaces
+                // the guess, a failed one leaves it exactly as before. CandidateBasenameFrom
+                // returning null is the trigger's second conjunct failing (a
+                // cron reply that never mentions a picture at all) and is
+                // checked here, against the same Text TurnsFromHistory built,
+                // rather than inside that pure method.
+                for (var i = 0; i < turns.Count; i++)
+                {
+                    if (turns[i].Automation is not { } automation) continue;
+
+                    var basename = OpenClawCronRecovery.CandidateBasenameFrom(turns[i].Text);
+                    if (basename is null) continue;
+
+                    var recovered = await RecoverCronMediaPathAsync(automation.JobId, basename, ct);
+                    if (recovered is null) continue;
+
+                    // Same media value the named-path arm inside
+                    // TurnsFromHistory builds for the identical shape — one
+                    // place decides what a resolved cron picture's route and
+                    // path look like, whether the MEDIA: line came straight
+                    // off the message or, as here, off the run record that
+                    // produced it.
+                    var media = new OpenClawMediaSource(recovered, chat.GatewayKey);
+                    turns[i] = turns[i] with
+                    {
+                        ImageUrl = media.Route,
+                        ImageAlt = OpenClawCronRecovery.BasenameOf(recovered),
+                        ImageSourcePath = media.Path
+                    };
+                }
+
                 // The message count, not the turn count: it is what the next
                 // page's offset is measured in, and one message can produce
                 // several turns or none.
