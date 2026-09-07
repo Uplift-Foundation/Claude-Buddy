@@ -40,7 +40,25 @@ namespace ClaudeBuddy
         // with no url at all (CB-91) — so a turn generally has *either* this
         // or ImageUrl, never both. Defaulted for the same reason Mine is:
         // only TurnsFromHistory is in a position to fill it in.
-        byte[]? ImageBytes = null);
+        byte[]? ImageBytes = null,
+
+        // The clean path behind ImageUrl, when ImageUrl is one of the
+        // gateway's own assistant-media requests (CB-109). ImageUrl is the
+        // finished, identity-bearing url and is fetched verbatim; this is the
+        // human-readable file it names, carried so the panel can put it in the
+        // tooltip on a refusal without unescaping it back out of a query
+        // string. Same category of value ImageAlt already holds — a basename
+        // derived from this very path — only whole rather than lossy.
+        //
+        // Null for a picture that did not come from that route at all: an
+        // image block carrying its own url, or one carrying inline bytes.
+        // Defaulted, and trailing, for the same reason Mine and ImageBytes
+        // are — only the arms of TurnsFromHistory that build such a request
+        // are in a position to fill it in. A tenth field on a record struct
+        // that became a record precisely so a tenth field would not mean
+        // rewriting every producer; this is that cost being paid rather than
+        // worked around.
+        string? ImageSourcePath = null);
 
     // One OpenClaw session, as something the chat panel can talk to.
     //
@@ -291,7 +309,23 @@ namespace ClaudeBuddy
             // that has one or the other, so restating that here would be a
             // branch nothing could ever take.
             if (match.Value.ImageBytes is { Length: > 0 } matchedBytes) turn.ImageBytes = matchedBytes;
-            else turn.ImageUrl = match.Value.ImageUrl;
+            else
+            {
+                // ImageSourcePath before ImageUrl, always. It is a plain
+                // property and raises nothing; ImageUrl's setter is what wakes
+                // the row up (see TurnView's PropertyChanged handler), so
+                // setting the url first would send it fetching before the path
+                // it needs to caption a refusal had arrived.
+                //
+                // Carried across rather than left null: the match came out of
+                // a TurnsFromHistory page for *this* session, so both the url
+                // and the path are already the right ones, and dropping the
+                // path here would mean a live reply's picture lost the ability
+                // to say why it did not load — which is what the history path
+                // does say (CB-93).
+                turn.ImageSourcePath = match.Value.ImageSourcePath;
+                turn.ImageUrl = match.Value.ImageUrl;
+            }
 
             turn.ImageAlt = match.Value.ImageAlt;
 
@@ -314,7 +348,14 @@ namespace ClaudeBuddy
         {
             if (!_pendingImageChecks.Add(turn)) return;
 
-            var bytes = await OpenClawSessions.FetchLocalMediaAsync(path, CancellationToken.None);
+            // The path *and* whose conversation named it (CB-109). This method
+            // is on the session, so GatewayKey is simply in hand — the seam
+            // was never missing here, only unused: the fetch below asked the
+            // gateway about a file without saying which agent's media policy
+            // to judge it against, and got a default agent's answer.
+            var media = new OpenClawMediaSource(path, GatewayKey);
+
+            var bytes = await OpenClawSessions.FetchLocalMediaAsync(media, CancellationToken.None);
             if (bytes is { Length: > 0 })
             {
                 turn.ImageBytes = bytes;
@@ -334,8 +375,13 @@ namespace ClaudeBuddy
             // read-scoped media route, so there is no ordinary attachment
             // url to protect against asking a meta question that has no
             // answer.
-            var json = await OpenClawSessions.FetchLocalMediaMetaAsync(path, CancellationToken.None);
-            turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path);
+            // Asked against the same url the fetch above used, so the reason
+            // describes the request that actually failed. See
+            // FetchLocalMediaMetaAsync's own comment: an explanation asked
+            // with a different identity than the fetch does not fail, it lies.
+            var json = await OpenClawSessions.FetchLocalMediaMetaAsync(
+                media.Route, CancellationToken.None);
+            turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, media.Path);
             turn.ImageNote = OpenClawMediaRefusal.Explain(json);
 
             TurnUpdated?.Invoke(turn);
@@ -425,6 +471,12 @@ namespace ClaudeBuddy
             {
                 Role = t.Role,
                 Text = t.Text,
+
+                // Copied alongside ImageUrl, never instead of it: the url is
+                // what gets fetched, this is the file it names, and a turn
+                // that kept one without the other could no longer say why a
+                // picture did not load (CB-109).
+                ImageSourcePath = t.ImageSourcePath,
                 ImageUrl = t.ImageUrl,
                 ImageBytes = t.ImageBytes,
                 ImageAlt = t.ImageAlt,
@@ -456,6 +508,10 @@ namespace ClaudeBuddy
                 {
                     Role = turn.Role,
                     Text = turn.Text,
+
+                    // See PrependHistory's twin above for why this travels
+                    // with ImageUrl rather than being recovered from it.
+                    ImageSourcePath = turn.ImageSourcePath,
                     ImageUrl = turn.ImageUrl,
                     ImageBytes = turn.ImageBytes,
                     ImageAlt = turn.ImageAlt,

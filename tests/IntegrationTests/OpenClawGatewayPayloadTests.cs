@@ -501,8 +501,15 @@ public class OpenClawGatewayPayloadTests
     [Fact]
     public void APageOfHistoryIsClassifiedShapeByShape()
     {
-        var page = Json(HistoryPage).GetProperty("messages");
-        var turns = OpenClawSessions.TurnsFromHistory(page);
+        var payload = Json(HistoryPage);
+        var page = payload.GetProperty("messages");
+
+        // The key off the payload itself, which is where production gets it
+        // too — FetchHistoryPageAsync passes the key it asked with, and every
+        // picture route on the page carries it so the gateway resolves its
+        // media policy against the right agent (CB-109).
+        var turns = OpenClawSessions.TurnsFromHistory(
+            page, payload.GetProperty("sessionKey").GetString());
 
         Assert.Equal(6, turns.Count);
 
@@ -537,6 +544,143 @@ public class OpenClawGatewayPayloadTests
         Assert.False(turns[5].Mine);
         Assert.Equal("can you take the release notes?", turns[5].Text);
         Assert.NotNull(turns[5].Speaker);
+    }
+
+    // --- the assistant-media request, as a shape ---------------------------
+    //
+    // CB-109's seam is an HTTP request the gateway defines, so it gets covered
+    // here as well as in tests/UnitTests, per CLAUDE.md's rule for a format
+    // this process does not own. What is asserted is the request *shape* and
+    // the parsing of captured answers — **no socket is opened and none should
+    // ever be.** CI runners have no OpenClaw gateway at all, and a gateway
+    // call with no timeout does not fail a suite, it stalls it: one such call
+    // on this ticket hung for over ten minutes and had to be killed as an
+    // orphan. A test that silently needs a healthy gateway is a flake with a
+    // schedule.
+    //
+    // The same pattern as everything else in this file: fixtures derived from
+    // what a real gateway actually returned, asserted against the real code.
+
+    private const string MediaPath =
+        "/Users/w/.openclaw/workspace-sample-agent/outputs/demo/sample_40.png";
+
+    private const string MediaSessionKey = "agent:comfyui:discord:direct:100000000000000001";
+
+    // The exact string that goes on the wire, spelled out rather than
+    // computed, so a change to how it is built has to be a change to this line
+    // too. Order included: `source` first, because the app recognises one of
+    // these urls by prefix and CB-93's refusal note is what silently stops
+    // working if anything is put in front of it.
+    [Fact]
+    public void TheAssistantMediaRequestIsTheFileAndTheAskingSession()
+    {
+        var route = new OpenClawMediaSource(MediaPath, MediaSessionKey).Route;
+
+        Assert.Equal(
+            "/__openclaw__/assistant-media?source="
+            + "%2FUsers%2Fw%2F.openclaw%2Fworkspace-sample-agent%2Foutputs%2Fdemo%2Fsample_40.png"
+            + "&sessionKey=agent%3Acomfyui%3Adiscord%3Adirect%3A100000000000000001",
+            route);
+
+        // No agentId, in any arrangement. Measured on a healthy gateway
+        // (OpenClaw 2026.9.2, 3928bad): the key alone serves the file — 200,
+        // 1,116,874 bytes for one of the corpus files — while `agentId=main`
+        // paired with this same key answers 404 Not Found and `agentId=comfyui`
+        // paired with it answers available:true. So a client-sent agent id can
+        // only ever disagree, and the key already carries the provenance.
+        Assert.DoesNotContain("agentId", route, StringComparison.Ordinal);
+    }
+
+    // The explanation is asked with the identity the fetch used, because it is
+    // asked with the *same string* plus a flag. An explanation asked with a
+    // different identity than the fetch does not fail — it lies, which is
+    // worse than the silence CB-93 set out to remove.
+    [Fact]
+    public void TheMetaRequestIsTheFetchPlusAFlag()
+    {
+        var source = new OpenClawMediaSource(MediaPath, MediaSessionKey);
+
+        Assert.Equal(source.Route + "&meta=1", source.MetaRoute);
+        Assert.Equal(source.MetaRoute, OpenClawMediaSource.MetaOf(source.Route));
+        Assert.Contains("&sessionKey=", source.MetaRoute, StringComparison.Ordinal);
+        Assert.EndsWith("&meta=1", source.MetaRoute, StringComparison.Ordinal);
+    }
+
+    // With no session the request is byte-identical to what this app sent
+    // before CB-109 — the no-regression pin, at the seam rather than only at
+    // the constructor. Nothing in production builds one of these; a fixture
+    // can.
+    [Fact]
+    public void WithNoSessionTheRequestIsUnchangedFromBeforeTheFix()
+    {
+        Assert.Equal(
+            OpenClawSessions.AssistantMediaRoute + Uri.EscapeDataString(MediaPath),
+            new OpenClawMediaSource(MediaPath, null).Route);
+    }
+
+    // Both prefixes match a real request, which is what keeps the refusal note
+    // visible: ShouldAskWhy gates on the parameterless prefix so recognition
+    // survives a reordering, and the older constant still matches because
+    // `source` is still first.
+    [Fact]
+    public void ARealRequestIsRecognisedAsOneOfTheseRoutes()
+    {
+        var route = new OpenClawMediaSource(MediaPath, MediaSessionKey).Route;
+
+        Assert.StartsWith(OpenClawSessions.AssistantMediaPathPrefix, route, StringComparison.Ordinal);
+        Assert.StartsWith(OpenClawSessions.AssistantMediaRoute, route, StringComparison.Ordinal);
+        Assert.True(OpenClawMediaRefusal.ShouldAskWhy(Array.Empty<byte>(), route));
+        Assert.True(OpenClawMediaRefusal.ShouldAskWhy(null, OpenClawMediaSource.MetaOf(route)));
+    }
+
+    // The four meta bodies a real gateway returned for this route, verbatim
+    // apart from the ticket value, read back through the real code.
+    //
+    // Detail is what is asserted rather than Explain's sentence: the tooltip is
+    // where the path and the gateway's own code have to survive intact, and the
+    // sentences themselves are CB-108's to word.
+    [Theory]
+    [InlineData("""{"available":false,"code":"outside-allowed-folders","reason":"Outside allowed folders","retryable":false,"canAllow":true}""",
+                "outside-allowed-folders")]
+    [InlineData("""{"available":false,"code":"unsupported-media-type","reason":"Not an image"}""",
+                "unsupported-media-type")]
+    [InlineData("""{"available":false,"code":"file-not-found"}""", "file-not-found")]
+    public void ACapturedRefusalBodyKeepsItsCodeAndPathInTheTooltip(string json, string code)
+    {
+        Assert.Equal(MediaPath + " — " + code, OpenClawMediaRefusal.Detail(json, MediaPath));
+
+        // And the line above it says something, whatever CB-108 has it say.
+        Assert.False(string.IsNullOrWhiteSpace(OpenClawMediaRefusal.Explain(json)));
+    }
+
+    // The success body, which is what the same file answers *with* a session.
+    // mediaTicket and mediaTicketExpiresAt are present in it and are
+    // deliberately unread: the bytes come back 200 on the sessionKey alone, so
+    // presenting a ticket would mean a mandatory meta round trip per picture to
+    // obtain a credential the server does not ask for.
+    [Fact]
+    public void TheSuccessBodyIsNotTreatedAsARefusalAndItsTicketIsIgnored()
+    {
+        const string json = """
+        {"available":true,"mimeType":"image/png","sizeBytes":1116874,
+         "mediaTicket":"v1.aaaaaaaa","mediaTicketExpiresAt":"2026-09-06T00:05:00.000Z"}
+        """;
+
+        Assert.DoesNotContain("refused", OpenClawMediaRefusal.Explain(json), StringComparison.Ordinal);
+        Assert.Equal(MediaPath, OpenClawMediaRefusal.Detail(json, MediaPath));
+    }
+
+    // The traversal the gateway normalises and then cannot find. This app
+    // refuses it before ever asking — LooksLikeAnImagePath, reached through
+    // LocalMediaPathFrom — which since CB-109 is the only structural guard
+    // left on this path, because supplying a session disables the gateway's
+    // folder allowlist rather than scoping it.
+    [Theory]
+    [InlineData("/Users/w/.openclaw/media/../../../../etc/passwd.png")]
+    [InlineData("//evil.example/a.png")]
+    public void ATraversalNeverBecomesARequestAtAll(string path)
+    {
+        Assert.Null(OpenClawSessions.LocalMediaPathFrom("MEDIA:" + path));
     }
 
     // --- the room-send failure path ----------------------------------------

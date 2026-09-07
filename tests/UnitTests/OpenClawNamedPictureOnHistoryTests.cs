@@ -21,8 +21,12 @@ public class OpenClawNamedPictureOnHistoryTests
         "/Users/sample/.openclaw/workspace-manager-aster/.openclaw-cli-images/"
         + "3c1f90ab7d2e4658b0c9d31a5e7f8240c6b4a9e15d38f072a1bc6e9034d5f871.jpg";
 
+    // Null session key for the same reason OpenClawHistoryTurnTests uses one:
+    // these fixtures are about the parser recognising a MEDIA: line, and a
+    // null key leaves the route exactly the shape SourceOf below unpicks.
+    // CB-109's threading is covered in OpenClawMediaSourceTests.
     private static System.Collections.Generic.List<HistoryTurn> Turns(string json)
-        => OpenClawSessions.TurnsFromHistory(JsonDocument.Parse(json).RootElement);
+        => OpenClawSessions.TurnsFromHistory(JsonDocument.Parse(json).RootElement, null);
 
     private static string SourceOf(HistoryTurn turn)
         => Uri.UnescapeDataString(turn.ImageUrl!.Split('=')[^1]);

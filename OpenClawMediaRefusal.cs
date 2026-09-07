@@ -29,28 +29,21 @@ namespace ClaudeBuddy
         // TurnView.LoadImage path but has no meta variant; asking it would be
         // a second wasted request against a route that was never going to
         // explain itself.
+        //
+        // Gated on AssistantMediaPathPrefix rather than AssistantMediaRoute
+        // since CB-109, and the difference is not cosmetic. AssistantMediaRoute
+        // ends in `?source=`, so a StartsWith against it was quietly asserting
+        // that `source` is the *first* query parameter — which it is, on
+        // purpose (see OpenClawMediaSource.Route), but which made this guard
+        // depend on parameter order for no reason of its own. Had CB-109 put
+        // the identity in front of `source`, this test would have stopped
+        // matching and every refusal note in the app would have disappeared
+        // with no test failing and no picture visibly breaking. The prefix
+        // without the parameter is what this actually wants to know.
         internal static bool ShouldAskWhy(byte[]? bytes, string? url) =>
             (bytes is null || bytes.Length == 0)
             && url is not null
-            && url.StartsWith(OpenClawSessions.AssistantMediaRoute, StringComparison.Ordinal);
-
-        // The route a meta question asks, built the same way
-        // OpenClawSessions.FetchLocalMediaAsync builds the ordinary fetch —
-        // same prefix, same escaping, `&meta=1` appended.
-        internal static string MetaRoute(string path) =>
-            OpenClawSessions.AssistantMediaRoute + Uri.EscapeDataString(path) + "&meta=1";
-
-        // The reverse of MetaRoute's escaping, for the one call site that
-        // only has the built url (TurnView.LoadImage, via ChatTurn.ImageUrl)
-        // rather than the raw path a MEDIA: marker was matched against
-        // (OpenClawChatSession.TryResolveLocalMedia, which already has it).
-        // Null for a url this route didn't build, which ShouldAskWhy already
-        // refuses to ask meta about.
-        internal static string? PathFromUrl(string? url) =>
-            url is not null
-            && url.StartsWith(OpenClawSessions.AssistantMediaRoute, StringComparison.Ordinal)
-                ? Uri.UnescapeDataString(url[OpenClawSessions.AssistantMediaRoute.Length..])
-                : null;
+            && url.StartsWith(OpenClawSessions.AssistantMediaPathPrefix, StringComparison.Ordinal);
 
         private const string Prefix = "Picture not shown — ";
 
@@ -100,6 +93,26 @@ namespace ClaudeBuddy
             var code = StringOrNull(root, "code");
             var reason = StringOrNull(root, "reason")?.Trim();
 
+            // CB-109 changed how often this arm is reached and not whether it
+            // is reachable, and it is worth being precise about which, because
+            // the naive reading is that it is now dead.
+            //
+            // This app can no longer *generate* a request that produces it:
+            // every production fetch now carries the asking session, and a
+            // request with a session does not get judged against the folder
+            // allowlist at all (measured — a workspace-sample-agent file
+            // serves under agent:main's session). But the policy is the
+            // gateway's, not ours. A gateway on an older version, with a
+            // different policy config, or after a future policy change can
+            // still answer this, and the response even carries
+            // `canAllow:true`, which implies a server-side allow flow.
+            //
+            // So after CB-109 this arm means something narrower and still
+            // true: the gateway refused this folder *even though we told it
+            // whose conversation this is*. CB-93's remedy is exactly right for
+            // that case — writing to ~/.openclaw/media/ is allowed for every
+            // agent regardless of policy — so the sentence below stays as
+            // shipped. Do not tidy this away as unreachable.
             if (string.Equals(code, "outside-allowed-folders", StringComparison.Ordinal))
             {
                 return Prefix + "the gateway won't serve files from that folder. Ask the agent to "
