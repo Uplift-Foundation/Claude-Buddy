@@ -25,8 +25,9 @@
          reached the dispatcher and landed instead in the crash log as an
          unobserved task exception — twenty-two entries across twelve separate
          runs of the app, counted on 7 Sep 2026. See the same note in
-         AccountOrbWindow.axaml.cs, which is where that count is explained; if
-         you are updating one of them, update both.
+         AccountOrbWindow.axaml.cs, which is where that count is explained. It
+         appears in three files — here, there, and
+         tests/UiTests/AccountOrbWindowTests.cs — and all three move together.
 
          Be precise about what that cost, because measuring it changed the
          answer. On Avalonia 12.1.1 RunAsync faults the *returned task* rather
