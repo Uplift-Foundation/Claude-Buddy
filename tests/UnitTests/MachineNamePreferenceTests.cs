@@ -103,9 +103,9 @@ public class MachineNamePreferenceTests
         // ComputerName is free text and routinely has an apostrophe and spaces
         // in it. What goes on the wire has to survive being a filename, a tmux
         // target and a dictionary key.
-        var tag = MachineNames.Tag("the owner’s Mac mini");
+        var tag = MachineNames.Tag("Sam’s Mac mini");
 
-        Assert.Equal("hostmacmini", tag);
+        Assert.Equal("samsmacmini", tag);
         Assert.DoesNotContain(' ', tag);
         Assert.DoesNotContain('’', tag);
     }
@@ -133,7 +133,7 @@ public class MachineNamePreferenceTests
     public void FreeTextIsStillMadeSafe()
     {
         // ComputerName routinely has spaces and a curly apostrophe.
-        Assert.Equal("HostMacmini", MachineNames.Clean("the owner’s Mac mini"));
+        Assert.Equal("SamsMacmini", MachineNames.Clean("Sam’s Mac mini"));
     }
 
     [Theory]
