@@ -650,22 +650,40 @@ plan's original assumption came from.
 
 Two categories of residue PR #168 left behind on purpose, re-measured here so
 the number stops drifting between mentions. Both are occurrence counts — a
-plain `grep -c` undercounts a line that repeats the value, so these are `grep
--o | wc -l` — taken against a named ref rather than "the tree", which the
-second entry below shows matters just as much.
+plain `grep -c` undercounts a line that repeats the value, so these are
+`grep -io | wc -l`. Case-insensitivity is load-bearing, not decoration: on
+`ddb32c2`, `host-mbp` matched case-sensitively is 3 files / 3 occurrences;
+matched case-insensitively it's 7 files / 18 occurrences, because the same
+host gets typed in more than one case across commits — a method that doesn't
+say `-i` gets a different number than the one below.
 
-**Home paths.** `/Users/user` still appears in the tree:
+A record that states the occurrence count of a value also has to exclude its
+*own* mention of that value, or committing the record changes the very figure
+it commits — this section's own row is not residue, it's the record talking
+about the residue, and a count that doesn't say so cannot be self-consistent.
+That exclusion is narrow, though: it removes only this document's own line,
+not every deliberate mention elsewhere. The clone-owner warning in
+`CLAUDE.md`/`AGENTS.md`, for instance, stays counted — it is exactly the kind
+of occurrence this non-goal is a decision about, not evidence about the
+record itself. Excluding it too would look more careful and measure the wrong
+thing, which is precisely the mistake that produced a 27 for the figure below
+where the correct count is 28.
+
+**Home paths.** `/Users/user`, on `ddb32c2`, excluding only this
+document's own mention:
 
 | Ref | Files (any type) | Of which `.cs` | Occurrences |
 | --- | --- | --- | --- |
 | `933ffb9` | 11 | 8 | 28 |
 | `808119c` | 12 | 9 | 29 |
+| `ddb32c2` | 11 | 8 | 28 |
 
-It moved by one file and one occurrence across two merges in between — neither
-a scrub nor a regression, just ordinary development touching path examples.
-That drift is the argument for citing the ref alongside any count at all: a
-number with no ref attached is already stale by the time it's read, and three
-different figures for this exact residue have circulated for that reason.
+It has moved by a file and an occurrence between refs, and not in one
+direction — ordinary development touching path examples, neither a scrub nor
+a regression. That non-monotonic drift is the actual argument for citing the
+ref alongside any count at all: a number with no ref attached is already
+stale by the time it's read, and three different figures for this exact
+residue have circulated for that reason.
 
 Not chased, and not going to be: a home path reveals a local account name, not
 a credential — it grants nothing on its own. It appears mostly in path examples
@@ -675,14 +693,14 @@ author's real name and email on every commit, permanently — scrubbing it from
 path strings conceals nothing `git log` doesn't already disclose. Chasing it
 across a dozen files would churn far more diff than it protects.
 
-**Machine hostnames.** LAN hostnames of a private network, measured on
-`808119c`:
+**Machine hostnames.** LAN hostnames of a private network, on `ddb32c2`,
+excluding only this document's own mention:
 
 | Hostname | Files | Occurrences |
 | --- | --- | --- |
 | `avatar.internal` | 6 | 9 |
 | `host-mbp` | 6 | 17 |
-| `host-mac-mini` | 2 | 7 |
+| `host-mac-mini` | 1 | 6 |
 
 Same reasoning as the home paths: a LAN hostname is not a credential, it names
 a machine on a private network with no route to it from outside, and it is
