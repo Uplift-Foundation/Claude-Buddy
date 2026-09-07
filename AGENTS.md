@@ -245,6 +245,91 @@ Clones from the canonical repo call it `origin`; clones from the
 `wtvamp/Claude-Buddy` fork call the fork `origin` and the canonical repo
 `upstream`.
 
+## Reading the code: never from this clone
+
+**The checkout you are probably standing in is not `develop`.**
+`/Users/user/Source/Claude-Buddy` is Owner's own working clone and is
+routinely parked on an in-progress branch, so a file read from it describes
+*that branch's* behaviour — and whoever reads it goes on to describe that as
+current. Read from the ref you mean:
+
+```bash
+git show upstream/develop:OpenClawSessions.cs    # a one-off check
+git worktree add /tmp/wt upstream/develop        # several files
+```
+
+**Don't switch this clone's branch to make reading convenient.** It holds
+uncommitted work that isn't yours; an agent did that once and had it reverted
+within the hour.
+
+CB-109 paid for this: it was planned for hours against `LocalMediaPathFrom` as
+read from this clone, which was sitting on CB-107's branch, so the plan
+described a parser arm `develop` does not have. Everything measured against the
+live gateway survived; every statement about *what the app does today* had to be
+withdrawn.
+
+## Claims, and the checks that are worth their cost
+
+The failure above has a general shape, and it appeared six times in one evening
+across CB-93/108/109/112/115/116, from three different agents: **a claim
+inheriting confidence from evidence about something adjacent.**
+
+| the claim | what the evidence was actually about |
+| --- | --- |
+| "the same file" | a byte count from a different file in a sibling directory |
+| "the gateway is gone, a restart won't fix it" | one hung request, plus another agent's stale process table |
+| "this is what the app does today" | source read from a feature branch |
+| "these turns name a picture" | a paraphrase of the parser's rule, not the rule |
+| "harvesting recovers most of them" | files existing on disk, not the transcript saying where |
+| "no client-side fix exists" | the transcript alone, never asking what else the gateway knew |
+
+Each time the evidence was real and about the wrong thing. Four checks that cost
+seconds and each of which has already cost hours by being skipped:
+
+**Don't reimplement the rule you're measuring — run it.** "Names a picture" got
+paraphrased as "contains an image-extension token" where the rule is "the
+*trailing* token is one" — wrong in both directions at once. The parsers here are
+pure and cheap to call, precisely so nobody has to paraphrase them. Related:
+"a message mentioning a `.png`" and "a picture turn" are different counts.
+
+**Pair every positive result with a negative control that would have failed if
+your setup were wrong.** `cron.runs → data` alongside `tasks.flows → missing
+scope: operator.admin`, on one token, is what makes "this works at read scope" a
+measurement rather than a hope. Without the paired refusal you cannot tell it
+from *I happen to be over-privileged*, which nearly invalidated two tickets.
+**Prefer a declaration where the system publishes one** — the gateway states
+per-method scopes in `dist/method-scopes-*.js` — but the two are peers: the
+table can't prove your credential lacks admin, your probe can't prove the
+requirement survives the next release.
+
+**Name the range you audited, and whether it was per-commit or net.** A PR is
+audited against the base it merges into, not against your own commit's parent —
+and net-zero across a range is not the same as never present, because a scrub
+committed *on top of* an introduction cancels it in the net diff while both
+commits stay in history:
+
+```bash
+for c in $(git rev-list upstream/develop..HEAD); do
+  git show $c | grep "^+" | grep -i "<pattern>"    # code
+  git log -1 --format=%B $c | grep -i "<pattern>"  # message
+done
+```
+
+Better still, **prefer un-stacking over remembering you're stacked**: while a
+branch sits on someone else's unmerged commit, "my added lines" and "this PR's
+diff" are different ranges. Rebasing onto merged `develop` collapses them and
+the audit is right by construction. A structural fix beats a discipline.
+
+**A confident negative ends the inquiry, so it earns more suspicion than a
+confident error.** "We can't test that from here" and "I already scrubbed that"
+were both false and both stopped anyone looking again; a wrong positive gets
+contradicted by the next measurement. The sixth row above is the dangerous
+version of this: every claim was correctly sourced and correctly caveated, and
+the conclusion was still wrong because nobody asked whether the transcript was
+the whole world. **Rigour inside a wrong frame produces confident error, and it
+arrives with receipts.** When a conclusion says something is impossible, ask
+what *else* knows about this — not whether your evidence is sound.
+
 ## Commits
 
 Messages here are prose, not changelog lines: a short summary in the
