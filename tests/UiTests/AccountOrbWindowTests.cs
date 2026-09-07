@@ -328,8 +328,10 @@ public class AccountOrbWindowTests
     // answers with InvalidOperationException("Looping animations must not use
     // the Run method.") — a looping animation is *applied* by a style, never
     // run. Fire-and-forget, so the throw reached only
-    // ~/Library/Logs/ClaudeBuddy/crash.log, as an unobserved task exception,
-    // seven times over four days.
+    // ~/Library/Logs/ClaudeBuddy/crash.log, as an unobserved task exception —
+    // twenty-two entries across twelve separate runs of the app, counted on
+    // 7 Sep 2026. AccountOrbWindow.axaml.cs explains that count; this is the
+    // third file carrying it, and all three move together.
     //
     // The *decision* — which readings breathe, and which rings must be left
     // strictly alone — is not tested here at all. It lives in
