@@ -36,6 +36,34 @@ namespace ClaudeBuddy
         // which is a real cost honestly paid for a ring that tracks a burst;
         // at ten seconds it would be most of a core, for a number that reports
         // whole percentage points.
+        //
+        // **On the timeout hazard UsagePoller's comment warns about, because
+        // this is the change that warning was written to catch.** That comment
+        // tells the next person that anyone tightening the cadence must weigh
+        // the tail rather than the median: UsagePoller.RunOne gives up at 20s
+        // and CodexAppServerUsage.Ask at 15s, and a dropped source is not a gap
+        // on screen — AccountOrbs.Apply keeps the reading it already had, so a
+        // cadence fast enough to start missing its own deadline would make the
+        // orb *less* truthful rather than more. That warning stands, and this
+        // change does not incur it, and both halves of that need saying or the
+        // next reader finds a caution sitting next to the thing it appears to
+        // forbid.
+        //
+        // It does not incur it because **a cadence does not shorten a
+        // deadline.** AccountOrbs._polling means a read already in flight is
+        // never joined by a second, so every read still gets the same 20s and
+        // 15s it always had, however often the interval says to start one. What
+        // a faster cadence changes is how often a read *begins*, not how long
+        // one is allowed to take — so the ceilings are exactly as far away at
+        // sixty seconds as they were at five minutes. The hazard being warned
+        // about is a cadence fast enough that reads would need to overlap,
+        // which the guard makes impossible rather than merely unlikely.
+        //
+        // Measured headroom when this was written: worst of thirteen rounds
+        // 7.7s, or 38% of the 20s ceiling, with zero dropped readings. That is
+        // one machine on one afternoon and is recorded as such, not as a
+        // property of the system — generalising from a single measurement is
+        // the mistake CB-122 exists to correct.
         internal static readonly TimeSpan Fast = TimeSpan.FromSeconds(60);
 
         // Where it settles, and what the app did unconditionally before.

@@ -215,6 +215,20 @@ namespace ClaudeBuddy
     // machine at load average 5.5 across 14 cores. The rings are still not a
     // live readout and were never designed to be. That is now a statement about
     // what a poll costs, not a claim about what the CLI would refuse to tell us.
+    //
+    // One caution for anyone changing that cadence, and the reconciliation of it
+    // with the cadence that already did: RunOne below gives up at 20s and
+    // CodexAppServerUsage.Ask at 15s, and a dropped source is not a gap on
+    // screen — AccountOrbs.Apply keeps the reading it already had, deliberately,
+    // so a network blink does not look like an account being deleted. A cadence
+    // fast enough to start missing its own deadline would therefore make the orb
+    // *less* truthful rather than more, which means the tail matters here and
+    // the median does not. UsagePollCadence already polls as often as every
+    // sixty seconds and does **not** run into this, because AccountOrbs._polling
+    // stops a read in flight from ever being joined by a second: each read still
+    // gets the whole 20s or 15s regardless of the interval. See the comment on
+    // UsagePollCadence.Fast, which has the argument in full — a cadence changes
+    // how often a read starts, never how long it may take.
     internal sealed class UsagePoller : IUsageSource
     {
         // Generous, and deliberately not the five seconds BackgroundJobs uses
