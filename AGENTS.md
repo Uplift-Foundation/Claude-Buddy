@@ -323,6 +323,62 @@ report.** A non-goal nobody can check against is a shrug, not a decision — so
 body reporting a finding needs only the category — "a home path", "a
 four-digit id prefix" — because the value adds nothing a reader can act on.
 
+**Everything above reads as a warning about optimism. It is not.** Of six wrong
+conclusions in one day, four were too strong and two were too weak — a freeze
+reported as real that was not, and a defect written off as a perception problem
+that was not either. The direction is incidental, and a rule tuned to catch only
+the confident half will keep letting the other half through. What all six share
+is that something was *concluded* where it could have been *gone and looked at*.
+Five more checks, in that light:
+
+**A comment asserting a fact about an external system is not evidence — it is a
+hypothesis with good grammar.** `UsagePoller.MinimumInterval` said Claude Code
+caches the usage fetch behind a five-minute write guard, so polling faster
+"cannot produce a newer number". Nobody had ever checked. A fresher figure comes
+back twelve seconds later. Because the sentence read like a finding rather than
+an assumption, the cadence was never weighed against a real cost — it was
+deferred to — and an investigation into orbs a user reported as frozen spent
+hours downstream of it, since a comment saying fresher data does not exist rules
+out the cheapest explanation first. CB-122 is what that cost. The check was one
+command in a loop.
+
+**A measurement taken during one regime is not a measurement of the system.**
+This happened twice in one afternoon, and the repeat is the point, because the
+second came *after* the first had been understood and written down. First an
+eight-second opacity trace was taken as evidence about indefinite behaviour.
+Then, having learned that, a ten-minute window in which usage did not move was
+nearly reported as the cache granularity — but the account was idle, so a flat
+series is equally consistent with a five-minute cache and with no cache at all.
+The instrument was perfect both times: the right command, the right environment,
+sixty-second intervals, thirteen clean rounds, zero dropped samples. **Care at
+the point of measurement cannot catch this.** Only one question can, and it has
+to be asked before generalising rather than after: *is this system stationary
+over the window I sampled?* If it is bursty, a quiet sample measures the quiet.
+
+**A line-based search over wrapped prose can return a false zero.** Two greps for
+phrases that were present came back empty purely because the text had been
+reflowed across a line break, and both were a keystroke away from being reported
+as missing. Confirm a negative by reading, not by rerunning. This compounds with
+the confident-negative rule above: a false zero ends the inquiry, which is
+exactly why it deserves more suspicion than a false positive would.
+
+**A review is a statement about a sha, and it expires when the branch moves.** A
+PR read, reasoned about and reported on can be merged, rebased or force-pushed
+between the reading and the report, and every identifier in that report then
+describes something that no longer exists. Re-resolve the head sha immediately
+before reporting, and say which one you checked. This is the reused-window-id
+trap in another costume: a stale identifier does not error, it answers about
+something else, plausibly.
+
+**Auditing part of a claim and reporting the whole of it is that same failure in
+miniature.** Resolving a rebase conflict here deleted a paragraph the other
+branch had added. The audit that followed checked that every **measurement**
+from that branch survived, found that they had, and reported that **nothing**
+had. The check was structurally incapable of finding the missing thing, because
+the missing thing was not a measurement — a claim about the whole from evidence
+about one part, stated in the same sentence that claimed a careful audit. Report
+what you checked *for*, not merely that you checked.
+
 ## Auditing a diff: range, scope, and refusals
 
 **Name the range you audited, and whether it was per-commit or net.** A PR is
@@ -554,6 +610,45 @@ wrong when the halves start with different letters, and partly because reading
 the answer meant looking at the screen. Same rule as the geometry: `OrbGlyph` is
 pure and takes the two-letter *setting* as an argument rather than reading it,
 so the tests do not depend on the machine they run on.
+
+### Measuring a running app from outside
+
+Reading geometry and pixels back out of the window server is the right instrument
+when a change is about what actually reached the screen — a property can update
+while no frame is ever presented, and only the pixels can tell you which happened.
+It has three traps in it, and **all three hand back plausible data rather than an
+error**, which is what makes them worth writing down. All three were hit in one
+afternoon reading account orbs off a live app.
+
+**A macOS window id is not stable across a process restart, and a freed id is
+reused rather than retired.** `screencapture -x -o -l<dead id>` does not fail; it
+returns a perfectly good PNG of whatever window inherited the number. That was
+caught only because a weekly ring appeared to move eighty points in a minute,
+which is not a rate any weekly window moves at — a two-point drift would have
+been reported as exactly the movement being looked for. Re-resolve the pid *and*
+the window ids on every sample, and log them beside the data, so a restart shows
+up in the series instead of hiding in it. Note `MacOSWindowList.ForPid` will not
+find orbs: it drops anything under 80x80 and anything off layer 0, and orbs are
+72x72 and topmost, so this needs its own `CGWindowListCopyWindowInfo` query.
+
+**An arc sweep read off pixels overshoots — about +2.5% at r=32 and +3.2% at
+r=25.** The stroke is 5 dip with a round cap, so the drawn arc runs 2.5 dip past
+each end, and the antialiased fringe counts as coloured on top of that. The error
+is proportionally worse on a short arc, where the caps are a large fraction of
+the whole. Subtract it before calling a drawn value wrong: the orbs matched their
+source exactly once it was accounted for, having read about eleven points high
+before. And mask the CLI badge — it sits 32.5 dip from the orb centre at roughly
+225 degrees, which is *on* the weekly ring, so a naive "coloured pixel at r=32"
+scan reports about 6.7% weekly for an orb drawing none at all.
+
+**A background job has no window server session, and that failure is silent.**
+`CGSessionCopyCurrentDictionary` returns null there, `MacOSScreenLock` reads null
+as locked, and the main thread parks for up to two hours having printed nothing
+whatsoever. Patching that out only moves the failure along to `Avalonia.Native
+was not able to start the RenderTimer. Native error code is: -6661`, and
+`screencapture` refuses both `-l<id>` and `-R<rect>` in that context too. So
+anything that has to see the screen goes to a session with a real GUI context, or
+to a human. It cannot be made to work from a background job by trying harder.
 
 ## The automated suite
 
