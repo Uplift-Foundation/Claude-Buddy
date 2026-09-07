@@ -475,5 +475,56 @@ namespace ClaudeBuddy.Tests
             Assert.Equal("openclaw:agent:main:main", session.SessionId);
             Assert.Equal("agent:main:main", session.GatewayKey);
         }
+
+        // ---- CB-116: TryResolveLocalMedia's own confidence gate --------------
+        //
+        // The live path (OnAgentText's rooted-candidate branch) has no message
+        // envelope to read an openclawAutomation tag off, unlike the history
+        // read — so the only provenance it can go on is whether the agent wrote
+        // an explicit "MEDIA:" line. No gateway is configured in this suite
+        // (TestBootstrap points settings at a fresh temp directory), so both the
+        // byte fetch and the meta call reach their own host/token guard and
+        // answer without a socket — the same "no gateway" seam
+        // ChatPanelImageNoteTests.ARefusedPicturesTooltipIsThePathFromTheSource
+        // already relies on for the history-path twin of this behaviour.
+
+        // The regression pin: an explicit MEDIA: line on the live path kept
+        // explaining a failure before this ticket, and still does — High
+        // confidence, wording unchanged.
+        [Fact]
+        public async Task ALiveMediaLineFailureStillExplainsWhy()
+        {
+            var session = Session();
+
+            session.OnAgentEvent("agent", AgentText("here you go\nMEDIA:/tmp/live_high.png"));
+
+            for (var i = 0; i < 50 && session.History[0].ImageNote is null; i++)
+                await Task.Delay(10);
+
+            Assert.Equal("Picture not shown — couldn't ask the gateway why.",
+                session.History[0].ImageNote);
+            Assert.Equal(MediaConfidence.High, session.History[0].Confidence);
+        }
+
+        // The fix itself: a live reply ending in a rooted path with no "MEDIA:"
+        // prefix and no automation to confirm it — the same unbounded, ordinary-
+        // prose population "I deleted photo.png" belongs to — stays silent on a
+        // failure. Confidence is set synchronously before the fetch even starts
+        // (see TryResolveLocalMedia), so it is the positive witness that the
+        // gate actually ran rather than nothing having happened yet.
+        [Fact]
+        public async Task ALiveTrailingRootedPathFailureStaysSilent()
+        {
+            var session = Session();
+
+            session.OnAgentEvent("agent", AgentText("here you go /tmp/live_low.png"));
+
+            Assert.Equal(MediaConfidence.Low, session.History[0].Confidence);
+
+            await Task.Delay(200);
+
+            Assert.Null(session.History[0].ImageNote);
+            Assert.Null(session.History[0].ImageNoteDetail);
+        }
     }
 }

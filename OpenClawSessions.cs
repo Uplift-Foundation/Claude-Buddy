@@ -1853,7 +1853,13 @@ namespace ClaudeBuddy
                     mirrorDrawn.Add((turns.Count, source));
                     turns.Add(new HistoryTurn(
                         role, delivered, media.Route,
-                        delivered, at, speaker, colour, mine, null, media.Path));
+                        delivered, at, speaker, colour, mine, null, media.Path,
+
+                        // CB-116: the gateway wrote this record itself to say
+                        // it delivered something — a delivery-mirror is never
+                        // a guess about what an agent's prose might mean, so a
+                        // failed fetch behind it is always worth explaining.
+                        Confidence: MediaConfidence.High));
                     continue;
                 }
 
@@ -1903,13 +1909,37 @@ namespace ClaudeBuddy
                     ? automation
                     : (OpenClawAutomation?)null;
 
+                // CB-116: whether this turn's own origin is reason enough to
+                // trust a *failed* fetch's explanation, decided here — the one
+                // place that has both the candidate's provenance (Explicit,
+                // from LocalMediaPathFrom itself) and the turn's provenance
+                // (cronAutomation, just above) in hand. Never re-derived from
+                // the text downstream: OpenClawMediaRefusal's callers act on
+                // this value and never look at the candidate's shape again.
+                //
+                // High whenever the candidate is Explicit — an agent that
+                // wrote a "MEDIA:" line is asserting a picture regardless of
+                // whether the turn came from an automation — or whenever the
+                // turn is a confirmed openclawAutomation delivery, even if the
+                // candidate itself is only a trailing token. Low otherwise:
+                // ordinary prose that merely ends in something filename-
+                // shaped, which is exactly "I deleted photo.png" and exactly
+                // "I deleted /Users/me/photo.png" — the rootedness of the
+                // second does not make it any more trustworthy than the
+                // first, because both are shape, and shape is not what this
+                // tiers on.
                 var namedCandidate = LocalMediaPathFrom(text);
                 if (namedCandidate is not null)
                 {
+                    var candidate = namedCandidate.Value;
+                    var confidence = candidate.Explicit || cronAutomation is not null
+                        ? MediaConfidence.High
+                        : MediaConfidence.Low;
+
                     // A bare filename resolves against this page's own
                     // harvested paths (CB-94) before falling back to a guess
                     // — see ResolveLocalMediaPath's own comment.
-                    var named = ResolveLocalMediaPath(namedCandidate, mediaPaths);
+                    var named = ResolveLocalMediaPath(candidate.Path, mediaPaths);
                     namedSources[named] = namedSources.GetValueOrDefault(named) + 1;
 
                     // Text kept and the picture beside it, which is the shape
@@ -1925,12 +1955,19 @@ namespace ClaudeBuddy
                     turns.Add(new HistoryTurn(role, text.Trim(), namedMedia.Route,
                         named[(named.LastIndexOf('/') + 1)..],
                         at, speaker, colour, mine, null, namedMedia.Path,
-                        Automation: cronAutomation));
+                        Automation: cronAutomation, Confidence: confidence));
                     continue;
                 }
 
+                // No candidate at all, so nothing here draws a picture yet —
+                // but a cron-tagged turn can still gain one later, through the
+                // recovery pass in FetchHistoryPageAsync, which is why the
+                // same automation-based tier is set here too rather than left
+                // at the default. See that method's own Confidence: High for
+                // why a recovered path does not need to re-derive this.
                 turns.Add(new HistoryTurn(role, text.Trim(), null, "", at,
-                    speaker, colour, mine, Automation: cronAutomation));
+                    speaker, colour, mine, Automation: cronAutomation,
+                    Confidence: cronAutomation is not null ? MediaConfidence.High : MediaConfidence.Low));
             }
 
             // One delivery, two arms, one bubble — CB-98's cross-arm case,
@@ -2082,10 +2119,34 @@ namespace ClaudeBuddy
         private static readonly string[] ImageExtensions =
             { ".png", ".jpg", ".jpeg", ".gif", ".webp" };
 
+        // CB-116: which of the two ways LocalMediaPathFrom can find a
+        // candidate produced this one — the input to tiering the note a
+        // failed fetch leaves behind (see MediaConfidence, next to ChatRole
+        // in RemoteChat.cs, for the full reasoning, and HistoryTurn.Confidence
+        // below for where a candidate's Explicit combines with a turn's own
+        // automation tag to decide it). A record rather than the bare
+        // string this returned before, for the same reason HistoryTurn is a
+        // record and not a tuple: the caller needs *why* a candidate was
+        // found, not only what it was, and a downstream re-derivation of that
+        // "why" from the string alone is exactly the bug this ticket exists
+        // to fix (see LocalMediaPathFrom's own comment).
+        //
+        // Explicit is true only for a "MEDIA:" line — an agent that writes
+        // that prefix is asserting a picture, regardless of anything else
+        // about the turn. It is false for both other arms below (a message
+        // that is nothing but a path, and CB-107's caption-plus-trailing-
+        // token shape): neither one is a stated assertion, and the caller
+        // decides their tier from provenance the parser has no access to —
+        // whether the turn came off an openclawAutomation delivery — not from
+        // this flag. See CB-116's design note on why that split is by
+        // provenance and never by shape: a rooted path in prose is exactly as
+        // untrustworthy as a bare one.
+        internal readonly record struct LocalMediaCandidate(string Path, bool Explicit);
+
         // Returns a rooted path (starting with "/" or "~/") or, since CB-107,
         // a bare filename with no directory at all — the caller decides how
         // to turn either into something fetchable (ResolveLocalMediaPath).
-        internal static string? LocalMediaPathFrom(string text)
+        internal static LocalMediaCandidate? LocalMediaPathFrom(string text)
         {
             // A line of its own, not necessarily the first line: the real
             // captured example (CB-88) has two paragraphs of in-character
@@ -2103,11 +2164,13 @@ namespace ClaudeBuddy
                 if (!line.StartsWith(LocalMediaMarker, StringComparison.Ordinal)) continue;
 
                 var path = line[LocalMediaMarker.Length..].Trim();
-                return LooksLikeAnImagePath(path) ? path : null;
+                return LooksLikeAnImagePath(path)
+                    ? new LocalMediaCandidate(path, Explicit: true)
+                    : null;
             }
 
             var trimmed = text.Trim();
-            if (LooksLikeAnImagePath(trimmed)) return trimmed;
+            if (LooksLikeAnImagePath(trimmed)) return new LocalMediaCandidate(trimmed, Explicit: false);
 
             // CB-107: an agent's caption can pair descriptive prose with the
             // file rather than sending it alone — a caption line followed by
@@ -2126,7 +2189,7 @@ namespace ClaudeBuddy
             if (tokens.Length == 0) return null;
 
             var last = tokens[^1];
-            if (LooksLikeAnImagePath(last)) return last;
+            if (LooksLikeAnImagePath(last)) return new LocalMediaCandidate(last, Explicit: false);
 
             // A bare filename alone, with nothing else in the message, already
             // failed the whole-message check above and stays plain text — an
@@ -2138,7 +2201,9 @@ namespace ClaudeBuddy
             // unresolved; ResolveLocalMediaPath is what turns this into
             // something fetchable, the same way the delivery-mirror branch
             // already does for its own bare filenames.
-            return tokens.Length > 1 && LooksLikeABareImageFilename(last) ? last : null;
+            return tokens.Length > 1 && LooksLikeABareImageFilename(last)
+                ? new LocalMediaCandidate(last, Explicit: false)
+                : null;
         }
 
         // No directory separator at all, as opposed to LooksLikeAnImagePath's
@@ -3145,7 +3210,19 @@ namespace ClaudeBuddy
                     {
                         ImageUrl = media.Route,
                         ImageAlt = OpenClawCronRecovery.BasenameOf(recovered),
-                        ImageSourcePath = media.Path
+                        ImageSourcePath = media.Path,
+
+                        // CB-116: already High going in — this loop only ever
+                        // reaches a turn whose Automation is set, which is
+                        // exactly what makes TurnsFromHistory's own tiering
+                        // High for it. Restated explicitly anyway, because
+                        // this is the single most confirmed source of the
+                        // five in CB-116's tier table — a path read back off
+                        // the cron run that produced the delivery — and
+                        // because leaving it implicit is exactly the shape of
+                        // bug CB-115 itself was: a value that stayed right
+                        // only until something else in this area moved.
+                        Confidence = MediaConfidence.High
                     };
                 }
 

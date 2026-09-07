@@ -2872,6 +2872,17 @@ namespace ClaudeBuddy
                 var path = _turn.ImageSourcePath;
                 if (path is null) return;
 
+                // CB-116: a low-confidence candidate — ordinary prose that
+                // merely ends in something filename-shaped, with nothing
+                // (no explicit "MEDIA:" line, no automation delivery) to say
+                // this turn was a real picture — stays silent on a failure
+                // rather than asking the gateway why and showing a
+                // confident-sounding note for a picture that was never real.
+                // "I deleted photo.png" is exactly this case. See
+                // ChatTurn.Confidence and MediaConfidence, next to ChatRole
+                // in RemoteChat.cs, for the full reasoning.
+                if (_turn.Confidence != MediaConfidence.High) return;
+
                 // Asked against the very url that just failed, plus the flag.
                 // An explanation asked with a different identity than the
                 // fetch does not fail — it *lies*, which is worse than the

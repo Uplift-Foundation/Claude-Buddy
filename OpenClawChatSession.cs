@@ -73,7 +73,18 @@ namespace ClaudeBuddy
         // read of one message with no opinion on what counts as
         // image-shaped. See OpenClawCronRecovery's header for the full
         // trigger and why it is gated this way.
-        OpenClawAutomation? Automation = null);
+        OpenClawAutomation? Automation = null,
+
+        // CB-116: whether a *failed* fetch for this turn's picture is worth
+        // explaining with a visible note — see MediaConfidence, next to
+        // ChatRole in RemoteChat.cs, for the full reasoning. Decided by
+        // TurnsFromHistory (and, for a CB-115 recovery, by
+        // FetchHistoryPageAsync) at the point each arm already knows the
+        // candidate's provenance; nothing downstream re-derives it from the
+        // text. Defaults High so an arm with no opinion — an inline image
+        // block, a turn built outside this parser — keeps today's behaviour:
+        // a failure explains itself unless something here says not to.
+        MediaConfidence Confidence = MediaConfidence.High);
 
     // One OpenClaw session, as something the chat panel can talk to.
     //
@@ -274,6 +285,8 @@ namespace ClaudeBuddy
             var localPath = OpenClawSessions.LocalMediaPathFrom(text);
             if (localPath is not null)
             {
+                var candidate = localPath.Value;
+
                 // No page to harvest a real directory from while streaming
                 // (see ResolveLocalMediaPath's own comment) — a bare filename
                 // gets the shared-media-directory guess, the same one the
@@ -292,10 +305,22 @@ namespace ClaudeBuddy
                 // record, and nothing is lost either way — if the recovery
                 // finds nothing, the refetched page's own named-path arm
                 // applies the same guess this branch would have.
-                var resolved = OpenClawSessions.ResolveLocalMediaPath(localPath, null);
-                if (resolved != OpenClawSessions.SharedMediaDir + localPath)
+                var resolved = OpenClawSessions.ResolveLocalMediaPath(candidate.Path, null);
+                if (resolved != OpenClawSessions.SharedMediaDir + candidate.Path)
                 {
-                    TryResolveLocalMedia(_streaming, resolved);
+                    // CB-116: no openclawAutomation to consult here — a live
+                    // "agent" event carries only the streamed text, not the
+                    // message envelope TurnsFromHistory reads it off. So the
+                    // only provenance available live is whether the agent
+                    // wrote an explicit "MEDIA:" line; a trailing-token match
+                    // with no automation to confirm it is tiered Low, the same
+                    // conservative default a history read would give the
+                    // identical text on a non-automation turn.
+                    var confidence = candidate.Explicit
+                        ? MediaConfidence.High
+                        : MediaConfidence.Low;
+
+                    TryResolveLocalMedia(_streaming, resolved, confidence);
                     return;
                 }
             }
@@ -379,7 +404,15 @@ namespace ClaudeBuddy
                 // path here would mean a live reply's picture lost the ability
                 // to say why it did not load — which is what the history path
                 // does say (CB-93).
+                //
+                // Confidence travels with it for the same reason (CB-116):
+                // setting ImageUrl below is what wakes TurnView.LoadImage up
+                // (see its PropertyChanged handler), and that is where this
+                // value gets read. Leaving it at the turn's default here would
+                // silently promote whatever tier the matched turn actually
+                // carries to High.
                 turn.ImageSourcePath = match.Value.ImageSourcePath;
+                turn.Confidence = match.Value.Confidence;
                 turn.ImageUrl = match.Value.ImageUrl;
             }
 
@@ -400,9 +433,21 @@ namespace ClaudeBuddy
         // deciding what counts as such a reference. Same one-shot-per-turn
         // guard as TryResolveLiveImage; the two never fire for the same turn
         // since OnAgentText only ever detects one marker or the other.
-        private async void TryResolveLocalMedia(ChatTurn turn, string path)
+        //
+        // confidence travels from OnAgentText's own read of the candidate
+        // (CB-116) — carried in rather than re-derived from path, which by
+        // this point is already resolved and has lost whether it came from an
+        // explicit "MEDIA:" line or a bare trailing token.
+        private async void TryResolveLocalMedia(
+            ChatTurn turn, string path, MediaConfidence confidence)
         {
             if (!_pendingImageChecks.Add(turn)) return;
+
+            // Set before the fetch, the same order LoadImage's twin uses for
+            // ImageSourcePath: whoever knows the reason writes it down before
+            // anything that might act on it, rather than the panel asking a
+            // question this method already had the answer to.
+            turn.Confidence = confidence;
 
             // The path *and* whose conversation named it (CB-109). This method
             // is on the session, so GatewayKey is simply in hand — the seam
@@ -422,6 +467,14 @@ namespace ClaudeBuddy
                 TurnUpdated?.Invoke(turn);
                 return;
             }
+
+            // CB-116: a low-confidence candidate — ordinary prose that merely
+            // ends in something filename-shaped, with nothing to say this
+            // turn was a real delivery — stays silent on a failure rather
+            // than asking the gateway why and showing a confident-sounding
+            // note for a picture that was never real. See
+            // MediaConfidence for the full reasoning.
+            if (confidence != MediaConfidence.High) return;
 
             // CB-93: the fetch above came back empty, which used to leave the
             // turn as bare "MEDIA:<path>" text with no explanation. No
@@ -533,6 +586,11 @@ namespace ClaudeBuddy
                 // that kept one without the other could no longer say why a
                 // picture did not load (CB-109).
                 ImageSourcePath = t.ImageSourcePath,
+
+                // CB-116: carried the same way — the tier TurnsFromHistory
+                // already worked out for this turn, not re-guessed here from
+                // its text. See ChatTurn.Confidence's own header.
+                Confidence = t.Confidence,
                 ImageUrl = t.ImageUrl,
                 ImageBytes = t.ImageBytes,
                 ImageAlt = t.ImageAlt,
@@ -568,6 +626,7 @@ namespace ClaudeBuddy
                     // See PrependHistory's twin above for why this travels
                     // with ImageUrl rather than being recovered from it.
                     ImageSourcePath = turn.ImageSourcePath,
+                    Confidence = turn.Confidence,
                     ImageUrl = turn.ImageUrl,
                     ImageBytes = turn.ImageBytes,
                     ImageAlt = turn.ImageAlt,

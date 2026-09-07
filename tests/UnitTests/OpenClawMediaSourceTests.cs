@@ -269,7 +269,7 @@ public class OpenClawMediaSourceTests
     [Fact]
     public void AnOrdinaryRootedImagePathIsStillAccepted()
     {
-        Assert.Equal(Png, OpenClawSessions.LocalMediaPathFrom("MEDIA:" + Png));
+        Assert.Equal(Png, OpenClawSessions.LocalMediaPathFrom("MEDIA:" + Png)?.Path);
     }
 
     // ---- threaded through the parser ------------------------------------

@@ -30,6 +30,42 @@ namespace ClaudeBuddy
     //     shows what it is given and never trims or pages.
     public enum ChatRole { User, Assistant, System }
 
+    // CB-116: how much a candidate picture's own origin is worth trusting
+    // when the fetch behind it fails — the fix for a bug that had nothing to
+    // do with fetching. OpenClaw's LocalMediaPathFrom recognises any
+    // caption-shaped prose ending in something extension-shaped (CB-107),
+    // which is right for finding real pictures and wrong for deciding
+    // whether a *failure* is worth a visible "picture not shown" note:
+    // "I deleted photo.png" matches the same shape as a real delivery and,
+    // unlike a real delivery, is an unbounded population — any message in any
+    // conversation that happens to end in a filename, forever.
+    //
+    // The fetch itself is unaffected by this — every producer still tries,
+    // cheaply and cached, because that is how real pictures named this way
+    // are found at all. This only tiers whether a *failed* fetch gets to say
+    // why. High for a candidate this app has independent reason to trust —
+    // an explicit "MEDIA:" line, the gateway's own delivery-mirror record, a
+    // path CB-115 recovered from the cron run that produced it, or a
+    // trailing token on a turn the gateway tagged as an openclawAutomation
+    // delivery. Low for everything else: ordinary prose that merely ends in
+    // something filename-shaped, which is exactly comfyui-style narration
+    // turns (accepted as a trade — see CB-116's PR body) and exactly
+    // "I deleted photo.png".
+    //
+    // Deliberately not derived from the candidate's *shape* — a rooted path
+    // in prose is exactly as untrustworthy as a bare one, and the real
+    // corpus has genuine deliveries in both shapes. Provenance is metadata
+    // about who produced the turn; shape is a property of the text, and
+    // CB-107 already proved shape alone cannot tell a caption from a
+    // delivery.
+    //
+    // A transport-neutral type living beside ChatRole rather than nested in
+    // OpenClawSessions, even though every producer of it today is OpenClaw's:
+    // ChatTurn.Confidence is a public member of a deliberately
+    // transport-agnostic model, and a public member cannot expose a less
+    // accessible — or more tightly coupled — type than itself.
+    public enum MediaConfidence { High, Low }
+
     public enum RemoteChatState { Disconnected, Connecting, Connected, Error }
 
     // Mutable on purpose: a streaming reply updates Text in place and raises
@@ -116,6 +152,22 @@ namespace ClaudeBuddy
         // it is always set immediately *before* ImageUrl, whose Raise() is
         // what tells the row to look again.
         public string? ImageSourcePath { get; set; }
+
+        // CB-116: whether a *failed* fetch for ImageUrl is worth explaining
+        // with the note below, rather than staying silent — see
+        // MediaConfidence's own header for the full reasoning. Set by
+        // whoever set ImageSourcePath, the same pairing that field already
+        // has with ImageUrl; see OpenClawSessions.HistoryTurn.Confidence for
+        // where the OpenClaw producers actually decide the value.
+        //
+        // Plain rather than notifying, for the same reason ImageSourcePath is:
+        // it is always set before ImageUrl, whose own setter is what tells
+        // the row to look again, so nothing here needs its own Raise().
+        //
+        // Defaults High: a turn built by anything other than the OpenClaw
+        // producers — a local CLI transcript, a room merge — never had a
+        // reason not to ask why, and keeps not having one.
+        public MediaConfidence Confidence { get; set; } = MediaConfidence.High;
 
         private string? _imageNote;
 
