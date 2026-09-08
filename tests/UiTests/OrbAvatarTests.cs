@@ -88,6 +88,35 @@ public class OrbAvatarTests
         }
     }
 
+    // The workspace resolver publishes the same identity table as agents.list.
+    // Drive that table through a real orb as well as asserting its parser in the
+    // console suites: this catches a metadata picture being accepted but never
+    // reaching the visible OpenClaw surface.
+    [AvaloniaFact]
+    public void AWorkspaceIdentityPictureAndVoiceReachTheAgentOrb()
+    {
+        var agent = Agent();
+        try
+        {
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>
+                {
+                    [agent] = new("Workspace Nova", "✨", Png(), "Samantha"),
+                });
+            var sessionId = $"openclaw:agent:{agent}:discord:channel:1";
+            var orb = new OrbWindow(sessionId);
+
+            orb.UpdateFrom(Gateway("Workspace Nova"));
+
+            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.Equal("Samantha", OpenClawSessions.VoiceForSession(sessionId));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
     // Applying the same picture twice is a no-op rather than a rebuild: the scan
     // runs a couple of times a second, and rebuilding the brush on every tick
     // would restart an animated avatar continuously.

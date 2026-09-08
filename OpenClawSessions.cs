@@ -79,7 +79,7 @@ namespace ClaudeBuddy
         private static readonly Dictionary<string, AgentIdentity> Identities =
             new(StringComparer.OrdinalIgnoreCase);
 
-        internal sealed record AgentIdentity(string Name, string? Emoji, byte[]? Avatar);
+        internal sealed record AgentIdentity(string Name, string? Emoji, byte[]? Avatar, string? Voice = null);
 
         // A test seam, matching SetSnapshotForTests: the only thing that fills the
         // identity table is LoadAgentNamesAsync, which is an agents.list request
@@ -232,6 +232,12 @@ namespace ClaudeBuddy
             var parts = key.Split(':');
             return parts.Length >= 2 && parts[0] == "agent" ? IdentityOf(parts[1]) : null;
         }
+
+        // Speech stays with the user's selected voice unless this agent named a
+        // system-voice label in its workspace metadata.  A missing (or rejected)
+        // field is deliberately not a different kind of default.
+        public static string? VoiceForSession(string sessionId) =>
+            IdentityForSession(sessionId)?.Voice;
 
         // How long a session stays "working" after its last event. A turn emits
         // events continuously while it runs — thinking deltas, tool phases — so
@@ -867,25 +873,7 @@ namespace ClaudeBuddy
                 {
                     var id = Str(agent, "id");
                     if (string.IsNullOrWhiteSpace(id)) continue;
-
-                    var identity = agent.TryGetProperty("identity", out var block)
-                        && block.ValueKind == JsonValueKind.Object
-                            ? block
-                            : default;
-
-                    var name = Str(agent, "displayName");
-                    if (string.IsNullOrWhiteSpace(name)) name = Str(agent, "name");
-                    if (string.IsNullOrWhiteSpace(name) && identity.ValueKind == JsonValueKind.Object)
-                    {
-                        name = Str(identity, "name");
-                    }
-
-                    parsed.Add((id!, new AgentIdentity(
-                        name?.Trim() ?? id!,
-                        identity.ValueKind == JsonValueKind.Object ? Str(identity, "emoji") : null,
-                        identity.ValueKind == JsonValueKind.Object
-                            ? DecodeDataUri(Str(identity, "avatarUrl"))
-                            : null)));
+                    parsed.Add((id!, IdentityFrom(agent)));
                 }
 
                 lock (Gate)
@@ -916,6 +904,29 @@ namespace ClaudeBuddy
                 // Names are a courtesy; without them the ids still identify a
                 // session perfectly well.
             }
+        }
+
+        // Kept beside the wire call but pure so the precedence between local
+        // workspace metadata and the gateway's published identity is testable.
+        internal static AgentIdentity IdentityFrom(JsonElement agent)
+        {
+            var id = Str(agent, "id") ?? "";
+            var identity = agent.TryGetProperty("identity", out var block)
+                && block.ValueKind == JsonValueKind.Object ? block : default;
+
+            var name = Str(agent, "displayName");
+            if (string.IsNullOrWhiteSpace(name)) name = Str(agent, "name");
+            if (string.IsNullOrWhiteSpace(name) && identity.ValueKind == JsonValueKind.Object)
+                name = Str(identity, "name");
+
+            var local = OpenClawWorkspaceIdentity.Read(Str(agent, "workspace"));
+            return new AgentIdentity(
+                local.Name ?? name?.Trim() ?? id,
+                identity.ValueKind == JsonValueKind.Object ? Str(identity, "emoji") : null,
+                local.Avatar ?? (identity.ValueKind == JsonValueKind.Object
+                    ? DecodeDataUri(Str(identity, "avatarUrl"))
+                    : null),
+                local.Voice);
         }
 
         // "data:image/png;base64,iVBOR…" -> the bytes. Anything else, including a
