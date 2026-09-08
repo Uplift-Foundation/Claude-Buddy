@@ -73,10 +73,13 @@ public class OpenClawWorkspaceIdentityTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_root, "IDENTITY.md"), "- Name: Workspace name\n- Voice: Ava\n- Avatar: avatar.png");
         File.WriteAllBytes(Path.Combine(_root, "avatar.png"), Png());
-        var json = JsonDocument.Parse($$"""
-            { "id": "main", "workspace": "{{_root}}", "displayName": "Gateway name",
-              "identity": { "emoji": "✨", "avatarUrl": "data:image/png;base64,AQ==" } }
-            """).RootElement;
+        var json = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            id = "main",
+            workspace = _root,
+            displayName = "Gateway name",
+            identity = new { emoji = "✨", avatarUrl = "data:image/png;base64,AQ==" },
+        })).RootElement;
 
         var identity = OpenClawSessions.IdentityFrom(json);
 

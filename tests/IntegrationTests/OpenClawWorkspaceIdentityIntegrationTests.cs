@@ -24,9 +24,12 @@ public class OpenClawWorkspaceIdentityIntegrationTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_workspace, "IDENTITY.md"), "- Name: Mica\n- Voice: Karen\n- Avatar: mica.png");
         File.WriteAllBytes(Path.Combine(_workspace, "mica.png"), Png());
-        var agent = JsonDocument.Parse($$"""
-            { "id": "mica", "workspace": "{{_workspace}}", "displayName": "Gateway Mica" }
-            """).RootElement;
+        var agent = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            id = "mica",
+            workspace = _workspace,
+            displayName = "Gateway Mica",
+        })).RootElement;
 
         var identity = OpenClawSessions.IdentityFrom(agent);
 
