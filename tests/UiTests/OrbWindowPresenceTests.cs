@@ -432,6 +432,39 @@ public class OrbWindowPresenceTests
         Assert.False(orb.FindControl<MenuItem>("EndSessionItem")!.IsVisible);
     }
 
+    [AvaloniaFact]
+    public void ALocalSessionCanResetOnlyItsDisplayedStateToIdle()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        var item = orb.FindControl<MenuItem>("ResetIdleItem")!;
+        Assert.True(item.IsEnabled);
+        Assert.Equal("Reset this session to idle", item.Header);
+        Assert.Equal(
+            "Changes this orb's displayed state only; the next hook event may update it again.",
+            ToolTip.GetTip(item));
+    }
+
+    [AvaloniaTheory]
+    [InlineData(SessionSource.OpenClaw,
+        "OpenClaw controls this session's state",
+        "This session is managed by OpenClaw, so Claude Buddy cannot reset its state.")]
+    [InlineData(SessionSource.RemoteControl,
+        "This session's state is controlled on its other machine",
+        "This session is managed on its other machine, so it must be reset there.")]
+    public void ASessionOwnedElsewhereExplainsWhyItsStateCannotBeResetHere(
+        SessionSource source, string explanation, string tooltip)
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status(kind: SessionKind.Remote, source: source));
+
+        var item = orb.FindControl<MenuItem>("ResetIdleItem")!;
+        Assert.False(item.IsEnabled);
+        Assert.Equal(explanation, item.Header);
+        Assert.Equal(tooltip, ToolTip.GetTip(item));
+    }
+
     // A parked orb that was *already* parked when its window first appeared.
     //
     // The order the scan produces every time — construct, UpdateFrom, Show — and

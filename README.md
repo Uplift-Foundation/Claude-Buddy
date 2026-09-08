@@ -48,7 +48,7 @@ same mark.
 it holds that spot as other sessions come and go (the rest of the stack
 closes up behind it), and it's remembered across restarts of Claude Buddy —
 per working directory, since session ids are new every time. Right-click →
-**"Return this orb to the stack"** to give the placement up and have that
+**"Reset this orb's position"** to give the placement up and have that
 orb rejoin the default top-right column. Two live sessions in the same
 directory share one remembered spot: the first orb to appear takes it and
 the other stacks normally, so they never land on top of each other. An orb
@@ -841,8 +841,12 @@ are statements about what this app can *see*, and a status file is the only plac
 a live session's terminal coordinates and colour live. If the app does delete one
 it should not have, the session's next hook event writes it back.
 
-Right-click → "Reset this session to idle" is still there for a session whose
-process is alive but whose orb is stuck amber.
+Right-click → "Reset this session to idle" is still there for a local CLI
+session whose process is alive but whose orb is stuck amber. It changes only
+Claude Buddy's local status record and the next hook event can replace it with
+the session's real state. OpenClaw sessions instead say that OpenClaw controls
+their state, and remote-control sessions say that their other machine does;
+Claude Buddy does not offer a reset that cannot change either one.
 
 **Scope**: this only tracks Claude Code sessions that read a `settings.json`
 you've wired up per step 2 below. Each Claude Code install — WSL (per Linux

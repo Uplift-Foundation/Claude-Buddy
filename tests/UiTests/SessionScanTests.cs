@@ -1,5 +1,6 @@
 using System.Reflection;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
@@ -392,7 +393,7 @@ public class SessionScanTests
     }
 
     [AvaloniaFact]
-    public void ResetAllReachesEverySessionAndAGatewayOneIsLeftToItsOwner()
+    public void ResetAllReachesEverySessionAndSessionsOwnedElsewhereAreLeftToTheirOwners()
     {
         // A gateway session has no status file to rewrite, and the path this
         // would build from its key ("openclaw:agent:main:…") is not one this app
@@ -404,13 +405,17 @@ public class SessionScanTests
         var manager = Scan(scratch);
 
         var gateway = new SessionStatus { Source = SessionSource.OpenClaw, State = "generating" };
+        var remote = new SessionStatus { Source = SessionSource.RemoteControl, State = "waiting" };
         Statuses(manager)["openclaw:agent:main"] = gateway;
+        Statuses(manager)["remote:work:session"] = remote;
 
         manager.ResetAllSessionsToIdle();
 
         Assert.Equal("idle", manager.StatusFor("local-1")!.State);
         Assert.Equal("generating", gateway.State);
+        Assert.Equal("waiting", remote.State);
         Assert.False(Directory.EnumerateFiles(scratch.Dir, "openclaw*").Any());
+        Assert.False(Directory.EnumerateFiles(scratch.Dir, "remote*").Any());
     }
 
     [AvaloniaFact]
@@ -597,6 +602,9 @@ public class SessionScanTests
             // A drag: the window moves and the app is told to remember it.
             var window = WindowFor(manager, "session-a");
             window.PinAt(new PixelPoint(300, 200));
+            var resetPosition = window.FindControl<MenuItem>("ResetPositionItem")!;
+            Assert.True(resetPosition.IsVisible);
+            Assert.Equal("Reset this orb's position", resetPosition.Header);
             manager.RememberOrbPosition(window);
 
             Assert.Equal(300, ClaudeBuddySettings.OrbPositionFor(key)!.X);

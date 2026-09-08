@@ -366,6 +366,21 @@ namespace ClaudeBuddy
             AgentsViewItem.IsVisible = ClickRouting.OffersTheAgentsView(status);
             DismissItem.IsVisible = SessionPresence.CanDismiss(status);
             EndSessionItem.IsVisible = SessionPresence.CanEndSession(status);
+            var resetIdleExplanation = status.Source switch
+            {
+                SessionSource.OpenClaw => (
+                    "OpenClaw controls this session's state",
+                    "This session is managed by OpenClaw, so Claude Buddy cannot reset its state."),
+                SessionSource.RemoteControl => (
+                    "This session's state is controlled on its other machine",
+                    "This session is managed on its other machine, so it must be reset there."),
+                _ => (
+                    "Reset this session to idle",
+                    "Changes this orb's displayed state only; the next hook event may update it again.")
+            };
+            ResetIdleItem.IsEnabled = status.IsLocalCli;
+            ResetIdleItem.Header = resetIdleExplanation.Item1;
+            ToolTip.SetTip(ResetIdleItem, resetIdleExplanation.Item2);
 
             if (status.State != _lastState)
             {
@@ -1957,7 +1972,7 @@ namespace ClaudeBuddy
         // Dragging an orb pins it: it keeps that spot as sessions come and go
         // (SessionManager.ReflowPositions steps over pinned orbs) and the spot
         // is remembered across restarts, keyed by the session's directory. The
-        // context menu's "Return this orb to the stack" undoes both.
+        // context menu's "Reset this orb's position" undoes both.
 
         // Where the user dragged this orb is remembered against this key — the
         // session's cwd, set by SessionManager. Empty for a session with no cwd
@@ -2307,6 +2322,9 @@ namespace ClaudeBuddy
 
         internal void ResetIdle_Click(object? sender, RoutedEventArgs e)
         {
+            // The disabled menu row explains why this is unavailable for
+            // OpenClaw and remote-control sessions. Keep the manager's guard
+            // as well: a stale click must not turn a remote id into a path.
             SessionManager.Instance?.ResetSessionToIdle(SessionId);
         }
 
