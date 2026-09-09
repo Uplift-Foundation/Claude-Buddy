@@ -212,12 +212,14 @@ public class ChatPanelInteractionTests : IDisposable
             OpenClawSessions.SetIdentitiesForTests(
                 new Dictionary<string, OpenClawSessions.AgentIdentity>
                 {
-                    [agent] = new("Voice agent", null, null, "af_bella"),
+                    [agent] = new("Voice agent", null, null, "af_bella", 1.3),
                 });
             var neural = new TextToSpeech.VoiceOption(
                 TextToSpeech.SpeakEngine.Neural, "af_bella", "af_bella (Kokoro)");
             Assert.Equal(neural, ChatPanel.VoiceFor(openClaw, new[] { neural }));
+            Assert.Equal(1.3, ChatPanel.RateFor(openClaw));
             Assert.Null(ChatPanel.VoiceFor(NewFake(sessionId: "fake-voice-" + agent)));
+            Assert.Null(ChatPanel.RateFor(NewFake(sessionId: "fake-voice-" + agent)));
         }
         finally
         {

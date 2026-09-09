@@ -1005,7 +1005,13 @@ also accepts the deliberate field labels `Voice Name`, `Speech Voice`, and `TTS
 Voice`, in Markdown bullets, bold fields, two-cell tables, or YAML front matter.
 Labels are case-insensitive and the first valid value for each field wins. A
 profile can document a Kokoro choice as `**Voice:** af_bella (Kokoro TTS)`:
-the engine annotation is ignored and `af_bella` is matched. Voices match the
+the engine annotation is ignored and `af_bella` is matched. The same
+annotation may also qualify a speaking rate for the neural (Kokoro) engine —
+`(Kokoro TTS, rate 1.3)` or `(Kokoro TTS, speed 1.3x)` — recognized generically
+for any agent's profile, not tied to a specific voice or value. A rate outside
+0.5–2.0, or one that doesn't parse, is ignored and the engine speaks at its own
+default speed; only a voice's own workspace file can set its rate, and system
+voices and custom commands have no rate here at all. Voices match the
 available system, Kokoro, and custom-command options exactly when possible,
 then by an unambiguous normalized shorthand; a missing or ambiguous match keeps
 the global voice. Avatar paths are
@@ -1014,12 +1020,12 @@ at 2 MB. Missing or invalid fields retain the identity or voice supplied by the
 gateway and Claude Buddy settings.
 
 When the gateway is on a paired Claude Buddy peer rather than this machine,
-the direct Peer Link can optionally provide the already-resolved profile voice.
-It sends only the requested agent id, voice label, and the gateway certificate
-pin; it never reads or transfers workspace files. Both Buddies must support the
-optional exchange and be directly paired. The answer is discarded when that
-peer disconnects or its gateway pin no longer matches, so an unavailable peer
-continues to use the normal global-voice fallback.
+the direct Peer Link can optionally provide the already-resolved profile voice
+and rate. It sends only the requested agent id, voice label, rate, and the
+gateway certificate pin; it never reads or transfers workspace files. Both
+Buddies must support the optional exchange and be directly paired. The answer
+is discarded when that peer disconnects or its gateway pin no longer matches,
+so an unavailable peer continues to use the normal global-voice fallback.
 
 **An agent's picture is its orb, and a channel's orb is everyone in it.** An
 agent with an avatar set in OpenClaw wears it instead of its letters, with the

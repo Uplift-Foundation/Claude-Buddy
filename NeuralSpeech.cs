@@ -517,7 +517,7 @@ namespace ClaudeBuddy
         // showing a stop button over silence.
         // Excluded from coverage: starts the side-car engine process.
         [ExcludeFromCodeCoverage]
-        public static Process? Start(string text, string? voice, Action? onSpeaking)
+        public static Process? Start(string text, string? voice, double? rate, Action? onSpeaking)
         {
             var engine = UsableEnginePath;
             if (engine is null || !File.Exists(ModelPath)) return null;
@@ -536,6 +536,16 @@ namespace ClaudeBuddy
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
+
+            // Absent rather than defaulted to "1": the engine already treats a
+            // missing --rate as its own default speed, so there is one fewer
+            // place a "1" meaning "unset" and a "1" meaning "explicitly
+            // normal speed" could be confused for each other.
+            if (rate is { } spoken)
+            {
+                startInfo.ArgumentList.Add("--rate");
+                startInfo.ArgumentList.Add(spoken.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
 
             var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
 

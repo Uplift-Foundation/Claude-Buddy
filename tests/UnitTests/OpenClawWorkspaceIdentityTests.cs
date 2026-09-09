@@ -60,6 +60,58 @@ public class OpenClawWorkspaceIdentityTests : IDisposable
         });
 
         Assert.Equal("af_bella", fields.Voice);
+        Assert.Null(fields.Rate);
+    }
+
+    [Theory]
+    [InlineData("- **Voice:** `af_nicole` (Kokoro TTS, rate 1.3)", 1.3)]
+    [InlineData("- **Voice:** `af_nicole` (Kokoro TTS, speed 1.3x)", 1.3)]
+    [InlineData("- **Voice:** `af_nicole` (Kokoro TTS, Rate: 0.8)", 0.8)]
+    public void ARateQualifierAfterTheEngineNameIsRecognisedForAnyAgent(string line, double expected)
+    {
+        // Real redacted profile shape (CB-131): the engine annotation carries
+        // a trailing speed qualifier after a comma. Generic, not special-cased
+        // to this agent or this value — any profile's Voice line qualifies.
+        var fields = OpenClawWorkspaceIdentity.Parse(new[] { line });
+
+        Assert.Equal("af_nicole", fields.Voice);
+        Assert.Equal(expected, fields.Rate);
+    }
+
+    [Theory]
+    [InlineData("- **Voice:** `af_nicole` (Kokoro TTS, rate 0.1)")]   // below MinRate
+    [InlineData("- **Voice:** `af_nicole` (Kokoro TTS, rate 9.0)")]   // above MaxRate
+    [InlineData("- **Voice:** `af_nicole` (Kokoro TTS, rate fast)")]  // not a number
+    [InlineData("- **Voice:** `af_nicole` (Kokoro TTS)")]             // no rate at all
+    public void AnUnusableRateLeavesTheVoiceResolvedAndTheRateAbsent(string line)
+    {
+        var fields = OpenClawWorkspaceIdentity.Parse(new[] { line });
+
+        Assert.Equal("af_nicole", fields.Voice);
+        Assert.Null(fields.Rate);
+    }
+
+    [Fact]
+    public void ABulletedBoldVoiceFieldCarriesNoStrayMarkupInAnyField()
+    {
+        // The real fixture this parser has to survive: every field in a real
+        // IDENTITY.md is a bulleted bold label ("- **Name:** ..."), not the
+        // bare bold ("**Name:** ...") the rest of this file's fixtures use.
+        // Before this, a bulleted bold field parsed through the plain-bullet
+        // path, which does not know the closing "**" falls after the colon —
+        // every one of them, not just Voice, read back with a stray "** " on
+        // the front.
+        var fields = OpenClawWorkspaceIdentity.Parse(new[]
+        {
+            "- **Name:** Annabel Lee",
+            "- **Voice:** `af_nicole` (Kokoro TTS, rate 1.3)",
+            "- **Avatar:** avatars/annabel-lee.png",
+        });
+
+        Assert.Equal("Annabel Lee", fields.Name);
+        Assert.Equal("af_nicole", fields.Voice);
+        Assert.Equal(1.3, fields.Rate);
+        Assert.Equal("avatars/annabel-lee.png", fields.Avatar);
     }
 
     [Fact]

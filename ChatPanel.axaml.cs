@@ -1960,7 +1960,7 @@ namespace ClaudeBuddy
             var last = _turns.LastOrDefault(t => t.Role == ChatRole.Assistant);
             if (last is null || string.IsNullOrWhiteSpace(last.Text)) return;
 
-            Speak(last.Text, VoiceFor(_session));
+            Speak(last.Text, VoiceFor(_session), RateFor(_session));
         }
 
         // A panel can hold several remote session kinds. Only OpenClaw agent
@@ -1976,6 +1976,14 @@ namespace ClaudeBuddy
                     ? OpenClawSessions.VoiceForSession(session.SessionId)
                     : OpenClawSessions.VoiceForSession(session.SessionId, options);
 
+        // Same eligibility as VoiceFor: a rate with no voice behind it has
+        // nothing to qualify, and a room's shared global voice has no single
+        // agent's rate to use either.
+        internal static double? RateFor(IRemoteChatSession? session) =>
+            session?.SessionId.StartsWith("openclaw:agent:", StringComparison.Ordinal) != true
+                ? null
+                : OpenClawSessions.RateForSession(session.SessionId);
+
         // TextToSpeech.Speak is itself excluded from coverage ("starts a speech
         // engine and makes the machine make a noise" — see its own comment) —
         // pulled out here so that exclusion covers only this one call and not
@@ -1984,10 +1992,10 @@ namespace ClaudeBuddy
         // line — actually reaching a real utterance — has no headless seam and
         // is deliberately left uncovered rather than exercised for real.
         [ExcludeFromCodeCoverage]
-        private static void Speak(string text, TextToSpeech.VoiceOption? voice)
+        private static void Speak(string text, TextToSpeech.VoiceOption? voice, double? rate = null)
         {
             if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
-            else TextToSpeech.Speak(text, voice);
+            else TextToSpeech.Speak(text, voice, rate);
         }
 
         private void ApplySpeakState(TextToSpeech.SpeakState state)

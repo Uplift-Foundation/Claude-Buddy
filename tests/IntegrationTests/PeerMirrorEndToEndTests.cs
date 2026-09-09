@@ -206,7 +206,7 @@ public class PeerMirrorEndToEndTests : IDisposable
 
             var source = NewHost(new PeerMirrorHost.OpenClawIdentitySeams(
                 Resolve: (pin, ids) => pin == gatewayPin && ids.SequenceEqual(new[] { "main" })
-                    ? new[] { new OpenClawPeerIdentity.Row("main", "af_bella") }
+                    ? new[] { new OpenClawPeerIdentity.Row("main", "af_bella", 1.3) }
                     : Array.Empty<OpenClawPeerIdentity.Row>(),
                 Apply: (_, _, _) => { }));
             var receiver = NewHost(new PeerMirrorHost.OpenClawIdentitySeams(
@@ -240,9 +240,10 @@ public class PeerMirrorEndToEndTests : IDisposable
             Assert.Empty(await Ask(gatewayPin, "unknown"));
             Assert.Null(OpenClawSessions.VoiceForSession("openclaw:agent:main:room", new[] { option }));
 
-            Assert.Equal(new[] { new OpenClawPeerIdentity.Row("main", "af_bella") },
+            Assert.Equal(new[] { new OpenClawPeerIdentity.Row("main", "af_bella", 1.3) },
                 await Ask(gatewayPin, "main"));
             Assert.Equal(option, OpenClawSessions.VoiceForSession("openclaw:agent:main:room", new[] { option }));
+            Assert.Equal(1.3, OpenClawSessions.RateForSession("openclaw:agent:main:room"));
         }
         finally
         {
