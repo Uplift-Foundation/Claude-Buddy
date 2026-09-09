@@ -183,6 +183,34 @@ public class ChatPanelInteractionTests : IDisposable
         Assert.Equal(TextToSpeech.SpeakState.Idle, TextToSpeech.State);
     }
 
+    // The platform speech call is intentionally outside headless coverage, but
+    // choosing whether that call receives a workspace voice is a panel decision
+    // and must not drift from the orb's equivalent path.
+    [AvaloniaFact]
+    public void AnOpenClawAgentPanelSelectsItsWorkspaceVoiceOnly()
+    {
+        var agent = "voice-" + Guid.NewGuid().ToString("N");
+        var sessionId = $"openclaw:agent:{agent}:discord:direct:1";
+        try
+        {
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>
+                {
+                    [agent] = new("Voice agent", null, null, "Samantha"),
+                });
+
+            var openClaw = new OpenClawChatSession(sessionId, sessionId["openclaw:".Length..], "Voice agent");
+
+            Assert.Equal("Samantha", ChatPanel.VoiceFor(openClaw));
+            Assert.Null(ChatPanel.VoiceFor(NewFake(sessionId: "fake-voice-" + agent)));
+        }
+        finally
+        {
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>());
+        }
+    }
+
     // --- OnPanelKeyDown: Escape and Cmd+W ---
 
     [AvaloniaFact]

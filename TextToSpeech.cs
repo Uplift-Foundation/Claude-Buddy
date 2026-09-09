@@ -507,11 +507,23 @@ namespace ClaudeBuddy
         // Excluded from coverage: starts a speech engine and makes the machine
         // make a noise.
         [ExcludeFromCodeCoverage]
-        public static void Speak(string text, string? voice = null)
+        public static void Speak(string text, string? voice = null, bool forceSystemVoice = false)
         {
             Cancel();
 
             if (string.IsNullOrWhiteSpace(text)) return;
+
+            // Workspace metadata names a system-voice label, but it travels
+            // between machines with very different installed voices. Refuse an
+            // unavailable label before bypassing the user's selected engine;
+            // that makes a stale workspace field fall back exactly as if it
+            // were absent, rather than producing a failed or different read.
+            if (forceSystemVoice && (string.IsNullOrWhiteSpace(voice)
+                || !SystemVoices().Contains(voice, StringComparer.OrdinalIgnoreCase)))
+            {
+                voice = null;
+                forceSystemVoice = false;
+            }
 
             // Whichever engine owns the selected voice, rather than a fixed
             // precedence: all three are offered together now, so the choice made in
@@ -524,7 +536,7 @@ namespace ClaudeBuddy
             // robotic system voice would look like their command working badly
             // rather than not running, which is the harder failure to diagnose. It
             // reports and stays quiet instead.
-            if (selected?.Engine == SpeakEngine.Custom && StartCustomCommand(text)) return;
+            if (!forceSystemVoice && selected?.Engine == SpeakEngine.Custom && StartCustomCommand(text)) return;
 
             // The neural engine *is* fallen through from rather than trusted: if it
             // can't start — a partial download, a model deleted by hand — the same
@@ -533,7 +545,7 @@ namespace ClaudeBuddy
             // and speaking worse is a much better failure than not speaking, which
             // is the shape of bug the comment at the top of this file exists
             // because of.
-            if (selected?.Engine == SpeakEngine.Neural
+            if (!forceSystemVoice && selected?.Engine == SpeakEngine.Neural
                 && NeuralSpeech.Available
                 && StartNeural(text))
             {

@@ -996,6 +996,16 @@ rather than a fourth M. The second half says which conversation it is, because
 one agent commonly has a DM with you, a DM with someone else and two channels
 going at once.
 
+**Workspace identity overrides are local and explicit.** When `agents.list`
+names an agent workspace, Claude Buddy reads root-level Markdown files there:
+`IDENTITY.md` first, then `SOUL.md`, then the remaining `*.md` files by filename.
+Use OpenClaw's bullet format, for example `- Name: Aurora`,
+`- Avatar: avatars/aurora.png`, and Claude Buddy's `- Voice: Samantha`. Labels are
+case-insensitive and the first valid value for each field wins. Avatar paths are
+local to that workspace (no URLs or data URIs), cannot escape it, and are capped
+at 2 MB. Missing or invalid fields retain the identity or voice supplied by the
+gateway and Claude Buddy settings.
+
 **An agent's picture is its orb, and a channel's orb is everyone in it.** An
 agent with an avatar set in OpenClaw wears it instead of its letters, with the
 state moving out to the ring. The orb Claude Buddy draws for a *channel* — the

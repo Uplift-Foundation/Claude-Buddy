@@ -1577,7 +1577,12 @@ namespace ClaudeBuddy
 
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            Dispatcher.UIThread.Post(() => TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice));
+            var voice = OpenClawSessions.VoiceForSession(SessionId);
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+                else TextToSpeech.Speak(text, voice, forceSystemVoice: true);
+            });
         }
 
         // Called by SessionManager when speech starts, changes phase or stops.
