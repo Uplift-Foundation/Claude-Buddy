@@ -96,12 +96,16 @@ public class OrbAvatarTests
     public void AWorkspaceIdentityPictureAndVoiceReachTheAgentOrb()
     {
         var agent = Agent();
+        // Matching is intentionally constrained to voices installed on the
+        // current platform, so use this runner's list rather than a macOS-only
+        // fixture name while exercising the orb's identity seam.
+        var workspaceVoice = TextToSpeech.SystemVoices()[0];
         try
         {
             OpenClawSessions.SetIdentitiesForTests(
                 new Dictionary<string, OpenClawSessions.AgentIdentity>
                 {
-                    [agent] = new("Workspace Nova", "✨", Png(), "Samantha"),
+                    [agent] = new("Workspace Nova", "✨", Png(), workspaceVoice),
                 });
             var sessionId = $"openclaw:agent:{agent}:discord:channel:1";
             var orb = new OrbWindow(sessionId);
