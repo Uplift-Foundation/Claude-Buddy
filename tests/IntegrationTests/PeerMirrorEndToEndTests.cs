@@ -15,6 +15,7 @@ namespace ClaudeBuddy.IntegrationTests;
 // What it replaces is worth restating: the same exchange over the relay cost a
 // model turn per frame and was measured at 222 to 247 seconds for a single 6KB
 // chunk, with at least one chunk arriving corrupted.
+[Collection("Settings")]
 public class PeerMirrorEndToEndTests : IDisposable
 {
     private readonly string _dir = Path.Combine(
@@ -30,9 +31,9 @@ public class PeerMirrorEndToEndTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { }
     }
 
-    private PeerMirrorHost NewHost()
+    private PeerMirrorHost NewHost(PeerMirrorHost.OpenClawIdentitySeams? identity = null)
     {
-        var host = new PeerMirrorHost();
+        var host = new PeerMirrorHost(identity);
         _hosts.Add(host);
         return host;
     }
@@ -178,5 +179,95 @@ public class PeerMirrorEndToEndTests : IDisposable
         var far = Serving(UserRow("u1", "hello"));
 
         Assert.False(far.Host.MayAsk("someone-else"));
+    }
+
+    // Two PeerMirrorHosts and a real TLS socket are deliberately involved here:
+    // injecting the receiving cache would prove its lookup and leave the new
+    // request/response routing untested. The source seam models only the local
+    // workspace resolver on the other machine; the receiving seam calls the
+    // production apply path after the response has crossed the link.
+    [Fact]
+    public async Task APairedHostRoutesOnlySamePinnedKnownAgentVoicesToTheReceiver()
+    {
+        var savedPin = ClaudeBuddySettings.OpenClawFingerprint;
+        const string gatewayPin = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var option = new TextToSpeech.VoiceOption(TextToSpeech.SpeakEngine.Neural,
+            "af_bella", "af_bella (Kokoro)");
+        TaskCompletionSource<IReadOnlyList<OpenClawPeerIdentity.Row>>? applied = null;
+        try
+        {
+            // Do not let the connection callback send an automatic request: the
+            // three explicit requests below are the observations this test makes.
+            ClaudeBuddySettings.OpenClawFingerprint = "";
+            OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>
+            {
+                ["main"] = new("Gateway Main", null, null),
+            });
+
+            var source = NewHost(new PeerMirrorHost.OpenClawIdentitySeams(
+                Resolve: (pin, ids) => pin == gatewayPin && ids.SequenceEqual(new[] { "main" })
+                    ? new[] { new OpenClawPeerIdentity.Row("main", "af_bella") }
+                    : Array.Empty<OpenClawPeerIdentity.Row>(),
+                Apply: (_, _, _) => { }));
+            var receiver = NewHost(new PeerMirrorHost.OpenClawIdentitySeams(
+                Resolve: (_, _) => Array.Empty<OpenClawPeerIdentity.Row>(),
+                Apply: (peer, pin, rows) =>
+                {
+                    OpenClawSessions.ApplyPeerProfileVoices(peer, pin, rows);
+                    applied?.TrySetResult(rows);
+                }));
+
+            PeerIdentity.Remember(new PeerIdentity.Peer(PeerIdentity.OwnPin(), "profile-source"));
+            PeerIdentity.Remember(new PeerIdentity.Peer(PeerIdentity.OwnPin(), MachineNames.Mine()));
+            source.Link.Listen(0);
+            Assert.True(await receiver.Link.ConnectAsync("profile-source", "127.0.0.1",
+                source.Link.BoundPort, new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token));
+
+            ClaudeBuddySettings.OpenClawFingerprint = gatewayPin;
+
+            async Task<IReadOnlyList<OpenClawPeerIdentity.Row>> Ask(string pin, params string[] ids)
+            {
+                applied = new TaskCompletionSource<IReadOnlyList<OpenClawPeerIdentity.Row>>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                await receiver.RequestOpenClawProfileVoicesAsync(pin, ids);
+                return await applied.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+
+            // A different gateway and an id which the source did not resolve
+            // each produce an empty routed response, leaving global fallback.
+            Assert.Empty(await Ask(new string('b', 64), "main"));
+            Assert.Null(OpenClawSessions.VoiceForSession("openclaw:agent:main:room", new[] { option }));
+            Assert.Empty(await Ask(gatewayPin, "unknown"));
+            Assert.Null(OpenClawSessions.VoiceForSession("openclaw:agent:main:room", new[] { option }));
+
+            Assert.Equal(new[] { new OpenClawPeerIdentity.Row("main", "af_bella") },
+                await Ask(gatewayPin, "main"));
+            Assert.Equal(option, OpenClawSessions.VoiceForSession("openclaw:agent:main:room", new[] { option }));
+        }
+        finally
+        {
+            ClaudeBuddySettings.OpenClawFingerprint = savedPin;
+            OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>());
+        }
+    }
+
+    [Fact]
+    public async Task AnUnconnectedMachineCannotInvokeEitherProfileRoutingDirection()
+    {
+        var resolved = 0;
+        var applied = 0;
+        var host = NewHost(new PeerMirrorHost.OpenClawIdentitySeams(
+            Resolve: (_, _) => { resolved++; return Array.Empty<OpenClawPeerIdentity.Row>(); },
+            Apply: (_, _, _) => applied++));
+        var pin = new string('a', 64);
+
+        await host.DeliverAsync("not-paired", PeerProtocol.Message(PeerProtocol.OpenClawIdentityGet,
+            "request", body: PeerProtocol.BodyOf(new OpenClawPeerIdentity.Request(pin, new[] { "main" }))));
+        await host.DeliverAsync("not-paired", PeerProtocol.Message(PeerProtocol.OpenClawIdentity,
+            "response", body: PeerProtocol.BodyOf(new OpenClawPeerIdentity.Response(pin,
+                new[] { new OpenClawPeerIdentity.Row("main", "af_bella") }))));
+
+        Assert.Equal(0, resolved);
+        Assert.Equal(0, applied);
     }
 }

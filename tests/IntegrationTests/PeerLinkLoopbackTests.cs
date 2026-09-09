@@ -68,6 +68,10 @@ public class PeerLinkLoopbackTests
 
         using var server = Link(onServer, pin, reachedServer);
         using var client = Link(new List<PeerProtocol.PeerMessage>(), pin);
+        var connected = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disconnected = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.PeerConnected += machine => connected.TrySetResult(machine);
+        client.PeerDisconnected += machine => disconnected.TrySetResult(machine);
 
         // Port 0: the OS picks, and the listener reports what it chose. Probing
         // for a free port and then asking for it has a race between the probe
@@ -80,6 +84,7 @@ public class PeerLinkLoopbackTests
             "the client could not complete a TLS handshake against the listener");
 
         Assert.True(client.IsConnected("loopback"));
+        Assert.Equal(MachineNames.Mine(), await connected.Task.WaitAsync(TimeSpan.FromSeconds(10)));
 
         // Not a `hello`, which the link now consumes itself: the greeting is
         // what names an inbound connection, so it never reaches Deliver. Using
@@ -104,6 +109,9 @@ public class PeerLinkLoopbackTests
         Assert.True(
             server.IsConnected(MachineNames.Mine()),
             "the greeting did not name the inbound connection");
+
+        client.Drop("loopback");
+        Assert.Equal("loopback", await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
     // The payload that motivated the whole change: a transcript-sized message,
@@ -140,6 +148,29 @@ public class PeerLinkLoopbackTests
 
         var received = Assert.Single(onServer);
         Assert.Equal(big.Length, received.Body!.Value.GetString()!.Length);
+    }
+
+    [Fact]
+    public async Task AnOptionalProfileVoiceMessageCrossesThePairedTlsLink()
+    {
+        var pin = PeerIdentity.PinOf(Cert.Value);
+        var onServer = new List<PeerProtocol.PeerMessage>();
+        var arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var server = Link(onServer, pin, arrived);
+        using var client = Link(new List<PeerProtocol.PeerMessage>(), pin);
+        server.Listen(0);
+
+        Assert.True(await client.ConnectAsync("loopback", "127.0.0.1", server.BoundPort, Timeout(10)));
+        var gatewayPin = new string('a', 64);
+        var body = PeerProtocol.BodyOf(new OpenClawPeerIdentity.Request(gatewayPin, new[] { "main" }));
+        Assert.True(await client.SendAsync("loopback", PeerProtocol.Message(
+            PeerProtocol.OpenClawIdentityGet, "profile", body: body)));
+
+        await arrived.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var received = Assert.Single(onServer);
+        Assert.Equal(PeerProtocol.OpenClawIdentityGet, received.Type);
+        Assert.Equal("main", OpenClawPeerIdentity.RequestFrom(received.Body!.Value)!.AgentIds.Single());
     }
 
     // A machine offering a certificate we did not pair with is refused at the

@@ -79,6 +79,11 @@ namespace ClaudeBuddy
         private static readonly Dictionary<string, AgentIdentity> Identities =
             new(StringComparer.OrdinalIgnoreCase);
 
+        private static readonly Dictionary<string, PeerVoiceCache> PeerVoices =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private sealed record PeerVoiceCache(string GatewayPin, Dictionary<string, string> Voices);
+
         internal sealed record AgentIdentity(string Name, string? Emoji, byte[]? Avatar, string? Voice = null);
 
         // A test seam, matching SetSnapshotForTests: the only thing that fills the
@@ -107,6 +112,7 @@ namespace ClaudeBuddy
             lock (Gate)
             {
                 Identities.Clear();
+                PeerVoices.Clear();
                 foreach (var (id, identity) in identities) Identities[id] = identity;
 
                 if (names is null) return;
@@ -246,8 +252,78 @@ namespace ClaudeBuddy
         internal static TextToSpeech.VoiceOption? VoiceForSession(
             string sessionId, IEnumerable<TextToSpeech.VoiceOption> options)
         {
-            var requested = IdentityForSession(sessionId)?.Voice;
+            var requested = IdentityForSession(sessionId)?.Voice ?? PeerVoiceFor(AgentIdOf(sessionId));
             return requested is null ? null : TextToSpeech.MatchVoiceOption(requested, options);
+        }
+
+        internal static IReadOnlyList<OpenClawPeerIdentity.Row> PeerProfileVoices(
+            string gatewayPin, IReadOnlyList<string> agentIds)
+        {
+            if (!OpenClawPeerIdentity.ValidPin(gatewayPin)
+                || agentIds.Count > OpenClawPeerIdentity.MaxAgents
+                || !string.Equals(gatewayPin, ClaudeBuddySettings.OpenClawFingerprint, StringComparison.OrdinalIgnoreCase))
+                return Array.Empty<OpenClawPeerIdentity.Row>();
+
+            lock (Gate) return agentIds
+                .Where(OpenClawPeerIdentity.ValidAgentId)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(id => Identities.TryGetValue(id, out var identity)
+                    ? (AgentId: id, Voice: identity.Voice) : (AgentId: id, Voice: (string?)null))
+                .Where(row => OpenClawPeerIdentity.ValidVoice(row.Voice))
+                .Select(row => new OpenClawPeerIdentity.Row(row.AgentId, row.Voice!)).ToList();
+        }
+
+        internal static void ApplyPeerProfileVoices(string peer, string gatewayPin,
+            IReadOnlyList<OpenClawPeerIdentity.Row> rows)
+        {
+            if (string.IsNullOrWhiteSpace(peer) || rows.Count > OpenClawPeerIdentity.MaxAgents
+                || !OpenClawPeerIdentity.ValidPin(gatewayPin)
+                || !string.Equals(gatewayPin, ClaudeBuddySettings.OpenClawFingerprint, StringComparison.OrdinalIgnoreCase)) return;
+            lock (Gate)
+            {
+                var accepted = rows.Where(row => OpenClawPeerIdentity.ValidAgentId(row.AgentId)
+                    && OpenClawPeerIdentity.ValidVoice(row.Voice) && Identities.ContainsKey(row.AgentId))
+                    .ToDictionary(row => row.AgentId, row => row.Voice, StringComparer.OrdinalIgnoreCase);
+                if (accepted.Count > OpenClawPeerIdentity.MaxAgents) return;
+                PeerVoices[peer] = new PeerVoiceCache(gatewayPin, accepted);
+            }
+        }
+
+        internal static void ForgetPeerProfileVoices(string peer)
+        {
+            lock (Gate) PeerVoices.Remove(peer);
+        }
+
+        // A direct link can come up after agents.list did. Re-asking then is
+        // necessary: a cached answer is intentionally never read across a
+        // disconnect, but a later successful pairing should not need a gateway
+        // reconnect before its already-known agents can speak correctly.
+        internal static void RequestPeerProfileVoices()
+        {
+            var pin = ClaudeBuddySettings.OpenClawFingerprint;
+            if (!OpenClawPeerIdentity.ValidPin(pin)) return;
+
+            List<string> ids;
+            lock (Gate) ids = Identities.Keys
+                .Where(OpenClawPeerIdentity.ValidAgentId)
+                .Take(OpenClawPeerIdentity.MaxAgents).ToList();
+            if (ids.Count > 0)
+                _ = PeerSessions.Host?.RequestOpenClawProfileVoicesAsync(pin!, ids);
+        }
+
+        private static string? PeerVoiceFor(string? agentId)
+        {
+            if (agentId is null) return null;
+            lock (Gate)
+            {
+                var pin = ClaudeBuddySettings.OpenClawFingerprint;
+                if (!OpenClawPeerIdentity.ValidPin(pin)) return null;
+                var matches = PeerVoices.Values
+                    .Where(cache => string.Equals(cache.GatewayPin, pin, StringComparison.OrdinalIgnoreCase)
+                        && cache.Voices.TryGetValue(agentId, out _))
+                    .Select(cache => cache.Voices[agentId]).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                return matches.Count == 1 ? matches[0] : null;
+            }
         }
 
         // How long a session stays "working" after its last event. A turn emits
@@ -891,6 +967,7 @@ namespace ClaudeBuddy
                 {
                     AgentNames.Clear();
                     Identities.Clear();
+                    PeerVoices.Clear();
 
                     foreach (var (id, identity) in parsed)
                     {
@@ -898,6 +975,8 @@ namespace ClaudeBuddy
                         Identities[id] = identity;
                     }
                 }
+
+                RequestPeerProfileVoices();
 
                 // Decoded here, on this background task, rather than the first
                 // time an orb asks for one. OpenClawAvatars.For runs SkiaSharp

@@ -20,7 +20,16 @@ namespace ClaudeBuddy
     // that were supposed to be the check.
     internal sealed class PeerMirrorHost : IDisposable
     {
+        // The host owns routing, while resolving a local workspace identity and
+        // accepting one are OpenClaw concerns. Keeping that boundary explicit
+        // lets the real TLS integration test model two machines without giving
+        // either one a file-reading backdoor into the other.
+        internal sealed record OpenClawIdentitySeams(
+            Func<string, IReadOnlyList<string>, IReadOnlyList<OpenClawPeerIdentity.Row>> Resolve,
+            Action<string, string, IReadOnlyList<OpenClawPeerIdentity.Row>> Apply);
+
         private readonly PeerLink _link;
+        private readonly OpenClawIdentitySeams _openClawIdentity;
         private readonly object _gate = new();
 
         // The far machine a connection belongs to, once `hello` has said so.
@@ -30,12 +39,16 @@ namespace ClaudeBuddy
         private RemoteMirrorClient? _client;
         private RemoteMirrorServer? _server;
 
-        internal PeerMirrorHost()
+        internal PeerMirrorHost(OpenClawIdentitySeams? openClawIdentity = null)
         {
+            _openClawIdentity = openClawIdentity ?? new OpenClawIdentitySeams(
+                OpenClawSessions.PeerProfileVoices, OpenClawSessions.ApplyPeerProfileVoices);
             _link = new PeerLink(new PeerLink.Seams(
                 Deliver: DeliverAsync,
                 KnownPeer: PeerIdentity.PeerFor,
                 OwnCertificate: PeerIdentity.Certificate));
+            _link.PeerDisconnected += OpenClawSessions.ForgetPeerProfileVoices;
+            _link.PeerConnected += _ => OpenClawSessions.RequestPeerProfileVoices();
         }
 
         internal PeerLink Link => _link;
@@ -98,6 +111,21 @@ namespace ClaudeBuddy
             }
         }
 
+        // Optional feature negotiation: old peers ignore this new message, so
+        // the caller receives no response and retains its existing fallback.
+        internal async Task RequestOpenClawProfileVoicesAsync(string gatewayPin,
+            IReadOnlyList<string> agentIds)
+        {
+            if (!OpenClawPeerIdentity.ValidPin(gatewayPin)) return;
+            var ids = agentIds.Where(OpenClawPeerIdentity.ValidAgentId)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Take(OpenClawPeerIdentity.MaxAgents).ToList();
+            if (ids.Count == 0) return;
+            var request = new OpenClawPeerIdentity.Request(gatewayPin, ids);
+            foreach (var machine in _link.ConnectedMachines())
+                await _link.SendAsync(machine, PeerProtocol.Message(PeerProtocol.OpenClawIdentityGet,
+                    PeerProtocol.NewId(), body: PeerProtocol.BodyOf(request))).ConfigureAwait(false);
+        }
+
         // --- outbound --------------------------------------------------------------
 
         // The SendFrame seam both halves take.
@@ -115,8 +143,27 @@ namespace ClaudeBuddy
 
         // --- inbound ---------------------------------------------------------------
 
-        private async Task DeliverAsync(string machine, PeerProtocol.PeerMessage message)
+        internal async Task DeliverAsync(string machine, PeerProtocol.PeerMessage message)
         {
+            if (message.Type == PeerProtocol.OpenClawIdentityGet && message.Body is { } requestBody)
+            {
+                var request = OpenClawPeerIdentity.RequestFrom(requestBody);
+                if (request is null || !MayAsk(machine)) return;
+                var rows = _openClawIdentity.Resolve(request.GatewayPin, request.AgentIds);
+                var response = new OpenClawPeerIdentity.Response(request.GatewayPin, rows);
+                await _link.SendAsync(machine, PeerProtocol.Message(PeerProtocol.OpenClawIdentity,
+                    message.Id, body: PeerProtocol.BodyOf(response))).ConfigureAwait(false);
+                return;
+            }
+
+            if (message.Type == PeerProtocol.OpenClawIdentity && message.Body is { } responseBody)
+            {
+                var response = OpenClawPeerIdentity.ResponseFrom(responseBody);
+                if (response is not null && MayAsk(machine))
+                    _openClawIdentity.Apply(machine, response.GatewayPin, response.Voices);
+                return;
+            }
+
             var text = message.Body?.ValueKind == JsonValueKind.String
                 ? message.Body.Value.GetString()
                 : null;

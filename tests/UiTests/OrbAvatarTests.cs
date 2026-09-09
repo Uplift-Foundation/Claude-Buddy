@@ -132,6 +132,39 @@ public class OrbAvatarTests
         }
     }
 
+    [AvaloniaFact]
+    public void APairedPeerProfileVoiceReachesTheAgentOrbWithoutReplacingItsIdentity()
+    {
+        var savedPin = ClaudeBuddySettings.OpenClawFingerprint;
+        var agent = Agent();
+        const string pin = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var neural = new TextToSpeech.VoiceOption(
+            TextToSpeech.SpeakEngine.Neural, "af_bella", "af_bella (Kokoro)");
+        try
+        {
+            ClaudeBuddySettings.OpenClawFingerprint = pin;
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>
+                {
+                    [agent] = new("Gateway Nova", "✨", Png()),
+                });
+            OpenClawSessions.ApplyPeerProfileVoices("paired-mini", pin,
+                new[] { new OpenClawPeerIdentity.Row(agent, "af_bella") });
+
+            var sessionId = $"openclaw:agent:{agent}:discord:channel:1";
+            var orb = new OrbWindow(sessionId);
+            orb.UpdateFrom(Gateway("Gateway Nova"));
+
+            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.Equal(neural, OrbWindow.VoiceForRemoteSpeech(sessionId, new[] { neural }));
+        }
+        finally
+        {
+            ClaudeBuddySettings.OpenClawFingerprint = savedPin;
+            PublishNothing();
+        }
+    }
+
     // Applying the same picture twice is a no-op rather than a rebuild: the scan
     // runs a couple of times a second, and rebuilding the brush on every tick
     // would restart an animated avatar continuously.
