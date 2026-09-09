@@ -54,7 +54,7 @@ namespace ClaudeBuddy
                 // relay.
                 serveOnLaunch: () =>
                 {
-                    
+
 
                     // The peer link starts here for exactly the reasons above,
                     // and rather more sharply. It is a socket and a UDP
@@ -65,6 +65,20 @@ namespace ClaudeBuddy
                     //
                     // Does nothing unless peerLinkEnabled is on.
                     PeerSessions.Start();
+
+                    // OpenClawSessions.Restart() used to wait behind the
+                    // screen-lock check too, in SessionManager.Start() — and a
+                    // machine kept permanently locked (a headless server Buddy,
+                    // paired to hand another machine its resolved agent
+                    // voices) never restarted it in any practical timeframe: it
+                    // restarts on every relaunch, so the two-hour cap this
+                    // file's waitForUnlock imposes never actually elapses.
+                    // Opening the gateway connection is a WebSocket client and
+                    // a background poll loop, the same shape as PeerSessions
+                    // above rather than anything that touches a window, so it
+                    // belongs here for the identical reason (CB-130). Does
+                    // nothing unless openclawEnabled is on.
+                    OpenClawSessions.Restart();
                 },
 
                 // Avalonia's macOS render timer is a CVDisplayLink, and

@@ -433,11 +433,13 @@ namespace ClaudeBuddy
 
             _pollTimer.Start();
 
-            // Connects only if the user has turned it on and given it an
-            // address; otherwise this returns having done nothing at all.
-            OpenClawSessions.Restart();
+            // OpenClawSessions.Restart() used to be called here, but here is
+            // after the screen-unlock wait — see Program.cs's serveOnLaunch,
+            // where it starts now, for why a machine that stays locked can no
+            // longer leave it never called at all (CB-130).
 
-            // Subscribed unconditionally, unlike OpenClawSessions.Restart above:
+            // Subscribed unconditionally, unlike OpenClawSessions.Restart in
+            // serveOnLaunch:
             // this only wires up an event, and starting the bridge is a separate,
             // deliberate act because it costs the user's quota. Nothing fires
             // here until something asks for it.
