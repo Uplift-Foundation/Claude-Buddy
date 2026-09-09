@@ -1013,6 +1013,14 @@ local to that workspace (no URLs or data URIs), cannot escape it, and are capped
 at 2 MB. Missing or invalid fields retain the identity or voice supplied by the
 gateway and Claude Buddy settings.
 
+When the gateway is on a paired Claude Buddy peer rather than this machine,
+the direct Peer Link can optionally provide the already-resolved profile voice.
+It sends only the requested agent id, voice label, and the gateway certificate
+pin; it never reads or transfers workspace files. Both Buddies must support the
+optional exchange and be directly paired. The answer is discarded when that
+peer disconnects or its gateway pin no longer matches, so an unavailable peer
+continues to use the normal global-voice fallback.
+
 **An agent's picture is its orb, and a channel's orb is everyone in it.** An
 agent with an avatar set in OpenClaw wears it instead of its letters, with the
 state moving out to the ring. The orb Claude Buddy draws for a *channel* — the

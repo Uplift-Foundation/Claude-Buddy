@@ -50,6 +50,9 @@ namespace ClaudeBuddy
         private CancellationTokenSource? _stopping;
         private int _boundPort;
 
+        internal event Action<string>? PeerDisconnected;
+        internal event Action<string>? PeerConnected;
+
         // The port actually being listened on, which is not always the one that
         // was asked for: passing 0 lets the OS choose.
         //
@@ -455,6 +458,7 @@ namespace ClaudeBuddy
             }
 
             MirrorLog.Say("peer-dropped", $"machine={name ?? "(already gone)"}");
+            if (name is not null) PeerDisconnected?.Invoke(name);
             peer.Dispose();
         }
 
@@ -784,6 +788,7 @@ namespace ClaudeBuddy
             if (peer is null) return;
 
             MirrorLog.Say("peer-dropped", $"machine={machine}");
+            PeerDisconnected?.Invoke(machine);
             peer.Dispose();
         }
 
@@ -804,6 +809,8 @@ namespace ClaudeBuddy
 
                 _peers[to] = peer;
             }
+
+            PeerConnected?.Invoke(to);
         }
 
         [ExcludeFromCodeCoverage]

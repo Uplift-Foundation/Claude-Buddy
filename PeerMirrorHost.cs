@@ -36,6 +36,8 @@ namespace ClaudeBuddy
                 Deliver: DeliverAsync,
                 KnownPeer: PeerIdentity.PeerFor,
                 OwnCertificate: PeerIdentity.Certificate));
+            _link.PeerDisconnected += OpenClawSessions.ForgetPeerProfileVoices;
+            _link.PeerConnected += _ => OpenClawSessions.RequestPeerProfileVoices();
         }
 
         internal PeerLink Link => _link;
@@ -98,6 +100,21 @@ namespace ClaudeBuddy
             }
         }
 
+        // Optional feature negotiation: old peers ignore this new message, so
+        // the caller receives no response and retains its existing fallback.
+        internal async Task RequestOpenClawProfileVoicesAsync(string gatewayPin,
+            IReadOnlyList<string> agentIds)
+        {
+            if (!OpenClawPeerIdentity.ValidPin(gatewayPin)) return;
+            var ids = agentIds.Where(OpenClawPeerIdentity.ValidAgentId)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Take(OpenClawPeerIdentity.MaxAgents).ToList();
+            if (ids.Count == 0) return;
+            var request = new OpenClawPeerIdentity.Request(gatewayPin, ids);
+            foreach (var machine in _link.ConnectedMachines())
+                await _link.SendAsync(machine, PeerProtocol.Message(PeerProtocol.OpenClawIdentityGet,
+                    PeerProtocol.NewId(), body: PeerProtocol.BodyOf(request))).ConfigureAwait(false);
+        }
+
         // --- outbound --------------------------------------------------------------
 
         // The SendFrame seam both halves take.
@@ -117,6 +134,25 @@ namespace ClaudeBuddy
 
         private async Task DeliverAsync(string machine, PeerProtocol.PeerMessage message)
         {
+            if (message.Type == PeerProtocol.OpenClawIdentityGet && message.Body is { } requestBody)
+            {
+                var request = OpenClawPeerIdentity.RequestFrom(requestBody);
+                if (request is null || !MayAsk(machine)) return;
+                var rows = OpenClawSessions.PeerProfileVoices(request.GatewayPin, request.AgentIds);
+                var response = new OpenClawPeerIdentity.Response(request.GatewayPin, rows);
+                await _link.SendAsync(machine, PeerProtocol.Message(PeerProtocol.OpenClawIdentity,
+                    message.Id, body: PeerProtocol.BodyOf(response))).ConfigureAwait(false);
+                return;
+            }
+
+            if (message.Type == PeerProtocol.OpenClawIdentity && message.Body is { } responseBody)
+            {
+                var response = OpenClawPeerIdentity.ResponseFrom(responseBody);
+                if (response is not null && MayAsk(machine))
+                    OpenClawSessions.ApplyPeerProfileVoices(machine, response.GatewayPin, response.Voices);
+                return;
+            }
+
             var text = message.Body?.ValueKind == JsonValueKind.String
                 ? message.Body.Value.GetString()
                 : null;

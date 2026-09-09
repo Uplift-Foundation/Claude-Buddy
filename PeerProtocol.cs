@@ -47,6 +47,10 @@ namespace ClaudeBuddy
         public const string Input = "input";
         public const string Ok = "ok";
         public const string Err = "err";
+        // Optional capability negotiation: an older Buddy ignores these two
+        // messages, and the requester simply keeps its local/global fallback.
+        public const string OpenClawIdentityGet = "openclaw-identity-get";
+        public const string OpenClawIdentity = "openclaw-identity";
 
         // Error codes, carried in `err`. The same set MirrorProtocol used, since
         // they describe the far machine's state rather than the transport: the
