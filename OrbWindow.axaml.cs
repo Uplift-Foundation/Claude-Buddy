@@ -1581,7 +1581,7 @@ namespace ClaudeBuddy
             Dispatcher.UIThread.Post(() =>
             {
                 if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
-                else TextToSpeech.Speak(text, voice, forceSystemVoice: true);
+                else TextToSpeech.Speak(text, voice);
             });
         }
 

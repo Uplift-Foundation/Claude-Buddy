@@ -205,7 +205,9 @@ public class ChatPanelInteractionTests : IDisposable
 
             var openClaw = new OpenClawChatSession(sessionId, sessionId["openclaw:".Length..], "Voice agent");
 
-            Assert.NotNull(ChatPanel.VoiceFor(openClaw));
+            var voice = Assert.IsType<TextToSpeech.VoiceOption>(ChatPanel.VoiceFor(openClaw));
+            Assert.Equal(TextToSpeech.SpeakEngine.System, voice.Engine);
+            Assert.Equal(workspaceVoice, voice.Name);
             Assert.Null(ChatPanel.VoiceFor(NewFake(sessionId: "fake-voice-" + agent)));
         }
         finally

@@ -158,6 +158,20 @@ namespace ClaudeBuddy.Tests
             Assert.Null(MatchSystemVoice("Not installed", new[] { "Ava", "Zoe" }));
         }
 
+        [Fact]
+        public void AKokoroWorkspaceIdentifierResolvesToItsEngineAndName()
+        {
+            Assert.Equal(Neural1, MatchVoiceOption("AF-Bella", Options()));
+        }
+
+        [Fact]
+        public void AWorkspaceVoiceSharedByTwoEnginesFallsBack()
+        {
+            var duplicate = new VoiceOption(SpeakEngine.Custom, "af_bella", "af_bella (custom)");
+
+            Assert.Null(MatchVoiceOption("af_bella", new[] { Neural1, duplicate }));
+        }
+
         // --- SelectedFrom: resolving a saved choice ---
 
         private static readonly VoiceOption System1 =

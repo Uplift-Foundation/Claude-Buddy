@@ -233,13 +233,21 @@ namespace ClaudeBuddy
             return parts.Length >= 2 && parts[0] == "agent" ? IdentityOf(parts[1]) : null;
         }
 
-        // Speech stays with the user's selected voice unless this agent named a
-        // system-voice label in its workspace metadata.  A missing (or rejected)
+        // Speech stays with the user's selected voice unless this agent named an
+        // available voice in its workspace metadata. A missing (or rejected)
         // field is deliberately not a different kind of default.
-        public static string? VoiceForSession(string sessionId)
+        public static TextToSpeech.VoiceOption? VoiceForSession(string sessionId)
+            => VoiceForSession(sessionId, TextToSpeech.AllVoiceOptions());
+
+        // Kept separate from enumeration so the session rule can be exercised
+        // without asking the host to launch Kokoro or a user's voice command.
+        // The production overload above is the only caller which owns that
+        // machine-specific list.
+        internal static TextToSpeech.VoiceOption? VoiceForSession(
+            string sessionId, IEnumerable<TextToSpeech.VoiceOption> options)
         {
             var requested = IdentityForSession(sessionId)?.Voice;
-            return requested is null ? null : TextToSpeech.MatchSystemVoice(requested, TextToSpeech.SystemVoices());
+            return requested is null ? null : TextToSpeech.MatchVoiceOption(requested, options);
         }
 
         // How long a session stays "working" after its last event. A turn emits

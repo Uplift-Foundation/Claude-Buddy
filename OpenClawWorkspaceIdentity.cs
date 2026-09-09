@@ -79,24 +79,24 @@ namespace ClaudeBuddy
                 }
 
                 if (inFrontMatter && FieldAfterColon(trimmed, out var yamlLabel, out var yamlValue)
-                    && VoiceLabel(yamlLabel) && Valid(yamlValue))
+                    && VoiceLabel(yamlLabel) && VoiceValue(yamlValue) is { } yamlVoice)
                 {
-                    voice ??= yamlValue;
+                    voice ??= yamlVoice;
                     continue;
                 }
 
                 if (TableField(trimmed, out var tableLabel, out var tableValue)
                     && (index + 1 >= source.Count || !TableSeparator(source[index + 1]))
-                    && VoiceLabel(tableLabel) && Valid(tableValue))
+                    && VoiceLabel(tableLabel) && VoiceValue(tableValue) is { } tableVoice)
                 {
-                    voice ??= tableValue;
+                    voice ??= tableVoice;
                     continue;
                 }
 
                 if (BoldField(trimmed, out var boldLabel, out var boldValue)
-                    && VoiceLabel(boldLabel) && Valid(boldValue))
+                    && VoiceLabel(boldLabel) && VoiceValue(boldValue) is { } boldVoice)
                 {
-                    voice ??= boldValue;
+                    voice ??= boldVoice;
                     continue;
                 }
 
@@ -106,8 +106,8 @@ namespace ClaudeBuddy
 
                 if (name is null && string.Equals(label, "Name", StringComparison.OrdinalIgnoreCase))
                     name = value;
-                else if (voice is null && VoiceLabel(label))
-                    voice = value;
+                else if (voice is null && VoiceLabel(label) && VoiceValue(value) is { } bulletVoice)
+                    voice = bulletVoice;
                 else if (avatar is null && string.Equals(label, "Avatar", StringComparison.OrdinalIgnoreCase))
                     avatar = value;
             }
@@ -179,6 +179,31 @@ namespace ClaudeBuddy
             || label.Equals("Voice Name", StringComparison.OrdinalIgnoreCase)
             || label.Equals("Speech Voice", StringComparison.OrdinalIgnoreCase)
             || label.Equals("TTS Voice", StringComparison.OrdinalIgnoreCase);
+
+        // Profiles often make the engine helpful to readers: `**Voice:**
+        // af_bella (Kokoro TTS)`.  The parenthesis is not part of Kokoro's
+        // identifier, but parentheses are part of several system-voice names
+        // (for example "Ava (Premium)").  Strip only annotations which name an
+        // engine, not every parenthesised suffix.
+        private static string? VoiceValue(string value)
+        {
+            var candidate = value.Trim();
+            if (candidate.EndsWith(")", StringComparison.Ordinal))
+            {
+                var open = candidate.LastIndexOf('(');
+                if (open > 0 && VoiceEngineAnnotation(candidate[(open + 1)..^1]))
+                    candidate = candidate[..open].TrimEnd();
+            }
+
+            return Valid(candidate) ? candidate : null;
+        }
+
+        private static bool VoiceEngineAnnotation(string annotation)
+        {
+            var normalized = annotation.Trim().ToLowerInvariant();
+            return normalized is "kokoro" or "kokoro tts" or "neural" or "neural tts"
+                or "system" or "system voice" or "custom" or "custom voice" or "tts";
+        }
 
         private static bool Valid(string value) =>
             !string.IsNullOrWhiteSpace(value) && !IsPlaceholder(value);

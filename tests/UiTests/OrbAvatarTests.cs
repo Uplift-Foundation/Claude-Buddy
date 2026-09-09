@@ -113,7 +113,9 @@ public class OrbAvatarTests
             orb.UpdateFrom(Gateway("Workspace Nova"));
 
             Assert.IsType<ImageBrush>(orb.Orb.Fill);
-            Assert.NotNull(OpenClawSessions.VoiceForSession(sessionId));
+            var voice = Assert.IsType<TextToSpeech.VoiceOption>(OpenClawSessions.VoiceForSession(sessionId));
+            Assert.Equal(TextToSpeech.SpeakEngine.System, voice.Engine);
+            Assert.Equal(workspaceVoice, voice.Name);
         }
         finally
         {
