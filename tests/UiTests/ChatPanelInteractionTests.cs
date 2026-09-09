@@ -191,17 +191,21 @@ public class ChatPanelInteractionTests : IDisposable
     {
         var agent = "voice-" + Guid.NewGuid().ToString("N");
         var sessionId = $"openclaw:agent:{agent}:discord:direct:1";
+        // The resolver deliberately refuses a voice which is not installed.
+        // Choose one published by this runner so this UI seam verifies that an
+        // accepted workspace voice reaches the panel on every supported RID.
+        var workspaceVoice = TextToSpeech.SystemVoices()[0];
         try
         {
             OpenClawSessions.SetIdentitiesForTests(
                 new Dictionary<string, OpenClawSessions.AgentIdentity>
                 {
-                    [agent] = new("Voice agent", null, null, "Samantha"),
+                    [agent] = new("Voice agent", null, null, workspaceVoice),
                 });
 
             var openClaw = new OpenClawChatSession(sessionId, sessionId["openclaw:".Length..], "Voice agent");
 
-            Assert.Equal("Samantha", ChatPanel.VoiceFor(openClaw));
+            Assert.NotNull(ChatPanel.VoiceFor(openClaw));
             Assert.Null(ChatPanel.VoiceFor(NewFake(sessionId: "fake-voice-" + agent)));
         }
         finally

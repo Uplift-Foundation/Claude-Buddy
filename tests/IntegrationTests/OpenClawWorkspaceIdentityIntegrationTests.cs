@@ -22,7 +22,7 @@ public class OpenClawWorkspaceIdentityIntegrationTests : IDisposable
     [Fact]
     public void AnAgentsListWorkspaceBecomesTheAgentNameVoiceAndPicture()
     {
-        File.WriteAllText(Path.Combine(_workspace, "IDENTITY.md"), "- Name: Mica\n- Voice: Karen\n- Avatar: mica.png");
+        File.WriteAllText(Path.Combine(_workspace, "IDENTITY.md"), "- Name: Mica\n- TTS Voice: Karen\n- Avatar: mica.png");
         File.WriteAllBytes(Path.Combine(_workspace, "mica.png"), Png());
         var agent = JsonDocument.Parse(JsonSerializer.Serialize(new
         {

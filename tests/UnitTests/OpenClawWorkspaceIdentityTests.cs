@@ -3,6 +3,7 @@ using Xunit;
 
 namespace ClaudeBuddy.Tests;
 
+[Collection("Settings")]
 public class OpenClawWorkspaceIdentityTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "cb-workspace-identity-" + Guid.NewGuid());
@@ -33,6 +34,47 @@ public class OpenClawWorkspaceIdentityTests : IDisposable
         Assert.Equal("Aurora", fields.Name);
         Assert.Equal("Samantha", fields.Voice);
         Assert.Equal("portraits/me.png", fields.Avatar);
+    }
+
+    [Theory]
+    [InlineData("- Voice Name: Ava (Premium)")]
+    [InlineData("- Speech Voice: Ava (Premium)")]
+    [InlineData("- TTS Voice: Ava (Premium)")]
+    [InlineData("**Voice**: Ava (Premium)")]
+    [InlineData("**Voice:** Ava (Premium)")]
+    [InlineData("| Voice | Ava (Premium) |")]
+    public void DeliberateMarkdownVoiceFieldVariantsAreRead(string line)
+    {
+        Assert.Equal("Ava (Premium)", OpenClawWorkspaceIdentity.Parse(new[] { line }).Voice);
+    }
+
+    [Fact]
+    public void AFrontMatterVoiceIsReadButIncidentalProseIsNot()
+    {
+        var fields = OpenClawWorkspaceIdentity.Parse(new[]
+        {
+            "---", "tts voice: Ava (Premium)", "---",
+            "The voice: Ava (Premium) is pleasant, but this is prose.",
+        });
+
+        Assert.Equal("Ava (Premium)", fields.Voice);
+        Assert.Null(OpenClawWorkspaceIdentity.Parse(new[]
+        {
+            "The voice: Ava (Premium) is pleasant, but this is prose.",
+        }).Voice);
+    }
+
+    [Fact]
+    public void AMarkdownTableHeaderDoesNotWinOverItsVoiceDataRow()
+    {
+        var fields = OpenClawWorkspaceIdentity.Parse(new[]
+        {
+            "| Voice | Value |",
+            "| --- | :--- |",
+            "| TTS Voice | Ava (Premium) |",
+        });
+
+        Assert.Equal("Ava (Premium)", fields.Voice);
     }
 
     [Fact]
@@ -92,19 +134,29 @@ public class OpenClawWorkspaceIdentityTests : IDisposable
     [Fact]
     public void MissingWorkspaceMetadataLeavesGatewayIdentityAndGlobalVoiceInPlace()
     {
-        ClaudeBuddySettings.SpeakVoice = "Global voice";
-        var json = JsonDocument.Parse("""
-            { "id": "main", "displayName": "Gateway name",
-              "identity": { "avatarUrl": "data:image/png;base64,AQ==" } }
-            """).RootElement;
+        var savedVoice = ClaudeBuddySettings.SpeakVoice;
+        try
+        {
+            ClaudeBuddySettings.SpeakVoice = "Global voice";
+            var json = JsonDocument.Parse("""
+                { "id": "main", "displayName": "Gateway name",
+                  "identity": { "avatarUrl": "data:image/png;base64,AQ==" } }
+                """).RootElement;
 
-        var identity = OpenClawSessions.IdentityFrom(json);
-        OpenClawSessions.SetIdentitiesForTests(
-            new Dictionary<string, OpenClawSessions.AgentIdentity> { ["main"] = identity });
+            var identity = OpenClawSessions.IdentityFrom(json);
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity> { ["main"] = identity });
 
-        Assert.Equal("Gateway name", identity.Name);
-        Assert.Null(identity.Voice);
-        Assert.Equal(new byte[] { 1 }, identity.Avatar);
-        Assert.Null(OpenClawSessions.VoiceForSession("openclaw:agent:main:main"));
+            Assert.Equal("Gateway name", identity.Name);
+            Assert.Null(identity.Voice);
+            Assert.Equal(new byte[] { 1 }, identity.Avatar);
+            Assert.Null(OpenClawSessions.VoiceForSession("openclaw:agent:main:main"));
+        }
+        finally
+        {
+            ClaudeBuddySettings.SpeakVoice = savedVoice;
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>());
+        }
     }
 }

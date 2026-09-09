@@ -402,6 +402,48 @@ namespace ClaudeBuddy
             return voices;
         }
 
+        // Workspace metadata is written by people, while platform voices come
+        // from two unrelated operating systems. Exact names win; otherwise a
+        // deliberately narrow normalized match accepts a common shorthand only
+        // when it identifies one installed voice. A guess between two Davids is
+        // worse than falling back to the user's global voice.
+        internal static string? MatchSystemVoice(string? requested, IEnumerable<string> installed)
+        {
+            if (string.IsNullOrWhiteSpace(requested)) return null;
+
+            var choices = installed.Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var exact = choices.Where(v => string.Equals(v, requested.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+            if (exact.Count == 1) return exact[0];
+
+            var wanted = ComparableVoice(requested);
+            if (wanted.Length == 0) return null;
+
+            var normalized = choices.Where(v => ComparableVoice(v) == wanted).ToList();
+            if (normalized.Count == 1) return normalized[0];
+
+            var shorthand = choices.Where(v =>
+            {
+                var candidate = ComparableVoice(v);
+                return candidate.StartsWith(wanted, StringComparison.Ordinal)
+                    || wanted.StartsWith(candidate, StringComparison.Ordinal);
+            }).ToList();
+
+            return shorthand.Count == 1 ? shorthand[0] : null;
+        }
+
+        internal static string NormalizeVoice(string value) => new(value
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToLowerInvariant)
+            .ToArray());
+
+        private static string ComparableVoice(string value)
+        {
+            var normalized = NormalizeVoice(value);
+            return normalized.StartsWith("microsoft", StringComparison.Ordinal)
+                ? normalized["microsoft".Length..]
+                : normalized;
+        }
+
         // `say -v ?` output, one voice per line, as the names to offer.
         //
         // Split out of SystemVoices because this reads a format another program
