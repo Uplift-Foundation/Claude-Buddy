@@ -35,6 +35,34 @@ public class OpenClawWorkspaceIdentityTests : IDisposable
         Assert.Equal("portraits/me.png", fields.Avatar);
     }
 
+    [Theory]
+    [InlineData("- Voice Name: Ava (Premium)")]
+    [InlineData("- Speech Voice: Ava (Premium)")]
+    [InlineData("- TTS Voice: Ava (Premium)")]
+    [InlineData("**Voice**: Ava (Premium)")]
+    [InlineData("**Voice:** Ava (Premium)")]
+    [InlineData("| Voice | Ava (Premium) |")]
+    public void DeliberateMarkdownVoiceFieldVariantsAreRead(string line)
+    {
+        Assert.Equal("Ava (Premium)", OpenClawWorkspaceIdentity.Parse(new[] { line }).Voice);
+    }
+
+    [Fact]
+    public void AFrontMatterVoiceIsReadButIncidentalProseIsNot()
+    {
+        var fields = OpenClawWorkspaceIdentity.Parse(new[]
+        {
+            "---", "tts voice: Ava (Premium)", "---",
+            "The voice: Ava (Premium) is pleasant, but this is prose.",
+        });
+
+        Assert.Equal("Ava (Premium)", fields.Voice);
+        Assert.Null(OpenClawWorkspaceIdentity.Parse(new[]
+        {
+            "The voice: Ava (Premium) is pleasant, but this is prose.",
+        }).Voice);
+    }
+
     [Fact]
     public void IdentityThenSoulThenOrdinalMarkdownFilesSupplyEachField()
     {

@@ -1000,8 +1000,13 @@ going at once.
 names an agent workspace, Claude Buddy reads root-level Markdown files there:
 `IDENTITY.md` first, then `SOUL.md`, then the remaining `*.md` files by filename.
 Use OpenClaw's bullet format, for example `- Name: Aurora`,
-`- Avatar: avatars/aurora.png`, and Claude Buddy's `- Voice: Samantha`. Labels are
-case-insensitive and the first valid value for each field wins. Avatar paths are
+`- Avatar: avatars/aurora.png`, and Claude Buddy's `- Voice: Samantha`. Voice
+also accepts the deliberate field labels `Voice Name`, `Speech Voice`, and `TTS
+Voice`, in Markdown bullets, bold fields, two-cell tables, or YAML front matter.
+Labels are case-insensitive and the first valid value for each field wins. A
+voice matches an installed system voice exactly when possible, then by an
+unambiguous normalized shorthand; a missing or ambiguous match keeps the global
+voice. Avatar paths are
 local to that workspace (no URLs or data URIs), cannot escape it, and are capped
 at 2 MB. Missing or invalid fields retain the identity or voice supplied by the
 gateway and Claude Buddy settings.

@@ -56,22 +56,54 @@ namespace ClaudeBuddy
             string? name = null;
             string? voice = null;
             string? avatar = null;
+            var inFrontMatter = false;
+            var sawContent = false;
 
             foreach (var line in lines)
             {
                 var trimmed = line.Trim();
+                if (!sawContent && trimmed.Length == 0) continue;
+                if (!sawContent && trimmed == "---")
+                {
+                    sawContent = true;
+                    inFrontMatter = true;
+                    continue;
+                }
+                sawContent = true;
+                if (inFrontMatter && trimmed == "---")
+                {
+                    inFrontMatter = false;
+                    continue;
+                }
+
+                if (inFrontMatter && FieldAfterColon(trimmed, out var yamlLabel, out var yamlValue)
+                    && VoiceLabel(yamlLabel) && Valid(yamlValue))
+                {
+                    voice ??= yamlValue;
+                    continue;
+                }
+
+                if (TableField(trimmed, out var tableLabel, out var tableValue)
+                    && VoiceLabel(tableLabel) && Valid(tableValue))
+                {
+                    voice ??= tableValue;
+                    continue;
+                }
+
+                if (BoldField(trimmed, out var boldLabel, out var boldValue)
+                    && VoiceLabel(boldLabel) && Valid(boldValue))
+                {
+                    voice ??= boldValue;
+                    continue;
+                }
+
                 if (!trimmed.StartsWith("-", StringComparison.Ordinal)) continue;
 
-                var colon = trimmed.IndexOf(':');
-                if (colon < 2) continue;
-
-                var label = trimmed[1..colon].Trim();
-                var value = trimmed[(colon + 1)..].Trim();
-                if (string.IsNullOrWhiteSpace(value) || IsPlaceholder(value)) continue;
+                if (!FieldAfterColon(trimmed[1..].Trim(), out var label, out var value) || !Valid(value)) continue;
 
                 if (name is null && string.Equals(label, "Name", StringComparison.OrdinalIgnoreCase))
                     name = value;
-                else if (voice is null && string.Equals(label, "Voice", StringComparison.OrdinalIgnoreCase))
+                else if (voice is null && VoiceLabel(label))
                     voice = value;
                 else if (avatar is null && string.Equals(label, "Avatar", StringComparison.OrdinalIgnoreCase))
                     avatar = value;
@@ -81,6 +113,61 @@ namespace ClaudeBuddy
         }
 
         internal sealed record Fields(string? Name, string? Voice, string? Avatar);
+
+        private static bool FieldAfterColon(string text, out string label, out string value)
+        {
+            var colon = text.IndexOf(':');
+            if (colon <= 0)
+            {
+                label = value = "";
+                return false;
+            }
+
+            label = text[..colon].Trim().Trim('*').Trim();
+            value = text[(colon + 1)..].Trim();
+            return label.Length > 0;
+        }
+
+        // A bold standalone field is intentional Markdown metadata; ordinary
+        // prose with a colon is not. Both common bold spellings are accepted:
+        // **Voice**: Ava and **Voice:** Ava.
+        private static bool BoldField(string text, out string label, out string value)
+        {
+            if (!text.StartsWith("**", StringComparison.Ordinal))
+            {
+                label = value = "";
+                return false;
+            }
+
+            var close = text.IndexOf("**", 2, StringComparison.Ordinal);
+            if (close < 2) { label = value = ""; return false; }
+
+            var labelInsideBold = text[2..close].Trim();
+            label = labelInsideBold.TrimEnd(':').Trim();
+            var rest = text[(close + 2)..].TrimStart();
+            if (labelInsideBold.EndsWith(":", StringComparison.Ordinal)) value = rest;
+            else if (rest.StartsWith(":", StringComparison.Ordinal)) value = rest[1..].Trim();
+            else { value = ""; return false; }
+            return label.Length > 0;
+        }
+
+        private static bool TableField(string text, out string label, out string value)
+        {
+            var cells = text.Trim().Trim('|').Split('|');
+            if (cells.Length != 2) { label = value = ""; return false; }
+            label = cells[0].Trim().Trim('*').Trim();
+            value = cells[1].Trim();
+            return label.Length > 0;
+        }
+
+        private static bool VoiceLabel(string label) =>
+            label.Equals("Voice", StringComparison.OrdinalIgnoreCase)
+            || label.Equals("Voice Name", StringComparison.OrdinalIgnoreCase)
+            || label.Equals("Speech Voice", StringComparison.OrdinalIgnoreCase)
+            || label.Equals("TTS Voice", StringComparison.OrdinalIgnoreCase);
+
+        private static bool Valid(string value) =>
+            !string.IsNullOrWhiteSpace(value) && !IsPlaceholder(value);
 
         private static string FileOrder(string path)
         {

@@ -125,6 +125,39 @@ namespace ClaudeBuddy.Tests
             Assert.Equal(new[] { "Albert", "bob", "zoe" }, voices);
         }
 
+        // --- MatchSystemVoice: workspace metadata -> installed voice -------
+
+        [Fact]
+        public void AnExactWorkspaceVoiceWinsOverAFuzzyAlternative()
+        {
+            Assert.Equal("Ava", MatchSystemVoice("ava", new[] { "Ava", "Ava (Premium)" }));
+        }
+
+        [Fact]
+        public void PunctuationAndCaseAreIgnoredForAnExactNormalizedVoice()
+        {
+            Assert.Equal("Microsoft David Desktop",
+                MatchSystemVoice("microsoft-david_desktop", new[] { "Microsoft David Desktop" }));
+        }
+
+        [Fact]
+        public void OneUnambiguousShortenedVoiceNameResolves()
+        {
+            Assert.Equal("Ava (Premium)", MatchSystemVoice("Ava", new[] { "Ava (Premium)", "Zoe" }));
+        }
+
+        [Fact]
+        public void AnAmbiguousShortenedVoiceNameFallsBack()
+        {
+            Assert.Null(MatchSystemVoice("David", new[] { "Microsoft David Desktop", "David (Enhanced)" }));
+        }
+
+        [Fact]
+        public void AnUnmatchedWorkspaceVoiceFallsBack()
+        {
+            Assert.Null(MatchSystemVoice("Not installed", new[] { "Ava", "Zoe" }));
+        }
+
         // --- SelectedFrom: resolving a saved choice ---
 
         private static readonly VoiceOption System1 =

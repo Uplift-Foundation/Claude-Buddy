@@ -236,8 +236,11 @@ namespace ClaudeBuddy
         // Speech stays with the user's selected voice unless this agent named a
         // system-voice label in its workspace metadata.  A missing (or rejected)
         // field is deliberately not a different kind of default.
-        public static string? VoiceForSession(string sessionId) =>
-            IdentityForSession(sessionId)?.Voice;
+        public static string? VoiceForSession(string sessionId)
+        {
+            var requested = IdentityForSession(sessionId)?.Voice;
+            return requested is null ? null : TextToSpeech.MatchSystemVoice(requested, TextToSpeech.SystemVoices());
+        }
 
         // How long a session stays "working" after its last event. A turn emits
         // events continuously while it runs — thinking deltas, tool phases — so
