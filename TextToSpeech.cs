@@ -564,13 +564,13 @@ namespace ClaudeBuddy
         // Excluded from coverage: starts a speech engine and makes the machine
         // make a noise.
         [ExcludeFromCodeCoverage]
-        public static void Speak(string text, VoiceOption voice) =>
+        public static void Speak(string text, VoiceOption voice, double? rate = null) =>
             Speak(text, voice.Name, forceSystemVoice: voice.Engine == SpeakEngine.System,
-                forceEngine: voice.Engine);
+                forceEngine: voice.Engine, rate: rate);
 
         [ExcludeFromCodeCoverage]
         public static void Speak(string text, string? voice = null, bool forceSystemVoice = false,
-            SpeakEngine? forceEngine = null)
+            SpeakEngine? forceEngine = null, double? rate = null)
         {
             Cancel();
 
@@ -612,7 +612,7 @@ namespace ClaudeBuddy
             // because of.
             if (!forceSystemVoice && selected?.Engine == SpeakEngine.Neural
                 && NeuralSpeech.Available
-                && StartNeural(text, selected.Name))
+                && StartNeural(text, selected.Name, rate))
             {
                 return;
             }
@@ -806,7 +806,7 @@ namespace ClaudeBuddy
 
         // Excluded from coverage: starts the Kokoro side-car process.
         [ExcludeFromCodeCoverage]
-        private static bool StartNeural(string text, string? voice = null)
+        private static bool StartNeural(string text, string? voice = null, double? rate = null)
         {
             // Announced before the process exists, because starting it is itself
             // part of the wait being announced.
@@ -815,6 +815,7 @@ namespace ClaudeBuddy
             var proc = NeuralSpeech.Start(
                 text,
                 voice ?? ClaudeBuddySettings.NeuralVoice,
+                rate,
                 onSpeaking: () => Enter(SpeakState.Speaking));
 
             if (proc is null)

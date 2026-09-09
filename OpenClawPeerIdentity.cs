@@ -13,12 +13,21 @@ namespace ClaudeBuddy
         internal const int MaxAgentId = 96;
         internal const int MaxVoice = 256;
 
+        // Mirrors OpenClawWorkspaceIdentity's own bound: a rate this route
+        // carries was already validated there before it ever reached a Row,
+        // but a peer is a message from another process, not from that
+        // parser, so the bound is enforced again on the way in rather than
+        // trusted from the wire.
+        internal const double MinRate = 0.5;
+        internal const double MaxRate = 2.0;
+
         internal sealed record Request(
             [property: JsonPropertyName("gatewayPin")] string GatewayPin,
             [property: JsonPropertyName("agentIds")] IReadOnlyList<string> AgentIds);
         internal sealed record Row(
             [property: JsonPropertyName("agentId")] string AgentId,
-            [property: JsonPropertyName("voice")] string Voice);
+            [property: JsonPropertyName("voice")] string Voice,
+            [property: JsonPropertyName("rate")] double? Rate = null);
         internal sealed record Response(
             [property: JsonPropertyName("gatewayPin")] string GatewayPin,
             [property: JsonPropertyName("voices")] IReadOnlyList<Row> Voices);
@@ -31,6 +40,9 @@ namespace ClaudeBuddy
 
         internal static bool ValidVoice(string? value) => !string.IsNullOrWhiteSpace(value)
             && value.Length <= MaxVoice && value.All(c => !char.IsControl(c));
+
+        internal static bool ValidRate(double? value) =>
+            value is null || (value is { } rate && rate >= MinRate && rate <= MaxRate);
 
         internal static Request? RequestFrom(JsonElement body)
         {
@@ -62,12 +74,22 @@ namespace ClaudeBuddy
             foreach (var row in voices.EnumerateArray())
             {
                 if (row.ValueKind != JsonValueKind.Object
-                    || !OnlyProperties(row, "agentId", "voice")
+                    || !OnlyProperties(row, "agentId", "voice", "rate")
                     || !row.TryGetProperty("agentId", out var id)
                     || !row.TryGetProperty("voice", out var voice)
                     || id.ValueKind != JsonValueKind.String || voice.ValueKind != JsonValueKind.String
                     || !ValidAgentId(id.GetString()) || !ValidVoice(voice.GetString())) return null;
-                rows.Add(new Row(id.GetString()!, voice.GetString()!));
+
+                double? rate = null;
+                if (row.TryGetProperty("rate", out var rateElement))
+                {
+                    if (rateElement.ValueKind != JsonValueKind.Number
+                        || !rateElement.TryGetDouble(out var parsedRate) || !ValidRate(parsedRate))
+                        return null;
+                    rate = parsedRate;
+                }
+
+                rows.Add(new Row(id.GetString()!, voice.GetString()!, rate));
             }
 
             return rows.Count > MaxAgents || rows.Select(r => r.AgentId).Distinct(StringComparer.OrdinalIgnoreCase).Count() != rows.Count

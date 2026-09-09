@@ -82,9 +82,11 @@ namespace ClaudeBuddy
         private static readonly Dictionary<string, PeerVoiceCache> PeerVoices =
             new(StringComparer.OrdinalIgnoreCase);
 
-        private sealed record PeerVoiceCache(string GatewayPin, Dictionary<string, string> Voices);
+        private sealed record PeerVoiceCache(
+            string GatewayPin, Dictionary<string, (string Voice, double? Rate)> Voices);
 
-        internal sealed record AgentIdentity(string Name, string? Emoji, byte[]? Avatar, string? Voice = null);
+        internal sealed record AgentIdentity(
+            string Name, string? Emoji, byte[]? Avatar, string? Voice = null, double? Rate = null);
 
         // A test seam, matching SetSnapshotForTests: the only thing that fills the
         // identity table is LoadAgentNamesAsync, which is an agents.list request
@@ -252,9 +254,19 @@ namespace ClaudeBuddy
         internal static TextToSpeech.VoiceOption? VoiceForSession(
             string sessionId, IEnumerable<TextToSpeech.VoiceOption> options)
         {
-            var requested = IdentityForSession(sessionId)?.Voice ?? PeerVoiceFor(AgentIdOf(sessionId));
+            var requested = IdentityForSession(sessionId)?.Voice ?? PeerVoiceFor(AgentIdOf(sessionId)).Voice;
             return requested is null ? null : TextToSpeech.MatchVoiceOption(requested, options);
         }
+
+        // Only the neural (Kokoro) engine has a speaking rate to set — a
+        // system voice or a user's own custom command has no such knob here,
+        // so a rate resolved for either is simply never read. Kept separate
+        // from VoiceForSession rather than folded into VoiceOption: that
+        // record is also the shape of every entry in "every voice from every
+        // engine" (the settings picker's list), where a per-utterance rate
+        // has no meaning at all.
+        internal static double? RateForSession(string sessionId) =>
+            IdentityForSession(sessionId)?.Rate ?? PeerVoiceFor(AgentIdOf(sessionId)).Rate;
 
         internal static IReadOnlyList<OpenClawPeerIdentity.Row> PeerProfileVoices(
             string gatewayPin, IReadOnlyList<string> agentIds)
@@ -268,9 +280,11 @@ namespace ClaudeBuddy
                 .Where(OpenClawPeerIdentity.ValidAgentId)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Select(id => Identities.TryGetValue(id, out var identity)
-                    ? (AgentId: id, Voice: identity.Voice) : (AgentId: id, Voice: (string?)null))
+                    ? (AgentId: id, Voice: identity.Voice, Rate: identity.Rate)
+                    : (AgentId: id, Voice: (string?)null, Rate: (double?)null))
                 .Where(row => OpenClawPeerIdentity.ValidVoice(row.Voice))
-                .Select(row => new OpenClawPeerIdentity.Row(row.AgentId, row.Voice!)).ToList();
+                .Select(row => new OpenClawPeerIdentity.Row(row.AgentId, row.Voice!,
+                    OpenClawPeerIdentity.ValidRate(row.Rate) ? row.Rate : null)).ToList();
         }
 
         internal static void ApplyPeerProfileVoices(string peer, string gatewayPin,
@@ -282,8 +296,9 @@ namespace ClaudeBuddy
             lock (Gate)
             {
                 var accepted = rows.Where(row => OpenClawPeerIdentity.ValidAgentId(row.AgentId)
-                    && OpenClawPeerIdentity.ValidVoice(row.Voice) && Identities.ContainsKey(row.AgentId))
-                    .ToDictionary(row => row.AgentId, row => row.Voice, StringComparer.OrdinalIgnoreCase);
+                    && OpenClawPeerIdentity.ValidVoice(row.Voice) && OpenClawPeerIdentity.ValidRate(row.Rate)
+                    && Identities.ContainsKey(row.AgentId))
+                    .ToDictionary(row => row.AgentId, row => (row.Voice, row.Rate), StringComparer.OrdinalIgnoreCase);
                 if (accepted.Count > OpenClawPeerIdentity.MaxAgents) return;
                 PeerVoices[peer] = new PeerVoiceCache(gatewayPin, accepted);
             }
@@ -311,18 +326,19 @@ namespace ClaudeBuddy
                 _ = PeerSessions.Host?.RequestOpenClawProfileVoicesAsync(pin!, ids);
         }
 
-        private static string? PeerVoiceFor(string? agentId)
+        private static (string? Voice, double? Rate) PeerVoiceFor(string? agentId)
         {
-            if (agentId is null) return null;
+            if (agentId is null) return (null, null);
             lock (Gate)
             {
                 var pin = ClaudeBuddySettings.OpenClawFingerprint;
-                if (!OpenClawPeerIdentity.ValidPin(pin)) return null;
+                if (!OpenClawPeerIdentity.ValidPin(pin)) return (null, null);
                 var matches = PeerVoices.Values
                     .Where(cache => string.Equals(cache.GatewayPin, pin, StringComparison.OrdinalIgnoreCase)
                         && cache.Voices.TryGetValue(agentId, out _))
-                    .Select(cache => cache.Voices[agentId]).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                return matches.Count == 1 ? matches[0] : null;
+                    .Select(cache => cache.Voices[agentId])
+                    .GroupBy(m => (m.Voice.ToLowerInvariant(), m.Rate)).Select(g => g.First()).ToList();
+                return matches.Count == 1 ? matches[0] : (null, null);
             }
         }
 
@@ -1016,7 +1032,8 @@ namespace ClaudeBuddy
                 local.Avatar ?? (identity.ValueKind == JsonValueKind.Object
                     ? DecodeDataUri(Str(identity, "avatarUrl"))
                     : null),
-                local.Voice);
+                local.Voice,
+                local.Rate);
         }
 
         // "data:image/png;base64,iVBOR…" -> the bytes. Anything else, including a

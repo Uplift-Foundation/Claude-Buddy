@@ -6,17 +6,25 @@ namespace ClaudeBuddy
     // path accepted here is proved to remain inside its canonical root.
     internal static class OpenClawWorkspaceIdentity
     {
-        internal sealed record Metadata(string? Name, string? Voice, byte[]? Avatar)
+        internal sealed record Metadata(string? Name, string? Voice, double? Rate, byte[]? Avatar)
         {
             internal bool IsEmpty => Name is null && Voice is null && Avatar is null;
         }
+
+        // The engine can run anywhere from half to double real-time speech
+        // without the model itself starting to garble — this is a caution
+        // against a profile typo (a rate of "13" meant as "1.3") reaching the
+        // engine as a wildly wrong value, not a claim about where it stops
+        // sounding good.
+        private const double MinRate = 0.5;
+        private const double MaxRate = 2.0;
 
         private const long MaxAvatarBytes = 2 * 1024 * 1024;
 
         internal static Metadata Read(string? workspace)
         {
             var root = CanonicalDirectory(workspace);
-            if (root is null) return new Metadata(null, null, null);
+            if (root is null) return new Metadata(null, null, null, null);
 
             try
             {
@@ -27,6 +35,7 @@ namespace ClaudeBuddy
 
                 string? name = null;
                 string? voice = null;
+                double? rate = null;
                 byte[]? avatar = null;
 
                 foreach (var file in files)
@@ -37,15 +46,16 @@ namespace ClaudeBuddy
                     var fields = Parse(File.ReadAllLines(resolved));
                     name ??= fields.Name;
                     voice ??= fields.Voice;
+                    rate ??= fields.Rate;
                     avatar ??= AvatarAt(root, fields.Avatar);
                 }
 
-                return new Metadata(name, voice, avatar);
+                return new Metadata(name, voice, rate, avatar);
             }
-            catch (IOException) { return new Metadata(null, null, null); }
-            catch (UnauthorizedAccessException) { return new Metadata(null, null, null); }
-            catch (ArgumentException) { return new Metadata(null, null, null); }
-            catch (NotSupportedException) { return new Metadata(null, null, null); }
+            catch (IOException) { return new Metadata(null, null, null, null); }
+            catch (UnauthorizedAccessException) { return new Metadata(null, null, null, null); }
+            catch (ArgumentException) { return new Metadata(null, null, null, null); }
+            catch (NotSupportedException) { return new Metadata(null, null, null, null); }
         }
 
         // OpenClaw's IDENTITY.md format is deliberately Markdown, not a second
@@ -55,6 +65,7 @@ namespace ClaudeBuddy
         {
             string? name = null;
             string? voice = null;
+            double? rate = null;
             string? avatar = null;
             var inFrontMatter = false;
             var sawContent = false;
@@ -79,43 +90,63 @@ namespace ClaudeBuddy
                 }
 
                 if (inFrontMatter && FieldAfterColon(trimmed, out var yamlLabel, out var yamlValue)
-                    && VoiceLabel(yamlLabel) && VoiceValue(yamlValue) is { } yamlVoice)
+                    && VoiceLabel(yamlLabel) && VoiceValue(yamlValue) is var (yamlVoice, yamlRate) && yamlVoice is not null)
                 {
                     voice ??= yamlVoice;
+                    rate ??= yamlRate;
                     continue;
                 }
 
                 if (TableField(trimmed, out var tableLabel, out var tableValue)
                     && (index + 1 >= source.Count || !TableSeparator(source[index + 1]))
-                    && VoiceLabel(tableLabel) && VoiceValue(tableValue) is { } tableVoice)
+                    && VoiceLabel(tableLabel) && VoiceValue(tableValue) is var (tableVoice, tableRate) && tableVoice is not null)
                 {
                     voice ??= tableVoice;
+                    rate ??= tableRate;
                     continue;
                 }
 
                 if (BoldField(trimmed, out var boldLabel, out var boldValue)
-                    && VoiceLabel(boldLabel) && VoiceValue(boldValue) is { } boldVoice)
+                    && VoiceLabel(boldLabel) && VoiceValue(boldValue) is var (boldVoice, boldRate) && boldVoice is not null)
                 {
                     voice ??= boldVoice;
+                    rate ??= boldRate;
                     continue;
                 }
 
                 if (!trimmed.StartsWith("-", StringComparison.Ordinal)) continue;
 
-                if (!FieldAfterColon(trimmed[1..].Trim(), out var label, out var value) || !Valid(value)) continue;
+                // A bullet can carry its own bold label — `- **Voice:** Ava` is
+                // exactly as common in a real profile as the bare `- Voice:
+                // Ava` below, and every real fixture this parser was built
+                // from happens to use it. BoldField understands where the
+                // closing `**` actually falls (after the colon, not before
+                // it); FieldAfterColon does not, and used to leave it sitting
+                // in the value — every bulleted-bold field, not just Voice,
+                // read back with a stray "** " on the front of it.
+                var rest = trimmed[1..].TrimStart();
+                string label, value;
+                if (!BoldField(rest, out label, out value))
+                {
+                    if (!FieldAfterColon(rest, out label, out value) || !Valid(value)) continue;
+                }
+                else if (!Valid(value)) continue;
 
                 if (name is null && string.Equals(label, "Name", StringComparison.OrdinalIgnoreCase))
                     name = value;
-                else if (voice is null && VoiceLabel(label) && VoiceValue(value) is { } bulletVoice)
+                else if (voice is null && VoiceLabel(label) && VoiceValue(value) is var (bulletVoice, bulletRate) && bulletVoice is not null)
+                {
                     voice = bulletVoice;
+                    rate ??= bulletRate;
+                }
                 else if (avatar is null && string.Equals(label, "Avatar", StringComparison.OrdinalIgnoreCase))
                     avatar = value;
             }
 
-            return new Fields(name, voice, avatar);
+            return new Fields(name, voice, rate, avatar);
         }
 
-        internal sealed record Fields(string? Name, string? Voice, string? Avatar);
+        internal sealed record Fields(string? Name, string? Voice, double? Rate, string? Avatar);
 
         private static bool FieldAfterColon(string text, out string label, out string value)
         {
@@ -185,17 +216,42 @@ namespace ClaudeBuddy
         // identifier, but parentheses are part of several system-voice names
         // (for example "Ava (Premium)").  Strip only annotations which name an
         // engine, not every parenthesised suffix.
-        private static string? VoiceValue(string value)
+        //
+        // A profile is also free to qualify that engine further — `(Kokoro
+        // TTS, rate 1.3)` — and that qualifier is exactly as much not-part-
+        // of-the-voice-identifier as the engine name itself. Recognising only
+        // the token before the first comma means the engine name still has to
+        // match the known list; whatever rides along after it is read for a
+        // rate but never has to be understood to be stripped.
+        private static (string? Voice, double? Rate) VoiceValue(string value)
         {
             var candidate = value.Trim();
+            double? rate = null;
             if (candidate.EndsWith(")", StringComparison.Ordinal))
             {
                 var open = candidate.LastIndexOf('(');
-                if (open > 0 && VoiceEngineAnnotation(candidate[(open + 1)..^1]))
-                    candidate = candidate[..open].TrimEnd();
+                if (open > 0)
+                {
+                    var annotation = candidate[(open + 1)..^1];
+                    var engine = annotation.Split(',', 2);
+                    if (VoiceEngineAnnotation(engine[0]))
+                    {
+                        candidate = candidate[..open].TrimEnd();
+                        if (engine.Length > 1) rate = RateIn(engine[1]);
+                    }
+                }
             }
 
-            return Valid(candidate) ? candidate : null;
+            // A code span around the identifier itself — `` `af_nicole` `` —
+            // is real fixture, not a coincidence: every voice line captured
+            // from a real profile uses it. Stripped only when both ticks are
+            // there and there is something left between them, so a value that
+            // is nothing *but* a lone backtick is left alone rather than
+            // emptied.
+            if (candidate.Length > 2 && candidate.StartsWith('`') && candidate.EndsWith('`'))
+                candidate = candidate[1..^1].Trim();
+
+            return Valid(candidate) ? (candidate, rate) : (null, null);
         }
 
         private static bool VoiceEngineAnnotation(string annotation)
@@ -203,6 +259,33 @@ namespace ClaudeBuddy
             var normalized = annotation.Trim().ToLowerInvariant();
             return normalized is "kokoro" or "kokoro tts" or "neural" or "neural tts"
                 or "system" or "system voice" or "custom" or "custom voice" or "tts";
+        }
+
+        // "rate 1.3", "speed 1.3x", "Rate: 1.3" — a keyword, then the first
+        // number after it. Out of bounds or missing entirely is not an error:
+        // the caller already has a voice, and a rate nobody can parse just
+        // means the engine's own default speed, same as no rate at all.
+        private static double? RateIn(string qualifier)
+        {
+            var words = qualifier.Split(new[] { ' ', ':', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < words.Length; i++)
+            {
+                if (words[i].ToLowerInvariant() is not ("rate" or "speed"))
+                    continue;
+
+                for (var j = i + 1; j < words.Length; j++)
+                {
+                    var token = words[j].TrimEnd('x', 'X');
+                    if (double.TryParse(token, System.Globalization.NumberStyles.AllowDecimalPoint,
+                            System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+                        && parsed >= MinRate && parsed <= MaxRate)
+                    {
+                        return parsed;
+                    }
+                }
+            }
+
+            return null;
         }
 
         private static bool Valid(string value) =>

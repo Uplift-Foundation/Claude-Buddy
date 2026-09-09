@@ -1578,10 +1578,11 @@ namespace ClaudeBuddy
             if (string.IsNullOrWhiteSpace(text)) return;
 
             var voice = VoiceForRemoteSpeech(SessionId);
+            var rate = OpenClawSessions.RateForSession(SessionId);
             Dispatcher.UIThread.Post(() =>
             {
                 if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
-                else TextToSpeech.Speak(text, voice);
+                else TextToSpeech.Speak(text, voice, rate);
             });
         }
 

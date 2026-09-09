@@ -120,11 +120,12 @@ public class OrbAvatarTests
             OpenClawSessions.SetIdentitiesForTests(
                 new Dictionary<string, OpenClawSessions.AgentIdentity>
                 {
-                    [agent] = new("Workspace Nova", "✨", Png(), "af_bella"),
+                    [agent] = new("Workspace Nova", "✨", Png(), "af_bella", 1.3),
                 });
             var neural = new TextToSpeech.VoiceOption(
                 TextToSpeech.SpeakEngine.Neural, "af_bella", "af_bella (Kokoro)");
             Assert.Equal(neural, OrbWindow.VoiceForRemoteSpeech(sessionId, new[] { neural }));
+            Assert.Equal(1.3, OpenClawSessions.RateForSession(sessionId));
         }
         finally
         {
@@ -149,7 +150,7 @@ public class OrbAvatarTests
                     [agent] = new("Gateway Nova", "✨", Png()),
                 });
             OpenClawSessions.ApplyPeerProfileVoices("paired-mini", pin,
-                new[] { new OpenClawPeerIdentity.Row(agent, "af_bella") });
+                new[] { new OpenClawPeerIdentity.Row(agent, "af_bella", 1.3) });
 
             var sessionId = $"openclaw:agent:{agent}:discord:channel:1";
             var orb = new OrbWindow(sessionId);
@@ -157,6 +158,7 @@ public class OrbAvatarTests
 
             Assert.IsType<ImageBrush>(orb.Orb.Fill);
             Assert.Equal(neural, OrbWindow.VoiceForRemoteSpeech(sessionId, new[] { neural }));
+            Assert.Equal(1.3, OpenClawSessions.RateForSession(sessionId));
         }
         finally
         {
