@@ -1967,10 +1967,14 @@ namespace ClaudeBuddy
         // sessions have workspace identity metadata; a room deliberately has
         // no single agent voice, so both it and every other session keep the
         // user's global speech selection.
-        internal static string? VoiceFor(IRemoteChatSession? session) =>
-            session?.SessionId.StartsWith("openclaw:agent:", StringComparison.Ordinal) == true
-                ? OpenClawSessions.VoiceForSession(session.SessionId)
-                : null;
+        internal static TextToSpeech.VoiceOption? VoiceFor(
+            IRemoteChatSession? session,
+            IEnumerable<TextToSpeech.VoiceOption>? options = null) =>
+            session?.SessionId.StartsWith("openclaw:agent:", StringComparison.Ordinal) != true
+                ? null
+                : options is null
+                    ? OpenClawSessions.VoiceForSession(session.SessionId)
+                    : OpenClawSessions.VoiceForSession(session.SessionId, options);
 
         // TextToSpeech.Speak is itself excluded from coverage ("starts a speech
         // engine and makes the machine make a noise" — see its own comment) —
@@ -1980,10 +1984,10 @@ namespace ClaudeBuddy
         // line — actually reaching a real utterance — has no headless seam and
         // is deliberately left uncovered rather than exercised for real.
         [ExcludeFromCodeCoverage]
-        private static void Speak(string text, string? voice)
+        private static void Speak(string text, TextToSpeech.VoiceOption? voice)
         {
             if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
-            else TextToSpeech.Speak(text, voice, forceSystemVoice: true);
+            else TextToSpeech.Speak(text, voice);
         }
 
         private void ApplySpeakState(TextToSpeech.SpeakState state)

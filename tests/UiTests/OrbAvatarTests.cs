@@ -113,7 +113,18 @@ public class OrbAvatarTests
             orb.UpdateFrom(Gateway("Workspace Nova"));
 
             Assert.IsType<ImageBrush>(orb.Orb.Fill);
-            Assert.NotNull(OpenClawSessions.VoiceForSession(sessionId));
+            var voice = Assert.IsType<TextToSpeech.VoiceOption>(OpenClawSessions.VoiceForSession(sessionId));
+            Assert.Equal(TextToSpeech.SpeakEngine.System, voice.Engine);
+            Assert.Equal(workspaceVoice, voice.Name);
+
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>
+                {
+                    [agent] = new("Workspace Nova", "✨", Png(), "af_bella"),
+                });
+            var neural = new TextToSpeech.VoiceOption(
+                TextToSpeech.SpeakEngine.Neural, "af_bella", "af_bella (Kokoro)");
+            Assert.Equal(neural, OrbWindow.VoiceForRemoteSpeech(sessionId, new[] { neural }));
         }
         finally
         {

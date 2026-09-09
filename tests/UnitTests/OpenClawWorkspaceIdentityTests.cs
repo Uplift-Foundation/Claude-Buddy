@@ -49,6 +49,20 @@ public class OpenClawWorkspaceIdentityTests : IDisposable
     }
 
     [Fact]
+    public void AProfileKokoroAnnotationIsNotPartOfItsVoiceIdentifier()
+    {
+        var fields = OpenClawWorkspaceIdentity.Parse(new[]
+        {
+            "# [redacted agent]",
+            "",
+            "**Voice:** af_bella (Kokoro TTS)",
+            "This profile deliberately has no other metadata fields.",
+        });
+
+        Assert.Equal("af_bella", fields.Voice);
+    }
+
+    [Fact]
     public void AFrontMatterVoiceIsReadButIncidentalProseIsNot()
     {
         var fields = OpenClawWorkspaceIdentity.Parse(new[]

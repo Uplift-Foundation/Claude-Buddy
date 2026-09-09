@@ -1004,9 +1004,11 @@ Use OpenClaw's bullet format, for example `- Name: Aurora`,
 also accepts the deliberate field labels `Voice Name`, `Speech Voice`, and `TTS
 Voice`, in Markdown bullets, bold fields, two-cell tables, or YAML front matter.
 Labels are case-insensitive and the first valid value for each field wins. A
-voice matches an installed system voice exactly when possible, then by an
-unambiguous normalized shorthand; a missing or ambiguous match keeps the global
-voice. Avatar paths are
+profile can document a Kokoro choice as `**Voice:** af_bella (Kokoro TTS)`:
+the engine annotation is ignored and `af_bella` is matched. Voices match the
+available system, Kokoro, and custom-command options exactly when possible,
+then by an unambiguous normalized shorthand; a missing or ambiguous match keeps
+the global voice. Avatar paths are
 local to that workspace (no URLs or data URIs), cannot escape it, and are capped
 at 2 MB. Missing or invalid fields retain the identity or voice supplied by the
 gateway and Claude Buddy settings.

@@ -205,7 +205,18 @@ public class ChatPanelInteractionTests : IDisposable
 
             var openClaw = new OpenClawChatSession(sessionId, sessionId["openclaw:".Length..], "Voice agent");
 
-            Assert.NotNull(ChatPanel.VoiceFor(openClaw));
+            var voice = Assert.IsType<TextToSpeech.VoiceOption>(ChatPanel.VoiceFor(openClaw));
+            Assert.Equal(TextToSpeech.SpeakEngine.System, voice.Engine);
+            Assert.Equal(workspaceVoice, voice.Name);
+
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>
+                {
+                    [agent] = new("Voice agent", null, null, "af_bella"),
+                });
+            var neural = new TextToSpeech.VoiceOption(
+                TextToSpeech.SpeakEngine.Neural, "af_bella", "af_bella (Kokoro)");
+            Assert.Equal(neural, ChatPanel.VoiceFor(openClaw, new[] { neural }));
             Assert.Null(ChatPanel.VoiceFor(NewFake(sessionId: "fake-voice-" + agent)));
         }
         finally

@@ -1577,13 +1577,23 @@ namespace ClaudeBuddy
 
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            var voice = OpenClawSessions.VoiceForSession(SessionId);
+            var voice = VoiceForRemoteSpeech(SessionId);
             Dispatcher.UIThread.Post(() =>
             {
                 if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
-                else TextToSpeech.Speak(text, voice, forceSystemVoice: true);
+                else TextToSpeech.Speak(text, voice);
             });
         }
+
+        // The production path asks the process-owned resolver for the current
+        // machine's options. Keeping the list injectable makes the UI decision
+        // testable without downloading Kokoro or launching a custom command.
+        internal static TextToSpeech.VoiceOption? VoiceForRemoteSpeech(
+            string sessionId,
+            IEnumerable<TextToSpeech.VoiceOption>? options = null) =>
+            options is null
+                ? OpenClawSessions.VoiceForSession(sessionId)
+                : OpenClawSessions.VoiceForSession(sessionId, options);
 
         // Called by SessionManager when speech starts, changes phase or stops.
         public void SetFlyoutSpeakState(TextToSpeech.SpeakState state) =>
