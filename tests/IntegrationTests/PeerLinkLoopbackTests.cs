@@ -114,6 +114,31 @@ public class PeerLinkLoopbackTests
         Assert.Equal("loopback", await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
+    // CB-132: dialing a peer already known by its real name — the ordinary
+    // reconnect case, not the provisional by-address one — used to leave the
+    // *dialer* with no PeerConnected of its own. Only the accepting side ever
+    // fired one, via the inbound greeting's rename. A caller that dials and
+    // waits on its own PeerConnected (OpenClawSessions.RequestPeerProfileVoices
+    // is exactly this) could then wait forever for a connection already up.
+    [Fact]
+    public async Task TheDialerFiresItsOwnPeerConnectedForAnAlreadyKnownName()
+    {
+        var pin = PeerIdentity.PinOf(Cert.Value);
+
+        using var server = Link(new List<PeerProtocol.PeerMessage>(), pin);
+        using var client = Link(new List<PeerProtocol.PeerMessage>(), pin);
+        var clientConnected = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.PeerConnected += machine => clientConnected.TrySetResult(machine);
+
+        server.Listen(0);
+
+        Assert.True(
+            await client.ConnectAsync("loopback", "127.0.0.1", server.BoundPort, Timeout(10)),
+            "the client could not complete a TLS handshake against the listener");
+
+        Assert.Equal("loopback", await clientConnected.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
     // The payload that motivated the whole change: a transcript-sized message,
     // sent whole. Under the old transport this was 6KB chunks of base64 retyped
     // by a model at roughly four minutes each.
