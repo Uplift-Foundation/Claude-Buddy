@@ -59,8 +59,10 @@ namespace ClaudeBuddy
             var inFrontMatter = false;
             var sawContent = false;
 
-            foreach (var line in lines)
+            var source = lines.ToList();
+            for (var index = 0; index < source.Count; index++)
             {
+                var line = source[index];
                 var trimmed = line.Trim();
                 if (!sawContent && trimmed.Length == 0) continue;
                 if (!sawContent && trimmed == "---")
@@ -84,6 +86,7 @@ namespace ClaudeBuddy
                 }
 
                 if (TableField(trimmed, out var tableLabel, out var tableValue)
+                    && (index + 1 >= source.Count || !TableSeparator(source[index + 1]))
                     && VoiceLabel(tableLabel) && Valid(tableValue))
                 {
                     voice ??= tableValue;
@@ -158,6 +161,17 @@ namespace ClaudeBuddy
             label = cells[0].Trim().Trim('*').Trim();
             value = cells[1].Trim();
             return label.Length > 0;
+        }
+
+        private static bool TableSeparator(string text)
+        {
+            var cells = text.Trim().Trim('|').Split('|');
+            return cells.Length >= 2 && cells.All(cell =>
+            {
+                var marker = cell.Trim();
+                return marker.Length >= 3 && marker.Contains('-')
+                    && marker.All(c => c is '-' or ':');
+            });
         }
 
         private static bool VoiceLabel(string label) =>

@@ -3,6 +3,7 @@ using Xunit;
 
 namespace ClaudeBuddy.Tests;
 
+[Collection("Settings")]
 public class OpenClawWorkspaceIdentityTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "cb-workspace-identity-" + Guid.NewGuid());
@@ -64,6 +65,19 @@ public class OpenClawWorkspaceIdentityTests : IDisposable
     }
 
     [Fact]
+    public void AMarkdownTableHeaderDoesNotWinOverItsVoiceDataRow()
+    {
+        var fields = OpenClawWorkspaceIdentity.Parse(new[]
+        {
+            "| Voice | Value |",
+            "| --- | :--- |",
+            "| TTS Voice | Ava (Premium) |",
+        });
+
+        Assert.Equal("Ava (Premium)", fields.Voice);
+    }
+
+    [Fact]
     public void IdentityThenSoulThenOrdinalMarkdownFilesSupplyEachField()
     {
         File.WriteAllText(Path.Combine(_root, "zebra.md"), "- Voice: Zara\n- Avatar: zebra.png");
@@ -120,19 +134,29 @@ public class OpenClawWorkspaceIdentityTests : IDisposable
     [Fact]
     public void MissingWorkspaceMetadataLeavesGatewayIdentityAndGlobalVoiceInPlace()
     {
-        ClaudeBuddySettings.SpeakVoice = "Global voice";
-        var json = JsonDocument.Parse("""
-            { "id": "main", "displayName": "Gateway name",
-              "identity": { "avatarUrl": "data:image/png;base64,AQ==" } }
-            """).RootElement;
+        var savedVoice = ClaudeBuddySettings.SpeakVoice;
+        try
+        {
+            ClaudeBuddySettings.SpeakVoice = "Global voice";
+            var json = JsonDocument.Parse("""
+                { "id": "main", "displayName": "Gateway name",
+                  "identity": { "avatarUrl": "data:image/png;base64,AQ==" } }
+                """).RootElement;
 
-        var identity = OpenClawSessions.IdentityFrom(json);
-        OpenClawSessions.SetIdentitiesForTests(
-            new Dictionary<string, OpenClawSessions.AgentIdentity> { ["main"] = identity });
+            var identity = OpenClawSessions.IdentityFrom(json);
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity> { ["main"] = identity });
 
-        Assert.Equal("Gateway name", identity.Name);
-        Assert.Null(identity.Voice);
-        Assert.Equal(new byte[] { 1 }, identity.Avatar);
-        Assert.Null(OpenClawSessions.VoiceForSession("openclaw:agent:main:main"));
+            Assert.Equal("Gateway name", identity.Name);
+            Assert.Null(identity.Voice);
+            Assert.Equal(new byte[] { 1 }, identity.Avatar);
+            Assert.Null(OpenClawSessions.VoiceForSession("openclaw:agent:main:main"));
+        }
+        finally
+        {
+            ClaudeBuddySettings.SpeakVoice = savedVoice;
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>());
+        }
     }
 }
