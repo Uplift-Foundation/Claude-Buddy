@@ -384,6 +384,19 @@ namespace ClaudeBuddy
                     name: MachineNames.Mine(), code: pairingCode))
                     .ConfigureAwait(false);
 
+                // Fired here, not left to Rename: Rename only runs for the
+                // accepting side's inbound hello, or for a provisional (by-
+                // address) dial once the far end's real name arrives — neither
+                // of which covers the ordinary case dialing here, reconnecting
+                // to a peer already known by its real name. Without this, the
+                // dialer never learns its own connection came up at all, which
+                // is what let OpenClawSessions.RequestPeerProfileVoices() sit
+                // forever having asked nobody: its own gateway load can finish
+                // before this connect does, and there was nothing left to
+                // retry it (CB-132). A provisional dial still gets exactly one
+                // firing, later, once Settle knows the real name to report.
+                if (!nameIsProvisional) PeerConnected?.Invoke(machine);
+
                 return true;
             }
             catch (Exception ex)
