@@ -928,6 +928,24 @@ the panel. And sending from the panel types into the session's tmux pane, so
 anything you send from the orb shows up in the terminal too, exactly as if you
 had typed it there. There is no second conversation to get out of step.
 
+**The header says which conversation this is, and where it is happening.** The
+name and the picture on the first line, the room or the place on the second,
+and under those the facts that are true whether or not anybody has named the
+session: what Claude Code calls this chat and the directory it is working in,
+written `~/Source/Claude-Buddy`, with the whole path in a tooltip when the
+panel is too narrow for it — then the machine it is running on, dimmest and on
+a row of its own. (Two rows rather than one because a panel opens 340 points
+wide and three facts do not fit across it; the portrait beside them is taller
+than all three lines together, so the second row costs the header no height.)
+The session's own name is left out when the line above already says it, which
+is the ordinary case for a local session and stops the header saying one thing
+twice; a `CLAUDE.md` persona or an OpenClaw room taking the first line is what
+gives it somewhere to go. A conversation in a room has no directory on this
+disk, so it shows the machine alone. **The machine is named always, and drawn
+in the session's own colour when it is not this machine** — a panel open here
+on a session running on the Mac mini says so, rather than leaving you to work
+it out.
+
 Two honest limits. The panel updates a **block at a time** rather than a word at
 a time — each thinking pass, each tool call and each paragraph appears as it
 finishes, a few seconds behind the terminal's own streaming. And a half-typed
