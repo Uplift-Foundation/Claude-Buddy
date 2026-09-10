@@ -192,9 +192,15 @@ public class NumpyVoiceTests
         Assert.Equal(new[] { 3 }, tensor.Shape);
     }
 
+    // A key with no colon after it anywhere — which has to be the *last* key
+    // to be reached at all, and that is the point. Written the obvious way,
+    // `{'descr' '<f4', 'fortran_order': ...}`, this test passed while proving
+    // nothing: the scan for a colon runs to the end of the header, found
+    // fortran_order's, and read `False` as the dtype. The refusal message was
+    // the one being asserted and the arm under test was never entered.
     [Theory]
-    [InlineData("{'descr' '<f4', 'fortran_order': False, 'shape': (2,), }")]   // no colon at all
-    [InlineData("{'descr': , 'fortran_order': False, 'shape': (2,), }")]       // a key with no value
+    [InlineData("{'fortran_order': False, 'shape': (2,), 'descr'}")]     // no colon after it
+    [InlineData("{'descr': , 'fortran_order': False, 'shape': (2,), }")] // a key with no value
     public void AKeyThisCannotReadAValueFromIsTheSameAsAMissingOne(string dictionary) =>
         Assert.Contains("dtype", Refusal(File1Raw(dictionary, Float32Body(1f, 2f))));
 
@@ -333,6 +339,25 @@ public class NumpyVoiceTests
 
         Assert.Equal(original.Shape, again.Shape);
         Assert.Equal(original.Values, again.Values);
+    }
+
+    // A one-dimensional tensor, written and read back. Its own case because
+    // the shape a 1-D array is written with needs Python's trailing comma —
+    // `(3,)` is a tuple and `(3)` is the number three — and the round trip is
+    // the only thing that can catch it, since this reader is forgiving of a
+    // shape it would itself never write.
+    [Fact]
+    public void AOneDimensionalTensorSurvivesTheRoundTripWithItsTrailingComma()
+    {
+        var original = Read(Voice(new[] { 3 }, 1f, 2f, 3f));
+
+        var bytes = NumpyVoices.Write(original);
+        var headerLength = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(8, 2));
+        Assert.Contains("'shape': (3,)", Encoding.ASCII.GetString(bytes, 10, headerLength));
+
+        var again = Read(bytes);
+        Assert.Equal(new[] { 3 }, again.Shape);
+        Assert.Equal(new[] { 1f, 2f, 3f }, again.Values);
     }
 
     // ...and it is written the way numpy writes one, which is what makes the

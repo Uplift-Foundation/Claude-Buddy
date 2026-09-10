@@ -108,6 +108,27 @@ public class VoiceBlendFileTests : IDisposable
             ? File.ReadAllLines(PersonaLog.Path_).Where(l => l.Contains("blend", StringComparison.Ordinal)).ToArray()
             : Array.Empty<string>();
 
+    // --- where the file goes when nobody has overridden it ---------------------
+
+    // The one thing this suite's own scratch directories cannot say: that the
+    // directory a blend is written into in production is the same directory
+    // the engine is handed as `--user-voices`. If those two ever drift, every
+    // test here still passes and no orb on any machine ever speaks a blend.
+    //
+    // Reads the real layout rather than writing to it — NeuralSpeech's paths
+    // are string arithmetic over the settings directory, which TestBootstrap
+    // has already pointed at a temp directory of its own.
+    [Fact]
+    public void ByDefaultABlendIsWrittenWhereTheEngineIsToldToLookForVoices()
+    {
+        VoiceBlends.SetPathsForTests(null);
+
+        var paths = VoiceBlends.Current;
+
+        Assert.Equal(NeuralSpeech.UserVoicesDirectory, paths.Target);
+        Assert.Contains(NeuralSpeech.UserVoicesDirectory, paths.Search);
+    }
+
     // --- the ticket's own case -----------------------------------------------
 
     [Fact]
