@@ -673,6 +673,7 @@ public class LocalPersonaTests : IDisposable
         var options = new[] { Bella, Samantha };
 
         Assert.Null(LocalPersonas.VoiceForSession("never-set", options));
+        Assert.Null(LocalPersonas.RateForSession("never-set"));
 
         var silent = "sess-" + Guid.NewGuid();
         LocalPersonas.Set(silent, Named("Leota"));
