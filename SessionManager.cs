@@ -238,8 +238,9 @@ namespace ClaudeBuddy
         private readonly string _statusDir;
 
         // What the persona files looked like the last time this session's
-        // persona was actually read: LocalPersona.Signature over its candidate
-        // paths, which is existence, length and mtime and nothing else.
+        // persona was actually read, and what was read from them:
+        // LocalPersona.Signature is existence, length and mtime and nothing
+        // else.
         //
         // The scan runs on the UI thread every two seconds, so the per-tick cost
         // of this feature has to be a handful of stats and no more. Reading a
@@ -247,7 +248,16 @@ namespace ClaudeBuddy
         // on no other. Keyed by session rather than by directory because two
         // sessions in one repo are two registry entries, and each has to be
         // filled once even though they will agree.
-        private readonly Dictionary<string, string> _personaSignatures = new(StringComparer.Ordinal);
+        //
+        // The Persona is kept beside the signature for one reason, and it is
+        // not caching: its Files are the canonical paths actually read,
+        // including whatever the candidates `@`-imported. A candidate list
+        // alone cannot notice an edit to an imported file, because an imported
+        // file is not a candidate — so the next tick's signature is taken over
+        // both, and a persona kept in a `docs/persona.md` refreshes like one
+        // written in the CLAUDE.md itself.
+        private readonly Dictionary<string, (string Signature, LocalPersona.Persona Persona)>
+            _personas = new(StringComparer.Ordinal);
 
         public SessionManager()
             : this(StatusDirectory.Path())
@@ -1408,7 +1418,7 @@ namespace ClaudeBuddy
         internal void ApplyPersona(
             string sessionId,
             SessionStatus status,
-            Dictionary<string, IReadOnlyList<string>> candidatesByCwd)
+            Dictionary<(string Cwd, SessionSource Source), IReadOnlyList<string>> candidatesByCwd)
         {
             // A gateway session's identity comes from the gateway, and a
             // remote-control relay is not a conversation at all. Neither has a
@@ -1423,7 +1433,13 @@ namespace ClaudeBuddy
             // deliberately do not, so two CLIs open on one repo have two
             // different candidate lists and one cache entry would hand the
             // second one the first one's.
-            var key = status.Cwd + " " + status.Source;
+            //
+            // A tuple rather than the two glued together with a separator. A
+            // directory name on macOS or Linux may legally contain very nearly
+            // any byte, so every separator is one somebody could have in a path
+            // — and the first attempt at this reached for a NUL, which is
+            // exactly the byte that makes a source file read as binary to grep.
+            var key = (status.Cwd, status.Source);
             if (!candidatesByCwd.TryGetValue(key, out var candidates))
             {
                 candidates = LocalPersona.CandidateFiles(
@@ -1431,10 +1447,32 @@ namespace ClaudeBuddy
                 candidatesByCwd[key] = candidates;
             }
 
-            var signature = LocalPersona.Signature(candidates);
-            if (_personaSignatures.TryGetValue(sessionId, out var seen) && seen == signature) return;
+            var known = _personas.TryGetValue(sessionId, out var cached) ? cached : default;
 
-            _personaSignatures[sessionId] = signature;
+            // Over the candidates *and* whatever the last read actually
+            // followed. The two differ exactly when a CLAUDE.md `@`-imports
+            // another file: the import is where the persona often lives and is
+            // never a candidate itself, so watching the candidate list alone
+            // would leave an edited `docs/persona.md` invisible until something
+            // else in the tree happened to move. Persona.Files is the ordered
+            // canonical list of what was read, which is precisely that set.
+            var watched = known.Persona is null
+                ? candidates
+                : candidates.Concat(known.Persona.Files);
+
+            var signature = LocalPersona.Signature(watched);
+
+            // Nothing moved. Re-Set anyway, because this is also the path a
+            // session takes on the tick after another session in the same
+            // repository resolved the identical files — the registry's own
+            // reference check makes that free, and skipping it outright would
+            // leave a session whose entry was dropped elsewhere with no persona
+            // until one of its files changed.
+            if (known.Persona is not null && known.Signature == signature)
+            {
+                LocalPersonas.Set(sessionId, known.Persona);
+                return;
+            }
 
             // Set drops the decoded picture for this session itself, so an
             // edited portrait is re-decoded rather than served from the cache
@@ -1442,11 +1480,21 @@ namespace ClaudeBuddy
             // invariant, and a second call site is a second place for it to be
             // half-removed later.
             //
-            // The resolution is a fresh Persona every time, which is what makes
-            // Set's identity check the right one — it skips the eviction only
-            // when handed back the very object it already holds, and this hands
-            // it a new one precisely when a file has moved.
-            LocalPersonas.Set(sessionId, LocalPersona.ResolveForSession(status));
+            // This is the only path that resolves, so it is the only path that
+            // hands Set an object it has not seen — which is what makes Set's
+            // reference check the right one rather than a value comparison.
+            var persona = LocalPersona.ResolveForSession(status);
+
+            // Stored over the set the *next* tick will compare, not the one
+            // just compared. On the very first pass there is no previous read
+            // to take imports from, so `watched` above was the candidates
+            // alone — and storing that would make the second tick's longer
+            // signature differ for no reason and resolve a second time, every
+            // time, forever. One more round of stats here is what stops that.
+            _personas[sessionId] =
+                (LocalPersona.Signature(candidates.Concat(persona.Files)), persona);
+
+            LocalPersonas.Set(sessionId, persona);
         }
 
         internal void ScanAndUpdate()
@@ -1465,7 +1513,7 @@ namespace ClaudeBuddy
             // any session has ever run in, for the life of the process, to save
             // nothing measurable. Several sessions in one repo is the common
             // case and is what this actually saves.
-            var candidatesByCwd = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+            var candidatesByCwd = new Dictionary<(string Cwd, SessionSource Source), IReadOnlyList<string>>();
 
             IEnumerable<string> files;
             try
@@ -2044,7 +2092,7 @@ namespace ClaudeBuddy
                 // is a Bitmap per frame, held by a process-wide cache that has
                 // no other reason to ever let one go. The registry entry is
                 // small; the picture behind it is not, and Forget drops both.
-                _personaSignatures.Remove(id);
+                _personas.Remove(id);
                 LocalPersonas.Forget(id);
             }
 

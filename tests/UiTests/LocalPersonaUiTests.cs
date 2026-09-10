@@ -331,6 +331,87 @@ public class LocalPersonaUiTests : IDisposable
         Assert.Equal(orb.OrbColor, ((ISolidColorBrush)panel.Avatar.Fill!).Color);
     }
 
+    // --- the whole way through ---
+
+    // A status file on disk, a CLAUDE.md beside the directory it names, one
+    // real scan — and an orb wearing the name out of that file.
+    //
+    // Every other case here starts from a persona already published, which is
+    // the only way to test the drawing in isolation and is also the way to
+    // ship a feature where each half works and the two are not connected.
+    // ScanAndUpdate is the connection, and it can only run here: it builds
+    // OrbWindows, which is why SessionScanTests lives in this assembly and why
+    // ApplyPersona's own filesystem cases are in tests/IntegrationTests
+    // instead.
+    //
+    // Shaped like SessionScanTests' own fixtures for the reasons its header
+    // gives: this process's pid and a term_program, so nothing in the scan
+    // shells out to `claude agents` or to a terminal.
+    [AvaloniaFact]
+    public void ARealScanGivesAnOrbThePersonaFromItsProjectsClaudeMd()
+    {
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+
+        var project = Path.Combine(Path.GetTempPath(), "cb-persona-scan-ui-" + Guid.NewGuid());
+        var statusDir = Path.Combine(Path.GetTempPath(), "cb-persona-scan-dir-" + Guid.NewGuid());
+        Directory.CreateDirectory(project);
+        Directory.CreateDirectory(statusDir);
+
+        var sessionId = "persona-scan-ui-" + Guid.NewGuid();
+
+        try
+        {
+            File.WriteAllText(Path.Combine(project, "CLAUDE.md"), "# Notes\n\nHer name is Leota.\n");
+            File.WriteAllText(
+                Path.Combine(statusDir, sessionId + ".txt"),
+                System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+                {
+                    State = "idle",
+                    Cli = "",
+                    Title = "cb-persona-scan-ui",
+                    Cwd = project,
+                    SessionPid = Environment.ProcessId,
+                    TermProgram = "iTerm.app",
+                    Tty = "/dev/ttys004",
+                }));
+
+            var manager = new SessionManager(statusDir);
+            manager.ScanAndUpdate();
+
+            Assert.Equal("Leota", LocalPersonas.For(sessionId)?.Name);
+            Assert.Equal("Le", OrbFor(manager, sessionId).GlyphText);
+
+            // And it goes when the session does. A registry that only ever
+            // grew would hold a decoded portrait per session for the life of
+            // the process.
+            File.Delete(Path.Combine(statusDir, sessionId + ".txt"));
+            manager.ScanAndUpdate();
+
+            Assert.Null(LocalPersonas.For(sessionId));
+        }
+        finally
+        {
+            LocalPersonas.Forget(sessionId);
+            try { Directory.Delete(project, recursive: true); } catch { }
+            try { Directory.Delete(statusDir, recursive: true); } catch { }
+        }
+    }
+
+    // Read rather than widened, the same reasoning SessionScanTests records for
+    // reaching the scan's own window table.
+    private static OrbWindow OrbFor(SessionManager manager, string sessionId)
+    {
+        var field = typeof(SessionManager).GetField(
+            "_windows", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        Assert.NotNull(field);
+
+        var windows = (IReadOnlyDictionary<string, OrbWindow>)field!.GetValue(manager)!;
+        Assert.True(windows.ContainsKey(sessionId), "the scan should have built an orb for the session");
+
+        return windows[sessionId];
+    }
+
     // --- the voice ---
 
     // No persona at all answers null, and null is not silence: it is the
