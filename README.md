@@ -1011,6 +1011,18 @@ wins. `Avatar`, `Profile Picture`, `Profile Pic`, `Profile Image`, `Profile
 Photo`, `Picture`, `Portrait`, `Photo` and `Image` all name the picture;
 `Voice`, `Voice Name`, `Speech Voice` and `TTS Voice` all name the voice.
 
+**Write the picture path however you would write it in Markdown.** A code span
+around it and a note after it are both read straight through, which is how real
+profiles are written:
+
+```markdown
+- Profile picture: `avatars/annabel-lee.gif` (animated, updated 2026-09-09)
+```
+
+What is *not* read is anything that is not a relative file beside the Markdown:
+a URL, an absolute path and a `data:` URI are all refused, whatever they are
+wrapped in, and `persona.log` says so under **not a relative picture path**.
+
 **A sentence works too, because a `CLAUDE.md` is prose.** These three are read:
 
 ```markdown
@@ -1096,8 +1108,8 @@ two-second poll and opens nothing until a size or a timestamp moves.
 **A picture that is skipped says so.** One line goes into `persona.log`, beside
 the crash log — `~/Library/Logs/ClaudeBuddy` on macOS,
 `%LOCALAPPDATA%\ClaudeBuddy\Logs` on Windows — naming the file, the reason (too
-large, escapes root, rooted path, or unreadable) and the cap, once per distinct
-message however many sessions ask. Before that line existed an oversized
+large, escapes root, rooted path, not a relative picture path, or unreadable)
+and the cap, once per distinct message however many sessions ask. Before that line existed an oversized
 portrait was dropped in silence and looked exactly like a persona that had named
 no picture at all.
 

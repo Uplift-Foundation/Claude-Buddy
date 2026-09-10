@@ -30,6 +30,12 @@ public class PersonaRejectionMessageTests
     [InlineData("EscapesRoot", "escapes root")]
     [InlineData("Rooted", "rooted path")]
     [InlineData("Unreadable", "unreadable")]
+    // CB-139's, and the one this table exists for. All twenty-four refusals on
+    // one Mac mini said "unreadable — it is missing" about values that were
+    // never files at all, three of which named perfectly good pictures. A
+    // reason that sends somebody looking on disk for a file they never wrote
+    // costs more than no reason would have.
+    [InlineData("NotRelativePath", "not a relative picture path")]
     public void EveryOtherRefusalNamesItsCategoryAndTheCapToo(string reason, string category)
     {
         var message = Message(Enum.Parse<PersonaFiles.AvatarRejection>(reason));
@@ -37,6 +43,31 @@ public class PersonaRejectionMessageTests
         Assert.Contains("cto.png", message);
         Assert.Contains(category, message);
         Assert.Contains("8,388,608 bytes", message);
+    }
+
+    // The two categories a reader has to be able to tell apart by eye, because
+    // the real-machine check for this ticket is somebody reading a fresh
+    // `persona.log` and counting which lines are which. "Unreadable" sends you
+    // to a file; "not a relative picture path" tells you there was never a file
+    // to go to. Neither string may appear inside the other's line.
+    [Fact]
+    public void AValueThatWasNeverAPathIsNotConfusableWithAFileThatIsMissing()
+    {
+        var unusable = Message(PersonaFiles.AvatarRejection.NotRelativePath);
+        var missing = Message(PersonaFiles.AvatarRejection.Unreadable);
+
+        Assert.Contains("not a relative picture path", unusable);
+        Assert.DoesNotContain("unreadable", unusable);
+        Assert.DoesNotContain("it is missing", unusable);
+
+        Assert.Contains("it is missing", missing);
+        Assert.DoesNotContain("not a relative picture path", missing);
+
+        // And it names what a picture is allowed to be, because the reader is
+        // holding a value this app refused and has to work out what to write
+        // instead.
+        Assert.Contains(".webp", unusable);
+        Assert.Contains("data:", unusable);
     }
 
     // The cap is spelled with invariant separators rather than the machine's,

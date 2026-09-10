@@ -44,7 +44,12 @@ namespace ClaudeBuddy
                     name ??= fields.Name;
                     voice ??= fields.Voice;
                     rate ??= fields.Rate;
-                    avatar ??= PersonaFiles.AvatarAt(root, fields.Avatar);
+                    // The whole Fields rather than fields.Avatar, so a value
+                    // that named a picture and did not read as one is refused
+                    // out loud instead of being indistinguishable from a file
+                    // that named none — see PersonaFiles.AvatarAt's own
+                    // comment for why the check lives there and not here.
+                    avatar ??= PersonaFiles.AvatarAt(root, fields);
                 }
 
                 return new Metadata(name, voice, rate, avatar);

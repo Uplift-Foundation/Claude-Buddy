@@ -305,13 +305,29 @@ public class PersonaRealFileTests : IDisposable
         Assert.Contains("escapes root", Assert.Single(LinesAbout("linked.png")));
     }
 
-    // Written as a bullet, because that is the only shape that can carry a
-    // rooted path this far: both the prose arm and the colon-less arm refuse
-    // one on sight, and the explicit bullet grammar — which predates all of
-    // this and is OpenClaw's as well as ours — does not. So the filesystem's
-    // own refusal is the one that fires, which is exactly why it is there.
+    // Written as a bullet, because that used to be the only shape that could
+    // carry a rooted path this far: both the prose arm and the colon-less arm
+    // refused one on sight and the explicit bullet grammar — which predates all
+    // of this and is OpenClaw's as well as ours — did not, so the filesystem's
+    // own refusal was the one that fired.
+    //
+    // **CB-139 moved which reason this line names, on purpose.** The bullet arm
+    // now runs the same normalisation every other arm does, and that
+    // normalisation refuses a rooted path before the filesystem is asked, so
+    // the value arrives under "not a relative picture path" instead. That is
+    // the ticket's decision and not a side effect: a `data:` URI, a URL and an
+    // absolute path are one complaint written three ways — you have named
+    // something that is not a file beside your markdown — and a reader deciding
+    // what to do about their picture is given the same answer whichever they
+    // wrote.
+    //
+    // AvatarRejection.Rooted is not dead. It is the filesystem seam's own
+    // guard, still reached whenever a caller hands PersonaFiles a path rather
+    // than a parsed field, and LocalPersonaFilesTests is where that is
+    // asserted. Two checks, in two places, for one rule — which is what
+    // PersonaFiles' own comment says the arrangement is for.
     [Fact]
-    public void AnAbsolutePicturePathIsLoggedAsRooted()
+    public void AnAbsolutePicturePathIsRefusedAsNotARelativePath()
     {
         var project = WriteTheRealTree(picture: "rooted.png");
         var absolute = Path.Combine(project, ".claude", "rooted.png");
@@ -321,7 +337,10 @@ public class PersonaRealFileTests : IDisposable
             "## Attributes\n\n- Profile photo: " + absolute + "\n");
 
         Assert.Null(Resolve(project).AvatarPath);
-        Assert.Contains("rooted path", Assert.Single(LinesAbout("rooted.png")));
+
+        var line = Assert.Single(LinesAbout("rooted.png"));
+        Assert.Contains("not a relative picture path", line);
+        Assert.DoesNotContain("unreadable", line);
     }
 
     // --- the bytes nobody keeps -------------------------------------------

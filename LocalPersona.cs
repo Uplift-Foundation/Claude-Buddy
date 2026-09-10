@@ -251,7 +251,7 @@ namespace ClaudeBuddy
                 voice ??= fields.Voice;
                 rate ??= fields.Rate;
 
-                if (avatarPath is not null || fields.Avatar is null) continue;
+                if (avatarPath is not null) continue;
 
                 // The directory of the file that named the picture, taken from
                 // the canonical path Load already resolved — never null, for
@@ -265,7 +265,12 @@ namespace ClaudeBuddy
                 // The path only. The bytes are read to prove the file opens
                 // and then dropped — see PersonaFiles.AvatarPathAt for why
                 // that read is not skipped.
-                var picture = PersonaFiles.AvatarPathAt(root, fields.Avatar);
+                // The whole Fields rather than fields.Avatar. The early-out
+                // above used to skip a file whose Avatar was null, which is
+                // also every file where somebody wrote a picture this grammar
+                // could not read — so the one case worth reporting was the one
+                // case that never reached the resolver at all.
+                var picture = PersonaFiles.AvatarPathAt(root, fields);
                 if (picture is null) continue;
 
                 avatarSource = path;
