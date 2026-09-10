@@ -111,9 +111,9 @@ namespace ClaudeBuddy
             return new Face(
                 persona.Name,
                 null,
-                persona.Avatar is null
+                persona.AvatarPath is null
                     ? null
-                    : OpenClawAvatars.For(LocalPersonas.AvatarKey(sessionId), persona.Avatar),
+                    : OpenClawAvatars.ForFile(LocalPersonas.AvatarKey(sessionId), persona.AvatarPath),
                 Gateway: false);
         }
     }

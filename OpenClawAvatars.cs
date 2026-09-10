@@ -54,11 +54,41 @@ namespace ClaudeBuddy
                 if (Cache.TryGetValue(agentId, out var cached)) return cached;
             }
 
+            return Store(agentId, bytes);
+        }
+
+        // The same thing for a picture that is a file rather than bytes on the
+        // wire, which is what a local persona's is.
+        //
+        // The file is read *inside* the cache miss, and that is the point of
+        // the entry point existing at all: the gateway's avatars arrive as
+        // base64 in agents.list and have nowhere else to live, but a persona's
+        // picture is a file that is already on this disk, and holding its bytes
+        // in the persona record meant one copy per session of a file every one
+        // of those sessions could have re-read. On a hit nothing is read at
+        // all, which is the ordinary case — an orb asks for its picture on
+        // every poll tick.
+        //
+        // Read through PersonaFiles rather than File.ReadAllBytes, so the size
+        // cap and the canonical-path guard that admitted this file in the first
+        // place are the same ones that admit it now.
+        public static Avatar? ForFile(string cacheKey, string path)
+        {
+            lock (Gate)
+            {
+                if (Cache.TryGetValue(cacheKey, out var cached)) return cached;
+            }
+
+            return Store(cacheKey, PersonaFiles.ReadAvatarFile(path));
+        }
+
+        private static Avatar? Store(string cacheKey, byte[]? bytes)
+        {
             var decoded = bytes is null || bytes.Length == 0 ? null : Decode(bytes);
 
             lock (Gate)
             {
-                Cache[agentId] = decoded;
+                Cache[cacheKey] = decoded;
                 return decoded;
             }
         }

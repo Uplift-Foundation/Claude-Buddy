@@ -183,9 +183,10 @@ public class LocalPersonaScanTests : IDisposable
         Assert.Same(first, LocalPersonas.For(_sessionId));
     }
 
-    // A picture beside the markdown reaches the registry as bytes. The reader's
-    // refusals are LocalPersonaFilesTests' subject; what this adds is that the
-    // scan asks for one at all.
+    // A picture beside the markdown reaches the registry as a path — not as
+    // bytes, which is CB-135's change and is asserted on its own further down.
+    // The reader's refusals are LocalPersonaFilesTests' subject; what this adds
+    // is that the scan asks for one at all.
     [Fact]
     public void APictureBesideTheMarkdownReachesTheRegistry()
     {
@@ -195,7 +196,8 @@ public class LocalPersonaScanTests : IDisposable
         Manager().ApplyPersona(_sessionId, Status(), Pass());
 
         var persona = LocalPersonas.For(_sessionId);
-        Assert.Equal(new byte[] { 1, 2, 3, 4 }, persona!.Avatar);
+        Assert.Equal(Path.Combine(_project, "leota.png"), persona!.AvatarPath);
+        Assert.Equal(new byte[] { 1, 2, 3, 4 }, File.ReadAllBytes(persona.AvatarPath!));
     }
 
     // The case markdown alone cannot see, and the one that shipped broken. A
@@ -219,14 +221,14 @@ public class LocalPersonaScanTests : IDisposable
         manager.ApplyPersona(_sessionId, Status(), Pass());
 
         var first = LocalPersonas.For(_sessionId);
-        Assert.Equal(new byte[] { 1, 2, 3, 4 }, first!.Avatar);
-        Assert.Equal(picture, first.AvatarPath);
+        Assert.Equal(picture, first!.AvatarPath);
+        Assert.Equal(new byte[] { 1, 2, 3, 4 }, File.ReadAllBytes(first.AvatarPath!));
 
         File.WriteAllBytes(picture, new byte[] { 9, 8, 7, 6, 5 });
         manager.ApplyPersona(_sessionId, Status(), Pass());
 
         var second = LocalPersonas.For(_sessionId);
-        Assert.Equal(new byte[] { 9, 8, 7, 6, 5 }, second!.Avatar);
+        Assert.Equal(new byte[] { 9, 8, 7, 6, 5 }, File.ReadAllBytes(second!.AvatarPath!));
 
         // A *different* object is the half of the fix the registry owns: that
         // is what makes Set drop the bitmap decoded from the old bytes. Same

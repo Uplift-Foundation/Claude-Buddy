@@ -117,7 +117,7 @@ jobs:
       - name: UI tests (xUnit, headless)
         shell: pwsh
         run: |
-          # Real total measured on CB-133's branch is 1059 — set below
+          # Real total measured on CB-135's branch is 1067 — set below
           # that so the suite can grow without touching this file; see the
           # step comment above for what this is a belt against.
           $minimumExpectedTests = 1050

@@ -65,7 +65,7 @@ public class LocalPersonaScreenshots
             project, SessionSource.ClaudeCode, Array.Empty<string>());
 
         Assert.Equal("Leota", persona.Name);
-        Assert.NotNull(persona.Avatar);
+        Assert.NotNull(persona.AvatarPath);
 
         LocalPersonas.SetForTests(
             new Dictionary<string, LocalPersona.Persona> { [sessionId] = persona });

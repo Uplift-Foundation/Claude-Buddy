@@ -46,10 +46,68 @@ namespace ClaudeBuddy
     //     block is where a CLAUDE.md *shows* you what to write, and text being
     //     shown is not text being asserted.
     //
+    // And one shape more, added by CB-135 because the bounds above turned out
+    // to refuse a real file: a **colon-less `Label Value` line**, but only
+    // underneath a persona heading. This repository's own `.claude/PERSONA.MD`
+    // writes its attributes as
+    //
+    //     ## Attributes
+    //     Name Jennifer
+    //     Profile Photo cto.png
+    //
+    // which is neither the explicit grammar (no colon, no bullet) nor a
+    // sentence (no verb), so a file naming a name and a picture in a file the
+    // resolver provably reads produced no persona at all.
+    //
+    // The tension that shape raises is the one the header above spends its
+    // length on — `Name Jennifer` and "Name resolution is handled by the
+    // folder" have the same first word — and it is resolved by **scope, not by
+    // widening**. A persona section is a heading whose text mentions persona,
+    // attributes, identity, character, profile, about me or who i am, and it
+    // runs until the next heading of its own level or higher. Inside one, a
+    // line whose first word or two is a recognised label states that field;
+    // outside one, this arm does not run at all, so every paragraph in every
+    // CLAUDE.md above a session's directory means exactly what it meant
+    // before. The value still has to pass the same bounds — which is why the
+    // sentence about name resolution is refused even inside an Attributes
+    // section, on word count, and why `Voice is 50% sky and 50% nicole` is
+    // refused too until CB-136 gives a blend somewhere to go.
+    //
     // Every one of those refusals loses a field rather than guessing at one,
     // which is the right way round: an orb wearing the folder's name is
     // ordinary, and an orb that renamed itself out of a sentence about
     // something else is a bug nobody can find.
+    //
+    // And then there is the form people actually reach for when they are
+    // *listing* attributes rather than addressing Claude: no colon, no verb, no
+    // bullet — a label and a value, one per line, under a heading that says
+    // what the list is.
+    //
+    //     ## Attributes
+    //     Name Jennifer
+    //     Profile Photo cto.png
+    //
+    // CB-133 read none of that, and this repository's own `.claude/PERSONA.MD`
+    // — which names all three fields — resolved to no persona at all while
+    // every test in the suite was green. The tension is real, though: `Label
+    // Value` with nothing between them is also the shape of the first two words
+    // of an enormous number of ordinary sentences, and "Name resolution is
+    // handled by the folder" must not rename an orb.
+    //
+    // It is resolved by **scope, not by widening**. The colon-less form is read
+    // only inside a persona section — a heading, at any level, whose text
+    // contains one of the words below, running until the next heading of the
+    // same or a higher level. Outside such a section the form does not exist,
+    // so nothing anywhere else in a CLAUDE.md changes meaning. Inside it the
+    // value still has to pass the same bounds a prose value does, which is what
+    // stops "Name resolution is handled by the folder" from being read even
+    // under `## Attributes`.
+    //
+    // A heading is what a person writes when they mean "the following is a
+    // description of the agent", and there is no cheaper signal of intent
+    // available in Markdown. Section-scoping also keeps the promise the bounds
+    // above make: a passing mention still cannot set a field, because a passing
+    // mention is not written under `## Persona`.
     internal static class PersonaMarkdown
     {
         internal sealed record Fields(string? Name, string? Voice, double? Rate, string? Avatar);
@@ -79,6 +137,32 @@ namespace ClaudeBuddy
             var inFence = false;
             var sawContent = false;
 
+            // Zero when no persona section is open, otherwise the heading
+            // level that opened the one we are inside. A level rather than a
+            // flag because a section ends at the next heading of its own level
+            // *or higher*: a `### Voice` underneath `## Attributes` is still
+            // inside the attributes, and a second `## Something else` is not.
+            var sectionLevel = 0;
+
+            // One place where a field that has been named actually lands,
+            // shared by the two arms that can name one. Written as a local
+            // function rather than repeated because the prose arm and the
+            // colon-less arm agree about everything after the reading — first
+            // statement wins, a voice goes through the shared voice grammar so
+            // an engine annotation is stripped the same way — and two copies
+            // of that agreement is one copy that can drift.
+            void Assign(ProseKind kind, string stated)
+            {
+                if (kind is ProseKind.Name) name ??= stated;
+                else if (kind is ProseKind.Avatar) avatar ??= stated;
+                else
+                {
+                    var (statedVoice, statedRate) = VoiceValue(stated);
+                    voice ??= statedVoice;
+                    rate ??= statedRate;
+                }
+            }
+
             var source = lines.ToList();
             for (var index = 0; index < source.Count; index++)
             {
@@ -99,14 +183,32 @@ namespace ClaudeBuddy
                 }
 
                 // Fence state is tracked for every line, including the ones the
-                // explicit arms below go on to read. Only the prose arm acts on
-                // it — see the header — so this changes nothing about what a
-                // bullet or a table row means, which is deliberate: what
-                // OpenClaw's profiles already parse to is not this ticket's to
-                // move.
+                // explicit arms below go on to read. Only the three arms added
+                // for a CLAUDE.md act on it — the prose sentence, the persona
+                // heading and the colon-less field — so this changes nothing
+                // about what a bullet or a table row means, which is
+                // deliberate: what OpenClaw's profiles already parse to is not
+                // this feature's to move.
                 if (Fence(trimmed))
                 {
                     inFence = !inFence;
+                    continue;
+                }
+
+                // A heading is where a persona section opens and where it
+                // closes, and it carries no field of its own — `## Attributes`
+                // labels what follows rather than stating it. Consuming the
+                // line here loses nothing that was read before: a heading
+                // cannot be a bullet, a two-cell table row or a bold field,
+                // and the prose regex refuses anything starting with `#`.
+                //
+                // Inside a fence it is not a heading at all but a comment in
+                // somebody's shell example, and inside front matter it is a
+                // YAML comment.
+                if (!inFrontMatter && !inFence && Heading(trimmed, out var level, out var heading))
+                {
+                    if (sectionLevel > 0 && level <= sectionLevel) sectionLevel = 0;
+                    if (PersonaSection(heading)) sectionLevel = level;
                     continue;
                 }
 
@@ -144,28 +246,26 @@ namespace ClaudeBuddy
                     // rest, since a line beginning `**`, `|` or `#` cannot
                     // start with one of its nouns.
                     if (inFrontMatter || inFence) continue;
-                    if (!ProseField(trimmed, out var kind, out var value)) continue;
 
-                    switch (kind)
+                    // Assign rather than a switch here: everything VoiceValue
+                    // rejects — blank, a <placeholder> — is already outside
+                    // what a prose value is allowed to contain, so ??= against
+                    // a null it cannot produce is the whole of the handling
+                    // rather than a missing check.
+                    if (ProseField(trimmed, out var proseKind, out var proseValue))
                     {
-                        case ProseKind.Name:
-                            name ??= value;
-                            break;
-                        case ProseKind.Voice:
-                            // No "did it survive VoiceValue" arm here, unlike
-                            // the explicit fields above: everything VoiceValue
-                            // rejects — blank, a <placeholder> — is already
-                            // outside what a prose value is allowed to contain,
-                            // so ??= against a null it cannot produce is the
-                            // whole of the handling rather than a missing check.
-                            var (proseVoice, proseRate) = VoiceValue(value);
-                            voice ??= proseVoice;
-                            rate ??= proseRate;
-                            break;
-                        case ProseKind.Avatar:
-                            avatar ??= value;
-                            break;
+                        Assign(proseKind, proseValue);
+                        continue;
                     }
+
+                    // The loosening, and the scope that keeps it safe. Outside
+                    // a persona section this arm does not run, so a paragraph
+                    // beginning "Name resolution is handled by the folder"
+                    // means what it has always meant; inside one it is still
+                    // refused, on the same word count that refuses it as
+                    // prose.
+                    if (sectionLevel > 0 && SectionField(trimmed, out var sectionKind, out var sectionValue))
+                        Assign(sectionKind, sectionValue);
 
                     continue;
                 }
@@ -213,7 +313,7 @@ namespace ClaudeBuddy
         private static readonly Regex Prose = new(
             @"^(?:(?:this\s+agent's|the\s+agent's|her|his|their|its|the|my|your|agent)\s+)?" +
             @"(?<noun>speaking\s+voice|tts\s+voice|profile\s+picture|profile\s+pic|profile\s+image" +
-            @"|name|voice|picture|portrait|avatar|image)" +
+            @"|profile\s+photo|name|voice|picture|portrait|avatar|image|photo)" +
             @"\s+(?:is|should\s+be|will\s+be)\s*:?\s+(?<value>.+?)\.?\s*$",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
@@ -252,15 +352,7 @@ namespace ClaudeBuddy
                 return true;
             }
 
-            // The last token, so "the file leota.png" names the same picture
-            // "leota.png" does. A path is one token; the words in front of it
-            // are somebody being polite about it.
-            var path = words[^1];
-
-            if (path.Contains(':')) return false;
-            if (Path.IsPathRooted(path)) return false;
-            if (!PictureExtensions.Any(extension => path.EndsWith(extension, StringComparison.OrdinalIgnoreCase)))
-                return false;
+            if (!PictureValue(words, out var path)) return false;
 
             kind = ProseKind.Avatar;
             value = path;
@@ -280,6 +372,151 @@ namespace ClaudeBuddy
 
             return value.All(c =>
                 char.IsLetterOrDigit(c) || c is ' ' or '_' or '-' or '\'' or '(' or ')');
+        }
+
+        // A picture, as either arm is allowed to name one: the last token, so
+        // "the file leota.png" names the same picture "leota.png" does. A path
+        // is one token; the words in front of it are somebody being polite
+        // about it.
+        //
+        // Rooted paths and anything with a colon in it are refused here rather
+        // than at the filesystem, so `/etc/passwd` and `https://x/y.png` never
+        // become a read. PersonaFiles refuses both again — this is the cheap
+        // half of a check that has to hold in both places, not the only half.
+        internal static bool PictureValue(string[] words, out string path)
+        {
+            var last = words[^1];
+            path = last;
+
+            if (last.Contains(':')) return false;
+            if (Path.IsPathRooted(last)) return false;
+
+            return PictureExtensions.Any(
+                extension => last.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // A Markdown ATX heading, and which level it is.
+        //
+        // Setext headings (a line of `===` or `---` underneath the text) are
+        // deliberately not read: the `---` spelling is already front matter's
+        // fence in this parser, and a persona file that writes its attributes
+        // heading that way is rarer than a file that would have its front
+        // matter silently reinterpreted.
+        //
+        // `#hashtag` is not a heading — CommonMark requires whitespace after
+        // the run of hashes — and seven hashes is not one either.
+        internal static bool Heading(string trimmed, out int level, out string text)
+        {
+            level = 0;
+            text = "";
+
+            var hashes = 0;
+            while (hashes < trimmed.Length && trimmed[hashes] == '#') hashes++;
+            if (hashes is 0 or > 6) return false;
+
+            var rest = trimmed[hashes..];
+            if (rest.Length > 0 && !char.IsWhiteSpace(rest[0])) return false;
+
+            level = hashes;
+
+            // The closing run of an ATX heading (`## Attributes ##`) is
+            // decoration rather than text.
+            text = rest.Trim().TrimEnd('#').Trim();
+            return true;
+        }
+
+        // Which headings open a section where a bare `Label Value` line is
+        // metadata rather than prose.
+        //
+        // Contains rather than equals, because nobody writes a heading that is
+        // exactly the word: "## Attributes", "## Her persona", "# About me"
+        // and "## Agent profile" are all the same declaration, and a rule that
+        // reads only one spelling of it is a rule people have to learn.
+        // Deliberately a short, closed list — every word here names a section
+        // whose whole purpose is to describe the agent, which is what makes
+        // reading its lines as fields defensible.
+        private static readonly string[] SectionWords =
+            { "persona", "attributes", "identity", "character", "profile", "about me", "who i am" };
+
+        internal static bool PersonaSection(string heading) =>
+            SectionWords.Any(word => heading.Contains(word, StringComparison.OrdinalIgnoreCase));
+
+        // Every label this grammar knows is one or two words.
+        private const int MaxLabelWords = 2;
+
+        // `Name Jennifer`, `Profile Photo cto.png` — a recognised label, a
+        // space, and a value that has to survive the same bounds every other
+        // arm applies.
+        //
+        // Longest label first, so `Profile Photo cto.png` is read as a photo
+        // rather than as an unrecognised "Profile" — the same reason the prose
+        // regex spells its two-word nouns before its one-word ones.
+        //
+        // A label followed by a colon is not this shape and never reaches
+        // here as one: "Name:" is not "Name", so `Name: prose is not metadata`
+        // is refused by the label match itself and keeps meaning what
+        // OnlyExplicitBulletFieldsAreReadAndPlaceholdersDoNotWin has said it
+        // means since before prose was read at all.
+        internal static bool SectionField(string trimmed, out ProseKind kind, out string value)
+        {
+            kind = ProseKind.None;
+            value = "";
+
+            var words = trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length < 2) return false;
+
+            for (var length = Math.Min(MaxLabelWords, words.Length - 1); length >= 1; length--)
+            {
+                if (!SectionLabel(string.Join(' ', words.Take(length)), out var labelled)) continue;
+
+                var rest = words[length..];
+
+                if (labelled is ProseKind.Avatar)
+                {
+                    if (!PictureValue(rest, out var picture)) return false;
+                    kind = labelled;
+                    value = picture;
+                    return true;
+                }
+
+                var stated = string.Join(' ', rest);
+                if (!BoundedWords(stated, rest)) return false;
+
+                kind = labelled;
+                value = stated;
+                return true;
+            }
+
+            return false;
+        }
+
+        // The label lists the explicit grammar already keeps, asked as one
+        // question. Nothing new is recognised here that a bullet would not
+        // recognise — which is the point: a user who writes `- Name: Jennifer`
+        // in one file and `Name Jennifer` under `## Attributes` in another has
+        // said the same thing twice.
+        internal static bool SectionLabel(string label, out ProseKind kind)
+        {
+            if (label.Equals("Name", StringComparison.OrdinalIgnoreCase))
+            {
+                kind = ProseKind.Name;
+                return true;
+            }
+
+            if (VoiceLabel(label))
+            {
+                kind = ProseKind.Voice;
+                return true;
+            }
+
+            if (AvatarLabel(label))
+            {
+                kind = ProseKind.Avatar;
+                return true;
+            }
+
+            kind = ProseKind.None;
+            return false;
         }
 
         // The noun as the alternation spells it, with whatever whitespace the
@@ -370,7 +607,9 @@ namespace ClaudeBuddy
             || label.Equals("Profile Picture", StringComparison.OrdinalIgnoreCase)
             || label.Equals("Profile Pic", StringComparison.OrdinalIgnoreCase)
             || label.Equals("Profile Image", StringComparison.OrdinalIgnoreCase)
+            || label.Equals("Profile Photo", StringComparison.OrdinalIgnoreCase)
             || label.Equals("Picture", StringComparison.OrdinalIgnoreCase)
+            || label.Equals("Photo", StringComparison.OrdinalIgnoreCase)
             || label.Equals("Portrait", StringComparison.OrdinalIgnoreCase)
             || label.Equals("Image", StringComparison.OrdinalIgnoreCase);
 

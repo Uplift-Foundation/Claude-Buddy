@@ -82,8 +82,14 @@ public class PersonaPortraitCacheTests : IDisposable
 
     // The decoded frames an orb would draw for this session, asked the way the
     // orb asks for them.
-    private OpenClawAvatars.Avatar? Decoded() =>
-        OpenClawAvatars.For(LocalPersonas.AvatarKey(_sessionId), LocalPersonas.For(_sessionId)?.Avatar);
+    // Asked the way the orb asks for it — by path, since CB-135 stopped the
+    // persona record carrying the bytes. Null path means no picture, which is
+    // the guard both drawing sites keep in front of this call.
+    private OpenClawAvatars.Avatar? Decoded()
+    {
+        var path = LocalPersonas.For(_sessionId)?.AvatarPath;
+        return path is null ? null : OpenClawAvatars.ForFile(LocalPersonas.AvatarKey(_sessionId), path);
+    }
 
     [AvaloniaFact]
     public void APortraitReplacedInPlaceIsDecodedAgainRatherThanServedFromTheCache()
@@ -117,7 +123,12 @@ public class PersonaPortraitCacheTests : IDisposable
         // survived the change would come back identical however new the bytes
         // in the registry are — which is exactly what the orb was drawing.
         Assert.NotSame(before, after);
-        Assert.Equal(Portrait(0x2E, 0xA0, 0x43), LocalPersonas.For(_sessionId)!.Avatar);
+        // The registry carries the path, and the file behind it is the new
+        // portrait — which is the whole of what the decode above had to go and
+        // read for the orb to change.
+        var portrait = LocalPersonas.For(_sessionId)!.AvatarPath;
+        Assert.Equal(picture, portrait);
+        Assert.Equal(Portrait(0x2E, 0xA0, 0x43), File.ReadAllBytes(portrait!));
     }
 
     // The other side of it: nothing moved, so nothing is thrown away. A cache
