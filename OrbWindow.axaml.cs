@@ -89,6 +89,22 @@ namespace ClaudeBuddy
         // from OrbColor, which is the *state* and changes as the session works.
         public Color? AccentColor => _accentColor;
 
+        // The status this orb last drew, for the chat panel's header line.
+        //
+        // Read off the orb rather than looked up in SessionManager for the same
+        // reason KindLabel, PresenceLabel and IsHeartbeat are: the panel and the
+        // badge on the thing that was clicked must not be able to disagree, and
+        // a second lookup is a second chance for them to. It is the same object
+        // either way — SessionManager pushes each scan's status here through
+        // UpdateFrom — but this one is reachable from a headless test that has
+        // no SessionManager running at all, and the lookup is not.
+        //
+        // Null before the first status write, which is an ordinary state and
+        // not an error: an orb can be clicked before its hook has ever fired.
+        // UpdateFrom calls ChatPanel.RefreshIdentityFor, so the panel re-reads
+        // this and fills the line in when the write lands.
+        public SessionStatus? LastStatus => _lastStatus;
+
         private readonly RadialGradientBrush _glowBrush = new()
         {
             GradientOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative),

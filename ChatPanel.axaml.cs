@@ -839,6 +839,98 @@ namespace ClaudeBuddy
             TitleText.Text = string.IsNullOrEmpty(persona) ? parts[0] : persona;
             SubtitleText.Text = parts.Length > 1 ? parts[1] : "";
             SubtitleText.IsVisible = parts.Length > 1;
+
+            // Last, because the meta line's first rule is "not what the title
+            // already says" and the title has only just been decided.
+            ApplyMeta();
+        }
+
+        // --- CB-134: which session, which folder, which machine -------------
+
+        // What this machine is called, asked once.
+        //
+        // MachineNames.Mine() shells out to scutil on macOS. It caches its own
+        // answer, but this runs from ApplyTitle, which runs on every hook write
+        // — several a second while a session is working — and taking a lock in
+        // that path to be handed back a string that cannot change while the
+        // process lives is a cost with nothing on the other side of it.
+        //
+        // Lazily rather than in a field initializer: the field would run scutil
+        // during ChatPanel's type initialiser, which is the first time any test
+        // in the UI suite touches the class, and a subprocess in a static
+        // constructor is a deadlock waiting for a machine slow enough.
+        private static string? _thisMachine;
+
+        private static string ThisMachine => _thisMachine ??= MachineNames.Mine();
+
+        // Dim, because this line is the one you go looking for rather than the
+        // one that catches your eye. Matching the TextBlock's own Foreground in
+        // the XAML: the Lead run inherits it and only the machine token
+        // overrides it, so the two have to agree.
+        private static readonly IBrush MetaInk = new SolidColorBrush(Color.Parse("#80FFFFFF"));
+
+        // The machine, when it is not this one. Bright enough to be the thing
+        // you notice in a line that is otherwise deliberately quiet, because
+        // "this conversation is happening on the mini" is the one fact here
+        // that changes what you should do about it.
+        //
+        // The orb's accent — the session's own colour — is preferred, so the
+        // panel and the ring on the orb it opened from say the same thing. Not
+        // every session has one (AccentColor is null for anything the app has
+        // not been told a colour for), and the fallback is the same light blue
+        // the transcript draws links in rather than a fourth colour nobody has
+        // seen before.
+        private static readonly IBrush RemoteMachineInk = new SolidColorBrush(Color.Parse("#FF9FD0FF"));
+
+        // Fills in the header's third line, or collapses it.
+        //
+        // Every fact here can arrive after the panel is already open — a title
+        // comes from a hook write that may not have happened yet, and a
+        // mirrored session's machine comes off a roster that answers a moment
+        // later — so this is re-run from ApplyTitle and from OnMachineChanged
+        // rather than once at Bind. That is the same lesson ApplyTitle's own
+        // comment records: the header used to keep whatever it was born with.
+        private void ApplyMeta()
+        {
+            // The orb first, and SessionManager only where there is no orb
+            // status to read — a panel can be bound before the session's first
+            // hook write, and in that window the manager may already hold what
+            // the orb has not been handed yet.
+            var status = _owner?.LastStatus
+                ?? SessionManager.Instance?.StatusFor(_session?.SessionId);
+
+            var machine = ChatHeaderMeta.MachineFor(
+                (_session as IRemoteChatMachine)?.MachineName, ThisMachine);
+
+            var meta = ChatHeaderMeta.Compose(
+                TitleText.Text,
+                status?.Title,
+                status?.Cwd,
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                machine.Name,
+                machine.IsLocal);
+
+            MetaRow.IsVisible = meta.IsVisible;
+
+            // On the row rather than on either block, so the hover answers
+            // wherever the pointer lands on the line — including the gap the
+            // ellipsis just made, which is exactly where somebody who cannot
+            // read the path will put it.
+            ToolTip.SetTip(MetaRow, meta.IsVisible ? meta.Tooltip : null);
+
+            // Set both rows every time, visibility included. The panel is
+            // reused across sessions, so a row left showing from the last
+            // conversation is drawn over this one — the same reason ApplyTitle
+            // re-reads rather than patching, and here the thing left behind
+            // would be another session's machine.
+            MetaText.IsVisible = meta.Lead.Length > 0;
+            MetaText.Text = meta.Lead;
+
+            MetaMachineText.IsVisible = meta.Machine.Length > 0;
+            MetaMachineText.Text = meta.Machine;
+            MetaMachineText.Foreground = meta.RemoteMachine
+                ? (_owner?.AccentColor is { } accent ? new SolidColorBrush(accent) : RemoteMachineInk)
+                : MetaInk;
         }
 
         private void RefreshSoleSpeaker()
@@ -2183,6 +2275,15 @@ namespace ClaudeBuddy
             KindChipText.Text = KindChipLabel(
                 _owner.KindGlyphText, _owner.KindLabel, _owner.PresenceLabel,
                 (_session as IRemoteChatMachine)?.MachineName);
+
+            // The same answer arriving changes the meta line too, and it is the
+            // half that changes colour: until the roster names the machine, a
+            // mirrored session is indistinguishable from a local one and the
+            // line says this machine in the ordinary dim ink. Left out at
+            // first, which meant the panel picked the accent up only on the
+            // next hook write — and a mirrored session's hook writes happen on
+            // the other machine, so for that case there was no next one.
+            ApplyMeta();
         }
 
         // What the chip says, including which machine when that is known.

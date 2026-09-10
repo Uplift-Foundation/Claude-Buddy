@@ -102,8 +102,8 @@ jobs:
       # has no per-error name to print) and is now the thing this loop's
       # `break` actually depends on — not `dotnet test`'s exit code alone.
       # `--minimum-expected-tests` is a second, independent belt from the
-      # test host itself; the floor is set BELOW the real total (1059,
-      # measured on CB-133's branch) on purpose, so this doesn't need
+      # test host itself; the floor is set BELOW the real total (1081,
+      # measured on CB-134's branch) on purpose, so this doesn't need
       # editing every time the suite grows by a test or two. Bump it only as
       # a deliberate edit when the real total moves meaningfully, never to
       # make a red run pass.
@@ -117,7 +117,7 @@ jobs:
       - name: UI tests (xUnit, headless)
         shell: pwsh
         run: |
-          # Real total measured on CB-135's branch is 1067 — set below
+          # Real total measured on CB-134's branch is 1081 — set below
           # that so the suite can grow without touching this file; see the
           # step comment above for what this is a belt against.
           $minimumExpectedTests = 1050
@@ -163,9 +163,9 @@ jobs:
       - name: UI screenshots
         shell: pwsh
         run: |
-          # Real total on 4d2c87f is 105 — set below that so the suite can
-          # grow without touching this file; see the "UI tests" step above
-          # for what this is a belt against.
+          # Real total on CB-134's branch is 111 — set below that so the
+          # suite can grow without touching this file; see the "UI tests"
+          # step above for what this is a belt against.
           $minimumExpectedTests = 100
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             dotnet test tests/UiScreenshots -c Release -- --report-xunit --report-xunit-filename ui-screenshots.xunit.xml --report-xunit-trx --report-xunit-trx-filename ui-screenshots.trx --minimum-expected-tests $minimumExpectedTests

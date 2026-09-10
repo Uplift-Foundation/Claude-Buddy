@@ -102,6 +102,37 @@ internal static class ChatPanelTestAccess
         typeof(ChatPanel).GetField("Panels", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new MissingFieldException("ChatPanel", "Panels");
 
+    // What the panel thinks this machine is called.
+    //
+    // The third header line names the machine always, and colours it when the
+    // session is on a *different* one — so the two cases a reviewer cares
+    // about are "same name" and "different name", and on a real machine only
+    // one of them can be arranged: MachineNames.Mine() answers whatever this
+    // Mac or this runner is called, and a test that asserted a literal would
+    // be asserting the hostname of whoever ran it.
+    //
+    // Reflection, and the third thing here that has to be, for the reason the
+    // two above give: a settable machine name is a thing only a test ever
+    // wants, and an internal setter beside ApplyMeta would be a seam the app
+    // could reach by mistake. ChatPanel caches the answer in a private static
+    // precisely because it cannot change while the process lives.
+    //
+    // Restores what it took, so the next class to run sees the real machine
+    // again. Every caller of this is in [Collection("Settings")] — the field
+    // is process-wide, and two classes racing on it would race to a different
+    // set of executed lines rather than to a failure.
+    public static IDisposable WithMachineName(string? name)
+    {
+        var held = MachineField.GetValue(null);
+        MachineField.SetValue(null, name);
+
+        return new Restore(() => MachineField.SetValue(null, held));
+    }
+
+    private static readonly FieldInfo MachineField =
+        typeof(ChatPanel).GetField("_thisMachine", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new MissingFieldException("ChatPanel", "_thisMachine");
+
     private sealed class Restore : IDisposable
     {
         private readonly Action _undo;

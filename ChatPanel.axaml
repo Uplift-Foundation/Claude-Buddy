@@ -129,6 +129,63 @@
                                    Foreground="#99FFFFFF"
                                    TextTrimming="CharacterEllipsis"/>
                     </StackPanel>
+                    <!-- The facts about this conversation that are true whether
+                         or not anybody named it: which session, which folder,
+                         which machine. Dimmer than the subtitle above it and
+                         smaller than the title above that, because it is read
+                         when you go looking rather than at a glance — a header
+                         where all three lines shout is a header with no first
+                         line.
+
+                         **Two rows, and the machine has the second one to
+                         itself.** The ticket asked for one, on the reasoning
+                         that more rows would make the card taller than the
+                         conversation under it — which turns out not to be true
+                         here, and the measurement is the reason this is two:
+                         the portrait beside these lines is 68 tall and the
+                         three text rows come to about 53, so the second meta
+                         row costs no header height whatsoever. What one row
+                         did cost was the facts themselves. The panel opens 340
+                         wide, which leaves this column about 180 for three
+                         facts that want nearer 400, and every way of dividing
+                         one row between them was tried and drawn: the whole
+                         line trimmed threw the machine away, which is the fact
+                         the design says is shown *always* and the only one
+                         carrying a colour; reserving the machine on the right
+                         left the rest reading "…"; wrapping to two lines broke
+                         mid-path and ellipsised nothing. Given a row each,
+                         both are legible at the width a panel actually opens
+                         at.
+
+                         A header with no lead at all — a room, which has no
+                         directory — collapses the first row rather than
+                         drawing it empty, so the machine sits directly under
+                         the chips instead of after a blank line. ApplyMeta
+                         does that; an empty TextBlock still measures a line
+                         high, so leaving it visible would have been a gap
+                         nobody asked for.
+
+                         Two blocks rather than two runs in one, because the
+                         machine wears the accent when the session is somewhere
+                         else and a TextBlock has one Foreground. Background is
+                         Transparent so the tooltip answers anywhere on either
+                         row, including the space the ellipsis just made, which
+                         is where somebody who cannot read the path will put
+                         the pointer. The whole stack is collapsed until
+                         Compose says there is something to say; see ApplyMeta. -->
+                    <StackPanel x:Name="MetaRow"
+                                IsVisible="False"
+                                Background="Transparent">
+                        <TextBlock x:Name="MetaText"
+                                   FontSize="11"
+                                   Foreground="#80FFFFFF"
+                                   TextTrimming="CharacterEllipsis"/>
+                        <TextBlock x:Name="MetaMachineText"
+                                   IsVisible="False"
+                                   FontSize="11"
+                                   Foreground="#80FFFFFF"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
                 </StackPanel>
 
                 <!-- Keep this chat open. First of the three because it is the
