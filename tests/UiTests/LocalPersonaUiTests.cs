@@ -44,6 +44,12 @@ public class LocalPersonaUiTests : IDisposable
         LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>());
         ClaudeBuddySettings.TwoLetterGlyphs = _twoLetterWas;
 
+        // Process-wide for the same reason the persona registry is, and with
+        // a sharper consequence: left set, a later class materialises a blend
+        // into a directory this one has already deleted; left unset while a
+        // blend test runs, it writes into the developer's own voices folder.
+        VoiceBlends.SetPathsForTests(null);
+
         foreach (var directory in _dirsToClean)
         {
             try { Directory.Delete(directory, recursive: true); } catch (IOException) { }
@@ -628,6 +634,124 @@ public class LocalPersonaUiTests : IDisposable
         // the same shape OpenClawSessions.RateForSession has, and for the same
         // reason: a rate is not a property of the voice that was chosen.
         Assert.Equal(1.3, LocalPersonas.RateForSession(sessionId));
+    }
+
+    // --- the voice, written as a mixture (CB-136) ---
+
+    // A tiny voice file, and a scratch pair of directories for the blend to
+    // be read out of and written into. Tiny because this suite is asking
+    // whether the orb's entry point is wired to the blend at all, not whether
+    // the arithmetic is right — that is NumpyVoiceTests', over the real
+    // shape, and VoiceBlendFileTests', over real files.
+    private string VoicesDirectory(params (string Name, float Value)[] voices)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "cb-blend-ui-" + Guid.NewGuid());
+        Directory.CreateDirectory(directory);
+        _dirsToClean.Add(directory);
+
+        foreach (var (name, value) in voices)
+        {
+            var tensor = new NumpyVoices.Tensor(new[] { 4 }, Enumerable.Repeat(value, 4).ToArray());
+            File.WriteAllBytes(Path.Combine(directory, name + ".npy"), NumpyVoices.Write(tensor));
+        }
+
+        VoiceBlends.SetPathsForTests(new VoiceBlends.Paths(new[] { directory }, directory));
+        return directory;
+    }
+
+    // The whole of CB-136 as the orb meets it: this repository's own persona
+    // line, published the way the scan publishes one, reaching the speak
+    // path as a voice the engine can be handed.
+    [AvaloniaFact]
+    public void ABlendedPersonaVoiceReachesTheOrbsSpeakPathAsAMaterialisedVoice()
+    {
+        var directory = VoicesDirectory(("af_sky", 1f), ("af_nicole", 3f));
+        var sessionId = PublishPersona(Persona(voice: "50% sky and 50% nicole"));
+
+        var option = OrbWindow.VoiceForLocalSpeech(
+            sessionId, new[] { Neural("af_sky"), Neural("af_nicole"), Neural("af_bella") });
+
+        Assert.NotNull(option);
+        Assert.Equal(TextToSpeech.SpeakEngine.Neural, option!.Engine);
+        Assert.Equal("af_blend_sky50-nicole50", option.Name);
+        Assert.Contains("blend", option.Label, StringComparison.OrdinalIgnoreCase);
+
+        // The name is not a label the orb invented — it is a file the engine
+        // will find, in the directory the engine is passed as --user-voices.
+        Assert.True(File.Exists(Path.Combine(directory, option.Name + ".npy")));
+    }
+
+    // The neural engine switched off, which is the case a persona cannot see
+    // coming. AllVoiceOptions offers no neural voices then, so there is
+    // nothing for a part to resolve to — and the answer has to be the user's
+    // global voice rather than silence, and rather than a system voice picked
+    // because one of the words looked close enough.
+    [AvaloniaFact]
+    public void ABlendIsIgnoredWhenTheNeuralEngineIsOff()
+    {
+        var directory = VoicesDirectory(("af_sky", 1f), ("af_nicole", 3f));
+        var sessionId = PublishPersona(Persona(voice: "50% sky and 50% nicole", rate: 1.1));
+
+        var systemOnly = new[]
+        {
+            new TextToSpeech.VoiceOption(TextToSpeech.SpeakEngine.System, "Samantha", "Samantha"),
+            new TextToSpeech.VoiceOption(TextToSpeech.SpeakEngine.System, "Sky", "Sky"),
+        };
+
+        Assert.Null(OrbWindow.VoiceForLocalSpeech(sessionId, systemOnly));
+
+        // ...and nothing was built. A blend that cannot be spoken must not
+        // leave a file behind for a later run to find and reuse.
+        Assert.Empty(Directory.GetFiles(directory, "*blend*"));
+
+        // The rate survives the voice not matching and is simply never read,
+        // the same as for a single voice that did not match.
+        Assert.Equal(1.1, LocalPersonas.RateForSession(sessionId));
+    }
+
+    // A mixture naming a voice this machine has not got is the global voice
+    // too — the whole blend, not the half that resolved. Speaking a two-voice
+    // mixture as one of its halves would be a voice nobody chose, and it
+    // would be indistinguishable from the blend having worked.
+    [AvaloniaFact]
+    public void AMixtureWithOnePartThisMachineLacksFallsBackWholesale()
+    {
+        var directory = VoicesDirectory(("af_sky", 1f));
+        var sessionId = PublishPersona(Persona(voice: "50% sky and 50% nicole"));
+
+        Assert.Null(OrbWindow.VoiceForLocalSpeech(
+            sessionId, new[] { Neural("af_sky"), Neural("af_bella") }));
+
+        Assert.Empty(Directory.GetFiles(directory, "*blend*"));
+    }
+
+    // ...and the remote half of the same seam, because a workspace
+    // IDENTITY.md is read by the same parser and now means the same thing. A
+    // blend honoured on one orb and ignored on the other is exactly the drift
+    // PersonaMarkdown was lifted out of OpenClawWorkspaceIdentity to prevent.
+    [AvaloniaFact]
+    public void AGatewayAgentsBlendReachesTheRemoteSpeakPathToo()
+    {
+        VoicesDirectory(("af_sky", 1f), ("af_nicole", 3f));
+
+        const string sessionId = "openclaw:agent:blend:blend";
+        OpenClawSessions.SetIdentitiesForTests(new Dictionary<string, OpenClawSessions.AgentIdentity>
+        {
+            ["blend"] = new("Jennifer", null, null, "50% sky and 50% nicole"),
+        });
+
+        try
+        {
+            var option = OrbWindow.VoiceForRemoteSpeech(
+                sessionId, new[] { Neural("af_sky"), Neural("af_nicole") });
+
+            Assert.Equal("af_blend_sky50-nicole50", option!.Name);
+        }
+        finally
+        {
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>());
+        }
     }
 
     private static TextToSpeech.VoiceOption Neural(string name) =>

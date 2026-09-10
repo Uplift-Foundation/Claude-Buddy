@@ -497,6 +497,8 @@ Mandarin and filtered out of an English list. A name with no recognisable prefix
 at all is *not* dropped; it falls through to the American English list and
 appears like any other voice. Copying the naming of the bundled ones is still
 the safe move, since it's the prefix that decides how the voice is treated.
+This is also where a blended persona voice is written — see *A voice can be a
+blend* — which is why a blend wears the prefix of its first part.
 
 Worth knowing what a Kokoro "voice" is before hunting for more: it's a 510 KB
 array of style vectors for that one model, not an engine and not a recording. So
@@ -1027,8 +1029,11 @@ one of the field nouns, `is` / `should be` / `will be`, and a value. A name or a
 voice must be one to three words and at most 40 characters, of letters, digits,
 spaces and `_ - ' ( )` — so **"The name is derived from the folder unless the
 user renames it"** names nothing, and neither does "Her voice is lovely and warm
-and low". A picture must be a relative path ending in `.png`, `.jpg`, `.jpeg`,
-`.gif` or `.webp`. Anything outside that shape is left alone as the prose it is.
+and low". A **voice** has one allowance more, described under *A voice can be a
+blend* below: it may be a mixture, up to eleven words and 120 characters, if it
+carries a percentage and reads as one. A picture must be a relative path ending
+in `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp`. Anything outside that shape is
+left alone as the prose it is.
 
 **Under a persona heading, the colon is optional.** A file whose whole purpose
 is to describe the agent tends to be written as a list of attributes rather than
@@ -1107,13 +1112,57 @@ silent. `**Voice:** af_bella (Kokoro TTS, rate 1.3)` sets a speaking rate for
 the neural engine the same way an OpenClaw profile does; system voices and
 custom commands have no rate.
 
-**Nothing is written anywhere** except that log. The persona lives in memory for
-as long as the orb does, is never copied into the status file the hooks write,
-and never leaves this machine. The picture's *bytes* are not kept either: the
-persona remembers where the file is, and the decoded 144-pixel frames an orb
-actually draws are the only copy that stays resident — which is what makes an
-8 MiB cap affordable on a machine running twenty or thirty agents out of one
-repository.
+### A voice can be a blend
+
+A voice may also be written as a **mixture of two to four Kokoro voices**, which
+is what you want when no single one sounds like the agent you have in mind:
+
+```markdown
+## Attributes
+
+Voice is 50% sky and 50% nicole
+```
+
+`and`, `plus`, a comma and `+` all separate the parts, and a percentage may lead
+its voice or follow it — `sky 60%, nicole 40%` says the same thing as
+`60% sky and 40% nicole`. Leave the percentages out entirely and the parts share
+equally: `Voice is sky and nicole` is a 50/50 mixture. Each part is resolved by
+the same rules a single voice is, so `sky` finds `af_sky`.
+
+**What happens then**: the app averages the parts' style vectors, weighted, and
+writes the result once into the same voices directory *Adding voices* above
+describes — `%APPDATA%\ClaudeBuddy\voices`, or
+`~/Library/Application Support/ClaudeBuddy/voices` — as a real Kokoro voice
+named for the mixture, `af_blend_sky50-nicole50.npy` for the example above. It
+is built on the first speak and reused after that, appears in the engine's own
+voice list, and survives an engine upgrade like anything else in that directory.
+Nothing has to be downloaded and nothing about the engine changes.
+
+**Anything the app cannot read as a mixture leaves you speaking in your global
+voice**, never in silence — the same rule a single unmatched voice follows. That
+covers a part naming a voice this machine has not got (the whole mixture is
+refused, not just that part), stated percentages that do not total 100 give or
+take one (`60% and 60%` is somebody who meant something else, while 99 and 101
+are rounding and are normalised), a percentage on some parts and not others, and
+more than four parts. Blends are Kokoro-only, so a mixture is also ignored
+outright when the neural engine is switched off. A mixture that could not be
+built says why in `persona.log`.
+
+Two bounds worth knowing, both about prose rather than about blends. A sentence
+value carrying a percentage may be up to eleven words, but **the percentage is
+what buys those words** — without one, "Her voice is lovely and warm and low" and
+"sky, nicole and bella" are the same shape, and nothing can tell them apart. So a
+*weightless* mixture of three or four parts has to be written as an explicit
+field (`- Voice: sky, nicole and bella`), which has never had a word limit; two
+weightless parts fit the ordinary three-word bound and need nothing special.
+
+**Almost nothing is written anywhere** — that log, and a blended voice's own
+`.npy` if a persona asked for one. The persona itself lives in memory for as long
+as the orb does, is never copied into the status file the hooks write, and never
+leaves this machine. The picture's *bytes* are not kept either: the persona
+remembers where the file is, and the decoded 144-pixel frames an orb actually
+draws are the only copy that stays resident — which is what makes an 8 MiB cap
+affordable on a machine running twenty or thirty agents out of one repository.
 
 ## OpenClaw agents (experimental, off by default)
 

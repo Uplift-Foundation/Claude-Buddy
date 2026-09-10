@@ -37,6 +37,13 @@ namespace ClaudeBuddy
     //     about naming, not a name, and the word count is what tells them
     //     apart. A colon, a slash or an "http" is a URL or a second clause, and
     //     either way not a voice.
+    //   * A **voice** has one bound more than a name, added by CB-136: it may
+    //     also be a mixture — `50% sky and 50% nicole` — up to eleven words
+    //     and a hundred and twenty characters, admitting `%`, `,` and `+`.
+    //     That is a large widening on paper and a narrow one in fact, because
+    //     the longer form is accepted only when VoiceBlend can read it as a
+    //     mixture, and VoiceBlend insists every part is a single token. See
+    //     BoundedVoice.
     //   * A picture is a relative path whose last token ends in an image
     //     extension. Rooted paths and anything with a colon in it are refused
     //     before the filesystem is asked, so `/etc/passwd` and
@@ -70,8 +77,10 @@ namespace ClaudeBuddy
     // CLAUDE.md above a session's directory means exactly what it meant
     // before. The value still has to pass the same bounds — which is why the
     // sentence about name resolution is refused even inside an Attributes
-    // section, on word count, and why `Voice is 50% sky and 50% nicole` is
-    // refused too until CB-136 gives a blend somewhere to go.
+    // section, on word count. `Voice is 50% sky and 50% nicole` was refused
+    // alongside it until CB-136 gave a blend somewhere to go; it is read now,
+    // and the bound it passes is BoundedVoice rather than a wider version of
+    // the one that refuses the sentence.
     //
     // Every one of those refusals loses a field rather than guessing at one,
     // which is the right way round: an orb wearing the folder's name is
@@ -126,6 +135,25 @@ namespace ClaudeBuddy
         // A name or a voice, as prose is allowed to state one.
         private const int MaxProseWords = 3;
         private const int MaxProseValueLength = 40;
+
+        // ...and a voice only, when what it states is a mixture.
+        //
+        // CB-135 left these bounds alone on purpose and asserted that
+        // `Voice is 50% sky and 50% nicole` produced nothing, so that whichever
+        // ticket gave a blend somewhere to go had to come here and move them
+        // deliberately. This is that move (CB-136).
+        //
+        // Eleven words is what a four-part blend spelled the long way needs —
+        // `25% a and 25% b and 25% c and 25% d` — and a hundred and twenty
+        // characters is that same blend with real identifiers in it. Both are
+        // far past what a name may be, which is why they are separate
+        // constants and why they are reached only through BoundedVoice, which
+        // guards them with two conditions rather than one: the value must
+        // contain a `%`, and VoiceBlend must be able to read it as a mixture.
+        // The second alone is not enough — see the comment in BlendShaped,
+        // where a real sentence that satisfies it is named.
+        private const int MaxVoiceWords = 11;
+        private const int MaxVoiceValueLength = 120;
 
         internal static Fields Parse(IEnumerable<string> lines)
         {
@@ -346,7 +374,7 @@ namespace ClaudeBuddy
 
             if (noun is "voice" or "speaking voice" or "tts voice")
             {
-                if (!BoundedWords(stated, words)) return false;
+                if (!BoundedVoice(stated, words)) return false;
                 kind = ProseKind.Voice;
                 value = stated;
                 return true;
@@ -372,6 +400,63 @@ namespace ClaudeBuddy
 
             return value.All(c =>
                 char.IsLetterOrDigit(c) || c is ' ' or '_' or '-' or '\'' or '(' or ')');
+        }
+
+        // A voice value, which is a name or a mixture of them.
+        //
+        // The whitelist above has no `%` in it, and that — not the word count
+        // — is what actually refused this repository's own persona line: a
+        // two-word `Voice is 50% sky` was rejected too, well inside the cap.
+        // Both barriers had to move and only one of them was ever suspected,
+        // which is why the second arm here is written as its own bound rather
+        // than as three more characters added to the first.
+        //
+        // Order matters and only for cost: an ordinary voice name passes the
+        // narrow test and never reaches the regex behind VoiceBlend.Parse.
+        internal static bool BoundedVoice(string value, string[] words) =>
+            BoundedWords(value, words) || BlendShaped(value, words);
+
+        private static bool BlendShaped(string value, string[] words)
+        {
+            // **A percentage is required, and it is the whole of the intent
+            // signal.** Without this line "Her voice is lovely and warm and
+            // low" is a three-part equal blend of three single tokens — five
+            // words inside the eleven-word cap, every character on the
+            // whitelist, and structurally indistinguishable from "sky, nicole
+            // and bella". Nothing can tell those two apart without knowing
+            // which words are voices, and the parser deliberately does not.
+            // A `%` is what nobody writes by accident in a sentence about a
+            // voice, so it is what buys the extra eight words.
+            //
+            // The cost is stated rather than hidden: a *weightless* blend of
+            // three or four parts is over the prose word cap and is not read
+            // as prose. Two parts still are — `Voice is sky and nicole` fits
+            // the narrow bound unchanged and the blend layer claims it
+            // downstream — and any number of parts can be written under the
+            // explicit `- Voice:` grammar, which has never had a word cap.
+            if (!value.Contains('%')) return false;
+
+            if (value.Length > MaxVoiceValueLength) return false;
+            if (words.Length > MaxVoiceWords) return false;
+            if (value.Contains(':') || value.Contains('/')) return false;
+            if (value.Contains("http", StringComparison.OrdinalIgnoreCase)) return false;
+
+            // The same whitelist as a name's, plus the three marks a mixture
+            // is written with. Parentheses are deliberately *not* here: an
+            // engine annotation belongs to a single voice, and a blend
+            // carrying one is a shape nobody writes and this does not have to
+            // guess at.
+            if (!value.All(c =>
+                    char.IsLetterOrDigit(c) || c is ' ' or '_' or '-' or '\'' or '%' or ',' or '+'))
+            {
+                return false;
+            }
+
+            // The bound that does the real work — see the comment on
+            // MaxVoiceWords. Running the grammar rather than paraphrasing it
+            // is also the rule CLAUDE.md states outright: the parser is pure
+            // and cheap to call precisely so nobody restates its answer here.
+            return VoiceBlend.Parse(value) is not null;
         }
 
         // A picture, as either arm is allowed to name one: the last token, so
@@ -479,8 +564,17 @@ namespace ClaudeBuddy
                     return true;
                 }
 
+                // A voice gets the wider bound here for the same reason it
+                // gets it in the prose arm: `Voice 50% sky and 50% nicole`
+                // under `## Attributes` is the same statement as the sentence
+                // with "is" in it, and a grammar that reads one and not the
+                // other is a rule people have to learn.
                 var stated = string.Join(' ', rest);
-                if (!BoundedWords(stated, rest)) return false;
+                var bounded = labelled is ProseKind.Voice
+                    ? BoundedVoice(stated, rest)
+                    : BoundedWords(stated, rest);
+
+                if (!bounded) return false;
 
                 kind = labelled;
                 value = stated;
