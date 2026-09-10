@@ -33,6 +33,16 @@ public class ChatPanelHeaderMetaTests : IDisposable
     private static readonly string Project =
         Path.Combine(Home, "Source", "HauntedMansionTerminalTheme");
 
+    // The home-relative path as the panel writes it, with whatever separator
+    // this machine uses. ChatHeaderMeta keeps the native one deliberately — a
+    // path is a thing somebody pastes into their own shell — so an expected
+    // string with a literal "/" in it passes on a Mac and fails on Windows,
+    // which is exactly what the Windows leg caught the first time this ran.
+    private static string Under(params string[] parts) =>
+        "~" + Path.DirectorySeparatorChar + string.Join(Path.DirectorySeparatorChar, parts);
+
+    private static readonly string ProjectShown = Under("Source", "HauntedMansionTerminalTheme");
+
     // A name no machine has. The far-machine arm is the one that matters here,
     // and it is only far if it differs from whatever this Mac or this runner
     // calls itself — so the name is chosen to be one nobody's `scutil` will
@@ -123,8 +133,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
         var panel = ChatPanelTestAccess.Instance!;
 
         Assert.True(Row(panel).IsVisible);
-        Assert.Equal(
-            "~/Source/HauntedMansionTerminalTheme · warrens-macbook-pro", LineOf(panel));
+        Assert.Equal(ProjectShown + " · warrens-macbook-pro", LineOf(panel));
     }
 
     [AvaloniaFact]
@@ -142,8 +151,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
 
         Assert.Equal("Leota", panel.FindControl<TextBlock>("TitleText")!.Text);
         Assert.Equal(
-            "haunted-mansion · ~/Source/HauntedMansionTerminalTheme · warrens-macbook-pro",
-            LineOf(panel));
+            "haunted-mansion · " + ProjectShown + " · warrens-macbook-pro", LineOf(panel));
     }
 
     [AvaloniaFact]
@@ -208,6 +216,26 @@ public class ChatPanelHeaderMetaTests : IDisposable
         // this capture's twin in tests/UiScreenshots exists to show.
         Assert.Equal("#openclaw-management", panel.FindControl<TextBlock>("TitleText")!.Text);
         Assert.Equal("wtvamp", panel.FindControl<TextBlock>("SubtitleText")!.Text);
+    }
+
+    [AvaloniaFact]
+    public void APanelBoundBeforeTheFirstHookWriteStillNamesTheMachine()
+    {
+        using var machine = ChatPanelTestAccess.WithMachineName("warrens-macbook-pro");
+
+        // An orb can be clicked before its hook has ever fired, and then there
+        // is no status anywhere to read: the orb has none, and SessionManager
+        // is not running in this suite either, which is what makes this the
+        // arm ApplyMeta's own fallback is written for. What it must not do is
+        // draw a row with a separator and nothing on either side of it.
+        ChatPanel.OpenFor(NewOrb(), NewFake("Leota"));
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+
+        Assert.True(Row(panel).IsVisible);
+        Assert.Equal("warrens-macbook-pro", LineOf(panel));
+        Assert.False(Lead(panel).IsVisible);
     }
 
     [AvaloniaFact]
@@ -357,8 +385,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
 
         var panel = ChatPanelTestAccess.Instance!;
 
-        Assert.Equal(
-            "~/Source/HauntedMansionTerminalTheme · warrens-macbook-pro", LineOf(panel));
+        Assert.Equal(ProjectShown + " · warrens-macbook-pro", LineOf(panel));
 
         orb.UpdateFrom(new SessionStatus
         {
@@ -370,8 +397,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
         Flush();
 
         Assert.Equal(
-            "haunted-mansion · ~/Source/HauntedMansionTerminalTheme · warrens-macbook-pro",
-            LineOf(panel));
+            "haunted-mansion · " + ProjectShown + " · warrens-macbook-pro", LineOf(panel));
     }
 
     [AvaloniaFact]
@@ -392,7 +418,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
 
         var panel = ChatPanelTestAccess.Instance!;
 
-        Assert.Equal("~/Source/Claude-Buddy · warrens-macbook-pro", LineOf(panel));
+        Assert.Equal(Under("Source", "Claude-Buddy") + " · warrens-macbook-pro", LineOf(panel));
         Assert.DoesNotContain("haunted-mansion", LineOf(panel));
         Assert.DoesNotContain(Project, TipOf(panel));
     }

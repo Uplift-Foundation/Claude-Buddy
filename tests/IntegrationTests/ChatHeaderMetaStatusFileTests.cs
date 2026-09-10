@@ -231,4 +231,87 @@ public class ChatHeaderMetaStatusFileTests
 
         Directory.Delete(tmp.FullName, true);
     }
+
+    // The same seam on the other platform, because a feature works on Windows
+    // and macOS or it is not a feature — and because the one thing in this
+    // change that is genuinely platform-shaped is the path. ChatHeaderMeta
+    // keeps the native separator rather than normalising it (a path is a thing
+    // somebody pastes into their own shell), so what a Windows header shows is
+    // `~\Source\Claude-Buddy`, and asserting that from a Mac would be
+    // asserting a string rather than a behaviour.
+    //
+    // The title is left empty here rather than staged through a transcript:
+    // this is about the status file's cwd surviving the round trip on a
+    // platform whose separator differs, and the ps1 hook's own title parsing
+    // has its own tests next door in HookScriptPs1Tests.
+    [WindowsFact]
+    public void TheWindowsHookFeedsTheSameHeaderLineWithWindowsSeparators()
+    {
+        var tmp = Directory.CreateTempSubdirectory("cb-header-meta-");
+        var home = Path.Combine(tmp.FullName, "home");
+        var project = Path.Combine(home, "Source", "Claude-Buddy");
+        Directory.CreateDirectory(project);
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            session_id = "header-meta-win",
+            cwd = project,
+            transcript_path = "",
+        });
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "pwsh",
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-NonInteractive");
+        psi.ArgumentList.Add("-File");
+        psi.ArgumentList.Add(Path.Combine(RepoRoot, "ClaudeBuddyHook.ps1"));
+        psi.ArgumentList.Add("-State");
+        psi.ArgumentList.Add("idle");
+        psi.ArgumentList.Add("-Agent");
+        psi.ArgumentList.Add("claude");
+        psi.ArgumentList.Add("-TempDir");
+        psi.ArgumentList.Add(tmp.FullName);
+        psi.Environment.Remove("GROK_SESSION_ID");
+        psi.Environment.Remove("GROK_HOOK_EVENT");
+        psi.Environment.Remove("GROK_WORKSPACE_ROOT");
+        psi.Environment.Remove("GROK_HOME");
+
+        using (var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start pwsh"))
+        {
+            process.StandardInput.Write(payload);
+            process.StandardInput.Close();
+
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.Equal(0, process.ExitCode);
+            Assert.Equal("", stdout);
+            Assert.Equal("", stderr);
+        }
+
+        var status = StatusAfterHook(tmp.FullName, "header-meta-win");
+
+        var meta = ChatHeaderMeta.Compose(
+            "Claude-Buddy", status.Title, status.Cwd, home, "the-windows-box", true);
+
+        Assert.Equal(
+            "~" + Path.DirectorySeparatorChar + "Source" + Path.DirectorySeparatorChar
+                + "Claude-Buddy · the-windows-box",
+            meta.Text);
+
+        // And the tooltip is still the whole thing, drive letter included —
+        // the half of the path the abbreviation threw away is the half a
+        // Windows user needs to paste anywhere.
+        Assert.Contains(project, meta.Tooltip);
+
+        Directory.Delete(tmp.FullName, true);
+    }
 }

@@ -102,7 +102,7 @@ jobs:
       # has no per-error name to print) and is now the thing this loop's
       # `break` actually depends on — not `dotnet test`'s exit code alone.
       # `--minimum-expected-tests` is a second, independent belt from the
-      # test host itself; the floor is set BELOW the real total (1072,
+      # test host itself; the floor is set BELOW the real total (1081,
       # measured on CB-134's branch) on purpose, so this doesn't need
       # editing every time the suite grows by a test or two. Bump it only as
       # a deliberate edit when the real total moves meaningfully, never to
@@ -117,7 +117,7 @@ jobs:
       - name: UI tests (xUnit, headless)
         shell: pwsh
         run: |
-          # Real total measured on CB-134's branch is PENDING — set below
+          # Real total measured on CB-134's branch is 1081 — set below
           # that so the suite can grow without touching this file; see the
           # step comment above for what this is a belt against.
           $minimumExpectedTests = 1050

@@ -109,6 +109,19 @@ public class ChatHeaderMetaTests
     }
 
     [Fact]
+    public void ANullTitleIsNotSomethingTheNameCanRepeat()
+    {
+        // TitleText.Text is a nullable string and the panel hands it straight
+        // over, so this is the panel's own first frame rather than a defensive
+        // case: nothing has been titled yet, and a name that suppressed itself
+        // against a null would leave the row with nothing but a folder on it.
+        var meta = Composed(null, "haunted-mansion", Project, Home, Mine, true);
+
+        Assert.Equal(
+            "haunted-mansion · ~/Source/HauntedMansionTerminalTheme · " + Mine, meta.Text);
+    }
+
+    [Fact]
     public void AnEmptySessionNameIsSimplyAbsent()
     {
         // The early state of every local session, and the reason ApplyTitle
