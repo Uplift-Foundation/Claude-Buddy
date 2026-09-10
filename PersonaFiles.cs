@@ -47,8 +47,22 @@ namespace ClaudeBuddy
             catch (IOException) { return null; }
         }
 
-        internal static byte[]? AvatarAt(string root, string? avatar)
+        internal static byte[]? AvatarAt(string root, string? avatar) => AvatarAt(root, avatar, out _);
+
+        // The bytes, and where they were actually read from.
+        //
+        // The path is an output rather than something the caller can work out
+        // for itself, and that is the point: the string in the markdown is
+        // relative, may run through a subdirectory, and is only accepted after
+        // being canonicalised and proved to stay inside its root. Recomputing
+        // it outside this function would be a second copy of that resolution,
+        // and a second copy that agreed with this one only until one of them
+        // changed. The one caller that wants it wants it in order to *stat*
+        // the file again on the next scan, so it has to be the same file this
+        // read, not a path that resolves to it today.
+        internal static byte[]? AvatarAt(string root, string? avatar, out string? path)
         {
+            path = null;
             if (string.IsNullOrWhiteSpace(avatar) || Path.IsPathRooted(avatar)) return null;
 
             try
@@ -60,7 +74,14 @@ namespace ClaudeBuddy
                 if (candidate is null || !IsWithin(root, candidate)) return null;
 
                 var info = new FileInfo(candidate);
-                return info.Length is > 0 and <= MaxAvatarBytes ? File.ReadAllBytes(candidate) : null;
+                if (info.Length is <= 0 or > MaxAvatarBytes) return null;
+
+                // Set after the read rather than before it, so a picture that
+                // passes every check and then fails to open leaves no path
+                // behind for the next scan to watch.
+                var bytes = File.ReadAllBytes(candidate);
+                path = candidate;
+                return bytes;
             }
             catch (IOException) { return null; }
             catch (UnauthorizedAccessException) { return null; }

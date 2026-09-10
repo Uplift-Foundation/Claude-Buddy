@@ -377,6 +377,71 @@ public class LocalPersonaTests : IDisposable
         Assert.Equal(nearer, persona.AvatarSource);
     }
 
+    // A portrait is not a markdown file and is not a candidate, so nothing in
+    // Files names it — and the scan compares Signature over what a persona
+    // watches to decide whether to read anything again. Leaving the picture out
+    // of that set is the whole of the bug this pins: the same filename with new
+    // bytes changes no markdown file at all, so every signature over Files
+    // alone is identical and the orb keeps the old face until the app restarts.
+    [Fact]
+    public void APortraitIsPartOfWhatAPersonaWatches()
+    {
+        var project = Dir("tree", "project");
+        var picture = Path.Combine(project, "leota.png");
+        File.WriteAllBytes(picture, Png());
+        Write(project, "CLAUDE.md", "Her name is Leota", "Her picture is leota.png");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>());
+
+        Assert.Equal(picture, persona.AvatarPath);
+        Assert.Equal(persona.Files.Append(picture), persona.Watched);
+
+        var watchedBefore = LocalPersona.Signature(persona.Watched);
+        var filesBefore = LocalPersona.Signature(persona.Files);
+
+        // Overwritten in place: same name, new bytes, and not one markdown
+        // file touched.
+        File.WriteAllBytes(picture, Png().Concat(new byte[] { 0 }).ToArray());
+
+        Assert.NotEqual(watchedBefore, LocalPersona.Signature(persona.Watched));
+        Assert.Equal(filesBefore, LocalPersona.Signature(persona.Files));
+    }
+
+    // Only a length or an mtime, whichever the filesystem gives: both are in
+    // the signature precisely so a picture edited either way is noticed, and a
+    // same-length rewrite is the case a length alone would miss.
+    [Fact]
+    public void APortraitTouchedWithoutChangingItsLengthStillMoves()
+    {
+        var project = Dir("tree", "project");
+        var picture = Path.Combine(project, "leota.png");
+        File.WriteAllBytes(picture, Png());
+        Write(project, "CLAUDE.md", "Her picture is leota.png");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>());
+        var before = LocalPersona.Signature(persona.Watched);
+
+        // Set rather than slept for: the assertion is about the signature
+        // reading the timestamp, not about how fine this filesystem's clock is.
+        File.SetLastWriteTimeUtc(picture, File.GetLastWriteTimeUtc(picture).AddSeconds(5));
+
+        Assert.NotEqual(before, LocalPersona.Signature(persona.Watched));
+    }
+
+    [Fact]
+    public void APersonaWithNoPortraitWatchesOnlyWhatItRead()
+    {
+        var project = Dir("tree", "project");
+        Write(project, "CLAUDE.md", "Her name is Leota");
+
+        var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>());
+
+        Assert.Null(persona.AvatarPath);
+        Assert.Equal(persona.Files, persona.Watched);
+        Assert.Null(LocalPersona.Empty.AvatarPath);
+        Assert.Empty(LocalPersona.Empty.Watched);
+    }
+
     [Fact]
     public void EveryFileActuallyReadIsReported()
     {
@@ -567,7 +632,7 @@ public class LocalPersonaTests : IDisposable
     // --- LocalPersonas: the live registry -----------------------------------
 
     private static LocalPersona.Persona Named(string name, string? voice = null, double? rate = null) =>
-        new(name, voice, rate, null, null, Array.Empty<string>());
+        new(name, voice, rate, null, null, null, Array.Empty<string>());
 
     [Fact]
     public void APersonaIsRememberedAgainstItsSession()

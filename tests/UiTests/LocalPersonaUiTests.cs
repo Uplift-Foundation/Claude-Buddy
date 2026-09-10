@@ -74,7 +74,9 @@ public class LocalPersonaUiTests : IDisposable
 
     private static LocalPersona.Persona Persona(
         string? name = "Leota", string? voice = null, double? rate = null, byte[]? avatar = null) =>
-        new(name, voice, rate, avatar, avatar is null ? null : "/tmp/leota/CLAUDE.md",
+        new(name, voice, rate, avatar,
+            avatar is null ? null : "/tmp/leota/CLAUDE.md",
+            avatar is null ? null : "/tmp/leota/leota.png",
             new[] { "/tmp/leota/CLAUDE.md" });
 
     // Session ids are unique per case for the same reason agent ids are in

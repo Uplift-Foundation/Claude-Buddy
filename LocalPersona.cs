@@ -21,19 +21,37 @@ namespace ClaudeBuddy
     // itself layers them.
     internal static class LocalPersona
     {
+        // AvatarSource and AvatarPath are two different files and both are
+        // needed. AvatarSource is the markdown that *named* the picture, which
+        // is what says whose picture it is and which directory a relative path
+        // was resolved against; AvatarPath is the picture itself. The scan
+        // watches both, because they move independently: a portrait replaced
+        // in place — same filename, new bytes, CLAUDE.md untouched — changes
+        // nothing about any markdown file, and watching the markdown alone
+        // left the old face on the orb until something else in the tree
+        // happened to move or the app was restarted.
         internal sealed record Persona(
             string? Name,
             string? Voice,
             double? Rate,
             byte[]? Avatar,
             string? AvatarSource,
+            string? AvatarPath,
             IReadOnlyList<string> Files)
         {
             internal bool IsEmpty => Name is null && Voice is null && Avatar is null;
+
+            // The files this persona's answer depends on: what was read, plus
+            // the picture if there is one. Here rather than at the call site
+            // because forgetting the picture is exactly the bug this exists to
+            // have fixed, and a caller that assembles the set by hand is a
+            // caller that can forget it again.
+            internal IEnumerable<string> Watched =>
+                AvatarPath is null ? Files : Files.Append(AvatarPath);
         }
 
         internal static readonly Persona Empty =
-            new(null, null, null, null, null, Array.Empty<string>());
+            new(null, null, null, null, null, null, Array.Empty<string>());
 
         // How far up the tree to look. Not a security bound — the walk
         // terminates at the root on its own — but a bound on what the scan
@@ -209,6 +227,7 @@ namespace ClaudeBuddy
             double? rate = null;
             byte[]? avatar = null;
             string? avatarSource = null;
+            string? avatarPath = null;
             var files = new List<string>();
 
             foreach (var (path, lines) in Load(candidates))
@@ -231,14 +250,15 @@ namespace ClaudeBuddy
                 // already read from, never admit one from anywhere new.
                 var root = Path.GetDirectoryName(path)!;
 
-                var bytes = PersonaFiles.AvatarAt(root, fields.Avatar);
+                var bytes = PersonaFiles.AvatarAt(root, fields.Avatar, out var picture);
                 if (bytes is null) continue;
 
                 avatar = bytes;
                 avatarSource = path;
+                avatarPath = picture;
             }
 
-            return new Persona(name, voice, rate, avatar, avatarSource, files);
+            return new Persona(name, voice, rate, avatar, avatarSource, avatarPath, files);
         }
 
         // What the scan compares to decide whether anything is worth re-reading:
@@ -359,11 +379,20 @@ namespace ClaudeBuddy
         internal static string AvatarKey(string sessionId) => "local:" + sessionId;
 
         // Setting a *different* persona object drops any bitmap decoded from
-        // the old one, so an edited picture is re-decoded rather than served
-        // from the cache forever. Identity rather than content: the scan keeps
-        // one persona object per session and hands the same one back until the
-        // files change, so this costs a dictionary removal per change and
+        // the old one. Identity rather than content: the scan keeps one persona
+        // object per session and hands the same one back until something it
+        // watches moves, so this costs a dictionary removal per change and
         // nothing per tick.
+        //
+        // That makes this half of a two-part invariant, and the other half is
+        // the scan's. A picture is only re-decoded here if the scan hands over
+        // a new object, and it only does that if it noticed the picture change
+        // — which for a portrait overwritten in place, with the markdown left
+        // alone, means it has to be watching the picture file itself. It is:
+        // see Persona.Watched and SessionManager.ApplyPersona. Neither half is
+        // sufficient alone, and the version of this comment that claimed an
+        // edited picture was re-decoded said so while the scan was still
+        // watching only the markdown.
         internal static void Set(string sessionId, LocalPersona.Persona persona)
         {
             lock (Gate)

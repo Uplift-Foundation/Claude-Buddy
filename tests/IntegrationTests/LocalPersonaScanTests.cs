@@ -181,6 +181,64 @@ public class LocalPersonaScanTests : IDisposable
         Assert.Equal(new byte[] { 1, 2, 3, 4 }, persona!.Avatar);
     }
 
+    // The case markdown alone cannot see, and the one that shipped broken. A
+    // portrait replaced in place changes no markdown file: same filename, new
+    // bytes, CLAUDE.md untouched. A signature over the markdown is therefore
+    // identical, the cached persona is handed back, the registry's reference
+    // check keeps the decoded bitmap, and the orb wears the old face until the
+    // app restarts. Watching the picture file is what closes it.
+    //
+    // The replacement is a different length as well as different bytes, for
+    // the reason EditingTheMarkdownIsPickedUpOnTheNextPass gives about
+    // timestamp resolution.
+    [Fact]
+    public void APortraitReplacedInPlaceIsPickedUpOnTheNextPass()
+    {
+        WriteMarkdown("CLAUDE.md", "Her name is Leota.\nHer profile picture is leota.png.\n");
+        var picture = Path.Combine(_project, "leota.png");
+        File.WriteAllBytes(picture, new byte[] { 1, 2, 3, 4 });
+
+        var manager = Manager();
+        manager.ApplyPersona(_sessionId, Status(), Pass());
+
+        var first = LocalPersonas.For(_sessionId);
+        Assert.Equal(new byte[] { 1, 2, 3, 4 }, first!.Avatar);
+        Assert.Equal(picture, first.AvatarPath);
+
+        File.WriteAllBytes(picture, new byte[] { 9, 8, 7, 6, 5 });
+        manager.ApplyPersona(_sessionId, Status(), Pass());
+
+        var second = LocalPersonas.For(_sessionId);
+        Assert.Equal(new byte[] { 9, 8, 7, 6, 5 }, second!.Avatar);
+
+        // A *different* object is the half of the fix the registry owns: that
+        // is what makes Set drop the bitmap decoded from the old bytes. Same
+        // object, and the picture would be re-read and the face still stale.
+        Assert.NotSame(first, second);
+    }
+
+    // ...and having watched it once, it settles. The picture goes into the
+    // stored signature on the pass that read it, so an untouched picture is
+    // not a reason to resolve again — otherwise every session with a portrait
+    // would re-read a markdown tree and a picture twice a second forever.
+    [Fact]
+    public void APortraitSettlesRatherThanResolvingEveryPass()
+    {
+        WriteMarkdown("CLAUDE.md", "Her name is Leota.\nHer profile picture is leota.png.\n");
+        File.WriteAllBytes(Path.Combine(_project, "leota.png"), new byte[] { 1, 2, 3, 4 });
+
+        var manager = Manager();
+
+        manager.ApplyPersona(_sessionId, Status(), Pass());
+        var first = LocalPersonas.For(_sessionId);
+
+        manager.ApplyPersona(_sessionId, Status(), Pass());
+        Assert.Same(first, LocalPersonas.For(_sessionId));
+
+        manager.ApplyPersona(_sessionId, Status(), Pass());
+        Assert.Same(first, LocalPersonas.For(_sessionId));
+    }
+
     // A gateway session is never asked. Its identity is the gateway's, and its
     // Cwd — when it has one at all — is wherever this app was started from, so
     // reading a persona out of it would put the developer's own repository name

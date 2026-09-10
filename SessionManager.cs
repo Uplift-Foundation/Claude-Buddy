@@ -250,12 +250,12 @@ namespace ClaudeBuddy
         // filled once even though they will agree.
         //
         // The Persona is kept beside the signature for one reason, and it is
-        // not caching: its Files are the canonical paths actually read,
-        // including whatever the candidates `@`-imported. A candidate list
-        // alone cannot notice an edit to an imported file, because an imported
-        // file is not a candidate — so the next tick's signature is taken over
-        // both, and a persona kept in a `docs/persona.md` refreshes like one
-        // written in the CLAUDE.md itself.
+        // not caching: its Watched set is the canonical paths actually read —
+        // whatever the candidates `@`-imported, and the portrait itself.
+        // Neither is a candidate, so a candidate list alone cannot notice an
+        // edit to either; the next tick's signature is taken over both, and a
+        // persona kept in a `docs/persona.md` or a face replaced in place
+        // refreshes like a name written in the CLAUDE.md itself.
         private readonly Dictionary<string, (string Signature, LocalPersona.Persona Persona)>
             _personas = new(StringComparer.Ordinal);
 
@@ -1450,15 +1450,26 @@ namespace ClaudeBuddy
             var known = _personas.TryGetValue(sessionId, out var cached) ? cached : default;
 
             // Over the candidates *and* whatever the last read actually
-            // followed. The two differ exactly when a CLAUDE.md `@`-imports
-            // another file: the import is where the persona often lives and is
-            // never a candidate itself, so watching the candidate list alone
-            // would leave an edited `docs/persona.md` invisible until something
-            // else in the tree happened to move. Persona.Files is the ordered
-            // canonical list of what was read, which is precisely that set.
+            // followed. The two differ in two ways, and both were found by a
+            // change that went unnoticed rather than reasoned about in
+            // advance.
+            //
+            // A CLAUDE.md `@`-imports another file: the import is where the
+            // persona often lives and is never a candidate itself, so watching
+            // the candidate list alone leaves an edited `docs/persona.md`
+            // invisible until something else in the tree happens to move.
+            //
+            // And a portrait is replaced in place — same filename, new bytes,
+            // markdown untouched. Nothing in any *markdown* file has changed,
+            // so a signature over markdown alone is identical, the cached
+            // persona is re-Set, the registry's reference check sees the same
+            // object and keeps the decoded bitmap, and the orb wears the old
+            // face until the app restarts. Persona.Watched is Files plus the
+            // picture for exactly that reason, and it costs one extra stat per
+            // tick and only for a session that has a portrait at all.
             var watched = known.Persona is null
                 ? candidates
-                : candidates.Concat(known.Persona.Files);
+                : candidates.Concat(known.Persona.Watched);
 
             var signature = LocalPersona.Signature(watched);
 
@@ -1492,7 +1503,7 @@ namespace ClaudeBuddy
             // signature differ for no reason and resolve a second time, every
             // time, forever. One more round of stats here is what stops that.
             _personas[sessionId] =
-                (LocalPersona.Signature(candidates.Concat(persona.Files)), persona);
+                (LocalPersona.Signature(candidates.Concat(persona.Watched)), persona);
 
             LocalPersonas.Set(sessionId, persona);
         }
