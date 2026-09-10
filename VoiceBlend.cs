@@ -62,15 +62,19 @@ namespace ClaudeBuddy
         // has such a voice: the name as written, and its share as a whole
         // percentage. Percent rather than a double so that the share, the slug
         // and the arithmetic can never disagree — see Shares.
-        internal sealed record Part(string Voice, int Percent)
-        {
-            internal double Weight => Percent / 100.0;
-        }
+        //
+        // Deliberately no `Weight` here, only on the resolved part below. An
+        // unresolved part's share is never multiplied by anything — nothing
+        // can be averaged until the voices are known — so a fraction on this
+        // record would be a second spelling of Percent that no caller wanted
+        // and no test could reach except by asking for it.
+        internal sealed record Part(string Voice, int Percent);
 
         internal sealed record Blend(IReadOnlyList<Part> Parts);
 
         // A part whose voice the machine actually has, and the option that
-        // will speak it.
+        // will speak it. This is where the share becomes a fraction, because
+        // this is where something multiplies by it.
         internal sealed record ResolvedPart(TextToSpeech.VoiceOption Option, int Percent)
         {
             internal double Weight => Percent / 100.0;
