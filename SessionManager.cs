@@ -237,6 +237,18 @@ namespace ClaudeBuddy
 
         private readonly string _statusDir;
 
+        // What the persona files looked like the last time this session's
+        // persona was actually read: LocalPersona.Signature over its candidate
+        // paths, which is existence, length and mtime and nothing else.
+        //
+        // The scan runs on the UI thread every two seconds, so the per-tick cost
+        // of this feature has to be a handful of stats and no more. Reading a
+        // CLAUDE.md and decoding a portrait happen on the tick a stat moves and
+        // on no other. Keyed by session rather than by directory because two
+        // sessions in one repo are two registry entries, and each has to be
+        // filled once even though they will agree.
+        private readonly Dictionary<string, string> _personaSignatures = new(StringComparer.Ordinal);
+
         public SessionManager()
             : this(StatusDirectory.Path())
         {
@@ -1385,6 +1397,55 @@ namespace ClaudeBuddy
         // the whole of the scan, and calling it from anywhere but the timer, the
         // watcher's debounce or Start would mean two passes racing over the same
         // dictionaries on the same thread's re-entrancy.
+        // Read this session's persona, if the files it could be written in have
+        // moved since the last time we looked.
+        //
+        // Internal so a test can drive one session's read without a whole scan;
+        // the caching is the part worth exercising directly, because "it is only
+        // stats unless something changed" is the entire reason this is allowed
+        // to run on the UI thread twice a second and is not visible from
+        // outside any other way.
+        internal void ApplyPersona(
+            string sessionId,
+            SessionStatus status,
+            Dictionary<string, IReadOnlyList<string>> candidatesByCwd)
+        {
+            // A gateway session's identity comes from the gateway, and a
+            // remote-control relay is not a conversation at all. Neither has a
+            // working directory on this machine whose CLAUDE.md would be about
+            // *it* — a relay's cwd is wherever the app was started from, and
+            // reading a persona out of that would put the developer's own
+            // repository name on somebody else's orb.
+            if (!status.IsLocalCli || string.IsNullOrEmpty(status.Cwd)) return;
+
+            // Source is part of the key, not just the directory: Claude Code
+            // consults the user-level config directories and Codex and Grok
+            // deliberately do not, so two CLIs open on one repo have two
+            // different candidate lists and one cache entry would hand the
+            // second one the first one's.
+            var key = status.Cwd + " " + status.Source;
+            if (!candidatesByCwd.TryGetValue(key, out var candidates))
+            {
+                candidates = LocalPersona.CandidateFiles(
+                    status.Cwd, LocalPersona.UserConfigDirs(), status.Source);
+                candidatesByCwd[key] = candidates;
+            }
+
+            var signature = LocalPersona.Signature(candidates);
+            if (_personaSignatures.TryGetValue(sessionId, out var seen) && seen == signature) return;
+
+            _personaSignatures[sessionId] = signature;
+
+            // Before the registry write rather than after. The decoded-picture
+            // cache is keyed by session and has no idea the bytes behind it have
+            // changed, so an edited portrait would otherwise keep drawing the
+            // old one until the process restarted — and the window where the
+            // registry holds new bytes and the cache holds an old Bitmap is
+            // exactly one poll tick wide if it is the wrong way round.
+            OpenClawAvatars.Forget(LocalPersonas.AvatarKey(sessionId));
+            LocalPersonas.Set(sessionId, LocalPersona.ResolveForSession(status));
+        }
+
         internal void ScanAndUpdate()
         {
             SyncAutoColorMarker();
@@ -1392,6 +1453,16 @@ namespace ClaudeBuddy
             var seen = new HashSet<string>();
             var now = DateTime.UtcNow;
             bool setChanged = false;
+
+            // Which files a persona could be written in, per working directory,
+            // for the length of this one pass. Local rather than a field on
+            // purpose: building the list is pure string work over a path walk —
+            // cheap enough to redo every couple of seconds — where a field
+            // keyed by directory would accumulate an entry for every directory
+            // any session has ever run in, for the life of the process, to save
+            // nothing measurable. Several sessions in one repo is the common
+            // case and is what this actually saves.
+            var candidatesByCwd = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
 
             IEnumerable<string> files;
             try
@@ -1919,6 +1990,13 @@ namespace ClaudeBuddy
                     setChanged = true;
                 }
 
+                // Who this session says it is, from the CLAUDE.md files beside
+                // its work. Before UpdateFrom, deliberately: the orb's label and
+                // its portrait both read the registry this fills, so doing it
+                // after would draw one tick of the old answer every time a
+                // persona changed.
+                ApplyPersona(sessionId, status, candidatesByCwd);
+
                 _statuses[sessionId] = status;
 
                 var isNew = !_windows.TryGetValue(sessionId, out var window);
@@ -1958,6 +2036,14 @@ namespace ClaudeBuddy
                 // transcript that will never grow again, and a FileSystemWatcher
                 // per dead session is a handle leak measured in days.
                 if (_chats.Remove(id, out var chat)) chat.Dispose();
+
+                // Same argument for the persona, one size up: a decoded portrait
+                // is a Bitmap per frame, held by a process-wide cache that has
+                // no other reason to ever let one go. The registry entry is
+                // small; the picture behind it is not.
+                _personaSignatures.Remove(id);
+                LocalPersonas.Forget(id);
+                OpenClawAvatars.Forget(LocalPersonas.AvatarKey(id));
             }
 
             // After the removal pass, so an orb has already gone before its file
