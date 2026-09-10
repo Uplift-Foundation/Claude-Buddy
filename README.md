@@ -994,8 +994,14 @@ Voice` and `TTS Voice` all name the voice.
 **A sentence works too, because a `CLAUDE.md` is prose.** These three are read:
 
 ```markdown
-Her name is Leota. Her profile picture is leota.png. Her voice is Bella.
+Her name is Leota.
+Her profile picture is leota.png.
+Her voice is Bella.
 ```
+
+**One sentence per line**, which is grammar rather than housekeeping: a line is
+what gets read, so two of these sharing one make a value long enough that the
+bounds below reject it and neither field is set.
 
 The shape is deliberately narrow: an optional possessive (`her`, `his`,
 `their`, `its`, `the`, `my`, `your`, `this agent's`, `the agent's`, `agent`),

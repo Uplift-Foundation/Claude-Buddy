@@ -949,11 +949,11 @@ namespace ClaudeBuddy
 
             // Neither a portrait nor an emoji, which is every local session
             // without a persona picture and a gateway one whose agent list
-            // hasn't landed yet. Its orb already
-            // carries both halves of an identity — a letter and a colour, the
-            // ones just clicked — so the header borrows them. Better than an
-            // empty circle, and better than a second scheme invented for this
-            // window: the panel ends up looking like the orb it came out of.
+            // hasn't landed yet. Its orb already carries both halves of an
+            // identity — a letter and a colour, the ones just clicked — so the
+            // header borrows them. Better than an empty circle, and better than
+            // a second scheme invented for this window: the panel ends up
+            // looking like the orb it came out of.
             //
             // Keyed on there being no identity to draw rather than on the
             // session's type, because the panel deliberately doesn't know what

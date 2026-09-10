@@ -78,10 +78,16 @@ public class LocalPersonaScreenshots
         var project = Path.Combine(Path.GetTempPath(), "cb-persona-capture-" + Guid.NewGuid());
         Directory.CreateDirectory(project);
 
+        // One sentence per line, which is the grammar rather than a formatting
+        // preference: PersonaMarkdown reads a line at a time and its prose arm
+        // is anchored to the end of one, so two sentences sharing a line make a
+        // value seven words long that the bounds correctly refuse. Worth
+        // knowing, and worth a fixture that shows the shape that works.
         File.WriteAllText(Path.Combine(project, "CLAUDE.md"), """
             # Haunted Mansion Terminal Theme
 
-            Her name is Leota. Her profile picture is leota.png.
+            Her name is Leota.
+            Her profile picture is leota.png.
 
             The rest of this file is ordinary project notes, which is the point:
             a persona is written in the file that was already there.
