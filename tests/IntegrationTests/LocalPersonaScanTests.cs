@@ -19,9 +19,26 @@ namespace ClaudeBuddy.Tests;
 // does is filesystem, so it belongs here, where the filesystem is real and no
 // window has to exist for it to run.
 //
-// Not [Collection("Settings")]: nothing here reads a setting. LocalPersonas is
-// process-wide, so every case uses its own session id and empties the registry
-// afterwards.
+// [Collection("Settings")], and the comment here used to say the opposite —
+// "nothing here reads a setting" — which was wrong in a way that took a real
+// failure to see. ApplyPersona asks LocalPersona.UserConfigDirs which accounts
+// this machine has, and that reads ClaudeCodeProfileDirs: a process-wide static
+// that three other classes in this assembly add to and remove from. An account
+// appearing between two passes lengthens the candidate list, which changes the
+// signature, which resolves the persona again and hands the registry a new
+// object — so the two settling cases below, whose whole claim is that the same
+// object comes back, fail with nothing wrong with them.
+//
+// It is rare and it is invisible in isolation: twelve consecutive runs of those
+// two cases alone all passed, because running them alone removes the other
+// writer. It showed up once in a full-suite run under the coverage collector
+// and not again. SettingsCollection.cs has the same story from the other
+// assembly, which is where the fix comes from — serialise everything that
+// touches the shared model rather than hunt the interleaving.
+//
+// LocalPersonas is process-wide too, so every case uses its own session id and
+// empties the registry afterwards.
+[Collection("Settings")]
 public class LocalPersonaScanTests : IDisposable
 {
     private readonly string _project =
