@@ -230,16 +230,22 @@ namespace ClaudeBuddy
                     return null;
                 }
 
+                // One refusal rather than two, because both halves mean the
+                // same thing — this string could not be turned into a file
+                // inside the root — and because both are all but unreachable
+                // from here in the first place: the link walk above runs
+                // first and fails closed, so a missing file and a link out of
+                // the tree have already been refused by the time this asks.
+                // What is left is a file that changes between the two calls,
+                // which no test on either runner can arrange. The category
+                // still distinguishes them, so the log stays useful if one
+                // ever does happen.
                 var candidate = CanonicalFile(combined);
-                if (candidate is null)
+                if (candidate is null || !IsWithin(root, candidate))
                 {
-                    Reject(AvatarRejection.Unreadable, avatar);
-                    return null;
-                }
-
-                if (!IsWithin(root, candidate))
-                {
-                    Reject(AvatarRejection.EscapesRoot, avatar);
+                    Reject(
+                        candidate is null ? AvatarRejection.Unreadable : AvatarRejection.EscapesRoot,
+                        avatar);
                     return null;
                 }
 

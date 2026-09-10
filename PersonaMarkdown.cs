@@ -183,11 +183,12 @@ namespace ClaudeBuddy
                 }
 
                 // Fence state is tracked for every line, including the ones the
-                // explicit arms below go on to read. Only the prose arm acts on
-                // it — see the header — so this changes nothing about what a
-                // bullet or a table row means, which is deliberate: what
-                // OpenClaw's profiles already parse to is not this ticket's to
-                // move.
+                // explicit arms below go on to read. Only the three arms added
+                // for a CLAUDE.md act on it — the prose sentence, the persona
+                // heading and the colon-less field — so this changes nothing
+                // about what a bullet or a table row means, which is
+                // deliberate: what OpenClaw's profiles already parse to is not
+                // this feature's to move.
                 if (Fence(trimmed))
                 {
                     inFence = !inFence;
