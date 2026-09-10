@@ -51,6 +51,22 @@ types are `Epic`, `Feature`, `Story`, `Task`, `Bug`, `Subtask` (one word);
 `Feature` is level with `Story`, not above it, so an `Epic` still groups a
 multi-ticket effort.
 
+**A follow-up that fixes an existing feature is a `Bug` against that feature's
+ticket, not a new `Feature`.** The test is whether a reasonable reading of the
+original ticket's acceptance criteria already covered the case. If it did, the
+feature is incomplete, and filing the gap as fresh scope quietly redefines the
+original as having succeeded — and picks the wrong branch prefix, since
+`bugfix/` is what says "wrong on `develop`, not yet released".
+
+CB-133 paid for it: personas parsed out of markdown shipped, and the same day
+`.claude/PERSONA.MD` in this repository — naming a name, a profile photo and a
+voice, in a file the resolver provably reads — resolved to nothing. Two
+follow-ups went up as `Feature`s and had to be refiled as `Bug`s. Scope asked
+for *afterwards* stays a `Feature` (CB-134). Retyping a mis-filed ticket in
+place beats re-keying it, but rewrite the summary and description as a defect —
+what was written, what the app did, what it should have done, with the real
+input as reproduction steps.
+
 **CB's board has four columns, and they are now confirmed** — read off CB-1, the
 first ticket filed, which is what this paragraph used to ask for. They are
 **Refinement → Development → Testing → Done**, with transition ids 11, 21, 31 and

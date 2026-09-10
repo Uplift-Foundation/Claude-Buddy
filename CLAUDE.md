@@ -58,6 +58,31 @@ types are `Epic`, `Feature`, `Story`, `Task`, `Bug` and `Subtask` (one word, no
 hyphen); `Feature` sits at the same level as `Story` rather than above it, so an
 `Epic` is still what groups a multi-ticket effort.
 
+**A follow-up that fixes an existing feature is a `Bug` against that feature's
+ticket, not a new `Feature`.** The test is whether a reasonable reading of the
+original ticket's acceptance criteria already covered the case. If it did, the
+feature is incomplete, and filing the gap as fresh scope quietly redefines the
+original as having succeeded: the board then shows a finished feature sitting
+next to unrelated new work, when what actually happened is that the feature does
+not do what it said. It picks the wrong branch prefix too — `bugfix/` is what
+says "wrong on `develop`, not yet released".
+
+CB-133 paid for this rule. It shipped personas parsed out of markdown, and the
+same day `.claude/PERSONA.MD` in this repository — naming a name, a profile
+photo and a voice, in a file the resolver provably reads — resolved to nothing
+at all. Two follow-ups went up as `Feature`s and had to be refiled as `Bug`s,
+because the requirement had been "whenever an md file mentions a name, voice or
+profile picture, assign that persona to the orb", and a real file producing no
+persona is that requirement unmet rather than a new idea. Scope somebody asks
+for *afterwards* still belongs in a `Feature`, which is what CB-134 correctly
+is.
+
+Changing a mis-filed ticket's type in place is usually better than deleting and
+re-keying it — the keys survive and so do the comments. What is not acceptable
+is leaving an enhancement-shaped summary on a defect: rewrite the summary and
+description to say what was written, what the app did, and what it should have
+done, with the real input as the reproduction steps.
+
 **CB's board has four columns, and they are now confirmed** — read off CB-1, the
 first ticket filed, which is what this paragraph used to ask for. They are
 **Refinement → Development → Testing → Done**, with transition ids 11, 21, 31 and
