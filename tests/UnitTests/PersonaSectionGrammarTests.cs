@@ -101,8 +101,12 @@ public class PersonaSectionGrammarTests
     [InlineData("Voice is the one the user picked in settings unless overridden")]
     [InlineData("Voice is https://example.invalid/voices and more")]
     // A slash with no colon in front of it, so the path half of that guard is
-    // reached on its own rather than short-circuited by the colon.
+    // reached on its own rather than short-circuited by the colon — and a
+    // colon with a percentage, which is the only way to reach the colon half
+    // at all, since the https line above is refused for having no `%` long
+    // before either is asked.
     [InlineData("Voice is 50% voices/af_sky and 50% nicole")]
+    [InlineData("Voice is 50% kokoro:sky and 50% nicole")]
     // The sentence that made the percentage mandatory. Five single tokens
     // joined by "and" is structurally a three-part equal blend and nothing
     // can tell it from one — see BlendShaped.
