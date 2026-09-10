@@ -820,8 +820,23 @@ namespace ClaudeBuddy
         private void ApplyTitle()
         {
             var parts = (_session?.DisplayName ?? "").Split(" — ", 2);
+            var persona = SessionIdentity.LocalNameFor(_session?.SessionId);
 
-            TitleText.Text = parts[0];
+            // A local persona renames the header the same way it renames the
+            // orb: the CLAUDE.md beside the work says what this agent is
+            // called, and a header still reading the folder name beside an orb
+            // reading "Le" is the app disagreeing with itself in the one place
+            // both are on screen at once.
+            //
+            // Only the local half. A gateway session's DisplayName is already
+            // built from its identity — "Nova — #general", name and place — and
+            // a *room's* is the room, where the identity is whichever agent is
+            // in the session key. Overwriting that would put one agent's name on
+            // the header of a channel four of them are talking in, which is the
+            // distinction RefreshSoleSpeaker's own comment spells out below.
+            //
+            // The place half is never touched: a persona says who, never where.
+            TitleText.Text = string.IsNullOrEmpty(persona) ? parts[0] : persona;
             SubtitleText.Text = parts.Length > 1 ? parts[1] : "";
             SubtitleText.IsVisible = parts.Length > 1;
         }
@@ -832,15 +847,18 @@ namespace ClaudeBuddy
 
             var was = _soleSpeaker.Name;
 
-            var identity = _session is null
-                ? null
-                : OpenClawSessions.IdentityForSession(_session.SessionId);
+            // Asked of SessionIdentity rather than of OpenClawSessions, which is
+            // what makes the chips on a local session's messages say "Leota"
+            // instead of the folder. The identityName slot is exactly the right
+            // one for a persona: it is "the name we were told, as opposed to
+            // whatever the panel is titled", and a CLAUDE.md is being told.
+            var identityName = SessionIdentity.NameFor(_session?.SessionId);
 
             // The rule itself is in ChatSpeaker, pure and tested — including
             // the part that matters here, that a name we already knew is never
             // replaced by not knowing it. That is what made the chips vanish
             // after a while rather than simply never appear.
-            var name = ChatSpeaker.Resolve(identity?.Name, TitleText.Text, was);
+            var name = ChatSpeaker.Resolve(identityName, TitleText.Text, was);
 
             if (name == was) return;
 
@@ -926,20 +944,24 @@ namespace ClaudeBuddy
         {
             StopAvatarAnimation();
 
-            var avatar = OpenClawSessions.AvatarForSession(sessionId);
-            var identity = OpenClawSessions.IdentityForSession(sessionId);
+            var face = SessionIdentity.For(sessionId);
+            var avatar = face.Avatar;
 
-            // Neither a portrait nor an emoji, which is every local session and
-            // a gateway one whose agent list hasn't landed yet. Its orb already
-            // carries both halves of an identity — a letter and a colour, the
-            // ones just clicked — so the header borrows them. Better than an
-            // empty circle, and better than a second scheme invented for this
-            // window: the panel ends up looking like the orb it came out of.
+            // Neither a portrait nor an emoji, which is every local session
+            // without a persona picture and a gateway one whose agent list
+            // hasn't landed yet. Its orb already carries both halves of an
+            // identity — a letter and a colour, the ones just clicked — so the
+            // header borrows them. Better than an empty circle, and better than
+            // a second scheme invented for this window: the panel ends up
+            // looking like the orb it came out of.
             //
-            // Keyed on there being no OpenClaw identity rather than on the
+            // Keyed on there being no identity to draw rather than on the
             // session's type, because the panel deliberately doesn't know what
-            // kinds of session exist.
-            if (avatar is null && identity is null && _owner is not null)
+            // kinds of session exist. SessionIdentity owns which of the two
+            // registries answered and what counts as a face of one's own — a
+            // local persona's *name* deliberately does not, because the orb is
+            // already carrying it and borrowing is how it gets here.
+            if (!face.DrawsItsOwnCircle && _owner is not null)
             {
                 _avatar = null;
                 _avatarFrame = 0;
@@ -995,14 +1017,14 @@ namespace ClaudeBuddy
                 // name when there is no emoji to use instead.
                 var agentColor = AgentColorFor(sessionId);
 
-                AvatarEmoji.Text = !string.IsNullOrEmpty(identity?.Emoji)
-                    ? identity!.Emoji!
-                    : OrbGlyph.Initials(identity?.Name);
+                AvatarEmoji.Text = !string.IsNullOrEmpty(face.Emoji)
+                    ? face.Emoji!
+                    : OrbGlyph.Initials(face.Name);
                 AvatarEmoji.IsVisible = !string.IsNullOrEmpty(AvatarEmoji.Text);
 
                 // Initials are letterforms, not a pictograph, so they want the
                 // smaller size an emoji would overflow at.
-                if (string.IsNullOrEmpty(identity?.Emoji)) AvatarEmoji.FontSize = 26;
+                if (string.IsNullOrEmpty(face.Emoji)) AvatarEmoji.FontSize = 26;
 
                 if (agentColor is { } c)
                 {
@@ -1040,7 +1062,14 @@ namespace ClaudeBuddy
             Avatar.IsVisible = true;
             // A portrait gets the ring too. Without it the one avatar with a
             // picture is the only one in the app not wearing its own colour.
-            RingFor(AgentColorFor(sessionId));
+            //
+            // A local persona has no agent colour to ask for, there being no
+            // agent — so it takes the orb's accent instead, which is the colour
+            // the orb is drawing its own ring in around this same picture. The
+            // fallback is deliberately not offered to a gateway session: there,
+            // a null answer means the agent list has not landed yet, and the
+            // hairline is the honest thing to draw until it does.
+            RingFor(AgentColorFor(sessionId) ?? (face.Gateway ? null : _owner?.AccentColor));
 
             if (!avatar.IsAnimated) return;
 

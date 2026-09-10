@@ -284,11 +284,30 @@ namespace ClaudeBuddy
             // which — while the terminal had been calling them MenuUX,
             // Narrative and HitReactSpec the whole time. The title still gets
             // said, in the tooltip, because "which team" is worth knowing too.
-            var name = string.IsNullOrEmpty(status.Agent) ? label : status.Agent;
+            //
+            // Between those two sits the persona the session's own CLAUDE.md
+            // names. It outranks the title because it is the more deliberate of
+            // the two — a title is whatever Claude Code decided this
+            // conversation was about, where a name written into a repository's
+            // CLAUDE.md is somebody saying what this agent is called — and it
+            // loses to an agent name because that one is more specific still:
+            // every member of a team shares the repo and so would share the
+            // persona, which is the exact collision the Agent branch exists to
+            // break. The rule itself is LocalPersona.OrbLabel, pure and tested,
+            // for the same reason OrbGlyph is: it was checkable only by looking
+            // at the screen otherwise.
+            var personaName = status.IsLocalCli ? LocalPersonas.For(SessionId)?.Name : null;
+            var name = LocalPersona.OrbLabel(status.Agent, personaName, status.Title, folder);
 
-            var described = string.IsNullOrEmpty(status.Agent) || string.IsNullOrEmpty(label)
+            // Whoever the orb is named for, followed by what the session is —
+            // which is the half a persona replaces on the orb and must not also
+            // replace here. "Leota · claude-buddy" is a tooltip worth opening;
+            // "Leota", on an orb already reading Le, is not.
+            var namedFor = string.IsNullOrEmpty(status.Agent) ? personaName : status.Agent;
+
+            var described = string.IsNullOrEmpty(namedFor) || string.IsNullOrEmpty(label)
                 ? name
-                : $"{status.Agent} · {label}";
+                : $"{namedFor} · {label}";
 
             // The presence word goes in the tooltip as well as on the badge,
             // because a mark says *that* there is something and only a word says
@@ -808,28 +827,50 @@ namespace ClaudeBuddy
 
         private void ApplyAvatar(SessionStatus status)
         {
-            if (status.Source != SessionSource.OpenClaw)
-            {
-                ClearAvatar();
-                return;
-            }
-
-            var identity = OpenClawSessions.IdentityForSession(SessionId);
-            _agentEmoji = identity?.Emoji;
-
-            // Asked of OpenClawSessions rather than assembled here, because a
-            // room's picture is not an agent's picture — it is a composite of
-            // everyone in the channel, and that is a question about who is in
-            // the room, which this window has no business knowing. The chat
-            // panel's header asks the same function, so the two cannot end up
-            // wearing different faces for the same session.
-            var avatar = OpenClawSessions.AvatarForSession(SessionId);
+            var avatar = AvatarFor(status);
             if (avatar is null)
             {
                 ClearAvatar();
                 return;
             }
 
+            ShowAvatar(avatar);
+        }
+
+        // Which picture, if any — the only part of drawing a portrait that
+        // differs between a gateway agent and a local one. Everything after it
+        // is identical, which is why it is a separate method: the two branches
+        // were a copy of forty lines apart from these ten, and a copy is where
+        // the ring stops matching the fill on one of them.
+        private OpenClawAvatars.Avatar? AvatarFor(SessionStatus status)
+        {
+            if (status.Source == SessionSource.OpenClaw)
+            {
+                _agentEmoji = OpenClawSessions.IdentityForSession(SessionId)?.Emoji;
+
+                // Asked of OpenClawSessions rather than assembled here, because
+                // a room's picture is not an agent's picture — it is a composite
+                // of everyone in the channel, and that is a question about who
+                // is in the room, which this window has no business knowing. The
+                // chat panel's header asks the same function, so the two cannot
+                // end up wearing different faces for the same session.
+                return OpenClawSessions.AvatarForSession(SessionId);
+            }
+
+            // A persona has no emoji to leave _agentEmoji holding — see
+            // SessionIdentity for why the grammar deliberately has no such
+            // field — so a local orb with no picture keeps falling back to its
+            // letters, which is what it did before any of this.
+            if (!status.IsLocalCli) return null;
+
+            var persona = LocalPersonas.For(SessionId);
+            return persona?.Avatar is null
+                ? null
+                : OpenClawAvatars.For(LocalPersonas.AvatarKey(SessionId), persona.Avatar);
+        }
+
+        private void ShowAvatar(OpenClawAvatars.Avatar avatar)
+        {
             if (ReferenceEquals(avatar, _avatar)) return;
 
             _avatar = avatar;
@@ -1536,16 +1577,17 @@ namespace ClaudeBuddy
             SpeakIfThereIsAnything(FindSpeakableText());
         }
 
-        // Excluded from coverage: both of its lines. Reaching SpeakNow means a
+        // Excluded from coverage: both of its lines. Reaching SpeakLocal means a
         // transcript with something in it was found, and what happens next is the
         // machine running the tests reading it out loud — so a test that covered
         // this line would be one nobody could run with other people in the room.
-        // Which text is found is FindSpeakableText, which is measured.
+        // Which text is found is FindSpeakableText, which is measured; which
+        // voice says it is VoiceForLocalSpeech, which is measured too.
         [ExcludeFromCodeCoverage]
         private void SpeakIfThereIsAnything(string? text)
         {
             if (text is null) return;
-            SpeakNow(text);
+            SpeakLocal(text, VoiceForLocalSpeech(SessionId), LocalPersonas.RateForSession(SessionId));
         }
 
         // Safe to call: SessionManager.Instance is null outside the running app, so
@@ -1566,9 +1608,23 @@ namespace ClaudeBuddy
         // measured. An earlier attempt at testing the caller end to end actually
         // spoke out loud on a developer's machine, which is how narrow this needs
         // to be.
+        //
+        // The *decision* this is handed — which voice, at what rate — is not
+        // excluded and is not guessed at here: VoiceForLocalSpeech and
+        // LocalPersonas.RateForSession answer it, and both are tested against an
+        // injected option list rather than against whatever this machine has
+        // installed. Which is the whole shape of the exclusion: the choice is
+        // measured, only the noise is not. Same body as the remote path in
+        // SpeakRemoteAsync, deliberately — a persona's voice and a gateway
+        // agent's are the same feature seen from two ends, and "no voice matched"
+        // has to mean the user's own setting in both or one of them silently
+        // stops speaking.
         [ExcludeFromCodeCoverage]
-        private static void SpeakNow(string text) =>
-            TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+        private static void SpeakLocal(string text, TextToSpeech.VoiceOption? voice, double? rate)
+        {
+            if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+            else TextToSpeech.Speak(text, voice, rate);
+        }
 
         internal async Task SpeakRemoteAsync()
         {
@@ -1595,6 +1651,18 @@ namespace ClaudeBuddy
             options is null
                 ? OpenClawSessions.VoiceForSession(sessionId)
                 : OpenClawSessions.VoiceForSession(sessionId, options);
+
+        // The local half of the same seam, and deliberately the same shape: a
+        // persona that names a voice the machine does not have answers null, and
+        // null is the global setting rather than silence. Injectable for the
+        // same reason — a test that had to install Kokoro to assert which voice
+        // a CLAUDE.md picked would be a test nobody runs.
+        internal static TextToSpeech.VoiceOption? VoiceForLocalSpeech(
+            string sessionId,
+            IEnumerable<TextToSpeech.VoiceOption>? options = null) =>
+            options is null
+                ? LocalPersonas.VoiceForSession(sessionId)
+                : LocalPersonas.VoiceForSession(sessionId, options);
 
         // Called by SessionManager when speech starts, changes phase or stops.
         public void SetFlyoutSpeakState(TextToSpeech.SpeakState state) =>

@@ -966,6 +966,100 @@ would be worse than no button. That parsing has a test suite of its own
 (`dotnet run --project tests/TranscriptTests`) whose fixtures are transcribed
 from real captures.
 
+## Personas from CLAUDE.md
+
+An orb is normally named for whatever Claude Code decided the conversation was
+about, falling back to the folder. **If a project's `CLAUDE.md` says what the
+agent working there is called, the orb wears that instead** — its name, its
+picture, and the voice it reads a turn out in.
+
+Nothing is turned on and no new file is introduced. It reads the Markdown that
+is already beside the work, and a project that says nothing about a persona is
+drawn exactly as it was before.
+
+**The fields, in the grammar the OpenClaw workspace files already use:**
+
+```markdown
+- Name: Leota
+- Profile picture: leota.png
+- Voice: Bella
+```
+
+Bullets, bold fields (`**Name:** Leota`), two-cell tables and YAML front matter
+all work, labels are case-insensitive, and the first valid value for each field
+wins. `Avatar`, `Profile Picture`, `Profile Pic`, `Profile Image`, `Picture`,
+`Portrait` and `Image` all name the picture; `Voice`, `Voice Name`, `Speech
+Voice` and `TTS Voice` all name the voice.
+
+**A sentence works too, because a `CLAUDE.md` is prose.** These three are read:
+
+```markdown
+Her name is Leota.
+Her profile picture is leota.png.
+Her voice is Bella.
+```
+
+**One sentence per line**, which is grammar rather than housekeeping: a line is
+what gets read, so two of these sharing one make a value long enough that the
+bounds below reject it and neither field is set.
+
+The shape is deliberately narrow: an optional possessive (`her`, `his`,
+`their`, `its`, `the`, `my`, `your`, `this agent's`, `the agent's`, `agent`),
+one of the field nouns, `is` / `should be` / `will be`, and a value. A name or a
+voice must be one to three words and at most 40 characters, of letters, digits,
+spaces and `_ - ' ( )` — so **"The name is derived from the folder unless the
+user renames it"** names nothing, and neither does "Her voice is lovely and warm
+and low". A picture must be a relative path ending in `.png`, `.jpg`, `.jpeg`,
+`.gif` or `.webp`. Anything outside that shape is left alone as the prose it is.
+
+**Which files, nearest first.** From the session's working directory upwards to
+the root, each directory contributes `CLAUDE.md`, `CLAUDE.local.md`,
+`.claude/CLAUDE.md` and `AGENTS.md`, in that order; `@path` imports inside them
+are followed, five hops deep and twenty files at most. **The nearest file that
+names a field wins it**, so a repository can set a name and one subdirectory can
+override the picture without restating the rest.
+
+**Then, for Claude Code only, your user-level `~/.claude/CLAUDE.md`** (and any
+extra profile directories configured in Settings → Claude Code profiles, plus
+`CLAUDE_CONFIG_DIR` if the app was started with one). It is last for a reason
+worth knowing before you use it: **a persona there applies to every Claude Code
+session on the machine that no project has already named.** That is occasionally
+what someone wants and is more often a surprise, so put a persona in the project
+unless you mean all of them. Codex and Grok sessions read the directory walk
+only — their own user-level conventions are a separate question and this does
+not guess at them.
+
+**An agent name still wins.** Every member of an agent team inherits the team
+session's directory and so would inherit one persona between them, which is the
+collision the agent name exists to break. The order is agent name, then persona,
+then the session title, then the folder — and **the tooltip still says the
+title**, because "who" replacing "which conversation" would cost more than it
+gave.
+
+**The security bounds are the same ones the OpenClaw workspace files get**, and
+they are what makes reading files nobody was asked about acceptable at all. A
+picture path is relative, local, and cannot leave the directory of the Markdown
+file that named it — not through `..`, not through a symlink, and not as a URL
+or a `data:` URI. Pictures are capped at 2 MB and Markdown files at 256 KB;
+anything larger is skipped rather than truncated. The files are re-read only
+when one of them actually changes: the app stats them on its ordinary
+two-second poll and opens nothing until a size or a timestamp moves.
+
+**A voice falls back rather than failing.** The name is matched against the
+voices this machine actually has — system voices, Kokoro's if the neural engine
+is switched on, and a custom command's — exactly first, then by given name
+(`Bella` finds Kokoro's `af_bella`), then by an unambiguous shorthand. A voice
+that matches nothing, or matches two things, leaves the session speaking in your
+global voice. That is deliberate: a `CLAUDE.md` written on somebody else's
+machine, or read with the neural engine off, should sound ordinary rather than
+silent. `**Voice:** af_bella (Kokoro TTS, rate 1.3)` sets a speaking rate for
+the neural engine the same way an OpenClaw profile does; system voices and
+custom commands have no rate.
+
+**Nothing is written anywhere.** The persona lives in memory for as long as the
+orb does, is never copied into the status file the hooks write, and never leaves
+this machine.
+
 ## OpenClaw agents (experimental, off by default)
 
 Claude Buddy can also show an orb for each recently active session on an
