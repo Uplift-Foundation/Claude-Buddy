@@ -460,24 +460,58 @@ namespace ClaudeBuddy
             return shorthand.Count == 1 ? shorthand[0] : null;
         }
 
+        // A persona's stated voice, which may be one name or a mixture of
+        // several, resolved over the options this machine actually has.
+        //
+        // One entry point for both the local CLAUDE.md persona and the gateway
+        // agent's profile, because they read the same grammar out of the same
+        // parser and a blend honoured on one orb and ignored on the other is
+        // exactly the drift PersonaMarkdown's own header exists to prevent.
+        //
+        // A value that is not blend-shaped goes to MatchVoiceOption unchanged,
+        // so nothing about a single voice name — including a parenthesised
+        // system voice like `Ava (Premium)` — moves.
+        internal static VoiceOption? VoiceForPersona(
+            string? requested, IEnumerable<VoiceOption> options)
+        {
+            var blend = VoiceBlend.Parse(requested);
+            return blend is null
+                ? MatchVoiceOption(requested, options)
+                : VoiceBlends.Option(blend, options);
+        }
+
         internal static string NormalizeVoice(string value) => new(value
             .Where(char.IsLetterOrDigit)
             .Select(char.ToLowerInvariant)
             .ToArray());
 
-        // An engine's identifier with its locale prefix taken off, and the name
-        // unchanged when there is no such prefix. Two lowercase ASCII letters
-        // and an underscore, which is Kokoro's whole convention; anything else
+        // Kokoro's two-letter locale-and-gender prefix, with its underscore,
+        // or the empty string for a name that has none. Two lowercase ASCII
+        // letters and an underscore is the whole convention; anything else
         // keeping an underscore in third position ("Microsoft David Desktop"
         // has none, "hi_there" would need to be a voice) is left alone by the
         // letter test rather than by a list of engines.
-        private static string GivenName(string name)
+        //
+        // Internal because VoiceBlend needs the same rule to name a blended
+        // file: the engine reads a voice's language off exactly this prefix
+        // and drops anything it files under another language out of an English
+        // listing, so a blend of two `af_` voices has to be an `af_` voice or
+        // it is invisible.
+        internal static string LocalePrefix(string name)
         {
             var trimmed = name.Trim();
             return trimmed.Length > 3 && trimmed[2] == '_'
                    && char.IsAsciiLetterLower(trimmed[0]) && char.IsAsciiLetterLower(trimmed[1])
-                ? trimmed[3..]
-                : trimmed;
+                ? trimmed[..3]
+                : "";
+        }
+
+        // An engine's identifier with that prefix taken off, and the name
+        // unchanged when there is no such prefix.
+        private static string GivenName(string name)
+        {
+            var trimmed = name.Trim();
+            return trimmed[LocalePrefix(trimmed).Length..];
         }
 
         private static string ComparableVoice(string value)

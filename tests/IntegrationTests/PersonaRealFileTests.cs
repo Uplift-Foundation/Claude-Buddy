@@ -141,9 +141,67 @@ public class PersonaRealFileTests : IDisposable
 
     // --- the ticket's own use case ----------------------------------------
 
-    // CB-135's half of the end-to-end criterion it shares with CB-136. The
-    // voice half is CB-136's and is deliberately not asserted here beyond the
-    // record of what it does today.
+    // **The joint end-to-end criterion CB-135 and CB-136 share, in one test.**
+    //
+    // CB-135 landed first and asserted its own two thirds; the ticket says
+    // whichever lands second owns the whole of it, and CB-136 is second. So
+    // all three fields are asserted here against one tree — the real file's
+    // lines verbatim, reached through the real `@.claude/PERSONA.MD` import,
+    // with the picture beside it — rather than three tests each arranging the
+    // thing it is about.
+    //
+    // That distinction is the reason the criterion was written at all. Every
+    // test CB-133 shipped was green while this exact file produced nothing,
+    // because each of them wrote a markdown file designed to make something
+    // happen. A per-line grammar table is necessary and it is not sufficient:
+    // the seam CB-135 fell through was between two tickets' bounds, and no
+    // test of either half could have been standing at it.
+    //
+    // The voice is asserted as far as this suite can honestly take it: the
+    // mixture, its parts and its shares, resolved against an injected list of
+    // what a machine with the engine on would offer. Materialising it needs a
+    // real `.npy` on a disk, which is VoiceBlendFileTests', and hearing it is
+    // Warren's.
+    [Fact]
+    public void TheRepositorysOwnPersonaFileResolvesToJenniferHerPhotoAndHerBlend()
+    {
+        var project = WriteTheRealTree();
+
+        var persona = Resolve(project);
+
+        Assert.Equal("Jennifer", persona.Name);
+
+        Assert.Equal(Path.Combine(project, ".claude", "cto.png"), persona.AvatarPath);
+        var bytes = PersonaFiles.ReadAvatarFile(persona.AvatarPath!);
+        Assert.NotNull(bytes);
+        Assert.Equal(RealPortraitBytes, bytes!.Length);
+
+        // The voice half, which resolved to nothing at all until CB-136 moved
+        // the bounds this line was refused by.
+        Assert.Equal("50% sky and 50% nicole", persona.Voice);
+
+        var installed = new[]
+        {
+            new TextToSpeech.VoiceOption(TextToSpeech.SpeakEngine.Neural, "af_sky", "af_sky (Kokoro)"),
+            new TextToSpeech.VoiceOption(TextToSpeech.SpeakEngine.Neural, "af_nicole", "af_nicole (Kokoro)"),
+            new TextToSpeech.VoiceOption(TextToSpeech.SpeakEngine.Neural, "af_bella", "af_bella (Kokoro)"),
+            new TextToSpeech.VoiceOption(TextToSpeech.SpeakEngine.System, "Samantha", "Samantha (system)"),
+        };
+
+        var blend = VoiceBlend.Parse(persona.Voice);
+        Assert.NotNull(blend);
+
+        var resolved = VoiceBlend.Resolve(blend!, installed);
+        Assert.NotNull(resolved);
+        Assert.Equal(new[] { "af_sky", "af_nicole" }, resolved!.Parts.Select(p => p.Option.Name));
+        Assert.Equal(new[] { 0.5, 0.5 }, resolved.Parts.Select(p => p.Weight));
+        Assert.Equal("af_blend_sky50-nicole50", resolved.Name);
+    }
+
+    // CB-135's half of the criterion above, kept as its own case: it is the
+    // one that fails if the name or the picture regresses while the voice
+    // still works, and a single test asserting all three cannot say which
+    // third broke.
     [Fact]
     public void TheRepositorysOwnPersonaFileResolvesToJenniferAndHerPhoto()
     {

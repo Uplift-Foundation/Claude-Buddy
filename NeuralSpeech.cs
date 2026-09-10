@@ -92,8 +92,15 @@ namespace ClaudeBuddy
         // Voices the user added themselves, kept deliberately *outside* Root: an
         // engine upgrade deletes and replaces the whole versioned directory, so
         // anything dropped in beside the bundled voices would vanish at the next
-        // release. Nothing creates this directory — it exists if someone made it,
-        // and the engine ignores a path that isn't there.
+        // release. The engine ignores a path that isn't there, so nothing here
+        // has to create it.
+        //
+        // One thing does, and only when it has something to put in it:
+        // VoiceBlends, writing a persona's blended voice (CB-136). That is the
+        // same promise from the other side rather than a change to it — a
+        // blend is a voice the app added, it must survive an engine upgrade
+        // exactly as a hand-added one does, and this is the directory that
+        // decision was made for.
         //
         // A Kokoro voice is a 510KB numpy array of style vectors for the one
         // model, so "adding a voice" really is just putting a file here. The name

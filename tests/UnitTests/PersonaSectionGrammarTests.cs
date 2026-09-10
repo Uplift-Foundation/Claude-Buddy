@@ -44,17 +44,94 @@ public class PersonaSectionGrammarTests
         Assert.Equal("cto.png", fields.Avatar);
     }
 
-    // The voice line is deliberately *not* this ticket's to read. It fails for
-    // two reasons that are both about the voice value's own bounds — `%` is not
-    // in the character whitelist and five words is over the word cap — and both
-    // of those, along with what a blend of two voices would even mean, belong
-    // to CB-136. Asserted rather than left silent, so that whichever ticket
-    // lands second has to come here and change it deliberately.
+    // **This assertion is CB-135's, changed on purpose by CB-136.**
+    //
+    // It used to read `Assert.Null(...Voice)`, with a comment saying the voice
+    // line was deliberately not that ticket's to read: `%` is not in the
+    // character whitelist and five words is over the word cap, and both of
+    // those bounds — along with what a blend of two voices would even mean —
+    // belonged to CB-136. It was written as an assertion rather than left
+    // silent precisely so that whichever ticket landed second had to come here
+    // and change it deliberately. This is that change, and the line the file
+    // has always contained is now read.
+    //
+    // What the value *is* at this level is the raw text. Resolving `sky` to
+    // `af_sky` needs to know what this machine has installed, which a grammar
+    // test must not, so that half is VoiceBlendTests' and the end-to-end half
+    // is PersonaRealFileTests'.
     [Fact]
-    public void TheBlendedVoiceLineIsStillNotReadAndBelongsToCB136()
+    public void TheBlendedVoiceLineIsReadNowThatCB136GivesABlendSomewhereToGo()
     {
-        Assert.Null(PersonaMarkdown.Parse(TheRealFile()).Voice);
+        Assert.Equal("50% sky and 50% nicole", PersonaMarkdown.Parse(TheRealFile()).Voice);
     }
+
+    // ...and it really is a blend rather than a string that happens to have
+    // survived the bounds. Running the grammar rather than restating it, which
+    // is what CLAUDE.md asks for by name: the parser is pure and cheap to
+    // call, so nobody has to paraphrase what it accepts.
+    [Fact]
+    public void TheVoiceTheRealFileNamesParsesAsAFiftyFiftyMixture()
+    {
+        var blend = VoiceBlend.Parse(PersonaMarkdown.Parse(TheRealFile()).Voice);
+
+        Assert.NotNull(blend);
+        Assert.Equal(new[] { "sky", "nicole" }, blend!.Parts.Select(part => part.Voice));
+        Assert.Equal(new[] { 50, 50 }, blend.Parts.Select(part => part.Percent));
+    }
+
+    // The bound that makes the widening safe, at the level it was widened.
+    // Eleven words and a hundred and twenty characters is a large allowance
+    // on paper, and two conditions guard it: the value carries a `%`, and
+    // VoiceBlend can read it as a mixture. A sentence of the same length is
+    // still refused by one or the other.
+    [Theory]
+    [InlineData("Voice is 50% sky and 50% nicole", "50% sky and 50% nicole")]
+    [InlineData("Voice is 50% sky", "50% sky")]
+    [InlineData("Voice is 34% sky, 33% nicole and 33% bella", "34% sky, 33% nicole and 33% bella")]
+    [InlineData("Voice is af_bella", "af_bella")]
+    // Two weightless parts fit the *narrow* bound unchanged — three words —
+    // and are a blend downstream all the same.
+    [InlineData("Voice is sky and nicole", "sky and nicole")]
+    public void AVoiceValueMayBeAMixtureNowAndIsStillReadWordForWord(string line, string expected) =>
+        Assert.Equal(expected, PersonaMarkdown.Parse(new[] { "## Attributes", line }).Voice);
+
+    [Theory]
+    [InlineData("Voice is 50% a matter of taste, plus tone")]
+    [InlineData("Voice is 60% sky and 60% nicole")]
+    [InlineData("Voice is the one the user picked in settings unless overridden")]
+    [InlineData("Voice is https://example.invalid/voices and more")]
+    // The sentence that made the percentage mandatory. Five single tokens
+    // joined by "and" is structurally a three-part equal blend and nothing
+    // can tell it from one — see BlendShaped.
+    [InlineData("Voice is lovely and warm and low")]
+    // ...and the rest of the widened bound's own refusals, each one the
+    // narrow bound already had and the wide one keeps.
+    [InlineData("Voice is 20% one and 20% two and 20% three and 20% four and 20% five")]  // 12 words
+    [InlineData("Voice is 25% aaaaaaaaaaaaaaaaaaaaaaaaa and 25% bbbbbbbbbbbbbbbbbbbbbbbbb "
+                + "and 25% ccccccccccccccccccccccccc and 25% ddddddddddddddddddddddddd")]  // 130 characters
+    [InlineData("Voice is 50% http and 50% sky")]        // "http" with no colon or slash
+    [InlineData("Voice is 50% sky! and 50% nicole")]     // a mark no identifier carries
+    public void AValueThatIsNotAVoiceAndNotAMixtureIsStillRefused(string line) =>
+        Assert.Null(PersonaMarkdown.Parse(new[] { "## Attributes", line }).Voice);
+
+    // The colon-less form gets the same allowance as the sentence, because
+    // `Voice 50% sky and 50% nicole` under a heading is the same statement as
+    // the sentence with "is" in it.
+    [Fact]
+    public void TheColonLessFormReadsAMixtureToo() =>
+        Assert.Equal(
+            "50% sky and 50% nicole",
+            PersonaMarkdown.Parse(new[] { "## Attributes", "Voice 50% sky and 50% nicole" }).Voice);
+
+    // ...and a *name* did not move an inch. The widening is the voice value's
+    // and the voice value's only, which is what "this ticket owns the voice
+    // value's bounds" has to mean if CB-135's own refusals are to keep
+    // holding.
+    [Theory]
+    [InlineData("Name 50% Jennifer and 50% Leota")]
+    [InlineData("Name resolution is handled by the folder")]
+    public void ANameValueKeepsTheNarrowBoundItAlwaysHad(string line) =>
+        Assert.Null(PersonaMarkdown.Parse(new[] { "## Attributes", line }).Name);
 
     // The same three lines with the heading taken away. This is the whole of
     // the safety argument: the form is not a new grammar for markdown, it is a

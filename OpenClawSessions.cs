@@ -254,8 +254,14 @@ namespace ClaudeBuddy
         internal static TextToSpeech.VoiceOption? VoiceForSession(
             string sessionId, IEnumerable<TextToSpeech.VoiceOption> options)
         {
+            // VoiceForPersona rather than MatchVoiceOption since CB-136: a
+            // workspace IDENTITY.md is read by the same parser a CLAUDE.md is,
+            // so a voice written as a mixture there means the same thing it
+            // means here. Honouring a blend on one orb and ignoring it on the
+            // other is the drift PersonaMarkdown was lifted out of this file
+            // to prevent.
             var requested = IdentityForSession(sessionId)?.Voice ?? PeerVoiceFor(AgentIdOf(sessionId)).Voice;
-            return requested is null ? null : TextToSpeech.MatchVoiceOption(requested, options);
+            return requested is null ? null : TextToSpeech.VoiceForPersona(requested, options);
         }
 
         // Only the neural (Kokoro) engine has a speaking rate to set — a

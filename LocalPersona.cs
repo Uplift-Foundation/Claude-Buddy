@@ -452,9 +452,16 @@ namespace ClaudeBuddy
         // voice, or when the name it does give matches nothing here — all three
         // meaning "use the user's own voice", which is what the caller does
         // with a null.
+        //
+        // VoiceForPersona rather than MatchVoiceOption since CB-136, so a
+        // persona whose voice is written as a mixture — `Voice is 50% sky and
+        // 50% nicole`, which is what this repository's own `.claude/PERSONA.MD`
+        // says — resolves to the blended voice rather than to nothing. A
+        // mixture the machine cannot build still answers null, and null is
+        // still the user's global voice rather than silence.
         internal static TextToSpeech.VoiceOption? VoiceForSession(
             string? sessionId, IEnumerable<TextToSpeech.VoiceOption> options) =>
-            TextToSpeech.MatchVoiceOption(For(sessionId)?.Voice, options);
+            TextToSpeech.VoiceForPersona(For(sessionId)?.Voice, options);
 
         // Excluded from coverage: AllVoiceOptions asks the neural engine to
         // enumerate itself and runs the user's listing command, which is two
