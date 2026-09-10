@@ -102,11 +102,11 @@ jobs:
       # has no per-error name to print) and is now the thing this loop's
       # `break` actually depends on — not `dotnet test`'s exit code alone.
       # `--minimum-expected-tests` is a second, independent belt from the
-      # test host itself; the floor is set BELOW the real total (1010 on
-      # 4d2c87f — PR #172 will raise it to 1013) on purpose, so this doesn't
-      # need editing every time the suite grows by a test or two. Bump it
-      # only as a deliberate edit when the real total moves meaningfully,
-      # never to make a red run pass.
+      # test host itself; the floor is set BELOW the real total (1059,
+      # measured on CB-133's branch) on purpose, so this doesn't need
+      # editing every time the suite grows by a test or two. Bump it only as
+      # a deliberate edit when the real total moves meaningfully, never to
+      # make a red run pass.
       #
       # All filename options use space-separated `--flag value`, not
       # `--flag=value`: the MTP CLI parser mis-consumes arguments when two or
@@ -117,7 +117,7 @@ jobs:
       - name: UI tests (xUnit, headless)
         shell: pwsh
         run: |
-          # Real total on 4d2c87f is 1010 (1013 once #172 merges) — set below
+          # Real total measured on CB-133's branch is 1059 — set below
           # that so the suite can grow without touching this file; see the
           # step comment above for what this is a belt against.
           $minimumExpectedTests = 1050

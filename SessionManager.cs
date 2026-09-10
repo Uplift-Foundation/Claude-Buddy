@@ -1397,16 +1397,6 @@ namespace ClaudeBuddy
             return ScanVerdict.Keep;
         }
 
-        // One pass over the status directory: read everything, decide what
-        // deserves an orb, and reconcile the windows, the arrows and the tray
-        // with the answer.
-        //
-        // Internal rather than private so a test can drive a pass directly
-        // instead of waiting on the two-second timer that normally calls it.
-        // Nothing outside this class should: it is idempotent, but it is also
-        // the whole of the scan, and calling it from anywhere but the timer, the
-        // watcher's debounce or Start would mean two passes racing over the same
-        // dictionaries on the same thread's re-entrancy.
         // Read this session's persona, if the files it could be written in have
         // moved since the last time we looked.
         //
@@ -1508,6 +1498,16 @@ namespace ClaudeBuddy
             LocalPersonas.Set(sessionId, persona);
         }
 
+        // One pass over the status directory: read everything, decide what
+        // deserves an orb, and reconcile the windows, the arrows and the tray
+        // with the answer.
+        //
+        // Internal rather than private so a test can drive a pass directly
+        // instead of waiting on the two-second timer that normally calls it.
+        // Nothing outside this class should: it is idempotent, but it is also
+        // the whole of the scan, and calling it from anywhere but the timer, the
+        // watcher's debounce or Start would mean two passes racing over the same
+        // dictionaries on the same thread's re-entrancy.
         internal void ScanAndUpdate()
         {
             SyncAutoColorMarker();
