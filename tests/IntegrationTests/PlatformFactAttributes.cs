@@ -142,3 +142,35 @@ public sealed class MacFactAttribute : FactAttribute
             Skip = "no /usr/bin/plutil on this machine";
     }
 }
+
+// Creating a symbolic link is a privileged operation on Windows unless the
+// machine is in Developer Mode, and the tests that need one are testing what
+// happens when a persona's picture tries to leave its directory through a link
+// — a question that only arises where links can be made at all. Probing rather
+// than assuming the OS: a Windows CI runner with Developer Mode on should run
+// these, and a Unix machine with an exotic filesystem that refuses them should
+// not fail for it.
+public sealed class SymlinkFactAttribute : FactAttribute
+{
+    public SymlinkFactAttribute()
+    {
+        if (!CanCreateSymlinks()) Skip = "this machine will not create symbolic links";
+    }
+
+    private static bool CanCreateSymlinks()
+    {
+        var probe = Path.Combine(Path.GetTempPath(), "cb-symlink-probe-" + Guid.NewGuid());
+        try
+        {
+            File.CreateSymbolicLink(probe, Path.GetTempPath());
+            return true;
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        catch (PlatformNotSupportedException) { return false; }
+        finally
+        {
+            try { File.Delete(probe); } catch (IOException) { }
+        }
+    }
+}

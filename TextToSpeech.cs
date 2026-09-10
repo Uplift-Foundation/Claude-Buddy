@@ -418,9 +418,9 @@ namespace ClaudeBuddy
         // alongside either.  Resolve it over every currently usable option,
         // retaining the engine as well as the name so the later speak call does
         // not accidentally send a neural identifier to the system synthesizer.
-        // Exact, normalized, and shorthand matches must each be unique; guessing
-        // between two engines that happen to offer the same name is worse than
-        // the user's global voice.
+        // Exact, given-name, normalized, and shorthand matches must each be
+        // unique; guessing between two engines that happen to offer the same
+        // name is worse than the user's global voice.
         internal static VoiceOption? MatchVoiceOption(string? requested, IEnumerable<VoiceOption> options)
         {
             if (string.IsNullOrWhiteSpace(requested)) return null;
@@ -432,6 +432,20 @@ namespace ClaudeBuddy
 
             var wanted = ComparableVoice(requested);
             if (wanted.Length == 0) return null;
+
+            // The name a person would actually write. Kokoro's identifiers
+            // carry a two-letter locale-and-gender prefix — af_bella,
+            // bf_isabella — and nobody writing "her voice is Bella" in a
+            // CLAUDE.md means anything by the "af"; they very often do not know
+            // it is there. Stripping it and comparing what is left is exact
+            // rather than fuzzy, which is what keeps this above the shorthand
+            // step and out of its way: Bella reaches af_bella and stops, where
+            // shorthand alone matched neither af_bella nor bf_isabella and
+            // gave up. Isabella still reaches bf_isabella, because their given
+            // names differ — which is the case that makes prefix-stripping
+            // safe to do before, rather than instead of, the checks below.
+            var given = choices.Where(option => ComparableVoice(GivenName(option.Name)) == wanted).ToList();
+            if (given.Count == 1) return given[0];
 
             var normalized = choices.Where(option => ComparableVoice(option.Name) == wanted).ToList();
             if (normalized.Count == 1) return normalized[0];
@@ -450,6 +464,21 @@ namespace ClaudeBuddy
             .Where(char.IsLetterOrDigit)
             .Select(char.ToLowerInvariant)
             .ToArray());
+
+        // An engine's identifier with its locale prefix taken off, and the name
+        // unchanged when there is no such prefix. Two lowercase ASCII letters
+        // and an underscore, which is Kokoro's whole convention; anything else
+        // keeping an underscore in third position ("Microsoft David Desktop"
+        // has none, "hi_there" would need to be a voice) is left alone by the
+        // letter test rather than by a list of engines.
+        private static string GivenName(string name)
+        {
+            var trimmed = name.Trim();
+            return trimmed.Length > 3 && trimmed[2] == '_'
+                   && char.IsAsciiLetterLower(trimmed[0]) && char.IsAsciiLetterLower(trimmed[1])
+                ? trimmed[3..]
+                : trimmed;
+        }
 
         private static string ComparableVoice(string value)
         {

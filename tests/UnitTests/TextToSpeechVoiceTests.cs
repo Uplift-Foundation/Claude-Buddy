@@ -172,6 +172,91 @@ namespace ClaudeBuddy.Tests
             Assert.Null(MatchVoiceOption("af_bella", new[] { Neural1, duplicate }));
         }
 
+        // --- MatchVoiceOption: the given name ------------------------------
+        //
+        // Kokoro's identifiers carry a two-letter locale-and-gender prefix that
+        // nobody writing "Her voice is Bella" in a CLAUDE.md means anything by
+        // — most people do not know it is there. The pair below is the case
+        // that decides how much prefix-stripping is safe: af_bella and
+        // bf_isabella are two real Kokoro voices whose *prefixed* names are
+        // nothing alike and whose given names are Bella and Isabella. A step
+        // that matched on "ends with what was asked" would hand Bella to
+        // bf_isabella; matching the whole given name does not.
+
+        private static readonly VoiceOption Isabella =
+            new(SpeakEngine.Neural, "bf_isabella", "bf_isabella (Kokoro)");
+
+        private static VoiceOption[] KokoroPair() => new[] { Neural1, Isabella };
+
+        [Theory]
+        [InlineData("Bella")]
+        [InlineData("bella")]
+        [InlineData("BELLA")]
+        public void AGivenNameReachesItsPrefixedVoice(string requested)
+        {
+            Assert.Equal(Neural1, MatchVoiceOption(requested, KokoroPair()));
+        }
+
+        [Fact]
+        public void TheOtherVoicesGivenNameIsTheOtherVoice()
+        {
+            Assert.Equal(Isabella, MatchVoiceOption("Isabella", KokoroPair()));
+        }
+
+        // The check this pair exists for, asserted directly rather than
+        // inferred from the two above: the shorthand step compares
+        // "bfisabella" against "bella" in both directions and neither is a
+        // prefix of the other, so nothing below the given-name step can
+        // resolve Bella to Isabella either.
+        [Fact]
+        public void ShorthandCannotTurnBellaIntoIsabella()
+        {
+            Assert.Null(MatchVoiceOption("Bella", new[] { Isabella }));
+        }
+
+        // Half a given name is not a given name. The step is an equality
+        // check, not a prefix one, so "Bel" reaches neither — and where the
+        // shorthand step below *would* have something to say, two candidates
+        // beginning the same way are still refused rather than guessed between.
+        [Fact]
+        public void HalfAGivenNameResolvesToNothing()
+        {
+            Assert.Null(MatchVoiceOption("Bel", KokoroPair()));
+
+            var bella = new VoiceOption(SpeakEngine.System, "Bella", "Bella (system)");
+            var belinda = new VoiceOption(SpeakEngine.System, "Belinda", "Belinda (system)");
+            Assert.Null(MatchVoiceOption("Bel", new[] { bella, belinda }));
+        }
+
+        [Fact]
+        public void TwoEnginesOfferingTheSameGivenNameFallBack()
+        {
+            var other = new VoiceOption(SpeakEngine.Custom, "bf_bella", "bf_bella (custom)");
+
+            Assert.Null(MatchVoiceOption("Bella", new[] { Neural1, other }));
+        }
+
+        [Fact]
+        public void AGivenNameNothingHereOffersFallsBack()
+        {
+            Assert.Null(MatchVoiceOption("Leota", KokoroPair()));
+        }
+
+        // Two letters and an underscore is Kokoro's whole convention, and the
+        // test is on the letters rather than on a list of engines: a name whose
+        // third character happens to be an underscore is left alone unless what
+        // comes before it is two lowercase ASCII letters.
+        [Theory]
+        [InlineData("AF_bella")]
+        [InlineData("a1_bella")]
+        [InlineData("ab_")]
+        public void OnlyATwoLetterLowercasePrefixIsAPrefix(string name)
+        {
+            var odd = new VoiceOption(SpeakEngine.Neural, name, name);
+
+            Assert.Null(MatchVoiceOption("bella", new[] { odd }));
+        }
+
         // --- SelectedFrom: resolving a saved choice ---
 
         private static readonly VoiceOption System1 =

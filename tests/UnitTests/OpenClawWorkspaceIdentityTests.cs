@@ -36,6 +36,43 @@ public class OpenClawWorkspaceIdentityTests : IDisposable
         Assert.Equal("portraits/me.png", fields.Avatar);
     }
 
+    // The picture labels the local grammar accepts are the same labels here,
+    // because they are now one grammar. A user who writes `- Profile picture:
+    // x.png` in an IDENTITY.md and "Her profile picture is x.png" in a
+    // CLAUDE.md has said the same thing twice, and being told only one of them
+    // counts is exactly the drift PersonaMarkdown exists to prevent.
+    [Theory]
+    [InlineData("- Avatar: me.png")]
+    [InlineData("- Profile picture: me.png")]
+    [InlineData("- Profile pic: me.png")]
+    [InlineData("- Profile image: me.png")]
+    [InlineData("- Picture: me.png")]
+    [InlineData("- Portrait: me.png")]
+    [InlineData("- Image: me.png")]
+    [InlineData("- **Profile picture:** me.png")]
+    public void EveryWordForAPictureNamesTheWorkspacePicture(string line)
+    {
+        Assert.Equal("me.png", OpenClawWorkspaceIdentity.Parse(new[] { line }).Avatar);
+    }
+
+    // A workspace profile written as prose is read the same way a CLAUDE.md's
+    // is. The bounds are PersonaMarkdownProseTests' subject; what is asserted
+    // here is only that the workspace path goes through the same parser.
+    [Fact]
+    public void AWorkspaceProfileWrittenAsProseIsRead()
+    {
+        var fields = OpenClawWorkspaceIdentity.Parse(new[]
+        {
+            "Her name is Leota",
+            "Her profile picture is leota.png",
+            "Her voice is Bella",
+        });
+
+        Assert.Equal("Leota", fields.Name);
+        Assert.Equal("leota.png", fields.Avatar);
+        Assert.Equal("Bella", fields.Voice);
+    }
+
     [Theory]
     [InlineData("- Voice Name: Ava (Premium)")]
     [InlineData("- Speech Voice: Ava (Premium)")]
