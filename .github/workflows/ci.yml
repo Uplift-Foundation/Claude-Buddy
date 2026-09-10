@@ -120,7 +120,7 @@ jobs:
           # Real total on 4d2c87f is 1010 (1013 once #172 merges) — set below
           # that so the suite can grow without touching this file; see the
           # step comment above for what this is a belt against.
-          $minimumExpectedTests = 1005
+          $minimumExpectedTests = 1050
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             dotnet test tests/UiTests -c Release -- --report-xunit --report-xunit-filename ui-tests.xunit.xml --report-xunit-trx --report-xunit-trx-filename ui-tests.trx --minimum-expected-tests $minimumExpectedTests
             $testExitCode = $LASTEXITCODE
