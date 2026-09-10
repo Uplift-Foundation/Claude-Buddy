@@ -233,6 +233,66 @@ public class LocalPersonaFilesTests : IDisposable
         Assert.Null(PersonaFiles.ReadMarkdown(path));
     }
 
+    // --- paths and files the platform itself refuses ----------------------
+
+    // A NUL in a path is the one thing every .NET path API refuses outright,
+    // and it is the cheapest way to prove each of these functions answers
+    // "there is nothing here" rather than throwing into a two-second scan
+    // loop. Not a hypothetical input: a persona path is a token off a line of
+    // a file, and a file can contain anything.
+    [Fact]
+    public void APathThePlatformRefusesIsNotAnExceptionOutOfAnyOfThem()
+    {
+        var project = Dir("project");
+
+        Assert.Null(PersonaFiles.ReadMarkdown("a\0b"));
+        Assert.Null(PersonaFiles.CanonicalDirectory("a\0b"));
+        Assert.Null(PersonaFiles.CanonicalFile("a\0b"));
+        Assert.Null(PersonaFiles.AvatarAt(project, "a\0b.png"));
+    }
+
+    [Fact]
+    public void ADirectoryThatIsNotThereIsNotADirectory()
+    {
+        Assert.Null(PersonaFiles.CanonicalDirectory(Path.Combine(_root, "never-made")));
+        Assert.Null(PersonaFiles.CanonicalFile(Path.Combine(_root, "never-made")));
+    }
+
+    // The file is there, is the right size, and is inside the directory — and
+    // the read still fails, because the filesystem says no. That is a fall back
+    // to the orb's letters, not a crash on the scan thread.
+    [UnixFact]
+    public void APictureThisProcessCannotOpenIsRefused()
+    {
+        var project = Dir("project");
+        var picture = Path.Combine(project, "leota.png");
+        File.WriteAllBytes(picture, Png());
+        File.SetUnixFileMode(picture, UnixFileMode.None);
+
+        // uid 0 reads it regardless, which would make the assertion below a
+        // statement about nothing.
+        if (CanStillRead(picture)) return;
+
+        Assert.Null(PersonaFiles.AvatarAt(project, "leota.png"));
+    }
+
+    [Fact]
+    public void APictureHeldOpenExclusivelyIsRefusedRatherThanThrown()
+    {
+        var project = Dir("project");
+        var picture = Path.Combine(project, "leota.png");
+        File.WriteAllBytes(picture, Png());
+
+        using var exclusive = new FileStream(picture, FileMode.Open, FileAccess.Read, FileShare.None);
+
+        // Where the platform enforces the share mode this is an IOException on
+        // the read; where it does not, the bytes come back and there is nothing
+        // to assert about. Both are correct behaviour for this function, and
+        // neither is a reason to fail on one runner.
+        var read = PersonaFiles.AvatarAt(project, "leota.png");
+        Assert.True(read is null || read.SequenceEqual(Png()));
+    }
+
     private static bool CanStillRead(string path)
     {
         try
