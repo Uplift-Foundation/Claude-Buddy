@@ -89,6 +89,34 @@ namespace ClaudeBuddy
         // reading this file is deciding what to do about their picture, and
         // "how big is it allowed to be" is the question they have next
         // whichever refusal they hit.
+        // How much of the offending value the line is allowed to quote.
+        //
+        // Not a style choice — a real one, found by reading this log on a
+        // machine that had been running the build for half an hour. The value
+        // is whatever somebody wrote after a picture label, and the explicit
+        // bullet grammar happily accepts a `data:` URI: one line in that log
+        // was a five-kilobyte base64 WebP, quoted in full, against a 64 KiB
+        // ceiling for the whole file. A handful of those and the log is spent
+        // on one embedded image. A hundred and twenty characters is enough to
+        // recognise any real path and enough of a `data:` URI to see what it
+        // is.
+        private const int MaxQuotedValue = 120;
+
+        // Cut from the middle, not the end, and that correction came from the
+        // tests rather than from taste: a picture resolved out of a temp tree
+        // has a long directory in front of it and the *filename* on the end,
+        // so trimming the tail throws away the one part a reader recognises.
+        // The head says which tree, the tail says which file, and the length
+        // tells a truncated monster from a path that is merely long.
+        private const int QuotedHead = 70;
+        private const int QuotedTail = 40;
+
+        internal static string Quoted(string picture) =>
+            picture.Length <= MaxQuotedValue
+                ? picture
+                : picture[..QuotedHead] + "…" + picture[^QuotedTail..]
+                    + " (" + picture.Length.ToString("N0", CultureInfo.InvariantCulture) + " characters)";
+
         internal static string RejectionMessage(AvatarRejection reason, string picture, long bytes)
         {
             var detail = reason switch
@@ -102,7 +130,7 @@ namespace ClaudeBuddy
                 _ => "unreadable — it is missing, empty, or this process may not open it",
             };
 
-            return "persona picture ignored: \"" + picture + "\" (" + detail + "); cap is "
+            return "persona picture ignored: \"" + Quoted(picture) + "\" (" + detail + "); cap is "
                 + MaxAvatarBytes.ToString("N0", CultureInfo.InvariantCulture) + " bytes";
         }
 
