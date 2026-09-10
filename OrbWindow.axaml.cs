@@ -864,9 +864,9 @@ namespace ClaudeBuddy
             if (!status.IsLocalCli) return null;
 
             var persona = LocalPersonas.For(SessionId);
-            return persona?.Avatar is null
+            return persona?.AvatarPath is null
                 ? null
-                : OpenClawAvatars.For(LocalPersonas.AvatarKey(SessionId), persona.Avatar);
+                : OpenClawAvatars.ForFile(LocalPersonas.AvatarKey(SessionId), persona.AvatarPath);
         }
 
         private void ShowAvatar(OpenClawAvatars.Avatar avatar)

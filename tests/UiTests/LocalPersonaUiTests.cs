@@ -30,6 +30,7 @@ public class LocalPersonaUiTests : IDisposable
 {
     private readonly List<string> _panelsToClean = new();
     private readonly List<string> _avatarKeysToClean = new();
+    private readonly List<string> _dirsToClean = new();
     private readonly bool _twoLetterWas = ClaudeBuddySettings.TwoLetterGlyphs;
 
     public void Dispose()
@@ -42,6 +43,11 @@ public class LocalPersonaUiTests : IDisposable
         // assembly resolves for a session it never gave one to.
         LocalPersonas.SetForTests(new Dictionary<string, LocalPersona.Persona>());
         ClaudeBuddySettings.TwoLetterGlyphs = _twoLetterWas;
+
+        foreach (var directory in _dirsToClean)
+        {
+            try { Directory.Delete(directory, recursive: true); } catch (IOException) { }
+        }
     }
 
     // Never closed — see ChatPanelAvatarTests' own comment on the same helper:
@@ -72,12 +78,31 @@ public class LocalPersonaUiTests : IDisposable
         return data.ToArray();
     }
 
+    // A picture on disk rather than bytes in the record, which is CB-135's
+    // change: a persona now carries the path to its portrait and nothing else,
+    // and the decode reads the file. A fixture that named a file which was not
+    // there would draw no picture at all — so these write one, in a directory
+    // of their own that Dispose takes away again.
+    private string PortraitFile(byte r = 0x8A, byte g = 0x6F, byte b = 0xD4)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "cb-persona-ui-" + Guid.NewGuid());
+        Directory.CreateDirectory(directory);
+        _dirsToClean.Add(directory);
+
+        var path = Path.Combine(directory, "leota.png");
+        File.WriteAllBytes(path, Portrait(r, g, b));
+        return path;
+    }
+
     private static LocalPersona.Persona Persona(
-        string? name = "Leota", string? voice = null, double? rate = null, byte[]? avatar = null) =>
-        new(name, voice, rate, avatar,
-            avatar is null ? null : "/tmp/leota/CLAUDE.md",
-            avatar is null ? null : "/tmp/leota/leota.png",
-            new[] { "/tmp/leota/CLAUDE.md" });
+        string? name = "Leota", string? voice = null, double? rate = null, string? avatarPath = null)
+    {
+        var markdown = avatarPath is null
+            ? "/tmp/leota/CLAUDE.md"
+            : Path.Combine(Path.GetDirectoryName(avatarPath)!, "CLAUDE.md");
+
+        return new(name, voice, rate, avatarPath is null ? null : markdown, avatarPath, new[] { markdown });
+    }
 
     // Session ids are unique per case for the same reason agent ids are in
     // OrbAvatarTests: the decoded-picture cache is process-wide and keyed by
@@ -189,13 +214,58 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void APersonaPortraitReplacesTheOrbsLetters()
     {
-        var sessionId = PublishPersona(Persona(avatar: Portrait()));
+        var sessionId = PublishPersona(Persona(avatarPath: PortraitFile()));
         var orb = NewOrb(sessionId);
 
         orb.UpdateFrom(Local());
 
         Assert.False(orb.Glyph.IsVisible, "the letters should give way to the picture");
         Assert.IsType<ImageBrush>(orb.Orb.Fill);
+    }
+
+    // The other side of CB-135's change, and the one only a file can ask: the
+    // persona carries a path now, so a portrait the guards refuse at *decode*
+    // time has to leave the orb wearing its letters rather than an empty
+    // circle. Nothing about the record says the picture is unusable — the path
+    // is set, the file is there — and the refusal happens inside the read.
+    [AvaloniaFact]
+    public void APortraitTooBigToReadLeavesTheOrbItsLetters()
+    {
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+
+        var oversized = PortraitFile();
+        File.WriteAllBytes(oversized, new byte[9 * 1024 * 1024]);
+
+        var sessionId = PublishPersona(Persona(avatarPath: oversized));
+        var orb = NewOrb(sessionId);
+
+        orb.UpdateFrom(Local());
+
+        Assert.True(orb.Glyph.IsVisible);
+        Assert.Equal("Le", orb.GlyphText);
+        Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+    }
+
+    // A persona whose picture has been deleted since it was resolved is the
+    // same story one step further along, and it is not hypothetical: the scan
+    // resolves a persona once and hands the same object back until something
+    // it watches moves, so there is a window in which the path outlives the
+    // file.
+    [AvaloniaFact]
+    public void APortraitThatHasGoneAwayLeavesTheOrbItsLetters()
+    {
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+
+        var portrait = PortraitFile();
+        File.Delete(portrait);
+
+        var sessionId = PublishPersona(Persona(avatarPath: portrait));
+        var orb = NewOrb(sessionId);
+
+        orb.UpdateFrom(Local());
+
+        Assert.True(orb.Glyph.IsVisible);
+        Assert.Equal("Le", orb.GlyphText);
     }
 
     // A gateway session is not offered a persona even if one is somehow
@@ -211,7 +281,7 @@ public class LocalPersonaUiTests : IDisposable
         LocalPersonas.SetForTests(
             new Dictionary<string, LocalPersona.Persona>
             {
-                [sessionId] = Persona(avatar: Portrait()),
+                [sessionId] = Persona(avatarPath: PortraitFile()),
             });
         _avatarKeysToClean.Add(LocalPersonas.AvatarKey(sessionId));
 
@@ -283,7 +353,7 @@ public class LocalPersonaUiTests : IDisposable
     [AvaloniaFact]
     public void TheChatHeaderWearsThePersonasFace()
     {
-        var sessionId = PublishPersona(Persona(avatar: Portrait()));
+        var sessionId = PublishPersona(Persona(avatarPath: PortraitFile()));
         _panelsToClean.Add(sessionId);
 
         var fake = new FakeChatSession(null)

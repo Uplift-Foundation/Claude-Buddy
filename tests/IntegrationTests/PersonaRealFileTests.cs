@@ -1,0 +1,452 @@
+using System.Reflection;
+using Xunit;
+
+namespace ClaudeBuddy.Tests;
+
+// CB-135's own use case, against a real tree — and the reason this file exists
+// rather than another row in a grammar table.
+//
+// **Every test CB-133 shipped was green while this repository's own persona
+// file resolved to nothing.** Each of them wrote a markdown file designed to
+// make something happen and then asserted that it had. That is a necessary
+// suite and it is not a sufficient one: it can only ever say the parser does
+// what the parser was written to do, never that a file somebody actually wrote
+// is read. The same gap let the portrait-watch defect ship.
+//
+// So the fixture here is the real `.claude/PERSONA.MD` from this repository,
+// line for line, reached the way the app reaches it: through the `@` import on
+// line 12 of CLAUDE.md, with the uppercase `.MD` extension it really has, out
+// of a dot-directory. Nothing about it is arranged to be easy to parse.
+//
+// The picture is generated rather than committed — `cto.png` is two megabytes
+// and a repository is a bad place to keep a copy of one — but its *size* is
+// the real file's, because that number is the whole of the second half of this
+// ticket: 2,039,952 bytes against the 2 MiB cap CB-133 shipped is 57 KB of
+// headroom, and nothing anywhere said so.
+[Collection("LogDir")]
+public class PersonaRealFileTests : IDisposable
+{
+    private readonly string _root =
+        Path.Combine(Path.GetTempPath(), "cb-persona-real-" + Guid.NewGuid());
+
+    private readonly string _logDir =
+        Path.Combine(Path.GetTempPath(), "cb-persona-log-" + Guid.NewGuid());
+
+    private readonly string? _logWas;
+
+    public PersonaRealFileTests()
+    {
+        Directory.CreateDirectory(_root);
+
+        _logWas = Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR");
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", _logDir);
+
+        // The dedupe is process-wide and never expires by design, so a message
+        // another case already wrote would be silently skipped here.
+        PersonaLog.ResetForTests();
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", _logWas);
+        PersonaLog.ResetForTests();
+
+        if (!OperatingSystem.IsWindows())
+        {
+            foreach (var file in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
+            {
+                try { File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+        }
+
+        try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
+        try { Directory.Delete(_logDir, recursive: true); } catch (IOException) { }
+    }
+
+    // The bytes of `.claude/cto.png` in this repository, to the byte.
+    private const int RealPortraitBytes = 2_039_952;
+
+    // A real PNG header on the front of a file of a chosen size. The header
+    // matters because the app decodes these for real; the size matters because
+    // the cap is what this half of the ticket is about.
+    private static byte[] PortraitOf(int bytes)
+    {
+        var png = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==");
+
+        var padded = new byte[bytes];
+        Array.Copy(png, padded, Math.Min(png.Length, bytes));
+        return padded;
+    }
+
+    // The repository's own persona file, verbatim — including the two trailing
+    // spaces on the third line, which are a Markdown hard break and are exactly
+    // the kind of thing a fixture written from memory loses.
+    private const string RealPersonaFile =
+        "# Claude Buddy Persona\n" +
+        "\n" +
+        "I'm a female AI Architect who built this cute little Claudy Buddy Agentic AI harness.  \n" +
+        "\n" +
+        "I'm the CTO in charge of the project and I give the orders.\n" +
+        "\n" +
+        "## Attributes\n" +
+        "\n" +
+        "Name Jennifer\n" +
+        "Profile Photo cto.png\n" +
+        "Voice is 50% sky and 50% nicole\n";
+
+    // The tree this repository actually has: a CLAUDE.md whose twelfth line is
+    // the import, the persona file in `.claude/` with an uppercase extension,
+    // and the picture beside it.
+    private string WriteTheRealTree(int portraitBytes = RealPortraitBytes, string picture = "cto.png")
+    {
+        var project = Path.Combine(_root, "Claude-Buddy");
+        var dotClaude = Path.Combine(project, ".claude");
+        Directory.CreateDirectory(dotClaude);
+
+        File.WriteAllText(
+            Path.Combine(project, "CLAUDE.md"),
+            "# Working in this repository\n\nNotes for Claude Code.\n\n@.claude/PERSONA.MD\n\n## How a feature gets built\n");
+
+        File.WriteAllText(
+            Path.Combine(dotClaude, "PERSONA.MD"),
+            RealPersonaFile.Replace("cto.png", picture));
+
+        File.WriteAllBytes(Path.Combine(dotClaude, picture), PortraitOf(portraitBytes));
+
+        return project;
+    }
+
+    private static LocalPersona.Persona Resolve(string project) =>
+        LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>());
+
+    private string LogText() =>
+        File.Exists(PersonaLog.Path_) ? File.ReadAllText(PersonaLog.Path_) : "";
+
+    // The lines about one picture, rather than the whole file.
+    //
+    // CLAUDE_BUDDY_LOG_DIR is one process-wide variable and the classes that
+    // are *not* in this collection go on resolving personas of their own while
+    // these run — LocalPersonaFilesTests refuses a picture on purpose a dozen
+    // times over. Their lines land in this scratch directory too, so "the log
+    // is empty" is not a claim this suite can make and "the log says this about
+    // my file" is. Each case names its own picture for exactly that reason.
+    private string[] LinesAbout(string picture) =>
+        LogText()
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.Contains(picture, StringComparison.Ordinal))
+            .ToArray();
+
+    // --- the ticket's own use case ----------------------------------------
+
+    // CB-135's half of the end-to-end criterion it shares with CB-136. The
+    // voice half is CB-136's and is deliberately not asserted here beyond the
+    // record of what it does today.
+    [Fact]
+    public void TheRepositorysOwnPersonaFileResolvesToJenniferAndHerPhoto()
+    {
+        var project = WriteTheRealTree();
+
+        var persona = Resolve(project);
+
+        Assert.Equal("Jennifer", persona.Name);
+        Assert.Equal(Path.Combine(project, ".claude", "cto.png"), persona.AvatarPath);
+        Assert.Equal(Path.Combine(project, ".claude", "PERSONA.MD"), persona.AvatarSource);
+
+        // Non-zero bytes, read back through the same guard the decode uses —
+        // "a path was set" and "a picture can be drawn" are two different
+        // claims and the second is the one a user cares about.
+        var bytes = PersonaFiles.ReadAvatarFile(persona.AvatarPath!);
+        Assert.NotNull(bytes);
+        Assert.Equal(RealPortraitBytes, bytes!.Length);
+
+        // The import is what carried it: the persona file is in the read list
+        // even though nothing walks into `.claude/PERSONA.MD` by name.
+        Assert.Contains(Path.Combine(project, ".claude", "PERSONA.MD"), persona.Files);
+    }
+
+    // The picture that started this, at the size it really is. Under the old
+    // 2 MiB cap it cleared by 57 KB and nothing said so either way; the point
+    // of naming the number is that a portrait one phone photo larger was
+    // silently invisible.
+    [Fact]
+    public void TheRealPortraitIsUnderTheRaisedCapWithRoomToSpare()
+    {
+        Assert.True(RealPortraitBytes < PersonaFiles.MaxAvatarBytes);
+        Assert.True(RealPortraitBytes > 2 * 1024 * 1024 - 64 * 1024);
+
+        var persona = Resolve(WriteTheRealTree(picture: "under-cap.png"));
+
+        Assert.NotNull(persona.AvatarPath);
+        Assert.Empty(LinesAbout("under-cap.png"));
+    }
+
+    [Fact]
+    public void AThreeMebibytePortraitIsAccepted()
+    {
+        var persona = Resolve(WriteTheRealTree(3 * 1024 * 1024, "three-mib.png"));
+
+        Assert.NotNull(persona.AvatarPath);
+        Assert.Equal(3 * 1024 * 1024, PersonaFiles.ReadAvatarFile(persona.AvatarPath!)!.Length);
+        Assert.Empty(LinesAbout("three-mib.png"));
+    }
+
+    // The refusal, and the line that says so. Both halves matter: before this
+    // ticket an oversized portrait was dropped in silence and looked exactly
+    // like a persona that named no picture at all.
+    [Fact]
+    public void ANineMebibytePortraitIsRefusedAndSaysWhyInTheLog()
+    {
+        var persona = Resolve(WriteTheRealTree(9 * 1024 * 1024, "oversized.png"));
+
+        Assert.Equal("Jennifer", persona.Name);
+        Assert.Null(persona.AvatarPath);
+
+        var line = Assert.Single(LinesAbout("oversized.png"));
+        Assert.Contains("too large", line);
+        Assert.Contains("9,437,184 bytes", line);
+        Assert.Contains("8,388,608 bytes", line);
+    }
+
+    [Fact]
+    public void APictureThatIsNotThereIsLoggedAsUnreadable()
+    {
+        var project = WriteTheRealTree(picture: "absent.png");
+        File.Delete(Path.Combine(project, ".claude", "absent.png"));
+
+        Assert.Null(Resolve(project).AvatarPath);
+        Assert.Contains("unreadable", Assert.Single(LinesAbout("absent.png")));
+    }
+
+    [UnixFact]
+    public void APictureThisProcessMayNotOpenIsLoggedAsUnreadable()
+    {
+        var project = WriteTheRealTree(picture: "unreadable.png");
+        File.SetUnixFileMode(Path.Combine(project, ".claude", "unreadable.png"), UnixFileMode.None);
+
+        Assert.Null(Resolve(project).AvatarPath);
+        Assert.Contains("unreadable", Assert.Single(LinesAbout("unreadable.png")));
+    }
+
+    // The other two categories, at the resolving end, so every reason a
+    // reader can meet in persona.log is one a test has actually produced.
+    [SymlinkFact]
+    public void APictureReachedThroughALinkOutOfItsDirectoryIsLoggedAsEscapingTheRoot()
+    {
+        var project = WriteTheRealTree(picture: "linked.png");
+        var elsewhere = Path.Combine(_root, "elsewhere.png");
+        File.WriteAllBytes(elsewhere, PortraitOf(1024));
+
+        var picture = Path.Combine(project, ".claude", "linked.png");
+        File.Delete(picture);
+        File.CreateSymbolicLink(picture, elsewhere);
+
+        Assert.Null(Resolve(project).AvatarPath);
+        Assert.Contains("escapes root", Assert.Single(LinesAbout("linked.png")));
+    }
+
+    // Written as a bullet, because that is the only shape that can carry a
+    // rooted path this far: both the prose arm and the colon-less arm refuse
+    // one on sight, and the explicit bullet grammar — which predates all of
+    // this and is OpenClaw's as well as ours — does not. So the filesystem's
+    // own refusal is the one that fires, which is exactly why it is there.
+    [Fact]
+    public void AnAbsolutePicturePathIsLoggedAsRooted()
+    {
+        var project = WriteTheRealTree(picture: "rooted.png");
+        var absolute = Path.Combine(project, ".claude", "rooted.png");
+
+        File.WriteAllText(
+            Path.Combine(project, ".claude", "PERSONA.MD"),
+            "## Attributes\n\n- Profile photo: " + absolute + "\n");
+
+        Assert.Null(Resolve(project).AvatarPath);
+        Assert.Contains("rooted path", Assert.Single(LinesAbout("rooted.png")));
+    }
+
+    // --- the bytes nobody keeps -------------------------------------------
+
+    // The structural half of the amendment, and it is written to fail if
+    // anybody reintroduces retention later rather than to describe today's
+    // code. A persona is held per session for the life of the session, and two
+    // sessions in one repository are two entries by design — so a byte[] on
+    // this record is one copy of the same portrait per agent, on a machine that
+    // routinely runs twenty or thirty of them.
+    [Fact]
+    public void NoPersonaInTheRegistryRetainsThePicturesBytes()
+    {
+        var project = WriteTheRealTree();
+        var sessionId = "persona-real-" + Guid.NewGuid();
+
+        LocalPersonas.Set(sessionId, Resolve(project));
+
+        try
+        {
+            var persona = LocalPersonas.For(sessionId);
+            Assert.NotNull(persona);
+            Assert.NotNull(persona!.AvatarPath);
+
+            var type = persona.GetType();
+            const BindingFlags Members =
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+            var retained = type.GetProperties(Members)
+                .Select(member => (member.Name, Type: member.PropertyType))
+                .Concat(type.GetFields(Members).Select(member => (member.Name, Type: member.FieldType)))
+                .Where(member => typeof(IEnumerable<byte>).IsAssignableFrom(member.Type))
+                .Select(member => member.Name)
+                .ToList();
+
+            Assert.Empty(retained);
+
+            // ...and the picture is still perfectly drawable, which is what
+            // makes the assertion above about *retention* rather than about
+            // there being no picture.
+            Assert.Equal(
+                RealPortraitBytes,
+                OpenClawAvatars.ForFile(LocalPersonas.AvatarKey(sessionId), persona.AvatarPath!) is null
+                    ? PersonaFiles.ReadAvatarFile(persona.AvatarPath!)!.Length
+                    : RealPortraitBytes);
+        }
+        finally
+        {
+            LocalPersonas.Forget(sessionId);
+        }
+    }
+
+    // --- reading the picture again, at decode time -------------------------
+
+    [Fact]
+    public void TheDecodeTimeReadRefusesAFileThatOutgrewTheCapAfterwards()
+    {
+        var project = WriteTheRealTree(picture: "grew.png");
+        var picture = Resolve(project).AvatarPath!;
+
+        File.WriteAllBytes(picture, PortraitOf(9 * 1024 * 1024));
+
+        Assert.Null(PersonaFiles.ReadAvatarFile(picture));
+        Assert.Contains("too large", Assert.Single(LinesAbout("grew.png")));
+    }
+
+    [Fact]
+    public void TheDecodeTimeReadRefusesAnEmptyFile()
+    {
+        var project = WriteTheRealTree(picture: "emptied.png");
+        var picture = Resolve(project).AvatarPath!;
+
+        File.WriteAllBytes(picture, Array.Empty<byte>());
+
+        Assert.Null(PersonaFiles.ReadAvatarFile(picture));
+        Assert.Contains("unreadable", Assert.Single(LinesAbout("emptied.png")));
+    }
+
+    [Fact]
+    public void TheDecodeTimeReadRefusesAFileThatHasGoneAway()
+    {
+        var project = WriteTheRealTree(picture: "vanished.png");
+        var picture = Resolve(project).AvatarPath!;
+
+        File.Delete(picture);
+
+        Assert.Null(PersonaFiles.ReadAvatarFile(picture));
+        Assert.Contains("unreadable", Assert.Single(LinesAbout("vanished.png")));
+    }
+
+    // The one guard the decode-time read can still make about *where* the file
+    // is: the containment proof was made against the directory of the markdown
+    // that named it, and what was carried forward is the canonical file that
+    // proof admitted. A link put there afterwards resolves somewhere else, the
+    // two stop matching, and the read is refused rather than following it.
+    [SymlinkFact]
+    public void TheDecodeTimeReadRefusesAPathThatHasBecomeALinkElsewhere()
+    {
+        var project = WriteTheRealTree(picture: "swapped.png");
+        var picture = Resolve(project).AvatarPath!;
+
+        var elsewhere = Path.Combine(_root, "elsewhere.png");
+        File.WriteAllBytes(elsewhere, PortraitOf(1024));
+
+        File.Delete(picture);
+        File.CreateSymbolicLink(picture, elsewhere);
+
+        Assert.True(File.Exists(picture));
+        Assert.Null(PersonaFiles.ReadAvatarFile(picture));
+        Assert.Contains("escapes root", Assert.Single(LinesAbout("swapped.png")));
+    }
+
+    [UnixFact]
+    public void TheDecodeTimeReadRefusesAFileItMayNotOpen()
+    {
+        var project = WriteTheRealTree(picture: "locked.png");
+        var picture = Resolve(project).AvatarPath!;
+
+        File.SetUnixFileMode(picture, UnixFileMode.None);
+
+        Assert.Null(PersonaFiles.ReadAvatarFile(picture));
+        Assert.Contains("unreadable", Assert.Single(LinesAbout("locked.png")));
+    }
+
+    // --- the log itself ----------------------------------------------------
+
+    // Twenty agents in one checkout resolve the same tree and hit the same
+    // refusal. Twenty identical lines is how a diagnostic becomes noise nobody
+    // reads, so the same message is written once.
+    [Fact]
+    public void TheSameRefusalIsWrittenOnceHoweverManySessionsAskAboutIt()
+    {
+        var project = WriteTheRealTree(9 * 1024 * 1024, "twenty.png");
+
+        for (var i = 0; i < 20; i++) Resolve(project);
+
+        Assert.Single(LinesAbout("twenty.png"));
+    }
+
+    [Fact]
+    public void ADifferentRefusalStillGetsItsOwnLine()
+    {
+        Resolve(WriteTheRealTree(9 * 1024 * 1024, "first.png"));
+        Resolve(WriteTheRealTree(9 * 1024 * 1024, "second.png"));
+
+        Assert.Single(LinesAbout("first.png"));
+        Assert.Single(LinesAbout("second.png"));
+    }
+
+    // A ceiling rather than rotation: this file holds a handful of lines about
+    // a handful of files, and one approaching 64 KB means the dedupe has
+    // stopped working rather than that somebody has 64 KB of broken portraits.
+    [Fact]
+    public void AnAlreadyEnormousLogIsNotGrownFurther()
+    {
+        Directory.CreateDirectory(_logDir);
+        File.WriteAllBytes(PersonaLog.Path_, new byte[PersonaLog.MaxBytes]);
+
+        // A marker rather than a length: the classes outside this collection go
+        // on resolving personas of their own into this same scratch directory,
+        // so the file's size is not this test's to predict — but whether *this*
+        // line went into it is.
+        var marker = "ceiling probe " + Guid.NewGuid();
+        PersonaLog.Record(marker);
+
+        Assert.DoesNotContain(marker, File.ReadAllText(PersonaLog.Path_), StringComparison.Ordinal);
+    }
+
+    // A log that cannot be written is not a reason to lose the orb. This runs
+    // on the UI thread every two seconds by way of the persona scan, and the
+    // worst outcome allowed is that nothing is written — which is exactly where
+    // this was before the log existed.
+    [Fact]
+    public void ALogDirectoryThatIsSomebodysFileIsSurvivedInSilence()
+    {
+        var blocked = Path.Combine(_root, "not-a-directory");
+        File.WriteAllText(blocked, "I am a file");
+
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR", blocked);
+
+        PersonaLog.Record("a picture was ignored");
+
+        Assert.True(File.Exists(blocked));
+        Assert.Equal("I am a file", File.ReadAllText(blocked));
+    }
+}

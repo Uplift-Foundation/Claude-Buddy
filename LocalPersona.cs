@@ -30,16 +30,29 @@ namespace ClaudeBuddy
         // nothing about any markdown file, and watching the markdown alone
         // left the old face on the orb until something else in the tree
         // happened to move or the app was restarted.
+        // Deliberately no `byte[] Avatar` field, and that is CB-135's change
+        // rather than an omission. This registry holds one Persona per session
+        // for the life of the session, and two sessions in one repository are
+        // two entries by design — so a retained picture is one copy of the
+        // source bytes *per agent*, on a machine that routinely runs twenty or
+        // thirty of them, all of the same file. What an orb actually draws is
+        // a 144 px frame out of OpenClawAvatars' cache; the source bytes were
+        // only ever the thing those were decoded from, and AvatarPath is
+        // enough to decode them again. See OpenClawAvatars.ForFile, which does.
+        //
+        // Nulling the field after the first decode was considered and
+        // rejected: a byte[] that is populated sometimes is a worse record to
+        // reason about than one that does not exist, and every caller would
+        // have had to know which half of the session's life it was in.
         internal sealed record Persona(
             string? Name,
             string? Voice,
             double? Rate,
-            byte[]? Avatar,
             string? AvatarSource,
             string? AvatarPath,
             IReadOnlyList<string> Files)
         {
-            internal bool IsEmpty => Name is null && Voice is null && Avatar is null;
+            internal bool IsEmpty => Name is null && Voice is null && AvatarPath is null;
 
             // The files this persona's answer depends on: what was read, plus
             // the picture if there is one. Here rather than at the call site
@@ -51,7 +64,7 @@ namespace ClaudeBuddy
         }
 
         internal static readonly Persona Empty =
-            new(null, null, null, null, null, null, Array.Empty<string>());
+            new(null, null, null, null, null, Array.Empty<string>());
 
         // How far up the tree to look. Not a security bound — the walk
         // terminates at the root on its own — but a bound on what the scan
@@ -225,7 +238,6 @@ namespace ClaudeBuddy
             string? name = null;
             string? voice = null;
             double? rate = null;
-            byte[]? avatar = null;
             string? avatarSource = null;
             string? avatarPath = null;
             var files = new List<string>();
@@ -239,7 +251,7 @@ namespace ClaudeBuddy
                 voice ??= fields.Voice;
                 rate ??= fields.Rate;
 
-                if (avatar is not null || fields.Avatar is null) continue;
+                if (avatarPath is not null || fields.Avatar is null) continue;
 
                 // The directory of the file that named the picture, taken from
                 // the canonical path Load already resolved — never null, for
@@ -250,15 +262,17 @@ namespace ClaudeBuddy
                 // already read from, never admit one from anywhere new.
                 var root = Path.GetDirectoryName(path)!;
 
-                var bytes = PersonaFiles.AvatarAt(root, fields.Avatar, out var picture);
-                if (bytes is null) continue;
+                // The path only. The bytes are read to prove the file opens
+                // and then dropped — see PersonaFiles.AvatarPathAt for why
+                // that read is not skipped.
+                var picture = PersonaFiles.AvatarPathAt(root, fields.Avatar);
+                if (picture is null) continue;
 
-                avatar = bytes;
                 avatarSource = path;
                 avatarPath = picture;
             }
 
-            return new Persona(name, voice, rate, avatar, avatarSource, avatarPath, files);
+            return new Persona(name, voice, rate, avatarSource, avatarPath, files);
         }
 
         // What the scan compares to decide whether anything is worth re-reading:

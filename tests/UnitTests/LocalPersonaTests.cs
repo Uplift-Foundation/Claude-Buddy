@@ -345,7 +345,8 @@ public class LocalPersonaTests : IDisposable
 
         var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, new[] { configDir });
 
-        Assert.Equal(Png(), persona.Avatar);
+        Assert.Equal(Path.Combine(configDir, "leota.png"), persona.AvatarPath);
+        Assert.Equal(Png(), File.ReadAllBytes(persona.AvatarPath!));
         Assert.Equal(named, persona.AvatarSource);
     }
 
@@ -358,7 +359,7 @@ public class LocalPersonaTests : IDisposable
         var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, Array.Empty<string>());
 
         Assert.Equal("Leota", persona.Name);
-        Assert.Null(persona.Avatar);
+        Assert.Null(persona.AvatarPath);
         Assert.Null(persona.AvatarSource);
     }
 
@@ -632,7 +633,7 @@ public class LocalPersonaTests : IDisposable
     // --- LocalPersonas: the live registry -----------------------------------
 
     private static LocalPersona.Persona Named(string name, string? voice = null, double? rate = null) =>
-        new(name, voice, rate, null, null, null, Array.Empty<string>());
+        new(name, voice, rate, null, null, Array.Empty<string>());
 
     [Fact]
     public void APersonaIsRememberedAgainstItsSession()

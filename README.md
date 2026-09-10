@@ -987,9 +987,9 @@ drawn exactly as it was before.
 
 Bullets, bold fields (`**Name:** Leota`), two-cell tables and YAML front matter
 all work, labels are case-insensitive, and the first valid value for each field
-wins. `Avatar`, `Profile Picture`, `Profile Pic`, `Profile Image`, `Picture`,
-`Portrait` and `Image` all name the picture; `Voice`, `Voice Name`, `Speech
-Voice` and `TTS Voice` all name the voice.
+wins. `Avatar`, `Profile Picture`, `Profile Pic`, `Profile Image`, `Profile
+Photo`, `Picture`, `Portrait`, `Photo` and `Image` all name the picture;
+`Voice`, `Voice Name`, `Speech Voice` and `TTS Voice` all name the voice.
 
 **A sentence works too, because a `CLAUDE.md` is prose.** These three are read:
 
@@ -1011,6 +1011,31 @@ spaces and `_ - ' ( )` — so **"The name is derived from the folder unless the
 user renames it"** names nothing, and neither does "Her voice is lovely and warm
 and low". A picture must be a relative path ending in `.png`, `.jpg`, `.jpeg`,
 `.gif` or `.webp`. Anything outside that shape is left alone as the prose it is.
+
+**Under a persona heading, the colon is optional.** A file whose whole purpose
+is to describe the agent tends to be written as a list of attributes rather than
+as sentences, so inside such a section a bare `Label Value` line is a field:
+
+```markdown
+## Attributes
+
+Name Jennifer
+Profile Photo cto.png
+```
+
+A **persona section** is a heading at any level whose text mentions `persona`,
+`attributes`, `identity`, `character`, `profile`, `about me` or `who i am`
+(case-insensitively), and it runs until the next heading of the same level or
+higher — so a `### Voice` underneath `## Attributes` is still inside it, and a
+second `## Build and run` ends it.
+
+**Outside such a section this form is not read at all**, which is the whole of
+why it is safe. "Name resolution is handled by the folder" in an ordinary
+paragraph is a sentence about naming, and it stays one. Inside a section the
+value still has to pass the same bounds every other shape applies, so that
+sentence names nothing there either — it is six words long, and a name is at
+most three. Fenced code blocks and YAML front matter are ignored exactly as they
+were, including headings written inside them.
 
 **Which files, nearest first.** From the session's working directory upwards to
 the root, each directory contributes `CLAUDE.md`, `CLAUDE.local.md`,
@@ -1040,10 +1065,18 @@ gave.
 they are what makes reading files nobody was asked about acceptable at all. A
 picture path is relative, local, and cannot leave the directory of the Markdown
 file that named it — not through `..`, not through a symlink, and not as a URL
-or a `data:` URI. Pictures are capped at 2 MB and Markdown files at 256 KB;
+or a `data:` URI. Pictures are capped at 8 MiB and Markdown files at 256 KB;
 anything larger is skipped rather than truncated. The files are re-read only
 when one of them actually changes: the app stats them on its ordinary
 two-second poll and opens nothing until a size or a timestamp moves.
+
+**A picture that is skipped says so.** One line goes into `persona.log`, beside
+the crash log — `~/Library/Logs/ClaudeBuddy` on macOS,
+`%LOCALAPPDATA%\ClaudeBuddy\Logs` on Windows — naming the file, the reason (too
+large, escapes root, rooted path, or unreadable) and the cap, once per distinct
+message however many sessions ask. Before that line existed an oversized
+portrait was dropped in silence and looked exactly like a persona that had named
+no picture at all.
 
 **A voice falls back rather than failing.** The name is matched against the
 voices this machine actually has — system voices, Kokoro's if the neural engine
@@ -1056,9 +1089,13 @@ silent. `**Voice:** af_bella (Kokoro TTS, rate 1.3)` sets a speaking rate for
 the neural engine the same way an OpenClaw profile does; system voices and
 custom commands have no rate.
 
-**Nothing is written anywhere.** The persona lives in memory for as long as the
-orb does, is never copied into the status file the hooks write, and never leaves
-this machine.
+**Nothing is written anywhere** except that log. The persona lives in memory for
+as long as the orb does, is never copied into the status file the hooks write,
+and never leaves this machine. The picture's *bytes* are not kept either: the
+persona remembers where the file is, and the decoded 144-pixel frames an orb
+actually draws are the only copy that stays resident — which is what makes an
+8 MiB cap affordable on a machine running twenty or thirty agents out of one
+repository.
 
 ## OpenClaw agents (experimental, off by default)
 

@@ -73,7 +73,8 @@ public class LocalPersonaFilesTests : IDisposable
         var persona = LocalPersona.Resolve(project, SessionSource.ClaudeCode, new[] { configDir });
 
         Assert.Equal("Leota", persona.Name);
-        Assert.Equal(Png(), persona.Avatar);
+        Assert.Equal(Path.Combine(middle, "team.png"), persona.AvatarPath);
+        Assert.Equal(Png(), File.ReadAllBytes(persona.AvatarPath!));
         Assert.Equal(Path.Combine(middle, "AGENTS.md"), persona.AvatarSource);
         // Nothing nearer said anything about a voice, so the user-level file —
         // the last file asked — is what supplies it.
@@ -145,17 +146,37 @@ public class LocalPersonaFilesTests : IDisposable
         Assert.Null(PersonaFiles.AvatarAt(project, "leota.png"));
     }
 
-    // Two megabytes is the cap, and the file at the far end is a real one this
-    // process can read — the refusal is about its size and nothing else.
+    // Eight mebibytes is the cap as of CB-135, and the file at the far end is a
+    // real one this process can read — the refusal is about its size and
+    // nothing else. Asserted against the constant as well as against a literal,
+    // so a future change to the cap fails here rather than quietly widening
+    // what this test is measuring.
     [Fact]
     public void APictureLargerThanTheCapIsRefused()
     {
         var project = Dir("project");
         var big = Path.Combine(project, "big.png");
-        File.WriteAllBytes(big, new byte[3 * 1024 * 1024]);
+        File.WriteAllBytes(big, new byte[9 * 1024 * 1024]);
 
-        Assert.Equal(3 * 1024 * 1024, new FileInfo(big).Length);
+        Assert.Equal(8 * 1024 * 1024, PersonaFiles.MaxAvatarBytes);
+        Assert.Equal(9 * 1024 * 1024, new FileInfo(big).Length);
         Assert.Null(PersonaFiles.AvatarAt(project, "big.png"));
+    }
+
+    // The other side of the raise, and the case the old cap actually refused:
+    // three megabytes is an ordinary size for a portrait somebody exported from
+    // a phone, it was over the 2 MiB cap CB-133 shipped, and it is read now.
+    [Fact]
+    public void APictureUnderTheRaisedCapIsRead()
+    {
+        var project = Dir("project");
+        var portrait = Path.Combine(project, "portrait.png");
+        File.WriteAllBytes(portrait, new byte[3 * 1024 * 1024]);
+
+        var read = PersonaFiles.AvatarAt(project, "portrait.png");
+
+        Assert.NotNull(read);
+        Assert.Equal(3 * 1024 * 1024, read!.Length);
     }
 
     [Fact]
