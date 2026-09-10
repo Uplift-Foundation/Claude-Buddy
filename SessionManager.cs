@@ -1436,13 +1436,16 @@ namespace ClaudeBuddy
 
             _personaSignatures[sessionId] = signature;
 
-            // Before the registry write rather than after. The decoded-picture
-            // cache is keyed by session and has no idea the bytes behind it have
-            // changed, so an edited portrait would otherwise keep drawing the
-            // old one until the process restarted — and the window where the
-            // registry holds new bytes and the cache holds an old Bitmap is
-            // exactly one poll tick wide if it is the wrong way round.
-            OpenClawAvatars.Forget(LocalPersonas.AvatarKey(sessionId));
+            // Set drops the decoded picture for this session itself, so an
+            // edited portrait is re-decoded rather than served from the cache
+            // forever. Deliberately not repeated here: the registry owns that
+            // invariant, and a second call site is a second place for it to be
+            // half-removed later.
+            //
+            // The resolution is a fresh Persona every time, which is what makes
+            // Set's identity check the right one — it skips the eviction only
+            // when handed back the very object it already holds, and this hands
+            // it a new one precisely when a file has moved.
             LocalPersonas.Set(sessionId, LocalPersona.ResolveForSession(status));
         }
 
@@ -2040,10 +2043,9 @@ namespace ClaudeBuddy
                 // Same argument for the persona, one size up: a decoded portrait
                 // is a Bitmap per frame, held by a process-wide cache that has
                 // no other reason to ever let one go. The registry entry is
-                // small; the picture behind it is not.
+                // small; the picture behind it is not, and Forget drops both.
                 _personaSignatures.Remove(id);
                 LocalPersonas.Forget(id);
-                OpenClawAvatars.Forget(LocalPersonas.AvatarKey(id));
             }
 
             // After the removal pass, so an orb has already gone before its file
