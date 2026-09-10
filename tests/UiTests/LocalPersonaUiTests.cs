@@ -412,6 +412,79 @@ public class LocalPersonaUiTests : IDisposable
         return windows[sessionId];
     }
 
+    // --- asking about a session that isn't one ---
+
+    // The three entry points, asked about nothing.
+    //
+    // Not defensive padding: ChatPanel asks all of these as
+    // `_session?.SessionId`, and a panel between Unbind and its next Bind has
+    // no session at all. Every one of them has to answer "I don't know" rather
+    // than throw, because the alternative is an exception on the UI thread
+    // inside a poll tick — and the panel would already be showing the right
+    // thing, so nothing on screen would hint at where it came from.
+    [AvaloniaFact]
+    public void NothingIsKnownAboutASessionThatIsNullOrEmpty()
+    {
+        Assert.False(SessionIdentity.IsGateway(null));
+        Assert.False(SessionIdentity.IsGateway(""));
+
+        Assert.Null(SessionIdentity.NameFor(null));
+        Assert.Null(SessionIdentity.NameFor(""));
+        Assert.Null(SessionIdentity.LocalNameFor(null));
+
+        Assert.Same(SessionIdentity.Unknown, SessionIdentity.For(null));
+        Assert.Same(SessionIdentity.Unknown, SessionIdentity.For(""));
+    }
+
+    // A local id nobody has published a persona for. Distinct from the case
+    // above: the id is real, the registry simply has nothing under it, which is
+    // every orb on a machine with no personas at all.
+    [AvaloniaFact]
+    public void AnUnknownLocalSessionHasNoIdentityRatherThanAnEmptyOne()
+    {
+        var sessionId = "local-unknown-" + Guid.NewGuid();
+
+        Assert.Null(SessionIdentity.NameFor(sessionId));
+        Assert.Null(SessionIdentity.LocalNameFor(sessionId));
+        Assert.Same(SessionIdentity.Unknown, SessionIdentity.For(sessionId));
+    }
+
+    // Both halves of the gateway/local split, from the one function, in one
+    // case — which is the property SessionIdentity exists for and the one that
+    // would break silently if a later change keyed on the wrong thing.
+    [AvaloniaFact]
+    public void TheGatewayAndLocalHalvesAnswerFromTheirOwnRegistries()
+    {
+        var agent = "nova" + Guid.NewGuid().ToString("N")[..8];
+        var gatewayId = $"openclaw:agent:{agent}:discord:direct:1";
+        var localId = PublishPersona(Persona());
+
+        try
+        {
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>
+                {
+                    [agent] = new("Gateway Nova", "✨", null),
+                });
+
+            Assert.True(SessionIdentity.IsGateway(gatewayId));
+            Assert.Equal("Gateway Nova", SessionIdentity.NameFor(gatewayId));
+
+            // ...and a gateway session never answers the *local* question, so
+            // the chat header cannot substitute an agent's name for a room's.
+            Assert.Null(SessionIdentity.LocalNameFor(gatewayId));
+
+            Assert.False(SessionIdentity.IsGateway(localId));
+            Assert.Equal("Leota", SessionIdentity.NameFor(localId));
+            Assert.Equal("Leota", SessionIdentity.LocalNameFor(localId));
+        }
+        finally
+        {
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>());
+        }
+    }
+
     // --- the voice ---
 
     // No persona at all answers null, and null is not silence: it is the
