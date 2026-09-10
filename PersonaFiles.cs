@@ -47,13 +47,22 @@ namespace ClaudeBuddy
         // by 57 KB.
         internal const long MaxAvatarBytes = 8 * 1024 * 1024;
 
-        // Why a picture named in markdown was not drawn. Four categories
-        // rather than a message per site, because the useful question when
-        // reading persona.log is which *kind* of thing went wrong: a rooted
-        // path and a symlink out of the tree are somebody writing a path this
-        // app will not follow, an oversized file is somebody's camera, and
-        // unreadable is the filesystem.
-        internal enum AvatarRejection { Rooted, EscapesRoot, TooLarge, Unreadable }
+        // Why a picture named in markdown was not drawn. Categories rather
+        // than a message per site, because the useful question when reading
+        // persona.log is which *kind* of thing went wrong: a rooted path and a
+        // symlink out of the tree are somebody writing a path this app will not
+        // follow, an oversized file is somebody's camera, and unreadable is the
+        // filesystem.
+        //
+        // NotRelativePath is CB-139's, and it was added because the absence of
+        // it was itself a defect. A `data:` URI, a URL and a value the grammar
+        // could not read as a path all used to arrive here as an empty avatar
+        // and were reported — when they were reported at all — as "unreadable —
+        // it is missing", which sends somebody looking on disk for a file they
+        // never wrote. Twenty-four lines on one Mac mini said that, and not one
+        // of them was about a missing file. A wrong reason is worse than no
+        // reason, because it is actionable and the action is wasted.
+        internal enum AvatarRejection { Rooted, EscapesRoot, TooLarge, Unreadable, NotRelativePath }
 
         // The lines of a markdown file, or null for every reason there might
         // not be any: it does not exist, it is too big to be one, or this
@@ -79,6 +88,45 @@ namespace ClaudeBuddy
         }
 
         internal static byte[]? AvatarAt(string root, string? avatar) => AvatarAt(root, avatar, out _);
+
+        // The two entry points the resolvers actually use, and the reason they
+        // take the whole parsed Fields rather than the one string they need
+        // from it.
+        //
+        // A picture that was *named* and could not be read as a path has to be
+        // written down, and by the time the resolver holds `fields.Avatar` that
+        // fact is gone: null there means both "no picture in this file" and
+        // "somebody wrote a data: URI after Profile picture:". Passing Fields
+        // is what keeps the two apart at the only place that can tell the
+        // difference — and passing it rather than asking each caller to check
+        // is what stops the check being dropped at one of the two call sites,
+        // which is the shape of every drift bug this feature has already had.
+        //
+        // Silent when nothing was named: a field nobody filled in is not a
+        // refusal, and a log that says so once per markdown file up a directory
+        // tree is a log nobody reads.
+        internal static byte[]? AvatarAt(string root, PersonaMarkdown.Fields fields)
+        {
+            if (fields.Avatar is null) { RejectUnusableValue(fields); return null; }
+            return AvatarAt(root, fields.Avatar);
+        }
+
+        internal static string? AvatarPathAt(string root, PersonaMarkdown.Fields fields)
+        {
+            if (fields.Avatar is null) { RejectUnusableValue(fields); return null; }
+            return AvatarPathAt(root, fields.Avatar);
+        }
+
+        // Note what this deliberately does *not* cover: a value that normalises
+        // to a perfectly good relative path naming a file that is not there
+        // still comes out of AvatarAt as Unreadable, because that is the honest
+        // answer and it is the one somebody can act on. The new category is for
+        // a value that was never a path at all.
+        private static void RejectUnusableValue(PersonaMarkdown.Fields fields)
+        {
+            if (fields.RawAvatar is not null)
+                Reject(AvatarRejection.NotRelativePath, fields.RawAvatar);
+        }
 
         // The line persona.log gets. Pure and separate from the writing of it,
         // so what it says can be asserted without a filesystem — and it is
@@ -127,6 +175,9 @@ namespace ClaudeBuddy
                     "escapes root — it resolves outside the directory of the markdown that named it",
                 AvatarRejection.Rooted =>
                     "rooted path — a persona picture is relative to the markdown that named it",
+                AvatarRejection.NotRelativePath =>
+                    "not a relative picture path — a persona picture is a relative path ending in "
+                    + ".png, .jpg, .jpeg, .gif or .webp, never a URL or a data: URI",
                 _ => "unreadable — it is missing, empty, or this process may not open it",
             };
 

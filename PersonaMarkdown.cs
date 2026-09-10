@@ -45,9 +45,16 @@ namespace ClaudeBuddy
     //     mixture, and VoiceBlend insists every part is a single token. See
     //     BoundedVoice.
     //   * A picture is a relative path whose last token ends in an image
-    //     extension. Rooted paths and anything with a colon in it are refused
-    //     before the filesystem is asked, so `/etc/passwd` and
-    //     `https://x/y.png` never become a read.
+    //     extension, once a code span and a trailing parenthetical note have
+    //     been taken off it — `` `avatars/lilibeth.png` (AI-generated) `` is
+    //     how real profiles write one, and CB-139 found eighteen lines of it in
+    //     one machine's persona.log, portraits that had never drawn because
+    //     only the prose arm normalised anything. AvatarValue is that
+    //     normalisation, and every arm now runs it rather than each keeping
+    //     its own. Rooted paths and
+    //     anything with a colon in it are refused before the filesystem is
+    //     asked, so `/etc/passwd`, `https://x/y.png` and a `data:` URI never
+    //     become a read.
     //   * Nothing inside YAML front matter, a fenced code block, a bullet, a
     //     bold field or a table row reaches the prose arm at all. A fenced
     //     block is where a CLAUDE.md *shows* you what to write, and text being
@@ -119,7 +126,27 @@ namespace ClaudeBuddy
     // mention is not written under `## Persona`.
     internal static class PersonaMarkdown
     {
-        internal sealed record Fields(string? Name, string? Voice, double? Rate, string? Avatar);
+        // RawAvatar is the value as written after the first picture label the
+        // explicit grammar recognised, whether or not it read as a path. It is
+        // here so that a picture somebody *named* and this parser could not use
+        // has somewhere to be reported from. Without it a value that fails
+        // normalisation is indistinguishable from a file that names no picture
+        // at all, and the resolver has nothing to write down: all twenty-four
+        // refusals on the machine CB-139 was filed from were logged as
+        // "unreadable — it is missing", and not one of them was about a missing
+        // file. A wrong diagnosis with good grammar is exactly what hid them
+        // for as long as it did.
+        //
+        // Only the explicit arms fill it, and that asymmetry is deliberate. An
+        // explicit arm has a *label* in front of the value — somebody wrote
+        // `Profile picture:` and then wrote something — so a value that reads
+        // as nothing is a mistake worth naming. A prose sentence has a noun in
+        // a sentence instead, and "her profile picture is lovely" names no file
+        // and never meant to; logging that would turn a bound this file's
+        // header spends its length defending into a stream of complaints about
+        // ordinary English.
+        internal sealed record Fields(
+            string? Name, string? Voice, double? Rate, string? Avatar, string? RawAvatar = null);
 
         // Which field a prose sentence named, if it named one at all.
         internal enum ProseKind { None, Name, Voice, Avatar }
@@ -161,6 +188,7 @@ namespace ClaudeBuddy
             string? voice = null;
             double? rate = null;
             string? avatar = null;
+            string? rawAvatar = null;
             var inFrontMatter = false;
             var inFence = false;
             var sawContent = false;
@@ -189,6 +217,27 @@ namespace ClaudeBuddy
                     voice ??= statedVoice;
                     rate ??= statedRate;
                 }
+            }
+
+            // The one place a picture named by the *explicit* grammar lands,
+            // so the four spellings of it cannot disagree — which is precisely
+            // the bug CB-139 was. A bullet assigned its value whole while the
+            // voice arm three lines above it stripped code spans and the prose
+            // arm normalised paths, so every profile that wrote its path in a
+            // code span — which is how real ones write it — kept the backticks
+            // and failed every path guard downstream in silence.
+            //
+            // Returns whether the line was *claimed*, not whether it produced a
+            // path: a line carrying a recognised picture label has been read
+            // whatever the value turned out to be, and offering it on to the
+            // prose arm afterwards would be reading it twice.
+            bool ExplicitAvatar(string label, string value)
+            {
+                if (!AvatarLabel(label) || !Valid(value)) return false;
+
+                rawAvatar ??= value;
+                avatar ??= AvatarValue(value);
+                return true;
             }
 
             var source = lines.ToList();
@@ -240,29 +289,50 @@ namespace ClaudeBuddy
                     continue;
                 }
 
-                if (inFrontMatter && FieldAfterColon(trimmed, out var yamlLabel, out var yamlValue)
-                    && VoiceLabel(yamlLabel) && VoiceValue(yamlValue) is var (yamlVoice, yamlRate) && yamlVoice is not null)
+                // Each of the three explicit non-bullet arms now asks two
+                // questions rather than one. A voice was the only field they
+                // ever read, which was survivable while the bullet arm was the
+                // only place a picture could be written and is not survivable
+                // now that the bullet arm normalises: a user who writes
+                // `avatar: portrait.png` in front matter and
+                // `- Avatar: portrait.png` in a bullet has said the same thing
+                // twice, and being told only one of them counts is the drift
+                // the whole file exists to prevent.
+                if (inFrontMatter && FieldAfterColon(trimmed, out var yamlLabel, out var yamlValue))
                 {
-                    voice ??= yamlVoice;
-                    rate ??= yamlRate;
-                    continue;
+                    if (VoiceLabel(yamlLabel) && VoiceValue(yamlValue) is var (yamlVoice, yamlRate) && yamlVoice is not null)
+                    {
+                        voice ??= yamlVoice;
+                        rate ??= yamlRate;
+                        continue;
+                    }
+
+                    if (ExplicitAvatar(yamlLabel, yamlValue)) continue;
                 }
 
                 if (TableField(trimmed, out var tableLabel, out var tableValue)
-                    && (index + 1 >= source.Count || !TableSeparator(source[index + 1]))
-                    && VoiceLabel(tableLabel) && VoiceValue(tableValue) is var (tableVoice, tableRate) && tableVoice is not null)
+                    && (index + 1 >= source.Count || !TableSeparator(source[index + 1])))
                 {
-                    voice ??= tableVoice;
-                    rate ??= tableRate;
-                    continue;
+                    if (VoiceLabel(tableLabel) && VoiceValue(tableValue) is var (tableVoice, tableRate) && tableVoice is not null)
+                    {
+                        voice ??= tableVoice;
+                        rate ??= tableRate;
+                        continue;
+                    }
+
+                    if (ExplicitAvatar(tableLabel, tableValue)) continue;
                 }
 
-                if (BoldField(trimmed, out var boldLabel, out var boldValue)
-                    && VoiceLabel(boldLabel) && VoiceValue(boldValue) is var (boldVoice, boldRate) && boldVoice is not null)
+                if (BoldField(trimmed, out var boldLabel, out var boldValue))
                 {
-                    voice ??= boldVoice;
-                    rate ??= boldRate;
-                    continue;
+                    if (VoiceLabel(boldLabel) && VoiceValue(boldValue) is var (boldVoice, boldRate) && boldVoice is not null)
+                    {
+                        voice ??= boldVoice;
+                        rate ??= boldRate;
+                        continue;
+                    }
+
+                    if (ExplicitAvatar(boldLabel, boldValue)) continue;
                 }
 
                 if (!trimmed.StartsWith("-", StringComparison.Ordinal))
@@ -321,11 +391,10 @@ namespace ClaudeBuddy
                     voice = bulletVoice;
                     rate ??= bulletRate;
                 }
-                else if (avatar is null && AvatarLabel(label))
-                    avatar = fieldValue;
+                else ExplicitAvatar(label, fieldValue);
             }
 
-            return new Fields(name, voice, rate, avatar);
+            return new Fields(name, voice, rate, avatar, rawAvatar);
         }
 
         // One sentence, subject first. The optional possessive is there because
@@ -380,10 +449,17 @@ namespace ClaudeBuddy
                 return true;
             }
 
-            if (!PictureValue(words, out var path)) return false;
+            // The same helper the explicit arms run, not a paraphrase of it.
+            // CLAUDE.md states that rule outright — the parsers here are pure
+            // and cheap to call precisely so nobody restates their answer — and
+            // this arm is where the drift CB-139 fixed started: two readings of
+            // "names a picture", each correct on its own, disagreeing about
+            // every value a real profile writes.
+            var picture = AvatarValue(stated);
+            if (picture is null) return false;
 
             kind = ProseKind.Avatar;
-            value = path;
+            value = picture;
             return true;
         }
 
@@ -459,25 +535,87 @@ namespace ClaudeBuddy
             return VoiceBlend.Parse(value) is not null;
         }
 
-        // A picture, as either arm is allowed to name one: the last token, so
-        // "the file leota.png" names the same picture "leota.png" does. A path
-        // is one token; the words in front of it are somebody being polite
-        // about it.
+        // A picture, as any arm is allowed to name one — one function, called
+        // by all of them, returning the path or null.
+        //
+        // The decorations first. A code span around the path itself is real
+        // fixture rather than a coincidence, the same as it is for a voice:
+        // every picture line captured off the Mac mini in CB-139 wore one, and
+        // most of them wore a note after it as well — `` `avatars/annabel-lee.gif`
+        // (animated, updated 2026-09-09) ``. The two are stripped in a loop
+        // rather than in a fixed order because the real shapes disagree about
+        // which is outermost: that line wears the note outside the span, and
+        // `` `avatars/annabel-lee.gif (animated)` `` wears it inside. Each strip
+        // strictly shortens the string, so the loop cannot fail to end.
+        //
+        // Then the last token, so "the file leota.png" names the same picture
+        // "leota.png" does — a path is one token, and the words in front of it
+        // are somebody being polite about it — with a trailing full stop taken
+        // off, because a sentence ends in one and a filename does not.
         //
         // Rooted paths and anything with a colon in it are refused here rather
-        // than at the filesystem, so `/etc/passwd` and `https://x/y.png` never
-        // become a read. PersonaFiles refuses both again — this is the cheap
-        // half of a check that has to hold in both places, not the only half.
-        internal static bool PictureValue(string[] words, out string path)
+        // than at the filesystem, so `/etc/passwd`, `https://x/y.png` and a
+        // `data:` URI never become a read. That last one is the case CB-139
+        // added and it is refused deliberately, not incidentally: a persona
+        // picture is a relative local path, and the gateway's `avatarUrl` is
+        // the only place base64 is accepted because it arrives over the wire
+        // rather than out of a file anybody can commit. PersonaFiles refuses
+        // all of it again — this is the cheap half of a check that has to hold
+        // in both places, not the only half.
+        internal static string? AvatarValue(string value)
         {
-            var last = words[^1];
-            path = last;
+            var candidate = value.Trim();
 
-            if (last.Contains(':')) return false;
-            if (Path.IsPathRooted(last)) return false;
+            while (true)
+            {
+                var before = candidate;
+                candidate = WithoutTrailingParenthetical(candidate);
+                candidate = WithoutCodeSpan(candidate);
+                if (string.Equals(candidate, before, StringComparison.Ordinal)) break;
+            }
+
+            var words = candidate.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length == 0) return null;
+
+            // The full stop first and the span again after it: "see
+            // `avatars/leota.png`." wears its span around the *token* rather
+            // than around the value, so the loop above cannot have reached it,
+            // and the stop sits outside the closing tick. Asking twice is a
+            // line; teaching the loop about tokens is a second grammar.
+            var last = WithoutCodeSpan(words[^1].TrimEnd('.'));
+            if (last.Length == 0) return null;
+            if (last.Contains(':')) return null;
+            if (Path.IsPathRooted(last)) return null;
 
             return PictureExtensions.Any(
-                extension => last.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
+                extension => last.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+                ? last
+                : null;
+        }
+
+        // Stripped only when both ticks are there and there is something left
+        // between them, so a value that is nothing *but* a lone backtick is
+        // left alone rather than emptied — the same rule, character for
+        // character, that VoiceValue applies to a voice identifier.
+        private static string WithoutCodeSpan(string candidate) =>
+            candidate.Length > 2 && candidate.StartsWith('`') && candidate.EndsWith('`')
+                ? candidate[1..^1].Trim()
+                : candidate;
+
+        // Any parenthesised trailer, not only the engine names VoiceValue
+        // knows. A voice annotation has to be recognised because the
+        // parenthesis is sometimes part of the identifier ("Ava (Premium)");
+        // no filename ends in one, so there is nothing here to protect and a
+        // whitelist would only be a list of the notes people had happened to
+        // write so far. `open > 0` leaves a value that is *nothing but* a
+        // parenthetical alone, which then fails the extension test on its own
+        // rather than being emptied first.
+        private static string WithoutTrailingParenthetical(string candidate)
+        {
+            if (!candidate.EndsWith(")", StringComparison.Ordinal)) return candidate;
+
+            var open = candidate.LastIndexOf('(');
+            return open > 0 ? candidate[..open].TrimEnd() : candidate;
         }
 
         // A Markdown ATX heading, and which level it is.
@@ -558,7 +696,8 @@ namespace ClaudeBuddy
 
                 if (labelled is ProseKind.Avatar)
                 {
-                    if (!PictureValue(rest, out var picture)) return false;
+                    var picture = AvatarValue(string.Join(' ', rest));
+                    if (picture is null) return false;
                     kind = labelled;
                     value = picture;
                     return true;
