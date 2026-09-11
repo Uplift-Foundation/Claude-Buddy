@@ -90,11 +90,15 @@ namespace ClaudeBuddy
     //     comment for why a persona is not allowed a byte array to hold a
     //     second picture in. Every generator writes `image:` before
     //     `image_animated:`, so first-wins means the still wins, which is
-    //     not a consolation prize: the still clears the byte cap by a wide
-    //     margin and the animation frequently does not (see
-    //     `PersonaFiles.MaxAvatarBytes`), so reading the still first is the
-    //     only choice under which this feature reliably produces a portrait
-    //     at all.
+    //     not a consolation prize: `LocalPersona.Persona` holds exactly one
+    //     avatar, so first-wins is what lets this feature produce a portrait
+    //     at all rather than waiting on a second label that may never come.
+    //     The byte cap used to reinforce that same point — under the old cap
+    //     the still cleared it by a wide margin and the animation often did
+    //     not — but CB-146 raised `PersonaFiles.MaxAvatarBytes` to 16 MiB
+    //     precisely because a real animation was clearing the old cap too,
+    //     so that is now a historical footnote to first-wins, not a reason
+    //     for it.
     //
     //   * Front matter gets one strip nothing else does: a scalar value is
     //     unquoted once, immediately after the label and the colon are torn

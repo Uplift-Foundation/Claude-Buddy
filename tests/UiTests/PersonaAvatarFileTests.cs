@@ -131,13 +131,49 @@ public class PersonaAvatarFileTests : IDisposable
         Assert.Null(OpenClawAvatars.ForFile(Key(), Path.Combine(_dir, "absent.png")));
     }
 
+    // 9 MiB, not 17: this was the size that tested the cap before CB-146 raised
+    // it to 16 MiB. Left at 9 it would still return null, but for the wrong
+    // reason — the zero bytes below are not a real PNG regardless of size, so
+    // an unmoved literal here would keep passing while silently testing decode
+    // failure instead of the cap. Sized to sit over the *current* cap so this
+    // stays a test of `AFileTooBigForTheCapIsNoPicture` and not of something
+    // else with the same name.
     [AvaloniaFact]
     public void AFileTooBigForTheCapIsNoPicture()
     {
         var path = Path.Combine(_dir, "huge.png");
-        File.WriteAllBytes(path, new byte[9 * 1024 * 1024]);
+        File.WriteAllBytes(path, new byte[(int)PersonaFiles.MaxAvatarBytes + 1]);
 
         Assert.Null(OpenClawAvatars.ForFile(Key(), path));
+    }
+
+    // The boundary CB-146 exists for, driven through the real UI-visible path
+    // rather than through PersonaFiles directly: a picture between the old
+    // 8 MiB cap and the new 16 MiB one now reaches the surface an orb actually
+    // draws, where before this ticket it would have decoded to nothing and
+    // fallen back to the emoji. 8,391,801 is not a round number — it is the
+    // real animated persona's exact size that forced this change (see
+    // PersonaFiles.MaxAvatarBytes), used here rather than an arbitrary
+    // in-between value so this test is pinned to the actual case, not merely
+    // a plausible one.
+    [AvaloniaFact]
+    public void APictureBetweenTheOldAndNewCapsIsDecodedIntoFrames()
+    {
+        var path = Path.Combine(_dir, "between-caps.png");
+        File.WriteAllBytes(path, Png());
+        using (var stream = new FileStream(path, FileMode.Append))
+        {
+            // Padded past 8,388,608 (the old cap) up to the real file's exact
+            // size, 8,391,801 — a real PNG header followed by padding decodes
+            // exactly like the unpadded one, since SkiaSharp reads the format
+            // from the header and stops there.
+            stream.Write(new byte[8_391_801 - new FileInfo(path).Length]);
+        }
+
+        var avatar = OpenClawAvatars.ForFile(Key(), path);
+
+        Assert.NotNull(avatar);
+        Assert.Single(avatar!.Frames);
     }
 
     // Bytes that are not a picture decode to nothing, the same as they do

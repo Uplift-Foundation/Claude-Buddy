@@ -253,19 +253,22 @@ public class PersonaRealFileTests : IDisposable
 
     // The refusal, and the line that says so. Both halves matter: before this
     // ticket an oversized portrait was dropped in silence and looked exactly
-    // like a persona that named no picture at all.
+    // like a persona that named no picture at all. Nine mebibytes was over
+    // CB-135's 8 MiB cap and is the size CB-146 raised the ceiling past — see
+    // PersonaFiles.MaxAvatarBytes for why the ceiling moved rather than the
+    // picture — so this now has to sit over the new 16 MiB cap instead.
     [Fact]
-    public void ANineMebibytePortraitIsRefusedAndSaysWhyInTheLog()
+    public void ASeventeenMebibytePortraitIsRefusedAndSaysWhyInTheLog()
     {
-        var persona = Resolve(WriteTheRealTree(9 * 1024 * 1024, "oversized.png"));
+        var persona = Resolve(WriteTheRealTree(17 * 1024 * 1024, "oversized.png"));
 
         Assert.Equal("Jennifer", persona.Name);
         Assert.Null(persona.AvatarPath);
 
         var line = Assert.Single(LinesAbout("oversized.png"));
         Assert.Contains("too large", line);
-        Assert.Contains("9,437,184 bytes", line);
-        Assert.Contains("8,388,608 bytes", line);
+        Assert.Contains("17,825,792 bytes", line);
+        Assert.Contains("16,777,216 bytes", line);
     }
 
     [Fact]
@@ -382,23 +385,60 @@ public class PersonaRealFileTests : IDisposable
         Assert.Contains("escapes root", Assert.Single(LinesAbout("outside-4471.png")));
     }
 
-    // Decision E, asserted rather than assumed: the real animated file is
-    // 3,193 bytes over the cap, and this is that exact margin against a
-    // portrait shape rather than an arbitrary number — see
-    // PersonaFiles.MaxAvatarBytes for the full measurement this refusal
-    // rests on.
+    // CB-146's own reason to exist. This exact number — 8,391,801 — is the
+    // real animated persona CB-140 measured against the old 8 MiB cap
+    // (`PersonaFiles.MaxAvatarBytes` = 8,388,608 then) and refused, 3,193
+    // bytes over; that file named no still, so the refusal cost the persona
+    // its picture entirely rather than falling back to a lesser one. CB-146
+    // raised the cap to 16 MiB specifically so this file is read rather than
+    // refused — see PersonaFiles.MaxAvatarBytes for why the resident-cost
+    // argument that kept the old cap in place was never actually about this
+    // constant. What was a refusal test is now the admission it should
+    // always have been: the exact bytes come back and nothing is logged.
     [Fact]
-    public void APictureThreeThousandOneHundredAndNinetyThreeBytesOverTheCapIsRefused()
+    public void TheRealAnimatedPersonaAtItsExactSizeIsReadAndNotRefused()
     {
-        var persona = Resolve(WriteTheRealTree(
-            (int)PersonaFiles.MaxAvatarBytes + 3193, "over-by-margin.png"));
+        var persona = Resolve(WriteTheRealTree(8_391_801, "real-animated.gif"));
+
+        Assert.NotNull(persona.AvatarPath);
+        var bytes = PersonaFiles.ReadAvatarFile(persona.AvatarPath!);
+        Assert.NotNull(bytes);
+        Assert.Equal(8_391_801, bytes!.Length);
+
+        Assert.Empty(LinesAbout("real-animated.gif"));
+    }
+
+    // The boundary itself, both sides — CB-146 is a file that missed the old
+    // one by 3,193 bytes, so the check in ReadAvatarFile
+    // (`info.Length > MaxAvatarBytes`) is worth pinning exactly rather than
+    // trusting by inspection. A file of precisely the cap is `<=`, not `>`,
+    // so it has to be read and to log nothing.
+    [Fact]
+    public void APictureExactlyAtTheCapIsReadAndLogsNothing()
+    {
+        var persona = Resolve(WriteTheRealTree((int)PersonaFiles.MaxAvatarBytes, "at-cap.png"));
+
+        Assert.NotNull(persona.AvatarPath);
+        var bytes = PersonaFiles.ReadAvatarFile(persona.AvatarPath!);
+        Assert.NotNull(bytes);
+        Assert.Equal(PersonaFiles.MaxAvatarBytes, bytes!.Length);
+
+        Assert.Empty(LinesAbout("at-cap.png"));
+    }
+
+    // One byte past the same boundary is enough to flip `>` and refuse, and
+    // the refusal names both the file's size and the cap it measured against.
+    [Fact]
+    public void APictureOneByteOverTheCapIsRefusedAndSaysWhyInTheLog()
+    {
+        var persona = Resolve(WriteTheRealTree((int)PersonaFiles.MaxAvatarBytes + 1, "over-cap.png"));
 
         Assert.Null(persona.AvatarPath);
 
-        var line = Assert.Single(LinesAbout("over-by-margin.png"));
+        var line = Assert.Single(LinesAbout("over-cap.png"));
         Assert.Contains("too large", line);
-        Assert.Contains("8,391,801 bytes", line);
-        Assert.Contains("8,388,608 bytes", line);
+        Assert.Contains("16,777,217 bytes", line);
+        Assert.Contains("16,777,216 bytes", line);
     }
 
     // --- the bytes nobody keeps -------------------------------------------
@@ -459,7 +499,9 @@ public class PersonaRealFileTests : IDisposable
         var project = WriteTheRealTree(picture: "grew.png");
         var picture = Resolve(project).AvatarPath!;
 
-        File.WriteAllBytes(picture, PortraitOf(9 * 1024 * 1024));
+        // 9 MiB outgrew the 8 MiB cap CB-135 shipped; it does not outgrow
+        // CB-146's 16 MiB one, so this now has to grow past that instead.
+        File.WriteAllBytes(picture, PortraitOf(17 * 1024 * 1024));
 
         Assert.Null(PersonaFiles.ReadAvatarFile(picture));
         Assert.Contains("too large", Assert.Single(LinesAbout("grew.png")));
@@ -531,7 +573,9 @@ public class PersonaRealFileTests : IDisposable
     [Fact]
     public void TheSameRefusalIsWrittenOnceHoweverManySessionsAskAboutIt()
     {
-        var project = WriteTheRealTree(9 * 1024 * 1024, "twenty.png");
+        // 17, not 9: 9 MiB cleared CB-135's 8 MiB cap under CB-146's 16 MiB
+        // one and would resolve rather than refuse, leaving no line to dedupe.
+        var project = WriteTheRealTree(17 * 1024 * 1024, "twenty.png");
 
         for (var i = 0; i < 20; i++) Resolve(project);
 
@@ -541,8 +585,8 @@ public class PersonaRealFileTests : IDisposable
     [Fact]
     public void ADifferentRefusalStillGetsItsOwnLine()
     {
-        Resolve(WriteTheRealTree(9 * 1024 * 1024, "first.png"));
-        Resolve(WriteTheRealTree(9 * 1024 * 1024, "second.png"));
+        Resolve(WriteTheRealTree(17 * 1024 * 1024, "first.png"));
+        Resolve(WriteTheRealTree(17 * 1024 * 1024, "second.png"));
 
         Assert.Single(LinesAbout("first.png"));
         Assert.Single(LinesAbout("second.png"));

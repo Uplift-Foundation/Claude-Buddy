@@ -239,8 +239,14 @@ public class LocalPersonaUiTests : IDisposable
     {
         ClaudeBuddySettings.TwoLetterGlyphs = true;
 
+        // Was a literal 9 MiB, which cleared CB-135's 8 MiB cap but not
+        // CB-146's 16 MiB one — this test kept passing regardless, since it
+        // was asserting *decode refusal*, not the cap directly, but for the
+        // wrong reason once the cap moved. Derived from the constant instead
+        // of a literal so the next cap change does not have to find this file
+        // too.
         var oversized = PortraitFile();
-        File.WriteAllBytes(oversized, new byte[9 * 1024 * 1024]);
+        File.WriteAllBytes(oversized, new byte[(int)PersonaFiles.MaxAvatarBytes + 1]);
 
         var sessionId = PublishPersona(Persona(avatarPath: oversized));
         var orb = NewOrb(sessionId);
