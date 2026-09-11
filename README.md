@@ -1008,8 +1008,9 @@ drawn exactly as it was before.
 A bullet, with or without a bold label, carries all three fields, and so does
 YAML front matter — labels are case-insensitive, and the first valid value for
 each field wins. A standalone bold field (`**Name:** Leota`) and a two-cell
-table row carry a voice or a picture, but not (yet) a name; see the front
-matter section below for a name written that way instead. `Avatar`, `Profile
+table row carry all three as well, except that a name is read from either only
+underneath a persona heading — described below — because `| Name | string |` in
+an ordinary schema table must not rename an orb. `Avatar`, `Profile
 Picture`, `Profile Pic`, `Profile Image`, `Profile Photo`, `Picture`,
 `Portrait`, `Photo`, `Image` and `Image Animated` (or `image_animated:` in
 front matter) all name the picture; `Voice`, `Voice Name`, `Speech Voice` and
@@ -1072,6 +1073,15 @@ documentation, not a declaration. It stays documentation even under a
 `## Persona` heading; only the markers change what a fence means. The heading
 and the Markdown image above the fence carry nothing either, the same as
 anywhere else: a heading labels what follows rather than stating it.
+
+**"Skipped whole" means every shape, not just prose.** Inside a fence, a
+bullet, a bold field, a two-cell table row, a colon-less `Label Value` line and
+a sentence are all examples rather than statements — so `- name: Build the
+thing` in a pasted GitHub Actions step names nobody, and neither does
+`| Voice | af_bella |` in a table showing you the format. The single exception
+is the marked block above. This is stated per shape because it was not always
+true of all of them: until CB-144 only the prose arm honoured the fence, and a
+workflow pasted into a `CLAUDE.md` renamed the orb after its build step.
 
 **Write the picture path however you would write it in Markdown.** A code span
 around it and a note after it are both read straight through, which is how real

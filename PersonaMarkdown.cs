@@ -116,10 +116,66 @@ namespace ClaudeBuddy
     //     persona — ended up on an orb. `slug:` exists because a generator
     //     without a display name yet still writes one, and `name:` wins the
     //     tie the same way every other field's first statement does.
+    //
+    //   * **A standalone bold field and a two-cell table row name the agent
+    //     too, but only inside a persona section** (CB-142). Before this they
+    //     were the two arms that read a voice and a picture and no name at
+    //     all, so `**Name:** Leota` — the very spelling the README used as its
+    //     example — named nobody, which is the drift at the top of this file
+    //     in its purest form: one field, written twice, honoured once.
+    //
+    //     The bound alone could not fix it. `| Name | string |` in a schema
+    //     table is a one-word value, and `NameValue("string")` returns
+    //     `"string"` — measured, not read off the regex — so a bound-only arm
+    //     would have put the word "string" on an orb the first time anybody
+    //     documented a data type. Scope is what refuses that line **outside a
+    //     persona section**, and the qualifier is not pedantry: under
+    //     `## Persona` the same row still yields `name = "string"`, by design.
+    //     A two-cell table under a persona heading is a table of persona
+    //     attributes, and "string" is a perfectly ordinary short name — there
+    //     is no test here for whether a value looks suspicious, and there
+    //     should not be one. The rule is CB-135's: a table of persona
+    //     attributes under `## Persona` and a schema table in a design
+    //     document are the same shape, and the heading is the only thing that
+    //     tells them apart.
+    //
+    //     The two guards are complementary rather than redundant, which is
+    //     why both are here. `**Name**: the value passed to the constructor`
+    //     is refused on word count even underneath `## Persona`; `**Name**:
+    //     Aurora` in an ordinary paragraph is refused on scope while passing
+    //     the bound easily. Neither guard catches both lines.
+    //
+    //     The bullet arm and the front-matter arm stay unscoped, and that is
+    //     not an inconsistency. OpenClaw's `IDENTITY.md` is a bare bulleted
+    //     list with no heading anywhere in it, and profile-gen writes YAML in
+    //     both of its templates — so scoping either would break every shipped
+    //     profile, while no shipped profile names an agent with a bold field
+    //     or a table row at all. Voice and picture stay unscoped on these two
+    //     arms for exactly that reason in reverse, and the evidence is named
+    //     rather than asserted because it has been doubted once already: the
+    //     fixture in
+    //     `OpenClawWorkspaceIdentityIntegrationTests.ARedactedProfileKokoroVoiceReachesTheMatchingNeuralOption`
+    //     is a **redacted real** `IDENTITY.md` whose voice is a bare
+    //     `**Voice:** af_bella (Kokoro TTS)` — not a bullet — under a title
+    //     that is not a persona heading. Scoping the bold arm's voice would
+    //     stop that profile speaking. CB-142 moved a name and nothing else.
+    //
+    //     CB-142 first gave this arm alone a fence check, and CB-144
+    //     replaced it with one gate covering every arm. The narrow version
+    //     was wrong in an instructive way: guarding the bold and table arms
+    //     does nothing for the bullet arm, which calls `BoldField` and
+    //     `FieldAfterColon` itself, so a fenced `- name: Build the thing`
+    //     went on renaming orbs after a pasted build step. See the gate in
+    //     `Parse`, just below the front-matter arm.
     //   * Nothing inside YAML front matter, a fenced code block, a bullet, a
     //     bold field or a table row reaches the prose arm at all. A fenced
     //     block is where a CLAUDE.md *shows* you what to write, and text being
     //     shown is not text being asserted.
+    //
+    //     As of CB-144 that second sentence is true of **every** arm rather
+    //     than only the prose one: a fenced line is skipped outright, with
+    //     exactly one exception, CB-141's marked `yaml` block, which is the
+    //     one fence a writer has explicitly declared to be a persona.
     //
     //   * With one exception, which is CB-141: a `yaml`/`yml` fence **inside
     //     a marked persona block** is read by the front-matter arm above,
@@ -339,6 +395,45 @@ namespace ClaudeBuddy
                 return true;
             }
 
+            // A name written as a standalone bold field or a two-cell table
+            // row, which the two arms below share (CB-142). One function
+            // rather than two copies, for the reason `ExplicitAvatar` above is
+            // one function: the arms agree about every part of this — the
+            // label list, the bound, first-statement-wins — and two copies of
+            // an agreement is one copy that can drift.
+            //
+            // Every guard is asked here rather than at the call sites so that
+            // neither arm can acquire one and not the other. `sectionLevel`
+            // first because it is the cheaper question and the one doing the
+            // work: `NameValue` accepts the word "string", so a schema table's
+            // `| Name | string |` is refused by scope alone.
+            //
+            // **There is no `inFence` check here, and there used to be.**
+            // CB-142 added one, because a `## Persona` section whose fenced
+            // example reads `| Name | Aurora |` must not rename an orb. It was
+            // the right rule in the wrong place: a *new* arm guarding itself
+            // while every older arm leaked, which CB-144 then measured as four
+            // separate holes including the bullet arm this function never
+            // touches. The rule now lives once, above, as `if (inFence &&
+            // !inMarkedYaml) continue;`, and every arm gets it. Do not
+            // reintroduce a copy here — one rule in one place is the whole
+            // point, and a second copy is the thing that drifts.
+            //
+            // Returns whether the line was *claimed*, which unlike
+            // `ExplicitAvatar` means "a name came out of it". A recognised
+            // label whose value fails the bound falls through to the arms
+            // below instead, exactly as the front-matter arm lets it — nothing
+            // down there recognises `Name` as a voice or a picture, so the
+            // line ends up read by nobody, which is what a refusal means.
+            bool ScopedName(string label, string value)
+            {
+                if (sectionLevel <= 0 || !NameLabel(label)) return false;
+                if (NameValue(value) is not { } stated) return false;
+
+                name ??= stated;
+                return true;
+            }
+
             var source = lines.ToList();
             for (var index = 0; index < source.Count; index++)
             {
@@ -482,9 +577,69 @@ namespace ClaudeBuddy
                     if (ExplicitAvatar(yamlLabel, yamlValue)) continue;
                 }
 
+                // **Everything else inside a fence is an example, not a
+                // statement** (CB-144). One gate, here, rather than a
+                // condition repeated on each arm below.
+                //
+                // **What preserves CB-141's marked block is the arm above, not
+                // `!inMarkedYaml`.** That arm `continue`s every line it
+                // claims, so no field-bearing `key: value` line inside a
+                // marked `yaml` fence ever reaches this gate — broadening this
+                // to a bare `if (inFence) continue;` passes all 3688 unit and
+                // 532 integration tests, which is how that was established
+                // rather than argued. The condition stays for two reasons that
+                // are smaller than "it is the mechanism" and are the honest
+                // ones: it makes the gate state its own rule instead of
+                // relying on an invariant two arms away, so reordering the
+                // arms cannot silently turn it into a CB-141 regression; and
+                // it is load-bearing for exactly one shape, below.
+                //
+                // That shape is a *bulleted* line inside a marked yaml fence —
+                // `- name: Aurora` between the markers. The front-matter arm
+                // never claims it (it asks `FieldAfterColon` on the whole
+                // line, and a bullet is not that), so it falls through to
+                // here, and the two spellings genuinely disagree: with the
+                // condition it names Aurora, without it nothing. Reading it is
+                // the right answer — the markers are a writer saying this
+                // region describes a persona, and `- name:` is a name
+                // everywhere else in this grammar — so
+                // `ABulletedNameInsideAMarkedYamlBlockIsStillRead` asserts it
+                // and this sentence is no longer the only thing holding the
+                // distinction.
+                //
+                // The scattered per-arm version of this was tried first and is
+                // why the rule is written once. Guarding the standalone-bold
+                // and table arms leaves the bullet arm wide open, because a
+                // bullet calls `BoldField`/`FieldAfterColon` itself on
+                // `trimmed[1..]` rather than going through them — so
+                // `- name: Build the thing`, an ordinary GitHub Actions step
+                // pasted into a CLAUDE.md, still renamed the orb after a build
+                // step. Measured, on `develop`: `Name = "Build the thing"`.
+                // Three more leaked the same way — `- **Voice:** af_bella`,
+                // `| Voice | af_bella |`, `**Voice:** af_bella`.
+                //
+                // This is the file's own rule finally applied uniformly: "a
+                // fenced block is where a CLAUDE.md *shows* you what to write,
+                // and text being shown is not text being asserted." It was
+                // true of the prose arm, the heading arm and the marker arm,
+                // and false of every explicit field arm, for as long as those
+                // arms have existed.
+                //
+                // **Do not add a fence check to the front-matter arm above.**
+                // It runs while `inFence` is true on purpose; that is the
+                // entire mechanism of CB-141's marked block, and a broad sweep
+                // that "adds the guard everywhere" silently reverts it while
+                // every test but the marked-block ones stays green.
+                if (inFence && !inMarkedYaml) continue;
+
                 if (TableField(trimmed, out var tableLabel, out var tableValue)
                     && (index + 1 >= source.Count || !TableSeparator(source[index + 1])))
                 {
+                    // Asked before the voice and picture arms purely for
+                    // symmetry with the front-matter arm above; the three
+                    // label lists are disjoint, so the order decides nothing.
+                    if (ScopedName(tableLabel, tableValue)) continue;
+
                     if (VoiceLabel(tableLabel) && VoiceValue(tableValue) is var (tableVoice, tableRate) && tableVoice is not null)
                     {
                         voice ??= tableVoice;
@@ -497,6 +652,8 @@ namespace ClaudeBuddy
 
                 if (BoldField(trimmed, out var boldLabel, out var boldValue))
                 {
+                    if (ScopedName(boldLabel, boldValue)) continue;
+
                     if (VoiceLabel(boldLabel) && VoiceValue(boldValue) is var (boldVoice, boldRate) && boldVoice is not null)
                     {
                         voice ??= boldVoice;
