@@ -438,9 +438,16 @@ public class PersonaScopedNameTests
     // The out-of-scope guarantee, asserted rather than assumed. A voice and a
     // picture are read from a bold field and a table row **outside** any
     // heading, exactly as they were before CB-142, because real profiles
-    // write them that way — a redacted OpenClaw `IDENTITY.md` in this suite's
-    // own fixtures is a bare `**Voice:** af_bella (Kokoro TTS)` under a title
-    // that is not a persona heading at all.
+    // write them that way. The evidence, named so it can be rechecked rather
+    // than doubted: `ARedactedProfileKokoroVoiceReachesTheMatchingNeuralOption`
+    // in `tests/IntegrationTests/OpenClawWorkspaceIdentityIntegrationTests.cs`
+    // is a redacted **real** `IDENTITY.md` whose only voice line is a bare
+    // `**Voice:** af_bella (Kokoro TTS)` — a standalone bold field, not a
+    // bullet — under a title heading that is not a persona heading. It is
+    // worth being specific because "OpenClaw uses bullets and profile-gen
+    // writes YAML" is true of the *other* fixtures and would, on its own,
+    // suggest scoping this arm is free. It is not: it would stop that profile
+    // speaking.
     [Theory]
     [InlineData("**Voice:** af_bella (Kokoro TTS)")]
     [InlineData("| Voice | af_bella (Kokoro TTS) |")]

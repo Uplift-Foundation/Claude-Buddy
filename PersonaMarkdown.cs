@@ -128,11 +128,16 @@ namespace ClaudeBuddy
     //     table is a one-word value, and `NameValue("string")` returns
     //     `"string"` — measured, not read off the regex — so a bound-only arm
     //     would have put the word "string" on an orb the first time anybody
-    //     documented a data type. Scope is what refuses that line, and it
-    //     refuses it for the same reason CB-135's colon-less arm is scoped: a
-    //     table of persona attributes under `## Persona` and a schema table in
-    //     a design document are the same shape, and the heading is the only
-    //     thing that tells them apart.
+    //     documented a data type. Scope is what refuses that line **outside a
+    //     persona section**, and the qualifier is not pedantry: under
+    //     `## Persona` the same row still yields `name = "string"`, by design.
+    //     A two-cell table under a persona heading is a table of persona
+    //     attributes, and "string" is a perfectly ordinary short name — there
+    //     is no test here for whether a value looks suspicious, and there
+    //     should not be one. The rule is CB-135's: a table of persona
+    //     attributes under `## Persona` and a schema table in a design
+    //     document are the same shape, and the heading is the only thing that
+    //     tells them apart.
     //
     //     The two guards are complementary rather than redundant, which is
     //     why both are here. `**Name**: the value passed to the constructor`
@@ -146,8 +151,14 @@ namespace ClaudeBuddy
     //     both of its templates — so scoping either would break every shipped
     //     profile, while no shipped profile names an agent with a bold field
     //     or a table row at all. Voice and picture stay unscoped on these two
-    //     arms for exactly that reason in reverse: real profiles do write
-    //     those that way, and CB-142 moved a name and nothing else.
+    //     arms for exactly that reason in reverse, and the evidence is named
+    //     rather than asserted because it has been doubted once already: the
+    //     fixture in
+    //     `OpenClawWorkspaceIdentityIntegrationTests.ARedactedProfileKokoroVoiceReachesTheMatchingNeuralOption`
+    //     is a **redacted real** `IDENTITY.md` whose voice is a bare
+    //     `**Voice:** af_bella (Kokoro TTS)` — not a bullet — under a title
+    //     that is not a persona heading. Scoping the bold arm's voice would
+    //     stop that profile speaking. CB-142 moved a name and nothing else.
     //
     //     CB-142 first gave this arm alone a fence check, and CB-144
     //     replaced it with one gate covering every arm. The narrow version
@@ -568,11 +579,33 @@ namespace ClaudeBuddy
 
                 // **Everything else inside a fence is an example, not a
                 // statement** (CB-144). One gate, here, rather than a
-                // condition repeated on each arm below — and it has to be
-                // *here* specifically, after the arm above, because the one
-                // shape a fence is legitimately read through is CB-141's
-                // marked `yaml` block, which that arm has just had its chance
-                // at. `!inMarkedYaml` is what preserves it.
+                // condition repeated on each arm below.
+                //
+                // **What preserves CB-141's marked block is the arm above, not
+                // `!inMarkedYaml`.** That arm `continue`s every line it
+                // claims, so no field-bearing `key: value` line inside a
+                // marked `yaml` fence ever reaches this gate — broadening this
+                // to a bare `if (inFence) continue;` passes all 3688 unit and
+                // 532 integration tests, which is how that was established
+                // rather than argued. The condition stays for two reasons that
+                // are smaller than "it is the mechanism" and are the honest
+                // ones: it makes the gate state its own rule instead of
+                // relying on an invariant two arms away, so reordering the
+                // arms cannot silently turn it into a CB-141 regression; and
+                // it is load-bearing for exactly one shape, below.
+                //
+                // That shape is a *bulleted* line inside a marked yaml fence —
+                // `- name: Aurora` between the markers. The front-matter arm
+                // never claims it (it asks `FieldAfterColon` on the whole
+                // line, and a bullet is not that), so it falls through to
+                // here, and the two spellings genuinely disagree: with the
+                // condition it names Aurora, without it nothing. Reading it is
+                // the right answer — the markers are a writer saying this
+                // region describes a persona, and `- name:` is a name
+                // everywhere else in this grammar — so
+                // `ABulletedNameInsideAMarkedYamlBlockIsStillRead` asserts it
+                // and this sentence is no longer the only thing holding the
+                // distinction.
                 //
                 // The scattered per-arm version of this was tried first and is
                 // why the rule is written once. Guarding the standalone-bold

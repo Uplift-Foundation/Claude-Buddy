@@ -240,6 +240,38 @@ public class PersonaFencedFieldTests
         Assert.Equal("aurora.png", fields.Avatar);
     }
 
+    // **The one shape where the gate's `!inMarkedYaml` condition is
+    // load-bearing**, pinned here because it was measured and found to be the
+    // only one.
+    //
+    // Broadening the gate to a bare `if (inFence) continue;` passes every
+    // other test in the repository — the front-matter arm `continue`s each
+    // `key: value` line it claims, so those never reach the gate at all. A
+    // *bulleted* line inside a marked yaml fence is different: the
+    // front-matter arm asks `FieldAfterColon` on the whole line and a bullet
+    // is not that, so it falls through, and there the two spellings disagree.
+    //
+    // Reading it is the right answer. The markers are a writer saying "this
+    // region describes a persona", and `- name:` is a name in every other arm
+    // of this grammar; refusing it here would make the marked block the one
+    // place a bullet means less than it does everywhere else. Asserted rather
+    // than left to the comment, so that anyone simplifying the gate finds a
+    // failing test instead of a silent behaviour change.
+    [Fact]
+    public void ABulletedNameInsideAMarkedYamlBlockIsStillRead()
+    {
+        var fields = PersonaMarkdown.Parse(new[]
+        {
+            "<!-- profile-gen:start slug=aurora -->",
+            "```yaml",
+            "- name: Aurora",
+            "```",
+            "<!-- profile-gen:end slug=aurora -->",
+        });
+
+        Assert.Equal("Aurora", fields.Name);
+    }
+
     // ...and the negative control that keeps the exception narrow: the same
     // yaml, not inside a marked block, is an ordinary example and stays one.
     // Without this, "the fence rule has an exception" and "the fence rule does

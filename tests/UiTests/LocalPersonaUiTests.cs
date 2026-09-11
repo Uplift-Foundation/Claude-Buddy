@@ -697,11 +697,24 @@ public class LocalPersonaUiTests : IDisposable
     //
     // An absence-asserting scan test must pin its config directories or it is
     // asserting something about the developer. Its positive siblings do not
-    // need the pin, and that asymmetry is not an oversight: `CandidateFiles`
-    // adds the directory walk before the user config dirs and every field is
-    // first-value-wins, so a fixture that supplies a field always beats
-    // anything in `~/.claude`. Only a fixture that supplies *nothing* can be
-    // answered by the machine.
+    // need the pin, and the reason is narrower than "the walk comes before the
+    // user config dirs" — that is true and it is not what protects them.
+    //
+    // What protects them is that **the fixture's own CLAUDE.md is candidate
+    // zero.** Measured against the real `CandidateFiles`: 34 candidates, the
+    // fixture's file at index 0 and `~/.claude/CLAUDE.md` at index 33. Every
+    // field is first-value-wins, so a fixture that *supplies* a field has
+    // already won before anything else is read.
+    //
+    // The ordering argument is the one to avoid repeating, because on Windows
+    // `Path.GetTempPath()` lives under the user profile, so the directory walk
+    // itself reaches `C:\Users\<user>\.claude\CLAUDE.md` as an ordinary
+    // *project* candidate — earlier than the user-config arm ever runs.
+    // CB-143's own seam test records that trap. It matters for a fixture that
+    // *omits* a field: such a test can still be answered by the machine even
+    // though it asserts a positive, and "the walk comes first" would wrongly
+    // say it is safe. The rule that survives is about candidate zero and about
+    // which fields the fixture actually supplies.
     [AvaloniaFact]
     public void ARealScanIgnoresTheSameYamlBlockWhenNothingMarksItAsAPersona()
     {
