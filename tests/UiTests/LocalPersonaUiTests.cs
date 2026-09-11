@@ -476,6 +476,141 @@ public class LocalPersonaUiTests : IDisposable
         }
     }
 
+    // CB-140, end to end: a directory name with a space in it, a front-matter
+    // persona.md `@`-imported from CLAUDE.md, and — in the same CLAUDE.md — an
+    // ordinary `- **Name**: ...` bullet describing a person rather than any
+    // persona. Before CB-140 the front-matter file named nobody at all (no
+    // `name:` arm) and the absolute `image:` path silently truncated around
+    // the space in the directory, so the orb fell through to that bullet and
+    // wore the wrong name with no picture. Both defects are fixed in the
+    // grammar; this is the proof they reach the screen.
+    [AvaloniaFact]
+    public void ARealScanWithASpaceInTheProjectDirectoryReadsThePersonaOverTheOrdinaryNameBullet()
+    {
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+
+        var project = Path.Combine(Path.GetTempPath(), "cb persona ui " + Guid.NewGuid());
+        var personaDir = Path.Combine(project, ".claude", "persona");
+        var statusDir = Path.Combine(Path.GetTempPath(), "cb-persona-scan-space-dir-" + Guid.NewGuid());
+        Directory.CreateDirectory(personaDir);
+        Directory.CreateDirectory(statusDir);
+
+        var sessionId = "persona-scan-space-ui-" + Guid.NewGuid();
+        var picture = Path.Combine(personaDir, "avatar.png");
+        File.WriteAllBytes(picture, Portrait());
+
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(project, "CLAUDE.md"),
+                "# Notes\n\n@.claude/persona/persona.md\n\n- **Name**: Jordan Casey, MBA / MSc\n");
+
+            File.WriteAllText(
+                Path.Combine(personaDir, "persona.md"),
+                "---\n" +
+                "name: \"Skyler\"\n" +
+                "image: \"" + picture + "\"\n" +
+                "---\n");
+
+            File.WriteAllText(
+                Path.Combine(statusDir, sessionId + ".txt"),
+                System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+                {
+                    State = "idle",
+                    Cli = "",
+                    Title = "cb-persona-scan-space",
+                    Cwd = project,
+                    SessionPid = Environment.ProcessId,
+                    TermProgram = "iTerm.app",
+                    Tty = "/dev/ttys004",
+                }));
+
+            var manager = new SessionManager(statusDir);
+            manager.ScanAndUpdate();
+
+            // The persona's name wins, not the bullet's — the bullet's value
+            // is five words carrying a comma and a slash, and NameValue's
+            // bound refuses it, so it never even competes.
+            Assert.Equal("Skyler", LocalPersonas.For(sessionId)?.Name);
+
+            var orb = OrbFor(manager, sessionId);
+            Assert.False(orb.Glyph.IsVisible, "the letters should give way to the picture");
+            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+
+            var fake = new FakeChatSession(null)
+            {
+                SessionId = sessionId,
+                DisplayName = "cb-persona-scan-space",
+            };
+            _panelsToClean.Add(sessionId);
+            ChatPanel.OpenFor(orb, fake);
+            Flush();
+
+            Assert.Equal("Skyler", ChatPanelTestAccess.Instance!.TitleText.Text);
+        }
+        finally
+        {
+            LocalPersonas.Forget(sessionId);
+            try { Directory.Delete(project, recursive: true); } catch { }
+            try { Directory.Delete(statusDir, recursive: true); } catch { }
+        }
+    }
+
+    // The other half: take the persona file away, and the bullet still must
+    // not win. The tree is the ordinary case CB-133 always meant to cover —
+    // no front matter at all — asserted here rather than assumed, because the
+    // fix that bounds the bullet arm is exactly what makes this true now and
+    // was not what made it true before.
+    [AvaloniaFact]
+    public void ARealScanWithNoPersonaFileLeavesTheOrbItsFolderLetters()
+    {
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+
+        var project = Path.Combine(Path.GetTempPath(), "cb persona ui none " + Guid.NewGuid());
+        var statusDir = Path.Combine(Path.GetTempPath(), "cb-persona-scan-none-dir-" + Guid.NewGuid());
+        Directory.CreateDirectory(project);
+        Directory.CreateDirectory(statusDir);
+
+        var sessionId = "persona-scan-none-ui-" + Guid.NewGuid();
+
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(project, "CLAUDE.md"),
+                "# Notes\n\n- **Name**: Jordan Casey, MBA / MSc\n");
+
+            File.WriteAllText(
+                Path.Combine(statusDir, sessionId + ".txt"),
+                System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+                {
+                    State = "idle",
+                    Cli = "",
+                    Title = "cb-persona-scan-none",
+                    Cwd = project,
+                    SessionPid = Environment.ProcessId,
+                    TermProgram = "iTerm.app",
+                    Tty = "/dev/ttys004",
+                }));
+
+            var manager = new SessionManager(statusDir);
+            manager.ScanAndUpdate();
+
+            Assert.Null(LocalPersonas.For(sessionId)?.Name);
+
+            var orb = OrbFor(manager, sessionId);
+            Assert.True(orb.Glyph.IsVisible);
+            Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+        }
+        finally
+        {
+            LocalPersonas.Forget(sessionId);
+            try { Directory.Delete(project, recursive: true); } catch { }
+            try { Directory.Delete(statusDir, recursive: true); } catch { }
+        }
+    }
+
     // Read rather than widened, the same reasoning SessionScanTests records for
     // reaching the scan's own window table.
     private static OrbWindow OrbFor(SessionManager manager, string sessionId)

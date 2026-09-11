@@ -69,6 +69,41 @@ public class PersonaAvatarFileTests : IDisposable
         Assert.False(avatar.IsAnimated);
     }
 
+    // CB-140: LocalPersona.Resolve now hands back an absolute AvatarPath when
+    // a profile's `image:` field is itself absolute — an ordinary shape for a
+    // generator whose persona file is `@`-imported from an arbitrary
+    // directory. This decoder was never given a relative-vs-absolute
+    // distinction to make in the first place (WritePng above has always
+    // handed it an absolute path), so the assertion worth making is the seam,
+    // not the decode: a real persona resolved end to end, whose path happens
+    // to be absolute, draws exactly like any other.
+    [AvaloniaFact]
+    public void AnAbsoluteAvatarPathFromAResolvedPersonaDecodesTheSameWay()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "cb-persona-avatar-abs-" + Guid.NewGuid());
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var picture = Path.Combine(directory, "avatar.png");
+            File.WriteAllBytes(picture, Png());
+            File.WriteAllText(
+                Path.Combine(directory, "CLAUDE.md"),
+                "---\nname: \"Skyler\"\nimage: \"" + picture + "\"\n---\n");
+
+            var persona = LocalPersona.Resolve(directory, SessionSource.ClaudeCode, Array.Empty<string>());
+            Assert.Equal(picture, persona.AvatarPath);
+
+            var avatar = OpenClawAvatars.ForFile(Key(), persona.AvatarPath!);
+
+            Assert.NotNull(avatar);
+            Assert.Single(avatar!.Frames);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch (IOException) { }
+        }
+    }
+
     // The cache is the whole point of the entry point taking a key. An orb asks
     // for its picture on every poll tick; a read per tick is what the decoded
     // cache has always existed to avoid, and moving the bytes out of the
