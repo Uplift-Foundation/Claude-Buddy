@@ -82,14 +82,13 @@ public class PersonaAvatarValueTests
     // A token that is nothing but punctuation, which the trailing-stop strip
     // empties.
     [InlineData("....")]
-    // Rooted, on both runners: a leading separator is rooted on Windows too,
-    // and a drive letter is refused by the colon before it is asked.
-    [InlineData("/etc/passwd.png")]
-    [InlineData("/Users/someone/Pictures/portrait.png")]
-    [InlineData("C:\\Users\\someone\\portrait.png")]
     // A URL, in a code span or out of one, is not a file beside the markdown.
     [InlineData("https://example.invalid/y.png")]
     [InlineData("`https://example.invalid/y.png`")]
+    // A single ASCII letter and a colon look like a drive letter until the
+    // very next character is asked — this is why ColonIsADriveLetter checks
+    // `://` before it checks the shape, not after.
+    [InlineData("a://x.png")]
     // And a data: URI, refused deliberately rather than incidentally — see
     // AvatarValue's own comment, and the README sentence it points at.
     [InlineData("data:image/webp;base64,UklGRhYAAABXRUJQVlA4TAoAAAAvAAAAAAfQ//73v/+BiOh/AAA=")]
@@ -97,6 +96,26 @@ public class PersonaAvatarValueTests
     public void AValueThatIsNotARelativePicturePathReadsAsNothing(string written)
     {
         Assert.Null(PersonaMarkdown.AvatarValue(written));
+    }
+
+    // --- an absolute path is a picture path now (§A) -----------------------
+    //
+    // Before CB-140 all three of these were refused on sight, by a rule that
+    // asked only whether the string began with a separator or a drive
+    // letter. That rule is gone from this grammar entirely: whether an
+    // absolute path is *allowed* is a question about where it resolves
+    // relative to the markdown that named it, and only PersonaFiles can
+    // answer that — see PersonaFiles.AvatarAt's containment check and
+    // PersonaRealFileTests for the positive and negative cases against a
+    // real tree. What is asserted here is only that this grammar hands the
+    // value back rather than refusing it before PersonaFiles ever sees it.
+    [Theory]
+    [InlineData("/etc/passwd.png", "/etc/passwd.png")]
+    [InlineData("/Users/someone/Pictures/portrait.png", "/Users/someone/Pictures/portrait.png")]
+    [InlineData("C:\\Users\\someone\\portrait.png", "C:\\Users\\someone\\portrait.png")]
+    public void AnAbsolutePathIsAPicturePathNow(string written, string expected)
+    {
+        Assert.Equal(expected, PersonaMarkdown.AvatarValue(written));
     }
 
     // --- markdown that is not quite markdown -------------------------------
@@ -152,6 +171,75 @@ public class PersonaAvatarValueTests
     {
         Assert.Null(PersonaMarkdown.AvatarValue(
             "data:image/webp;base64,UklGRiQAAABXRUJQVlA4TBcAAAAvAAAAAAfQ//73v/+BiOh/AAAAAAAA"));
+    }
+
+    // The same three real shapes, this time through the reader an explicit
+    // field actually uses. CB-139's fixtures are worth re-running here rather
+    // than trusted to have survived by inspection, because ExplicitAvatarValue
+    // is a new function and "the decorations strip the same way" is exactly
+    // the kind of thing a split like this can get wrong in one arm and not
+    // the other.
+    [Theory]
+    [InlineData("`avatars/annabel-lee.gif` (animated, updated 2026-09-09)", "avatars/annabel-lee.gif")]
+    [InlineData("`avatars/lilibeth.png` (AI-generated, cherry blossom portrait)", "avatars/lilibeth.png")]
+    [InlineData("`avatars/jessica.png`", "avatars/jessica.png")]
+    public void TheThreeRealPortraitsAlsoResolveThroughTheExplicitReader(string written, string expected)
+    {
+        Assert.Equal(expected, PersonaMarkdown.ExplicitAvatarValue(written));
+    }
+
+    // --- the asymmetry §B is built on, side by side -------------------------
+
+    // A labelled field is one whole value; a sentence still gives up its last
+    // token. This is the whole of the design in one pair of assertions: the
+    // same string, read two ways, on purpose.
+    [Fact]
+    public void ALabelledFieldTakesTheWholeValueWhileASentenceStillTakesTheLastToken()
+    {
+        Assert.Equal("sub dir/pic.png", PersonaMarkdown.ExplicitAvatarValue("sub dir/pic.png"));
+        Assert.Equal("dir/pic.png", PersonaMarkdown.AvatarValue("sub dir/pic.png"));
+    }
+
+    // The fail-open regression itself. Built from Path.DirectorySeparatorChar
+    // rather than a literal `/`, so the fixture is rooted on both CI runners
+    // and means the same thing on each — a literal `/a b/x.png` is not rooted
+    // on Windows at all, and would silently test nothing there.
+    //
+    // ExplicitAvatarValue returns the whole rooted value, because a labelled
+    // field is never tokenized. AvatarValue, reading the same value as though
+    // it were the tail of a sentence, must refuse it outright rather than
+    // truncate to a relative path nobody wrote: before CB-140 this returned
+    // `b" + sep + "x.png`, a relative path that passed every guard downstream
+    // and pointed at a file that was never there — which is the sharpest of
+    // the five defects CB-140 fixed, because the guard it defeated exists in
+    // every one of the seven grammar arms this parser has.
+    [Fact]
+    public void ARootedPathWithASpaceInADirectoryComponentIsRefusedRatherThanTruncated()
+    {
+        var sep = Path.DirectorySeparatorChar;
+        var rooted = sep + "a" + sep + "b c" + sep + "x.png";
+
+        Assert.Equal(rooted, PersonaMarkdown.ExplicitAvatarValue(rooted));
+        Assert.Null(PersonaMarkdown.AvatarValue("the file " + rooted));
+    }
+
+    // --- ColonIsADriveLetter, through the explicit reader -------------------
+
+    [Theory]
+    [InlineData("C:\\x\\y.png")]
+    [InlineData("C:/x/y.png")]
+    public void AWindowsDriveLetterIsNotAUrl(string written)
+    {
+        Assert.Equal(written, PersonaMarkdown.ExplicitAvatarValue(written));
+    }
+
+    // A second colon anywhere after the first is never a drive letter, however
+    // the first one looks — this is a path with a colon in the filename,
+    // which no drive letter has room for.
+    [Fact]
+    public void ASecondColonAfterTheDriveLetterIsRefused()
+    {
+        Assert.Null(PersonaMarkdown.ExplicitAvatarValue("C:\\a:b.png"));
     }
 
     // --- the same value, in each of the four explicit spellings ------------
@@ -255,7 +343,6 @@ public class PersonaAvatarValueTests
     [Theory]
     [InlineData("- Avatar: data:image/webp;base64,UklGRhYAAABXRUJQ", "data:image/webp;base64,UklGRhYAAABXRUJQ")]
     [InlineData("- Profile picture: https://example.invalid/y.png", "https://example.invalid/y.png")]
-    [InlineData("- Photo: /Users/someone/portrait.png", "/Users/someone/portrait.png")]
     [InlineData("- Portrait: lovely", "lovely")]
     [InlineData("**Picture:** data:image/png;base64,iVBOR", "data:image/png;base64,iVBOR")]
     [InlineData("| Photo | data:image/png;base64,iVBOR |", "data:image/png;base64,iVBOR")]
@@ -291,6 +378,18 @@ public class PersonaAvatarValueTests
 
         Assert.Equal("avatars/jessica.png", fields.Avatar);
         Assert.Equal("`avatars/jessica.png` (animated)", fields.RawAvatar);
+    }
+
+    // An absolute path is a path now, not a raw value with nowhere to go —
+    // the counterpart to the theory above, which used to include this exact
+    // line as a value the grammar could not use at all.
+    [Fact]
+    public void ABulletedAbsolutePathIsAPictureRatherThanARawLeftover()
+    {
+        var fields = PersonaMarkdown.Parse(new[] { "- Photo: /Users/someone/portrait.png" });
+
+        Assert.Equal("/Users/someone/portrait.png", fields.Avatar);
+        Assert.Equal("/Users/someone/portrait.png", fields.RawAvatar);
     }
 
     // A file that names no picture at all records nothing, which is what keeps
@@ -352,7 +451,6 @@ public class PersonaAvatarValueTests
     [Theory]
     [InlineData("Her profile picture is lovely")]
     [InlineData("Her portrait is https://example.invalid/y.png")]
-    [InlineData("The photo is /Users/someone/portrait.png")]
     public void AProseSentenceThatNamesNoFileStaysSilent(string line)
     {
         var fields = PersonaMarkdown.Parse(new[] { line });

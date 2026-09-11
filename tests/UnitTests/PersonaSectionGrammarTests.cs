@@ -348,8 +348,9 @@ public class PersonaSectionGrammarTests
     [InlineData("Name <your name>")]
     // Not a picture at all.
     [InlineData("Profile Photo notes.txt")]
-    // Rooted, and a URL.
-    [InlineData("Photo /etc/passwd.png")]
+    // A URL, still refused whether an absolute path is or not — see
+    // APictureIsReadOffAColonLessLine for what "Photo /etc/passwd.png" reads
+    // as now that this arm takes its value whole.
     [InlineData("Picture https://example.test/x.png")]
     // A label with nothing after it.
     [InlineData("Name")]
@@ -400,11 +401,33 @@ public class PersonaSectionGrammarTests
     [InlineData("Avatar cto.jpg", "cto.jpg")]
     [InlineData("Portrait pictures/cto.webp", "pictures/cto.webp")]
     [InlineData("Profile Picture cto.gif", "cto.gif")]
-    // The last token, the same rule the prose arm uses.
-    [InlineData("Picture the file cto.jpeg", "cto.jpeg")]
+    // A label and a value, not a sentence (CB-140, §B): unlike the prose
+    // arm, this one no longer takes a last token off an unrooted value —
+    // everything after the label is the picture, verbatim, the same as a
+    // bullet or a front-matter key reads it. "the file " is not a polite
+    // preamble here, it is part of the path.
+    [InlineData("Picture the file cto.jpeg", "the file cto.jpeg")]
+    // An absolute path is read whole too, and containment is PersonaFiles'
+    // question rather than this grammar's — see PersonaRealFileTests.
+    [InlineData("Photo /etc/passwd.png", "/etc/passwd.png")]
     public void APictureIsReadOffAColonLessLine(string line, string expected)
     {
         Assert.Equal(expected, PersonaMarkdown.Parse(new[] { "## Attributes", line }).Avatar);
+    }
+
+    // The negative control CB-140 was filed over, at the section arm: a
+    // rooted value with a space in a directory component is read whole
+    // rather than truncated to a relative fragment — built from
+    // Path.DirectorySeparatorChar so this is rooted on both CI runners.
+    [Fact]
+    public void ASectionPictureWithASpaceInItsDirectoryIsReadWhole()
+    {
+        var sep = Path.DirectorySeparatorChar;
+        var rooted = sep + "a" + sep + "b c" + sep + "x.png";
+
+        var fields = PersonaMarkdown.Parse(new[] { "## Attributes", "Photo " + rooted });
+
+        Assert.Equal(rooted, fields.Avatar);
     }
 
     // --- precedence -------------------------------------------------------
