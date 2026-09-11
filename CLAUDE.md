@@ -749,12 +749,26 @@ the guard only ran in CI:
 
 ```bash
 dotnet test tests/UiTests -c Release -- --report-xunit --report-xunit-filename ui-tests.xunit.xml
-pwsh tools/check-xunit-report.ps1 -ReportPath tests/UiTests/bin/Release/net10.0/<rid>/TestResults/ui-tests.xunit.xml -SuiteName UiTests -MinimumExpectedTests 1005 -Attempt 1 -MaxAttempts 1
+pwsh tools/check-xunit-report.ps1 -ReportPath tests/UiTests/bin/Release/net10.0/<rid>/TestResults/ui-tests.xunit.xml -SuiteName UiTests -MinimumExpectedTests 1050 -Attempt 1 -MaxAttempts 1
 ```
 
-(`<rid>` is whatever `dotnet test` printed for your machine; 1005 is the
-floor `ci.yml` currently uses — bump both only when the real total moves
-meaningfully, never to make a red run pass.)
+(`<rid>` is whatever `dotnet test` printed for your machine. **1050 is the
+value `ci.yml` actually sets today — read off `$minimumExpectedTests` in the
+UiTests step, not remembered.** This paragraph said 1005 until CB-141 checked
+it against the file, and a floor 45 too low is the worst kind of wrong number:
+it reads as measured, it never fails, and it silently stops being the guard it
+claims to be. If you quote it again, quote it from `ci.yml`. Bump the floor
+itself only when the real total moves meaningfully, in both places at once, and
+never to make a red run pass. The real total sits comfortably above this floor
+and moves every time a branch lands — CB-141 watched it go 1090 to 1091 during
+its own rebase — so measure it when you need it rather than reading a number
+out of this paragraph.)
+
+`AGENTS.md` carries this same advice and deliberately names **no** number,
+pointing at `.github/workflows/ci.yml` instead. That is the better shape and it
+is why it needed no correction here: a figure copied into prose goes stale
+without anything failing, and the two files are in sync on substance even
+though only one of them has a digit in it.
 
 `dotnet test` defaults to Debug; `ci.yml` builds Release. That gap is not
 theoretical and it is not about optimisation changing behaviour — Release simply
