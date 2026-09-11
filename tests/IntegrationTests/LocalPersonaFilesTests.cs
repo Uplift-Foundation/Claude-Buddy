@@ -106,8 +106,15 @@ public class LocalPersonaFilesTests : IDisposable
         Assert.Null(PersonaFiles.AvatarAt(project, Path.Combine("..", "outside.png")));
     }
 
+    // Renamed from ARootedPicturePathIsRefused (CB-140): the refusal was never
+    // about the string being rooted — Path.IsPathRooted(absolute) is still
+    // true here and is no longer why this fails. What refuses it is that
+    // "elsewhere" is not inside "project", which is exactly the same reason
+    // APictureAboveTheMarkdownsDirectoryIsRefused above refuses a relative
+    // `../outside.png`. This test's assertion is unchanged; only the reason
+    // it is true has moved.
     [Fact]
-    public void ARootedPicturePathIsRefused()
+    public void ARootedPicturePathOutsideTheRootIsRefused()
     {
         var project = Dir("project");
         var elsewhere = Dir("elsewhere");
@@ -115,6 +122,43 @@ public class LocalPersonaFilesTests : IDisposable
         File.WriteAllBytes(absolute, Png());
 
         Assert.True(Path.IsPathRooted(absolute));
+        Assert.Null(PersonaFiles.AvatarAt(project, absolute));
+    }
+
+    // The twin CB-140 added: the same rooted, absolute string, this time
+    // naming a file that really is inside the directory being asked about.
+    // Containment is what decides an absolute path now, in both directions —
+    // this is the "yes" half, alongside the "no" half just above.
+    [Fact]
+    public void ARootedPicturePathInsideTheRootIsRead()
+    {
+        var project = Dir("project");
+        var absolute = Path.Combine(project, "leota.png");
+        File.WriteAllBytes(absolute, Png());
+
+        Assert.True(Path.IsPathRooted(absolute));
+        Assert.Equal(Png(), PersonaFiles.AvatarAt(project, absolute));
+    }
+
+    // The one way an absolute path still gets refused for *where* it walks
+    // rather than for its own directory: a symlinked directory component
+    // between the root and the file, the same trap
+    // APictureReachedThroughALinkOutOfTheDirectoryIsRefused proves for a
+    // relative path. EscapesThroughLink walks every component of the path
+    // relative to the root, so an absolute value is walked exactly the same
+    // way once IsWithin has already agreed it names something under the
+    // root as a string.
+    [SymlinkFact]
+    public void ARootedPicturePathThroughALinkedDirectoryIsRefused()
+    {
+        var project = Dir("project");
+        var elsewhere = Dir("elsewhere");
+        File.WriteAllBytes(Path.Combine(elsewhere, "leota.png"), Png());
+        Directory.CreateSymbolicLink(Path.Combine(project, "pictures"), elsewhere);
+
+        var absolute = Path.Combine(project, "pictures", "leota.png");
+
+        Assert.True(File.Exists(absolute));
         Assert.Null(PersonaFiles.AvatarAt(project, absolute));
     }
 
