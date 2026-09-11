@@ -685,6 +685,23 @@ public class LocalPersonaUiTests : IDisposable
     // An orb falling back to its folder letters is what "no persona" looks like
     // on screen, which is why that is what is asserted rather than a null in
     // the registry alone.
+    // Pinned to CB-143's empty user-config seam, carried here alongside
+    // CB-142/CB-144 rather than left for a later ticket. This test asserts the
+    // orb is *not* dressed, and the fixture's own CLAUDE.md deliberately
+    // supplies nothing — so without the pin the scan walks on to the real
+    // `~/.claude`, and the assertion becomes "whoever runs this suite has not
+    // written a persona into their own config directory". That is not a
+    // property of this code, and on this machine it is not even true: the
+    // repository this suite lives in has a `.claude/PERSONA.MD` naming
+    // Jennifer.
+    //
+    // An absence-asserting scan test must pin its config directories or it is
+    // asserting something about the developer. Its positive siblings do not
+    // need the pin, and that asymmetry is not an oversight: `CandidateFiles`
+    // adds the directory walk before the user config dirs and every field is
+    // first-value-wins, so a fixture that supplies a field always beats
+    // anything in `~/.claude`. Only a fixture that supplies *nothing* can be
+    // answered by the machine.
     [AvaloniaFact]
     public void ARealScanIgnoresTheSameYamlBlockWhenNothingMarksItAsAPersona()
     {
@@ -735,7 +752,7 @@ public class LocalPersonaUiTests : IDisposable
                     Tty = "/dev/ttys004",
                 }));
 
-            var manager = new SessionManager(statusDir);
+            var manager = PinnedManager(statusDir);
             manager.ScanAndUpdate();
 
             Assert.Null(LocalPersonas.For(sessionId)?.Name);
