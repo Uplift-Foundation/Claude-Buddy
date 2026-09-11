@@ -100,6 +100,61 @@ public class PersonaRejectionMessageTests
         Assert.Contains("data:", unusable);
     }
 
+    // --- CB-147, D6: the two-root wording, opted into rather than default --
+
+    // bothRootsSearched defaults to false, so every call above — none of
+    // which passes it — is the proof that every existing message is
+    // untouched. These are the opt-in arm: only EscapesRoot and Unreadable
+    // vary on it, because those are the only two reachable when a value has
+    // genuinely failed under two distinct roots (D5) — TooLarge already
+    // names the one file that was found and measured, and NotAPicturePath is
+    // decided before any root is tried at all.
+    [Fact]
+    public void EscapesRootNamesBothAnchorsOnlyWhenBothWereSearched()
+    {
+        var single = PersonaFiles.RejectionMessage(PersonaFiles.AvatarRejection.EscapesRoot, "cto.png", 0);
+        var both = PersonaFiles.RejectionMessage(
+            PersonaFiles.AvatarRejection.EscapesRoot, "cto.png", 0, bothRootsSearched: true);
+
+        Assert.Contains(
+            "escapes root — it resolves outside the directory of the markdown that named it", single);
+        Assert.Contains("directory of the markdown that named it", both);
+        Assert.Contains("workspace", both);
+        Assert.NotEqual(single, both);
+    }
+
+    [Fact]
+    public void UnreadableNamesBothAnchorsOnlyWhenBothWereSearched()
+    {
+        var single = PersonaFiles.RejectionMessage(PersonaFiles.AvatarRejection.Unreadable, "cto.png", 0);
+        var both = PersonaFiles.RejectionMessage(
+            PersonaFiles.AvatarRejection.Unreadable, "cto.png", 0, bothRootsSearched: true);
+
+        Assert.Contains("it is missing, empty, or this process may not open it", single);
+        Assert.Contains("directory of the markdown that named it", both);
+        Assert.Contains("workspace", both);
+        Assert.Contains("empty, or this process may not open it", both);
+        Assert.NotEqual(single, both);
+    }
+
+    // TooLarge and NotAPicturePath are the two categories D5's ranking can
+    // never report from a genuinely two-root failure in a way that would
+    // make this flag matter (TooLarge already names a real, measured file;
+    // NotAPicturePath never reaches a root at all) — asserted here as the
+    // other half of "only EscapesRoot and Unreadable vary".
+    [Theory]
+    [InlineData("TooLarge")]
+    [InlineData("NotAPicturePath")]
+    public void EveryOtherCategoryIgnoresTheBothRootsFlagEntirely(string reason)
+    {
+        var category = Enum.Parse<PersonaFiles.AvatarRejection>(reason);
+
+        var single = PersonaFiles.RejectionMessage(category, "cto.png", 9_437_184);
+        var both = PersonaFiles.RejectionMessage(category, "cto.png", 9_437_184, bothRootsSearched: true);
+
+        Assert.Equal(single, both);
+    }
+
     // The cap is spelled with invariant separators rather than the machine's,
     // so a runner in a comma-decimal locale writes the same line as a runner
     // that is not — and so an assertion about it is about the message rather
