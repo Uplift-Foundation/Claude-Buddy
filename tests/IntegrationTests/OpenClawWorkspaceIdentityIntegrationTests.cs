@@ -76,4 +76,47 @@ public class OpenClawWorkspaceIdentityIntegrationTests : IDisposable
                 new Dictionary<string, OpenClawSessions.AgentIdentity>());
         }
     }
+
+    // CB-147, D7: pinning the conclusion that OpenClawWorkspaceIdentity needs
+    // no second candidate root, so the reasoning cannot rot silently if
+    // Read's own directory walk ever changes shape. Read canonicalises the
+    // workspace to `root` and enumerates `*.md` with
+    // SearchOption.TopDirectoryOnly in that same root, so the directory of
+    // every file it reads and the workspace root are one and the same
+    // directory by construction — a subdirectory picture still has to
+    // resolve, and an escaping one still has to be refused, with nothing new
+    // to add on either side.
+    [Fact]
+    public void ASubdirectoryPictureStillResolvesUnderOpenClawsSingleRoot()
+    {
+        Directory.CreateDirectory(Path.Combine(_workspace, "avatars"));
+        File.WriteAllBytes(Path.Combine(_workspace, "avatars", "mica.png"), Png());
+        File.WriteAllText(
+            Path.Combine(_workspace, "IDENTITY.md"), "- Name: Mica\n- Avatar: avatars/mica.png\n");
+
+        var identity = OpenClawWorkspaceIdentity.Read(_workspace);
+
+        Assert.Equal("Mica", identity.Name);
+        Assert.Equal(Png(), identity.Avatar);
+    }
+
+    [Fact]
+    public void AnEscapingPictureIsStillRefusedUnderOpenClawsSingleRoot()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "cb-workspace-outside-" + Guid.NewGuid());
+        Directory.CreateDirectory(outside);
+        try
+        {
+            File.WriteAllBytes(Path.Combine(outside, "leota.png"), Png());
+            File.WriteAllText(
+                Path.Combine(_workspace, "IDENTITY.md"),
+                "- Name: Mica\n- Avatar: ../" + Path.GetFileName(outside) + "/leota.png\n");
+
+            Assert.Null(OpenClawWorkspaceIdentity.Read(_workspace).Avatar);
+        }
+        finally
+        {
+            try { Directory.Delete(outside, recursive: true); } catch (IOException) { }
+        }
+    }
 }

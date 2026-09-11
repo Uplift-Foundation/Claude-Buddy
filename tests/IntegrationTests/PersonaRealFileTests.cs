@@ -345,14 +345,20 @@ public class PersonaRealFileTests : IDisposable
 
     // The negative control that proves the guard above is still a guard: an
     // absolute path to a real, readable file is refused when that file is
-    // *not* inside the naming file's own root — a sibling directory, in this
-    // case, one level up from `.claude`. Without this, "an absolute path
-    // resolves" and "containment is not checked at all" would look identical.
+    // *not* inside either candidate root — not the naming file's own
+    // directory (`.claude`), and, since CB-147, not the workspace root
+    // (`project`) either. The file sits a level *above* `project` itself, in
+    // `_root`, so this is a value D3 says must still be refused exactly as
+    // before: escaping both roots is escaping both roots, however many of
+    // them there now are. (CB-147 moved the file this test writes from
+    // directly inside `project` to _root — see
+    // AnAbsolutePathInsideTheWorkspaceButOutsideTheNamingFilesDirectoryIsNowRead
+    // just below for what a path in that in-between place resolves to now.)
     [Fact]
     public void AnAbsolutePicturePathOutsideTheNamingFilesRootIsRefused()
     {
         var project = WriteTheRealTree(picture: "inside.png");
-        var sibling = Path.Combine(project, "sibling-9214.png");
+        var sibling = Path.Combine(_root, "sibling-9214.png");
         File.WriteAllBytes(sibling, PortraitOf(1024));
 
         File.WriteAllText(
@@ -367,12 +373,15 @@ public class PersonaRealFileTests : IDisposable
     // name — the shape that used to defeat the rooted-path guard before it
     // ever reached this check. Containment refuses it exactly the same way
     // whether or not a space is involved, which is the point: the space was
-    // only ever a problem for the string-level rule this ticket removed.
+    // only ever a problem for the string-level rule this ticket removed. As
+    // above, the sibling now sits outside `project` entirely rather than
+    // merely outside `.claude`, so it escapes both CB-147 candidate roots
+    // rather than only the first.
     [Fact]
     public void AnAbsolutePicturePathOutsideTheRootWithASpaceInItIsRefused()
     {
         var project = WriteTheRealTree(picture: "inside-space.png");
-        var siblingDir = Path.Combine(project, "sibling with space");
+        var siblingDir = Path.Combine(_root, "sibling with space");
         Directory.CreateDirectory(siblingDir);
         var sibling = Path.Combine(siblingDir, "outside-4471.png");
         File.WriteAllBytes(sibling, PortraitOf(1024));
@@ -383,6 +392,36 @@ public class PersonaRealFileTests : IDisposable
 
         Assert.Null(Resolve(project).AvatarPath);
         Assert.Contains("escapes root", Assert.Single(LinesAbout("outside-4471.png")));
+    }
+
+    // CB-147, D4: the deliberate widening, stated as its own test rather than
+    // left as a side effect discovered by whoever next edits the two
+    // negative controls above. This is the exact value those two tests used
+    // to write — an absolute path directly inside `project` but outside the
+    // naming file's own directory (`project/.claude`) — and before this
+    // ticket it was refused. It is accepted now, because `project` is the
+    // workspace root and Path.Combine returns an absolute second argument
+    // unchanged, so the value resolves to the same file under either
+    // candidate root and differs only in which one's containment it passes.
+    // The ticket's non-goal is "not changing anything about absolute-path
+    // handling" — read as CB-140's IsWithin-only rule staying put, which it
+    // does; this is a new root being tried, not a weaker check being applied
+    // to the roots that already existed.
+    [Fact]
+    public void AnAbsolutePathInsideTheWorkspaceButOutsideTheNamingFilesDirectoryIsNowRead()
+    {
+        var project = WriteTheRealTree(picture: "inside.png");
+        var workspaceRelative = Path.Combine(project, "workspace-relative-6650.png");
+        File.WriteAllBytes(workspaceRelative, PortraitOf(1024));
+
+        File.WriteAllText(
+            Path.Combine(project, ".claude", "PERSONA.MD"),
+            "## Attributes\n\n- Profile photo: " + workspaceRelative + "\n");
+
+        var persona = Resolve(project);
+
+        Assert.Equal(workspaceRelative, persona.AvatarPath);
+        Assert.Empty(LinesAbout("workspace-relative-6650.png"));
     }
 
     // CB-146's own reason to exist. This exact number — 8,391,801 — is the

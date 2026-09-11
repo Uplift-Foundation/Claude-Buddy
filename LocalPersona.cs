@@ -227,13 +227,17 @@ namespace ClaudeBuddy
         }
 
         // The fold. First file to state a field owns it, and the picture is
-        // resolved against the directory of the file that named it — not
-        // against the session's cwd, so a `portrait.png` written in
+        // resolved against the directory of the file that named it first —
+        // not against the session's cwd, so a `portrait.png` written in
         // ~/.claude/CLAUDE.md means the one in ~/.claude and cannot be
         // shadowed by a file of that name in whatever directory the session
-        // happens to be sitting in.
+        // happens to be sitting in. The workspace root is tried only when
+        // that first, narrower lookup finds nothing (CB-147) — so a picture
+        // written relative to the workspace root, rather than to the
+        // directory of the markdown that named it, still resolves, without
+        // weakening the guarantee the file-directory lookup already made.
         internal static Persona Resolve(string? cwd, SessionSource source, IEnumerable<string> userConfigDirs) =>
-            ResolveFrom(CandidateFiles(cwd, userConfigDirs, source));
+            ResolveFrom(CandidateFiles(cwd, userConfigDirs, source), cwd);
 
         // The same fold, over a candidate list somebody else has already built.
         //
@@ -247,9 +251,22 @@ namespace ClaudeBuddy
         // the two the same list by construction rather than by both asking the
         // same question and hoping for the same answer, and it saves the second
         // walk besides.
-        internal static Persona ResolveFrom(IReadOnlyList<string> candidates)
+        //
+        // workspaceCwd defaults to null so every caller from before CB-147 —
+        // the direct-candidate-list tests among them — keeps its original,
+        // single-root behaviour without editing a call site: CandidateRoots
+        // treats a null workspace root as "one candidate root", which is
+        // this ticket's required degenerate case (D8) rather than a special
+        // case bolted on beside it.
+        internal static Persona ResolveFrom(IReadOnlyList<string> candidates, string? workspaceCwd = null)
         {
             if (candidates.Count == 0) return Empty;
+
+            // Canonicalised once per resolve rather than once per candidate
+            // file, since it is the same directory for every one of them. A
+            // cwd that is blank or does not exist canonicalises to null,
+            // which is exactly the "no second root" case D8 requires.
+            var workspaceRoot = PersonaFiles.CanonicalDirectory(workspaceCwd);
 
             string? name = null;
             string? voice = null;
@@ -286,7 +303,12 @@ namespace ClaudeBuddy
                 // also every file where somebody wrote a picture this grammar
                 // could not read — so the one case worth reporting was the one
                 // case that never reached the resolver at all.
-                var picture = PersonaFiles.AvatarPathAt(root, fields);
+                //
+                // root — the file's own directory — first, workspaceRoot
+                // second and only if root finds nothing: see
+                // PersonaFiles.AvatarAt's own comment (D1/D2) for why that
+                // order is not arbitrary.
+                var picture = PersonaFiles.AvatarPathAt(root, workspaceRoot, fields);
                 if (picture is null) continue;
 
                 avatarSource = path;

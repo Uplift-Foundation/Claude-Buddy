@@ -1539,7 +1539,12 @@ namespace ClaudeBuddy
             // are now one list; they used to be two, each built from its own
             // reading of CLAUDE_CONFIG_DIR and ClaudeCodeProfileDirs, with the
             // whole signature comparison in between them.
-            var persona = LocalPersona.ResolveFrom(candidates);
+            //
+            // status.Cwd passed as the workspace root (CB-147): it is already
+            // guarded non-blank above, and it is what lets a picture written
+            // relative to the workspace root — rather than to the directory
+            // of the markdown that named it — still resolve.
+            var persona = LocalPersona.ResolveFrom(candidates, status.Cwd);
 
             // Stored over the set the *next* tick will compare, not the one
             // just compared. On the very first pass there is no previous read

@@ -104,6 +104,44 @@ public class PersonaAvatarFileTests : IDisposable
         }
     }
 
+    // CB-147: a picture named relative to the workspace root rather than to
+    // the directory of the markdown that named it — reached the way the app
+    // actually reaches it, through the same `@`-import shape this
+    // repository's own CLAUDE.md uses, so the import hop is exercised rather
+    // than a hand-picked root. No new visible surface comes with this
+    // ticket, so there is no new tests/UiScreenshots capture to add — the
+    // decode path below is the same one AnAbsoluteAvatarPathFromAResolvedPersonaDecodesTheSameWay
+    // already draws through, and this is the same seam with a different root
+    // winning the resolve.
+    [AvaloniaFact]
+    public void AWorkspaceRelativeAvatarPathFromAResolvedPersonaDecodesTheSameWay()
+    {
+        var workspace = Path.Combine(Path.GetTempPath(), "cb-persona-avatar-ws-" + Guid.NewGuid());
+        var personaDir = Path.Combine(workspace, ".claude", "persona");
+        Directory.CreateDirectory(personaDir);
+        try
+        {
+            var picture = Path.Combine(personaDir, "margo.gif");
+            File.WriteAllBytes(picture, Png());
+            File.WriteAllText(Path.Combine(workspace, "CLAUDE.md"), "@.claude/persona/persona.md\n");
+            File.WriteAllText(
+                Path.Combine(personaDir, "persona.md"),
+                "- Name: Margo\n- Profile picture: .claude/persona/margo.gif\n");
+
+            var persona = LocalPersona.Resolve(workspace, SessionSource.ClaudeCode, Array.Empty<string>());
+            Assert.Equal(picture, persona.AvatarPath);
+
+            var avatar = OpenClawAvatars.ForFile(Key(), persona.AvatarPath!);
+
+            Assert.NotNull(avatar);
+            Assert.Single(avatar!.Frames);
+        }
+        finally
+        {
+            try { Directory.Delete(workspace, recursive: true); } catch (IOException) { }
+        }
+    }
+
     // The cache is the whole point of the entry point taking a key. An orb asks
     // for its picture on every poll tick; a read per tick is what the decoded
     // cache has always existed to avoid, and moving the bytes out of the
