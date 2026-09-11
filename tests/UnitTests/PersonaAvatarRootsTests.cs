@@ -72,4 +72,39 @@ public class PersonaAvatarRootsTests
 
         Assert.Equal(new[] { "/ws/project", "/WS/PROJECT" }, roots);
     }
+
+    // PersonaFiles.Rank — D5's ranking, asserted as the ordering contract it
+    // actually is rather than as three hardcoded integers: AvatarAt only ever
+    // asks "did this rejection get strictly further than the best one so
+    // far", so what matters is the relative order, not the literal numbers,
+    // and a test pinned to 0/1/2/-1 would turn a harmless renumbering into a
+    // false failure. Unreadable means nothing was there at all; EscapesRoot
+    // means something real was found outside the root; TooLarge means the
+    // file was found and measured — each one a stronger claim about the
+    // world than the last, hence the order.
+    //
+    // NotAPicturePath is included even though it can never actually reach
+    // Rank in production (it is decided in RejectUnusableValue before any
+    // root is tried) — its arm exists only to keep the switch exhaustive,
+    // and the contract that matters for it is purely negative: it must never
+    // be able to win AvatarAt's "got strictly further" comparison against a
+    // real outcome, which is what ranking it below all three asserts.
+    [Fact]
+    public void EveryRejectionRanksBelowTheOneThatProvesMoreAboutTheWorld()
+    {
+        var unreadable = PersonaFiles.Rank(PersonaFiles.AvatarRejection.Unreadable);
+        var escapesRoot = PersonaFiles.Rank(PersonaFiles.AvatarRejection.EscapesRoot);
+        var tooLarge = PersonaFiles.Rank(PersonaFiles.AvatarRejection.TooLarge);
+        var notAPicturePath = PersonaFiles.Rank(PersonaFiles.AvatarRejection.NotAPicturePath);
+
+        Assert.True(unreadable < escapesRoot);
+        Assert.True(escapesRoot < tooLarge);
+
+        // Below every real outcome, not merely below one of them — otherwise
+        // a future reordering of the other three could leave it able to
+        // outrank the weakest of them.
+        Assert.True(notAPicturePath < unreadable);
+        Assert.True(notAPicturePath < escapesRoot);
+        Assert.True(notAPicturePath < tooLarge);
+    }
 }

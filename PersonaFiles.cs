@@ -436,8 +436,17 @@ namespace ClaudeBuddy
         // D5's ranking, as a number: how far a rejection got toward finding
         // the file. NotAPicturePath cannot arise here — it is decided in
         // RejectUnusableValue, before any root is tried at all — so it has no
-        // meaningful rank and is given one only so the switch is exhaustive.
-        private static int Rank(AvatarRejection reason) => reason switch
+        // meaningful rank; its arm exists to keep the switch exhaustive and
+        // has to rank below every real outcome so it can never win the "got
+        // furthest" comparison in AvatarAt, if some future caller ever did
+        // manage to hand it in.
+        //
+        // Internal rather than private so a unit test can assert the ranking
+        // contract directly, the same reason SessionManager.Superseded and
+        // InheritTerminalInfo are internal — a decision worth a case per
+        // outcome is a seam to open up, not a reason to test it only through
+        // whatever real files happen to reach it.
+        internal static int Rank(AvatarRejection reason) => reason switch
         {
             AvatarRejection.Unreadable => 0,
             AvatarRejection.EscapesRoot => 1,
