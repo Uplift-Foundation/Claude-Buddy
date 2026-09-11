@@ -98,6 +98,25 @@ public class PersonaMarkdownProseTests
         Assert.Equal(expected, PersonaMarkdown.Parse(new[] { line }).Avatar);
     }
 
+    // The positive half of the fail-open fixture, at the level a real
+    // CLAUDE.md is actually read at: one sentence, through Parse, with no
+    // "the file" preamble in front of the path — this is the shape the
+    // ticket's own example names ("Her picture is /Users/w/My Docs/x.png").
+    // Because the whole value after "is" is itself rooted, ProseField hands
+    // it to AvatarValue exactly as written and the space inside its
+    // directory costs nothing. Built from Path.DirectorySeparatorChar so
+    // this is rooted — and means the same thing — on both CI runners.
+    [Fact]
+    public void ASentenceWhoseWholeValueIsRootedWithASpaceInItIsReadInFull()
+    {
+        var sep = Path.DirectorySeparatorChar;
+        var rooted = sep + "a" + sep + "b c" + sep + "x.png";
+
+        var fields = PersonaMarkdown.Parse(new[] { "Her picture is " + rooted });
+
+        Assert.Equal(rooted, fields.Avatar);
+    }
+
     // --- the negative table ----------------------------------------------
 
     [Theory]

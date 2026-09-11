@@ -103,6 +103,18 @@ public class PersonaFrontMatterTests
         Assert.Null(fields.Name);
     }
 
+    // A pair that opens with one mark and closes with the other is not a
+    // matched pair — Unquoted requires both ends to agree — so it is left
+    // exactly as written, quotes and all, and then refused by the ordinary
+    // character bound the same as any other stray punctuation would be.
+    [Fact]
+    public void MismatchedOpeningAndClosingQuotesAreNotStripped()
+    {
+        var fields = PersonaMarkdown.Parse(new[] { "---", "voice: \"af_bella'", "---" });
+
+        Assert.Equal("\"af_bella'", fields.Voice);
+    }
+
     // A bullet, a bold field and a table cell are Markdown a person typed —
     // the unquoting strip is a YAML affordance and runs nowhere else, so a
     // quote written there is part of the value.

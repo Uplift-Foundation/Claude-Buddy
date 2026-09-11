@@ -223,6 +223,24 @@ public class PersonaAvatarValueTests
         Assert.Null(PersonaMarkdown.AvatarValue("the file " + rooted));
     }
 
+    // The positive half of the same fixture, through the *lenient* reader
+    // with no "the file" preamble at all — "Her picture is /a/b c/x.png" is
+    // itself covered end to end at the sentence level in
+    // PersonaMarkdownProseTests; this is the same value one layer down,
+    // straight through AvatarValue. When the *whole* candidate is rooted —
+    // not merely a fragment of a longer sentence — the space inside it must
+    // not cost the reading: this is the case "the file" being absent
+    // entirely changes, and it is the shape the ticket's own example
+    // ("Her picture is /Users/w/My Docs/x.png") names directly.
+    [Fact]
+    public void AWholeValueThatIsRootedWithASpaceInItsDirectoryIsReadInFull()
+    {
+        var sep = Path.DirectorySeparatorChar;
+        var rooted = sep + "a" + sep + "b c" + sep + "x.png";
+
+        Assert.Equal(rooted, PersonaMarkdown.AvatarValue(rooted));
+    }
+
     // --- ColonIsADriveLetter, through the explicit reader -------------------
 
     [Theory]
@@ -240,6 +258,15 @@ public class PersonaAvatarValueTests
     public void ASecondColonAfterTheDriveLetterIsRefused()
     {
         Assert.Null(PersonaMarkdown.ExplicitAvatarValue("C:\\a:b.png"));
+    }
+
+    // A colon that is neither part of a `://` scheme nor at index 1 is not a
+    // drive letter either — it is refused on that alone, with none of the
+    // other conditions in ColonIsADriveLetter ever needing to be asked.
+    [Fact]
+    public void AColonNotAtIndexOneIsNotADriveLetter()
+    {
+        Assert.Null(PersonaMarkdown.ExplicitAvatarValue("ab:cd.png"));
     }
 
     // --- the same value, in each of the four explicit spellings ------------
@@ -390,6 +417,23 @@ public class PersonaAvatarValueTests
 
         Assert.Equal("/Users/someone/portrait.png", fields.Avatar);
         Assert.Equal("/Users/someone/portrait.png", fields.RawAvatar);
+    }
+
+    // The third of the three call sites the fail-open defect reached
+    // (ExplicitAvatar, serving bullets, bold fields, tables and front
+    // matter), at the full Parse level rather than only through
+    // ExplicitAvatarValue directly: a bulleted, absolute path with a space
+    // in a directory component is read whole rather than truncated. Built
+    // from Path.DirectorySeparatorChar so it is rooted on both CI runners.
+    [Fact]
+    public void ABulletedAbsolutePathWithASpaceInItsDirectoryIsReadInFull()
+    {
+        var sep = Path.DirectorySeparatorChar;
+        var rooted = sep + "a" + sep + "b c" + sep + "x.png";
+
+        var fields = PersonaMarkdown.Parse(new[] { "- Photo: " + rooted });
+
+        Assert.Equal(rooted, fields.Avatar);
     }
 
     // A file that names no picture at all records nothing, which is what keeps
