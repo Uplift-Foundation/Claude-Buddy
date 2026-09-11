@@ -1008,8 +1008,9 @@ drawn exactly as it was before.
 A bullet, with or without a bold label, carries all three fields, and so does
 YAML front matter — labels are case-insensitive, and the first valid value for
 each field wins. A standalone bold field (`**Name:** Leota`) and a two-cell
-table row carry a voice or a picture, but not (yet) a name; see the front
-matter section below for a name written that way instead. `Avatar`, `Profile
+table row carry all three as well, except that a name is read from either only
+underneath a persona heading — described below — because `| Name | string |` in
+an ordinary schema table must not rename an orb. `Avatar`, `Profile
 Picture`, `Profile Pic`, `Profile Image`, `Profile Photo`, `Picture`,
 `Portrait`, `Photo`, `Image` and `Image Animated` (or `image_animated:` in
 front matter) all name the picture; `Voice`, `Voice Name`, `Speech Voice` and

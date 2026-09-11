@@ -116,6 +116,38 @@ namespace ClaudeBuddy
     //     persona — ended up on an orb. `slug:` exists because a generator
     //     without a display name yet still writes one, and `name:` wins the
     //     tie the same way every other field's first statement does.
+    //
+    //   * **A standalone bold field and a two-cell table row name the agent
+    //     too, but only inside a persona section** (CB-142). Before this they
+    //     were the two arms that read a voice and a picture and no name at
+    //     all, so `**Name:** Leota` — the very spelling the README used as its
+    //     example — named nobody, which is the drift at the top of this file
+    //     in its purest form: one field, written twice, honoured once.
+    //
+    //     The bound alone could not fix it. `| Name | string |` in a schema
+    //     table is a one-word value, and `NameValue("string")` returns
+    //     `"string"` — measured, not read off the regex — so a bound-only arm
+    //     would have put the word "string" on an orb the first time anybody
+    //     documented a data type. Scope is what refuses that line, and it
+    //     refuses it for the same reason CB-135's colon-less arm is scoped: a
+    //     table of persona attributes under `## Persona` and a schema table in
+    //     a design document are the same shape, and the heading is the only
+    //     thing that tells them apart.
+    //
+    //     The two guards are complementary rather than redundant, which is
+    //     why both are here. `**Name**: the value passed to the constructor`
+    //     is refused on word count even underneath `## Persona`; `**Name**:
+    //     Aurora` in an ordinary paragraph is refused on scope while passing
+    //     the bound easily. Neither guard catches both lines.
+    //
+    //     The bullet arm and the front-matter arm stay unscoped, and that is
+    //     not an inconsistency. OpenClaw's `IDENTITY.md` is a bare bulleted
+    //     list with no heading anywhere in it, and profile-gen writes YAML in
+    //     both of its templates — so scoping either would break every shipped
+    //     profile, while no shipped profile names an agent with a bold field
+    //     or a table row at all. Voice and picture stay unscoped on these two
+    //     arms for exactly that reason in reverse: real profiles do write
+    //     those that way, and CB-142 moved a name and nothing else.
     //   * Nothing inside YAML front matter, a fenced code block, a bullet, a
     //     bold field or a table row reaches the prose arm at all. A fenced
     //     block is where a CLAUDE.md *shows* you what to write, and text being
@@ -339,6 +371,34 @@ namespace ClaudeBuddy
                 return true;
             }
 
+            // A name written as a standalone bold field or a two-cell table
+            // row, which the two arms below share (CB-142). One function
+            // rather than two copies, for the reason `ExplicitAvatar` above is
+            // one function: the arms agree about every part of this — the
+            // label list, the bound, first-statement-wins — and two copies of
+            // an agreement is one copy that can drift.
+            //
+            // Both guards are asked here rather than at the call sites so that
+            // neither arm can acquire one and not the other. `sectionLevel`
+            // first because it is the cheaper question and the one doing the
+            // work: `NameValue` accepts the word "string", so a schema table's
+            // `| Name | string |` is refused by scope alone.
+            //
+            // Returns whether the line was *claimed*, which unlike
+            // `ExplicitAvatar` means "a name came out of it". A recognised
+            // label whose value fails the bound falls through to the arms
+            // below instead, exactly as the front-matter arm lets it — nothing
+            // down there recognises `Name` as a voice or a picture, so the
+            // line ends up read by nobody, which is what a refusal means.
+            bool ScopedName(string label, string value)
+            {
+                if (sectionLevel <= 0 || !NameLabel(label)) return false;
+                if (NameValue(value) is not { } stated) return false;
+
+                name ??= stated;
+                return true;
+            }
+
             var source = lines.ToList();
             for (var index = 0; index < source.Count; index++)
             {
@@ -485,6 +545,11 @@ namespace ClaudeBuddy
                 if (TableField(trimmed, out var tableLabel, out var tableValue)
                     && (index + 1 >= source.Count || !TableSeparator(source[index + 1])))
                 {
+                    // Asked before the voice and picture arms purely for
+                    // symmetry with the front-matter arm above; the three
+                    // label lists are disjoint, so the order decides nothing.
+                    if (ScopedName(tableLabel, tableValue)) continue;
+
                     if (VoiceLabel(tableLabel) && VoiceValue(tableValue) is var (tableVoice, tableRate) && tableVoice is not null)
                     {
                         voice ??= tableVoice;
@@ -497,6 +562,8 @@ namespace ClaudeBuddy
 
                 if (BoldField(trimmed, out var boldLabel, out var boldValue))
                 {
+                    if (ScopedName(boldLabel, boldValue)) continue;
+
                     if (VoiceLabel(boldLabel) && VoiceValue(boldValue) is var (boldVoice, boldRate) && boldVoice is not null)
                     {
                         voice ??= boldVoice;

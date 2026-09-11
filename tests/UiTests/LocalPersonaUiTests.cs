@@ -815,6 +815,159 @@ public class LocalPersonaUiTests : IDisposable
     // not a property of this test.
     private static SessionManager PinnedManager(string statusDir) =>
         new(statusDir, null, userConfigDirs: () => Array.Empty<string>());
+    // CB-142, end to end: a persona written as a table of attributes under a
+    // heading, which named nobody at all before this ticket — the table arm
+    // read a voice and a picture and no name — so the orb wore its folder's
+    // letters while the file three lines above it said otherwise. The glyph
+    // and the panel title are the two places that shows, and they are asserted
+    // separately because a name can reach the registry and still not reach
+    // either.
+    [AvaloniaFact]
+    public void ARealScanReadsANameFromAnAttributeTableUnderAPersonaHeading()
+    {
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+
+        var project = Path.Combine(Path.GetTempPath(), "cb-persona-table-" + Guid.NewGuid());
+        var statusDir = Path.Combine(Path.GetTempPath(), "cb-persona-table-dir-" + Guid.NewGuid());
+        Directory.CreateDirectory(project);
+        Directory.CreateDirectory(statusDir);
+
+        var sessionId = "persona-table-ui-" + Guid.NewGuid();
+
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(project, "CLAUDE.md"),
+                "# Notes\n" +
+                "\n" +
+                "## Persona\n" +
+                "\n" +
+                "| Field | Value |\n" +
+                "| --- | --- |\n" +
+                "| Name | Aurora Vale |\n" +
+                "| Voice | af_bella (Kokoro TTS) |\n");
+
+            File.WriteAllText(
+                Path.Combine(statusDir, sessionId + ".txt"),
+                System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+                {
+                    State = "idle",
+                    Cli = "",
+                    Title = "cb-persona-table",
+                    Cwd = project,
+                    SessionPid = Environment.ProcessId,
+                    TermProgram = "iTerm.app",
+                    Tty = "/dev/ttys004",
+                }));
+
+            var manager = PinnedManager(statusDir);
+            manager.ScanAndUpdate();
+
+            Assert.Equal("Aurora Vale", LocalPersonas.For(sessionId)?.Name);
+
+            // No picture in this fixture on purpose: the letters are what the
+            // user sees change, and "Av" is the persona's rather than the
+            // title's, which is "Cp". Both spelled out rather than computed
+            // with OrbGlyph.For — this suite says so at its first case, and
+            // the reason is that a glyph bug survived a year of tests that
+            // asked the function under test what it expected.
+            var orb = OrbFor(manager, sessionId);
+            Assert.True(orb.Glyph.IsVisible);
+            Assert.Equal("Av", orb.GlyphText);
+
+            var fake = new FakeChatSession(null)
+            {
+                SessionId = sessionId,
+                DisplayName = "cb-persona-table",
+            };
+            _panelsToClean.Add(sessionId);
+            ChatPanel.OpenFor(orb, fake);
+            Flush();
+
+            Assert.Equal("Aurora Vale", ChatPanelTestAccess.Instance!.TitleText.Text);
+        }
+        finally
+        {
+            LocalPersonas.Forget(sessionId);
+            try { Directory.Delete(project, recursive: true); } catch { }
+            try { Directory.Delete(statusDir, recursive: true); } catch { }
+        }
+    }
+
+    // Pinned to CB-143's empty user-config seam, which this test needs more
+    // than most: it asserts a persona is *absent*, so against the real
+    // `~/.claude` it would be asserting that whoever runs the suite has not
+    // written a persona into their own config directory. That is not a
+    // property of this test and it holds only by luck.
+    //
+    // The negative control at the same level, and the one that says why the
+    // arm above is scoped rather than merely bounded. This CLAUDE.md is an
+    // ordinary design note — a schema table, no persona anywhere — and it is
+    // the file every session in such a repository reads. `NameValue` accepts
+    // the word "string" (PersonaScopedNameTests measures that rather than
+    // assuming it), so without the heading rule this orb would be labelled
+    // "St" and its panel titled "string".
+    [AvaloniaFact]
+    public void ARealScanOverASchemaTableLeavesTheOrbItsFolderLetters()
+    {
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+
+        var project = Path.Combine(Path.GetTempPath(), "cb-persona-schema-" + Guid.NewGuid());
+        var statusDir = Path.Combine(Path.GetTempPath(), "cb-persona-schema-dir-" + Guid.NewGuid());
+        Directory.CreateDirectory(project);
+        Directory.CreateDirectory(statusDir);
+
+        var sessionId = "persona-schema-ui-" + Guid.NewGuid();
+
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(project, "CLAUDE.md"),
+                "# Notes\n" +
+                "\n" +
+                "## The session record\n" +
+                "\n" +
+                "| Field | Type |\n" +
+                "| --- | --- |\n" +
+                "| Name | string |\n" +
+                "| Started | timestamp |\n" +
+                "\n" +
+                "**Name**: the value passed to the constructor, before defaulting\n");
+
+            File.WriteAllText(
+                Path.Combine(statusDir, sessionId + ".txt"),
+                System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+                {
+                    State = "idle",
+                    Cli = "",
+                    Title = "cb-persona-schema",
+                    Cwd = project,
+                    SessionPid = Environment.ProcessId,
+                    TermProgram = "iTerm.app",
+                    Tty = "/dev/ttys004",
+                }));
+
+            var manager = PinnedManager(statusDir);
+            manager.ScanAndUpdate();
+
+            Assert.Null(LocalPersonas.For(sessionId)?.Name);
+
+            // The letters the session's own title gives, and specifically not
+            // the "St" the word "string" would have drawn. Literals for the
+            // reason the case above gives.
+            var orb = OrbFor(manager, sessionId);
+            Assert.True(orb.Glyph.IsVisible);
+            Assert.Equal("Cp", orb.GlyphText);
+        }
+        finally
+        {
+            LocalPersonas.Forget(sessionId);
+            try { Directory.Delete(project, recursive: true); } catch { }
+            try { Directory.Delete(statusDir, recursive: true); } catch { }
+        }
+    }
 
     // Read rather than widened, the same reasoning SessionScanTests records for
     // reaching the scan's own window table.

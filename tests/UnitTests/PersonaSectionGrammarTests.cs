@@ -564,10 +564,16 @@ public class PersonaSectionGrammarTests
     }
 
     // Every shape that reads a picture label at all: prose, a bullet, a
-    // bulleted bold field, and the colon-less form. The bare bold, table and
-    // front-matter arms read a *voice* and nothing else — for every label, not
-    // just this one — which is CB-133's grammar unchanged and not this
-    // ticket's to widen.
+    // bulleted bold field, and the colon-less form.
+    //
+    // This list was once the whole of it, with a comment saying the bare
+    // bold, table and front-matter arms read a voice and nothing else. That
+    // stopped being true in stages — CB-139 gave all three a picture, CB-140
+    // gave front matter a name, CB-142 gave the bold and table arms one under
+    // a persona heading — so what is left here is a list of the shapes that
+    // read a picture *unconditionally*, and the bare bold and table arms now
+    // belong to it too. PersonaMarkdownGrammarTests owns those; the cases
+    // below stay as the colon-less form's own, which is this file's subject.
     [Theory]
     [InlineData("Her photo is cto.png")]
     [InlineData("Her profile photo is cto.png")]

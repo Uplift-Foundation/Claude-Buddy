@@ -159,6 +159,13 @@ public class PersonaMarkdownProseTests
     [InlineData("When you speak, her voice is what you should use")]
     // Deliberate Markdown metadata shapes are read by their own arms, or not
     // at all; neither is the prose arm's business.
+    //
+    // These two still name nobody after CB-142 gave both arms a name, and the
+    // reason is the scope rather than the shape: each line is parsed on its
+    // own here, with no persona heading above it, which is precisely the
+    // ordinary-document case the scoping rule exists to leave alone. That this
+    // assertion survived the change unedited is the cheapest evidence there is
+    // that it did.
     [InlineData("**Name:** Leota")]
     [InlineData("| Name | Leota |")]
     [InlineData("- Her name is Leota")]
