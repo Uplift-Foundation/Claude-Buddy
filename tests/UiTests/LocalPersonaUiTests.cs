@@ -454,7 +454,7 @@ public class LocalPersonaUiTests : IDisposable
                     Tty = "/dev/ttys004",
                 }));
 
-            var manager = new SessionManager(statusDir);
+            var manager = PinnedManager(statusDir);
             manager.ScanAndUpdate();
 
             Assert.Equal("Leota", LocalPersonas.For(sessionId)?.Name);
@@ -526,7 +526,7 @@ public class LocalPersonaUiTests : IDisposable
                     Tty = "/dev/ttys004",
                 }));
 
-            var manager = new SessionManager(statusDir);
+            var manager = PinnedManager(statusDir);
             manager.ScanAndUpdate();
 
             // The persona's name wins, not the bullet's — the bullet's value
@@ -594,7 +594,7 @@ public class LocalPersonaUiTests : IDisposable
                     Tty = "/dev/ttys004",
                 }));
 
-            var manager = new SessionManager(statusDir);
+            var manager = PinnedManager(statusDir);
             manager.ScanAndUpdate();
 
             Assert.Null(LocalPersonas.For(sessionId)?.Name);
@@ -610,6 +610,16 @@ public class LocalPersonaUiTests : IDisposable
             try { Directory.Delete(statusDir, recursive: true); } catch { }
         }
     }
+
+    // A scan whose user-level config directories are this fixture's answer and
+    // not the machine's — CB-143's seam, used here for the second reason that
+    // ticket found. The scan reaches ~/.claude for a Claude Code session, so
+    // ARealScanWithNoPersonaFileLeavesTheOrbItsFolderLetters was asserting that
+    // *the person running the suite* had not written a persona into their own
+    // config directory. That held on every machine it has run on so far and is
+    // not a property of this test.
+    private static SessionManager PinnedManager(string statusDir) =>
+        new(statusDir, null, userConfigDirs: () => Array.Empty<string>());
 
     // Read rather than widened, the same reasoning SessionScanTests records for
     // reaching the scan's own window table.

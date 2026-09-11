@@ -10,8 +10,10 @@ namespace ClaudeBuddy
     // session's source and the user-level config directories rather than asking
     // the machine for them, so the whole of the resolution — which files, in
     // which order, which field wins — is a plain unit test over a temp tree.
-    // ResolveForSession is the one wrapper that asks the machine, and it does
-    // nothing else.
+    // UserConfigDirs is the one thing here that asks the machine, and it does
+    // nothing else — which is what lets SessionManager's scan ask it once per
+    // pass and hand the answer down, rather than have each step here ask again
+    // and risk two steps of one pass disagreeing (CB-143).
     //
     // Nearest-first, and that is the interesting half. A CLAUDE.md in the
     // directory you are working in is about *this* project; one three levels up
@@ -230,9 +232,23 @@ namespace ClaudeBuddy
         // ~/.claude/CLAUDE.md means the one in ~/.claude and cannot be
         // shadowed by a file of that name in whatever directory the session
         // happens to be sitting in.
-        internal static Persona Resolve(string? cwd, SessionSource source, IEnumerable<string> userConfigDirs)
+        internal static Persona Resolve(string? cwd, SessionSource source, IEnumerable<string> userConfigDirs) =>
+            ResolveFrom(CandidateFiles(cwd, userConfigDirs, source));
+
+        // The same fold, over a candidate list somebody else has already built.
+        //
+        // Split out for CB-143. The scan needs the candidates twice in one pass
+        // — once to stat them for the signature, once to read them — and
+        // building them twice meant building them from UserConfigDirs twice,
+        // which is two readings of two process-wide globals with the whole of
+        // the signature comparison in between. A list that moved between those
+        // two readings gave a pass that watched one set of files and read
+        // another, with nothing anywhere saying so. Handing the list down makes
+        // the two the same list by construction rather than by both asking the
+        // same question and hoping for the same answer, and it saves the second
+        // walk besides.
+        internal static Persona ResolveFrom(IReadOnlyList<string> candidates)
         {
-            var candidates = CandidateFiles(cwd, userConfigDirs, source);
             if (candidates.Count == 0) return Empty;
 
             string? name = null;
@@ -325,13 +341,6 @@ namespace ClaudeBuddy
 
             return signature.ToString();
         }
-
-        // The production wrapper, and the only thing here that asks the machine
-        // anything.
-        internal static Persona ResolveForSession(SessionStatus status) =>
-            status.IsLocalCli && !string.IsNullOrWhiteSpace(status.Cwd)
-                ? Resolve(status.Cwd, status.Source, UserConfigDirs())
-                : Empty;
 
         // The Claude Code config directories this app knows about, in the order
         // they should be asked.

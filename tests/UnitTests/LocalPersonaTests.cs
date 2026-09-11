@@ -5,7 +5,7 @@ namespace ClaudeBuddy.Tests;
 // LocalPersona — which files a session's persona could be written in, which of
 // them actually says what, and what the orb ends up called.
 //
-// In the Settings collection because ResolveForSession and UserConfigDirs reach
+// In the Settings collection because UserConfigDirs reaches
 // ClaudeConfigRoots, which reads ClaudeCodeProfileDirs — one process-wide static
 // that a dozen classes in this assembly touch. SettingsCollection.cs has the
 // story of the once-in-five failure that bought that rule.
@@ -529,41 +529,40 @@ public class LocalPersonaTests : IDisposable
             LocalPersona.Signature(new[] { a, b }), LocalPersona.Signature(new[] { b, a }));
     }
 
-    // --- ResolveForSession: the one wrapper that asks the machine ----------
+    // --- ResolveFrom: the fold over a list somebody else built --------------
+    //
+    // What used to be here was ResolveForSession, a wrapper that asked
+    // UserConfigDirs for itself and applied the two guards
+    // SessionManager.ApplyPersona had already applied a moment earlier. CB-143
+    // removed it: the scan needs the candidate list twice in one pass and now
+    // builds it once, so the fold takes the list rather than the question that
+    // produces it, and the guards live in the one place that was always
+    // checking them first. Both of them are covered where they now are —
+    // LocalPersonaScanTests' AGatewaySessionIsNotGivenAPersona and
+    // ASessionWithNoWorkingDirectoryIsNotGivenAPersona.
 
     [Fact]
-    public void ALocalSessionReadsThePersonaBesideItsWork()
+    public void TheFoldTakesTheCandidateListItIsGiven()
     {
         var project = Dir("tree", "project");
         Write(project, "CLAUDE.md", "Her name is Leota", "Her voice is Bella");
 
-        var persona = LocalPersona.ResolveForSession(new SessionStatus
-        {
-            Cwd = project,
-            Source = SessionSource.ClaudeCode,
-        });
+        var persona = LocalPersona.ResolveFrom(
+            LocalPersona.CandidateFiles(project, Array.Empty<string>(), SessionSource.ClaudeCode));
 
         Assert.Equal("Leota", persona.Name);
         Assert.Equal("Bella", persona.Voice);
     }
 
+    // An empty list is the answer for a session there is nowhere to look for —
+    // a gateway conversation, whose CandidateFiles is empty by the rule at the
+    // top of that method. Empty by reference, because the registry's own change
+    // check is a reference check and a fresh record every pass would drop a
+    // decoded portrait every pass.
     [Fact]
-    public void ASessionWithNoLocalTerminalIsNotAskedForOne()
+    public void AnEmptyCandidateListIsTheEmptyPersonaItself()
     {
-        var project = Dir("tree", "project");
-        Write(project, "CLAUDE.md", "Her name is Leota");
-
-        Assert.Same(LocalPersona.Empty, LocalPersona.ResolveForSession(new SessionStatus
-        {
-            Cwd = project,
-            Source = SessionSource.OpenClaw,
-        }));
-
-        Assert.Same(LocalPersona.Empty, LocalPersona.ResolveForSession(new SessionStatus
-        {
-            Cwd = "",
-            Source = SessionSource.ClaudeCode,
-        }));
+        Assert.Same(LocalPersona.Empty, LocalPersona.ResolveFrom(Array.Empty<string>()));
     }
 
     // --- UserConfigDirs -----------------------------------------------------

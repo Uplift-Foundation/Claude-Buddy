@@ -259,6 +259,42 @@ namespace ClaudeBuddy
         private readonly Dictionary<string, (string Signature, LocalPersona.Persona Persona)>
             _personas = new(StringComparer.Ordinal);
 
+        // Which user-level config directories the persona scan asks about.
+        //
+        // A seam rather than a direct call, and CB-143 is what bought it.
+        // LocalPersona.UserConfigDirs reads two pieces of process-wide mutable
+        // state — the CLAUDE_CONFIG_DIR environment variable, and
+        // ClaudeCodeProfileDirs by way of ClaudeConfigRoots — and ApplyPersona
+        // asked it afresh on every pass. The answer is part of the candidate
+        // list, the candidate list is part of the signature, and a signature
+        // that differs is the scan's definition of "something moved": so
+        // anything at all that changed either of those between two passes
+        // handed the registry a brand-new Persona with identical content, and
+        // LocalPersonas.Set threw away the decoded portrait for it. The whole
+        // settling invariant was hostage to two process-wide globals.
+        //
+        // In this process that is a test-isolation failure and nothing worse —
+        // the app never calls SetEnvironmentVariable, so CLAUDE_CONFIG_DIR is
+        // fixed for its lifetime, and a user adding an account in Settings
+        // genuinely *should* make the scan look again, because that account's
+        // own CLAUDE.md is a user-level persona file it was not reading a
+        // moment ago. One re-resolve when the setting changes is correct; one
+        // per tick is the bug, and nothing in production produces one.
+        //
+        // The reason it is a seam anyway is that a test cannot say that. A
+        // sibling class in another xUnit collection setting CLAUDE_CONFIG_DIR
+        // to a sentinel runs *in parallel* with this one, and every test here
+        // whose claim is "the same Persona object came back" fails with nothing
+        // wrong with it and nothing to point at. Pinning the provider closes
+        // both routes at once and closes them structurally, which a third
+        // [Collection] attribute would not: the attribute is a promise that
+        // every future writer of either global remembers to join, and this is a
+        // scan that no longer reads either.
+        //
+        // Same pattern, and the same argument, as CLAUDE_BUDDY_SETTINGS_DIR and
+        // CLAUDE_BUDDY_PROFILE_ROOT.
+        private readonly Func<IReadOnlyList<string>> _userConfigDirs;
+
         public SessionManager()
             : this(StatusDirectory.Path())
         {
@@ -294,7 +330,8 @@ namespace ClaudeBuddy
             string statusDir,
             Func<Dictionary<string, string>?>? jobListing,
             Func<HashSet<string>?>? attachClients = null,
-            Func<string, string?>? transcriptHunt = null)
+            Func<string, string?>? transcriptHunt = null,
+            Func<IReadOnlyList<string>>? userConfigDirs = null)
         {
             _statusDir = statusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
@@ -307,6 +344,11 @@ namespace ClaudeBuddy
             // Wrapped for the same optional-parameter reason: FindTranscriptFor
             // takes a home override the scan never passes.
             _transcriptHunt = transcriptHunt ?? (id => TranscriptReader.FindTranscriptFor(id));
+            // Wrapped for the same optional-parameter reason the two above are:
+            // UserConfigDirs takes a config-dir override and a home override
+            // that the scan never passes, and an optional parameter stops a
+            // method group converting to a zero-argument Func.
+            _userConfigDirs = userConfigDirs ?? (() => LocalPersona.UserConfigDirs());
         }
 
         private readonly Func<Dictionary<string, string>?> _jobListing;
@@ -1416,7 +1458,14 @@ namespace ClaudeBuddy
             // *it* — a relay's cwd is wherever the app was started from, and
             // reading a persona out of that would put the developer's own
             // repository name on somebody else's orb.
-            if (!status.IsLocalCli || string.IsNullOrEmpty(status.Cwd)) return;
+            //
+            // IsNullOrWhiteSpace rather than IsNullOrEmpty: this is now the
+            // only guard in front of the resolution, where it used to be one of
+            // two and LocalPersona.ResolveForSession carried the stricter half.
+            // A cwd of " " walks nowhere, so its candidate list would be the
+            // user-level files alone — a persona from ~/.claude on an orb whose
+            // session has no working directory at all.
+            if (!status.IsLocalCli || string.IsNullOrWhiteSpace(status.Cwd)) return;
 
             // Source is part of the key, not just the directory: Claude Code
             // consults the user-level config directories and Codex and Grok
@@ -1433,7 +1482,7 @@ namespace ClaudeBuddy
             if (!candidatesByCwd.TryGetValue(key, out var candidates))
             {
                 candidates = LocalPersona.CandidateFiles(
-                    status.Cwd, LocalPersona.UserConfigDirs(), status.Source);
+                    status.Cwd, _userConfigDirs(), status.Source);
                 candidatesByCwd[key] = candidates;
             }
 
@@ -1484,7 +1533,13 @@ namespace ClaudeBuddy
             // This is the only path that resolves, so it is the only path that
             // hands Set an object it has not seen — which is what makes Set's
             // reference check the right one rather than a value comparison.
-            var persona = LocalPersona.ResolveForSession(status);
+            //
+            // ResolveFrom(candidates) rather than a second walk from the cwd.
+            // The list stat'd for the signature above and the list read here
+            // are now one list; they used to be two, each built from its own
+            // reading of CLAUDE_CONFIG_DIR and ClaudeCodeProfileDirs, with the
+            // whole signature comparison in between them.
+            var persona = LocalPersona.ResolveFrom(candidates);
 
             // Stored over the set the *next* tick will compare, not the one
             // just compared. On the very first pass there is no previous read

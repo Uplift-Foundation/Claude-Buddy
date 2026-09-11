@@ -19,22 +19,41 @@ namespace ClaudeBuddy.Tests;
 // does is filesystem, so it belongs here, where the filesystem is real and no
 // window has to exist for it to run.
 //
-// [Collection("Settings")], and the comment here used to say the opposite —
-// "nothing here reads a setting" — which was wrong in a way that took a real
-// failure to see. ApplyPersona asks LocalPersona.UserConfigDirs which accounts
-// this machine has, and that reads ClaudeCodeProfileDirs: a process-wide static
-// that three other classes in this assembly add to and remove from. An account
-// appearing between two passes lengthens the candidate list, which changes the
-// signature, which resolves the persona again and hands the registry a new
-// object — so the two settling cases below, whose whole claim is that the same
-// object comes back, fail with nothing wrong with them.
+// The user-level config directories are PINNED, and that is CB-143's change.
 //
-// It is rare and it is invisible in isolation: twelve consecutive runs of those
-// two cases alone all passed, because running them alone removes the other
-// writer. It showed up once in a full-suite run under the coverage collector
-// and not again. SettingsCollection.cs has the same story from the other
-// assembly, which is where the fix comes from — serialise everything that
-// touches the shared model rather than hunt the interleaving.
+// ApplyPersona used to ask LocalPersona.UserConfigDirs on every pass, which
+// reads two pieces of process-wide mutable state: the CLAUDE_CONFIG_DIR
+// environment variable and ClaudeCodeProfileDirs by way of ClaudeConfigRoots.
+// Either one changing between two passes lengthens the candidate list, which
+// changes the signature, which is the scan's definition of "something moved" —
+// so the persona resolved again and the registry got a brand-new object with
+// identical content. Every case below whose claim is "the same object came
+// back" then fails with nothing wrong with it and nothing in its own fixture to
+// point at.
+//
+// That is not hypothetical and it is not only a settings problem.
+// AnImportedFileSettlesRatherThanResolvingEveryPass failed once on the Windows
+// CI leg and passed twice on the identical sha, and the mechanism was the
+// environment variable: UsagePollerEnvironmentTests and
+// AgentRosterEnvironmentTests are [Collection("ConfigDirEnv")], a *different*
+// collection, which xUnit runs in parallel with this one, and the first of
+// those holds CLAUDE_CONFIG_DIR at a sentinel while a stand-in child process
+// runs. One extra record in the signature — a config directory that does not
+// even exist — is the whole of it.
+//
+// The two writers were reachable by two different collection attributes, and a
+// third attribute would only have closed one of them. Pinning the provider
+// closes both at once and closes them structurally: this scan no longer reads
+// either global, so there is nothing left for a future writer of either to
+// disturb. Array.Empty rather than the machine's real answer for a second
+// reason — without it these cases read the developer's own ~/.claude/CLAUDE.md,
+// so a persona written there would break AProjectWithNoPersonaIsRecordedAsHavingNone
+// on that machine and nowhere else. The user-level arm is covered on purpose
+// below, against a fixture directory, instead of by accident against a real one.
+//
+// [Collection("Settings")] is kept as a second line rather than as the
+// mechanism: the seam is what makes the claims independent, and the attribute
+// only still costs nothing.
 //
 // LocalPersonas is process-wide too, so every case uses its own session id and
 // empties the registry afterwards.
@@ -47,12 +66,19 @@ public class LocalPersonaScanTests : IDisposable
     private readonly string _statusDir =
         Path.Combine(Path.GetTempPath(), "cb-persona-status-" + Guid.NewGuid());
 
+    // A stand-in for ~/.claude: a user-level config directory this fixture owns
+    // outright, so the cases that need one can have one without the answer
+    // depending on whose machine the suite is running on.
+    private readonly string _configDir =
+        Path.Combine(Path.GetTempPath(), "cb-persona-config-" + Guid.NewGuid());
+
     private readonly string _sessionId = "persona-scan-" + Guid.NewGuid();
 
     public LocalPersonaScanTests()
     {
         Directory.CreateDirectory(_project);
         Directory.CreateDirectory(_statusDir);
+        Directory.CreateDirectory(_configDir);
     }
 
     public void Dispose()
@@ -60,6 +86,7 @@ public class LocalPersonaScanTests : IDisposable
         LocalPersonas.Forget(_sessionId);
         try { Directory.Delete(_project, recursive: true); } catch { }
         try { Directory.Delete(_statusDir, recursive: true); } catch { }
+        try { Directory.Delete(_configDir, recursive: true); } catch { }
     }
 
     private void WriteMarkdown(string name, string body) =>
@@ -76,7 +103,11 @@ public class LocalPersonaScanTests : IDisposable
     // One dictionary per pass, the same way ScanAndUpdate makes one per tick.
     private Dictionary<(string Cwd, SessionSource Source), IReadOnlyList<string>> Pass() => new();
 
-    private SessionManager Manager() => new(_statusDir);
+    // Nothing above the project tree, unless a case says otherwise. See the
+    // header: this is the pin that makes every settling claim below independent
+    // of what else in the process is running.
+    private SessionManager Manager(IReadOnlyList<string>? userConfigDirs = null) =>
+        new(_statusDir, null, userConfigDirs: () => userConfigDirs ?? Array.Empty<string>());
 
     // The whole point, end to end through the method the timer calls: a
     // sentence in a file on disk becomes a name in the registry the orb reads.
@@ -273,13 +304,29 @@ public class LocalPersonaScanTests : IDisposable
     }
 
     // Neither is a session with nowhere to look.
-    [Fact]
-    public void ASessionWithNoWorkingDirectoryIsNotGivenAPersona()
+    //
+    // Whitespace as well as empty, and that is CB-143's guard rather than a
+    // flourish. The stricter half of this check used to sit in
+    // LocalPersona.ResolveForSession, one call further down; with that wrapper
+    // gone it lives here, and a cwd of " " that got past it would walk nowhere
+    // and be left with the user-level candidates alone — a persona read out of
+    // ~/.claude and hung on an orb whose session has no working directory.
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("\t")]
+    public void ASessionWithNoWorkingDirectoryIsNotGivenAPersona(string cwd)
     {
-        var status = Status();
-        status.Cwd = "";
+        WriteMarkdown("CLAUDE.md", "Her name is Leota.\n");
 
-        Manager().ApplyPersona(_sessionId, status, Pass());
+        var status = Status();
+        status.Cwd = cwd;
+
+        // A user-level directory that does name a persona, so a walk that got
+        // this far would have something to find and this would fail rather
+        // than pass for want of a file.
+        File.WriteAllText(Path.Combine(_configDir, "CLAUDE.md"), "Her name is Constance.\n");
+        Manager(new[] { _configDir }).ApplyPersona(_sessionId, status, Pass());
 
         Assert.Null(LocalPersonas.For(_sessionId));
     }
@@ -344,6 +391,71 @@ public class LocalPersonaScanTests : IDisposable
     // than on the outcome, because in a tree with no user-level file the two
     // lists would happen to produce the same persona and the bug would not
     // show.
+    // The user-level arm, against a directory this fixture owns. Before CB-143
+    // the scan tests reached the machine's real ~/.claude for this, which
+    // covered the arm by accident and made every case above depend on what the
+    // person running them had written in their own config directory.
+    [Fact]
+    public void AUserLevelConfigDirectoryIsConsultedForClaudeCode()
+    {
+        WriteMarkdown("CLAUDE.md", "# Notes\n\nNothing about a persona here.\n");
+        File.WriteAllText(Path.Combine(_configDir, "CLAUDE.md"), "Her name is Leota.\n");
+
+        Manager(new[] { _configDir }).ApplyPersona(_sessionId, Status(), Pass());
+
+        Assert.Equal("Leota", LocalPersonas.For(_sessionId)!.Name);
+    }
+
+    // ...and is not consulted for the other CLIs. Codex and Grok have their own
+    // config directories with their own layouts, so ~/.claude describing a Codex
+    // session would be a persona taken from the wrong CLI. CandidateFiles owns
+    // that rule and LocalPersonaTests covers it directly; this is the scan
+    // actually honouring it with a user-level file present to be wrongly read.
+    [Fact]
+    public void AUserLevelConfigDirectoryIsNotConsultedForCodex()
+    {
+        WriteMarkdown("CLAUDE.md", "# Notes\n\nNothing about a persona here.\n");
+        File.WriteAllText(Path.Combine(_configDir, "CLAUDE.md"), "Her name is Leota.\n");
+
+        Manager(new[] { _configDir })
+            .ApplyPersona(_sessionId, Status(SessionSource.Codex), Pass());
+
+        Assert.True(LocalPersonas.For(_sessionId)!.IsEmpty);
+    }
+
+    // CB-143's regression test for the settings half of the old coupling: an
+    // account added between two passes used to lengthen the candidate list and
+    // hand the registry a fresh object. It cannot now, because the scan is not
+    // the thing reading the setting. A real account change still re-resolves —
+    // see SessionManager's own comment for why that is correct rather than the
+    // bug — it simply no longer reaches a scan that was told which directories
+    // to look in.
+    [Fact]
+    public void AnAccountAppearingInSettingsBetweenPassesDoesNotDisturbSettling()
+    {
+        WriteMarkdown("CLAUDE.md", "@persona.md\n");
+        WriteMarkdown("persona.md", "Her name is Leota.\n");
+
+        var manager = Manager();
+
+        manager.ApplyPersona(_sessionId, Status(), Pass());
+        var first = LocalPersonas.For(_sessionId);
+
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-cb143");
+        try
+        {
+            manager.ApplyPersona(_sessionId, Status(), Pass());
+            Assert.Same(first, LocalPersonas.For(_sessionId));
+        }
+        finally
+        {
+            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-cb143");
+        }
+
+        manager.ApplyPersona(_sessionId, Status(), Pass());
+        Assert.Same(first, LocalPersonas.For(_sessionId));
+    }
+
     [Fact]
     public void ClaudeCodeAndCodexInOneRepositoryDoNotShareACandidateList()
     {
