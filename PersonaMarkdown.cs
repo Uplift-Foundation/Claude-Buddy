@@ -148,6 +148,14 @@ namespace ClaudeBuddy
     //     or a table row at all. Voice and picture stay unscoped on these two
     //     arms for exactly that reason in reverse: real profiles do write
     //     those that way, and CB-142 moved a name and nothing else.
+    //
+    //     The new arm does take one guard the two beside it do not: it
+    //     refuses a line inside a fence. A section heading that introduces a
+    //     fenced example of the persona format is the ordinary way to write
+    //     documentation, and without the guard that example names the orb —
+    //     which is the next bullet's rule broken by the one arm added after
+    //     it was written. See `ScopedName` for why the older arms keep their
+    //     fence-blindness rather than being fixed alongside.
     //   * Nothing inside YAML front matter, a fenced code block, a bullet, a
     //     bold field or a table row reaches the prose arm at all. A fenced
     //     block is where a CLAUDE.md *shows* you what to write, and text being
@@ -378,11 +386,28 @@ namespace ClaudeBuddy
             // label list, the bound, first-statement-wins — and two copies of
             // an agreement is one copy that can drift.
             //
-            // Both guards are asked here rather than at the call sites so that
+            // Every guard is asked here rather than at the call sites so that
             // neither arm can acquire one and not the other. `sectionLevel`
             // first because it is the cheaper question and the one doing the
             // work: `NameValue` accepts the word "string", so a schema table's
             // `| Name | string |` is refused by scope alone.
+            //
+            // **`inFence` is checked here and deliberately not on the voice
+            // and picture arms two lines below.** That asymmetry looks wrong
+            // and is the correct answer to two different questions. A fenced
+            // block is where a CLAUDE.md *shows* you what to write, and text
+            // being shown is not text being asserted — so a `## Persona`
+            // section whose fenced example reads `| Name | Aurora |` must not
+            // rename an orb, and without this guard it does: measured, before
+            // the guard existed. The older arms ignore the fence because
+            // OpenClaw's profiles have parsed that way since before this
+            // grammar moved here, and what those files already resolve to is
+            // not this ticket's to change; a new arm inherits no such claim,
+            // so it starts correct rather than starting grandfathered. The
+            // scope guard is what makes the difference matter at all — a
+            // fenced example is overwhelmingly written *under* a heading
+            // explaining the format, which is exactly where this arm now
+            // looks and where the other two never did.
             //
             // Returns whether the line was *claimed*, which unlike
             // `ExplicitAvatar` means "a name came out of it". A recognised
@@ -392,7 +417,7 @@ namespace ClaudeBuddy
             // line ends up read by nobody, which is what a refusal means.
             bool ScopedName(string label, string value)
             {
-                if (sectionLevel <= 0 || !NameLabel(label)) return false;
+                if (sectionLevel <= 0 || inFence || !NameLabel(label)) return false;
                 if (NameValue(value) is not { } stated) return false;
 
                 name ??= stated;

@@ -249,6 +249,121 @@ public class PersonaScopedNameTests
         Assert.Null(fields.Name);
     }
 
+    // **The case the test above does not cover, and which was a real defect
+    // until the fence guard went into `ScopedName`.** Here the heading is
+    // genuine and outside the fence — the scope really is open — and only the
+    // *field* is inside a fenced example. That is not a contrived fixture: it
+    // is what a CLAUDE.md documenting its own persona format looks like, a
+    // `## Persona` section whose fenced block shows the reader what to write.
+    // Before the guard, both spellings named the orb out of the example,
+    // measured rather than supposed.
+    //
+    // Two cases rather than a theory over both spellings, because they
+    // exercise different arms — one the table arm, one the bold arm — and a
+    // regression reinstating the hole in only one of them should fail only
+    // one of these.
+    [Fact]
+    public void AFencedTableExampleUnderARealPersonaHeadingNamesNobody()
+    {
+        var fields = PersonaMarkdown.Parse(new[]
+        {
+            "## Persona",
+            "",
+            "Write your attributes as a table:",
+            "",
+            "```markdown",
+            "| Name | Aurora |",
+            "```",
+        });
+
+        Assert.Null(fields.Name);
+    }
+
+    [Fact]
+    public void AFencedBoldExampleUnderARealPersonaHeadingNamesNobody()
+    {
+        var fields = PersonaMarkdown.Parse(new[]
+        {
+            "## Persona",
+            "",
+            "Or as bold fields:",
+            "",
+            "```markdown",
+            "**Name**: Aurora",
+            "```",
+        });
+
+        Assert.Null(fields.Name);
+    }
+
+    // The fence closes, and the section it was written inside is still open,
+    // so a name stated after the example is read normally. Without this, a
+    // guard that simply stopped reading from the first fence onwards would
+    // pass both cases above while quietly breaking every file that documents
+    // its format and then fills it in.
+    [Fact]
+    public void ANameAfterAFencedExampleInTheSameSectionIsStillRead()
+    {
+        var fields = PersonaMarkdown.Parse(new[]
+        {
+            "## Persona",
+            "",
+            "```markdown",
+            "| Name | Example |",
+            "```",
+            "",
+            "| Name | Aurora |",
+        });
+
+        Assert.Equal("Aurora", fields.Name);
+    }
+
+    // The grandfathered half, asserted rather than left implied: a voice and
+    // a picture inside that same fenced example are still read, because the
+    // older arms have no fence check and CB-142 deliberately did not give
+    // them one. This test exists to *document* the asymmetry, so that anyone
+    // who later decides to close it has to come here and change a test that
+    // says why it was open — the same reason CB-135 asserted the voice blend
+    // it was not yet reading.
+    [Fact]
+    public void AFencedVoiceAndPictureAreStillReadBecauseThoseArmsAreUnchanged()
+    {
+        var fields = PersonaMarkdown.Parse(new[]
+        {
+            "## Persona",
+            "",
+            "```markdown",
+            "**Voice:** af_bella (Kokoro TTS)",
+            "| Portrait | leota.png |",
+            "```",
+        });
+
+        Assert.Equal("af_bella", fields.Voice);
+        Assert.Equal("leota.png", fields.Avatar);
+        Assert.Null(fields.Name);
+    }
+
+    // The same thing with no heading anywhere in the file, which is what
+    // actually establishes that the table and bold arms run on fenced lines
+    // at all. Without this the test above is ambiguous: a reader could
+    // believe the voice was read because the *section* was open, when scope
+    // has never had anything to do with those two arms. This is the shape
+    // that proves the pre-existing hole is real, and therefore that the new
+    // arm's guard is load-bearing rather than decorative.
+    [Fact]
+    public void AFencedVoiceWithNoHeadingAtAllIsStillRead()
+    {
+        var fields = PersonaMarkdown.Parse(new[]
+        {
+            "```markdown",
+            "| Voice | nicole |",
+            "```",
+        });
+
+        Assert.Equal("nicole", fields.Voice);
+        Assert.Null(fields.Name);
+    }
+
     // --- first statement wins ---------------------------------------------
 
     // The `??=` skip, per arm. Until a file states a name twice this half of

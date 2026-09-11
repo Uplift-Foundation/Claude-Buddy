@@ -171,6 +171,41 @@ public class PersonaScopedNameFileTests : IDisposable
         Assert.Equal(Path.Combine(project, ".claude", "aurora.png"), persona.AvatarPath);
     }
 
+    // A CLAUDE.md that documents its own persona format, which is the shape
+    // this repository's own README is. The heading is real, the section is
+    // open, and the fenced block is an *example* — before `ScopedName` grew
+    // its fence guard, both spellings in it named the orb. At this level the
+    // point is that such a file is ordinary: it is what a maintainer writes to
+    // tell the next person how to write a persona, and reading it as one is
+    // the "shown is not asserted" rule broken.
+    [Fact]
+    public void AClaudeMdDocumentingThePersonaFormatNamesNoPersona()
+    {
+        var project = Path.Combine(_root, "docs-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(project);
+
+        File.WriteAllText(
+            Path.Combine(project, "CLAUDE.md"),
+            "# Working in this repository\n" +
+            "\n" +
+            "## Persona\n" +
+            "\n" +
+            "Write the agent's attributes as a table:\n" +
+            "\n" +
+            "```markdown\n" +
+            "| Name | Aurora |\n" +
+            "| Voice | af_bella |\n" +
+            "```\n" +
+            "\n" +
+            "...or as bold fields:\n" +
+            "\n" +
+            "```markdown\n" +
+            "**Name**: Aurora\n" +
+            "```\n");
+
+        Assert.Null(Resolve(project).Name);
+    }
+
     [Fact]
     public void ASentenceShapedNameInsideAPersonaSectionIsRefusedOnTheBoundAlone()
     {
