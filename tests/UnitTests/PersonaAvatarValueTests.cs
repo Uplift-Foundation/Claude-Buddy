@@ -269,6 +269,33 @@ public class PersonaAvatarValueTests
         Assert.Null(PersonaMarkdown.ExplicitAvatarValue("ab:cd.png"));
     }
 
+    // A colon at index 1 with a digit in front of it is not a drive letter
+    // either — Windows drive letters are ASCII letters, never digits — so
+    // this refuses on the second condition rather than the first.
+    [Fact]
+    public void AColonAtIndexOneAfterADigitIsNotADriveLetter()
+    {
+        Assert.Null(PersonaMarkdown.ExplicitAvatarValue("5:\\x\\y.png"));
+    }
+
+    // A colon at index 1 after a real letter, with nothing long enough after
+    // it to be a path, is refused on length rather than on shape — "C:" has
+    // no room for a separator and a filename.
+    [Fact]
+    public void ATwoCharacterValueEndingRightAfterTheColonIsRefused()
+    {
+        Assert.Null(PersonaMarkdown.ExplicitAvatarValue("C:"));
+    }
+
+    // A drive letter followed by neither a backslash nor a forward slash is
+    // not a drive letter shape at all — the third character has to be one or
+    // the other, and this is neither.
+    [Fact]
+    public void ADriveLetterFollowedByNeitherSeparatorIsRefused()
+    {
+        Assert.Null(PersonaMarkdown.ExplicitAvatarValue("C:xfile.png"));
+    }
+
     // --- the same value, in each of the four explicit spellings ------------
 
     // The bug was an asymmetry between arms, so the assertion that matters is

@@ -115,6 +115,18 @@ public class PersonaFrontMatterTests
         Assert.Equal("\"af_bella'", fields.Voice);
     }
 
+    // The mismatch the other way round: opens with a single quote, closes
+    // with a double one. Unquoted asks the same two questions regardless of
+    // which mark opens the value, and this is the one input shape that
+    // reaches the second question (a single-quote opener) and answers no.
+    [Fact]
+    public void AValueOpeningWithASingleQuoteAndClosingWithADoubleOneIsNotStripped()
+    {
+        var fields = PersonaMarkdown.Parse(new[] { "---", "voice: 'af_bella\"", "---" });
+
+        Assert.Equal("'af_bella\"", fields.Voice);
+    }
+
     // A bullet, a bold field and a table cell are Markdown a person typed —
     // the unquoting strip is a YAML affordance and runs nowhere else, so a
     // quote written there is part of the value.
