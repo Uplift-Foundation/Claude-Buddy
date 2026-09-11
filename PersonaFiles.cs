@@ -207,26 +207,41 @@ namespace ClaudeBuddy
                 : picture[..QuotedHead] + "…" + picture[^QuotedTail..]
                     + " (" + picture.Length.ToString("N0", CultureInfo.InvariantCulture) + " characters)";
 
-        internal static string RejectionMessage(AvatarRejection reason, string picture, long bytes)
+        // bothRootsSearched defaults to false so every existing call site and
+        // every existing asserted string in the test suite is byte-identical
+        // (CB-147, D6) — this only ever reads true when AvatarAt has actually
+        // run the guard chain against two distinct roots and both refused the
+        // value, which is the one case where naming just one of them would be
+        // telling half the story. TooLarge and NotAPicturePath do not vary on
+        // it: TooLarge already names the file that was found, and
+        // NotAPicturePath is decided before any root is tried at all.
+        internal static string RejectionMessage(
+            AvatarRejection reason, string picture, long bytes, bool bothRootsSearched = false)
         {
             var detail = reason switch
             {
                 AvatarRejection.TooLarge =>
                     "too large — " + bytes.ToString("N0", CultureInfo.InvariantCulture) + " bytes",
-                AvatarRejection.EscapesRoot =>
-                    "escapes root — it resolves outside the directory of the markdown that named it",
+                AvatarRejection.EscapesRoot => bothRootsSearched
+                    ? "escapes root — it resolves outside both the directory of the markdown that named it "
+                        + "and the workspace"
+                    : "escapes root — it resolves outside the directory of the markdown that named it",
                 AvatarRejection.NotAPicturePath =>
                     "not a picture path — a persona picture is a relative or absolute path ending in "
                     + ".png, .jpg, .jpeg, .gif or .webp, never a URL or a data: URI",
-                _ => "unreadable — it is missing, empty, or this process may not open it",
+                _ => bothRootsSearched
+                    ? "unreadable — it is missing under both the directory of the markdown that named it "
+                        + "and the workspace, empty, or this process may not open it"
+                    : "unreadable — it is missing, empty, or this process may not open it",
             };
 
             return "persona picture ignored: \"" + Quoted(picture) + "\" (" + detail + "); cap is "
                 + MaxAvatarBytes.ToString("N0", CultureInfo.InvariantCulture) + " bytes";
         }
 
-        private static void Reject(AvatarRejection reason, string picture, long bytes = 0) =>
-            PersonaLog.Record(RejectionMessage(reason, picture, bytes));
+        private static void Reject(
+            AvatarRejection reason, string picture, long bytes = 0, bool bothRootsSearched = false) =>
+            PersonaLog.Record(RejectionMessage(reason, picture, bytes, bothRootsSearched));
 
         // Where a picture named in markdown actually lives, with every guard
         // applied and no bytes kept.
@@ -245,6 +260,25 @@ namespace ClaudeBuddy
         internal static string? AvatarPathAt(string root, string? avatar)
         {
             AvatarAt(root, avatar, out var path);
+            return path;
+        }
+
+        // The CB-147 counterparts, taking a second candidate root: the
+        // session's workspace root, alongside the directory of the markdown
+        // that named the picture. Everything said about the single-root
+        // overloads above applies unchanged to whichever root actually
+        // resolves it — these exist so LocalPersona.ResolveFrom can offer a
+        // workspace-relative convention without a second implementation of
+        // the resolution.
+        internal static string? AvatarPathAt(string fileDirectory, string? workspaceRoot, PersonaMarkdown.Fields fields)
+        {
+            if (fields.Avatar is null) { RejectUnusableValue(fields); return null; }
+            return AvatarPathAt(fileDirectory, workspaceRoot, fields.Avatar);
+        }
+
+        internal static string? AvatarPathAt(string fileDirectory, string? workspaceRoot, string? avatar)
+        {
+            AvatarAt(fileDirectory, workspaceRoot, avatar, out var path);
             return path;
         }
 
@@ -316,13 +350,114 @@ namespace ClaudeBuddy
         // changed. The one caller that wants it wants it in order to *stat*
         // the file again on the next scan, so it has to be the same file this
         // read, not a path that resolves to it today.
-        internal static byte[]? AvatarAt(string root, string? avatar, out string? path)
+        internal static byte[]? AvatarAt(string root, string? avatar, out string? path) =>
+            AvatarAt(root, null, avatar, out path);
+
+        // CB-147: a picture may be named relative to two different places —
+        // the directory of the markdown file that named it, or the session's
+        // workspace root — and both conventions are real, so both are tried.
+        //
+        // D1/D2: fileDirectory is always tried first and, if it resolves to
+        // an existing, canonical, contained, non-empty, under-cap file, wins
+        // outright — workspaceRoot is not even consulted. That is not a
+        // tie-break of convenience: it is what keeps a user-level picture
+        // from being shadowable by a same-named file in whatever repository
+        // a session happens to have open (see LocalPersona.Resolve's own
+        // comment). D3: each root gets the whole guard chain run against
+        // itself alone, in TryAvatarAt below — there is no "contained in
+        // root1 union root2" check anywhere, and a value that escapes both
+        // roots is refused exactly as it was refused under one. D4: an
+        // absolute avatar value resolves to the same file under either root
+        // (Path.Combine returns a rooted second argument unchanged) and
+        // differs only in which root's containment it passes, so it is
+        // accepted if it is contained in *either* — a deliberate widening
+        // from today's single-root behaviour, named in the PR body rather
+        // than hidden in this diff.
+        internal static byte[]? AvatarAt(
+            string fileDirectory, string? workspaceRoot, string? avatar, out string? path)
         {
             path = null;
 
             // A blank field is a field nobody filled in, and is not a
             // rejection worth writing down.
             if (string.IsNullOrWhiteSpace(avatar)) return null;
+
+            var roots = CandidateRoots(fileDirectory, workspaceRoot);
+
+            var haveRejection = false;
+            var bestRejection = AvatarRejection.Unreadable;
+            var bestLength = 0L;
+
+            foreach (var root in roots)
+            {
+                var bytes = TryAvatarAt(root, avatar, out var candidatePath, out var rejection, out var length);
+                if (bytes is not null)
+                {
+                    path = candidatePath;
+                    return bytes;
+                }
+
+                // D5: one rejection logged per resolve, never two. Rank by
+                // how much the value was proved about — Unreadable (nothing
+                // was there) < EscapesRoot (something real was found outside)
+                // < TooLarge (the file was found and measured) — and report
+                // whichever root got strictly further. Ties go to the first,
+                // narrower root, which is what leaving `>` rather than `>=`
+                // below does.
+                if (!haveRejection || Rank(rejection) > Rank(bestRejection))
+                {
+                    bestRejection = rejection;
+                    bestLength = length;
+                    haveRejection = true;
+                }
+            }
+
+            // bothRootsSearched is true only when there were genuinely two
+            // distinct roots to search (CandidateRoots already deduped a
+            // workspace root that equals fileDirectory down to one) — see D6.
+            Reject(bestRejection, avatar, bestLength, bothRootsSearched: roots.Count > 1);
+            return null;
+        }
+
+        // D8: the candidate roots for a resolve, deduplicated so the
+        // overwhelmingly common case — a workspace root that is itself the
+        // directory of the markdown file, e.g. a CLAUDE.md sitting in the
+        // session's cwd — tries once rather than twice. A workspace root of
+        // null (no cwd, or one that does not canonicalise — see
+        // PersonaFiles.CanonicalDirectory) degrades to exactly one candidate
+        // root and therefore byte-identical behaviour to before this ticket.
+        // Ordinal on the trimmed strings, consistent with IsWithin and Trim,
+        // since those are the same strings this is comparing.
+        internal static IReadOnlyList<string> CandidateRoots(string fileDirectory, string? workspaceRoot) =>
+            workspaceRoot is null || string.Equals(Trim(fileDirectory), Trim(workspaceRoot), StringComparison.Ordinal)
+                ? new[] { fileDirectory }
+                : new[] { fileDirectory, workspaceRoot };
+
+        // D5's ranking, as a number: how far a rejection got toward finding
+        // the file. NotAPicturePath cannot arise here — it is decided in
+        // RejectUnusableValue, before any root is tried at all — so it has no
+        // meaningful rank and is given one only so the switch is exhaustive.
+        private static int Rank(AvatarRejection reason) => reason switch
+        {
+            AvatarRejection.Unreadable => 0,
+            AvatarRejection.EscapesRoot => 1,
+            AvatarRejection.TooLarge => 2,
+            _ => -1,
+        };
+
+        // The guard chain against exactly one root — this is the whole of
+        // what AvatarAt used to do directly, before CB-147 needed to run it
+        // more than once per resolve. Returns its outcome rather than logging
+        // it: a naive per-root loop that logged from in here would write one
+        // line per failing root, which is the "which root failed, twice"
+        // shape D5 exists to rule out. AvatarAt is the only caller, and it is
+        // the only place that logs.
+        private static byte[]? TryAvatarAt(
+            string root, string avatar, out string? path, out AvatarRejection rejection, out long length)
+        {
+            path = null;
+            rejection = AvatarRejection.Unreadable;
+            length = 0;
 
             try
             {
@@ -342,7 +477,7 @@ namespace ClaudeBuddy
                 // where does it resolve.
                 if (!IsWithin(root, combined))
                 {
-                    Reject(AvatarRejection.EscapesRoot, avatar);
+                    rejection = AvatarRejection.EscapesRoot;
                     return null;
                 }
 
@@ -354,11 +489,9 @@ namespace ClaudeBuddy
                     // The refusal is right either way, but the *reason* is the
                     // whole value of the log line, and "escapes root" sends
                     // somebody looking for a symlink they do not have.
-                    Reject(
-                        File.Exists(combined) || Directory.Exists(combined)
-                            ? AvatarRejection.EscapesRoot
-                            : AvatarRejection.Unreadable,
-                        avatar);
+                    rejection = File.Exists(combined) || Directory.Exists(combined)
+                        ? AvatarRejection.EscapesRoot
+                        : AvatarRejection.Unreadable;
                     return null;
                 }
 
@@ -375,22 +508,21 @@ namespace ClaudeBuddy
                 var candidate = CanonicalFile(combined);
                 if (candidate is null || !IsWithin(root, candidate))
                 {
-                    Reject(
-                        candidate is null ? AvatarRejection.Unreadable : AvatarRejection.EscapesRoot,
-                        avatar);
+                    rejection = candidate is null ? AvatarRejection.Unreadable : AvatarRejection.EscapesRoot;
                     return null;
                 }
 
                 var info = new FileInfo(candidate);
                 if (info.Length <= 0)
                 {
-                    Reject(AvatarRejection.Unreadable, avatar);
+                    rejection = AvatarRejection.Unreadable;
                     return null;
                 }
 
                 if (info.Length > MaxAvatarBytes)
                 {
-                    Reject(AvatarRejection.TooLarge, avatar, info.Length);
+                    rejection = AvatarRejection.TooLarge;
+                    length = info.Length;
                     return null;
                 }
 
@@ -401,10 +533,10 @@ namespace ClaudeBuddy
                 path = candidate;
                 return bytes;
             }
-            catch (IOException) { Reject(AvatarRejection.Unreadable, avatar); return null; }
-            catch (UnauthorizedAccessException) { Reject(AvatarRejection.Unreadable, avatar); return null; }
-            catch (ArgumentException) { Reject(AvatarRejection.Unreadable, avatar); return null; }
-            catch (NotSupportedException) { Reject(AvatarRejection.Unreadable, avatar); return null; }
+            catch (IOException) { rejection = AvatarRejection.Unreadable; return null; }
+            catch (UnauthorizedAccessException) { rejection = AvatarRejection.Unreadable; return null; }
+            catch (ArgumentException) { rejection = AvatarRejection.Unreadable; return null; }
+            catch (NotSupportedException) { rejection = AvatarRejection.Unreadable; return null; }
         }
 
         internal static string? CanonicalDirectory(string? path)

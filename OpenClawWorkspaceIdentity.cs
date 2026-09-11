@@ -11,6 +11,19 @@ namespace ClaudeBuddy
     // read by two parsers is two grammars that drift apart silently. What is
     // left here is the part that is genuinely OpenClaw's: which files in a
     // workspace directory are asked, and in what order.
+    //
+    // CB-147 asked, explicitly, whether this needed the same second
+    // candidate root LocalPersona gained for a picture written relative to
+    // the workspace root rather than to the directory of the file that
+    // named it. It does not: Read canonicalises the workspace to `root` and
+    // then enumerates `*.md` with SearchOption.TopDirectoryOnly in that same
+    // root, so every file it ever reads already has
+    // Path.GetDirectoryName(file) == root — the naming file's own directory
+    // and the workspace root are one and the same directory by
+    // construction. A second root here would just be the first root a
+    // second time, so adding the parameter would be a no-op with a
+    // maintenance cost rather than a fix for anything. Left alone on
+    // purpose.
     internal static class OpenClawWorkspaceIdentity
     {
         internal sealed record Metadata(string? Name, string? Voice, double? Rate, byte[]? Avatar)
