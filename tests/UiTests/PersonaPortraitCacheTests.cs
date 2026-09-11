@@ -26,11 +26,23 @@ namespace ClaudeBuddy.Tests;
 // below hold trivially, and the suite would report a cache it never touched.
 // No window is constructed all the same.
 //
-// [Collection("Settings")] because ApplyPersona asks LocalPersona.UserConfigDirs
-// for the machine's Claude Code accounts, which reads ClaudeCodeProfileDirs —
-// one process-wide static a dozen classes here touch. The cache and the
-// registry are process-wide too, so each case uses its own session id and
-// cleans up after itself.
+// The user-level config directories are pinned here for CB-143's reason, and
+// AnUntouchedPortraitKeepsItsDecodedFrames is why this file cares rather than
+// only tests/IntegrationTests. ApplyPersona used to ask
+// LocalPersona.UserConfigDirs on every pass, which reads CLAUDE_CONFIG_DIR and
+// ClaudeCodeProfileDirs; either one moving between two passes lengthens the
+// candidate list, changes the signature, resolves the persona again and hands
+// the registry a new object — and a new object is precisely what makes
+// LocalPersonas.Set drop the decoded bitmap. So the shared-state coupling and
+// the cost this file measures are the same fact seen twice: a portrait
+// re-decoded on every tick, per session, on a machine running twenty or thirty
+// agents. Pinning the provider is what makes the claim below about the cache
+// rather than about what else was running.
+//
+// [Collection("Settings")] is kept, both because the cases here write settings
+// of their own and as a second line behind the pin. The cache and the registry
+// are process-wide too, so each case uses its own session id and cleans up
+// after itself.
 [Collection("Settings")]
 public class PersonaPortraitCacheTests : IDisposable
 {
@@ -80,6 +92,13 @@ public class PersonaPortraitCacheTests : IDisposable
 
     private Dictionary<(string Cwd, SessionSource Source), IReadOnlyList<string>> Pass() => new();
 
+    // Nothing above the project tree. See the header — and note this also stops
+    // these cases reading the developer's own ~/.claude/CLAUDE.md, which they
+    // did before and which would put a real portrait in front of the fixture's
+    // on a machine whose owner had written one.
+    private SessionManager Manager() =>
+        new(_statusDir, null, userConfigDirs: () => Array.Empty<string>());
+
     // The decoded frames an orb would draw for this session, asked the way the
     // orb asks for them.
     // Asked the way the orb asks for it — by path, since CB-135 stopped the
@@ -100,7 +119,7 @@ public class PersonaPortraitCacheTests : IDisposable
             "Her name is Leota.\nHer profile picture is leota.png.\n");
         File.WriteAllBytes(picture, Portrait(0x8A, 0x6F, 0xD4));
 
-        var manager = new SessionManager(_statusDir);
+        var manager = Manager();
         manager.ApplyPersona(_sessionId, Status(), Pass());
 
         var before = Decoded();
@@ -143,7 +162,7 @@ public class PersonaPortraitCacheTests : IDisposable
             "Her name is Leota.\nHer profile picture is leota.png.\n");
         File.WriteAllBytes(Path.Combine(_project, "leota.png"), Portrait(0x8A, 0x6F, 0xD4));
 
-        var manager = new SessionManager(_statusDir);
+        var manager = Manager();
         manager.ApplyPersona(_sessionId, Status(), Pass());
 
         var before = Decoded();
@@ -152,6 +171,49 @@ public class PersonaPortraitCacheTests : IDisposable
         manager.ApplyPersona(_sessionId, Status(), Pass());
         manager.ApplyPersona(_sessionId, Status(), Pass());
 
+        Assert.Same(before, Decoded());
+    }
+
+    // CB-143, at the level where it actually costs something. The scan used to
+    // ask which Claude Code accounts this machine had on every single pass, so
+    // an account appearing in settings — or a CLAUDE_CONFIG_DIR that moved
+    // under a test in another xUnit collection — lengthened the candidate list,
+    // changed the signature, resolved the persona again, and handed the
+    // registry an object that was new by identity and identical by content.
+    // LocalPersonas.Set compares by reference, so that threw away the decoded
+    // frames: the orb re-decoded a portrait it was already drawing, for a
+    // change to something that has nothing to do with the picture.
+    //
+    // Asserted on the decoded Avatar rather than on the Persona because that is
+    // the thing a user pays for. A new Persona record costs a few allocations;
+    // a re-decode is a PNG through Skia and a WriteableBitmap, twice a second,
+    // per agent.
+    [AvaloniaFact]
+    public void AnAccountAppearingInSettingsDoesNotCostThePortraitItsDecodedFrames()
+    {
+        File.WriteAllText(
+            Path.Combine(_project, "CLAUDE.md"),
+            "Her name is Leota.\nHer profile picture is leota.png.\n");
+        File.WriteAllBytes(Path.Combine(_project, "leota.png"), Portrait(0x8A, 0x6F, 0xD4));
+
+        var manager = Manager();
+        manager.ApplyPersona(_sessionId, Status(), Pass());
+
+        var before = Decoded();
+        Assert.NotNull(before);
+
+        ClaudeBuddySettings.AddClaudeCodeProfileDir(".claude-cb143-ui");
+        try
+        {
+            manager.ApplyPersona(_sessionId, Status(), Pass());
+            Assert.Same(before, Decoded());
+        }
+        finally
+        {
+            ClaudeBuddySettings.RemoveClaudeCodeProfileDir(".claude-cb143-ui");
+        }
+
+        manager.ApplyPersona(_sessionId, Status(), Pass());
         Assert.Same(before, Decoded());
     }
 }
