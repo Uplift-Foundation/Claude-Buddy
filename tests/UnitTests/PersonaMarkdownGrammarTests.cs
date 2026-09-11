@@ -198,4 +198,48 @@ public class PersonaMarkdownGrammarTests
     {
         Assert.Null(PersonaMarkdown.Parse(new[] { "---", "voice:", "---" }).Voice);
     }
+
+    // --- the bullet Name arm stays unscoped, on purpose (CB-140 §C) --------
+    //
+    // NameLabel/NameValue could have been restricted to run only inside a
+    // persona heading, the way SectionField's own arms already are — that
+    // would have made an ordinary `- **Name**: ...` bullet in a bare
+    // CLAUDE.md stop naming an orb, which reads like exactly the fix this
+    // ticket was about. It was rejected: OpenClaw's own IDENTITY.md is a
+    // bare bulleted list with no heading at all
+    // (OpenClawWorkspaceIdentityTests' own fixtures are exactly that shape),
+    // so section-scoping the bullet arm would break every shipped profile
+    // rather than fix the one that misbehaved. What actually misbehaved was
+    // that this was the only name-producing arm with no bound at all — see
+    // AFiveWordNameCarryingASlashAndACommaNamesNothing for the front-matter
+    // half of the same fix. The bound is what does the work; the arm stays
+    // reachable from a bare bullet exactly as it always was.
+    //
+    // These two sit together deliberately, the same value shape CB-140 was
+    // filed over on each side of the bound: short and clean still wins,
+    // long and sentence-shaped still loses, and both are read straight off a
+    // bullet with no heading above it.
+    [Fact]
+    public void AShortBoundedBulletNameWithNoHeadingAboveItStillNamesTheOrb()
+    {
+        var fields = PersonaMarkdown.Parse(new[]
+        {
+            "# Notes",
+            "- **Name**: Jane Doe",
+        });
+
+        Assert.Equal("Jane Doe", fields.Name);
+    }
+
+    [Fact]
+    public void ABulletNameThatReadsAsASentenceRatherThanANameNamesNothing()
+    {
+        var fields = PersonaMarkdown.Parse(new[]
+        {
+            "# Notes",
+            "- **Name**: Jordan Casey, MBA / MSc",
+        });
+
+        Assert.Null(fields.Name);
+    }
 }

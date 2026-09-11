@@ -169,7 +169,7 @@ public class PersonaAvatarValueFileTests : IDisposable
         Assert.Null(Resolve(project).AvatarPath);
 
         var line = Assert.Single(LinesAbout(DataUri));
-        Assert.Contains("not a relative picture path", line);
+        Assert.Contains("not a picture path", line);
         Assert.DoesNotContain("unreadable", line);
         Assert.DoesNotContain("it is missing", line);
     }
@@ -182,14 +182,18 @@ public class PersonaAvatarValueFileTests : IDisposable
         Assert.Null(OpenClawWorkspaceIdentity.Read(workspace).Avatar);
 
         var line = Assert.Single(LinesAbout(DataUri));
-        Assert.Contains("not a relative picture path", line);
+        Assert.Contains("not a picture path", line);
         Assert.DoesNotContain("unreadable", line);
     }
 
-    // A URL and an absolute path arrive at the same category, which is the
-    // widening the ticket asked for: all three are somebody naming a thing that
-    // is not a file beside their markdown, and splitting them into three
-    // messages would be three ways of saying the same sentence.
+    // A URL and a value with no image extension arrive at the same category:
+    // both are somebody naming a thing that is not a picture at all, and
+    // splitting them into two messages would be two ways of saying the same
+    // sentence. An absolute path used to be a third row here — CB-139's grammar
+    // refused one on sight, the same as a URL — but CB-140 made a well-formed
+    // absolute path legal, so it no longer lands in this category at all; see
+    // PersonaRealFileTests for what it resolves to now, and the "escapes root"
+    // tests for the one way an absolute path still gets refused.
     [Theory]
     [InlineData("https://example.invalid/portrait-8412.png")]
     [InlineData("no-extension-8412")]
@@ -198,7 +202,7 @@ public class PersonaAvatarValueFileTests : IDisposable
         var project = WriteProject(value, picture: null);
 
         Assert.Null(Resolve(project).AvatarPath);
-        Assert.Contains("not a relative picture path", Assert.Single(LinesAbout("8412")));
+        Assert.Contains("not a picture path", Assert.Single(LinesAbout("8412")));
     }
 
     // --- the honest "unreadable" that must survive -------------------------
@@ -217,7 +221,7 @@ public class PersonaAvatarValueFileTests : IDisposable
 
         var line = Assert.Single(LinesAbout("absent-7213.png"));
         Assert.Contains("unreadable", line);
-        Assert.DoesNotContain("not a relative picture path", line);
+        Assert.DoesNotContain("not a picture path", line);
         // The normalised path is what gets quoted, not the raw value — the
         // reader is being sent to a file, so the line has to name the file.
         Assert.DoesNotContain("never exported", line);
@@ -255,7 +259,7 @@ public class PersonaAvatarValueFileTests : IDisposable
         var fields = PersonaMarkdown.Parse(new[] { "- Avatar: " + DataUri });
 
         Assert.Null(PersonaFiles.AvatarAt(_root, fields));
-        Assert.Contains("not a relative picture path", Assert.Single(LinesAbout(DataUri)));
+        Assert.Contains("not a picture path", Assert.Single(LinesAbout(DataUri)));
     }
 
     [Fact]
@@ -264,7 +268,7 @@ public class PersonaAvatarValueFileTests : IDisposable
         var fields = PersonaMarkdown.Parse(new[] { "- Avatar: https://example.invalid/x-3390.png" });
 
         Assert.Null(PersonaFiles.AvatarPathAt(_root, fields));
-        Assert.Contains("not a relative picture path", Assert.Single(LinesAbout("3390")));
+        Assert.Contains("not a picture path", Assert.Single(LinesAbout("3390")));
     }
 
     [Fact]

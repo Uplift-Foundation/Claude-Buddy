@@ -45,24 +45,50 @@ namespace ClaudeBuddy
         // not — 2 MiB is a perfectly ordinary size for a portrait exported
         // from a phone, and this repository's own `cto.png` cleared the old cap
         // by 57 KB.
+        //
+        // CB-140 measured a real animated persona against this cap and left it
+        // where it was. The still was 1,363,624 bytes — comfortably under —
+        // and the animated GIF was 8,391,801, exactly 3,193 bytes over. Raising
+        // the cap by 0.04% to admit it was rejected on the numbers rather than
+        // on principle: that GIF decodes to 64 frames, and OpenClawAvatars
+        // retains decoded 144×144 BGRA8888 frames per session
+        // (144 * 144 * 4 = 82,944 bytes each), so an admitted animation would
+        // be 64 * 82,944 = 5,308,416 bytes resident per session — sixty-four
+        // times what the still costs — on a machine that routinely runs twenty
+        // or thirty agents out of one repository. §D of the CB-140 design also
+        // means this was never on the path to the ticket's headline outcome: a
+        // persona's first picture label wins, every real generator writes the
+        // still before the animation, so the still is what draws regardless of
+        // where this cap sits.
         internal const long MaxAvatarBytes = 8 * 1024 * 1024;
 
         // Why a picture named in markdown was not drawn. Categories rather
         // than a message per site, because the useful question when reading
-        // persona.log is which *kind* of thing went wrong: a rooted path and a
-        // symlink out of the tree are somebody writing a path this app will not
-        // follow, an oversized file is somebody's camera, and unreadable is the
+        // persona.log is which *kind* of thing went wrong: escaping the root —
+        // by `..`, by a symlink, or simply by naming a directory that is not
+        // it — is somebody writing a path this app will not follow, an
+        // oversized file is somebody's camera, and unreadable is the
         // filesystem.
         //
-        // NotRelativePath is CB-139's, and it was added because the absence of
-        // it was itself a defect. A `data:` URI, a URL and a value the grammar
-        // could not read as a path all used to arrive here as an empty avatar
-        // and were reported — when they were reported at all — as "unreadable —
-        // it is missing", which sends somebody looking on disk for a file they
-        // never wrote. Twenty-four lines on one Mac mini said that, and not one
-        // of them was about a missing file. A wrong reason is worse than no
-        // reason, because it is actionable and the action is wasted.
-        internal enum AvatarRejection { Rooted, EscapesRoot, TooLarge, Unreadable, NotRelativePath }
+        // NotAPicturePath is CB-139's NotRelativePath, renamed by CB-140 for
+        // the reason its own message changed: it used to mean "not a *relative*
+        // path", and an absolute one is legal now, provided it stays inside the
+        // root — see AvatarAt. The category is otherwise the same, and it was
+        // added because the absence of it was itself a defect. A `data:` URI, a
+        // URL and a value the grammar could not read as a path all used to
+        // arrive here as an empty avatar and were reported — when they were
+        // reported at all — as "unreadable — it is missing", which sends
+        // somebody looking on disk for a file they never wrote. Twenty-four
+        // lines on one Mac mini said that, and not one of them was about a
+        // missing file. A wrong reason is worse than no reason, because it is
+        // actionable and the action is wasted.
+        //
+        // Rooted is gone rather than kept around as a second name for the same
+        // thing: CB-140 removed the string-level "does this begin with a
+        // separator" refusal from both PersonaMarkdown and here, in favour of
+        // the containment check (IsWithin) the filesystem already had to run.
+        // A caller cannot reach the old category any more, from either seam.
+        internal enum AvatarRejection { EscapesRoot, TooLarge, Unreadable, NotAPicturePath }
 
         // The lines of a markdown file, or null for every reason there might
         // not be any: it does not exist, it is too big to be one, or this
@@ -125,7 +151,7 @@ namespace ClaudeBuddy
         private static void RejectUnusableValue(PersonaMarkdown.Fields fields)
         {
             if (fields.RawAvatar is not null)
-                Reject(AvatarRejection.NotRelativePath, fields.RawAvatar);
+                Reject(AvatarRejection.NotAPicturePath, fields.RawAvatar);
         }
 
         // The line persona.log gets. Pure and separate from the writing of it,
@@ -173,10 +199,8 @@ namespace ClaudeBuddy
                     "too large — " + bytes.ToString("N0", CultureInfo.InvariantCulture) + " bytes",
                 AvatarRejection.EscapesRoot =>
                     "escapes root — it resolves outside the directory of the markdown that named it",
-                AvatarRejection.Rooted =>
-                    "rooted path — a persona picture is relative to the markdown that named it",
-                AvatarRejection.NotRelativePath =>
-                    "not a relative picture path — a persona picture is a relative path ending in "
+                AvatarRejection.NotAPicturePath =>
+                    "not a picture path — a persona picture is a relative or absolute path ending in "
                     + ".png, .jpg, .jpeg, .gif or .webp, never a URL or a data: URI",
                 _ => "unreadable — it is missing, empty, or this process may not open it",
             };
@@ -281,19 +305,32 @@ namespace ClaudeBuddy
             path = null;
 
             // A blank field is a field nobody filled in, and is not a
-            // rejection worth writing down; a rooted one is somebody being
-            // refused and is.
+            // rejection worth writing down.
             if (string.IsNullOrWhiteSpace(avatar)) return null;
-            if (Path.IsPathRooted(avatar))
-            {
-                Reject(AvatarRejection.Rooted, avatar);
-                return null;
-            }
 
             try
             {
                 var combined = Path.GetFullPath(Path.Combine(root, avatar));
-                if (!IsWithin(root, combined) || EscapesThroughLink(root, combined))
+
+                // The one check that decides whether an absolute value is
+                // legal, and the only one that ever should have: `Combine`
+                // returns a rooted second argument unchanged, so a relative
+                // path and an absolute one arrive here exactly the same way,
+                // and containment is asked of both alike. Before CB-140 a
+                // separate "does this begin with a separator" test ran ahead
+                // of this and refused every absolute path outright — which
+                // is also what let a rooted path with a space in a directory
+                // component slip past PersonaMarkdown's own guard, since the
+                // two rules were answering different questions about the
+                // same string. This is the only question worth asking:
+                // where does it resolve.
+                if (!IsWithin(root, combined))
+                {
+                    Reject(AvatarRejection.EscapesRoot, avatar);
+                    return null;
+                }
+
+                if (EscapesThroughLink(root, combined))
                 {
                     // A picture that is simply not there fails the link walk
                     // too: it cannot resolve a component that does not exist,

@@ -44,17 +44,78 @@ namespace ClaudeBuddy
     //     the longer form is accepted only when VoiceBlend can read it as a
     //     mixture, and VoiceBlend insists every part is a single token. See
     //     BoundedVoice.
-    //   * A picture is a relative path whose last token ends in an image
-    //     extension, once a code span and a trailing parenthetical note have
-    //     been taken off it — `` `avatars/lilibeth.png` (AI-generated) `` is
-    //     how real profiles write one, and CB-139 found eighteen lines of it in
-    //     one machine's persona.log, portraits that had never drawn because
-    //     only the prose arm normalised anything. AvatarValue is that
-    //     normalisation, and every arm now runs it rather than each keeping
-    //     its own. Rooted paths and
-    //     anything with a colon in it are refused before the filesystem is
-    //     asked, so `/etc/passwd`, `https://x/y.png` and a `data:` URI never
-    //     become a read.
+    //   * A picture is a path whose last token ends in an image extension,
+    //     once a code span and a trailing parenthetical note have been taken
+    //     off it — `` `avatars/lilibeth.png` (AI-generated) `` is how real
+    //     profiles write one, and CB-139 found eighteen lines of it in one
+    //     machine's persona.log, portraits that had never drawn because only
+    //     the prose arm normalised anything. `AvatarValue` is that
+    //     normalisation for a sentence; `ExplicitAvatarValue` is the same
+    //     function for a labelled field, and the two disagree on purpose
+    //     about one thing — the next paragraph. Whether an absolute path is
+    //     *allowed* is not decided here at all: that is a question about
+    //     where the file naming it lives, not about the string, and
+    //     PersonaFiles answers it by containment once this grammar has
+    //     handed back a candidate (CB-140). A colon still refuses
+    //     `https://x/y.png` and a `data:` URI before the filesystem is
+    //     asked — `ColonIsADriveLetter` carves out only the one shape a
+    //     colon legitimately takes in a path, `C:\...` — so those two never
+    //     become a read, but `/etc/passwd.png` and
+    //     `C:\Users\...\portrait.png` now reach PersonaFiles exactly like a
+    //     relative path does, which is the one place equipped to ask whether
+    //     the directory they name is the markdown's own.
+    //
+    //   * **A labelled field is one whole value; a sentence is not.**
+    //     Somebody who writes `image:`, `- Avatar:` or `| Photo |` and then a
+    //     path has written the whole of it — there is no sentence to find a
+    //     filename in, so `ExplicitAvatarValue` never takes a last token off
+    //     a labelled value, only the code-span and parenthetical decoration
+    //     every arm already stripped. `AvatarValue`, the sentence reader,
+    //     still takes the last token, because "the file leota.png" has to
+    //     keep naming `leota.png` — that is CB-133's whole reason to exist.
+    //     The two still have to agree on one rule: neither reading may turn
+    //     an absolute path into a relative one by truncating around a space
+    //     in a directory name, which is the defect CB-140 was filed over.
+    //     `AvatarValue`'s half of that is to stop tokenizing at all once the
+    //     *whole* candidate is rooted, so "Her picture is /Users/w/My
+    //     Docs/x.png" is read correctly without touching "the file
+    //     leota.png"; where only a *fragment* of a longer sentence is
+    //     rooted — "the file /a b/x.png" — refusing outright is the only
+    //     answer that neither guesses at a truncated path nor accepts a
+    //     filename whose directory is not the one that was written.
+    //
+    //   * `image_animated` is a second picture *label*, not a second field:
+    //     a persona still has one `Avatar`, and the first picture label this
+    //     grammar reaches keeps it — see `LocalPersona.Persona`'s own
+    //     comment for why a persona is not allowed a byte array to hold a
+    //     second picture in. Every generator writes `image:` before
+    //     `image_animated:`, so first-wins means the still wins, which is
+    //     not a consolation prize: the still clears the byte cap by a wide
+    //     margin and the animation frequently does not (see
+    //     `PersonaFiles.MaxAvatarBytes`), so reading the still first is the
+    //     only choice under which this feature reliably produces a portrait
+    //     at all.
+    //
+    //   * Front matter gets one strip nothing else does: a scalar value is
+    //     unquoted once, immediately after the label and the colon are torn
+    //     apart, because `name: "Aurora"` is YAML saying a string is a
+    //     string — the quotes are the format's syntax, not something the
+    //     writer meant to name their agent with — so `Name`, `Voice` and a
+    //     picture all lose them before any bound above judges the result. A
+    //     bullet, a bold field and a table cell get no such strip: a quote
+    //     there is Markdown a person typed, and typed things are read as
+    //     written.
+    //
+    //   * `name:` and `slug:` both name the agent, sharing one bound —
+    //     `NameValue`, the same `BoundedWords` a prose or colon-less name
+    //     passes — with the bullet `Name` arm and the section arm, under one
+    //     list, `NameLabel`. Before CB-140 the bullet arm was the one place
+    //     in this whole grammar that read a name with no bound at all, which
+    //     is how an ordinary `- **Name**: Jordan Casey, MBA / MSc` — five
+    //     words, a comma and a slash, describing the human rather than any
+    //     persona — ended up on an orb. `slug:` exists because a generator
+    //     without a display name yet still writes one, and `name:` wins the
+    //     tie the same way every other field's first statement does.
     //   * Nothing inside YAML front matter, a fenced code block, a bullet, a
     //     bold field or a table row reaches the prose arm at all. A fenced
     //     block is where a CLAUDE.md *shows* you what to write, and text being
@@ -236,7 +297,7 @@ namespace ClaudeBuddy
                 if (!AvatarLabel(label) || !Valid(value)) return false;
 
                 rawAvatar ??= value;
-                avatar ??= AvatarValue(value);
+                avatar ??= ExplicitAvatarValue(value);
                 return true;
             }
 
@@ -300,6 +361,19 @@ namespace ClaudeBuddy
                 // the whole file exists to prevent.
                 if (inFrontMatter && FieldAfterColon(trimmed, out var yamlLabel, out var yamlValue))
                 {
+                    // Unquoted once, before any label asks, so `name:`,
+                    // `slug:`, `voice:`, `image:` and `image_animated:` all
+                    // get it without four copies of the same two-character
+                    // trim. See the header comment for why this runs only
+                    // here and not on a bullet, a bold field or a table cell.
+                    yamlValue = Unquoted(yamlValue);
+
+                    if (NameLabel(yamlLabel) && NameValue(yamlValue) is { } yamlName)
+                    {
+                        name ??= yamlName;
+                        continue;
+                    }
+
                     if (VoiceLabel(yamlLabel) && VoiceValue(yamlValue) is var (yamlVoice, yamlRate) && yamlVoice is not null)
                     {
                         voice ??= yamlVoice;
@@ -384,8 +458,8 @@ namespace ClaudeBuddy
                 }
                 else if (!Valid(fieldValue)) continue;
 
-                if (name is null && string.Equals(label, "Name", StringComparison.OrdinalIgnoreCase))
-                    name = fieldValue;
+                if (name is null && NameLabel(label) && NameValue(fieldValue) is { } bulletName)
+                    name = bulletName;
                 else if (voice is null && VoiceLabel(label) && VoiceValue(fieldValue) is var (bulletVoice, bulletRate) && bulletVoice is not null)
                 {
                     voice = bulletVoice;
@@ -535,34 +609,67 @@ namespace ClaudeBuddy
             return VoiceBlend.Parse(value) is not null;
         }
 
-        // A picture, as any arm is allowed to name one — one function, called
-        // by all of them, returning the path or null.
+        // A picture, as a *sentence* is allowed to name one — "the file
+        // leota.png" names the same picture "leota.png" does, because a path
+        // is one token and the words in front of it are somebody being
+        // polite about it. See Picture for what this and ExplicitAvatarValue
+        // share and the one thing they disagree about.
+        internal static string? AvatarValue(string value) => Picture(value, whole: false);
+
+        // A picture, as a *labelled* field states one — front matter, a
+        // bullet, a bold field, a table cell, and the colon-less section
+        // form. The value is the whole of what was written, not a sentence
+        // to search: nobody who typed `image:` and then a path meant for
+        // only its last word to count.
+        internal static string? ExplicitAvatarValue(string value) => Picture(value, whole: true);
+
+        // The one function both readers share, and the one place they part
+        // company. See the header comment's two paragraphs on this — the
+        // asymmetry is the design, not an inconsistency.
         //
-        // The decorations first. A code span around the path itself is real
-        // fixture rather than a coincidence, the same as it is for a voice:
-        // every picture line captured off the Mac mini in CB-139 wore one, and
-        // most of them wore a note after it as well — `` `avatars/annabel-lee.gif`
-        // (animated, updated 2026-09-09) ``. The two are stripped in a loop
-        // rather than in a fixed order because the real shapes disagree about
-        // which is outermost: that line wears the note outside the span, and
-        // `` `avatars/annabel-lee.gif (animated)` `` wears it inside. Each strip
-        // strictly shortens the string, so the loop cannot fail to end.
+        // The decorations come off first, for both readers alike. A code
+        // span around the path itself is real fixture rather than a
+        // coincidence, the same as it is for a voice: every picture line
+        // captured off the Mac mini in CB-139 wore one, and most of them wore
+        // a note after it as well — `` `avatars/annabel-lee.gif` (animated,
+        // updated 2026-09-09) ``. The two are stripped in a loop rather than
+        // in a fixed order because the real shapes disagree about which is
+        // outermost: that line wears the note outside the span, and
+        // `` `avatars/annabel-lee.gif (animated)` `` wears it inside. Each
+        // strip strictly shortens the string, so the loop cannot fail to end.
         //
-        // Then the last token, so "the file leota.png" names the same picture
-        // "leota.png" does — a path is one token, and the words in front of it
-        // are somebody being polite about it — with a trailing full stop taken
-        // off, because a sentence ends in one and a filename does not.
+        // Then the split. `whole` skips it outright — a labelled field is
+        // taken as written — and so does an *un*labelled sentence whose
+        // candidate, taken whole, is already rooted: that is what lets
+        // "Her picture is /Users/w/My Docs/x.png" read correctly, because
+        // splitting it on whitespace first and asking about the last token
+        // only would have thrown the directory away. Short of that, a
+        // sentence still gives up its last token, so "the file leota.png"
+        // keeps meaning `leota.png` — but if any *other* token in that
+        // sentence is itself rooted, the value is refused outright rather
+        // than truncated to a token after it: "the file /a b/x.png" must not
+        // quietly become a search for a relative "b/x.png" that nobody
+        // wrote. That fail-open shape, reachable through every one of the
+        // seven grammar arms this parser has, was CB-140's sharpest defect.
         //
-        // Rooted paths and anything with a colon in it are refused here rather
-        // than at the filesystem, so `/etc/passwd`, `https://x/y.png` and a
-        // `data:` URI never become a read. That last one is the case CB-139
-        // added and it is refused deliberately, not incidentally: a persona
-        // picture is a relative local path, and the gateway's `avatarUrl` is
-        // the only place base64 is accepted because it arrives over the wire
-        // rather than out of a file anybody can commit. PersonaFiles refuses
-        // all of it again — this is the cheap half of a check that has to hold
-        // in both places, not the only half.
-        internal static string? AvatarValue(string value)
+        // What is deliberately *not* asked here any more is whether the
+        // result is rooted. A rooted path used to be refused on sight,
+        // before the filesystem was consulted at all — which is also what
+        // silently defeated the guard above, because "reject anything
+        // rooted" and "take the last whitespace-separated token" fight each
+        // other the moment a directory has a space in it. Containment is the
+        // property that was ever worth having, and containment is a question
+        // about where a file sits relative to another one, which only
+        // PersonaFiles can answer — see the header comment's first
+        // paragraph on this.
+        //
+        // A colon still refuses a value outright, because that has nothing
+        // to do with rootedness: `https://x/y.png` and a `data:` URI are
+        // refused deliberately, not incidentally, per the header comment —
+        // except that an absolute path is now legal and Windows spells one
+        // with a colon, so ColonIsADriveLetter is asked rather than the bare
+        // character test this used to be.
+        private static string? Picture(string value, bool whole)
         {
             var candidate = value.Trim();
 
@@ -574,23 +681,62 @@ namespace ClaudeBuddy
                 if (string.Equals(candidate, before, StringComparison.Ordinal)) break;
             }
 
-            var words = candidate.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            if (words.Length == 0) return null;
+            string last;
+            if (whole || Path.IsPathRooted(candidate))
+            {
+                last = candidate;
+            }
+            else
+            {
+                var words = candidate.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (words.Length == 0) return null;
+
+                // A fragment of the sentence other than the last word is
+                // itself a rooted path — refuse rather than guess which word
+                // was meant to be the filename.
+                if (words.Length > 1 && words.Any(Path.IsPathRooted)) return null;
+
+                last = words[^1];
+            }
 
             // The full stop first and the span again after it: "see
             // `avatars/leota.png`." wears its span around the *token* rather
-            // than around the value, so the loop above cannot have reached it,
-            // and the stop sits outside the closing tick. Asking twice is a
-            // line; teaching the loop about tokens is a second grammar.
-            var last = WithoutCodeSpan(words[^1].TrimEnd('.'));
+            // than around the value, so the loop above cannot have reached
+            // it, and the stop sits outside the closing tick. Asking twice
+            // is a line; teaching the loop about tokens is a second grammar.
+            last = WithoutCodeSpan(last.TrimEnd('.'));
             if (last.Length == 0) return null;
-            if (last.Contains(':')) return null;
-            if (Path.IsPathRooted(last)) return null;
+            if (!ColonIsADriveLetter(last)) return null;
 
             return PictureExtensions.Any(
                 extension => last.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
                 ? last
                 : null;
+        }
+
+        // A colon is legal in exactly one shape a picture path takes: a
+        // Windows drive letter, `C:\...` or `C:/...`. Refusing every other
+        // colon is what keeps `https://x/y.png` and a `data:` URI out —
+        // that refusal is CB-139's and it is deliberate, not incidental: a
+        // persona picture is a local path, and the gateway's `avatarUrl` is
+        // the only place base64 is accepted, because it arrives over the
+        // wire rather than out of a file anybody can commit. PersonaFiles
+        // refuses all of it again — this is the cheap half of a check that
+        // has to hold in both places, not the only half.
+        //
+        // `://` is checked before the drive-letter shape is, and has to be:
+        // `a://x.png` satisfies "single ASCII letter, colon, then a slash"
+        // exactly as `C:/x.png` does, and only the second is a path. A
+        // second colon anywhere after the first is never a drive letter
+        // either — `C:\a:b.png` — so that is refused outright too.
+        private static bool ColonIsADriveLetter(string candidate)
+        {
+            var colon = candidate.IndexOf(':');
+            if (colon < 0) return true;
+            if (candidate.Contains("://", StringComparison.Ordinal)) return false;
+            if (candidate.IndexOf(':', colon + 1) >= 0) return false;
+            return colon == 1 && char.IsAsciiLetter(candidate[0])
+                && candidate.Length > 2 && candidate[2] is '\\' or '/';
         }
 
         // Stripped only when both ticks are there and there is something left
@@ -696,7 +842,10 @@ namespace ClaudeBuddy
 
                 if (labelled is ProseKind.Avatar)
                 {
-                    var picture = AvatarValue(string.Join(' ', rest));
+                    // A label and a value, not a sentence — the same reason
+                    // the bullet and front-matter arms take a picture whole
+                    // rather than as a last token to search for.
+                    var picture = ExplicitAvatarValue(string.Join(' ', rest));
                     if (picture is null) return false;
                     kind = labelled;
                     value = picture;
@@ -730,7 +879,7 @@ namespace ClaudeBuddy
         // said the same thing twice.
         internal static bool SectionLabel(string label, out ProseKind kind)
         {
-            if (label.Equals("Name", StringComparison.OrdinalIgnoreCase))
+            if (NameLabel(label))
             {
                 kind = ProseKind.Name;
                 return true;
@@ -823,6 +972,16 @@ namespace ClaudeBuddy
             });
         }
 
+        // `name:` and `slug:` both name the agent, shared by the front-matter
+        // arm, the bullet arm and SectionLabel so the three cannot drift the
+        // way the picture readers once did. `slug:` is what a generator
+        // writes when it has no display name yet; `name:` wins the tie
+        // wherever both are present, because it is asked first and every
+        // assignment here is `??=`.
+        internal static bool NameLabel(string label) =>
+            label.Equals("Name", StringComparison.OrdinalIgnoreCase)
+            || label.Equals("Slug", StringComparison.OrdinalIgnoreCase);
+
         internal static bool VoiceLabel(string label) =>
             label.Equals("Voice", StringComparison.OrdinalIgnoreCase)
             || label.Equals("Voice Name", StringComparison.OrdinalIgnoreCase)
@@ -835,6 +994,11 @@ namespace ClaudeBuddy
         // `- Profile picture: leota.png` in another has said the same thing
         // twice, and being told only one of them counts is the drift this
         // whole file exists to prevent.
+        //
+        // `image_animated` (and its spaced spelling, for a bullet or a bold
+        // field) is a *label* like any other here, not a different field —
+        // see the header comment for why recognising it is safe without
+        // giving a persona a second picture to hold.
         internal static bool AvatarLabel(string label) =>
             label.Equals("Avatar", StringComparison.OrdinalIgnoreCase)
             || label.Equals("Profile Picture", StringComparison.OrdinalIgnoreCase)
@@ -844,7 +1008,9 @@ namespace ClaudeBuddy
             || label.Equals("Picture", StringComparison.OrdinalIgnoreCase)
             || label.Equals("Photo", StringComparison.OrdinalIgnoreCase)
             || label.Equals("Portrait", StringComparison.OrdinalIgnoreCase)
-            || label.Equals("Image", StringComparison.OrdinalIgnoreCase);
+            || label.Equals("Image", StringComparison.OrdinalIgnoreCase)
+            || label.Equals("image_animated", StringComparison.OrdinalIgnoreCase)
+            || label.Equals("Image Animated", StringComparison.OrdinalIgnoreCase);
 
         // Profiles often make the engine helpful to readers: `**Voice:**
         // af_bella (Kokoro TTS)`.  The parenthesis is not part of Kokoro's
@@ -928,5 +1094,40 @@ namespace ClaudeBuddy
 
         internal static bool IsPlaceholder(string value) =>
             value.StartsWith("<", StringComparison.Ordinal) && value.EndsWith(">", StringComparison.Ordinal);
+
+        // A name, wherever the front-matter arm or the bullet arm found one —
+        // one function so the two cannot judge the same value differently.
+        // The bound is `BoundedWords`, the same one a prose or a colon-less
+        // name passes: before CB-140 the bullet arm was the only place in
+        // this grammar that read a name with no bound of its own, which is
+        // how an ordinary `- **Name**: Jordan Casey, MBA / MSc` — five
+        // words, a comma and a slash — was read as a persona's.
+        internal static string? NameValue(string value)
+        {
+            var candidate = value.Trim();
+            var words = candidate.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            return Valid(candidate) && BoundedWords(candidate, words) ? candidate : null;
+        }
+
+        // A YAML scalar's own quoting, stripped once and only for a
+        // front-matter value: `name: "Aurora"` is YAML saying a string is a
+        // string, and the quotes are the format's syntax rather than
+        // something the writer meant to name their agent with. A matched
+        // pair is required — an unclosed quote is left exactly as written,
+        // the same "read what is there rather than guess what was meant"
+        // rule AvatarValue's code-span strip already follows — and a bullet,
+        // a bold field or a table cell never reaches this at all: a quote
+        // there is Markdown a person typed, not YAML.
+        private static string Unquoted(string value)
+        {
+            var trimmed = value.Trim();
+            if (trimmed.Length < 2) return trimmed;
+
+            var first = trimmed[0];
+            var last = trimmed[^1];
+            return (first == '"' && last == '"') || (first == '\'' && last == '\'')
+                ? trimmed[1..^1].Trim()
+                : trimmed;
+        }
     }
 }

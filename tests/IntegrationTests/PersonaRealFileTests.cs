@@ -305,29 +305,27 @@ public class PersonaRealFileTests : IDisposable
         Assert.Contains("escapes root", Assert.Single(LinesAbout("linked.png")));
     }
 
-    // Written as a bullet, because that used to be the only shape that could
-    // carry a rooted path this far: both the prose arm and the colon-less arm
-    // refused one on sight and the explicit bullet grammar — which predates all
-    // of this and is OpenClaw's as well as ours — did not, so the filesystem's
-    // own refusal was the one that fired.
+    // **CB-140 inverted this test, on purpose.** Written as a bullet, because
+    // that used to be the only shape that could carry a rooted path this far —
+    // the prose arm and the colon-less arm refused one on sight and the
+    // explicit bullet grammar did not — so the filesystem's own refusal was
+    // the one that fired, and it fired under AvatarRejection.Rooted: a string
+    // beginning with a separator, refused before anybody asked where it
+    // resolved to.
     //
-    // **CB-139 moved which reason this line names, on purpose.** The bullet arm
-    // now runs the same normalisation every other arm does, and that
-    // normalisation refuses a rooted path before the filesystem is asked, so
-    // the value arrives under "not a relative picture path" instead. That is
-    // the ticket's decision and not a side effect: a `data:` URI, a URL and an
-    // absolute path are one complaint written three ways — you have named
-    // something that is not a file beside your markdown — and a reader deciding
-    // what to do about their picture is given the same answer whichever they
-    // wrote.
-    //
-    // AvatarRejection.Rooted is not dead. It is the filesystem seam's own
-    // guard, still reached whenever a caller hands PersonaFiles a path rather
-    // than a parsed field, and LocalPersonaFilesTests is where that is
-    // asserted. Two checks, in two places, for one rule — which is what
-    // PersonaFiles' own comment says the arrangement is for.
+    // That string-level rule is gone, from both PersonaMarkdown and
+    // PersonaFiles (§A). What decides an absolute path now is exactly what
+    // decides a relative one: does it canonicalise inside the directory of
+    // the markdown that named it. This fixture's absolute path names
+    // `rooted.png`, which `WriteTheRealTree` already wrote *beside*
+    // `PERSONA.MD` — the same directory, by construction — so it resolves,
+    // silently, the same as `- Profile photo: rooted.png` would have. This is
+    // the shape a profile generator needs: it writes an absolute path because
+    // the persona file is `@`-imported from an arbitrary directory and a
+    // relative one would not survive that, and the path it writes names a
+    // file right beside itself.
     [Fact]
-    public void AnAbsolutePicturePathIsRefusedAsNotARelativePath()
+    public void AnAbsolutePicturePathInsideTheNamingFilesOwnRootResolves()
     {
         var project = WriteTheRealTree(picture: "rooted.png");
         var absolute = Path.Combine(project, ".claude", "rooted.png");
@@ -336,11 +334,71 @@ public class PersonaRealFileTests : IDisposable
             Path.Combine(project, ".claude", "PERSONA.MD"),
             "## Attributes\n\n- Profile photo: " + absolute + "\n");
 
-        Assert.Null(Resolve(project).AvatarPath);
+        var persona = Resolve(project);
 
-        var line = Assert.Single(LinesAbout("rooted.png"));
-        Assert.Contains("not a relative picture path", line);
-        Assert.DoesNotContain("unreadable", line);
+        Assert.Equal(absolute, persona.AvatarPath);
+        Assert.Empty(LinesAbout("rooted.png"));
+    }
+
+    // The negative control that proves the guard above is still a guard: an
+    // absolute path to a real, readable file is refused when that file is
+    // *not* inside the naming file's own root — a sibling directory, in this
+    // case, one level up from `.claude`. Without this, "an absolute path
+    // resolves" and "containment is not checked at all" would look identical.
+    [Fact]
+    public void AnAbsolutePicturePathOutsideTheNamingFilesRootIsRefused()
+    {
+        var project = WriteTheRealTree(picture: "inside.png");
+        var sibling = Path.Combine(project, "sibling-9214.png");
+        File.WriteAllBytes(sibling, PortraitOf(1024));
+
+        File.WriteAllText(
+            Path.Combine(project, ".claude", "PERSONA.MD"),
+            "## Attributes\n\n- Profile photo: " + sibling + "\n");
+
+        Assert.Null(Resolve(project).AvatarPath);
+        Assert.Contains("escapes root", Assert.Single(LinesAbout("sibling-9214.png")));
+    }
+
+    // The same negative control, with a space in the sibling directory's own
+    // name — the shape that used to defeat the rooted-path guard before it
+    // ever reached this check. Containment refuses it exactly the same way
+    // whether or not a space is involved, which is the point: the space was
+    // only ever a problem for the string-level rule this ticket removed.
+    [Fact]
+    public void AnAbsolutePicturePathOutsideTheRootWithASpaceInItIsRefused()
+    {
+        var project = WriteTheRealTree(picture: "inside-space.png");
+        var siblingDir = Path.Combine(project, "sibling with space");
+        Directory.CreateDirectory(siblingDir);
+        var sibling = Path.Combine(siblingDir, "outside-4471.png");
+        File.WriteAllBytes(sibling, PortraitOf(1024));
+
+        File.WriteAllText(
+            Path.Combine(project, ".claude", "PERSONA.MD"),
+            "## Attributes\n\n- Profile photo: " + sibling + "\n");
+
+        Assert.Null(Resolve(project).AvatarPath);
+        Assert.Contains("escapes root", Assert.Single(LinesAbout("outside-4471.png")));
+    }
+
+    // Decision E, asserted rather than assumed: the real animated file is
+    // 3,193 bytes over the cap, and this is that exact margin against a
+    // portrait shape rather than an arbitrary number — see
+    // PersonaFiles.MaxAvatarBytes for the full measurement this refusal
+    // rests on.
+    [Fact]
+    public void APictureThreeThousandOneHundredAndNinetyThreeBytesOverTheCapIsRefused()
+    {
+        var persona = Resolve(WriteTheRealTree(
+            (int)PersonaFiles.MaxAvatarBytes + 3193, "over-by-margin.png"));
+
+        Assert.Null(persona.AvatarPath);
+
+        var line = Assert.Single(LinesAbout("over-by-margin.png"));
+        Assert.Contains("too large", line);
+        Assert.Contains("8,391,801 bytes", line);
+        Assert.Contains("8,388,608 bytes", line);
     }
 
     // --- the bytes nobody keeps -------------------------------------------

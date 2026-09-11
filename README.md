@@ -1005,11 +1005,36 @@ drawn exactly as it was before.
 - Voice: Bella
 ```
 
-Bullets, bold fields (`**Name:** Leota`), two-cell tables and YAML front matter
-all work, labels are case-insensitive, and the first valid value for each field
-wins. `Avatar`, `Profile Picture`, `Profile Pic`, `Profile Image`, `Profile
-Photo`, `Picture`, `Portrait`, `Photo` and `Image` all name the picture;
-`Voice`, `Voice Name`, `Speech Voice` and `TTS Voice` all name the voice.
+A bullet, with or without a bold label, carries all three fields, and so does
+YAML front matter — labels are case-insensitive, and the first valid value for
+each field wins. A standalone bold field (`**Name:** Leota`) and a two-cell
+table row carry a voice or a picture, but not (yet) a name; see the front
+matter section below for a name written that way instead. `Avatar`, `Profile
+Picture`, `Profile Pic`, `Profile Image`, `Profile Photo`, `Picture`,
+`Portrait`, `Photo`, `Image` and `Image Animated` (or `image_animated:` in
+front matter) all name the picture; `Voice`, `Voice Name`, `Speech Voice` and
+`TTS Voice` all name the voice; `Name` and `Slug` both name the agent, with
+`Name` winning when a file states both.
+
+**Front matter carries all three fields, and its quotes are YAML's rather than
+part of the value.** A generator that writes
+
+```yaml
+---
+name: "Leota"
+slug: "leota"
+image: "avatars/leota.png"
+voice: "af_bella"
+---
+```
+
+has its quotes stripped before any of the above is asked — `name:` reads as
+`Leota`, not `"Leota"` — because a quote there is YAML's own syntax rather
+than something the writer meant to name their agent with. A bullet, a bold
+field or a table cell get no such strip: a quote written there is Markdown a
+person typed, and is read exactly as written. `image_animated:` is a second
+label for the picture field, not a second field — writing both `image:` and
+`image_animated:` keeps the still, because the first one stated wins.
 
 **Write the picture path however you would write it in Markdown.** A code span
 around it and a note after it are both read straight through, which is how real
@@ -1019,9 +1044,23 @@ profiles are written:
 - Profile picture: `avatars/annabel-lee.gif` (animated, updated 2026-09-09)
 ```
 
-What is *not* read is anything that is not a relative file beside the Markdown:
-a URL, an absolute path and a `data:` URI are all refused, whatever they are
-wrapped in, and `persona.log` says so under **not a relative picture path**.
+**A path may be absolute, and it still cannot leave the Markdown's own
+directory.** It is read only if it canonicalises inside the directory of the
+file that named it — an absolute path that does is read, which is what a
+profile generator needs when its persona file is `@`-imported from an
+arbitrary directory and a relative path would not survive that; one that
+does not is refused, under **escapes root**. A URL and a `data:` URI are
+refused whatever they are wrapped in, absolute or not, under **not a picture
+path**.
+
+**A labelled field is one whole value.** `- Profile picture: my pictures/leota.png`
+names a file whose directory has a space in it, read exactly as written — only
+a *sentence* ("Her picture is the file leota.png") has its last word taken as
+the path, because a sentence has other words in it that are not part of the
+filename. A sentence carrying an absolute path is read as that whole path
+too, provided nothing else in the sentence is itself rooted; where a rooted
+*fragment* sits ahead of the sentence's own last word, the value is refused
+rather than guessed at.
 
 **A sentence works too, because a `CLAUDE.md` is prose.** These three are read:
 
@@ -1043,8 +1082,8 @@ spaces and `_ - ' ( )` — so **"The name is derived from the folder unless the
 user renames it"** names nothing, and neither does "Her voice is lovely and warm
 and low". A **voice** has one allowance more, described under *A voice can be a
 blend* below: it may be a mixture, up to eleven words and 120 characters, if it
-carries a percentage and reads as one. A picture must be a relative path ending
-in `.png`, `.jpg`, `.jpeg`, `.gif` or `.webp`. Anything outside that shape is
+carries a percentage and reads as one. A picture must be a path ending in
+`.png`, `.jpg`, `.jpeg`, `.gif` or `.webp`. Anything outside that shape is
 left alone as the prose it is.
 
 **Under a persona heading, the colon is optional.** A file whose whole purpose
@@ -1098,17 +1137,20 @@ gave.
 
 **The security bounds are the same ones the OpenClaw workspace files get**, and
 they are what makes reading files nobody was asked about acceptable at all. A
-picture path is relative, local, and cannot leave the directory of the Markdown
-file that named it — not through `..`, not through a symlink, and not as a URL
-or a `data:` URI. Pictures are capped at 8 MiB and Markdown files at 256 KB;
-anything larger is skipped rather than truncated. The files are re-read only
-when one of them actually changes: the app stats them on its ordinary
-two-second poll and opens nothing until a size or a timestamp moves.
+picture path is local, and cannot leave the directory of the Markdown file
+that named it — not through `..`, not through a symlink, not as a URL or a
+`data:` URI, and not by being absolute: an absolute path is resolved and then
+held to the same containment as a relative one, so it is read when it stays
+inside that directory and refused, exactly like any other path that tries to
+leave, when it does not. Pictures are capped at 8 MiB and Markdown files at
+256 KB; anything larger is skipped rather than truncated. The files are
+re-read only when one of them actually changes: the app stats them on its
+ordinary two-second poll and opens nothing until a size or a timestamp moves.
 
 **A picture that is skipped says so.** One line goes into `persona.log`, beside
 the crash log — `~/Library/Logs/ClaudeBuddy` on macOS,
 `%LOCALAPPDATA%\ClaudeBuddy\Logs` on Windows — naming the file, the reason (too
-large, escapes root, rooted path, not a relative picture path, or unreadable)
+large, escapes root, not a picture path, or unreadable)
 and the cap, once per distinct message however many sessions ask. Before that line existed an oversized
 portrait was dropped in silence and looked exactly like a persona that had named
 no picture at all.

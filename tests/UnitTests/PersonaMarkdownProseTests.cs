@@ -88,9 +88,33 @@ public class PersonaMarkdownProseTests
     // The last token, so a sentence that is polite about its own path still
     // names the file it names.
     [InlineData("Her picture is the file leota.png", "leota.png")]
+    // An absolute path, taken whole rather than tokenized, because the whole
+    // candidate is rooted — see PersonaMarkdown.Picture. Containment is a
+    // question for PersonaFiles, not this grammar; whether it is *allowed*
+    // is asserted against a real tree in PersonaRealFileTests.
+    [InlineData("Her picture is /etc/shadow.png", "/etc/shadow.png")]
     public void AStatedPictureIsRead(string line, string expected)
     {
         Assert.Equal(expected, PersonaMarkdown.Parse(new[] { line }).Avatar);
+    }
+
+    // The positive half of the fail-open fixture, at the level a real
+    // CLAUDE.md is actually read at: one sentence, through Parse, with no
+    // "the file" preamble in front of the path — this is the shape the
+    // ticket's own example names ("Her picture is /Users/w/My Docs/x.png").
+    // Because the whole value after "is" is itself rooted, ProseField hands
+    // it to AvatarValue exactly as written and the space inside its
+    // directory costs nothing. Built from Path.DirectorySeparatorChar so
+    // this is rooted — and means the same thing — on both CI runners.
+    [Fact]
+    public void ASentenceWhoseWholeValueIsRootedWithASpaceInItIsReadInFull()
+    {
+        var sep = Path.DirectorySeparatorChar;
+        var rooted = sep + "a" + sep + "b c" + sep + "x.png";
+
+        var fields = PersonaMarkdown.Parse(new[] { "Her picture is " + rooted });
+
+        Assert.Equal(rooted, fields.Avatar);
     }
 
     // --- the negative table ----------------------------------------------
@@ -107,9 +131,13 @@ public class PersonaMarkdownProseTests
     [InlineData("Her voice is lovely and warm and low")]
     // A URL is not a relative picture, and has a colon in it besides.
     [InlineData("Her picture is https://x/y.png")]
-    // Rooted, so it is not somewhere beside the file that named it.
+    // Refused for having no image extension, same as any other value would
+    // be — being rooted is no longer why this one fails. Its rooted sibling,
+    // `Her picture is /etc/shadow.png`, is a positive case now: see
+    // AStatedPictureIsRead. Whether an absolute path is *allowed* is a
+    // question PersonaFiles answers by containment, not something this
+    // grammar decides by looking at the string.
     [InlineData("Its avatar is /etc/passwd")]
-    [InlineData("Her picture is /etc/shadow.png")]
     // A second clause after a colon.
     [InlineData("Her name is Leota: the ghost")]
     // Not a picture at all.
@@ -140,6 +168,26 @@ public class PersonaMarkdownProseTests
 
         Assert.Null(fields.Name);
         Assert.Null(fields.Voice);
+        Assert.Null(fields.Avatar);
+    }
+
+    // The fail-open regression, at the sentence level. "the file" makes this
+    // a *fragment* of a longer sentence rather than the whole value, and the
+    // fragment's directory carries a space — the shape that used to defeat
+    // the rooted-path guard, because splitting on whitespace first and
+    // asking about only the last token turned "/abs dir/x.png" into a
+    // relative-looking "dir/x.png" that passed every check downstream and
+    // named a file nobody wrote. Built from Path.DirectorySeparatorChar
+    // rather than a literal `/abs`, so this means the same thing on both CI
+    // runners — a literal leading `/` is not rooted on Windows at all.
+    [Fact]
+    public void ASentenceCarryingARootedFragmentWithASpaceInItNamesNothing()
+    {
+        var sep = Path.DirectorySeparatorChar;
+        var rooted = sep + "abs" + sep + "my dir" + sep + "x.png";
+
+        var fields = PersonaMarkdown.Parse(new[] { "Her picture is the file " + rooted });
+
         Assert.Null(fields.Avatar);
     }
 
