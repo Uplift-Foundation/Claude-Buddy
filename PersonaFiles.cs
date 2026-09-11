@@ -37,30 +37,46 @@ namespace ClaudeBuddy
         // four-fold raise would have been hundreds of megabytes resident for
         // nothing.
         //
-        // It is no longer retained at all: a local persona carries AvatarPath
+        // That resident-bytes argument is gone, and has been since CB-135
+        // itself: a local persona carries AvatarPath rather than a byte array,
         // and the decode reads the file itself (ReadAvatarFile below, through
-        // OpenClawAvatars.ForFile), so what stays resident is the 144 px frame
-        // cache that was always the real cost, and this cap now bounds a
-        // transient read. That is what makes eight defensible where two was
-        // not — 2 MiB is a perfectly ordinary size for a portrait exported
-        // from a phone, and this repository's own `cto.png` cleared the old cap
-        // by 57 KB.
+        // OpenClawAvatars.ForFile) rather than being handed bytes that outlive
+        // the read. What this cap bounds today is a *transient* read — one
+        // buffer, alive for the length of a single resolve, freed the moment
+        // AvatarAt returns — not a buffer that sits in `LocalPersonas` for a
+        // session's whole life. 2 MiB was a perfectly ordinary size for a
+        // portrait exported from a phone, and this repository's own `cto.png`
+        // cleared it by 57 KB, but the number that actually bounds anything
+        // resident is a different one entirely, below.
         //
         // CB-140 measured a real animated persona against this cap and left it
-        // where it was. The still was 1,363,624 bytes — comfortably under —
-        // and the animated GIF was 8,391,801, exactly 3,193 bytes over. Raising
-        // the cap by 0.04% to admit it was rejected on the numbers rather than
-        // on principle: that GIF decodes to 64 frames, and OpenClawAvatars
-        // retains decoded 144×144 BGRA8888 frames per session
-        // (144 * 144 * 4 = 82,944 bytes each), so an admitted animation would
-        // be 64 * 82,944 = 5,308,416 bytes resident per session — sixty-four
-        // times what the still costs — on a machine that routinely runs twenty
-        // or thirty agents out of one repository. §D of the CB-140 design also
-        // means this was never on the path to the ticket's headline outcome: a
-        // persona's first picture label wins, every real generator writes the
-        // still before the animation, so the still is what draws regardless of
-        // where this cap sits.
-        internal const long MaxAvatarBytes = 8 * 1024 * 1024;
+        // where it was, and the reasoning was wrong for this constant even
+        // though the arithmetic in it was correct. The still was 1,363,624
+        // bytes — comfortably under — and the animated GIF was 8,391,801,
+        // exactly 3,193 bytes over; CB-140 computed that GIF's *resident* cost
+        // if admitted (64 frames × 144×144×4 = 5,308,416 bytes per session,
+        // sixty-four times the still) and declined to raise this cap on the
+        // strength of that number. But `MaxAvatarBytes` does not gate resident
+        // cost any more — see the paragraph above — so that computation was an
+        // argument about a different budget, wearing this constant's name.
+        // Raising *this* cap changes nothing about what stays resident: a
+        // 9 MiB 64-frame GIF costs exactly what an 8 MiB 64-frame GIF costs,
+        // because the resident cost is `frameCount × 144 × 144 × 4` bytes, a
+        // function of frame count rather than file size. What actually bounds
+        // it is `DecodeFrames`' own 120-frame ceiling in OpenClawAvatars.cs,
+        // untouched by this change and doing the whole of that job on its own.
+        //
+        // CB-146 is what that conflation cost: the persona from CB-140's own
+        // measurement — 8,391,801 bytes, 3,193 over the old cap, a 0.04%
+        // overshoot — named no still at all, so refusing its animation left it
+        // with no avatar whatsoever rather than a lesser one. Sixteen mebibytes
+        // is not "shave the cap down to fit the one file that failed" — a cap
+        // set 3 KB above today's failure is a cap that fails again on the next
+        // GIF anyone exports — it is a plain doubling, and a single 16 MiB read
+        // during a scan that already reads markdown files up a directory tree
+        // is not a cost worth defending against, since nothing stays resident
+        // from it once the read returns.
+        internal const long MaxAvatarBytes = 16 * 1024 * 1024;
 
         // Why a picture named in markdown was not drawn. Categories rather
         // than a message per site, because the useful question when reading

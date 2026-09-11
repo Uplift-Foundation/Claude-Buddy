@@ -190,8 +190,8 @@ public class LocalPersonaFilesTests : IDisposable
         Assert.Null(PersonaFiles.AvatarAt(project, "leota.png"));
     }
 
-    // Eight mebibytes is the cap as of CB-135, and the file at the far end is a
-    // real one this process can read — the refusal is about its size and
+    // Sixteen mebibytes is the cap as of CB-146, and the file at the far end is
+    // a real one this process can read — the refusal is about its size and
     // nothing else. Asserted against the constant as well as against a literal,
     // so a future change to the cap fails here rather than quietly widening
     // what this test is measuring.
@@ -200,11 +200,44 @@ public class LocalPersonaFilesTests : IDisposable
     {
         var project = Dir("project");
         var big = Path.Combine(project, "big.png");
-        File.WriteAllBytes(big, new byte[9 * 1024 * 1024]);
+        File.WriteAllBytes(big, new byte[17 * 1024 * 1024]);
 
-        Assert.Equal(8 * 1024 * 1024, PersonaFiles.MaxAvatarBytes);
-        Assert.Equal(9 * 1024 * 1024, new FileInfo(big).Length);
+        Assert.Equal(16 * 1024 * 1024, PersonaFiles.MaxAvatarBytes);
+        Assert.Equal(17 * 1024 * 1024, new FileInfo(big).Length);
         Assert.Null(PersonaFiles.AvatarAt(project, "big.png"));
+    }
+
+    // The exact boundary, both sides — CB-146 asked for this because the whole
+    // ticket is a file that missed one by 3,193 bytes. AvatarAt's own check is
+    // `info.Length > MaxAvatarBytes`, so a file of precisely MaxAvatarBytes has
+    // to be read, not refused; a widened `>=` would fail exactly this case
+    // while every test above it kept passing.
+    [Fact]
+    public void APictureExactlyAtTheCapIsRead()
+    {
+        var project = Dir("project");
+        var atCap = Path.Combine(project, "at-cap.png");
+        File.WriteAllBytes(atCap, new byte[PersonaFiles.MaxAvatarBytes]);
+
+        var read = PersonaFiles.AvatarAt(project, "at-cap.png");
+
+        Assert.NotNull(read);
+        Assert.Equal(PersonaFiles.MaxAvatarBytes, read!.Length);
+    }
+
+    // The other side of the same boundary: one byte over is enough to refuse.
+    // What the refusal actually says is PersonaRealFileTests' half of this
+    // pair, since that suite (not this one) isolates CLAUDE_BUDDY_LOG_DIR and
+    // can read persona.log back without racing every other test that refuses
+    // a picture on purpose.
+    [Fact]
+    public void APictureOneByteOverTheCapIsRefused()
+    {
+        var project = Dir("project");
+        var overCap = Path.Combine(project, "over-cap.png");
+        File.WriteAllBytes(overCap, new byte[PersonaFiles.MaxAvatarBytes + 1]);
+
+        Assert.Null(PersonaFiles.AvatarAt(project, "over-cap.png"));
     }
 
     // The other side of the raise, and the case the old cap actually refused:

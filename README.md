@@ -1190,7 +1190,7 @@ that named it — not through `..`, not through a symlink, not as a URL or a
 `data:` URI, and not by being absolute: an absolute path is resolved and then
 held to the same containment as a relative one, so it is read when it stays
 inside that directory and refused, exactly like any other path that tries to
-leave, when it does not. Pictures are capped at 8 MiB and Markdown files at
+leave, when it does not. Pictures are capped at 16 MiB and Markdown files at
 256 KB; anything larger is skipped rather than truncated. The files are
 re-read only when one of them actually changes: the app stats them on its
 ordinary two-second poll and opens nothing until a size or a timestamp moves.
@@ -1263,8 +1263,10 @@ weightless parts fit the ordinary three-word bound and need nothing special.
 as the orb does, is never copied into the status file the hooks write, and never
 leaves this machine. The picture's *bytes* are not kept either: the persona
 remembers where the file is, and the decoded 144-pixel frames an orb actually
-draws are the only copy that stays resident — which is what makes an 8 MiB cap
-affordable on a machine running twenty or thirty agents out of one repository.
+draws are the only copy that stays resident — sized by how many frames a
+picture decodes to, not by how many bytes it arrived as, which is what makes
+raising the file-size cap to 16 MiB cost nothing extra on a machine running
+twenty or thirty agents out of one repository.
 
 ## OpenClaw agents (experimental, off by default)
 

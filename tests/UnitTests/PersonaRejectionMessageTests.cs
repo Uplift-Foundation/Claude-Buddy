@@ -23,7 +23,35 @@ public class PersonaRejectionMessageTests
         Assert.Contains("cto.png", message);
         Assert.Contains("too large", message);
         Assert.Contains("9,437,184 bytes", message);
-        Assert.Contains("8,388,608 bytes", message);
+        Assert.Contains("16,777,216 bytes", message);
+    }
+
+    // The cap itself, pinned at the unit level: CB-146 raised it from 8 MiB to
+    // 16, and every message above quotes it as a formatted string rather than
+    // as this literal — a message could drift from the constant without any
+    // of those failing, which is exactly the shape of bug this ticket is
+    // about (a comment reasoning correctly about the wrong constant). This is
+    // the one assertion that would catch that: it names the value itself,
+    // not a string it appears inside.
+    [Fact]
+    public void TheCapIsSixteenMebibytes()
+    {
+        Assert.Equal(16 * 1024 * 1024, PersonaFiles.MaxAvatarBytes);
+    }
+
+    // The boundary the ticket is about, at the message level: a file one byte
+    // over the (new) cap names both its own size and the cap in the same
+    // message, which is what makes the refusal actionable rather than merely
+    // correct.
+    [Fact]
+    public void AFileOneByteOverTheCapNamesBothNumbers()
+    {
+        var message = Message(PersonaFiles.AvatarRejection.TooLarge, PersonaFiles.MaxAvatarBytes + 1);
+
+        Assert.Contains("cto.png", message);
+        Assert.Contains("too large", message);
+        Assert.Contains("16,777,217 bytes", message);
+        Assert.Contains("16,777,216 bytes", message);
     }
 
     [Theory]
@@ -44,7 +72,7 @@ public class PersonaRejectionMessageTests
 
         Assert.Contains("cto.png", message);
         Assert.Contains(category, message);
-        Assert.Contains("8,388,608 bytes", message);
+        Assert.Contains("16,777,216 bytes", message);
     }
 
     // The two categories a reader has to be able to tell apart by eye, because
@@ -83,7 +111,7 @@ public class PersonaRejectionMessageTests
         try
         {
             Thread.CurrentThread.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
-            Assert.Contains("8,388,608 bytes", Message(PersonaFiles.AvatarRejection.Unreadable));
+            Assert.Contains("16,777,216 bytes", Message(PersonaFiles.AvatarRejection.Unreadable));
         }
         finally
         {
