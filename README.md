@@ -1074,6 +1074,15 @@ documentation, not a declaration. It stays documentation even under a
 and the Markdown image above the fence carry nothing either, the same as
 anywhere else: a heading labels what follows rather than stating it.
 
+**"Skipped whole" means every shape, not just prose.** Inside a fence, a
+bullet, a bold field, a two-cell table row, a colon-less `Label Value` line and
+a sentence are all examples rather than statements — so `- name: Build the
+thing` in a pasted GitHub Actions step names nobody, and neither does
+`| Voice | af_bella |` in a table showing you the format. The single exception
+is the marked block above. This is stated per shape because it was not always
+true of all of them: until CB-144 only the prose arm honoured the fence, and a
+workflow pasted into a `CLAUDE.md` renamed the orb after its build step.
+
 **Write the picture path however you would write it in Markdown.** A code span
 around it and a note after it are both read straight through, which is how real
 profiles are written:

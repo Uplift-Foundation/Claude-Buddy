@@ -206,6 +206,102 @@ public class PersonaScopedNameFileTests : IDisposable
         Assert.Null(Resolve(project).Name);
     }
 
+    // CB-144 at the file level: a workflow pasted into a real `CLAUDE.md`, on
+    // disk, through the real resolver. This is the event the ticket is about —
+    // not a fixture shaped to trip a parser, but the ordinary act of pasting a
+    // build step into the file every session in the repository reads. Before
+    // the fence gate this orb was named "Build the thing".
+    //
+    // The picture is written beside the file so that a leak would have
+    // something to resolve *to*; asserting `AvatarPath` is null against a
+    // missing file would pass for the wrong reason.
+    [Fact]
+    public void AWorkflowPastedIntoAClaudeMdNamesNoPersona()
+    {
+        var project = Path.Combine(_root, "workflow-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(project);
+        File.WriteAllBytes(Path.Combine(project, "leota.png"), Png());
+
+        File.WriteAllText(
+            Path.Combine(project, "CLAUDE.md"),
+            "# Working in this repository\n" +
+            "\n" +
+            "## Build and run\n" +
+            "\n" +
+            "```yaml\n" +
+            "steps:\n" +
+            "  - name: Build the thing\n" +
+            "    run: dotnet build\n" +
+            "  - **Voice:** af_bella\n" +
+            "  - Avatar: leota.png\n" +
+            "```\n");
+
+        var persona = Resolve(project);
+
+        Assert.Null(persona.Name);
+        Assert.Null(persona.Voice);
+        Assert.Null(persona.AvatarPath);
+    }
+
+    // The positive control for the case above, at the same level and in the
+    // same file shape: unfenced, every one of those fields resolves. A gate
+    // that refused everything would pass the test above and fail this one.
+    [Fact]
+    public void TheSameFieldsUnfencedInAClaudeMdStillResolve()
+    {
+        var project = Path.Combine(_root, "unfenced-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(project);
+        File.WriteAllBytes(Path.Combine(project, "leota.png"), Png());
+
+        File.WriteAllText(
+            Path.Combine(project, "CLAUDE.md"),
+            "# Working in this repository\n" +
+            "\n" +
+            "- Name: Aurora\n" +
+            "- **Voice:** af_bella\n" +
+            "- Avatar: leota.png\n");
+
+        var persona = Resolve(project);
+
+        Assert.Equal("Aurora", persona.Name);
+        Assert.Equal("af_bella", persona.Voice);
+        Assert.Equal(Path.Combine(project, "leota.png"), persona.AvatarPath);
+    }
+
+    // CB-141's marked block, on disk, still read through its fence — the
+    // hazard assertion at the file level. If a later change adds a fence guard
+    // to the front-matter arm, this is one of the few tests that goes red.
+    [Fact]
+    public void AProfileGenMarkedBlockOnDiskStillResolvesThroughItsFence()
+    {
+        var project = Path.Combine(_root, "marked-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(project);
+        File.WriteAllBytes(Path.Combine(project, "aurora.png"), Png());
+
+        File.WriteAllText(
+            Path.Combine(project, "CLAUDE.md"),
+            "# Working in this repository\n" +
+            "\n" +
+            "<!-- profile-gen:start slug=aurora -->\n" +
+            "### Aurora\n" +
+            "\n" +
+            "```yaml\n" +
+            "schema_version: 1\n" +
+            "name: \"Aurora\"\n" +
+            "slug: \"aurora\"\n" +
+            "image: \"aurora.png\"\n" +
+            "voice: \"af_bella\"\n" +
+            "```\n" +
+            "\n" +
+            "<!-- profile-gen:end slug=aurora -->\n");
+
+        var persona = Resolve(project);
+
+        Assert.Equal("Aurora", persona.Name);
+        Assert.Equal("af_bella", persona.Voice);
+        Assert.Equal(Path.Combine(project, "aurora.png"), persona.AvatarPath);
+    }
+
     [Fact]
     public void ASentenceShapedNameInsideAPersonaSectionIsRefusedOnTheBoundAlone()
     {

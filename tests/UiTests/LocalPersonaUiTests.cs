@@ -969,6 +969,76 @@ public class LocalPersonaUiTests : IDisposable
         }
     }
 
+    // CB-144 at the surface a user actually looks at: somebody pastes a
+    // GitHub Actions workflow into their CLAUDE.md, and before the fence gate
+    // their orb was relabelled after the build step — glyph "Bt", panel titled
+    // "Build the thing". Nothing in the file was meant as metadata and nothing
+    // in the app said where the name came from, which is what made this worth
+    // a ticket rather than a curiosity.
+    //
+    // Pinned to CB-143's empty user-config seam because this asserts an
+    // absence; against the real ~/.claude it would be asserting something
+    // about whoever runs the suite.
+    [AvaloniaFact]
+    public void ARealScanOverAPastedWorkflowLeavesTheOrbItsOwnLetters()
+    {
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+
+        var project = Path.Combine(Path.GetTempPath(), "cb-persona-workflow-" + Guid.NewGuid());
+        var statusDir = Path.Combine(Path.GetTempPath(), "cb-persona-workflow-dir-" + Guid.NewGuid());
+        Directory.CreateDirectory(project);
+        Directory.CreateDirectory(statusDir);
+
+        var sessionId = "persona-workflow-ui-" + Guid.NewGuid();
+
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(project, "CLAUDE.md"),
+                "# Notes\n" +
+                "\n" +
+                "## Build and run\n" +
+                "\n" +
+                "```yaml\n" +
+                "steps:\n" +
+                "  - name: Build the thing\n" +
+                "    run: dotnet build\n" +
+                "```\n");
+
+            File.WriteAllText(
+                Path.Combine(statusDir, sessionId + ".txt"),
+                System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+                {
+                    State = "idle",
+                    Cli = "",
+                    Title = "cb-persona-workflow",
+                    Cwd = project,
+                    SessionPid = Environment.ProcessId,
+                    TermProgram = "iTerm.app",
+                    Tty = "/dev/ttys004",
+                }));
+
+            var manager = PinnedManager(statusDir);
+            manager.ScanAndUpdate();
+
+            Assert.Null(LocalPersonas.For(sessionId)?.Name);
+
+            // The letters are the session title's, and specifically not the
+            // "Bt" that "Build the thing" would have drawn. Literals, for the
+            // reason this suite's first case gives.
+            var orb = OrbFor(manager, sessionId);
+            Assert.True(orb.Glyph.IsVisible);
+            Assert.Equal("Cp", orb.GlyphText);
+        }
+        finally
+        {
+            LocalPersonas.Forget(sessionId);
+            try { Directory.Delete(project, recursive: true); } catch { }
+            try { Directory.Delete(statusDir, recursive: true); } catch { }
+        }
+    }
+
     // Read rather than widened, the same reasoning SessionScanTests records for
     // reaching the scan's own window table.
     private static OrbWindow OrbFor(SessionManager manager, string sessionId)

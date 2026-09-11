@@ -149,17 +149,22 @@ namespace ClaudeBuddy
     //     arms for exactly that reason in reverse: real profiles do write
     //     those that way, and CB-142 moved a name and nothing else.
     //
-    //     The new arm does take one guard the two beside it do not: it
-    //     refuses a line inside a fence. A section heading that introduces a
-    //     fenced example of the persona format is the ordinary way to write
-    //     documentation, and without the guard that example names the orb —
-    //     which is the next bullet's rule broken by the one arm added after
-    //     it was written. See `ScopedName` for why the older arms keep their
-    //     fence-blindness rather than being fixed alongside.
+    //     CB-142 first gave this arm alone a fence check, and CB-144
+    //     replaced it with one gate covering every arm. The narrow version
+    //     was wrong in an instructive way: guarding the bold and table arms
+    //     does nothing for the bullet arm, which calls `BoldField` and
+    //     `FieldAfterColon` itself, so a fenced `- name: Build the thing`
+    //     went on renaming orbs after a pasted build step. See the gate in
+    //     `Parse`, just below the front-matter arm.
     //   * Nothing inside YAML front matter, a fenced code block, a bullet, a
     //     bold field or a table row reaches the prose arm at all. A fenced
     //     block is where a CLAUDE.md *shows* you what to write, and text being
     //     shown is not text being asserted.
+    //
+    //     As of CB-144 that second sentence is true of **every** arm rather
+    //     than only the prose one: a fenced line is skipped outright, with
+    //     exactly one exception, CB-141's marked `yaml` block, which is the
+    //     one fence a writer has explicitly declared to be a persona.
     //
     //   * With one exception, which is CB-141: a `yaml`/`yml` fence **inside
     //     a marked persona block** is read by the front-matter arm above,
@@ -392,22 +397,16 @@ namespace ClaudeBuddy
             // work: `NameValue` accepts the word "string", so a schema table's
             // `| Name | string |` is refused by scope alone.
             //
-            // **`inFence` is checked here and deliberately not on the voice
-            // and picture arms two lines below.** That asymmetry looks wrong
-            // and is the correct answer to two different questions. A fenced
-            // block is where a CLAUDE.md *shows* you what to write, and text
-            // being shown is not text being asserted — so a `## Persona`
-            // section whose fenced example reads `| Name | Aurora |` must not
-            // rename an orb, and without this guard it does: measured, before
-            // the guard existed. The older arms ignore the fence because
-            // OpenClaw's profiles have parsed that way since before this
-            // grammar moved here, and what those files already resolve to is
-            // not this ticket's to change; a new arm inherits no such claim,
-            // so it starts correct rather than starting grandfathered. The
-            // scope guard is what makes the difference matter at all — a
-            // fenced example is overwhelmingly written *under* a heading
-            // explaining the format, which is exactly where this arm now
-            // looks and where the other two never did.
+            // **There is no `inFence` check here, and there used to be.**
+            // CB-142 added one, because a `## Persona` section whose fenced
+            // example reads `| Name | Aurora |` must not rename an orb. It was
+            // the right rule in the wrong place: a *new* arm guarding itself
+            // while every older arm leaked, which CB-144 then measured as four
+            // separate holes including the bullet arm this function never
+            // touches. The rule now lives once, above, as `if (inFence &&
+            // !inMarkedYaml) continue;`, and every arm gets it. Do not
+            // reintroduce a copy here — one rule in one place is the whole
+            // point, and a second copy is the thing that drifts.
             //
             // Returns whether the line was *claimed*, which unlike
             // `ExplicitAvatar` means "a name came out of it". A recognised
@@ -417,7 +416,7 @@ namespace ClaudeBuddy
             // line ends up read by nobody, which is what a refusal means.
             bool ScopedName(string label, string value)
             {
-                if (sectionLevel <= 0 || inFence || !NameLabel(label)) return false;
+                if (sectionLevel <= 0 || !NameLabel(label)) return false;
                 if (NameValue(value) is not { } stated) return false;
 
                 name ??= stated;
@@ -566,6 +565,39 @@ namespace ClaudeBuddy
 
                     if (ExplicitAvatar(yamlLabel, yamlValue)) continue;
                 }
+
+                // **Everything else inside a fence is an example, not a
+                // statement** (CB-144). One gate, here, rather than a
+                // condition repeated on each arm below — and it has to be
+                // *here* specifically, after the arm above, because the one
+                // shape a fence is legitimately read through is CB-141's
+                // marked `yaml` block, which that arm has just had its chance
+                // at. `!inMarkedYaml` is what preserves it.
+                //
+                // The scattered per-arm version of this was tried first and is
+                // why the rule is written once. Guarding the standalone-bold
+                // and table arms leaves the bullet arm wide open, because a
+                // bullet calls `BoldField`/`FieldAfterColon` itself on
+                // `trimmed[1..]` rather than going through them — so
+                // `- name: Build the thing`, an ordinary GitHub Actions step
+                // pasted into a CLAUDE.md, still renamed the orb after a build
+                // step. Measured, on `develop`: `Name = "Build the thing"`.
+                // Three more leaked the same way — `- **Voice:** af_bella`,
+                // `| Voice | af_bella |`, `**Voice:** af_bella`.
+                //
+                // This is the file's own rule finally applied uniformly: "a
+                // fenced block is where a CLAUDE.md *shows* you what to write,
+                // and text being shown is not text being asserted." It was
+                // true of the prose arm, the heading arm and the marker arm,
+                // and false of every explicit field arm, for as long as those
+                // arms have existed.
+                //
+                // **Do not add a fence check to the front-matter arm above.**
+                // It runs while `inFence` is true on purpose; that is the
+                // entire mechanism of CB-141's marked block, and a broad sweep
+                // that "adds the guard everywhere" silently reverts it while
+                // every test but the marked-block ones stays green.
+                if (inFence && !inMarkedYaml) continue;
 
                 if (TableField(trimmed, out var tableLabel, out var tableValue)
                     && (index + 1 >= source.Count || !TableSeparator(source[index + 1])))

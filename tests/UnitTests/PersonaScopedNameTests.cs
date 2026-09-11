@@ -318,15 +318,21 @@ public class PersonaScopedNameTests
         Assert.Equal("Aurora", fields.Name);
     }
 
-    // The grandfathered half, asserted rather than left implied: a voice and
-    // a picture inside that same fenced example are still read, because the
-    // older arms have no fence check and CB-142 deliberately did not give
-    // them one. This test exists to *document* the asymmetry, so that anyone
-    // who later decides to close it has to come here and change a test that
-    // says why it was open — the same reason CB-135 asserted the voice blend
-    // it was not yet reading.
+    // **These two assertions are CB-142's, inverted on purpose by CB-144.**
+    //
+    // They used to read `Assert.Equal("af_bella", fields.Voice)` — asserting
+    // that a voice and a picture inside a fenced example *were* still read,
+    // because the older arms had no fence check and CB-142 deliberately gave
+    // one only to the arm it added. They were written that way so that
+    // whoever later closed the hole had to come here and change a test which
+    // said why it was open, rather than silently changing behaviour nobody
+    // had written down. That is exactly what happened: CB-144 measured the
+    // leak as four separate holes, and these are the two of them this file
+    // had already pinned. The same device CB-135 used for the voice blend it
+    // was not yet reading, and it worked the same way — the test failed the
+    // moment the behaviour changed, and the change had to be argued.
     [Fact]
-    public void AFencedVoiceAndPictureAreStillReadBecauseThoseArmsAreUnchanged()
+    public void AFencedVoiceAndPictureAreNoLongerReadEither()
     {
         var fields = PersonaMarkdown.Parse(new[]
         {
@@ -338,20 +344,17 @@ public class PersonaScopedNameTests
             "```",
         });
 
-        Assert.Equal("af_bella", fields.Voice);
-        Assert.Equal("leota.png", fields.Avatar);
+        Assert.Null(fields.Voice);
+        Assert.Null(fields.Avatar);
         Assert.Null(fields.Name);
     }
 
-    // The same thing with no heading anywhere in the file, which is what
-    // actually establishes that the table and bold arms run on fenced lines
-    // at all. Without this the test above is ambiguous: a reader could
-    // believe the voice was read because the *section* was open, when scope
-    // has never had anything to do with those two arms. This is the shape
-    // that proves the pre-existing hole is real, and therefore that the new
-    // arm's guard is load-bearing rather than decorative.
+    // The same, with no heading anywhere in the file. This is the case that
+    // establishes the rule is about the *fence* and not about scope: no
+    // section is ever opened here, so nothing but the fence can be doing the
+    // refusing.
     [Fact]
-    public void AFencedVoiceWithNoHeadingAtAllIsStillRead()
+    public void AFencedVoiceWithNoHeadingAtAllIsNotReadEither()
     {
         var fields = PersonaMarkdown.Parse(new[]
         {
@@ -360,7 +363,7 @@ public class PersonaScopedNameTests
             "```",
         });
 
-        Assert.Equal("nicole", fields.Voice);
+        Assert.Null(fields.Voice);
         Assert.Null(fields.Name);
     }
 
