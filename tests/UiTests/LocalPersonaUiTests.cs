@@ -557,6 +557,201 @@ public class LocalPersonaUiTests : IDisposable
         }
     }
 
+    // CB-141, end to end: profile-gen's `claude-md` output mode — the whole
+    // persona inside a ```yaml fence, wrapped in `<!-- profile-gen:start -->`
+    // and `<!-- profile-gen:end -->` markers — written into a real CLAUDE.md,
+    // found by a real scan, reaching a real orb.
+    //
+    // The grammar is pinned in tests/UnitTests and the resolver seam in
+    // tests/IntegrationTests; neither can say the answer arrives on screen,
+    // which is the gap this file's own header describes and the one CB-133
+    // shipped through. The registry is the specific thing being asserted: a
+    // shape the parser now reads has to become a `LocalPersonas` entry and
+    // then a portrait on an orb, and the two steps after the parse are the
+    // ones nobody has exercised for this shape.
+    //
+    // Both surfaces are asserted because they fail differently — the orb takes
+    // the picture and drops its letters, the chat panel's header takes the
+    // name — and a persona that reached one and not the other has been half
+    // wired up before.
+    [AvaloniaFact]
+    public void ARealScanReadsAProfileGenEmbeddedBlockAllTheWayToTheOrb()
+    {
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+
+        var project = Path.Combine(Path.GetTempPath(), "cb-persona-embedded-ui-" + Guid.NewGuid());
+        var pictures = Path.Combine(project, "profiles", "aurora-vance");
+        var statusDir = Path.Combine(Path.GetTempPath(), "cb-persona-embedded-dir-" + Guid.NewGuid());
+        Directory.CreateDirectory(pictures);
+        Directory.CreateDirectory(statusDir);
+
+        var sessionId = "persona-embedded-ui-" + Guid.NewGuid();
+        File.WriteAllBytes(Path.Combine(pictures, "aurora-vance.png"), Portrait());
+
+        try
+        {
+            // profile-gen's embedded block as its renderer emits it, appended
+            // to a CLAUDE.md that already had prose in it — which is what the
+            // mode does to an existing file rather than what it writes into an
+            // empty one.
+            File.WriteAllLines(
+                Path.Combine(project, "CLAUDE.md"),
+                new[]
+                {
+                    "# Notes",
+                    "",
+                    "Notes for Claude Code.",
+                    "",
+                    "<!-- profile-gen:start slug=aurora-vance -->",
+                    "### Aurora Vance",
+                    "",
+                    "![Aurora Vance](profiles/aurora-vance/aurora-vance.png)",
+                    "",
+                    "```yaml",
+                    "schema_version: 1",
+                    "name: \"Aurora Vance\"",
+                    "slug: \"aurora-vance\"",
+                    "image: \"profiles/aurora-vance/aurora-vance.png\"",
+                    "",
+                    "voice: \"af_bella\"",
+                    "",
+                    "nsfw: false",
+                    "```",
+                    "",
+                    "**Personality:** Warm, precise, and a little wry.",
+                    "",
+                    "<!-- profile-gen:end slug=aurora-vance -->",
+                });
+
+            File.WriteAllText(
+                Path.Combine(statusDir, sessionId + ".txt"),
+                System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+                {
+                    State = "idle",
+                    Cli = "",
+                    Title = "cb-persona-embedded",
+                    Cwd = project,
+                    SessionPid = Environment.ProcessId,
+                    TermProgram = "iTerm.app",
+                    Tty = "/dev/ttys004",
+                }));
+
+            var manager = new SessionManager(statusDir);
+            manager.ScanAndUpdate();
+
+            // The registry first: the scan published a persona for this
+            // session, with all three fields the fenced block declared.
+            var persona = LocalPersonas.For(sessionId);
+            Assert.NotNull(persona);
+            Assert.Equal("Aurora Vance", persona!.Name);
+            Assert.Equal("af_bella", persona.Voice);
+            Assert.Equal(
+                Path.Combine(pictures, "aurora-vance.png"), persona.AvatarPath);
+
+            // Then the orb, which is the only surface that can say the picture
+            // was decoded rather than merely named.
+            var orb = OrbFor(manager, sessionId);
+            Assert.False(orb.Glyph.IsVisible, "the letters should give way to the picture");
+            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+
+            // And the header of the panel that opens under it, which is where
+            // the *name* shows up rather than the picture.
+            var fake = new FakeChatSession(null)
+            {
+                SessionId = sessionId,
+                DisplayName = "cb-persona-embedded",
+            };
+            _panelsToClean.Add(sessionId);
+            ChatPanel.OpenFor(orb, fake);
+            Flush();
+
+            Assert.Equal("Aurora Vance", ChatPanelTestAccess.Instance!.TitleText.Text);
+        }
+        finally
+        {
+            LocalPersonas.Forget(sessionId);
+            try { Directory.Delete(project, recursive: true); } catch { }
+            try { Directory.Delete(statusDir, recursive: true); } catch { }
+        }
+    }
+
+    // The paired refusal, and it is the half that makes the case above a
+    // measurement rather than a hope. The *same* CLAUDE.md with the two marker
+    // lines deleted and nothing else touched: the fence, the keys and the
+    // picture on disk are all still there, so anything the orb wears now came
+    // from the marker and not from the yaml.
+    //
+    // An orb falling back to its folder letters is what "no persona" looks like
+    // on screen, which is why that is what is asserted rather than a null in
+    // the registry alone.
+    [AvaloniaFact]
+    public void ARealScanIgnoresTheSameYamlBlockWhenNothingMarksItAsAPersona()
+    {
+        ClaudeBuddySettings.TwoLetterGlyphs = true;
+        ClaudeBuddySettings.ClaudeCodeEnabled = true;
+
+        var project = Path.Combine(Path.GetTempPath(), "cb-persona-unmarked-ui-" + Guid.NewGuid());
+        var pictures = Path.Combine(project, "profiles", "aurora-vance");
+        var statusDir = Path.Combine(Path.GetTempPath(), "cb-persona-unmarked-dir-" + Guid.NewGuid());
+        Directory.CreateDirectory(pictures);
+        Directory.CreateDirectory(statusDir);
+
+        var sessionId = "persona-unmarked-ui-" + Guid.NewGuid();
+        File.WriteAllBytes(Path.Combine(pictures, "aurora-vance.png"), Portrait());
+
+        try
+        {
+            File.WriteAllLines(
+                Path.Combine(project, "CLAUDE.md"),
+                new[]
+                {
+                    "# Notes",
+                    "",
+                    "A persona is declared like this:",
+                    "",
+                    "```yaml",
+                    "schema_version: 1",
+                    "name: \"Aurora Vance\"",
+                    "slug: \"aurora-vance\"",
+                    "image: \"profiles/aurora-vance/aurora-vance.png\"",
+                    "",
+                    "voice: \"af_bella\"",
+                    "",
+                    "nsfw: false",
+                    "```",
+                });
+
+            File.WriteAllText(
+                Path.Combine(statusDir, sessionId + ".txt"),
+                System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+                {
+                    State = "idle",
+                    Cli = "",
+                    Title = "cb-persona-unmarked",
+                    Cwd = project,
+                    SessionPid = Environment.ProcessId,
+                    TermProgram = "iTerm.app",
+                    Tty = "/dev/ttys004",
+                }));
+
+            var manager = new SessionManager(statusDir);
+            manager.ScanAndUpdate();
+
+            Assert.Null(LocalPersonas.For(sessionId)?.Name);
+
+            var orb = OrbFor(manager, sessionId);
+            Assert.True(orb.Glyph.IsVisible, "an unmarked yaml example must not dress an orb");
+            Assert.IsNotType<ImageBrush>(orb.Orb.Fill);
+        }
+        finally
+        {
+            LocalPersonas.Forget(sessionId);
+            try { Directory.Delete(project, recursive: true); } catch { }
+            try { Directory.Delete(statusDir, recursive: true); } catch { }
+        }
+    }
+
     // The other half: take the persona file away, and the bullet still must
     // not win. The tree is the ordinary case CB-133 always meant to cover —
     // no front matter at all — asserted here rather than assumed, because the
