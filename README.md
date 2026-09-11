@@ -1036,6 +1036,43 @@ person typed, and is read exactly as written. `image_animated:` is a second
 label for the picture field, not a second field — writing both `image:` and
 `image_animated:` keeps the still, because the first one stated wins.
 
+**A marked persona block carries the same front matter inside a fence.** A
+generator embedding a persona in a `CLAUDE.md` that already has content in it
+cannot use front matter — there is only one set of `---` rules and they belong
+to the top of the file — so it wraps the persona in a pair of HTML comments and
+puts the fields in a fenced `yaml` block instead:
+
+````markdown
+<!-- persona:start -->
+### Leota
+
+![Leota](avatars/leota.png)
+
+```yaml
+name: "Leota"
+slug: "leota"
+image: "avatars/leota.png"
+voice: "af_bella"
+```
+<!-- persona:end -->
+````
+
+Between `persona:start` and `persona:end`, a ` ```yaml ` (or ` ```yml `) block
+is read exactly as front matter is — same labels, same quote stripping, same
+first-value-wins. `profile-gen:start` and `profile-gen:end` are accepted as
+alternative spellings of the same markers, because the `profile-gen` skill is
+the generator that writes this shape today; the contract is *a marked persona
+block*, not any one tool's output, so a second generator — or a person writing
+one by hand — need not spell another project's name to be understood.
+
+**Everywhere else, a fenced block is still skipped whole** — that is the entire
+point of requiring the markers. A `CLAUDE.md` showing you how to write a config
+file is the commonest ` ```yaml ` block there is, and a `name:` inside one is
+documentation, not a declaration. It stays documentation even under a
+`## Persona` heading; only the markers change what a fence means. The heading
+and the Markdown image above the fence carry nothing either, the same as
+anywhere else: a heading labels what follows rather than stating it.
+
 **Write the picture path however you would write it in Markdown.** A code span
 around it and a note after it are both read straight through, which is how real
 profiles are written:
@@ -1109,7 +1146,8 @@ paragraph is a sentence about naming, and it stays one. Inside a section the
 value still has to pass the same bounds every other shape applies, so that
 sentence names nothing there either — it is six words long, and a name is at
 most three. Fenced code blocks and YAML front matter are ignored exactly as they
-were, including headings written inside them.
+were, including headings written inside them — a persona section does not make a
+fence readable, and only the markers described above do.
 
 **Which files, nearest first.** From the session's working directory upwards to
 the root, each directory contributes `CLAUDE.md`, `CLAUDE.local.md`,

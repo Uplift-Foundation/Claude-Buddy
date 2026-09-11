@@ -121,6 +121,31 @@ namespace ClaudeBuddy
     //     block is where a CLAUDE.md *shows* you what to write, and text being
     //     shown is not text being asserted.
     //
+    //   * With one exception, which is CB-141: a `yaml`/`yml` fence **inside
+    //     a marked persona block** is read by the front-matter arm above,
+    //     exactly as if its lines were between two `---` rules. A marked
+    //     block is the region between an HTML comment reading
+    //     `profile-gen:start` (or the tool-neutral `persona:start`) and its
+    //     matching `:end`. Outside such a block a fence is still skipped
+    //     whole, so the sentence above keeps meaning what it says for every
+    //     ```yaml example in every CLAUDE.md on the machine.
+    //
+    //     The exception exists because a shipping tool writes exactly that
+    //     shape on purpose. profile-gen's `claude-md` output mode wraps the
+    //     persona in those markers and puts every field it declares — name,
+    //     slug, image, image_animated, voice — inside a ```yaml fence, so the
+    //     mode resolved to *no persona at all*: the same requirement-unmet
+    //     class as CB-135 and CB-140, one shape further along.
+    //
+    //     Why the marker rather than the persona section CB-135 already
+    //     models, which would be the tidier signal: profile-gen's block opens
+    //     with `### <the persona's name>`, and PersonaSection matches only
+    //     persona/attributes/identity/character/profile/about me/who i am. A
+    //     heading reading `### Aurora Vance` opens no section at all, so
+    //     sectionLevel is zero for the whole block and a section-scoped rule
+    //     would fix nothing. The marker also has a real end, where a section
+    //     has a guessed one. See MarkedBlockMarker.
+    //
     // And one shape more, added by CB-135 because the bounds above turned out
     // to refuse a real file: a **colon-less `Label Value` line**, but only
     // underneath a persona heading. This repository's own `.claude/PERSONA.MD`
@@ -254,6 +279,19 @@ namespace ClaudeBuddy
             var inFence = false;
             var sawContent = false;
 
+            // The info string of the fence currently open — "yaml" for
+            // "```yaml", the empty string for a bare "```" — and read only
+            // while inFence is true. See the fence arm below for why it is
+            // cleared on the way out even though nothing can observe that.
+            var fenceInfo = "";
+
+            // Whether we are inside a *marked* persona block: the region
+            // between a `<!-- profile-gen:start ... -->` line and its matching
+            // `:end`, or the tool-neutral `persona:start`/`persona:end`
+            // spelling of the same thing. See MarkedBlockMarker for why the
+            // marker is the signal and a heading is not.
+            var inMarkedBlock = false;
+
             // Zero when no persona section is open, otherwise the heading
             // level that opened the one we are inside. A level rather than a
             // flag because a section ends at the next heading of its own level
@@ -327,9 +365,47 @@ namespace ClaudeBuddy
                 // about what a bullet or a table row means, which is
                 // deliberate: what OpenClaw's profiles already parse to is not
                 // this feature's to move.
+                //
+                // CB-141 adds a fourth reader of that state rather than a
+                // fifth exception to it: the front-matter arm, which now also
+                // runs on a `yaml` fence inside a marked persona block. It is
+                // purely additive — a line that arm does not claim falls
+                // through to exactly the arms it fell through to before.
                 if (Fence(trimmed))
                 {
+                    // The info string is read only when the fence opens.
+                    // CommonMark forbids one on a closing fence, so this loses
+                    // nothing.
+                    //
+                    // Clearing it on the way out is hygiene rather than a load-
+                    // bearing rule, and saying so is the point: nothing reads
+                    // fenceInfo while inFence is false, and the next opening
+                    // fence overwrites it regardless — so a stale value cannot
+                    // be observed today. It is cleared anyway because the
+                    // invariant "this describes the fence we are in" is the one
+                    // a later reader will assume, and leaving a closed fence's
+                    // language lying around is how that assumption stops being
+                    // true without anybody changing this line.
+                    fenceInfo = inFence ? "" : FenceInfo(trimmed);
                     inFence = !inFence;
+                    continue;
+                }
+
+                // A marked persona block opens and closes here, and the gate
+                // is `!inFence` for the same reason the heading arm has one:
+                // inside a fence this is not a declaration but somebody's
+                // *example* of one, in a CLAUDE.md that documents the format.
+                // A marker inside front matter is refused for a duller
+                // reason — front matter is already read as fields, so a region
+                // opened there would be a region with nothing left to give.
+                //
+                // The line is consumed rather than offered on. Nothing below
+                // reads it today (it is not a bullet, a two-cell table row, a
+                // bold field or a sentence the prose regex will start on), so
+                // this changes no outcome; it says what the line is.
+                if (!inFrontMatter && !inFence && MarkedBlockMarker(trimmed, out var opensBlock))
+                {
+                    inMarkedBlock = opensBlock;
                     continue;
                 }
 
@@ -359,7 +435,29 @@ namespace ClaudeBuddy
                 // `- Avatar: portrait.png` in a bullet has said the same thing
                 // twice, and being told only one of them counts is the drift
                 // the whole file exists to prevent.
-                if (inFrontMatter && FieldAfterColon(trimmed, out var yamlLabel, out var yamlValue))
+                //
+                // The one shape a fence is read through rather than skipped:
+                // a `yaml`/`yml` block inside a marked persona block. That is
+                // CB-141, and it is deliberately the *same* arm rather than a
+                // second grammar — profile-gen's `claude-md` mode writes the
+                // identical keys its `file` mode writes into real front
+                // matter, so `name:`, `slug:`, `image:`, `image_animated:` and
+                // `voice:` have to mean there exactly what they mean here. Two
+                // readers of one tool's output is the drift this whole file
+                // exists to prevent.
+                //
+                // All three conditions earn their place. Without `inFence`
+                // this is just front matter; without `inMarkedBlock` every
+                // ```yaml example on the machine becomes a persona
+                // declaration, which is the false positive the ticket's
+                // acceptance criterion 2 names; and without the info-string
+                // check a ```bash block inside the region would be read as
+                // metadata, when what the marker declares is a region that
+                // *describes* a persona, not that every fence inside it is
+                // YAML.
+                var inMarkedYaml = inFence && inMarkedBlock && YamlInfo(fenceInfo);
+
+                if ((inFrontMatter || inMarkedYaml) && FieldAfterColon(trimmed, out var yamlLabel, out var yamlValue))
                 {
                     // Unquoted once, before any label asks, so `name:`,
                     // `slug:`, `voice:`, `image:` and `image_animated:` all
@@ -914,6 +1012,106 @@ namespace ClaudeBuddy
         private static bool Fence(string trimmed) =>
             (trimmed.StartsWith("```", StringComparison.Ordinal)
              || trimmed.StartsWith("~~~", StringComparison.Ordinal));
+
+        // ...except that the language *is* examined now, on the way in, for
+        // the one case in Parse that reads a fenced block rather than skipping
+        // it. Only the first word is taken: CommonMark lets a fence carry
+        // attributes after its language ("```yaml {.wrap}", "```yaml title=x")
+        // and the language is the part that says what the block holds.
+        //
+        // Callers get "" for a bare fence, which is not a language any caller
+        // recognises — so an undeclared block is skipped exactly as it always
+        // was.
+        private static string FenceInfo(string trimmed)
+        {
+            var marker = trimmed[0];
+            var i = 0;
+            while (i < trimmed.Length && trimmed[i] == marker) i++;
+
+            var info = trimmed[i..].Trim();
+            var space = info.IndexOfAny(InfoBreak);
+            return space < 0 ? info : info[..space];
+        }
+
+        private static readonly char[] InfoBreak = { ' ', '\t' };
+
+        // Which fenced blocks hold YAML. Both spellings, because a person
+        // writing one by hand picks whichever they learned and a tool picks
+        // the other, and a grammar that reads only one of them is a rule
+        // people have to learn — the same argument NameLabel makes for
+        // `name:` and `slug:`.
+        private static bool YamlInfo(string info) =>
+            info.Equals("yaml", StringComparison.OrdinalIgnoreCase)
+            || info.Equals("yml", StringComparison.OrdinalIgnoreCase);
+
+        // The two spellings of the marker that delimits a persona block.
+        //
+        // `profile-gen` is the tool that actually emits one today: its
+        // `claude-md` output mode wraps the whole persona between
+        // `<!-- profile-gen:start slug=... -->` and `<!-- profile-gen:end
+        // slug=... -->`, with the fields inside a ```yaml fence in between.
+        // `persona` is the same shape with the tool's name taken out of it,
+        // and it is here so that what this repository promises to read is "a
+        // marked persona block" rather than "whatever profile-gen happens to
+        // emit". A second tool — or a person writing one by hand — should not
+        // have to spell another project's name to be understood.
+        private static readonly string[] BlockMarkerTools = { "profile-gen", "persona" };
+
+        // `<!-- profile-gen:start slug=aurora-vance -->` — an HTML comment
+        // whose first word is `<tool>:start` or `<tool>:end`. Whatever follows
+        // it (profile-gen writes a `slug=`) is the tool's own bookkeeping and
+        // is deliberately not read: this parser has no use for a slug it did
+        // not ask for, and a marker whose trailing attributes it refused to
+        // understand would be a marker that stops working the next time the
+        // tool adds one.
+        //
+        // Why a marker at all, when CB-135 already models a persona *section*
+        // and a section would be the tidier signal: profile-gen's block opens
+        // with `### <the persona's name>`, and PersonaSection matches only
+        // persona/attributes/identity/character/profile/about me/who i am. A
+        // heading reading `### Aurora Vance` opens no section, so sectionLevel
+        // is zero for the whole block and every section-scoped rule is dead
+        // there. Measured by running PersonaSection against the real
+        // template's real output, not by reading the list.
+        //
+        // What the marker buys over a section is also a genuine *end*. A
+        // section ends at the next heading of its own level or higher, which
+        // is a guess about where the author stopped; `:end` is the author
+        // saying so.
+        private static bool MarkedBlockMarker(string trimmed, out bool opens)
+        {
+            opens = false;
+
+            // Length before the slice: `<!-->` satisfies both ends at once by
+            // overlapping in the middle, and `trimmed[4..^3]` on five
+            // characters throws rather than returning nothing.
+            if (trimmed.Length < 7
+                || !trimmed.StartsWith("<!--", StringComparison.Ordinal)
+                || !trimmed.EndsWith("-->", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var content = trimmed[4..^3].Trim();
+            var space = content.IndexOfAny(InfoBreak);
+            var directive = space < 0 ? content : content[..space];
+
+            var colon = directive.IndexOf(':');
+            if (colon <= 0) return false;
+
+            var tool = directive[..colon];
+            if (!BlockMarkerTools.Any(known => tool.Equals(known, StringComparison.OrdinalIgnoreCase)))
+                return false;
+
+            var action = directive[(colon + 1)..];
+            if (action.Equals("start", StringComparison.OrdinalIgnoreCase))
+            {
+                opens = true;
+                return true;
+            }
+
+            return action.Equals("end", StringComparison.OrdinalIgnoreCase);
+        }
 
         internal static bool FieldAfterColon(string text, out string label, out string value)
         {
