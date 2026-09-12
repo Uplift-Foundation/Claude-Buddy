@@ -366,38 +366,24 @@ namespace ClaudeBuddy
         // internal for the same reason OrbsRows() above is: a test can drive
         // each row's control directly.
         //
-        // KNOWN BUG, found while writing SettingsWindowRowBuilderTests and left
-        // as-is rather than fixed here (CB-3 is a coverage ticket, not a bugfix
-        // one — see that test file's own comment): "Give each session a colour"
-        // is built *twice*, back to back, each its own Switch bound to the same
+        // CB-153: "Give each session a colour" used to be built twice, back to
+        // back, each its own Switch bound to the same
         // ClaudeBuddySettings.AutoColorSessions and the same OnAutoColorToggled
-        // handler, with two help strings that were each hand-edited slightly
-        // differently at some point (compare "that has none" / "with none",
-        // "so there its orb" / "so a Codex orb"). On screen this reads as one
-        // switch that happens to repeat its own explanation right below itself
-        // — easy to miss, and it is NOT harmless. This comment used to say the
-        // two copies cannot disagree because they share state; they can, and
-        // SettingsWindowCoverageTests now asserts it. They share the *setting*,
-        // not the control: each switch is built from the setting once, so
-        // flipping one writes the setting and leaves the other showing the old
-        // value until something rebuilds the window. Two switches sitting
-        // adjacent and reading differently is a visible inconsistency, not dead
-        // weight. Still clearly meant to be one row.
+        // handler, with two help strings hand-edited slightly differently at
+        // some point (compare "that has none" / "with none", "so there its
+        // orb" / "so a Codex orb"). On screen that read as one switch that
+        // happened to repeat its own explanation right below itself — and it
+        // was not harmless: the two copies shared the *setting*, not the
+        // control, so flipping one wrote the setting and left the other
+        // showing the old value until something rebuilt the window. Down to
+        // one row, which is what this was always meant to be; the surviving
+        // wording is the later, more polished of the two ("Codex orb" over
+        // "there its orb").
         internal Control[] OrbColourRows() => new[]
         {
             ColorRow("Idle", "idle"),
             ColorRow("Working", "generating"),
             ColorRow("Needs you", "waiting"),
-            Row("Give each session a colour",
-                Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
-                "Off, only a colour you set with /color shows on an orb. On, a session "
-                + "that has none is given one, from its working directory — so a project "
-                + "keeps its colour, and both CLIs agree on it. For Claude Code this "
-                + "writes the same record /color writes, so the colour survives a resume "
-                + "and the terminal agrees; /color still overrides it. Codex has nowhere "
-                + "to write one and shows none of its own, so there its orb takes the "
-                + "colour of its Codex section if it has one and the derived colour "
-                + "otherwise."),
             Row("Give each session a colour",
                 Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
                 "Off, only a colour you set with /color shows on an orb. On, a session "
