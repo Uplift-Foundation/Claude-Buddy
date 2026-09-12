@@ -510,7 +510,8 @@ namespace ClaudeBuddy
             ("Diamond", "diamond"),
             ("Star", "star"),
             ("Grid", "grid"),
-            ("Line", "line")
+            ("Horizontal Line", "line"),
+            ("Vertical Line", "vline")
         };
 
         internal Control ShapePicker() => ShapePicker(
