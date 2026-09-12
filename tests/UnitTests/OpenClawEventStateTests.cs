@@ -113,6 +113,48 @@ namespace ClaudeBuddy.Tests
             Assert.Equal("generating", Listed(key)!.State);
         }
 
+        // CB-149: a background task's result landing in the conversation is not
+        // a session starting to generate a reply — OpenClawChatSession treats
+        // the identical event as Complete(), not as new streaming text. Without
+        // this, a task the gateway keeps touching (its own housekeeping
+        // re-upserting an old, permanently blocked record among them) pins the
+        // orb "generating" forever: that state is the only thing that survives
+        // both the recency filter and the stale-orb sweep.
+        [Fact]
+        public void ATaskUpsertDoesNotMarkASessionGenerating()
+        {
+            var key = Key();
+
+            Fire("task", key, action: "upserted");
+
+            Assert.Equal("idle", Listed(key)!.State);
+        }
+
+        [Fact]
+        public void ATaskUpsertStopsAnAlreadyRunningSession()
+        {
+            var key = Key();
+
+            Fire("agent", key);
+            Assert.Equal("generating", Listed(key)!.State);
+
+            Fire("task", key, action: "upserted");
+
+            Assert.Equal("idle", Listed(key)!.State);
+        }
+
+        // Any other task action is not the completion delivery, so it still
+        // counts as the session doing something.
+        [Fact]
+        public void AnotherTaskActionStillCountsAsWork()
+        {
+            var key = Key();
+
+            Fire("task", key, action: "created");
+
+            Assert.Equal("generating", Listed(key)!.State);
+        }
+
         // The gateway's own housekeeping is not evidence of work. A heartbeat tick
         // arrives for every session on a timer, so counting it would leave every
         // orb pulsing forever.
@@ -212,6 +254,30 @@ namespace ClaudeBuddy.Tests
             var key = Key();
 
             Fire("cron", key, action: "finished");
+
+            ClaudeBuddySettings.OpenClawEnabled = true;
+            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+            ClaudeBuddySettings.OpenClawActiveWithinMinutes = 5;
+
+            var stale = new DateTimeOffset(DateTime.UtcNow.AddHours(-1)).ToUnixTimeMilliseconds();
+            var json = "{\"sessions\":[{\"key\":" + JsonSerializer.Serialize(key)
+                       + ",\"chatType\":\"channel\",\"lastActivityAt\":" + stale + "}]}";
+
+            var (sessions, _) = OpenClawSessions.Parse(Json(json), DateTime.UtcNow);
+
+            Assert.Contains(sessions, s => s.Key == key);
+            Assert.Equal("idle", sessions.First(s => s.Key == key).State);
+        }
+
+        // Same as the cron case above: the event that delivers a task's result
+        // still counts as activity, so a completion that lands seconds before a
+        // stale listing catches up does not vanish before anyone sees it.
+        [Fact]
+        public void TheEventThatDeliversATaskStillCountsAsActivity()
+        {
+            var key = Key();
+
+            Fire("task", key, action: "upserted");
 
             ClaudeBuddySettings.OpenClawEnabled = true;
             ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
