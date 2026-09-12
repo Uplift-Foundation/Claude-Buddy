@@ -1474,7 +1474,18 @@ namespace ClaudeBuddy
         // observable through Parse, which reads what this records.
         internal static void OnEvent(string name, JsonElement payload)
         {
-            if (name is "tick" or "health" or "presence" or "connect.challenge") return;
+            // "sessions.changed" is the gateway telling every client "go
+            // re-fetch the list", not "this session just did something" — see
+            // CB-152. It arrives once per session on the *whole roster* on
+            // every reconnect (confirmed live: a single reconnect fired it for
+            // an agent's cron-internal session, its own main DM, and — the
+            // reproduction case — a stale channel with no real activity in
+            // three days), including sessions nobody has touched in days. It
+            // carries the same sessionKey shape as a real turn-progress event,
+            // so without this exclusion it reads exactly like one and arms
+            // Running/LastSeen for the entire roster at once.
+            if (name is "tick" or "health" or "presence" or "connect.challenge"
+                or "sessions.changed") return;
             if (payload.ValueKind != JsonValueKind.Object) return;
 
             var key = Str(payload, "sessionKey");
