@@ -49,6 +49,17 @@ public class ChatPanelHeaderMetaTests : IDisposable
     // ever answer, rather than trusted to differ by luck.
     private const string Elsewhere = "cb134-not-this-machine";
 
+    // What CB-149's redundancy pass draws Elsewhere and the local machine
+    // name as: MachineNames.Readable() turns every hyphen a Bonjour name is
+    // wearing back into a space at the point of display, on the theory that
+    // it is standing in for whatever character — usually an apostrophe or a
+    // space — the name could not carry onto the network. The raw, hyphenated
+    // constants above are still what gets fed *in* (WithMachineName, a
+    // MirroredSession's reported name); these are only what the panel is
+    // asserted to have drawn.
+    private const string ElsewhereShown = "cb134 not this machine";
+    private const string MachineShown = "warrens macbook pro";
+
     private FakeChatSession NewFake(string displayName, string? sessionId = null)
     {
         var id = sessionId ?? "header-meta-" + Guid.NewGuid();
@@ -133,7 +144,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
         var panel = ChatPanelTestAccess.Instance!;
 
         Assert.True(Row(panel).IsVisible);
-        Assert.Equal(ProjectShown + " · warrens-macbook-pro", LineOf(panel));
+        Assert.Equal(ProjectShown + " · " + MachineShown, LineOf(panel));
     }
 
     [AvaloniaFact]
@@ -151,7 +162,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
 
         Assert.Equal("Leota", panel.FindControl<TextBlock>("TitleText")!.Text);
         Assert.Equal(
-            "haunted-mansion · " + ProjectShown + " · warrens-macbook-pro", LineOf(panel));
+            "haunted-mansion · " + ProjectShown + " · " + MachineShown, LineOf(panel));
     }
 
     [AvaloniaFact]
@@ -205,7 +216,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
         var panel = ChatPanelTestAccess.Instance!;
 
         Assert.True(Row(panel).IsVisible);
-        Assert.Equal("warrens-macbook-pro", LineOf(panel));
+        Assert.Equal(MachineShown, LineOf(panel));
 
         // The empty row above it is collapsed rather than left blank, so the
         // machine sits directly under the chips instead of after a gap.
@@ -216,6 +227,47 @@ public class ChatPanelHeaderMetaTests : IDisposable
         // this capture's twin in tests/UiScreenshots exists to show.
         Assert.Equal("#openclaw-management", panel.FindControl<TextBlock>("TitleText")!.Text);
         Assert.Equal("wtvamp", panel.FindControl<TextBlock>("SubtitleText")!.Text);
+    }
+
+    // CB-150: the case AGatewayRoomHasNoFolderAndSaysOnlyTheMachine's status
+    // leaves empty. There, status.Title is "" and nothing is repeated by
+    // construction. Here it is the gateway's own session title — "Annabel Lee
+    // — #cascadia-forensics-marketing" — which ApplyTitle has *already* split
+    // across TitleText ("Annabel Lee") and SubtitleText
+    // ("#cascadia-forensics-marketing"). Before this fix, Unrepeated compared
+    // status.Title only against TitleText, saw "Annabel Lee" next to the
+    // whole "Annabel Lee — #cascadia-forensics-marketing" and called them
+    // different, so the meta row drew the channel a second time directly
+    // under the chip that already names it.
+    [AvaloniaFact]
+    public void AGatewaySessionsSplitTitleIsNotRepeatedInTheMetaLine()
+    {
+        using var machine = ChatPanelTestAccess.WithMachineName("warrens-macbook-pro");
+
+        var orb = NewOrb();
+        orb.UpdateFrom(new SessionStatus
+        {
+            Source = SessionSource.OpenClaw,
+            State = "idle",
+            Kind = SessionKind.Channel,
+            Title = "Annabel Lee — #cascadia-forensics-marketing",
+            Cwd = "",
+        });
+
+        ChatPanel.OpenFor(orb, NewFake("Annabel Lee — #cascadia-forensics-marketing"));
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+
+        Assert.Equal("Annabel Lee", panel.FindControl<TextBlock>("TitleText")!.Text);
+        Assert.Equal(
+            "#cascadia-forensics-marketing", panel.FindControl<TextBlock>("SubtitleText")!.Text);
+
+        // The meta row still shows the machine — that fact is never a
+        // repeat — but the lead line, which would only have restated the
+        // two lines above it, stays collapsed.
+        Assert.False(Lead(panel).IsVisible);
+        Assert.Equal(MachineShown, LineOf(panel));
     }
 
     [AvaloniaFact]
@@ -234,7 +286,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
         var panel = ChatPanelTestAccess.Instance!;
 
         Assert.True(Row(panel).IsVisible);
-        Assert.Equal("warrens-macbook-pro", LineOf(panel));
+        Assert.Equal(MachineShown, LineOf(panel));
         Assert.False(Lead(panel).IsVisible);
     }
 
@@ -271,7 +323,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
 
         var panel = ChatPanelTestAccess.Instance!;
 
-        Assert.Equal("warrens-macbook-pro", MachineBlock(panel).Text);
+        Assert.Equal(MachineShown, MachineBlock(panel).Text);
         Assert.Equal(Color.Parse("#80FFFFFF"), InkOf(MachineBlock(panel)));
         Assert.Equal(InkOf(Lead(panel)), InkOf(MachineBlock(panel)));
     }
@@ -293,7 +345,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
 
         var panel = ChatPanelTestAccess.Instance!;
 
-        Assert.Equal(Elsewhere, MachineBlock(panel).Text);
+        Assert.Equal(ElsewhereShown, MachineBlock(panel).Text);
         Assert.NotNull(orb.AccentColor);
         Assert.Equal(orb.AccentColor, InkOf(MachineBlock(panel)));
     }
@@ -335,7 +387,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
 
         var panel = ChatPanelTestAccess.Instance!;
 
-        Assert.Equal(Elsewhere, MachineBlock(panel).Text);
+        Assert.Equal(ElsewhereShown, MachineBlock(panel).Text);
         Assert.Equal(Color.Parse("#80FFFFFF"), InkOf(MachineBlock(panel)));
     }
 
@@ -357,13 +409,13 @@ public class ChatPanelHeaderMetaTests : IDisposable
 
         // Until it answers, the line says this machine — naming no machine
         // would be a hole, and naming a guessed one would be worse.
-        Assert.EndsWith("warrens-macbook-pro", LineOf(panel));
+        Assert.EndsWith(MachineShown, LineOf(panel));
         Assert.Equal(Color.Parse("#80FFFFFF"), InkOf(MachineBlock(panel)));
 
         far.Arrive(Elsewhere);
         Flush();
 
-        Assert.EndsWith(Elsewhere, LineOf(panel));
+        Assert.EndsWith(ElsewhereShown, LineOf(panel));
         Assert.Equal(Color.Parse("#FF9FD0FF"), InkOf(MachineBlock(panel)));
     }
 
@@ -385,7 +437,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
 
         var panel = ChatPanelTestAccess.Instance!;
 
-        Assert.Equal(ProjectShown + " · warrens-macbook-pro", LineOf(panel));
+        Assert.Equal(ProjectShown + " · " + MachineShown, LineOf(panel));
 
         orb.UpdateFrom(new SessionStatus
         {
@@ -397,7 +449,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
         Flush();
 
         Assert.Equal(
-            "haunted-mansion · " + ProjectShown + " · warrens-macbook-pro", LineOf(panel));
+            "haunted-mansion · " + ProjectShown + " · " + MachineShown, LineOf(panel));
     }
 
     [AvaloniaFact]
@@ -418,7 +470,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
 
         var panel = ChatPanelTestAccess.Instance!;
 
-        Assert.Equal(Under("Source", "Claude-Buddy") + " · warrens-macbook-pro", LineOf(panel));
+        Assert.Equal(Under("Source", "Claude-Buddy") + " · " + MachineShown, LineOf(panel));
         Assert.DoesNotContain("haunted-mansion", LineOf(panel));
         Assert.DoesNotContain(Project, TipOf(panel));
     }
@@ -449,7 +501,7 @@ public class ChatPanelHeaderMetaTests : IDisposable
         Flush();
 
         Assert.Equal(before, LineOf(panel));
-        Assert.Equal("warrens-macbook-pro", MachineBlock(panel).Text);
+        Assert.Equal(MachineShown, MachineBlock(panel).Text);
     }
 
     // A session that is being mirrored from another machine: the one thing

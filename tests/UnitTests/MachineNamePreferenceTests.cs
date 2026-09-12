@@ -168,4 +168,36 @@ public class MachineNamePreferenceTests
         // says nothing.
         Assert.Equal("avatar", MachineNames.Tag("avatar.local"));
     }
+
+    // --- and read back out loud, without disturbing the key --------------------
+
+    [Fact]
+    public void EveryHyphenBecomesASpace()
+    {
+        // Clean() already discarded whichever character the hyphen is
+        // standing in for — an apostrophe, most often, since a Bonjour label
+        // cannot carry one — so there is no way back to "Warren's MacBook
+        // Pro" exactly. A space reads closer to what the owner actually
+        // typed than a hyphen does, which is the whole of what this buys.
+        Assert.Equal("warrens macbook pro", MachineNames.Readable("warrens-macbook-pro"));
+    }
+
+    [Fact]
+    public void ANameWithNoHyphenIsUnchanged()
+    {
+        Assert.Equal("avatar", MachineNames.Readable("avatar"));
+    }
+
+    [Fact]
+    public void ReadableNeverChangesWhatTheNameCompletesEqualAgainst()
+    {
+        // The property CB-149's header fix depends on: prettifying for
+        // display must never make two different machine names collide, or a
+        // far session could start reading as this one. MachineFor's
+        // comparison runs on the raw name before Readable ever sees it, so
+        // this only has to hold for Readable itself.
+        Assert.NotEqual(
+            MachineNames.Readable("warrens-macbook-pro"),
+            MachineNames.Readable("warren-smacbook-pro"));
+    }
 }
