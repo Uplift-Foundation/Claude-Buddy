@@ -104,19 +104,35 @@ namespace ClaudeBuddy
         // agentName is what CB-154 added: an agent-team member's own name
         // (AgentTeam.Membership.Name, already sanitised to letters, digits and
         // a handful of separators — never a path separator, so it cannot walk
-        // out of .claude/agents). Empty for anything that isn't a team member,
-        // which is every caller from before this ticket, so the default
-        // reproduces their exact candidate list unchanged.
+        // out of profiles/<name>). Empty for anything that isn't a team
+        // member, which is every caller from before this ticket, so the
+        // default reproduces their exact candidate list unchanged.
         //
-        // Named first, one level only — an author points a specific team
-        // member at its own persona by dropping a PERSONA.MD-shaped file at
-        // .claude/agents/<name>.md, which is also where Claude Code already
-        // expects that member's own subagent definition, so this is one file
-        // to maintain rather than a second convention beside it. It wins over
-        // the project-wide files at the same level for the reason every
-        // nearer file already wins: it says more specifically who this is.
-        // A team that gives a member no such file falls straight through to
-        // the shared project persona below, unchanged from today.
+        // profiles/<name>/<name>.md and .profiles-assets/<name>/<name>.md —
+        // not .claude/agents/<name>.md, which is where an earlier version of
+        // this change looked. That file is Claude Code's own subagent
+        // definition (frontmatter of tools/model/hooks) and was found, on a
+        // real running team, to carry no picture at all and a lowercase
+        // `name:` (the slug) that would have *shadowed* the real display
+        // name rather than supplying one — checking it first would have made
+        // this feature actively worse than not checking anything. The two
+        // paths here are profile-gen's own `write_profile.py --output file`
+        // layout (`profilegen/storage.py`'s tracked and gitignored cases),
+        // the tool real teams already use to give each hire a name, a voice
+        // and a portrait — so this reads what such a team already produces
+        // rather than asking for a third convention beside it.
+        //
+        // Checked at every directory level the walk visits, same as the four
+        // shared names below — not root-only. A track lead's hires are
+        // written with --root set to the lead's own directory, which is also
+        // where each hire's session normally sits, but a session's cwd can
+        // still drift one level below that during a turn, and repeating this
+        // check costs nothing a shared name's repetition does not already
+        // cost. It is checked first at each level for the reason a nearer
+        // file already wins over a farther one: it says more specifically
+        // who this is. A team that gives a member neither file falls
+        // straight through to the shared project persona, unchanged from
+        // before this ticket.
         internal static IReadOnlyList<string> CandidateFiles(
             string? cwd, IEnumerable<string> userConfigDirs, SessionSource source, string agentName = "")
         {
@@ -134,17 +150,16 @@ namespace ClaudeBuddy
                 if (seen.Add(path)) files.Add(path);
             }
 
+            var hasAgentName = agentName is not ("" or "." or "..");
+
             var directory = FullPathOrNull(cwd);
-            var atRoot = true;
             for (var depth = 0; directory is not null && depth < MaxDepth; depth++)
             {
-                // Root only: a member's own file lives beside the project's,
-                // not repeated at every ancestor directory the walk visits.
-                if (atRoot && agentName is not ("" or "." or ".."))
+                if (hasAgentName)
                 {
-                    Add(Path.Combine(directory, ".claude", "agents", agentName + ".md"));
+                    Add(Path.Combine(directory, "profiles", agentName, agentName + ".md"));
+                    Add(Path.Combine(directory, ".profiles-assets", agentName, agentName + ".md"));
                 }
-                atRoot = false;
 
                 Add(Path.Combine(directory, "CLAUDE.md"));
                 Add(Path.Combine(directory, "CLAUDE.local.md"));

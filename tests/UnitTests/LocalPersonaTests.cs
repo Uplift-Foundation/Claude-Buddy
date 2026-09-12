@@ -74,33 +74,39 @@ public class LocalPersonaTests : IDisposable
         Assert.Contains(Path.Combine(Path.GetPathRoot(full)!, "CLAUDE.md"), files);
     }
 
-    // CB-154: an agent-team member's own file, when it names one, wins over
-    // the project's shared files at the same directory level — same rule as
-    // any nearer file, one level narrower.
+    // CB-154: an agent-team member's own files — the two layouts
+    // write_profile.py's --output file can produce — win over the project's
+    // shared files at the same directory level, same rule as any nearer file,
+    // one convention narrower.
     [Fact]
-    public void AnAgentsOwnFileComesBeforeTheProjectsSharedFiles()
+    public void AnAgentsOwnProfileFilesComeBeforeTheProjectsSharedFiles()
     {
         var cwd = Path.Combine(Path.GetTempPath(), "cb-candidates", "a", "b");
         var full = Path.GetFullPath(cwd);
 
         var files = LocalPersona.CandidateFiles(
-            cwd, Array.Empty<string>(), SessionSource.ClaudeCode, "MenuUX");
+            cwd, Array.Empty<string>(), SessionSource.ClaudeCode, "helena-marsh");
 
-        Assert.Equal(Path.Combine(full, ".claude", "agents", "MenuUX.md"), files[0]);
-        Assert.Equal(Path.Combine(full, "CLAUDE.md"), files[1]);
+        Assert.Equal(Path.Combine(full, "profiles", "helena-marsh", "helena-marsh.md"), files[0]);
+        Assert.Equal(Path.Combine(full, ".profiles-assets", "helena-marsh", "helena-marsh.md"), files[1]);
+        Assert.Equal(Path.Combine(full, "CLAUDE.md"), files[2]);
     }
 
-    // Only at the cwd itself — an agent's own file is not repeated once per
-    // ancestor directory the walk visits, unlike the four shared names.
+    // Repeated at every ancestor directory, same as the four shared names —
+    // not root-only. A hire's session normally sits exactly at the directory
+    // write_profile.py was told to use as --root, but a turn can leave its
+    // cwd one level below that, and this costs nothing extra to check.
     [Fact]
-    public void AnAgentsOwnFileIsOfferedOnlyAtTheWorkingDirectory()
+    public void AnAgentsOwnProfileFilesAreOfferedAtEveryAncestorDirectoryToo()
     {
         var cwd = Path.Combine(Path.GetTempPath(), "cb-candidates", "a", "b");
+        var full = Path.GetFullPath(cwd);
+        var parent = Path.GetDirectoryName(full)!;
 
         var files = LocalPersona.CandidateFiles(
-            cwd, Array.Empty<string>(), SessionSource.ClaudeCode, "MenuUX");
+            cwd, Array.Empty<string>(), SessionSource.ClaudeCode, "helena-marsh");
 
-        Assert.Single(files, f => f.EndsWith(Path.Combine(".claude", "agents", "MenuUX.md")));
+        Assert.Contains(Path.Combine(parent, "profiles", "helena-marsh", "helena-marsh.md"), files);
     }
 
     // Every existing caller passes no agent name at all, and must see exactly
@@ -118,8 +124,8 @@ public class LocalPersonaTests : IDisposable
 
     // "." and ".." survive AgentTeam.SanitizeName (both are legal under its
     // letter/digit/dash/underscore/dot/space rule) but neither names a real
-    // agent, and ".." one level under .claude/agents is .claude itself — not
-    // a file this should ever open on a name nobody chose on purpose.
+    // agent, and ".." one level under profiles is the project root itself —
+    // not a directory this should ever be told is a persona.
     [Theory]
     [InlineData(".")]
     [InlineData("..")]
@@ -130,7 +136,7 @@ public class LocalPersonaTests : IDisposable
         var files = LocalPersona.CandidateFiles(
             cwd, Array.Empty<string>(), SessionSource.ClaudeCode, agentName);
 
-        Assert.DoesNotContain(files, f => f.Contains(Path.Combine(".claude", "agents")));
+        Assert.DoesNotContain(files, f => f.Contains("profiles"));
     }
 
     [Fact]

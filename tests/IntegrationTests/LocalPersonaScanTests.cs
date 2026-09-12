@@ -126,16 +126,20 @@ public class LocalPersonaScanTests : IDisposable
     }
 
     // CB-154, the ticket's own reproduction: two team members sharing one
-    // project cwd, one with its own .claude/agents/<name>.md, resolve to two
-    // different personas rather than the second collapsing onto whichever the
-    // shared cache entry happened to hold first.
+    // project cwd, one with its own profiles/<name>/<name>.md — the file
+    // real teams already have, written by profile-gen's write_profile.py
+    // --output file — resolve to two different personas rather than the
+    // second collapsing onto whichever the shared cache entry happened to
+    // hold first. Front matter, not a sentence, because that is the literal
+    // shape write_profile.py writes.
     [Fact]
     public void TwoTeamMembersInOneCwdCanEachHaveTheirOwnPersona()
     {
         WriteMarkdown("CLAUDE.md", "Her name is Leota.\n");
-        Directory.CreateDirectory(Path.Combine(_project, ".claude", "agents"));
+        Directory.CreateDirectory(Path.Combine(_project, "profiles", "helena-marsh"));
         File.WriteAllText(
-            Path.Combine(_project, ".claude", "agents", "MenuUX.md"), "Her name is Constance.\n");
+            Path.Combine(_project, "profiles", "helena-marsh", "helena-marsh.md"),
+            "---\nname: \"Constance\"\n---\n\n# Constance\n");
 
         var manager = Manager();
         var pass = Pass();
@@ -145,7 +149,7 @@ public class LocalPersonaScanTests : IDisposable
         try
         {
             manager.ApplyPersona(leadId, Status(), pass);
-            manager.ApplyPersona(memberId, Status(agent: "MenuUX"), pass);
+            manager.ApplyPersona(memberId, Status(agent: "helena-marsh"), pass);
 
             Assert.Equal("Leota", LocalPersonas.For(leadId)!.Name);
             Assert.Equal("Constance", LocalPersonas.For(memberId)!.Name);
