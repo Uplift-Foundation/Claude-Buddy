@@ -1496,8 +1496,27 @@ namespace ClaudeBuddy
                 // one worth keeping on screen.
                 LastSeen[key] = DateTime.UtcNow;
 
-                if (name is "cron" && Str(payload, "action") == "finished") Running.Remove(key);
-                else Running[key] = DateTime.UtcNow;
+                // "task"/"upserted" is a background task's result landing in the
+                // conversation, not a session starting to generate one — see
+                // OpenClawChatSession.OnAgentEvent, which treats the identical
+                // event as Complete() rather than as new streaming text. Left to
+                // fall through to the Running arm below, a task the gateway keeps
+                // touching (its own housekeeping re-upserting an old, permanently
+                // blocked record among them — CB-149) reads as a session that is
+                // perpetually mid-reply, and its orb never leaves the screen: the
+                // event both defeats "Keep orbs for" (State != "generating" is
+                // the only escape from the recency filter) and never ages out on
+                // its own, since every fresh touch rearms Running before RunIdle
+                // can retire the last one.
+                if ((name is "cron" && Str(payload, "action") == "finished")
+                    || (name is "task" && Str(payload, "action") == "upserted"))
+                {
+                    Running.Remove(key);
+                }
+                else
+                {
+                    Running[key] = DateTime.UtcNow;
+                }
             }
 
             // Only for a session someone has opened: building a transcript for
