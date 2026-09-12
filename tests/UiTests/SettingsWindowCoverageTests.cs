@@ -119,53 +119,38 @@ public class SettingsWindowCoverageTests
         }
     }
 
-    // --- the "Orb colours" rows, and the duplicate-row bug found here -------
+    // --- the "Orb colours" rows -------------------------------------------
 
-    // KNOWN BUG (see OrbColourRows' own comment in SettingsWindow.cs): "Give
-    // each session a colour" is built twice, back to back, both bound to
-    // ClaudeBuddySettings.AutoColorSessions via the same OnAutoColorToggled
-    // handler. This test documents that current shape rather than fixing it —
-    // CB-3 is a coverage ticket. If this ever starts failing because the
-    // duplicate was removed, delete this test along with it; that would be
-    // the fix, not a regression.
+    // CB-153: "Give each session a colour" used to be built twice, back to
+    // back, both bound to ClaudeBuddySettings.AutoColorSessions via the same
+    // OnAutoColorToggled handler — a visible duplicate on screen, and not
+    // harmless, since the two copies shared the setting rather than the
+    // control and could disagree on screen until the window rebuilt. Down to
+    // one row now; this replaces OrbColourRowsBuildsTheKnownDuplicateAutoColorRow,
+    // which documented the old, duplicated shape.
     [AvaloniaFact]
-    public void OrbColourRowsBuildsTheKnownDuplicateAutoColorRow()
+    public void OrbColourRowsBuildsExactlyOneAutoColorRow()
     {
         var was = ClaudeBuddySettings.AutoColorSessions;
         try
         {
-            // Set before the window is built, not after: the switches read the
-            // setting as they are constructed, so inheriting whatever the last
+            // Set before the window is built, not after: the switch reads the
+            // setting as it is constructed, so inheriting whatever the last
             // test left behind would decide this test's outcome for it.
             ClaudeBuddySettings.AutoColorSessions = false;
 
             var rows = NewWindow().OrbColourRows();
 
-            // 3 colour rows, 2 duplicate auto-colour rows, 1 reset row.
-            Assert.Equal(6, rows.Length);
+            // 3 colour rows, 1 auto-colour row, 1 reset row.
+            Assert.Equal(5, rows.Length);
 
-            var first = SwitchIn(rows[3]);
-            var second = SwitchIn(rows[4]);
+            var toggle = SwitchIn(rows[3]);
 
-            // Both start from the same setting, so they agree on arrival — which
-            // is why the duplication has gone unnoticed.
-            Assert.Equal(first.IsChecked, second.IsChecked);
-            Assert.False(first.IsChecked);
+            Assert.False(toggle.IsChecked);
 
-            // But they do NOT move together, which is the part worth recording.
-            // Each is an independent control initialised from the setting; toggling
-            // one writes the setting and leaves the other showing the old value.
-            // So the two copies can sit on screen disagreeing until something
-            // rebuilds the window — the duplication is a visible inconsistency
-            // rather than the harmless dead weight OrbColourRows' own comment
-            // claims ("neither copy can disagree with the other since they share
-            // state"). That comment is wrong, and this is the assertion that says
-            // so.
-            first.IsChecked = true;
+            toggle.IsChecked = true;
 
             Assert.True(ClaudeBuddySettings.AutoColorSessions);
-            Assert.NotEqual(first.IsChecked, second.IsChecked);
-            Assert.False(second.IsChecked);
         }
         finally
         {
