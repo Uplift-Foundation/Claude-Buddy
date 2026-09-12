@@ -92,16 +92,17 @@ public class LocalPersonaScanTests : IDisposable
     private void WriteMarkdown(string name, string body) =>
         File.WriteAllText(Path.Combine(_project, name), body);
 
-    private SessionStatus Status(SessionSource source = SessionSource.ClaudeCode) => new()
+    private SessionStatus Status(SessionSource source = SessionSource.ClaudeCode, string agent = "") => new()
     {
         Source = source,
         State = "idle",
         Cwd = _project,
         Title = "cb-persona-scan",
+        Agent = agent,
     };
 
     // One dictionary per pass, the same way ScanAndUpdate makes one per tick.
-    private Dictionary<(string Cwd, SessionSource Source), IReadOnlyList<string>> Pass() => new();
+    private Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>> Pass() => new();
 
     // Nothing above the project tree, unless a case says otherwise. See the
     // header: this is the pin that makes every settling claim below independent
@@ -122,6 +123,66 @@ public class LocalPersonaScanTests : IDisposable
         Assert.NotNull(persona);
         Assert.Equal("Leota", persona!.Name);
         Assert.Contains(Path.Combine(_project, "CLAUDE.md"), persona.Files.Select(Path.GetFullPath));
+    }
+
+    // CB-154, the ticket's own reproduction: two team members sharing one
+    // project cwd, one with its own profiles/<name>/<name>.md — the file
+    // real teams already have, written by profile-gen's write_profile.py
+    // --output file — resolve to two different personas rather than the
+    // second collapsing onto whichever the shared cache entry happened to
+    // hold first. Front matter, not a sentence, because that is the literal
+    // shape write_profile.py writes.
+    [Fact]
+    public void TwoTeamMembersInOneCwdCanEachHaveTheirOwnPersona()
+    {
+        WriteMarkdown("CLAUDE.md", "Her name is Leota.\n");
+        Directory.CreateDirectory(Path.Combine(_project, "profiles", "helena-marsh"));
+        File.WriteAllText(
+            Path.Combine(_project, "profiles", "helena-marsh", "helena-marsh.md"),
+            "---\nname: \"Constance\"\n---\n\n# Constance\n");
+
+        var manager = Manager();
+        var pass = Pass();
+        var leadId = _sessionId + "-lead";
+        var memberId = _sessionId + "-member";
+
+        try
+        {
+            manager.ApplyPersona(leadId, Status(), pass);
+            manager.ApplyPersona(memberId, Status(agent: "helena-marsh"), pass);
+
+            Assert.Equal("Leota", LocalPersonas.For(leadId)!.Name);
+            Assert.Equal("Constance", LocalPersonas.For(memberId)!.Name);
+        }
+        finally
+        {
+            LocalPersonas.Forget(leadId);
+            LocalPersonas.Forget(memberId);
+        }
+    }
+
+    // The other half of the same claim: a member with no file of its own still
+    // falls through to the project's shared persona, unchanged from before
+    // this ticket — this is a fallback, not a requirement that every member
+    // name one.
+    [Fact]
+    public void ATeamMemberWithNoOwnFileFallsBackToTheProjectsPersona()
+    {
+        WriteMarkdown("CLAUDE.md", "Her name is Leota.\n");
+
+        var manager = Manager();
+        var pass = Pass();
+        var memberId = _sessionId + "-member";
+
+        try
+        {
+            manager.ApplyPersona(memberId, Status(agent: "SomeoneElse"), pass);
+            Assert.Equal("Leota", LocalPersonas.For(memberId)!.Name);
+        }
+        finally
+        {
+            LocalPersonas.Forget(memberId);
+        }
     }
 
     // The cache, stated as the thing it actually promises. Not "it is fast" —

@@ -66,7 +66,7 @@ public class LocalPersonaScanConfigDirEnvTests : IDisposable
         Title = "cb-persona-env",
     };
 
-    private Dictionary<(string Cwd, SessionSource Source), IReadOnlyList<string>> Pass() => new();
+    private Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>> Pass() => new();
 
     // The exact fixture that failed, plus the flip that failed it. The
     // sentinel is the literal value UsagePollerEnvironmentTests sets, so this

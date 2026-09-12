@@ -101,8 +101,40 @@ namespace ClaudeBuddy
         // conversation on a gateway, and the second is a session whose cwd is
         // on somebody else's machine, where a path that happens to exist here
         // too would be a different directory wearing the same string.
+        // agentName is what CB-154 added: an agent-team member's own name
+        // (AgentTeam.Membership.Name, already sanitised to letters, digits and
+        // a handful of separators — never a path separator, so it cannot walk
+        // out of profiles/<name>). Empty for anything that isn't a team
+        // member, which is every caller from before this ticket, so the
+        // default reproduces their exact candidate list unchanged.
+        //
+        // profiles/<name>/<name>.md and .profiles-assets/<name>/<name>.md —
+        // not .claude/agents/<name>.md, which is where an earlier version of
+        // this change looked. That file is Claude Code's own subagent
+        // definition (frontmatter of tools/model/hooks) and was found, on a
+        // real running team, to carry no picture at all and a lowercase
+        // `name:` (the slug) that would have *shadowed* the real display
+        // name rather than supplying one — checking it first would have made
+        // this feature actively worse than not checking anything. The two
+        // paths here are profile-gen's own `write_profile.py --output file`
+        // layout (`profilegen/storage.py`'s tracked and gitignored cases),
+        // the tool real teams already use to give each hire a name, a voice
+        // and a portrait — so this reads what such a team already produces
+        // rather than asking for a third convention beside it.
+        //
+        // Checked at every directory level the walk visits, same as the four
+        // shared names below — not root-only. A track lead's hires are
+        // written with --root set to the lead's own directory, which is also
+        // where each hire's session normally sits, but a session's cwd can
+        // still drift one level below that during a turn, and repeating this
+        // check costs nothing a shared name's repetition does not already
+        // cost. It is checked first at each level for the reason a nearer
+        // file already wins over a farther one: it says more specifically
+        // who this is. A team that gives a member neither file falls
+        // straight through to the shared project persona, unchanged from
+        // before this ticket.
         internal static IReadOnlyList<string> CandidateFiles(
-            string? cwd, IEnumerable<string> userConfigDirs, SessionSource source)
+            string? cwd, IEnumerable<string> userConfigDirs, SessionSource source, string agentName = "")
         {
             var files = new List<string>();
             if (source is SessionSource.OpenClaw or SessionSource.RemoteControl) return files;
@@ -118,9 +150,17 @@ namespace ClaudeBuddy
                 if (seen.Add(path)) files.Add(path);
             }
 
+            var hasAgentName = agentName is not ("" or "." or "..");
+
             var directory = FullPathOrNull(cwd);
             for (var depth = 0; directory is not null && depth < MaxDepth; depth++)
             {
+                if (hasAgentName)
+                {
+                    Add(Path.Combine(directory, "profiles", agentName, agentName + ".md"));
+                    Add(Path.Combine(directory, ".profiles-assets", agentName, agentName + ".md"));
+                }
+
                 Add(Path.Combine(directory, "CLAUDE.md"));
                 Add(Path.Combine(directory, "CLAUDE.local.md"));
                 Add(Path.Combine(directory, ".claude", "CLAUDE.md"));
@@ -236,8 +276,9 @@ namespace ClaudeBuddy
         // written relative to the workspace root, rather than to the
         // directory of the markdown that named it, still resolves, without
         // weakening the guarantee the file-directory lookup already made.
-        internal static Persona Resolve(string? cwd, SessionSource source, IEnumerable<string> userConfigDirs) =>
-            ResolveFrom(CandidateFiles(cwd, userConfigDirs, source), cwd);
+        internal static Persona Resolve(
+            string? cwd, SessionSource source, IEnumerable<string> userConfigDirs, string agentName = "") =>
+            ResolveFrom(CandidateFiles(cwd, userConfigDirs, source, agentName), cwd);
 
         // The same fold, over a candidate list somebody else has already built.
         //
