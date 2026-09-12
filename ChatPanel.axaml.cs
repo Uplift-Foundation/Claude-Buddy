@@ -902,12 +902,26 @@ namespace ClaudeBuddy
             var machine = ChatHeaderMeta.MachineFor(
                 (_session as IRemoteChatMachine)?.MachineName, ThisMachine);
 
+            // What the header's first line already says, in full — not just
+            // TitleText.Text. A gateway session's title is "Annabel Lee —
+            // #cascadia-forensics-marketing", and ApplyTitle above already
+            // split that across TitleText and SubtitleText; comparing
+            // Unrepeated against TitleText alone sees "Annabel Lee" next to
+            // status?.Title's whole "Annabel Lee — #cascadia-forensics-
+            // marketing" and calls them different, so the meta row draws the
+            // detail a second time directly under the chip that already shows
+            // it. Rebuilding the same "name — place" shape the split came from
+            // is what makes the comparison see them as the repeat they are.
+            var shownTitle = SubtitleText.IsVisible && SubtitleText.Text is { Length: > 0 }
+                ? $"{TitleText.Text} — {SubtitleText.Text}"
+                : TitleText.Text;
+
             var meta = ChatHeaderMeta.Compose(
-                TitleText.Text,
+                shownTitle,
                 status?.Title,
                 status?.Cwd,
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                machine.Name,
+                MachineNames.Readable(machine.Name),
                 machine.IsLocal);
 
             MetaRow.IsVisible = meta.IsVisible;
