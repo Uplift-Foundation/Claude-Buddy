@@ -125,7 +125,7 @@ public class SettingsDeferredWriteTests
     [Fact]
     public void AWriteThatCannotHappenIsLoggedRatherThanCrashingOrVanishing()
     {
-        var log = Path.Combine(Path.GetTempPath(), "claude_buddy", "settings-errors.log");
+        var log = Path.Combine(StatusDirectory.Path(), "settings-errors.log");
         var before = File.Exists(log) ? new FileInfo(log).Length : 0;
 
         if (OperatingSystem.IsWindows())

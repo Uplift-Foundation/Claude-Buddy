@@ -19,6 +19,14 @@ internal static class TestBootstrap
         var dir = Path.Combine(Path.GetTempPath(), "cb-unittests-" + Guid.NewGuid());
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
 
+        // StatusDirectory.Path() (settings-errors.log's home) honors TMPDIR,
+        // not CLAUDE_BUDDY_SETTINGS_DIR — see the IntegrationTests
+        // TestBootstrap's identical line for the full reasoning, including why
+        // this is a short, separate suffix rather than `dir` itself (CB-17).
+        Environment.SetEnvironmentVariable(
+            "TMPDIR",
+            Path.Combine(Path.GetTempPath(), "cbt-" + Guid.NewGuid().ToString("N")[..8]));
+
         // ...and no test in this assembly may start a real relay: that is a live
         // Claude Code session in tmux, on the developer's own account, holding a
         // relay name the installed app also wants. Set here rather than trusted
