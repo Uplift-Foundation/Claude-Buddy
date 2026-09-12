@@ -59,7 +59,7 @@ public class SessionManagerConfigDirSeamTests : IDisposable
 
     private IReadOnlyList<string> Candidates(SessionManager manager)
     {
-        var pass = new Dictionary<(string Cwd, SessionSource Source), IReadOnlyList<string>>();
+        var pass = new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>>();
         manager.ApplyPersona(_sessionId, Status(), pass);
 
         return Assert.Single(pass).Value;
@@ -117,7 +117,7 @@ public class SessionManagerConfigDirSeamTests : IDisposable
             userConfigDirs: () => { asked++; return Array.Empty<string>(); });
 
         var second = _sessionId + "-second";
-        var pass = new Dictionary<(string Cwd, SessionSource Source), IReadOnlyList<string>>();
+        var pass = new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>>();
 
         try
         {

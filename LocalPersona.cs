@@ -101,8 +101,24 @@ namespace ClaudeBuddy
         // conversation on a gateway, and the second is a session whose cwd is
         // on somebody else's machine, where a path that happens to exist here
         // too would be a different directory wearing the same string.
+        // agentName is what CB-154 added: an agent-team member's own name
+        // (AgentTeam.Membership.Name, already sanitised to letters, digits and
+        // a handful of separators — never a path separator, so it cannot walk
+        // out of .claude/agents). Empty for anything that isn't a team member,
+        // which is every caller from before this ticket, so the default
+        // reproduces their exact candidate list unchanged.
+        //
+        // Named first, one level only — an author points a specific team
+        // member at its own persona by dropping a PERSONA.MD-shaped file at
+        // .claude/agents/<name>.md, which is also where Claude Code already
+        // expects that member's own subagent definition, so this is one file
+        // to maintain rather than a second convention beside it. It wins over
+        // the project-wide files at the same level for the reason every
+        // nearer file already wins: it says more specifically who this is.
+        // A team that gives a member no such file falls straight through to
+        // the shared project persona below, unchanged from today.
         internal static IReadOnlyList<string> CandidateFiles(
-            string? cwd, IEnumerable<string> userConfigDirs, SessionSource source)
+            string? cwd, IEnumerable<string> userConfigDirs, SessionSource source, string agentName = "")
         {
             var files = new List<string>();
             if (source is SessionSource.OpenClaw or SessionSource.RemoteControl) return files;
@@ -119,8 +135,17 @@ namespace ClaudeBuddy
             }
 
             var directory = FullPathOrNull(cwd);
+            var atRoot = true;
             for (var depth = 0; directory is not null && depth < MaxDepth; depth++)
             {
+                // Root only: a member's own file lives beside the project's,
+                // not repeated at every ancestor directory the walk visits.
+                if (atRoot && agentName is not ("" or "." or ".."))
+                {
+                    Add(Path.Combine(directory, ".claude", "agents", agentName + ".md"));
+                }
+                atRoot = false;
+
                 Add(Path.Combine(directory, "CLAUDE.md"));
                 Add(Path.Combine(directory, "CLAUDE.local.md"));
                 Add(Path.Combine(directory, ".claude", "CLAUDE.md"));
@@ -236,8 +261,9 @@ namespace ClaudeBuddy
         // written relative to the workspace root, rather than to the
         // directory of the markdown that named it, still resolves, without
         // weakening the guarantee the file-directory lookup already made.
-        internal static Persona Resolve(string? cwd, SessionSource source, IEnumerable<string> userConfigDirs) =>
-            ResolveFrom(CandidateFiles(cwd, userConfigDirs, source), cwd);
+        internal static Persona Resolve(
+            string? cwd, SessionSource source, IEnumerable<string> userConfigDirs, string agentName = "") =>
+            ResolveFrom(CandidateFiles(cwd, userConfigDirs, source, agentName), cwd);
 
         // The same fold, over a candidate list somebody else has already built.
         //

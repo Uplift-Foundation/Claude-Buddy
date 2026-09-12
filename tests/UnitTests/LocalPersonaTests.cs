@@ -74,6 +74,65 @@ public class LocalPersonaTests : IDisposable
         Assert.Contains(Path.Combine(Path.GetPathRoot(full)!, "CLAUDE.md"), files);
     }
 
+    // CB-154: an agent-team member's own file, when it names one, wins over
+    // the project's shared files at the same directory level — same rule as
+    // any nearer file, one level narrower.
+    [Fact]
+    public void AnAgentsOwnFileComesBeforeTheProjectsSharedFiles()
+    {
+        var cwd = Path.Combine(Path.GetTempPath(), "cb-candidates", "a", "b");
+        var full = Path.GetFullPath(cwd);
+
+        var files = LocalPersona.CandidateFiles(
+            cwd, Array.Empty<string>(), SessionSource.ClaudeCode, "MenuUX");
+
+        Assert.Equal(Path.Combine(full, ".claude", "agents", "MenuUX.md"), files[0]);
+        Assert.Equal(Path.Combine(full, "CLAUDE.md"), files[1]);
+    }
+
+    // Only at the cwd itself — an agent's own file is not repeated once per
+    // ancestor directory the walk visits, unlike the four shared names.
+    [Fact]
+    public void AnAgentsOwnFileIsOfferedOnlyAtTheWorkingDirectory()
+    {
+        var cwd = Path.Combine(Path.GetTempPath(), "cb-candidates", "a", "b");
+
+        var files = LocalPersona.CandidateFiles(
+            cwd, Array.Empty<string>(), SessionSource.ClaudeCode, "MenuUX");
+
+        Assert.Single(files, f => f.EndsWith(Path.Combine(".claude", "agents", "MenuUX.md")));
+    }
+
+    // Every existing caller passes no agent name at all, and must see exactly
+    // today's list — an empty string is "not a team member", not a name.
+    [Fact]
+    public void NoAgentNameLeavesTheListUnchanged()
+    {
+        var cwd = Path.Combine(Path.GetTempPath(), "cb-candidates", "a", "b");
+        var full = Path.GetFullPath(cwd);
+
+        var files = LocalPersona.CandidateFiles(cwd, Array.Empty<string>(), SessionSource.ClaudeCode, "");
+
+        Assert.Equal(Path.Combine(full, "CLAUDE.md"), files[0]);
+    }
+
+    // "." and ".." survive AgentTeam.SanitizeName (both are legal under its
+    // letter/digit/dash/underscore/dot/space rule) but neither names a real
+    // agent, and ".." one level under .claude/agents is .claude itself — not
+    // a file this should ever open on a name nobody chose on purpose.
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    public void ADotOnlyAgentNameAddsNoCandidate(string agentName)
+    {
+        var cwd = Path.Combine(Path.GetTempPath(), "cb-candidates", "a", "b");
+
+        var files = LocalPersona.CandidateFiles(
+            cwd, Array.Empty<string>(), SessionSource.ClaudeCode, agentName);
+
+        Assert.DoesNotContain(files, f => f.Contains(Path.Combine(".claude", "agents")));
+    }
+
     [Fact]
     public void TheUserLevelFileIsAskedLastAndOnlyForClaudeCode()
     {

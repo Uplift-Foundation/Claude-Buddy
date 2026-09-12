@@ -1450,7 +1450,7 @@ namespace ClaudeBuddy
         internal void ApplyPersona(
             string sessionId,
             SessionStatus status,
-            Dictionary<(string Cwd, SessionSource Source), IReadOnlyList<string>> candidatesByCwd)
+            Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>> candidatesByCwd)
         {
             // A gateway session's identity comes from the gateway, and a
             // remote-control relay is not a conversation at all. Neither has a
@@ -1478,11 +1478,19 @@ namespace ClaudeBuddy
             // any byte, so every separator is one somebody could have in a path
             // — and the first attempt at this reached for a NUL, which is
             // exactly the byte that makes a source file read as binary to grep.
-            var key = (status.Cwd, status.Source);
+            //
+            // Agent is part of the key too (CB-154): every member of an agent
+            // team shares one cwd, and a key without the agent's own name
+            // would hand the first member's candidate list — and therefore its
+            // persona — to every sibling that scans after it, regardless of
+            // whether CandidateFiles found a member-specific file for any of
+            // them. status.Agent is "" for anything that isn't a team member,
+            // which reproduces today's one-entry-per-cwd behaviour exactly.
+            var key = (status.Cwd, status.Source, status.Agent);
             if (!candidatesByCwd.TryGetValue(key, out var candidates))
             {
                 candidates = LocalPersona.CandidateFiles(
-                    status.Cwd, _userConfigDirs(), status.Source);
+                    status.Cwd, _userConfigDirs(), status.Source, status.Agent);
                 candidatesByCwd[key] = candidates;
             }
 
@@ -1584,7 +1592,8 @@ namespace ClaudeBuddy
             // any session has ever run in, for the life of the process, to save
             // nothing measurable. Several sessions in one repo is the common
             // case and is what this actually saves.
-            var candidatesByCwd = new Dictionary<(string Cwd, SessionSource Source), IReadOnlyList<string>>();
+            var candidatesByCwd =
+                new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>>();
 
             IEnumerable<string> files;
             try
