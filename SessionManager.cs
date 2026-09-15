@@ -237,6 +237,64 @@ namespace ClaudeBuddy
 
         private readonly string _statusDir;
 
+        // What the persona files looked like the last time this session's
+        // persona was actually read, and what was read from them:
+        // LocalPersona.Signature is existence, length and mtime and nothing
+        // else.
+        //
+        // The scan runs on the UI thread every two seconds, so the per-tick cost
+        // of this feature has to be a handful of stats and no more. Reading a
+        // CLAUDE.md and decoding a portrait happen on the tick a stat moves and
+        // on no other. Keyed by session rather than by directory because two
+        // sessions in one repo are two registry entries, and each has to be
+        // filled once even though they will agree.
+        //
+        // The Persona is kept beside the signature for one reason, and it is
+        // not caching: its Watched set is the canonical paths actually read —
+        // whatever the candidates `@`-imported, and the portrait itself.
+        // Neither is a candidate, so a candidate list alone cannot notice an
+        // edit to either; the next tick's signature is taken over both, and a
+        // persona kept in a `docs/persona.md` or a face replaced in place
+        // refreshes like a name written in the CLAUDE.md itself.
+        private readonly Dictionary<string, (string Signature, LocalPersona.Persona Persona)>
+            _personas = new(StringComparer.Ordinal);
+
+        // Which user-level config directories the persona scan asks about.
+        //
+        // A seam rather than a direct call, and CB-143 is what bought it.
+        // LocalPersona.UserConfigDirs reads two pieces of process-wide mutable
+        // state — the CLAUDE_CONFIG_DIR environment variable, and
+        // ClaudeCodeProfileDirs by way of ClaudeConfigRoots — and ApplyPersona
+        // asked it afresh on every pass. The answer is part of the candidate
+        // list, the candidate list is part of the signature, and a signature
+        // that differs is the scan's definition of "something moved": so
+        // anything at all that changed either of those between two passes
+        // handed the registry a brand-new Persona with identical content, and
+        // LocalPersonas.Set threw away the decoded portrait for it. The whole
+        // settling invariant was hostage to two process-wide globals.
+        //
+        // In this process that is a test-isolation failure and nothing worse —
+        // the app never calls SetEnvironmentVariable, so CLAUDE_CONFIG_DIR is
+        // fixed for its lifetime, and a user adding an account in Settings
+        // genuinely *should* make the scan look again, because that account's
+        // own CLAUDE.md is a user-level persona file it was not reading a
+        // moment ago. One re-resolve when the setting changes is correct; one
+        // per tick is the bug, and nothing in production produces one.
+        //
+        // The reason it is a seam anyway is that a test cannot say that. A
+        // sibling class in another xUnit collection setting CLAUDE_CONFIG_DIR
+        // to a sentinel runs *in parallel* with this one, and every test here
+        // whose claim is "the same Persona object came back" fails with nothing
+        // wrong with it and nothing to point at. Pinning the provider closes
+        // both routes at once and closes them structurally, which a third
+        // [Collection] attribute would not: the attribute is a promise that
+        // every future writer of either global remembers to join, and this is a
+        // scan that no longer reads either.
+        //
+        // Same pattern, and the same argument, as CLAUDE_BUDDY_SETTINGS_DIR and
+        // CLAUDE_BUDDY_PROFILE_ROOT.
+        private readonly Func<IReadOnlyList<string>> _userConfigDirs;
+
         public SessionManager()
             : this(StatusDirectory.Path())
         {
@@ -272,7 +330,8 @@ namespace ClaudeBuddy
             string statusDir,
             Func<Dictionary<string, string>?>? jobListing,
             Func<HashSet<string>?>? attachClients = null,
-            Func<string, string?>? transcriptHunt = null)
+            Func<string, string?>? transcriptHunt = null,
+            Func<IReadOnlyList<string>>? userConfigDirs = null)
         {
             _statusDir = statusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
@@ -285,6 +344,11 @@ namespace ClaudeBuddy
             // Wrapped for the same optional-parameter reason: FindTranscriptFor
             // takes a home override the scan never passes.
             _transcriptHunt = transcriptHunt ?? (id => TranscriptReader.FindTranscriptFor(id));
+            // Wrapped for the same optional-parameter reason the two above are:
+            // UserConfigDirs takes a config-dir override and a home override
+            // that the scan never passes, and an optional parameter stops a
+            // method group converting to a zero-argument Func.
+            _userConfigDirs = userConfigDirs ?? (() => LocalPersona.UserConfigDirs());
         }
 
         private readonly Func<Dictionary<string, string>?> _jobListing;
@@ -328,6 +392,13 @@ namespace ClaudeBuddy
         // class already runs, instead of starting a second timer.
         private readonly AccountOrbs _accountOrbs = new(
             new CompositeUsageSource(new UsagePoller(), new GrokUsagePoller(), new CodexUsagePoller()));
+
+        // Whether it is time to start and stop Grok to force a fresh usage
+        // reading — see GrokUsageRefresh.cs for why that is the only way to
+        // get one. Held apart from _accountOrbs because it runs on its own,
+        // much longer floor: GrokUsageRefresher.MinimumInterval, not the five
+        // minutes the account-orb read itself uses.
+        private readonly GrokUsageRefreshScheduler _grokRefresh = new();
         private readonly Dictionary<string, SessionStatus> _statuses = new();
         private readonly List<string> _order = new(); // stable stacking order
 
@@ -407,13 +478,32 @@ namespace ClaudeBuddy
             // five-minute floor, which is the interval Claude Code's own cache
             // makes meaningful, not this two-second one.
             _pollTimer.Tick += (_, _) => _accountOrbs.Tick(DateTimeOffset.UtcNow);
+
+            // Off the UI thread for the reason AccountOrbs.Tick already is:
+            // this starts a real process — the user's actual Grok Build
+            // application — and holds it open for several seconds. On the
+            // dispatcher that would freeze every orb on screen for the whole
+            // hold.
+            _pollTimer.Tick += (_, _) =>
+            {
+                if (_grokRefresh.Tick(
+                        DateTimeOffset.UtcNow,
+                        ClaudeBuddySettings.GrokAccountUsageEnabled,
+                        ClaudeBuddySettings.GrokAutoRefreshEnabled))
+                {
+                    Task.Run(GrokUsageRefresher.Refresh);
+                }
+            };
+
             _pollTimer.Start();
 
-            // Connects only if the user has turned it on and given it an
-            // address; otherwise this returns having done nothing at all.
-            OpenClawSessions.Restart();
+            // OpenClawSessions.Restart() used to be called here, but here is
+            // after the screen-unlock wait — see Program.cs's serveOnLaunch,
+            // where it starts now, for why a machine that stays locked can no
+            // longer leave it never called at all (CB-130).
 
-            // Subscribed unconditionally, unlike OpenClawSessions.Restart above:
+            // Subscribed unconditionally, unlike OpenClawSessions.Restart in
+            // serveOnLaunch:
             // this only wires up an event, and starting the bridge is a separate,
             // deliberate act because it costs the user's quota. Nothing fires
             // here until something asks for it.
@@ -825,11 +915,12 @@ namespace ClaudeBuddy
             // The CLI process that wrote the file has exited.
             ProcessGone,
 
-            // The conversation was handed to a background job mid-turn and
-            // nothing has happened in this session since — see
-            // TranscriptHandoff. The fork wears the conversation now, badge,
-            // title and all; this file is what the handoff left behind, and no
-            // hook will ever rewrite it.
+            // The conversation was handed to a background job — either
+            // mid-turn (see TranscriptHandoff) or from an idle window by
+            // opening agents mode (see SessionPark) — and this session is not
+            // the one showing it any more. The fork wears the conversation now,
+            // badge, title and all; this file is what the handoff left behind,
+            // and no hook will ever rewrite it.
             Backgrounded,
 
             // Quiet for longer than the user's "Keep orbs for" allows.
@@ -1043,7 +1134,8 @@ namespace ClaudeBuddy
 
                 Func<bool> handedToBackground = () =>
                     SessionPresence.CouldBeABackgroundedHusk(status, phase)
-                    && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
+                    && (SessionPark.IsParked(status.SessionPid, entry.SessionId)
+                        || TranscriptHandoff.EndsBackgrounded(status.TranscriptPath));
 
                 // **Orb lifetime is a display preference and does not belong in
                 // an answer to another machine.** Its own definition says "how
@@ -1068,6 +1160,19 @@ namespace ClaudeBuddy
                     entry.SessionId, entry.Status, entry.Written,
                     now, honourOrbLifetime ? StaleAfter : null,
                     superseded, running, handedToBackground);
+
+                // Ignoring orb lifetime answers a narrower question than
+                // "keep every file forever". A positively live pid is evidence
+                // that an old idle terminal still exists, but a pid-less
+                // Claude status has no such proof: it is either a current
+                // daemon job or a leftover from a finished subagent. Apply the
+                // same daemon-backed reachability rule the visible scan uses so
+                // a headless machine never advertises the latter to a peer.
+                if (verdict == ScanVerdict.Keep && entry.Status.SessionPid <= 0)
+                {
+                    verdict = JudgeReachability(
+                        entry.SessionId, entry.Status, new HashSet<string>(), phase, FileExists);
+                }
 
                 if (verdict == ScanVerdict.Keep) kept.Add((entry.SessionId, entry.Status));
                 else
@@ -1334,6 +1439,133 @@ namespace ClaudeBuddy
             return ScanVerdict.Keep;
         }
 
+        // Read this session's persona, if the files it could be written in have
+        // moved since the last time we looked.
+        //
+        // Internal so a test can drive one session's read without a whole scan;
+        // the caching is the part worth exercising directly, because "it is only
+        // stats unless something changed" is the entire reason this is allowed
+        // to run on the UI thread twice a second and is not visible from
+        // outside any other way.
+        internal void ApplyPersona(
+            string sessionId,
+            SessionStatus status,
+            Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>> candidatesByCwd)
+        {
+            // A gateway session's identity comes from the gateway, and a
+            // remote-control relay is not a conversation at all. Neither has a
+            // working directory on this machine whose CLAUDE.md would be about
+            // *it* — a relay's cwd is wherever the app was started from, and
+            // reading a persona out of that would put the developer's own
+            // repository name on somebody else's orb.
+            //
+            // IsNullOrWhiteSpace rather than IsNullOrEmpty: this is now the
+            // only guard in front of the resolution, where it used to be one of
+            // two and LocalPersona.ResolveForSession carried the stricter half.
+            // A cwd of " " walks nowhere, so its candidate list would be the
+            // user-level files alone — a persona from ~/.claude on an orb whose
+            // session has no working directory at all.
+            if (!status.IsLocalCli || string.IsNullOrWhiteSpace(status.Cwd)) return;
+
+            // Source is part of the key, not just the directory: Claude Code
+            // consults the user-level config directories and Codex and Grok
+            // deliberately do not, so two CLIs open on one repo have two
+            // different candidate lists and one cache entry would hand the
+            // second one the first one's.
+            //
+            // A tuple rather than the two glued together with a separator. A
+            // directory name on macOS or Linux may legally contain very nearly
+            // any byte, so every separator is one somebody could have in a path
+            // — and the first attempt at this reached for a NUL, which is
+            // exactly the byte that makes a source file read as binary to grep.
+            //
+            // Agent is part of the key too (CB-154): every member of an agent
+            // team shares one cwd, and a key without the agent's own name
+            // would hand the first member's candidate list — and therefore its
+            // persona — to every sibling that scans after it, regardless of
+            // whether CandidateFiles found a member-specific file for any of
+            // them. status.Agent is "" for anything that isn't a team member,
+            // which reproduces today's one-entry-per-cwd behaviour exactly.
+            var key = (status.Cwd, status.Source, status.Agent);
+            if (!candidatesByCwd.TryGetValue(key, out var candidates))
+            {
+                candidates = LocalPersona.CandidateFiles(
+                    status.Cwd, _userConfigDirs(), status.Source, status.Agent);
+                candidatesByCwd[key] = candidates;
+            }
+
+            var known = _personas.TryGetValue(sessionId, out var cached) ? cached : default;
+
+            // Over the candidates *and* whatever the last read actually
+            // followed. The two differ in two ways, and both were found by a
+            // change that went unnoticed rather than reasoned about in
+            // advance.
+            //
+            // A CLAUDE.md `@`-imports another file: the import is where the
+            // persona often lives and is never a candidate itself, so watching
+            // the candidate list alone leaves an edited `docs/persona.md`
+            // invisible until something else in the tree happens to move.
+            //
+            // And a portrait is replaced in place — same filename, new bytes,
+            // markdown untouched. Nothing in any *markdown* file has changed,
+            // so a signature over markdown alone is identical, the cached
+            // persona is re-Set, the registry's reference check sees the same
+            // object and keeps the decoded bitmap, and the orb wears the old
+            // face until the app restarts. Persona.Watched is Files plus the
+            // picture for exactly that reason, and it costs one extra stat per
+            // tick and only for a session that has a portrait at all.
+            var watched = known.Persona is null
+                ? candidates
+                : candidates.Concat(known.Persona.Watched);
+
+            var signature = LocalPersona.Signature(watched);
+
+            // Nothing moved. Re-Set anyway, because this is also the path a
+            // session takes on the tick after another session in the same
+            // repository resolved the identical files — the registry's own
+            // reference check makes that free, and skipping it outright would
+            // leave a session whose entry was dropped elsewhere with no persona
+            // until one of its files changed.
+            if (known.Persona is not null && known.Signature == signature)
+            {
+                LocalPersonas.Set(sessionId, known.Persona);
+                return;
+            }
+
+            // Set drops the decoded picture for this session itself, so an
+            // edited portrait is re-decoded rather than served from the cache
+            // forever. Deliberately not repeated here: the registry owns that
+            // invariant, and a second call site is a second place for it to be
+            // half-removed later.
+            //
+            // This is the only path that resolves, so it is the only path that
+            // hands Set an object it has not seen — which is what makes Set's
+            // reference check the right one rather than a value comparison.
+            //
+            // ResolveFrom(candidates) rather than a second walk from the cwd.
+            // The list stat'd for the signature above and the list read here
+            // are now one list; they used to be two, each built from its own
+            // reading of CLAUDE_CONFIG_DIR and ClaudeCodeProfileDirs, with the
+            // whole signature comparison in between them.
+            //
+            // status.Cwd passed as the workspace root (CB-147): it is already
+            // guarded non-blank above, and it is what lets a picture written
+            // relative to the workspace root — rather than to the directory
+            // of the markdown that named it — still resolve.
+            var persona = LocalPersona.ResolveFrom(candidates, status.Cwd);
+
+            // Stored over the set the *next* tick will compare, not the one
+            // just compared. On the very first pass there is no previous read
+            // to take imports from, so `watched` above was the candidates
+            // alone — and storing that would make the second tick's longer
+            // signature differ for no reason and resolve a second time, every
+            // time, forever. One more round of stats here is what stops that.
+            _personas[sessionId] =
+                (LocalPersona.Signature(candidates.Concat(persona.Watched)), persona);
+
+            LocalPersonas.Set(sessionId, persona);
+        }
+
         // One pass over the status directory: read everything, decide what
         // deserves an orb, and reconcile the windows, the arrows and the tray
         // with the answer.
@@ -1351,6 +1583,17 @@ namespace ClaudeBuddy
             var seen = new HashSet<string>();
             var now = DateTime.UtcNow;
             bool setChanged = false;
+
+            // Which files a persona could be written in, per working directory,
+            // for the length of this one pass. Local rather than a field on
+            // purpose: building the list is pure string work over a path walk —
+            // cheap enough to redo every couple of seconds — where a field
+            // keyed by directory would accumulate an entry for every directory
+            // any session has ever run in, for the life of the process, to save
+            // nothing measurable. Several sessions in one repo is the common
+            // case and is what this actually saves.
+            var candidatesByCwd =
+                new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>>();
 
             IEnumerable<string> files;
             try
@@ -1490,8 +1733,23 @@ namespace ClaudeBuddy
                 // file path.
                 // Which room this is standing in, if any. The room orb itself is
                 // added below, once, however many agents point at it.
+                // ...but only once there is more than one agent in it. One agent
+                // talking in a channel drew two orbs wearing the same face, an
+                // arrow between them, and a merged conversation with one member
+                // — every one of which says "these are the same thing" about a
+                // thing that was never two. The room orb earns its place by
+                // gathering several agents; with one, the agent's own orb
+                // already is the channel, and its # badge already says so.
+                //
+                // Counted in agents rather than sessions, since one agent can
+                // hold two sessions in the same channel and that is still one
+                // face. Asked of the participants, so an agent that has been
+                // quiet for longer than the recency window does not conjure a
+                // room orb around somebody who is on their own — the same list
+                // the picture is cut from, so the arrows and the faces cannot
+                // disagree about who is here.
                 var room = OpenClawSessionKind.RoomOf(session.Key);
-                if (room is not null)
+                if (room is not null && OpenClawSessions.AgentsInRoom(room).Count > 1)
                 {
                     status.Lead = RoomId(room);
 
@@ -1734,16 +1992,27 @@ namespace ClaudeBuddy
                     ? BackgroundJobs.Phase(Jobs(), sessionId)
                     : JobPhase.Unknown;
 
-                // Whether this file is the husk a backgrounded turn leaves
-                // behind — a closure so that only a session the earlier rules
-                // kept ever pays the stat, gated in
+                // Whether this file is the husk a handoff to a background job
+                // leaves behind — a closure so that only a session the earlier
+                // rules kept ever pays the stat, gated in
                 // SessionPresence.CouldBeABackgroundedHusk (which is also what
                 // keeps the fork itself, listed by the daemon as a live job,
-                // from reading its own inherited marker), answered from the
-                // transcript by TranscriptHandoff behind its own cache.
+                // from reading its own inherited marker).
+                //
+                // Two sources, asked cheapest-and-surest first. SessionPark
+                // reads Claude Code's own session record, which names the job
+                // that took the conversation and is cleared when the window
+                // gets it back — it is the fact rather than a trace of it, and
+                // it is the only one of the two that catches an *idle*
+                // conversation forked by opening agents mode, which writes no
+                // transcript marker at all (CB-30). TranscriptHandoff stays
+                // because it answers for a case the record cannot: a session
+                // whose process is gone leaves no record to read, and its
+                // transcript still says what happened.
                 Func<bool> handedToBackground = () =>
                     SessionPresence.CouldBeABackgroundedHusk(status, phase)
-                    && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
+                    && (SessionPark.IsParked(status.SessionPid, sessionId)
+                        || TranscriptHandoff.EndsBackgrounded(status.TranscriptPath));
 
                 // Two verdicts rather than one, with the viewer hunt sitting
                 // between them, because the order is load-bearing in both
@@ -1852,6 +2121,13 @@ namespace ClaudeBuddy
                     setChanged = true;
                 }
 
+                // Who this session says it is, from the CLAUDE.md files beside
+                // its work. Before UpdateFrom, deliberately: the orb's label and
+                // its portrait both read the registry this fills, so doing it
+                // after would draw one tick of the old answer every time a
+                // persona changed.
+                ApplyPersona(sessionId, status, candidatesByCwd);
+
                 _statuses[sessionId] = status;
 
                 var isNew = !_windows.TryGetValue(sessionId, out var window);
@@ -1891,6 +2167,13 @@ namespace ClaudeBuddy
                 // transcript that will never grow again, and a FileSystemWatcher
                 // per dead session is a handle leak measured in days.
                 if (_chats.Remove(id, out var chat)) chat.Dispose();
+
+                // Same argument for the persona, one size up: a decoded portrait
+                // is a Bitmap per frame, held by a process-wide cache that has
+                // no other reason to ever let one go. The registry entry is
+                // small; the picture behind it is not, and Forget drops both.
+                _personas.Remove(id);
+                LocalPersonas.Forget(id);
             }
 
             // After the removal pass, so an orb has already gone before its file

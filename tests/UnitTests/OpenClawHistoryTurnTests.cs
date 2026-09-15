@@ -25,8 +25,13 @@ public class OpenClawHistoryTurnTests
     private static JsonElement Messages(string json) =>
         JsonDocument.Parse(json).RootElement;
 
+    // No session key, deliberately: these cases are about what the parser
+    // reads out of a page, and a null key makes the picture routes come out
+    // byte-identical to what this file asserted before CB-109 threaded the
+    // originating session through them. The threading itself is covered where
+    // it belongs, in OpenClawMediaSourceTests.
     private static System.Collections.Generic.List<HistoryTurn> Turns(string json) =>
-        OpenClawSessions.TurnsFromHistory(Messages(json));
+        OpenClawSessions.TurnsFromHistory(Messages(json), null);
 
     // ---- the two role shapes --------------------------------------------
 
@@ -216,6 +221,305 @@ public class OpenClawHistoryTurnTests
         """);
 
         Assert.Equal("", Assert.Single(turns).ImageAlt);
+    }
+
+    // ---- pictures carried inline (CB-91) ---------------------------------
+
+    // The shape this gateway actually sends. Every real image block in its
+    // own stored transcripts is data+mimeType with no url at all, and the
+    // parser used to require a url and so dropped all of them silently.
+    //
+    // The base64 here is a one-pixel PNG, the same fixture the rest of this
+    // repo's image tests use.
+    private const string PixelBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==";
+
+    [Fact]
+    public void AnImageBlockCarryingItsBytesInlineBecomesATurnWithThoseBytes()
+    {
+        var turns = Turns($$"""
+        [{"role":"assistant","content":[
+            {"type":"image","data":"{{PixelBase64}}","mimeType":"image/png"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Equal(Convert.FromBase64String(PixelBase64), turn.ImageBytes);
+        Assert.Null(turn.ImageUrl);
+        Assert.Equal("", turn.Text);
+    }
+
+    // The gateway spells inline bytes both ways in different places — bare
+    // base64 in these blocks, a data: URI in agents.list's avatarUrl — so
+    // both are accepted here.
+    [Fact]
+    public void AnImageBlockCarryingADataUriAlsoBecomesBytes()
+    {
+        var turns = Turns($$"""
+        [{"role":"assistant","content":[
+            {"type":"image","data":"data:image/png;base64,{{PixelBase64}}"}]}]
+        """);
+
+        Assert.Equal(Convert.FromBase64String(PixelBase64), Assert.Single(turns).ImageBytes);
+    }
+
+    // A url still wins where one is given, so a deployment that sends the
+    // url form keeps working exactly as before.
+    [Fact]
+    public void AUrlIsStillPreferredWhenTheBlockCarriesOne()
+    {
+        var turns = Turns($$"""
+        [{"role":"assistant","content":[
+            {"type":"image","url":"https://x/a.png","data":"{{PixelBase64}}"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Equal("https://x/a.png", turn.ImageUrl);
+        Assert.Null(turn.ImageBytes);
+    }
+
+    [Fact]
+    public void AnImageBlockWithNeitherUrlNorDataIsSkipped()
+    {
+        Assert.Empty(Turns("""
+        [{"role":"assistant","content":[{"type":"image","mimeType":"image/png"}]}]
+        """));
+    }
+
+    // Data that is not base64 at all is a picture that cannot be shown, not
+    // an exception and not an empty bubble.
+    [Fact]
+    public void AnImageBlockWhoseDataIsNotBase64IsSkipped()
+    {
+        Assert.Empty(Turns("""
+        [{"role":"assistant","content":[{"type":"image","data":"not base64 !!!"}]}]
+        """));
+    }
+
+    // A data: URI with an empty payload decodes to a real, zero-length array
+    // rather than to null, so it reached the turn list as a picture that
+    // cannot be drawn — no text, no url, nothing to show. Zero bytes is no
+    // more a picture than a missing url is, which is what
+    // BestImageMatch already says about the same value.
+    [Fact]
+    public void AnImageBlockWhoseDataUriCarriesNoPayloadIsSkipped()
+    {
+        Assert.Empty(Turns("""
+        [{"role":"assistant","content":[{"type":"image","data":"data:image/png;base64,"}]}]
+        """));
+    }
+
+    // QA (CB-91): a whitespace-only url used to survive alongside decoded
+    // bytes, and the panel — which asks IsNullOrEmpty rather than
+    // IsNullOrWhiteSpace — would then try to fetch "   " and never draw the
+    // bytes sitting right beside it. One spelling of "no url" now.
+    [Fact]
+    public void AWhitespaceOnlyUrlIsNotAUrlAndTheInlineBytesAreUsed()
+    {
+        var turns = Turns($$"""
+        [{"role":"assistant","content":[
+            {"type":"image","url":"   ","data":"{{PixelBase64}}"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Null(turn.ImageUrl);
+        Assert.Equal(Convert.FromBase64String(PixelBase64), turn.ImageBytes);
+    }
+
+    [Fact]
+    public void SeveralInlineImagesBecomeSeveralTurns()
+    {
+        var turns = Turns($$"""
+        [{"role":"assistant","content":[
+            {"type":"image","data":"{{PixelBase64}}"},
+            {"type":"image","data":"{{PixelBase64}}"}]}]
+        """);
+
+        Assert.Equal(2, turns.Count);
+        Assert.All(turns, t => Assert.NotNull(t.ImageBytes));
+    }
+
+    // An object-shaped content with no text in it at all. Worth a case
+    // because it is the one arm of TextOf's switch that a real page never
+    // seems to produce, and without it the `?? ""` there is a branch nothing
+    // asks about — the same gap that hid a live defect twice on this feature.
+    [Fact]
+    public void AnObjectContentWithNoTextProducesNoTurn()
+    {
+        Assert.Empty(Turns("""
+        [{"role":"assistant","content":{"mimeType":"image/png"}}]
+        """));
+    }
+
+    // ---- a picture the gateway delivered (CB-94) -------------------------
+
+    // The exact record shape read off the gateway's own stored transcript for
+    // the drop Owner screenshotted: a delivery-mirror whose content is the
+    // bare filename. It becomes a picture turn pointing at the shared media
+    // directory through the read-scoped route.
+    [Fact]
+    public void ADeliveredPictureBecomesAPictureTurnRatherThanItsFilename()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","api":"openclaw-transcript","provider":"openclaw",
+          "model":"delivery-mirror",
+          "content":[{"type":"text","text":"sample_sunrise_100200300.png"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Contains("/__openclaw__/assistant-media?source=", turn.ImageUrl);
+        Assert.Contains("sample_sunrise_100200300.png", Uri.UnescapeDataString(turn.ImageUrl!));
+        Assert.Contains("~/.openclaw/media/", Uri.UnescapeDataString(turn.ImageUrl!));
+        Assert.Equal("sample_sunrise_100200300.png", turn.ImageAlt);
+    }
+
+    // The defect QA measured, end to end. A browser capture lives one
+    // directory below the shared media root, so gluing its bare name to that
+    // root fetched a 404 for a file that was on disk and servable the whole
+    // time. The real path is on the same page, and now it is what gets used.
+    [Fact]
+    public void ADeliveredPictureUsesTheRealPathFromThePageRatherThanAGuess()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","model":"claude-sonnet-4-6",
+          "content":[{"type":"text","text":"saved it to ~/.openclaw/media/browser/03a1be83.png"}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"03a1be83.png"}]}]
+        """);
+
+        var picture = Assert.Single(turns, t => t.ImageUrl is not null);
+        var source = Uri.UnescapeDataString(picture.ImageUrl!.Split('=')[^1]);
+
+        Assert.Equal("~/.openclaw/media/browser/03a1be83.png", source);
+    }
+
+    // The same recovery, but with the path where it usually really is: inside
+    // a tool_use block this parser never renders. Nine times as many pictures
+    // resolve this way as from the rendered text alone (3 of 41 versus 27 of
+    // 41, measured over the gateway host's whole corpus).
+    [Fact]
+    public void ADeliveredPictureFindsItsPathInsideAToolBlockItNeverRenders()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","content":[{"type":"tool_use","name":"bash",
+          "input":{"command":"openclaw message send --media ~/.openclaw/media/browser/03a1be83.png"}}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"03a1be83.png"}]}]
+        """);
+
+        // The tool block itself renders nothing, so the picture is the only
+        // turn — the paths are read without the wall of JSON being shown.
+        var picture = Assert.Single(turns);
+        var source = Uri.UnescapeDataString(picture.ImageUrl!.Split('=')[^1]);
+
+        Assert.Equal("~/.openclaw/media/browser/03a1be83.png", source);
+    }
+
+    // With no path anywhere on the page, the shared media directory is the
+    // fallback — right for a file an agent copied there, as Aurora's own
+    // runbook tells her to, and harmlessly wrong otherwise.
+    [Fact]
+    public void ADeliveredPictureFallsBackToTheSharedMediaDirectory()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"sample_sunrise_100200300.png"}]}]
+        """);
+
+        var source = Uri.UnescapeDataString(
+            Assert.Single(turns).ImageUrl!.Split('=')[^1]);
+
+        Assert.Equal("~/.openclaw/media/sample_sunrise_100200300.png", source);
+    }
+
+    // Two real files of the same name on one page. Rather than draw one of
+    // them and be wrong half the time, the ambiguity is dropped and the
+    // fallback takes over — the picture may not load, but it is never the
+    // wrong picture.
+    //
+    // The two paths are written as prose mentions rather than as messages
+    // whose whole text is a path. That is deliberate since CB-101: a message
+    // that *is* only a path is now drawn as its own picture (CB-88's bare-path
+    // arm, which the history parser finally honours), so path-only fixtures
+    // would produce three picture turns and say nothing about ambiguity. A
+    // mention still feeds the index, which is what this case is about.
+    [Fact]
+    public void AnAmbiguousFileNameFallsBackRatherThanDrawingTheWrongPicture()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","model":"m","content":[{"type":"text","text":"wrote it to /one/a.png just now"}]},
+         {"role":"assistant","model":"m","content":[{"type":"text","text":"and a copy at /two/a.png as well"}]},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"a.png"}]}]
+        """);
+
+        var picture = Assert.Single(turns, t => t.ImageUrl is not null);
+        var source = Uri.UnescapeDataString(picture.ImageUrl!.Split('=')[^1]);
+
+        Assert.Equal("~/.openclaw/media/a.png", source);
+    }
+
+    // CB-107: the envelope now names the same picture the mirror record
+    // delivers, and the two collapse into one bubble via the existing CB-98
+    // cross-arm rule (one named turn cancels one mirror) rather than each
+    // drawing it separately — which is what actually avoids one delivered
+    // picture appearing twice, without going back to never drawing the
+    // envelope's own picture at all.
+    [Fact]
+    public void TheEnvelopeAndItsMirrorCollapseIntoOnePicture()
+    {
+        var turns = Turns("""
+        [{"role":"user","content":"[Inter-session message] sourceSession=agent:comfyui:main\nrouted by OpenClaw\n/Users/w/.openclaw/media/pic.png"},
+         {"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"pic.png"}]}]
+        """);
+
+        Assert.Single(turns, t => t.ImageUrl is not null);
+        Assert.Single(turns);
+    }
+
+    // And it keeps its filename as text, so a fetch that cannot succeed — a
+    // gateway whose media root is somewhere else, a file since cleaned up —
+    // leaves the reader exactly what they see today rather than an empty
+    // bubble. The picture is the improvement; the text is the floor.
+    [Fact]
+    public void ADeliveredPictureStillReadsAsItsFilenameIfTheFetchFails()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"sample_sunrise_100200300.png"}]}]
+        """);
+
+        Assert.Equal("sample_sunrise_100200300.png", Assert.Single(turns).Text);
+    }
+
+    // A mirrored *text* message stays text. This is the same record type, and
+    // this exact string was observed live, so getting it wrong would turn
+    // ordinary messages into fetch attempts.
+    [Fact]
+    public void AMirroredTextMessageStaysText()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"**(via Claude Buddy)** try send me a picture"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Null(turn.ImageUrl);
+        Assert.Contains("try send me a picture", turn.Text);
+    }
+
+    // An agent that merely says a filename is not delivering a picture.
+    [Fact]
+    public void AnOrdinaryTurnNamingAFileStaysText()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","model":"claude-sonnet-4-6",
+          "content":[{"type":"text","text":"sample_sunrise_100200300.png"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Null(turn.ImageUrl);
+        Assert.Equal("sample_sunrise_100200300.png", turn.Text);
     }
 
     // ---- timestamps ------------------------------------------------------

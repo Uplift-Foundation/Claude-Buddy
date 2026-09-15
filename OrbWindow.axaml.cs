@@ -4,6 +4,7 @@ using Avalonia.Animation;
 using Avalonia.Animation.Easings;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Controls.Primitives.PopupPositioning;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
@@ -64,6 +65,8 @@ namespace ClaudeBuddy
         private string _lastColor = "";
         private Color? _accentColor;
         private string _lastGlyphName = "";
+        private string? _lastTipTitle;
+        private string? _lastTipPath;
 
         // Colour for the team arrow leaving this orb, when it has one. Follows
         // /color so several members pointing at one lead stay apart; sessions
@@ -85,6 +88,22 @@ namespace ClaudeBuddy
         // derived one for a gateway agent — or null where it has none. Distinct
         // from OrbColor, which is the *state* and changes as the session works.
         public Color? AccentColor => _accentColor;
+
+        // The status this orb last drew, for the chat panel's header line.
+        //
+        // Read off the orb rather than looked up in SessionManager for the same
+        // reason KindLabel, PresenceLabel and IsHeartbeat are: the panel and the
+        // badge on the thing that was clicked must not be able to disagree, and
+        // a second lookup is a second chance for them to. It is the same object
+        // either way — SessionManager pushes each scan's status here through
+        // UpdateFrom — but this one is reachable from a headless test that has
+        // no SessionManager running at all, and the lookup is not.
+        //
+        // Null before the first status write, which is an ordinary state and
+        // not an error: an orb can be clicked before its hook has ever fired.
+        // UpdateFrom calls ChatPanel.RefreshIdentityFor, so the panel re-reads
+        // this and fills the line in when the write lands.
+        public SessionStatus? LastStatus => _lastStatus;
 
         private readonly RadialGradientBrush _glowBrush = new()
         {
@@ -188,6 +207,8 @@ namespace ClaudeBuddy
                 ScheduleFlyoutHide();
             };
 
+            ConfigureThoughtBubblePlacement(Root);
+
             // Unlike WPF, Loaded fires *after* the first UpdateFrom here, so
             // honor any state that already arrived instead of stomping it.
             Loaded += (_, _) =>
@@ -230,7 +251,14 @@ namespace ClaudeBuddy
             {
                 Pulsing.Remove(this);
                 StopAvatarAnimation();
-                ChatPanel.HideFor(SessionId);
+
+                // CloseFor, not HideFor: the session behind this orb is gone,
+                // and a pinned panel is the one thing HideFor deliberately
+                // will not touch. Pinning is "keep this chat open", not "keep
+                // this chat open after the conversation ends" — a panel left
+                // behind here would be a transcript nothing can add to and no
+                // orb can reopen.
+                ChatPanel.CloseFor(SessionId);
             };
 
             // A session going away mid-dictation (the window closing) must
@@ -272,11 +300,30 @@ namespace ClaudeBuddy
             // which — while the terminal had been calling them MenuUX,
             // Narrative and HitReactSpec the whole time. The title still gets
             // said, in the tooltip, because "which team" is worth knowing too.
-            var name = string.IsNullOrEmpty(status.Agent) ? label : status.Agent;
+            //
+            // Between those two sits the persona the session's own CLAUDE.md
+            // names. It outranks the title because it is the more deliberate of
+            // the two — a title is whatever Claude Code decided this
+            // conversation was about, where a name written into a repository's
+            // CLAUDE.md is somebody saying what this agent is called — and it
+            // loses to an agent name because that one is more specific still:
+            // every member of a team shares the repo and so would share the
+            // persona, which is the exact collision the Agent branch exists to
+            // break. The rule itself is LocalPersona.OrbLabel, pure and tested,
+            // for the same reason OrbGlyph is: it was checkable only by looking
+            // at the screen otherwise.
+            var personaName = status.IsLocalCli ? LocalPersonas.For(SessionId)?.Name : null;
+            var name = LocalPersona.OrbLabel(status.Agent, personaName, status.Title, folder);
 
-            var described = string.IsNullOrEmpty(status.Agent) || string.IsNullOrEmpty(label)
+            // Whoever the orb is named for, followed by what the session is —
+            // which is the half a persona replaces on the orb and must not also
+            // replace here. "Leota · claude-buddy" is a tooltip worth opening;
+            // "Leota", on an orb already reading Le, is not.
+            var namedFor = string.IsNullOrEmpty(status.Agent) ? personaName : status.Agent;
+
+            var described = string.IsNullOrEmpty(namedFor) || string.IsNullOrEmpty(label)
                 ? name
-                : $"{status.Agent} · {label}";
+                : $"{namedFor} · {label}";
 
             // The presence word goes in the tooltip as well as on the badge,
             // because a mark says *that* there is something and only a word says
@@ -291,9 +338,19 @@ namespace ClaudeBuddy
             }
 
             var tipPath = string.IsNullOrEmpty(status.Cwd) ? null : status.Cwd;
-            ToolTip.SetTip(Root, ThoughtBubble(tipTitle, tipPath));
 
-            ToolTip.SetPlacement(Root, PlacementMode.Top);
+            // UpdateFrom runs on every session poll, but SetTip always builds
+            // a fresh Border. Doing that while the pointer is resting on the
+            // orb and the tooltip is already open made Avalonia close and
+            // reopen the popup on every poll tick — a flicker, not a redraw,
+            // for as long as the mouse stayed still. Content is small and
+            // cheap to compare, so skip the rebuild when nothing changed.
+            if (tipTitle != _lastTipTitle || tipPath != _lastTipPath)
+            {
+                ToolTip.SetTip(Root, ThoughtBubble(tipTitle, tipPath));
+                _lastTipTitle = tipTitle;
+                _lastTipPath = tipPath;
+            }
 
             _lastGlyphName = name;
             ApplyAvatar(status);
@@ -321,7 +378,11 @@ namespace ClaudeBuddy
             // instead said only "this is a channel", which is true of the badge
             // on every member orb too and so distinguished one room from
             // another not at all.
-            if (status.IsRoom)
+            // ...unless it has a picture, which it does as soon as anyone in
+            // the channel has one: the composite is the better answer to both
+            // "which channel" and "who is in it", and letters drawn over it
+            // would be unreadable anyway.
+            if (status.IsRoom && !_hasAvatar)
             {
                 Glyph.IsVisible = true;
             }
@@ -340,6 +401,21 @@ namespace ClaudeBuddy
             AgentsViewItem.IsVisible = ClickRouting.OffersTheAgentsView(status);
             DismissItem.IsVisible = SessionPresence.CanDismiss(status);
             EndSessionItem.IsVisible = SessionPresence.CanEndSession(status);
+            var resetIdleExplanation = status.Source switch
+            {
+                SessionSource.OpenClaw => (
+                    "OpenClaw controls this session's state",
+                    "This session is managed by OpenClaw, so Claude Buddy cannot reset its state."),
+                SessionSource.RemoteControl => (
+                    "This session's state is controlled on its other machine",
+                    "This session is managed on its other machine, so it must be reset there."),
+                _ => (
+                    "Reset this session to idle",
+                    "Changes this orb's displayed state only; the next hook event may update it again.")
+            };
+            ResetIdleItem.IsEnabled = status.IsLocalCli;
+            ResetIdleItem.Header = resetIdleExplanation.Item1;
+            ToolTip.SetTip(ResetIdleItem, resetIdleExplanation.Item2);
 
             if (status.State != _lastState)
             {
@@ -548,6 +624,12 @@ namespace ClaudeBuddy
         internal string? CliMarkFill { get; private set; }
 
         internal bool CliMarkVisible => CliBadge.IsVisible;
+
+        // Reference identity of the tooltip's current content, so a test can
+        // assert the flicker fix without a real popup: UpdateFrom must reuse
+        // this instance across polls whose title/path didn't change, and
+        // swap it for a new one when they did.
+        internal Control? CurrentThoughtBubble => ToolTip.GetTip(Root) as Control;
 
         private void ApplyCli(SessionSource source)
         {
@@ -761,22 +843,50 @@ namespace ClaudeBuddy
 
         private void ApplyAvatar(SessionStatus status)
         {
-            if (status.Source != SessionSource.OpenClaw)
-            {
-                ClearAvatar();
-                return;
-            }
-
-            var identity = OpenClawSessions.IdentityForSession(SessionId);
-            _agentEmoji = identity?.Emoji;
-
-            var avatar = identity is null ? null : OpenClawAvatars.For(IdOf(SessionId), identity.Avatar);
+            var avatar = AvatarFor(status);
             if (avatar is null)
             {
                 ClearAvatar();
                 return;
             }
 
+            ShowAvatar(avatar);
+        }
+
+        // Which picture, if any — the only part of drawing a portrait that
+        // differs between a gateway agent and a local one. Everything after it
+        // is identical, which is why it is a separate method: the two branches
+        // were a copy of forty lines apart from these ten, and a copy is where
+        // the ring stops matching the fill on one of them.
+        private OpenClawAvatars.Avatar? AvatarFor(SessionStatus status)
+        {
+            if (status.Source == SessionSource.OpenClaw)
+            {
+                _agentEmoji = OpenClawSessions.IdentityForSession(SessionId)?.Emoji;
+
+                // Asked of OpenClawSessions rather than assembled here, because
+                // a room's picture is not an agent's picture — it is a composite
+                // of everyone in the channel, and that is a question about who
+                // is in the room, which this window has no business knowing. The
+                // chat panel's header asks the same function, so the two cannot
+                // end up wearing different faces for the same session.
+                return OpenClawSessions.AvatarForSession(SessionId);
+            }
+
+            // A persona has no emoji to leave _agentEmoji holding — see
+            // SessionIdentity for why the grammar deliberately has no such
+            // field — so a local orb with no picture keeps falling back to its
+            // letters, which is what it did before any of this.
+            if (!status.IsLocalCli) return null;
+
+            var persona = LocalPersonas.For(SessionId);
+            return persona?.AvatarPath is null
+                ? null
+                : OpenClawAvatars.ForFile(LocalPersonas.AvatarKey(SessionId), persona.AvatarPath);
+        }
+
+        private void ShowAvatar(OpenClawAvatars.Avatar avatar)
+        {
             if (ReferenceEquals(avatar, _avatar)) return;
 
             _avatar = avatar;
@@ -813,17 +923,6 @@ namespace ClaudeBuddy
             RefreshAccent();
 
             StartAvatarAnimation();
-        }
-
-        private static string IdOf(string sessionId)
-        {
-            const string Prefix = "openclaw:";
-            var key = sessionId.StartsWith(Prefix, StringComparison.Ordinal)
-                ? sessionId[Prefix.Length..]
-                : sessionId;
-
-            var parts = key.Split(':');
-            return parts.Length >= 2 ? parts[1] : key;
         }
 
         private void ClearAvatar()
@@ -1003,6 +1102,68 @@ namespace ClaudeBuddy
         // sits below the button, where the same dots point at nothing and read
         // as a rendering fault. Sharing the palette and dropping the tail keeps
         // one look without claiming a button is thinking.
+        // Both orb windows are tiny (56x56 here, 72x72 for an account orb) and
+        // Topmost, so their thought bubble has to render outside the window's
+        // own bounds — Avalonia backs that with a real, separate native popup
+        // window rather than drawing inside Root. `PlacementMode.Top`'s own
+        // math put that popup's bounds overlapping Root's: caught live off
+        // the window server (CGWindowListCopyWindowInfo), a fresh popup
+        // window id opening and closing every ~20-25ms for as long as the
+        // hover lasted. The mechanism: the popup's bounds overlap Root's
+        // pixel under the cursor, the OS hands "topmost under the cursor" to
+        // the newly-opened popup, Avalonia reads that as the pointer leaving
+        // Root and closes the tooltip, the OS hands the cursor back to Root,
+        // Avalonia reopens it — a self-sustaining ~40Hz loop, which reads as
+        // flicker rather than as discrete blinks. AccountOrbWindow never set
+        // a Placement at all, which defaults to Pointer — the popup opens
+        // wherever the cursor already is, i.e. inside its own anchor, the
+        // same failure by a different route.
+        //
+        // Two earlier rounds (CB-104) each fixed a real bug in the tooltip's
+        // *content* churning open/closed on every session poll while the
+        // pointer sat still. Both fixes stay; this is a separate mechanism —
+        // geometry, not content — so it needed a separate fix.
+        //
+        // PlacementMode.Custom sidesteps whatever Top's default math is
+        // actually doing (undocumented, and this Avalonia version's source
+        // wasn't available locally to read it): the callback below computes
+        // the box itself, anchored to Root's own top edge and grown upward,
+        // so it cannot land on top of Root regardless of platform quirks.
+        // Call once, from the constructor — not every poll tick — since the
+        // callback never changes and there is no reason to touch a popup's
+        // placement while it may be open.
+        internal static void ConfigureThoughtBubblePlacement(Control anchor)
+        {
+            ToolTip.SetPlacement(anchor, PlacementMode.Custom);
+            ToolTip.SetCustomPopupPlacementCallback(anchor, PlaceThoughtBubbleAboveAnchor);
+        }
+
+        // Daylight above the anchor's own top edge, past whatever rounding
+        // either side of the popup positioner does. Not a tuned magic
+        // number: the overlap this replaces measured 78px deep into a 56px-
+        // tall window, so a few px here is a floor against rounding, not an
+        // offset chosen to clear one captured case.
+        private const double ThoughtBubbleClearance = 6;
+
+        private static void PlaceThoughtBubbleAboveAnchor(CustomPopupPlacement placement)
+        {
+            // Anchor = the target's own top-center point; Gravity = the
+            // popup grows in the "up" direction from that point, so its
+            // bottom-center lands on the anchor point before the offset
+            // pushes it clear. Both fully determined by us, not by
+            // PlacementMode.Top's own (evidently unreliable) math.
+            placement.Anchor = PopupAnchor.Top;
+            placement.Gravity = PopupGravity.Top;
+            placement.Offset = new Point(0, -ThoughtBubbleClearance);
+
+            // Never let a screen-edge constraint flip this to Bottom or
+            // Center — flipping back onto the anchor is exactly the bug
+            // being fixed here. An orb pinned at the very top of a display
+            // draws its tooltip partly off-screen instead, which is a far
+            // smaller problem than reopening the flicker loop.
+            placement.ConstraintAdjustment = PopupPositionerConstraintAdjustment.SlideX;
+        }
+
         internal static Control ThoughtBubble(string title, string? path, bool compact = false)
         {
             var bg = Color.Parse("#E6EAECF0");
@@ -1432,16 +1593,17 @@ namespace ClaudeBuddy
             SpeakIfThereIsAnything(FindSpeakableText());
         }
 
-        // Excluded from coverage: both of its lines. Reaching SpeakNow means a
+        // Excluded from coverage: both of its lines. Reaching SpeakLocal means a
         // transcript with something in it was found, and what happens next is the
         // machine running the tests reading it out loud — so a test that covered
         // this line would be one nobody could run with other people in the room.
-        // Which text is found is FindSpeakableText, which is measured.
+        // Which text is found is FindSpeakableText, which is measured; which
+        // voice says it is VoiceForLocalSpeech, which is measured too.
         [ExcludeFromCodeCoverage]
         private void SpeakIfThereIsAnything(string? text)
         {
             if (text is null) return;
-            SpeakNow(text);
+            SpeakLocal(text, VoiceForLocalSpeech(SessionId), LocalPersonas.RateForSession(SessionId));
         }
 
         // Safe to call: SessionManager.Instance is null outside the running app, so
@@ -1462,9 +1624,23 @@ namespace ClaudeBuddy
         // measured. An earlier attempt at testing the caller end to end actually
         // spoke out loud on a developer's machine, which is how narrow this needs
         // to be.
+        //
+        // The *decision* this is handed — which voice, at what rate — is not
+        // excluded and is not guessed at here: VoiceForLocalSpeech and
+        // LocalPersonas.RateForSession answer it, and both are tested against an
+        // injected option list rather than against whatever this machine has
+        // installed. Which is the whole shape of the exclusion: the choice is
+        // measured, only the noise is not. Same body as the remote path in
+        // SpeakRemoteAsync, deliberately — a persona's voice and a gateway
+        // agent's are the same feature seen from two ends, and "no voice matched"
+        // has to mean the user's own setting in both or one of them silently
+        // stops speaking.
         [ExcludeFromCodeCoverage]
-        private static void SpeakNow(string text) =>
-            TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+        private static void SpeakLocal(string text, TextToSpeech.VoiceOption? voice, double? rate)
+        {
+            if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+            else TextToSpeech.Speak(text, voice, rate);
+        }
 
         internal async Task SpeakRemoteAsync()
         {
@@ -1473,8 +1649,36 @@ namespace ClaudeBuddy
 
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            Dispatcher.UIThread.Post(() => TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice));
+            var voice = VoiceForRemoteSpeech(SessionId);
+            var rate = OpenClawSessions.RateForSession(SessionId);
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+                else TextToSpeech.Speak(text, voice, rate);
+            });
         }
+
+        // The production path asks the process-owned resolver for the current
+        // machine's options. Keeping the list injectable makes the UI decision
+        // testable without downloading Kokoro or launching a custom command.
+        internal static TextToSpeech.VoiceOption? VoiceForRemoteSpeech(
+            string sessionId,
+            IEnumerable<TextToSpeech.VoiceOption>? options = null) =>
+            options is null
+                ? OpenClawSessions.VoiceForSession(sessionId)
+                : OpenClawSessions.VoiceForSession(sessionId, options);
+
+        // The local half of the same seam, and deliberately the same shape: a
+        // persona that names a voice the machine does not have answers null, and
+        // null is the global setting rather than silence. Injectable for the
+        // same reason — a test that had to install Kokoro to assert which voice
+        // a CLAUDE.md picked would be a test nobody runs.
+        internal static TextToSpeech.VoiceOption? VoiceForLocalSpeech(
+            string sessionId,
+            IEnumerable<TextToSpeech.VoiceOption>? options = null) =>
+            options is null
+                ? LocalPersonas.VoiceForSession(sessionId)
+                : LocalPersonas.VoiceForSession(sessionId, options);
 
         // Called by SessionManager when speech starts, changes phase or stops.
         public void SetFlyoutSpeakState(TextToSpeech.SpeakState state) =>
@@ -1809,7 +2013,7 @@ namespace ClaudeBuddy
             // contract, and it is the same one either way.
             if (ChatPanel.IsOpenFor(SessionId))
             {
-                ChatPanel.AppendToInput(text);
+                ChatPanel.AppendToInput(this, text);
                 return;
             }
 
@@ -1824,7 +2028,7 @@ namespace ClaudeBuddy
                     _chatOpen = true;
                     HideFlyoutNow();
                     ChatPanel.OpenFor(this, chat);
-                    ChatPanel.AppendToInput(text);
+                    ChatPanel.AppendToInput(this, text);
                 }
 
                 return;
@@ -1868,7 +2072,7 @@ namespace ClaudeBuddy
         // Dragging an orb pins it: it keeps that spot as sessions come and go
         // (SessionManager.ReflowPositions steps over pinned orbs) and the spot
         // is remembered across restarts, keyed by the session's directory. The
-        // context menu's "Return this orb to the stack" undoes both.
+        // context menu's "Reset this orb's position" undoes both.
 
         // Where the user dragged this orb is remembered against this key — the
         // session's cwd, set by SessionManager. Empty for a session with no cwd
@@ -2218,6 +2422,9 @@ namespace ClaudeBuddy
 
         internal void ResetIdle_Click(object? sender, RoutedEventArgs e)
         {
+            // The disabled menu row explains why this is unavailable for
+            // OpenClaw and remote-control sessions. Keep the manager's guard
+            // as well: a stale click must not turn a remote id into a path.
             SessionManager.Instance?.ResetSessionToIdle(SessionId);
         }
 

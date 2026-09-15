@@ -402,6 +402,126 @@ namespace ClaudeBuddy
             return voices;
         }
 
+        // Workspace metadata is written by people, while platform voices come
+        // from two unrelated operating systems. Exact names win; otherwise a
+        // deliberately narrow normalized match accepts a common shorthand only
+        // when it identifies one installed voice. A guess between two Davids is
+        // worse than falling back to the user's global voice.
+        internal static string? MatchSystemVoice(string? requested, IEnumerable<string> installed)
+        {
+            return MatchVoiceOption(requested,
+                installed.Select(name => new VoiceOption(SpeakEngine.System, name, name)))?.Name;
+        }
+
+        // A workspace voice is an engine-neutral identifier: agents may move
+        // from a machine with Kokoro to one with SAPI, or use a custom command
+        // alongside either.  Resolve it over every currently usable option,
+        // retaining the engine as well as the name so the later speak call does
+        // not accidentally send a neural identifier to the system synthesizer.
+        // Exact, given-name, normalized, and shorthand matches must each be
+        // unique; guessing between two engines that happen to offer the same
+        // name is worse than the user's global voice.
+        internal static VoiceOption? MatchVoiceOption(string? requested, IEnumerable<VoiceOption> options)
+        {
+            if (string.IsNullOrWhiteSpace(requested)) return null;
+
+            var choices = options.Where(option => !string.IsNullOrWhiteSpace(option.Name)).ToList();
+            var exact = choices.Where(option =>
+                string.Equals(option.Name, requested.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+            if (exact.Count == 1) return exact[0];
+
+            var wanted = ComparableVoice(requested);
+            if (wanted.Length == 0) return null;
+
+            // The name a person would actually write. Kokoro's identifiers
+            // carry a two-letter locale-and-gender prefix — af_bella,
+            // bf_isabella — and nobody writing "her voice is Bella" in a
+            // CLAUDE.md means anything by the "af"; they very often do not know
+            // it is there. Stripping it and comparing what is left is exact
+            // rather than fuzzy, which is what keeps this above the shorthand
+            // step and out of its way: Bella reaches af_bella and stops, where
+            // shorthand alone matched neither af_bella nor bf_isabella and
+            // gave up. Isabella still reaches bf_isabella, because their given
+            // names differ — which is the case that makes prefix-stripping
+            // safe to do before, rather than instead of, the checks below.
+            var given = choices.Where(option => ComparableVoice(GivenName(option.Name)) == wanted).ToList();
+            if (given.Count == 1) return given[0];
+
+            var normalized = choices.Where(option => ComparableVoice(option.Name) == wanted).ToList();
+            if (normalized.Count == 1) return normalized[0];
+
+            var shorthand = choices.Where(option =>
+            {
+                var candidate = ComparableVoice(option.Name);
+                return candidate.StartsWith(wanted, StringComparison.Ordinal)
+                    || wanted.StartsWith(candidate, StringComparison.Ordinal);
+            }).ToList();
+
+            return shorthand.Count == 1 ? shorthand[0] : null;
+        }
+
+        // A persona's stated voice, which may be one name or a mixture of
+        // several, resolved over the options this machine actually has.
+        //
+        // One entry point for both the local CLAUDE.md persona and the gateway
+        // agent's profile, because they read the same grammar out of the same
+        // parser and a blend honoured on one orb and ignored on the other is
+        // exactly the drift PersonaMarkdown's own header exists to prevent.
+        //
+        // A value that is not blend-shaped goes to MatchVoiceOption unchanged,
+        // so nothing about a single voice name — including a parenthesised
+        // system voice like `Ava (Premium)` — moves.
+        internal static VoiceOption? VoiceForPersona(
+            string? requested, IEnumerable<VoiceOption> options)
+        {
+            var blend = VoiceBlend.Parse(requested);
+            return blend is null
+                ? MatchVoiceOption(requested, options)
+                : VoiceBlends.Option(blend, options);
+        }
+
+        internal static string NormalizeVoice(string value) => new(value
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToLowerInvariant)
+            .ToArray());
+
+        // Kokoro's two-letter locale-and-gender prefix, with its underscore,
+        // or the empty string for a name that has none. Two lowercase ASCII
+        // letters and an underscore is the whole convention; anything else
+        // keeping an underscore in third position ("Microsoft David Desktop"
+        // has none, "hi_there" would need to be a voice) is left alone by the
+        // letter test rather than by a list of engines.
+        //
+        // Internal because VoiceBlend needs the same rule to name a blended
+        // file: the engine reads a voice's language off exactly this prefix
+        // and drops anything it files under another language out of an English
+        // listing, so a blend of two `af_` voices has to be an `af_` voice or
+        // it is invisible.
+        internal static string LocalePrefix(string name)
+        {
+            var trimmed = name.Trim();
+            return trimmed.Length > 3 && trimmed[2] == '_'
+                   && char.IsAsciiLetterLower(trimmed[0]) && char.IsAsciiLetterLower(trimmed[1])
+                ? trimmed[..3]
+                : "";
+        }
+
+        // An engine's identifier with that prefix taken off, and the name
+        // unchanged when there is no such prefix.
+        private static string GivenName(string name)
+        {
+            var trimmed = name.Trim();
+            return trimmed[LocalePrefix(trimmed).Length..];
+        }
+
+        private static string ComparableVoice(string value)
+        {
+            var normalized = NormalizeVoice(value);
+            return normalized.StartsWith("microsoft", StringComparison.Ordinal)
+                ? normalized["microsoft".Length..]
+                : normalized;
+        }
+
         // `say -v ?` output, one voice per line, as the names to offer.
         //
         // Split out of SystemVoices because this reads a format another program
@@ -507,24 +627,44 @@ namespace ClaudeBuddy
         // Excluded from coverage: starts a speech engine and makes the machine
         // make a noise.
         [ExcludeFromCodeCoverage]
-        public static void Speak(string text, string? voice = null)
+        public static void Speak(string text, VoiceOption voice, double? rate = null) =>
+            Speak(text, voice.Name, forceSystemVoice: voice.Engine == SpeakEngine.System,
+                forceEngine: voice.Engine, rate: rate);
+
+        [ExcludeFromCodeCoverage]
+        public static void Speak(string text, string? voice = null, bool forceSystemVoice = false,
+            SpeakEngine? forceEngine = null, double? rate = null)
         {
             Cancel();
 
             if (string.IsNullOrWhiteSpace(text)) return;
 
+            // Legacy callers can explicitly force a system label. Workspace
+            // metadata now carries a resolved VoiceOption instead, but this
+            // guard still prevents old callers from handing SAPI or say a name
+            // which its own engine cannot use.
+            if (forceSystemVoice && (string.IsNullOrWhiteSpace(voice)
+                || !SystemVoices().Contains(voice, StringComparer.OrdinalIgnoreCase)))
+            {
+                voice = null;
+                forceSystemVoice = false;
+            }
+
             // Whichever engine owns the selected voice, rather than a fixed
             // precedence: all three are offered together now, so the choice made in
             // the settings window is the choice, not a hint that something else can
             // override.
-            var selected = SelectedVoice();
+            var selected = forceEngine is { } engine
+                ? new VoiceOption(engine, voice ?? "", "")
+                : SelectedVoice();
 
             // A user command is *not* fallen back from. Someone who configured
             // their own engine wants that engine; a silent substitution to a
             // robotic system voice would look like their command working badly
             // rather than not running, which is the harder failure to diagnose. It
             // reports and stays quiet instead.
-            if (selected?.Engine == SpeakEngine.Custom && StartCustomCommand(text)) return;
+            if (!forceSystemVoice && selected?.Engine == SpeakEngine.Custom
+                && StartCustomCommand(text, selected.Name)) return;
 
             // The neural engine *is* fallen through from rather than trusted: if it
             // can't start — a partial download, a model deleted by hand — the same
@@ -533,9 +673,9 @@ namespace ClaudeBuddy
             // and speaking worse is a much better failure than not speaking, which
             // is the shape of bug the comment at the top of this file exists
             // because of.
-            if (selected?.Engine == SpeakEngine.Neural
+            if (!forceSystemVoice && selected?.Engine == SpeakEngine.Neural
                 && NeuralSpeech.Available
-                && StartNeural(text))
+                && StartNeural(text, selected.Name, rate))
             {
                 return;
             }
@@ -634,7 +774,7 @@ namespace ClaudeBuddy
         // state, never a condition of working.
         // Excluded from coverage: starts the user's command as a subprocess.
         [ExcludeFromCodeCoverage]
-        private static bool StartCustomCommand(string text)
+        private static bool StartCustomCommand(string text, string? voice = null)
         {
             var command = ClaudeBuddySettings.SpeakCommand;
             if (string.IsNullOrWhiteSpace(command)) return false;
@@ -659,7 +799,7 @@ namespace ClaudeBuddy
             // a command that doesn't read this never notices it. Set even when
             // empty so a wrapper can tell "no choice made" from a stale value
             // inherited from this process's own environment.
-            startInfo.Environment["CLAUDEBUDDY_VOICE"] =
+            startInfo.Environment["CLAUDEBUDDY_VOICE"] = voice ??
                 ClaudeBuddySettings.SpeakCommandVoice ?? "";
 
             var proc = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
@@ -729,7 +869,7 @@ namespace ClaudeBuddy
 
         // Excluded from coverage: starts the Kokoro side-car process.
         [ExcludeFromCodeCoverage]
-        private static bool StartNeural(string text)
+        private static bool StartNeural(string text, string? voice = null, double? rate = null)
         {
             // Announced before the process exists, because starting it is itself
             // part of the wait being announced.
@@ -737,7 +877,8 @@ namespace ClaudeBuddy
 
             var proc = NeuralSpeech.Start(
                 text,
-                ClaudeBuddySettings.NeuralVoice,
+                voice ?? ClaudeBuddySettings.NeuralVoice,
+                rate,
                 onSpeaking: () => Enter(SpeakState.Speaking));
 
             if (proc is null)

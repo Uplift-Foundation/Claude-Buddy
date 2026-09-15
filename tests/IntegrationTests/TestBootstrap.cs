@@ -25,6 +25,25 @@ internal static class TestBootstrap
             "CLAUDE_BUDDY_SETTINGS_DIR",
             Path.Combine(Path.GetTempPath(), "cb-integrationtests-" + Guid.NewGuid()));
 
+        // StatusDirectory.Path() — where ClaudeBuddySettings.LogFailure writes
+        // settings-errors.log — honors TMPDIR rather than
+        // CLAUDE_BUDDY_SETTINGS_DIR (see StatusDirectory.Root's own comment:
+        // it's the seam a test uses to get its own sandbox). Left unset, every
+        // suite run appended Save/Load failure traces to the real
+        // $TMPDIR/claude_buddy/settings-errors.log on the developer's machine —
+        // a user-facing diagnostic file growing without bound from test noise
+        // (CB-17).
+        //
+        // A short suffix, not the full settings-dir guid: SessionMessengerSocketTests
+        // builds real AF_UNIX sockets under Path.GetTempPath(), which honors
+        // TMPDIR too, and a socket path over 104 bytes throws. Reusing the
+        // (much longer) settings scratch path here pushed that over the limit;
+        // an 8-hex-char suffix, the same budget SessionMessengerSocketTests
+        // already uses for its own directory, leaves it room.
+        Environment.SetEnvironmentVariable(
+            "TMPDIR",
+            Path.Combine(Path.GetTempPath(), "cbt-" + Guid.NewGuid().ToString("N")[..8]));
+
         // ...and no test here may start a real relay by accident — a live Claude
         // Code session in tmux, on the developer's own account. Unless the
         // live-bridge tests were deliberately opted into, which is the one case

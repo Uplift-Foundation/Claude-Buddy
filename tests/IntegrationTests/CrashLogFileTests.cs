@@ -10,6 +10,7 @@ namespace ClaudeBuddy.Tests;
 // without bound, and — the one that matters most — that a write which cannot
 // happen fails silently rather than throwing inside a process that is already
 // dying.
+[Collection("LogDir")]
 public class CrashLogFileTests : IDisposable
 {
     private readonly string _dir;

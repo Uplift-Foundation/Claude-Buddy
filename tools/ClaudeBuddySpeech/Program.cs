@@ -16,7 +16,7 @@ namespace ClaudeBuddySpeech
     // nothing about the app's speaking/stopping model has to change to accept a
     // completely different engine.
     //
-    //   ClaudeBuddySpeech.exe --model <path> --voice <name>   < text on stdin
+    //   ClaudeBuddySpeech.exe --model <path> --voice <name> [--rate <float>]   < text on stdin
     //   ClaudeBuddySpeech.exe --list-voices
     //
     // Text arrives on stdin rather than as an argument. That is not a style
@@ -36,6 +36,13 @@ namespace ClaudeBuddySpeech
         private const int ExitUsage = 2;
         private const int ExitNoModel = 3;
         private const int ExitFailed = 4;
+
+        // Mirrors the caller's own OpenClawWorkspaceIdentity/OpenClawPeerIdentity
+        // bound — kept here too because a value reaching this process over the
+        // command line is a string from a parent process, not a value this one
+        // has any reason to trust just because it looks like a number.
+        private const float MinRate = 0.5f;
+        private const float MaxRate = 2.0f;
 
         private static int Main(string[] args)
         {
@@ -63,6 +70,7 @@ namespace ClaudeBuddySpeech
             string? modelPath = null;
             string? voiceName = null;
             string? userVoicesPath = null;
+            float? rate = null;
 
             for (var i = 0; i < args.Length; i++)
             {
@@ -79,6 +87,17 @@ namespace ClaudeBuddySpeech
                         break;
                     case "--user-voices" when i + 1 < args.Length:
                         userVoicesPath = args[++i];
+                        break;
+                    // Out of range or unparsable is not a usage error: the
+                    // caller already validated its own range before sending
+                    // this, so a value that fails here is nothing this
+                    // process needs to refuse the whole utterance over — it
+                    // just speaks at the engine's own default speed instead.
+                    case "--rate" when i + 1 < args.Length:
+                        var rateText = args[++i];
+                        rate = float.TryParse(rateText, System.Globalization.NumberStyles.AllowDecimalPoint,
+                            System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+                            && parsed is >= MinRate and <= MaxRate ? parsed : null;
                         break;
                     default:
                         Console.Error.WriteLine($"ClaudeBuddySpeech: unexpected argument '{args[i]}'");
@@ -128,8 +147,8 @@ namespace ClaudeBuddySpeech
             // macOS deliberately does not go through KokoroSharp's own playback.
             // SpeakThroughAfplay carries the whole story of why.
             return OperatingSystem.IsMacOS()
-                ? SpeakThroughAfplay(modelPath, chosen, text)
-                : Speak(modelPath, chosen, text);
+                ? SpeakThroughAfplay(modelPath, chosen, text, rate)
+                : Speak(modelPath, chosen, text, rate);
         }
 
         // Voices the user dropped in themselves, from a directory outside the
@@ -243,7 +262,7 @@ namespace ClaudeBuddySpeech
         // written that way, having already been bitten by a .cmd wrapper whose
         // grandchild kept talking after the tracked child died; an afplay
         // started here is exactly that grandchild, and dies with us.
-        private static int SpeakThroughAfplay(string modelPath, KokoroVoice voice, string text)
+        private static int SpeakThroughAfplay(string modelPath, KokoroVoice voice, string text, float? rate)
         {
             using var synth = KokoroWavSynthesizer.LoadModel(modelPath, SessionOptionsForBackgroundUse());
 
@@ -256,6 +275,7 @@ namespace ClaudeBuddySpeech
             {
                 MaxFirstSegmentLength = 60
             });
+            if (rate is { } spoken) config.Speed = spoken;
 
             // Synthesis hands segments over as they finish; one consumer plays
             // them in order. A queue rather than playing from the callback
@@ -449,7 +469,7 @@ namespace ClaudeBuddySpeech
             return buffer.ToArray();
         }
 
-        private static int Speak(string modelPath, KokoroVoice voice, string text)
+        private static int Speak(string modelPath, KokoroVoice voice, string text, float? rate)
         {
             using var tts = KokoroTTS.LoadModel(modelPath, SessionOptionsForBackgroundUse());
 
@@ -464,6 +484,7 @@ namespace ClaudeBuddySpeech
             {
                 MaxFirstSegmentLength = 60
             });
+            if (rate is { } spoken) config.Speed = spoken;
 
             // Nothing here is async-await: the process exists to do one thing and
             // then die, so blocking the main thread until the callbacks fire is

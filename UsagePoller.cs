@@ -174,21 +174,63 @@ namespace ClaudeBuddy
     // that loses the race can log the user out of the account it was trying to
     // report on.
     //
-    // The request costs nothing. It is answered from Claude Code's own cache of
-    // the usage endpoint and makes no model call — measured at
+    // The request charges nothing. It is answered from Claude Code's own cache
+    // of the usage endpoint and makes no model call — measured at
     // total_cost_usd 0 and total_api_duration_ms 0 — but it does start a process
-    // and take a couple of seconds, which is why callers are expected to honour
-    // MinimumInterval rather than asking whenever they would like to know.
+    // and take a couple of seconds, which is why callers are expected to pace
+    // themselves rather than asking whenever they would like to know.
+    //
+    // **How often to ask is UsagePollCadence's decision, and this class used to
+    // hold a constant that said otherwise.** That constant, MinimumInterval, was
+    // five minutes, and it justified itself like this:
+    //
+    //     Claude Code caches the underlying fetch with a five-minute write
+    //     guard, so asking more often than this cannot produce a newer number —
+    //     it only spends a process launch to be told the same thing.
+    //
+    // That is an assertion of fact about somebody else's program, it was never
+    // checked, and it is false. Calling exactly the command below in a loop,
+    // under the app's own environment, returns a fresher figure far sooner:
+    // five-hour utilization read 24 and then 23 **twelve seconds later**, and 15
+    // against 18 sixty-five seconds apart; a second account moved 48 to 49
+    // across that same gap, so it is not one account behaving oddly. If the
+    // write guard existed, none of those pairs could differ. The one-point
+    // granularity is the API reporting an integer, and the twelve-second 24-to-
+    // 23 is that integer crossing 23.5 — which is itself evidence the value
+    // behind it is being re-read on that timescale rather than held.
+    //
+    // The constant is gone rather than corrected, because the number it held is
+    // now UsagePollCadence.Slow and two copies of one interval is how the next
+    // person changes one and not the other. What it cost while it stood is the
+    // reason this paragraph is longer than the constant was: it read like a
+    // finding rather than an assumption, so nobody weighed the cadence against a
+    // real cost — and an investigation into account orbs a user reported as
+    // frozen lost hours downstream of it, because a comment stating that fresher
+    // data does not exist rules out the cheapest explanation first.
+    //
+    // What is true, and what UsagePollCadence trades against: one full
+    // CompositeUsageSource.Read() is three subprocesses — a `claude -p` per
+    // Claude account plus one `codex app-server`; Grok is read off disk — and
+    // ran 4.5s to 7.7s of wall clock across thirteen rounds, median 5.6s, on a
+    // machine at load average 5.5 across 14 cores. The rings are still not a
+    // live readout and were never designed to be. That is now a statement about
+    // what a poll costs, not a claim about what the CLI would refuse to tell us.
+    //
+    // One caution for anyone changing that cadence, and the reconciliation of it
+    // with the cadence that already did: RunOne below gives up at 20s and
+    // CodexAppServerUsage.Ask at 15s, and a dropped source is not a gap on
+    // screen — AccountOrbs.Apply keeps the reading it already had, deliberately,
+    // so a network blink does not look like an account being deleted. A cadence
+    // fast enough to start missing its own deadline would therefore make the orb
+    // *less* truthful rather than more, which means the tail matters here and
+    // the median does not. UsagePollCadence already polls as often as every
+    // sixty seconds and does **not** run into this, because AccountOrbs._polling
+    // stops a read in flight from ever being joined by a second: each read still
+    // gets the whole 20s or 15s regardless of the interval. See the comment on
+    // UsagePollCadence.Fast, which has the argument in full — a cadence changes
+    // how often a read starts, never how long it may take.
     internal sealed class UsagePoller : IUsageSource
     {
-        // The floor between polls.
-        //
-        // Claude Code caches the underlying fetch with a five-minute write
-        // guard, so asking more often than this cannot produce a newer number —
-        // it only spends a process launch to be told the same thing. The rings
-        // are not a live readout and were never designed to be.
-        internal static readonly TimeSpan MinimumInterval = TimeSpan.FromMinutes(5);
-
         // Generous, and deliberately not the five seconds BackgroundJobs uses
         // for `claude agents --json`. This call was measured at ~2.4s and is
         // dominated by a transcript scan the CLI performs for its own /usage
@@ -251,50 +293,104 @@ namespace ClaudeBuddy
             }
         }
 
+        // How this account's poll is set up, split out for the reason
+        // AgentRoster.AgentsProcess is: the environment it does *not* carry is
+        // as load-bearing as the environment it does, and until this was its
+        // own function the only way to check either was to run a real `claude`
+        // against a real account.
+        //
+        // **This is not AgentRoster.AgentsProcess's rule, on purpose, even
+        // though the shape looks identical.** CB-42's "a null configDir leaves
+        // the variable alone" is about *launching a session on the user's
+        // behalf* — a relay, a background agents query — where inheriting
+        // whatever account the user's environment already names is the
+        // correct default, because the user is the one who chose it. A usage
+        // poll is not launching anything on anyone's behalf; it is answering
+        // a specific question an orb has already committed to: "how is
+        // *this* named account doing?" The name half of that claim is pinned
+        // to disk — UsageAccounts.AccountFilePath reads `~/.claude.json` for
+        // the default account regardless of what the environment says — so
+        // pinning the data half to the same file is what makes the orb's
+        // claim true. Leaving the variable to inherit gives one orb a name
+        // from one source and numbers from another, and nothing here would
+        // ever notice the two had drifted apart. That drift is CB-113: the
+        // default orb was labelled from `~/.claude.json` and reporting
+        // whatever `CLAUDE_CONFIG_DIR` the app process happened to be started
+        // under — a different, real account's numbers under this account's
+        // name.
+        //
+        // So the null case is explicit here, not merely absent: it removes
+        // the variable rather than leaving it. `psi.Environment` starts out
+        // seeded from this process's own environment, so a plain assignment
+        // for the named case is not enough to sever inheritance for the
+        // default one — `Remove` is the only thing that actually does. This
+        // is *not* the CB-42 hazard repeated: with no variable at all, Claude
+        // Code reads `$HOME/.claude.json` — the very file
+        // UsageAccounts.LabelFrom already read the label from — and not the
+        // separate, frequently un-onboarded `$HOME/.claude/.claude.json` that
+        // ClaudeProfile's comment warns about. Naming that directory
+        // explicitly would be the trap; removing the variable lands on the
+        // same file the label came from.
+        //
+        // The one user-visible consequence: someone who runs the whole app
+        // under a non-default CLAUDE_CONFIG_DIR sees their default orb's
+        // numbers change. Nothing is newly wrong for them — that orb was
+        // already labelled from `~/.claude.json`, so this makes an existing,
+        // mislabelled reading correct rather than pointing the orb at an
+        // account it wasn't already claiming to be.
+        internal static ProcessStartInfo UsageProcess(string claude, string? configDir)
+        {
+            var psi = new ProcessStartInfo(claude)
+            {
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+
+            psi.ArgumentList.Add("-p");
+
+            // Mandatory alongside `-p --output-format stream-json`; the CLI
+            // refuses the combination without it.
+            psi.ArgumentList.Add("--verbose");
+
+            // Keeps a poll that runs every five minutes forever out of
+            // ~/.claude/projects, where it would otherwise leave a transcript
+            // per account per poll for a conversation that never happened.
+            psi.ArgumentList.Add("--no-session-persistence");
+
+            // Stops the user's own SessionStart hooks firing on every poll —
+            // **including this app's own**, which would otherwise have the
+            // poller manufacturing the orbs it is measuring.
+            psi.ArgumentList.Add("--settings");
+            psi.ArgumentList.Add("{\"disableAllHooks\":true}");
+
+            psi.ArgumentList.Add("--input-format");
+            psi.ArgumentList.Add("stream-json");
+            psi.ArgumentList.Add("--output-format");
+            psi.ArgumentList.Add("stream-json");
+
+            if (configDir is not null) psi.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+            else psi.Environment.Remove("CLAUDE_CONFIG_DIR");
+
+            return psi;
+        }
+
         // One account's answer, as raw stdout.
         //
         // Excluded from coverage: starts the `claude` CLI as a real subprocess.
         // What is excluded is the launch, its timeout and the kill for a CLI that
         // never answers — the JSON it prints is parsed by UsageParse, which is
         // covered against real captured payloads. The same split, for the same
-        // reason, as BackgroundJobs.ReadOne.
+        // reason, as BackgroundJobs.ReadOne. UsageProcess above is the testable
+        // seam; nothing about *what* it builds is excluded, only the running of it.
         [ExcludeFromCodeCoverage]
         private static string? RunOne(string claude, string? configDir)
         {
             try
             {
-                var psi = new ProcessStartInfo(claude)
-                {
-                    UseShellExecute = false,
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
-
-                psi.ArgumentList.Add("-p");
-
-                // Mandatory alongside `-p --output-format stream-json`; the CLI
-                // refuses the combination without it.
-                psi.ArgumentList.Add("--verbose");
-
-                // Keeps a poll that runs every five minutes forever out of
-                // ~/.claude/projects, where it would otherwise leave a transcript
-                // per account per poll for a conversation that never happened.
-                psi.ArgumentList.Add("--no-session-persistence");
-
-                // Stops the user's own SessionStart hooks firing on every poll —
-                // **including this app's own**, which would otherwise have the
-                // poller manufacturing the orbs it is measuring.
-                psi.ArgumentList.Add("--settings");
-                psi.ArgumentList.Add("{\"disableAllHooks\":true}");
-
-                psi.ArgumentList.Add("--input-format");
-                psi.ArgumentList.Add("stream-json");
-                psi.ArgumentList.Add("--output-format");
-                psi.ArgumentList.Add("stream-json");
-
-                if (configDir is not null) psi.Environment["CLAUDE_CONFIG_DIR"] = configDir;
+                var psi = UsageProcess(claude, configDir);
 
                 using var process = Process.Start(psi);
                 if (process is null) return null;

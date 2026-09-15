@@ -1,16 +1,18 @@
-using System.Reflection;
-
 namespace ClaudeBuddy.Tests;
 
-// Same reflection seam as tests/UiTests/ChatPanelTestAccess.cs, copied for
-// the same reason FakeChatSession is: this project stays isolated from
-// tests/UiTests, and reflection over a private static field needs no
-// InternalsVisibleTo grant to duplicate cheaply.
+// Same seam as tests/UiTests/ChatPanelTestAccess.cs, copied for the same
+// reason FakeChatSession is: this project stays isolated from tests/UiTests,
+// and a two-line forwarder is cheaper to duplicate than to share.
+//
+// `Instance` resolves to the transient panel — the one every OpenFor in this
+// suite binds, and the one dismiss-on-deactivate still applies to. It was a
+// reflected private field until CB-110 turned the singleton into a registry;
+// see the UiTests copy for the longer version.
 internal static class ChatPanelTestAccess
 {
-    private static readonly FieldInfo InstanceField =
-        typeof(ChatPanel).GetField("_instance", BindingFlags.NonPublic | BindingFlags.Static)
-        ?? throw new MissingFieldException("ChatPanel", "_instance");
+    public static ChatPanel? Instance => ChatPanel.Transient;
 
-    public static ChatPanel? Instance => (ChatPanel?)InstanceField.GetValue(null);
+    public static ChatPanel? PanelFor(string sessionId) => ChatPanel.PanelFor(sessionId);
+
+    public static IReadOnlyList<ChatPanel> All => ChatPanel.All;
 }

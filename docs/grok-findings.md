@@ -89,7 +89,18 @@ A SuperGrok unified-billing account on this machine reported:
 }
 ```
 
-`subscriptionTier` is beside that (`SuperGrok`). There is no five-hour
+`subscriptionTier` is beside that (`SuperGrok`) — **beside**, meaning a sibling
+of `config` inside `ctx`, not a member of `config`. A parser that looks in
+`config` and then at the envelope root misses it in both places and leaves the
+plan line blank, which is exactly what shipped until CB-83.
+
+The envelope's `ts` is the age of the number. Grok writes this line **once, at
+startup**, and never again for the life of the process, so a machine that last
+ran `grok` two days ago is holding a two-day-old percentage — measured here at
+38 hours. Read the reading's age off `ts`, never off the moment the log file
+was read.
+
+There is no five-hour
 window. There is no public `grok usage` CLI. Asking Grok for this without
 holding its refresh token is **still unknown**; the log line is a last-resort
 read and is only as fresh as the last Grok process.
@@ -97,6 +108,51 @@ read and is only as fresh as the last Grok process.
 Do not call `/billing?format=credits` from this app. Do not read
 `auth.json`'s refresh token. The email in that file is fair game as a **label**,
 the way `~/.claude.json` `oauthAccount.emailAddress` is.
+
+### Forcing a fresh reading, measured 4 Sep 2026 (CB-96)
+
+**Nothing short of booting the real interactive TUI writes a fresh line — every
+lighter subcommand was tried and left `unified.jsonl` untouched.** `grok
+models`, `grok doctor`, `grok inspect`, `grok sessions` and `grok agent stdio`
+all ran and produced other log output, but none of them contain or trigger
+`billing: fetched credits config`.
+
+**It needs a real pty, not just a subprocess.** A plain redirected child
+(`ProcessStartInfo` with stdio piped, no terminal) fails immediately with
+`Device not configured (os error 6)` and never reaches the credits fetch.
+`script -q /dev/null grok` supplies one — BSD `script`, which ships with macOS,
+so this costs no extra dependency the way reaching for `tmux` would have. The
+credits line appears within 4-6 seconds of launch, consistently, across every
+run measured.
+
+**Three things worth knowing before killing it early:**
+
+- **No trust-prompt hang, even from a directory Grok has never seen.** Launched
+  from a brand-new scratch temp directory, credits still arrived in the same
+  4-6 second window with nothing blocking on an interactive prompt. Safe to
+  launch from an isolated cwd rather than a real project, so it never touches
+  real session history.
+- **No MCP servers start in that window.** `~/.grok/logs/mcp/{blender,
+  playwright,nocodb,unity-mcp}.stderr.log` were untouched by any test launch
+  here. Whatever starts those happens later in Grok's own boot sequence than
+  the credits fetch — killing within ~8 seconds stays ahead of it. Not proven
+  to stay ahead of it forever; a future Grok version that reorders its startup
+  could change this, which is why the app always kills the whole process tree
+  rather than trusting a graceful exit.
+- **No residue in `~/.grok`.** Killed this quickly, a scratch-directory launch
+  leaves no `trusted_folders.toml` entry and no session directory behind.
+
+**Killing it clean matters as much as starting it.** `pkill -P <script-pid>`
+then `kill <script-pid>` is what actually leaves nothing running — confirmed
+against `ps -eo pid,ppid,etime,command`, not just an exit code, because `script`
+is the parent and Grok itself is the child; killing only the parent would leave
+Grok running unsupervised.
+
+**Windows is unknown, not assumed working.** The pty requirement is not
+macOS-specific, but the way to supply one is: Windows needs the ConPTY API
+(`CreatePseudoConsole`), which nothing in this codebase wraps and which has not
+been run against a real Grok install on Windows. The auto-refresh feature is a
+deliberate no-op there rather than an unverified guess.
 
 ## Hooks
 

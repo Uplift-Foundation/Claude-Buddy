@@ -1,0 +1,412 @@
+using System;
+using System.IO;
+using System.Linq;
+using Xunit;
+
+namespace ClaudeBuddy.UnitTests;
+
+// The live-usage path added by CB-85: finding the `codex` binary, and picking
+// the one line worth reading out of the app-server's stream.
+//
+// Everything here is pure or filesystem-only. The subprocess itself —
+// CodexAppServerUsage.Ask — is excluded from coverage and named in the PR, the
+// same split UsagePoller.RunOne and BackgroundJobs.ReadOne already use: the
+// launch is untestable, the JSON it prints is not.
+public class CodexAppServerTests : IDisposable
+{
+    private readonly string _root = Path.Combine(
+        Path.GetTempPath(), "cb-codex-bin-" + Guid.NewGuid().ToString("N"));
+
+    private static readonly string[] NoSystemInstalls = Array.Empty<string>();
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_root, recursive: true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private string Touch(params string[] parts)
+    {
+        var path = Path.Combine(new[] { _root }.Concat(parts).ToArray());
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "#!/bin/sh\n");
+        return path;
+    }
+
+    // ---- Locate --------------------------------------------------------
+
+    [Fact]
+    public void TheSymlinkInLocalBinIsFoundFirst()
+    {
+        var home = Path.Combine(_root, "home");
+        var expected = Touch("home", ".local", "bin", "codex");
+        Touch("home", ".codex", "packages", "standalone", "current", "bin", "codex");
+
+        Assert.Equal(expected, CodexBinary.Locate(home, "", NoSystemInstalls));
+    }
+
+    // The standalone package is where ~/.local/bin/codex points. Worth finding
+    // on its own, because a broken or removed symlink leaves a perfectly good
+    // binary sitting there.
+    [Fact]
+    public void TheStandalonePackageIsFoundWhenTheSymlinkIsGone()
+    {
+        var home = Path.Combine(_root, "home");
+        var expected = Touch(
+            "home", ".codex", "packages", "standalone", "current", "bin", "codex");
+
+        Assert.Equal(expected, CodexBinary.Locate(home, "", NoSystemInstalls));
+    }
+
+    [Fact]
+    public void ASystemInstallIsFoundWhenTheHomeHasNothing()
+    {
+        var system = Touch("opt", "codex");
+
+        Assert.Equal(
+            system,
+            CodexBinary.Locate(Path.Combine(_root, "home"), "", new[] { system }));
+    }
+
+    [Fact]
+    public void PathIsTheLastResort()
+    {
+        var onPath = Touch("elsewhere", "codex");
+
+        Assert.Equal(
+            onPath,
+            CodexBinary.Locate(
+                Path.Combine(_root, "home"),
+                Path.Combine(_root, "elsewhere"),
+                NoSystemInstalls));
+    }
+
+    [Fact]
+    public void NothingAnywhereIsNullRatherThanAThrow()
+    {
+        Assert.Null(CodexBinary.Locate(Path.Combine(_root, "home"), "", NoSystemInstalls));
+    }
+
+    // A null searchPath means "consult the real PATH", which is the default and
+    // has to keep working. What it *finds* is deliberately not asserted: this
+    // developer's Mac has a real codex on PATH and a CI runner does not, so an
+    // assertion either way would be a test that passes for two different
+    // reasons — the hazard ClaudeBinary.Locate's own comment exists to name.
+    // That it answers at all, without throwing, is the part that is about the
+    // code rather than about the machine.
+    [Fact]
+    public void ANullSearchPathFallsBackToTheEnvironmentWithoutThrowing()
+    {
+        var record = Record.Exception(
+            () => CodexBinary.Locate(Path.Combine(_root, "home"), null, NoSystemInstalls));
+
+        Assert.Null(record);
+    }
+
+    // On Windows an npm-installed CLI is `codex.cmd` and a bare "codex" exists
+    // nowhere on disk, so a search that only tried the bare name found nothing —
+    // silently, which is the whole failure class CodexBinary exists to avoid.
+    // Driven with the extension list as an argument so this runs on every
+    // platform rather than only on the Windows CI leg.
+    [Fact]
+    public void AWindowsShimIsFoundByItsExtension()
+    {
+        var home = Path.Combine(_root, "home");
+        var expected = Touch("home", ".local", "bin", "codex.cmd");
+
+        Assert.Null(CodexBinary.Locate(home, "", NoSystemInstalls, CodexBinary.UnixExtensions));
+        Assert.Equal(
+            expected,
+            CodexBinary.Locate(home, "", NoSystemInstalls, CodexBinary.WindowsExtensions));
+    }
+
+    // The empty extension leads, so a real extensionless binary still wins on a
+    // Windows machine that has one.
+    [Fact]
+    public void AnExtensionlessBinaryStillWinsUnderTheWindowsList()
+    {
+        var home = Path.Combine(_root, "home");
+        var bare = Touch("home", ".local", "bin", "codex");
+        Touch("home", ".local", "bin", "codex.cmd");
+
+        Assert.Equal(
+            bare,
+            CodexBinary.Locate(home, "", NoSystemInstalls, CodexBinary.WindowsExtensions));
+    }
+
+    [Fact]
+    public void ExtensionsApplyToThePathFallbackToo()
+    {
+        var expected = Touch("elsewhere", "codex.exe");
+
+        Assert.Equal(
+            expected,
+            CodexBinary.Locate(
+                Path.Combine(_root, "home"),
+                Path.Combine(_root, "elsewhere"),
+                NoSystemInstalls,
+                CodexBinary.WindowsExtensions));
+    }
+
+    // ---- ResultFrom ----------------------------------------------------
+
+    // Verbatim from a real `codex app-server` exchange on this machine,
+    // 2 Sep 2026, codex-cli 0.151.0 — the response line plus the notification
+    // rows that arrive around it.
+    private const string LiveStream = """
+    {"jsonrpc":"2.0","method":"account/updated","params":{"account":{"type":"chatgpt","email":null,"planType":"team"}}}
+    {"id":1,"result":{"userAgent":"codex_cli_rs/0.151.0"}}
+    {"id":2,"result":{"rateLimits":{"limitId":"codex","limitName":null,"primary":{"usedPercent":100,"windowDurationMins":300,"resetsAt":1788391232},"secondary":{"usedPercent":38,"windowDurationMins":10080,"resetsAt":1788807866},"credits":{"hasCredits":false,"unlimited":false,"balance":null},"individualLimit":null,"spendControlReached":false,"planType":"team","rateLimitReachedType":"workspace_owner_credits_depleted"},"rateLimitsByLimitId":{"codex":{"limitId":"codex","primary":{"usedPercent":100,"windowDurationMins":300,"resetsAt":1788391232}}}}}
+    """;
+
+    [Fact]
+    public void TheAnswerIsPickedOutOfAStreamCarryingOtherRows()
+    {
+        var result = CodexAppServerUsage.ResultFrom(LiveStream);
+
+        Assert.NotNull(result);
+        Assert.Contains("\"rateLimits\"", result);
+        Assert.DoesNotContain("userAgent", result);
+    }
+
+    [Fact]
+    public void TheLiveAnswerBecomesAFiveHourRingAndAWeeklyRing()
+    {
+        var usage = CodexUsageParse.FromRateLimits(
+            CodexAppServerUsage.ResultFrom(LiveStream), "/Users/w/.codex", "codex",
+            DateTimeOffset.Parse("2026-09-02T22:30:00Z"));
+
+        Assert.True(usage!.Available);
+        Assert.Equal("team", usage.SubscriptionType);
+        Assert.Equal(100.0, usage.Session!.Percent);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1788391232), usage.Session.ResetsAt);
+        Assert.Equal(38.0, usage.Weekly!.Percent);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1788807866), usage.Weekly.ResetsAt);
+
+        // Credits are read under their camelCase spelling too — `hasCredits`
+        // false here, which is "no extra usage" rather than "unknown".
+        Assert.Equal("no_credits", usage.Extra!.DisabledReason);
+    }
+
+    // A live answer is dated by the read, not by a snapshot timestamp it does
+    // not have. That is CB-83's rule pointing the other way: the number is
+    // current, so the orb must not dim and the card must not age it.
+    [Fact]
+    public void ALiveAnswerIsNotStaleAndCarriesNoObservedAt()
+    {
+        var readAt = DateTimeOffset.Parse("2026-09-02T22:30:00Z");
+
+        var usage = CodexUsageParse.FromRateLimits(
+            CodexAppServerUsage.ResultFrom(LiveStream), null, "codex", readAt);
+
+        Assert.Null(usage!.ObservedAt);
+        Assert.Equal(readAt, usage.AsOf);
+        Assert.False(usage.IsStale(readAt));
+    }
+
+    [Fact]
+    public void AnErrorResponseIsNoReadingRatherThanAnEmptyOne()
+    {
+        var stream = """
+        {"id":2,"error":{"code":-32601,"message":"Method not found"}}
+        """;
+
+        Assert.Null(CodexAppServerUsage.ResultFrom(stream));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not json at all")]
+    [InlineData("""{"id":1,"result":{"userAgent":"x"}}""")]          // the wrong request
+    [InlineData("""{"id":"2","result":{"rateLimits":{}}}""")]        // id as a string
+    [InlineData("""{"result":{"rateLimits":{}}}""")]                 // no id
+    [InlineData("""{"id":2,"result":"nope"}""")]                     // result not an object
+    [InlineData("""{"id":2,"result":{"rateLimits":{}}""")]           // truncated line
+    public void AnythingThatIsNotTheAnswerIsSkipped(string? stdout)
+    {
+        Assert.Null(CodexAppServerUsage.ResultFrom(stdout));
+    }
+
+    // The request ids have to agree with what ResultFrom looks for, or the
+    // read silently finds nothing forever.
+    [Fact]
+    public void TheRequestAsksForTheIdTheReaderMatchesOn()
+    {
+        Assert.Contains($"\"id\":{CodexAppServerUsage.RequestId}",
+                        CodexAppServerUsage.RateLimitsRequest);
+        Assert.Contains("account/rateLimits/read", CodexAppServerUsage.RateLimitsRequest);
+        Assert.Contains("\"method\":\"initialize\"", CodexAppServerUsage.InitializeRequest);
+        Assert.DoesNotContain($"\"id\":{CodexAppServerUsage.RequestId}",
+                              CodexAppServerUsage.InitializeRequest);
+    }
+
+    // The end of the search: a PATH that exists, is looked through, and holds
+    // nothing. Distinct from the empty-PATH case, which returns earlier.
+    [Fact]
+    public void APathWithNoCodexInItIsExhaustedAndAnswersNull()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "empty-dir"));
+
+        Assert.Null(CodexBinary.Locate(
+            Path.Combine(_root, "home"),
+            Path.Combine(_root, "empty-dir"),
+            NoSystemInstalls));
+    }
+
+    // A PATH entry is the user's shell config, not anything this app controls.
+    // On .NET 10 a NUL in one no longer throws from Path.Combine — it simply
+    // fails File.Exists — so what is asserted is the outcome: the good
+    // directory after it still answers.
+    [Fact]
+    public void AMalformedPathEntryIsSteppedOver()
+    {
+        var good = Touch("elsewhere", "codex");
+        var searchPath = "bad\0entry" + Path.PathSeparator + Path.Combine(_root, "elsewhere");
+
+        Assert.Equal(
+            good,
+            CodexBinary.Locate(Path.Combine(_root, "home"), searchPath, NoSystemInstalls));
+    }
+
+    // The cached lookup. What it finds depends on the machine and is therefore
+    // not asserted — see ANullSearchPathFallsBackToTheEnvironmentWithoutThrowing
+    // for why. That it looks once and keeps the answer is about the code.
+    [Fact]
+    public void ThePathPropertyIsLookedUpOnceAndCached()
+    {
+        var first = CodexBinary.Path;
+        var second = CodexBinary.Path;
+
+        Assert.Equal(first, second);
+    }
+
+    // The whole JSON-RPC line, handed straight to the parser without ResultFrom
+    // pulling the result out first. Unwrap claims to accept this shape, and a
+    // claim in a comment that nothing exercises is how the next person gets a
+    // silent null — the same class of gap CB-83 was.
+    [Fact]
+    public void TheWholeResponseLineIsUnwrappedWithoutHelp()
+    {
+        var line = """
+        {"jsonrpc":"2.0","id":2,"result":{"rateLimits":{"primary":{"usedPercent":73,"windowDurationMins":300},"planType":"pro"}}}
+        """;
+
+        var usage = CodexUsageParse.FromRateLimits(
+            line, null, "codex", DateTimeOffset.Parse("2026-09-02T22:30:00Z"));
+
+        Assert.True(usage!.Available);
+        Assert.Equal(73.0, usage.Session!.Percent);
+        Assert.Equal("pro", usage.SubscriptionType);
+    }
+
+    // Every arm of ResultFrom's guards. The stream is an experimental protocol
+    // that will grow rows this app has never seen, so "skipped" has to mean
+    // skipped rather than "threw" or "matched something else" — and each of
+    // these shapes reaches a different one of those guards.
+    [Theory]
+    // A blank line between real rows: the length check, not the brace check.
+    [InlineData("\n\n{\"id\":2,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":5}}}}\n\n")]
+    // Leading whitespace and a row that is not JSON at all, before the answer.
+    [InlineData("noise \"result\" noise\n  {\"id\":2,\"result\":{\"rateLimits\":{\"usedPercent\":0,\"primary\":{\"usedPercent\":5}}}}")]
+    public void TheAnswerIsStillFoundPastRowsThatAreNotIt(string stdout)
+    {
+        Assert.NotNull(CodexAppServerUsage.ResultFrom(stdout));
+    }
+
+    [Theory]
+    // Not an object, and rejected before parsing by the leading-brace check.
+    [InlineData("[\"result\"]")]
+    // Carries the literal "result" as a *value*, so it survives the cheap
+    // substring reject and reaches the property lookup, which finds nothing.
+    // (`{"notresult":1}` would not: the quote sits before `not`, so the string
+    // `"result"` never appears and the row is dropped a step earlier.)
+    [InlineData("""{"id":2,"other":"result"}""")]
+    // The id matches and `result` is present but is not an object.
+    [InlineData("""{"id":2,"result":[1,2]}""")]
+    public void ARowThatOnlyLooksLikeTheAnswerIsSkipped(string stdout)
+    {
+        Assert.Null(CodexAppServerUsage.ResultFrom(stdout));
+    }
+
+    // ---- both spellings, and the arms either side of them ----------------
+
+    // `hasCredits: true` with no cap. A remaining balance is not a percentage,
+    // so it is a stated absence rather than a ring — and it is reached through
+    // the camelCase spelling here, the snake_case one in the rollout tests.
+    [Fact]
+    public void CreditsWithoutACapAreNotDrawnAsAGauge()
+    {
+        var json = """
+        {"rateLimits":{"primary":{"usedPercent":5,"windowDurationMins":300},"credits":{"hasCredits":true,"unlimited":false,"balance":4200}}}
+        """;
+
+        var usage = CodexUsageParse.FromRateLimits(json, null, "codex", DateTimeOffset.UtcNow);
+
+        Assert.Equal("credits_no_cap", usage!.Extra!.DisabledReason);
+        Assert.Null(usage.Extra.RingPercent);
+    }
+
+    // A window with no duration under either spelling is the week, not the
+    // five-hour ring: SessionWindowMinutes only claims a window that says it is
+    // short, and inventing "short" for a window that said nothing would put the
+    // wrong number on the inner ring.
+    [Theory]
+    [InlineData("""{"rateLimits":{"primary":{"usedPercent":9}}}""")]
+    [InlineData("""{"rateLimits":{"primary":{"usedPercent":9,"windowDurationMins":"soon"}}}""")]
+    public void AWindowThatDoesNotSayHowLongItIsCountsAsTheWeek(string json)
+    {
+        var usage = CodexUsageParse.FromRateLimits(json, null, "codex", DateTimeOffset.UtcNow);
+
+        Assert.Null(usage!.Session);
+        Assert.Equal(9.0, usage.Weekly!.Percent);
+    }
+
+    // The JSON-RPC envelope, but not the one this reads: a `result` that is not
+    // an object, and one with no rateLimits in it. Both fall through to the
+    // other shapes rather than being mistaken for an answer.
+    [Theory]
+    [InlineData("""{"id":2,"result":"nope","rate_limits":{"primary":{"used_percent":3,"window_minutes":300}}}""")]
+    [InlineData("""{"id":2,"result":{"userAgent":"x"},"rate_limits":{"primary":{"used_percent":3,"window_minutes":300}}}""")]
+    [InlineData("""{"result":{"rateLimits":"not an object"},"rate_limits":{"primary":{"used_percent":3,"window_minutes":300}}}""")]
+    public void AResultThatIsNotAnAnswerFallsThroughToTheOtherShapes(string json)
+    {
+        var usage = CodexUsageParse.FromRateLimits(json, null, "codex", DateTimeOffset.UtcNow);
+
+        Assert.Equal(3.0, usage!.Session!.Percent);
+    }
+
+    // A duration that is a number but not an int — the arm between "no
+    // duration" and "a duration this understands". It counts as the week,
+    // because a window that cannot be read as short is not claimed to be.
+    [Fact]
+    public void AFractionalWindowDurationIsNotReadAsTheFiveHourRing()
+    {
+        var json = """
+        {"rateLimits":{"primary":{"usedPercent":9,"windowDurationMins":300.5}}}
+        """;
+
+        var usage = CodexUsageParse.FromRateLimits(json, null, "codex", DateTimeOffset.UtcNow);
+
+        Assert.Null(usage!.Session);
+        Assert.Equal(9.0, usage.Weekly!.Percent);
+    }
+
+    // A credits object with neither spelling of has_credits in it. "Not stated"
+    // is not "yes", so it reads as no extra usage rather than as a budget the
+    // account may not have.
+    [Fact]
+    public void CreditsThatDoNotSayWhetherThereAreAnyCountAsNone()
+    {
+        var json = """
+        {"rateLimits":{"primary":{"usedPercent":9,"windowDurationMins":300},"credits":{"unlimited":false}}}
+        """;
+
+        var usage = CodexUsageParse.FromRateLimits(json, null, "codex", DateTimeOffset.UtcNow);
+
+        Assert.Equal("no_credits", usage!.Extra!.DisabledReason);
+        Assert.False(usage.Extra.Enabled);
+    }
+}

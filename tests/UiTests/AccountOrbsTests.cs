@@ -340,4 +340,137 @@ public class AccountOrbsTests
 
         Assert.Equal(0, source.Reads);
     }
+
+    // --- the poll cadence (CB-122) -----------------------------------------
+    // AccountOrbs' half of the adaptive interval: the rule itself is
+    // UsagePollCadence's and is covered per-outcome in tests/UnitTests, so what
+    // these drive is the wiring — that Apply compares against the reading it is
+    // about to overwrite, and that the answer reaches _interval.
+    //
+    // Driven through Apply rather than Tick on purpose. Tick would have to be
+    // waited out in real seconds, and the thing worth asserting is the decision
+    // rather than the sleeping.
+
+    [AvaloniaFact]
+    public void APollThatMovesNothingBacksTheCadenceOff()
+    {
+        var orbs = new AccountOrbs(new FakeUsageSource());
+        var reading = Usage(null, "board", weekly: 40);
+
+        // First reading of an account is always a change — there is nothing to
+        // compare it to — so this lands on Fast rather than doubling.
+        orbs.Apply(new[] { reading }, Now);
+        Assert.Equal(UsagePollCadence.Fast, orbs.PollInterval);
+
+        // The same numbers again, five minutes later. ReadAt has moved and the
+        // record is therefore unequal; the rings have not, so this must back off.
+        orbs.Apply(new[] { reading with { ReadAt = Now.AddMinutes(5) } }, Now.AddMinutes(5));
+        Assert.Equal(TimeSpan.FromSeconds(120), orbs.PollInterval);
+
+        orbs.Apply(new[] { reading with { ReadAt = Now.AddMinutes(10) } }, Now.AddMinutes(10));
+        Assert.Equal(TimeSpan.FromSeconds(240), orbs.PollInterval);
+
+        orbs.Apply(new[] { reading with { ReadAt = Now.AddMinutes(15) } }, Now.AddMinutes(15));
+        Assert.Equal(UsagePollCadence.Slow, orbs.PollInterval);
+
+        // ...and stays there rather than climbing past it.
+        orbs.Apply(new[] { reading with { ReadAt = Now.AddMinutes(20) } }, Now.AddMinutes(20));
+        Assert.Equal(UsagePollCadence.Slow, orbs.PollInterval);
+    }
+
+    [AvaloniaFact]
+    public void APollThatMovesARingReturnsToTheFastCadence()
+    {
+        var orbs = new AccountOrbs(new FakeUsageSource());
+        var reading = Usage(null, "board", weekly: 40);
+
+        orbs.Apply(new[] { reading }, Now);
+        for (var quiet = 0; quiet < 4; quiet++)
+            orbs.Apply(new[] { reading with { ReadAt = Now.AddMinutes(quiet + 1) } }, Now);
+
+        Assert.Equal(UsagePollCadence.Slow, orbs.PollInterval);
+
+        // The burst: one point of weekly, which is 3.6 degrees of arc and the
+        // smallest change the API can report.
+        orbs.Apply(new[] { Usage(null, "board", weekly: 41) }, Now);
+
+        Assert.Equal(UsagePollCadence.Fast, orbs.PollInterval);
+    }
+
+    // Any one account moving keeps the whole poll fast. The sources are read
+    // together in a single CompositeUsageSource.Read(), so there is no such
+    // thing as polling one of them harder than the others — and an account
+    // sitting still must not be able to hold back one that is climbing.
+    [AvaloniaFact]
+    public void OneMovingAccountKeepsTheCadenceFastForAllOfThem()
+    {
+        var orbs = new AccountOrbs(new FakeUsageSource());
+        var still = Usage(null, "board", weekly: 40);
+        var moving = Usage("/Users/x/.claude-work", "work", weekly: 20);
+
+        orbs.Apply(new[] { still, moving }, Now);
+        orbs.Apply(new[] { still, moving }, Now);
+        orbs.Apply(new[] { still, moving }, Now);
+        orbs.Apply(new[] { still, moving }, Now);
+        Assert.Equal(UsagePollCadence.Slow, orbs.PollInterval);
+
+        orbs.Apply(new[] { still, Usage("/Users/x/.claude-work", "work", weekly: 21) }, Now);
+
+        Assert.Equal(UsagePollCadence.Fast, orbs.PollInterval);
+    }
+
+    // An orb whose account answered nothing keeps the reading it had (the
+    // existing keep-stale rule), and a poll where *nobody* answered is not news
+    // about usage — so it must back off rather than hold the fast cadence on
+    // the strength of an empty answer.
+    [AvaloniaFact]
+    public void APollThatAnsweredNothingBacksOff()
+    {
+        var orbs = new AccountOrbs(new FakeUsageSource());
+
+        orbs.Apply(new[] { Usage(null, "board") }, Now);
+        Assert.Equal(UsagePollCadence.Fast, orbs.PollInterval);
+
+        orbs.Apply(Array.Empty<AccountUsage>(), Now);
+
+        Assert.Equal(TimeSpan.FromSeconds(120), orbs.PollInterval);
+    }
+
+    // A freshly constructed AccountOrbs has not polled at all, and must not
+    // assume the machine is quiet: starting at Slow would let a launch sleep
+    // through the first five minutes of a burst.
+    [AvaloniaFact]
+    public void ANewInstanceStartsFast()
+    {
+        Assert.Equal(UsagePollCadence.Fast, new AccountOrbs(new FakeUsageSource()).PollInterval);
+    }
+
+    // ...and so does a switch that has just been turned on, for the same
+    // reason the poll floor is cleared alongside it.
+    //
+    // The settings are pinned explicitly rather than inherited, and that is not
+    // ceremony: SyncToSettings closes everything and returns early when no
+    // source is enabled, so without this the test asserts on a line it never
+    // reached. It passed in Debug and failed in Release on the first run,
+    // because Release reorders a parallel suite and a sibling case had left
+    // every usage flag off — the exact Debug/Release divergence CLAUDE.md
+    // describes, fixed by making the test independent of what else ran rather
+    // than by loosening it.
+    [AvaloniaFact]
+    public void SyncToSettingsReturnsToTheFastCadence()
+    {
+        ClaudeBuddySettings.ReloadForTests();
+        ClaudeBuddySettings.AccountUsageEnabled = true;
+
+        var orbs = new AccountOrbs(new FakeUsageSource());
+        var reading = Usage(null, "board");
+
+        orbs.Apply(new[] { reading }, Now);
+        for (var quiet = 0; quiet < 4; quiet++) orbs.Apply(new[] { reading }, Now);
+        Assert.Equal(UsagePollCadence.Slow, orbs.PollInterval);
+
+        orbs.SyncToSettings(visible: false);
+
+        Assert.Equal(UsagePollCadence.Fast, orbs.PollInterval);
+    }
 }

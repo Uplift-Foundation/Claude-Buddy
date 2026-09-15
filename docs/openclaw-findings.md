@@ -1,8 +1,8 @@
 # OpenClaw gateway — spike findings
 
 Everything here was measured against one real gateway — OpenClaw **2026.7.1-2**
-(`0790d9f`), protocol **4**, running on a Mac mini at `198.51.100.127`, probed
-from a MacBook at `198.51.100.189` on the same subnet — unless it says otherwise.
+(`0790d9f`), protocol **4**, running on a Mac mini on the LAN, probed
+from a MacBook on the same subnet — unless it says otherwise.
 Where something is assumed rather than observed, it says so.
 
 The short version, in the order it was discovered:
@@ -31,11 +31,11 @@ The plan assumed a loopback-only gateway reached through
 | `gateway.mode` | `local` |
 | `gateway.tls.enabled` | `true`, cert `~/.openclaw/tls-cert.pem` |
 | TCP from the laptop | open, ~3 ms |
-| `https://198.51.100.127:18789/` | 200, serves the Control UI |
+| `https://198.51.100.10:18789/` | 200, serves the Control UI |
 | `http://…` (plain) | `curl: (52) Empty reply` — TLS only |
 | WebSocket upgrade | **101 on every path tried** (`/`, `/ws`, `/gateway`, `/api/ws`, `/socket`) |
 
-So the client connects directly to `wss://198.51.100.127:18789/`. No child
+So the client connects directly to `wss://198.51.100.10:18789/`. No child
 process, no port allocation, no orphan sweep, no `ControlMaster`/
 `ExitOnForwardFailure` hazards — the entire `SshTunnel` component and its
 shutdown-hook story can be deleted from the plan.
@@ -87,7 +87,7 @@ Ed25519 — with the WebSocket upgrade hand-rolled over it and handed to
 ### The served certificate is not the configured one
 
 `gateway.tls.cert` points at `~/.openclaw/tls-cert.pem`, an mkcert leaf
-(`O=mkcert development certificate`, SAN `localhost, 198.51.100.127, 127.0.0.1`,
+(`O=mkcert development certificate`, SAN `localhost, 198.51.100.10, 127.0.0.1`,
 sha256 `48911757…`). **The listener does not serve it.** What it actually
 presents is self-signed with no SAN at all:
 
@@ -122,10 +122,21 @@ development, so a literal in the code would have shipped broken. The client
 trusts what it sees on the first connection and stores it in
 `openclawFingerprint`, which is why this change cost nothing to absorb. Skipping
 name validation also still stands, and for a second reason now — the mkcert leaf
-does carry a SAN, but it names `198.51.100.127`, so validation would break the
+does carry a SAN, but it names `198.51.100.10`, so validation would break the
 moment the gateway moved to another address.
 
 Both fingerprints are kept above because the *variability* is the finding.
+
+**Correcting PR #168's scrub claim.** That PR's description said "no credential,
+token, key or fingerprint was found anywhere in the tree." Read next to this
+section, that is too wide: the two sha256 fingerprints just above are exactly
+what the phrase says isn't here. They are not the mistake — a certificate
+fingerprint is public key material, the value you pin *against*, not a value
+that grants access on its own; publishing one is how pinning gets verified, not
+a leak. What the scrub actually found and removed was **secrets** — an account
+id, message text, filenames tied to a real conversation — and the claim should
+have said that, not the broader word "fingerprint." Nothing here was rescrubbed
+as a result; the fingerprints stay, on purpose, for the reason two paragraphs up.
 
 **Method note:** an earlier round of these probes used `timeout 10 openssl …`.
 macOS has no `timeout`, so those commands never ran and their empty output read
@@ -352,7 +363,7 @@ here. A session with `hasActiveRun` should be exempt from pruning, the same way
 ### The fields that matter
 
 ```
-sessionKey        agent:main:discord:direct:100000000000000001
+sessionKey        agent:main:discord:direct:200000000000000001
                   agent:alexis:main | agent:main:cron:<uuid>
                   -> "agent:<name>:<surface>[:<type>:<id>]"; the agent name is
                      in the key and nowhere else useful
@@ -374,7 +385,7 @@ colliding with a local checkout of the same path — an OpenClaw session has no
 directory to collide with.
 
 Naming an orb: `origin.label` first, then `label`, then the agent name parsed out
-of `sessionKey`. The raw labels are workmanlike (`wtvamp user id:2467…`), so the
+of `sessionKey`. The raw labels are workmanlike (`some-user user id:1000…`), so the
 agent name plus surface (`alexis · discord`) may read better than either.
 
 ## A live turn: the state signal is the event stream, not the session list
@@ -486,8 +497,8 @@ matters.
 Names alone still under-identify: one agent commonly holds a DM with you, a DM
 with someone else and two channels at once, all `agent:<id>:discord:*`. The
 distinguishing part is `origin.label`, which is written for a log —
-`"#general channel id:100000000000000003"`, `"wtvamp user id:2467…"` — and
-cleans up to `#general` and `wtvamp` by cutting at `" id:"` and dropping the
+`"#general channel id:1900000000000000001"`, `"riverbend user id:2000…"` — and
+cleans up to `#general` and `riverbend` by cutting at `" id:"` and dropping the
 noun before it.
 
 ## Replying to a cron session works
@@ -575,9 +586,9 @@ everything it has in the first page and says so:
 
 | session | limit | returned | `totalMessages` | `hasMore` | span |
 | --- | --- | --- | --- | --- | --- |
-| `agent:kubernetes:…:100000000000000004` | 40 | 33 | — | false | 10–16 Aug |
+| `agent:kubernetes:…:1900000000000000003` | 40 | 33 | — | false | 10–16 Aug |
 | same | 500 | **33** | — | false | 10–16 Aug |
-| `agent:social:…:100000000000000003` | 500 | **56** | **104** | false | 17–18 Aug |
+| `agent:social:…:1900000000000000001` | 500 | **56** | **104** | false | 17–18 Aug |
 
 Asking for 500 returns the same 33 as asking for 40, and any `offset` past the
 end returns zero. So the client already receives the whole of what exists after
@@ -607,7 +618,7 @@ Read off the same probe, and better than what is currently derived:
 chatType      "channel" | "direct"     -- top level, not only inside origin
 kind          "group" | …              -- the gateway's own classification
 groupChannel  "#general"               -- the channel name, plainly
-displayName   "discord:100000000000000002#general"
+displayName   "discord:1900000000000000004#general"
 archived, unread, pinned, space, startedAt, endedAt, status
 ```
 
@@ -634,3 +645,65 @@ nouns. `chatType` at the top level is a more reliable source for
 `gateway.tailscale.mode: "off"`. Neither affects this design, but the first
 suggests OpenClaw's own remote story is ssh-based, which is presumably where the
 plan's original assumption came from.
+
+## Non-goals — measured, and deliberately not chased
+
+Two categories of residue PR #168 left behind on purpose, re-measured here so
+the number stops drifting between mentions. Both are occurrence counts — a
+plain `grep -c` undercounts a line that repeats the value, so these are
+`grep -io | wc -l`. Case-insensitivity is load-bearing, not decoration: on
+`ddb32c2`, `host-mbp` matched case-sensitively is 3 files / 3 occurrences;
+matched case-insensitively it's 7 files / 18 occurrences, because the same
+host gets typed in more than one case across commits — a method that doesn't
+say `-i` gets a different number than the one below.
+
+A record that states the occurrence count of a value also has to exclude its
+*own* mention of that value, or committing the record changes the very figure
+it commits — this section's own row is not residue, it's the record talking
+about the residue, and a count that doesn't say so cannot be self-consistent.
+That exclusion is narrow, though: it removes only this document's own line,
+not every deliberate mention elsewhere. The clone-owner warning in
+`CLAUDE.md`/`AGENTS.md`, for instance, stays counted — it is exactly the kind
+of occurrence this non-goal is a decision about, not evidence about the
+record itself. Excluding it too would look more careful and measure the wrong
+thing, which is precisely the mistake that produced a 27 for the figure below
+where the correct count is 28.
+
+**Home paths.** `/Users/user`, on `ddb32c2`, excluding only this
+document's own mention:
+
+| Ref | Files (any type) | Of which `.cs` | Occurrences |
+| --- | --- | --- | --- |
+| `933ffb9` | 11 | 8 | 28 |
+| `808119c` | 12 | 9 | 29 |
+| `ddb32c2` | 11 | 8 | 28 |
+
+It has moved by a file and an occurrence between refs, and not in one
+direction — ordinary development touching path examples, neither a scrub nor
+a regression. That non-monotonic drift is the actual argument for citing the
+ref alongside any count at all: a number with no ref attached is already
+stale by the time it's read, and three different figures for this exact
+residue have circulated for that reason.
+
+Not chased, and not going to be: a home path reveals a local account name, not
+a credential — it grants nothing on its own. It appears mostly in path examples
+that are useful documentation of real shapes (`workspace-<agent>/outputs/...`
+depths, for instance), and the repository's commit metadata already carries the
+author's real name and email on every commit, permanently — scrubbing it from
+path strings conceals nothing `git log` doesn't already disclose. Chasing it
+across a dozen files would churn far more diff than it protects.
+
+**Machine hostnames.** LAN hostnames of a private network, on `ddb32c2`,
+excluding only this document's own mention:
+
+| Hostname | Files | Occurrences |
+| --- | --- | --- |
+| `avatar.internal` | 6 | 9 |
+| `host-mbp` | 6 | 17 |
+| `host-mac-mini` | 1 | 6 |
+
+Same reasoning as the home paths: a LAN hostname is not a credential, it names
+a machine on a private network with no route to it from outside, and it is
+load-bearing in examples about peer discovery and multi-machine behaviour —
+including the mkcert issuer strings quoted earlier in this file. Left alone for
+the same cost/benefit reason.

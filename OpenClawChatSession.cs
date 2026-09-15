@@ -32,7 +32,59 @@ namespace ClaudeBuddy
         // value this becomes. Defaulted, because only the OpenClaw history
         // parser is in a position to answer it and every other producer of a
         // HistoryTurn would otherwise have to write `false` to say nothing.
-        bool Mine = false);
+        bool Mine = false,
+
+        // The picture itself, when the block carried it inline rather than
+        // naming somewhere to fetch it from. This is the shape this gateway
+        // actually emits — `{type:"image", data:"<base64>", mimeType:...}`
+        // with no url at all (CB-91) — so a turn generally has *either* this
+        // or ImageUrl, never both. Defaulted for the same reason Mine is:
+        // only TurnsFromHistory is in a position to fill it in.
+        byte[]? ImageBytes = null,
+
+        // The clean path behind ImageUrl, when ImageUrl is one of the
+        // gateway's own assistant-media requests (CB-109). ImageUrl is the
+        // finished, identity-bearing url and is fetched verbatim; this is the
+        // human-readable file it names, carried so the panel can put it in the
+        // tooltip on a refusal without unescaping it back out of a query
+        // string. Same category of value ImageAlt already holds — a basename
+        // derived from this very path — only whole rather than lossy.
+        //
+        // Null for a picture that did not come from that route at all: an
+        // image block carrying its own url, or one carrying inline bytes.
+        // Defaulted, and trailing, for the same reason Mine and ImageBytes
+        // are — only the arms of TurnsFromHistory that build such a request
+        // are in a position to fill it in. A tenth field on a record struct
+        // that became a record precisely so a tenth field would not mean
+        // rewriting every producer; this is that cost being paid rather than
+        // worked around.
+        string? ImageSourcePath = null,
+
+        // CB-115: which cron job might be able to recover this turn's
+        // picture, when the message named `openclawAutomation` with kind
+        // "cron" and neither arm above resolved anything — the delivered-
+        // mirror and named-path arms both `continue` before this field is
+        // ever set, so a turn only ever carries it alongside no picture,
+        // never instead of one it already has. Whether the message's text is
+        // actually worth a lookup (the trigger's second conjunct — an
+        // image-shaped trailing token, not just any cron reply) is decided
+        // later, in OpenClawSessions.FetchHistoryPageAsync, against this same
+        // Text — kept out of TurnsFromHistory so that method stays a pure
+        // read of one message with no opinion on what counts as
+        // image-shaped. See OpenClawCronRecovery's header for the full
+        // trigger and why it is gated this way.
+        OpenClawAutomation? Automation = null,
+
+        // CB-116: whether a *failed* fetch for this turn's picture is worth
+        // explaining with a visible note — see MediaConfidence, next to
+        // ChatRole in RemoteChat.cs, for the full reasoning. Decided by
+        // TurnsFromHistory (and, for a CB-115 recovery, by
+        // FetchHistoryPageAsync) at the point each arm already knows the
+        // candidate's provenance; nothing downstream re-derives it from the
+        // text. Defaults High so an arm with no opinion — an inline image
+        // block, a turn built outside this parser — keeps today's behaviour:
+        // a failure explains itself unless something here says not to.
+        MediaConfidence Confidence = MediaConfidence.High);
 
     // One OpenClaw session, as something the chat panel can talk to.
     //
@@ -56,6 +108,11 @@ namespace ClaudeBuddy
         // to become two turns — appending one to the other would produce a
         // paragraph that says the same thing twice in different voices.
         private string? _streamingKind;
+
+        // Turns already asked about, or being asked about — so a streaming
+        // snapshot that still carries the marker on its next delta doesn't
+        // fire a second gateway round trip for the same picture.
+        private readonly HashSet<ChatTurn> _pendingImageChecks = new();
 
         public OpenClawChatSession(string sessionId, string gatewayKey, string displayName)
         {
@@ -203,11 +260,240 @@ namespace ClaudeBuddy
                 };
                 _streamingKind = kind;
                 Add(_streaming);
+            }
+            else
+            {
+                _streaming.Text = text;
+                TurnUpdated?.Invoke(_streaming);
+            }
+
+            // A live snapshot never carries the picture itself — only a
+            // TurnsFromHistory read of chat.history does (see
+            // OpenClawSessions.BestImageMatch) — so a reply that mentions an
+            // attachment is worth asking the gateway about, once, rather than
+            // leaving it as text-only until the panel happens to reload.
+            if (text.Contains(OpenClawSessions.MediaAttachedMarker, StringComparison.Ordinal))
+            {
+                TryResolveLiveImage(_streaming);
                 return;
             }
 
-            _streaming.Text = text;
-            TurnUpdated?.Invoke(_streaming);
+            // A picture the agent generated itself and named by its own path
+            // on the gateway host — see LocalMediaPathFrom's own comment for
+            // why this is a second, distinct convention from the marker
+            // above rather than the same one.
+            var localPath = OpenClawSessions.LocalMediaPathFrom(text);
+            if (localPath is not null)
+            {
+                var candidate = localPath.Value;
+
+                // No page to harvest a real directory from while streaming
+                // (see ResolveLocalMediaPath's own comment) — a bare filename
+                // gets the shared-media-directory guess, the same one the
+                // history read falls back to when its own harvest misses.
+                // CB-115: only when that resolved to a real path. A bare
+                // filename resolves to the shared-media *guess*, and asking
+                // for it here would be worse than useless — TryResolveLocalMedia
+                // and TryResolveLiveImage share the one-shot _pendingImageChecks
+                // guard, so a guess that is about to 404 would consume this
+                // turn's single attempt and the run-record recovery below would
+                // never run. That is exactly how this feature was inert for the
+                // pictures it exists for.
+                //
+                // So the authoritative source goes first: a rooted path is
+                // fetched directly, a bare filename falls through to the run
+                // record, and nothing is lost either way — if the recovery
+                // finds nothing, the refetched page's own named-path arm
+                // applies the same guess this branch would have.
+                var resolved = OpenClawSessions.ResolveLocalMediaPath(candidate.Path, null);
+                if (resolved != OpenClawSessions.SharedMediaDir + candidate.Path)
+                {
+                    // CB-116: no openclawAutomation to consult here — a live
+                    // "agent" event carries only the streamed text, not the
+                    // message envelope TurnsFromHistory reads it off. So the
+                    // only provenance available live is whether the agent
+                    // wrote an explicit "MEDIA:" line; a trailing-token match
+                    // with no automation to confirm it is tiered Low, the same
+                    // conservative default a history read would give the
+                    // identical text on a non-automation turn.
+                    var confidence = candidate.Explicit
+                        ? MediaConfidence.High
+                        : MediaConfidence.Low;
+
+                    TryResolveLocalMedia(_streaming, resolved, confidence);
+                    return;
+                }
+            }
+
+            // CB-115: a cron-delivered picture whose transcript has already
+            // lost its directory — neither arm above could have resolved it,
+            // since it either shares its line with a caption (failing
+            // LocalMediaPathFrom's whole-trimmed-text rule) or carries no
+            // MEDIA: prefix at all (the delivery route strips both). Reusing
+            // TryResolveLiveImage rather than adding a fourth live-path arm:
+            // the real recovery — reading openclawAutomation.kind off the
+            // *actual* chat.history message, calling cron.runs, matching the
+            // basename — happens identically whether this page is fetched
+            // for the marker above or for this, inside
+            // OpenClawSessions.FetchHistoryPageAsync's turn-by-turn pass (see
+            // OpenClawCronRecovery's header for the full trigger). This check
+            // only decides whether asking is worth it at all — the same job
+            // the marker check above already does for its own case — so a
+            // reply that merely ends in something image-shaped costs one
+            // chat.history refetch and nothing more if it turns out not to be
+            // a recoverable cron picture.
+            if (OpenClawCronRecovery.CandidateBasenameFrom(text) is not null)
+            {
+                TryResolveLiveImage(_streaming);
+            }
+        }
+
+        // Best-effort and one-shot per turn, the same shape as TurnView's own
+        // LoadImage: a picture that doesn't resolve is a picture that doesn't
+        // resolve, and the text beside it still reads. Fetching the newest
+        // page rather than matching on anything in the event itself, because
+        // nothing in a live "agent" event ties back to a chat.history message
+        // — see BestImageMatch's own comment.
+        //
+        // No try/catch around the fetch: FetchPageAsync already swallows a
+        // gateway that will not answer and returns null, the same contract
+        // LoadOlderAsync already trusts without one of its own — adding a
+        // second catch here would only ever guard against nothing.
+        //
+        // No explicit Dispatcher.Post after the await: this runs under the
+        // app's own Avalonia SynchronizationContext, which already resumes an
+        // await's continuation on the UI thread — the same reason TurnView's
+        // LoadImage sets its own bound property directly.
+        private async void TryResolveLiveImage(ChatTurn turn)
+        {
+            if (!_pendingImageChecks.Add(turn)) return;
+
+            var page = await OpenClawSessions.FetchPageAsync(this, 0, CancellationToken.None);
+            if (page is null) return;
+
+            // Restricted to this turn's own role: a session's own
+            // chat.history mixes the agent's replies with everyone else's
+            // messages arriving as input to it (see OpenClawRoomChat's own
+            // header comment), and a picture someone else posted moments
+            // before or after the agent's reply is not the agent's picture —
+            // matching across roles would occasionally attribute the wrong
+            // one in a busy room.
+            var match = OpenClawSessions.BestImageMatch(page.Value.Turns, turn.Role, turn.At);
+            if (match is null) return;
+
+            // Whichever form the matched turn actually carries. On this
+            // gateway it is always the inline bytes (CB-91); the url arm is
+            // kept for a deployment that sends one instead. Setting only
+            // ImageUrl, as this did before, resolved to nothing at all here.
+            //
+            // No third arm for "neither": BestImageMatch only returns a turn
+            // that has one or the other, so restating that here would be a
+            // branch nothing could ever take.
+            if (match.Value.ImageBytes is { Length: > 0 } matchedBytes) turn.ImageBytes = matchedBytes;
+            else
+            {
+                // ImageSourcePath before ImageUrl, always. It is a plain
+                // property and raises nothing; ImageUrl's setter is what wakes
+                // the row up (see TurnView's PropertyChanged handler), so
+                // setting the url first would send it fetching before the path
+                // it needs to caption a refusal had arrived.
+                //
+                // Carried across rather than left null: the match came out of
+                // a TurnsFromHistory page for *this* session, so both the url
+                // and the path are already the right ones, and dropping the
+                // path here would mean a live reply's picture lost the ability
+                // to say why it did not load — which is what the history path
+                // does say (CB-93).
+                //
+                // Confidence travels with it for the same reason (CB-116):
+                // setting ImageUrl below is what wakes TurnView.LoadImage up
+                // (see its PropertyChanged handler), and that is where this
+                // value gets read. Leaving it at the turn's default here would
+                // silently promote whatever tier the matched turn actually
+                // carries to High.
+                turn.ImageSourcePath = match.Value.ImageSourcePath;
+                turn.Confidence = match.Value.Confidence;
+                turn.ImageUrl = match.Value.ImageUrl;
+            }
+
+            turn.ImageAlt = match.Value.ImageAlt;
+
+            // OpenClawRoomChat only rebuilds a room's merged view on this
+            // event (see its chat.TurnUpdated subscription) — the
+            // PropertyChanged the setters above already raised reaches a
+            // direct (non-room) panel through TurnView's own subscription,
+            // but a room's Rebuild() has to be asked separately.
+            TurnUpdated?.Invoke(turn);
+        }
+
+        // CB-88: an agent's own generated picture, named by its own path on
+        // the gateway host rather than fetchable by URL — fetched through the
+        // gateway's own read-scoped media route (see
+        // OpenClawSessions.FetchLocalMediaAsync), with LocalMediaPathFrom
+        // deciding what counts as such a reference. Same one-shot-per-turn
+        // guard as TryResolveLiveImage; the two never fire for the same turn
+        // since OnAgentText only ever detects one marker or the other.
+        //
+        // confidence travels from OnAgentText's own read of the candidate
+        // (CB-116) — carried in rather than re-derived from path, which by
+        // this point is already resolved and has lost whether it came from an
+        // explicit "MEDIA:" line or a bare trailing token.
+        private async void TryResolveLocalMedia(
+            ChatTurn turn, string path, MediaConfidence confidence)
+        {
+            if (!_pendingImageChecks.Add(turn)) return;
+
+            // Set before the fetch, the same order LoadImage's twin uses for
+            // ImageSourcePath: whoever knows the reason writes it down before
+            // anything that might act on it, rather than the panel asking a
+            // question this method already had the answer to.
+            turn.Confidence = confidence;
+
+            // The path *and* whose conversation named it (CB-109). This method
+            // is on the session, so GatewayKey is simply in hand — the seam
+            // was never missing here, only unused: the fetch below asked the
+            // gateway about a file without saying which agent's media policy
+            // to judge it against, and got a default agent's answer.
+            var media = new OpenClawMediaSource(path, GatewayKey);
+
+            var bytes = await OpenClawSessions.FetchLocalMediaAsync(media, CancellationToken.None);
+            if (bytes is { Length: > 0 })
+            {
+                turn.ImageBytes = bytes;
+
+                // See TryResolveLiveImage's identical comment: OpenClawRoomChat
+                // needs its own nudge to rebuild, beyond the PropertyChanged the
+                // setter above already raised.
+                TurnUpdated?.Invoke(turn);
+                return;
+            }
+
+            // CB-116: a low-confidence candidate — ordinary prose that merely
+            // ends in something filename-shaped, with nothing to say this
+            // turn was a real delivery — stays silent on a failure rather
+            // than asking the gateway why and showing a confident-sounding
+            // note for a picture that was never real. See
+            // MediaConfidence for the full reasoning.
+            if (confidence != MediaConfidence.High) return;
+
+            // CB-93: the fetch above came back empty, which used to leave the
+            // turn as bare "MEDIA:<path>" text with no explanation. No
+            // ShouldAskWhy guard needed here, unlike TurnView.LoadImage's
+            // history-path twin: this method is only ever reached with a
+            // path LocalMediaPathFrom already matched to the gateway's
+            // read-scoped media route, so there is no ordinary attachment
+            // url to protect against asking a meta question that has no
+            // answer.
+            // Asked against the same url the fetch above used, so the reason
+            // describes the request that actually failed. See
+            // FetchLocalMediaMetaAsync's own comment: an explanation asked
+            // with a different identity than the fetch does not fail, it lies.
+            var json = await OpenClawSessions.FetchLocalMediaMetaAsync(
+                media.Route, CancellationToken.None);
+            turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, media.Path);
+            turn.ImageNote = OpenClawMediaRefusal.Explain(json);
+
+            TurnUpdated?.Invoke(turn);
         }
 
         private void OnTool(JsonElement payload)
@@ -294,7 +580,19 @@ namespace ClaudeBuddy
             {
                 Role = t.Role,
                 Text = t.Text,
+
+                // Copied alongside ImageUrl, never instead of it: the url is
+                // what gets fetched, this is the file it names, and a turn
+                // that kept one without the other could no longer say why a
+                // picture did not load (CB-109).
+                ImageSourcePath = t.ImageSourcePath,
+
+                // CB-116: carried the same way — the tier TurnsFromHistory
+                // already worked out for this turn, not re-guessed here from
+                // its text. See ChatTurn.Confidence's own header.
+                Confidence = t.Confidence,
                 ImageUrl = t.ImageUrl,
+                ImageBytes = t.ImageBytes,
                 ImageAlt = t.ImageAlt,
                 At = t.At,
                 Speaker = t.Speaker,
@@ -324,7 +622,13 @@ namespace ClaudeBuddy
                 {
                     Role = turn.Role,
                     Text = turn.Text,
+
+                    // See PrependHistory's twin above for why this travels
+                    // with ImageUrl rather than being recovered from it.
+                    ImageSourcePath = turn.ImageSourcePath,
+                    Confidence = turn.Confidence,
                     ImageUrl = turn.ImageUrl,
+                    ImageBytes = turn.ImageBytes,
                     ImageAlt = turn.ImageAlt,
                     At = turn.At,
                     Speaker = turn.Speaker,

@@ -92,8 +92,15 @@ namespace ClaudeBuddy
         // Voices the user added themselves, kept deliberately *outside* Root: an
         // engine upgrade deletes and replaces the whole versioned directory, so
         // anything dropped in beside the bundled voices would vanish at the next
-        // release. Nothing creates this directory — it exists if someone made it,
-        // and the engine ignores a path that isn't there.
+        // release. The engine ignores a path that isn't there, so nothing here
+        // has to create it.
+        //
+        // One thing does, and only when it has something to put in it:
+        // VoiceBlends, writing a persona's blended voice (CB-136). That is the
+        // same promise from the other side rather than a change to it — a
+        // blend is a voice the app added, it must survive an engine upgrade
+        // exactly as a hand-added one does, and this is the directory that
+        // decision was made for.
         //
         // A Kokoro voice is a 510KB numpy array of style vectors for the one
         // model, so "adding a voice" really is just putting a file here. The name
@@ -517,7 +524,7 @@ namespace ClaudeBuddy
         // showing a stop button over silence.
         // Excluded from coverage: starts the side-car engine process.
         [ExcludeFromCodeCoverage]
-        public static Process? Start(string text, string? voice, Action? onSpeaking)
+        public static Process? Start(string text, string? voice, double? rate, Action? onSpeaking)
         {
             var engine = UsableEnginePath;
             if (engine is null || !File.Exists(ModelPath)) return null;
@@ -536,6 +543,16 @@ namespace ClaudeBuddy
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
+
+            // Absent rather than defaulted to "1": the engine already treats a
+            // missing --rate as its own default speed, so there is one fewer
+            // place a "1" meaning "unset" and a "1" meaning "explicitly
+            // normal speed" could be confused for each other.
+            if (rate is { } spoken)
+            {
+                startInfo.ArgumentList.Add("--rate");
+                startInfo.ArgumentList.Add(spoken.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
 
             var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
 

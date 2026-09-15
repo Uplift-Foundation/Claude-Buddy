@@ -31,7 +31,8 @@ public class AccountUsageScreenshots
         bool available = true,
         DateTimeOffset? readAt = null,
         string label = "board",
-        AccountUsageSource source = AccountUsageSource.ClaudeCode) =>
+        AccountUsageSource source = AccountUsageSource.ClaudeCode,
+        DateTimeOffset? observedAt = null) =>
         new(
             ConfigDir: null,
             Label: label,
@@ -41,7 +42,8 @@ public class AccountUsageScreenshots
             Weekly: weekly is null ? null : new UsageWindow(weekly.Value, Now.AddDays(3)),
             Extra: extra,
             ReadAt: readAt ?? Now,
-            Source: source);
+            Source: source,
+            ObservedAt: observedAt);
 
     private static AccountOrbWindow Orb(AccountUsage usage)
     {
@@ -204,6 +206,31 @@ public class AccountUsageScreenshots
         card.UpdateFrom(Usage(8, 85, spent), "board@example.org", Now);
 
         ScreenshotHelper.Capture(card, "usage-card-extra-spent.png");
+    }
+
+    // CB-83. The state a real Grok account was in: read a second ago, true a
+    // day and a half ago, and until this ticket drawn as though it were current
+    // — full brightness, "Last read 0m ago". Captured because the whole fix is
+    // a sentence and a dimming, and neither is reviewable from an assertion.
+    [AvaloniaFact]
+    public void TheCardForANumberThatIsOlderThanItLooks()
+    {
+        var card = new UsageCard();
+        card.UpdateFrom(
+            Usage(null, 44, source: AccountUsageSource.Grok,
+                  readAt: Now.AddSeconds(-1), observedAt: Now.AddHours(-38)),
+            "board@example.org", Now);
+
+        ScreenshotHelper.Capture(card, "usage-card-old-snapshot.png");
+    }
+
+    [AvaloniaFact]
+    public void AnOrbWearingANumberThatIsOlderThanItLooks()
+    {
+        ScreenshotHelper.Capture(
+            Orb(Usage(null, 44, source: AccountUsageSource.Grok,
+                      readAt: Now.AddSeconds(-1), observedAt: Now.AddHours(-38))),
+            "account-orb-old-snapshot.png");
     }
 
     [AvaloniaFact]

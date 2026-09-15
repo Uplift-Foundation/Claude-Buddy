@@ -120,7 +120,8 @@ namespace ClaudeBuddy
         UsageWindow? Weekly,
         ExtraUsage? Extra,
         DateTimeOffset ReadAt,
-        AccountUsageSource Source = AccountUsageSource.ClaudeCode)
+        AccountUsageSource Source = AccountUsageSource.ClaudeCode,
+        DateTimeOffset? ObservedAt = null)
     {
         // How long a reading is trusted before its orb is dimmed.
         //
@@ -132,7 +133,23 @@ namespace ClaudeBuddy
         // mean nobody has managed to ask.
         internal static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(15);
 
-        public bool IsStale(DateTimeOffset now) => now - ReadAt >= StaleAfter;
+        // When the number was *true*, as opposed to when this app looked.
+        //
+        // For the Claude Code poller the two are the same moment: it asks the
+        // CLI and the CLI answers about now, so ObservedAt is left null and this
+        // falls back to ReadAt. The Codex and Grok readings are different in
+        // kind — neither CLI can be asked, so both are read out of a file the
+        // CLI last wrote whenever it last ran, which may have been days ago.
+        //
+        // Keeping the two apart is the whole point. Before CB-83 both file
+        // pollers stamped ReadAt with UtcNow, which is honest about the read and
+        // a lie about the number: a Grok reading taken from a log line written
+        // 38 hours earlier could never go stale, never dimmed its orb, and had
+        // its card announce "Last read 0m ago". Everything downstream asks
+        // AsOf now, so an old number reads as old wherever it is drawn.
+        public DateTimeOffset AsOf => ObservedAt ?? ReadAt;
+
+        public bool IsStale(DateTimeOffset now) => now - AsOf >= StaleAfter;
 
         // What each ring should actually draw: the window, unless it has
         // expired, in which case nothing. Asked here rather than at each call

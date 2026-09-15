@@ -366,38 +366,24 @@ namespace ClaudeBuddy
         // internal for the same reason OrbsRows() above is: a test can drive
         // each row's control directly.
         //
-        // KNOWN BUG, found while writing SettingsWindowRowBuilderTests and left
-        // as-is rather than fixed here (CB-3 is a coverage ticket, not a bugfix
-        // one — see that test file's own comment): "Give each session a colour"
-        // is built *twice*, back to back, each its own Switch bound to the same
+        // CB-153: "Give each session a colour" used to be built twice, back to
+        // back, each its own Switch bound to the same
         // ClaudeBuddySettings.AutoColorSessions and the same OnAutoColorToggled
-        // handler, with two help strings that were each hand-edited slightly
-        // differently at some point (compare "that has none" / "with none",
-        // "so there its orb" / "so a Codex orb"). On screen this reads as one
-        // switch that happens to repeat its own explanation right below itself
-        // — easy to miss, and it is NOT harmless. This comment used to say the
-        // two copies cannot disagree because they share state; they can, and
-        // SettingsWindowCoverageTests now asserts it. They share the *setting*,
-        // not the control: each switch is built from the setting once, so
-        // flipping one writes the setting and leaves the other showing the old
-        // value until something rebuilds the window. Two switches sitting
-        // adjacent and reading differently is a visible inconsistency, not dead
-        // weight. Still clearly meant to be one row.
+        // handler, with two help strings hand-edited slightly differently at
+        // some point (compare "that has none" / "with none", "so there its
+        // orb" / "so a Codex orb"). On screen that read as one switch that
+        // happened to repeat its own explanation right below itself — and it
+        // was not harmless: the two copies shared the *setting*, not the
+        // control, so flipping one wrote the setting and left the other
+        // showing the old value until something rebuilt the window. Down to
+        // one row, which is what this was always meant to be; the surviving
+        // wording is the later, more polished of the two ("Codex orb" over
+        // "there its orb").
         internal Control[] OrbColourRows() => new[]
         {
             ColorRow("Idle", "idle"),
             ColorRow("Working", "generating"),
             ColorRow("Needs you", "waiting"),
-            Row("Give each session a colour",
-                Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
-                "Off, only a colour you set with /color shows on an orb. On, a session "
-                + "that has none is given one, from its working directory — so a project "
-                + "keeps its colour, and both CLIs agree on it. For Claude Code this "
-                + "writes the same record /color writes, so the colour survives a resume "
-                + "and the terminal agrees; /color still overrides it. Codex has nowhere "
-                + "to write one and shows none of its own, so there its orb takes the "
-                + "colour of its Codex section if it has one and the derived colour "
-                + "otherwise."),
             Row("Give each session a colour",
                 Switch(ClaudeBuddySettings.AutoColorSessions, OnAutoColorToggled),
                 "Off, only a colour you set with /color shows on an orb. On, a session "
@@ -510,7 +496,8 @@ namespace ClaudeBuddy
             ("Diamond", "diamond"),
             ("Star", "star"),
             ("Grid", "grid"),
-            ("Line", "line")
+            ("Horizontal Line", "line"),
+            ("Vertical Line", "vline")
         };
 
         internal Control ShapePicker() => ShapePicker(
@@ -922,6 +909,25 @@ namespace ClaudeBuddy
                 + "numbers; click it to keep the card up. Nothing here reads your login "
                 + "token."));
 
+            if (!ClaudeBuddySettings.GrokAccountUsageEnabled) return rows.ToArray();
+
+            rows.Add(Row("Keep Grok usage fresh automatically",
+                Switch(ClaudeBuddySettings.GrokAutoRefreshEnabled, OnGrokAutoRefreshToggled),
+                "Grok only reports its own usage once, when it starts, and never again for "
+                + "the life of that process — there is no lighter way to ask it. On, this "
+                + "starts and stops Grok in the background roughly every twenty minutes "
+                + "purely to force a fresh number, in a scratch folder rather than one of "
+                + "your projects. It runs for about eight seconds each time and shows no "
+                + "window: three cycles an hour, some twenty-four seconds of Grok running "
+                + "in total, and nothing appears on your screen or in your dock. Off, the "
+                + "orb keeps showing whatever the last real Grok session reported, dimming "
+                + "and dating it once that is more than fifteen minutes old — which, if you "
+                + "have not run Grok today, can be hours.\n\n"
+                + "This buys freshness, not movement. If you are not using Grok, a refresh "
+                + "will report the same percentage it did before, and that is the right "
+                + "answer rather than a failed one: the orb simply stops being dimmed and "
+                + "starts claiming the number is current."));
+
             return rows.ToArray();
         }
 
@@ -975,7 +981,26 @@ namespace ClaudeBuddy
         internal void OnGrokAccountUsageToggled(bool enabled)
         {
             ClaudeBuddySettings.GrokAccountUsageEnabled = enabled;
+
+            // Turning this off also turns auto-refresh off, rather than
+            // leaving it true underneath a row that just vanished. Auto-refresh
+            // starts the user's real Grok app in the background and is
+            // deliberately a second, separate opt-in for exactly that reason —
+            // leaving it flagged on while hidden would mean a later re-enable of
+            // this switch silently resumes it with no fresh consent, which is
+            // the one thing that separate-switch design was supposed to
+            // prevent. Only on-to-off writes anything here; turning usage orbs
+            // back on never flips auto-refresh back on, only makes its own row
+            // visible again.
+            if (!enabled) ClaudeBuddySettings.GrokAutoRefreshEnabled = false;
+
             SessionManager.Instance?.ReapplyAccountOrbs();
+            Rebuild();
+        }
+
+        internal void OnGrokAutoRefreshToggled(bool enabled)
+        {
+            ClaudeBuddySettings.GrokAutoRefreshEnabled = enabled;
         }
 
         internal Control[] OpenClawRows()

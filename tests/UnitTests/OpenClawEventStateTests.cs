@@ -113,14 +113,65 @@ namespace ClaudeBuddy.Tests
             Assert.Equal("generating", Listed(key)!.State);
         }
 
+        // CB-149: a background task's result landing in the conversation is not
+        // a session starting to generate a reply — OpenClawChatSession treats
+        // the identical event as Complete(), not as new streaming text. Without
+        // this, a task the gateway keeps touching (its own housekeeping
+        // re-upserting an old, permanently blocked record among them) pins the
+        // orb "generating" forever: that state is the only thing that survives
+        // both the recency filter and the stale-orb sweep.
+        [Fact]
+        public void ATaskUpsertDoesNotMarkASessionGenerating()
+        {
+            var key = Key();
+
+            Fire("task", key, action: "upserted");
+
+            Assert.Equal("idle", Listed(key)!.State);
+        }
+
+        [Fact]
+        public void ATaskUpsertStopsAnAlreadyRunningSession()
+        {
+            var key = Key();
+
+            Fire("agent", key);
+            Assert.Equal("generating", Listed(key)!.State);
+
+            Fire("task", key, action: "upserted");
+
+            Assert.Equal("idle", Listed(key)!.State);
+        }
+
+        // Any other task action is not the completion delivery, so it still
+        // counts as the session doing something.
+        [Fact]
+        public void AnotherTaskActionStillCountsAsWork()
+        {
+            var key = Key();
+
+            Fire("task", key, action: "created");
+
+            Assert.Equal("generating", Listed(key)!.State);
+        }
+
         // The gateway's own housekeeping is not evidence of work. A heartbeat tick
         // arrives for every session on a timer, so counting it would leave every
         // orb pulsing forever.
+        //
+        // "sessions.changed" (CB-152) joined this list live, not by inspection:
+        // a single reconnect fired it for a cron job's own internal session,
+        // the agent's main DM, and — the reproduction case — a channel with no
+        // real activity in three days, all in the same burst. It is the
+        // gateway telling every client "the roster changed, go re-fetch", not
+        // "this particular session just did something" — the opposite of what
+        // its shape (a plain sessionKey, same as a real turn event) suggests.
         [Theory]
         [InlineData("tick")]
         [InlineData("health")]
         [InlineData("presence")]
         [InlineData("connect.challenge")]
+        [InlineData("sessions.changed")]
         public void HousekeepingEventsAreNotEvidenceOfWork(string name)
         {
             var key = Key();
@@ -128,6 +179,33 @@ namespace ClaudeBuddy.Tests
             Fire(name, key);
 
             Assert.Equal("idle", Listed(key)!.State);
+        }
+
+        // The property that actually matters: this can't be used to keep a
+        // truly stale session artificially "recent" either, since it is what
+        // let the reproduction case in CB-152 evade the 15-minute active
+        // window for three days without ever showing "generating" — a
+        // "sessions.changed" burst on every reconnect kept refreshing
+        // LastSeen while Running stayed untouched, so the orb sat on screen
+        // dark rather than pulsing, which is what made it look unrelated to
+        // CB-149's fix at first.
+        [Fact]
+        public void ASessionsChangedEventDoesNotKeepAStaleSessionRecent()
+        {
+            ClaudeBuddySettings.OpenClawEnabled = true;
+            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+            ClaudeBuddySettings.OpenClawActiveWithinMinutes = 5;
+
+            var key = Key();
+            Fire("sessions.changed", key);
+
+            var stale = new DateTimeOffset(DateTime.UtcNow.AddHours(-1)).ToUnixTimeMilliseconds();
+            var json = "{\"sessions\":[{\"key\":" + JsonSerializer.Serialize(key)
+                       + ",\"chatType\":\"channel\",\"lastActivityAt\":" + stale + "}]}";
+
+            var (sessions, _) = OpenClawSessions.Parse(Json(json), DateTime.UtcNow);
+
+            Assert.DoesNotContain(sessions, s => s.Key == key);
         }
 
         [Fact]
@@ -212,6 +290,30 @@ namespace ClaudeBuddy.Tests
             var key = Key();
 
             Fire("cron", key, action: "finished");
+
+            ClaudeBuddySettings.OpenClawEnabled = true;
+            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;
+            ClaudeBuddySettings.OpenClawActiveWithinMinutes = 5;
+
+            var stale = new DateTimeOffset(DateTime.UtcNow.AddHours(-1)).ToUnixTimeMilliseconds();
+            var json = "{\"sessions\":[{\"key\":" + JsonSerializer.Serialize(key)
+                       + ",\"chatType\":\"channel\",\"lastActivityAt\":" + stale + "}]}";
+
+            var (sessions, _) = OpenClawSessions.Parse(Json(json), DateTime.UtcNow);
+
+            Assert.Contains(sessions, s => s.Key == key);
+            Assert.Equal("idle", sessions.First(s => s.Key == key).State);
+        }
+
+        // Same as the cron case above: the event that delivers a task's result
+        // still counts as activity, so a completion that lands seconds before a
+        // stale listing catches up does not vanish before anyone sees it.
+        [Fact]
+        public void TheEventThatDeliversATaskStillCountsAsActivity()
+        {
+            var key = Key();
+
+            Fire("task", key, action: "upserted");
 
             ClaudeBuddySettings.OpenClawEnabled = true;
             ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.WithChats;

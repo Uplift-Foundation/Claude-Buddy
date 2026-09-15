@@ -10,6 +10,7 @@ using Avalonia.Layout;
 using Avalonia.Controls.Documents;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 
 namespace ClaudeBuddy
@@ -18,17 +19,69 @@ namespace ClaudeBuddy
     // type in, and a mic. Opened by clicking an orb that represents a session
     // with no terminal to jump to — for those, this is where the click goes.
     //
-    // One instance, reused. Two panels would be two windows competing to be the
-    // key window, each one's dismiss-on-deactivate closing the other; a
-    // singleton makes "opening B closes A" correct by construction rather than
-    // emergent. What is worth keeping per session is the draft and the scroll
-    // position, and those live in a dictionary — a window is not a storage
-    // mechanism. The draft store isn't a nicety either: the panel hides whenever
-    // you switch apps, so without it every alt-tab would eat a half-typed
-    // sentence.
+    // One *transient* panel, reused. The rule used to be one panel full stop,
+    // and the argument for it was that two panels would be two windows
+    // competing to be the key window, each one's dismiss-on-deactivate closing
+    // the other. Read again, that argument is about dismiss-on-deactivate and
+    // not about windows: what it forbids is a second panel that hides the
+    // instant it loses focus. It says nothing about one that has been told to
+    // stay. So a pinned panel keeps its own window and opts out of Deactivated
+    // entirely, and everything not pinned still shares the single transient
+    // instance — "opening B closes A" remains correct by construction for
+    // exactly the panels it was ever true of.
+    //
+    // Two invariants hold the registry together, and every static entry point
+    // below is one of them being enforced somewhere. At most one unpinned
+    // panel: that is the paragraph above. At most one panel per session id:
+    // that is why OpenFor activates an existing pinned panel rather than
+    // binding the transient to a conversation already on screen, which would
+    // put one transcript in two windows that then disagree about it.
+    //
+    // What is worth keeping per session is the draft and the scroll position,
+    // and those live in a dictionary — a window is not a storage mechanism, and
+    // now that there can be several of them, one store keyed by session is what
+    // keeps a draft with its conversation rather than with whichever window
+    // happened to be typing it. The draft store isn't a nicety either: an
+    // unpinned panel hides whenever you switch apps, so without it every
+    // alt-tab would eat a half-typed sentence.
     public partial class ChatPanel : Window
     {
-        private static ChatPanel? _instance;
+        // Every live panel, pinned or not, in the order they were built.
+        //
+        // A list rather than the old single field because "which panel" is now
+        // a question with several answers — the transient one, the one showing
+        // a given session, the one a given orb owns — and each of those is a
+        // query over this rather than another field to keep in step with it.
+        // Panels add themselves at construction and drop out when their window
+        // closes; hiding the transient deliberately does not remove it, since
+        // the whole point of the transient is that it is reused.
+        private static readonly List<ChatPanel> Panels = new();
+
+        // Whether this panel has been told to stay. Almost the entire feature
+        // is this flag and the handful of places that read it: Deactivated,
+        // HideFor, RepositionFor, the header's drag, and what the close button
+        // means.
+        private bool _pinned;
+
+        // The panel that dismiss-on-deactivate still applies to, if there is
+        // one. Every caller that used to say "the panel" and mean the singleton
+        // means this: an orb about to move under it, an arrangement animation,
+        // a hide.
+        internal static ChatPanel? Transient => Panels.FirstOrDefault(p => !p._pinned);
+
+        // The panel showing a conversation, wherever it is. Distinct from
+        // Transient because a pinned panel is still the one place that session
+        // is on screen, and a caller asking "where is this conversation" must
+        // not be answered with a different one.
+        internal static ChatPanel? PanelFor(string sessionId) =>
+            Panels.FirstOrDefault(p => p._session?.SessionId == sessionId);
+
+        // For the calls that are genuinely about all of them — speech state and
+        // the text-scale slider, both of which are one global number that every
+        // open panel draws.
+        internal static IReadOnlyList<ChatPanel> All => Panels;
+
+        internal bool IsPinned => _pinned;
 
         private static readonly Dictionary<string, string> Drafts = new(StringComparer.Ordinal);
 
@@ -151,15 +204,42 @@ namespace ClaudeBuddy
                 foreach (var turn in _turns) turn.AvailableWidth = width;
             };
 
-            CloseButton.PointerPressed += (_, e) => { e.Handled = true; HideNow(); };
+            // Dismiss rather than HideNow: what the button means depends on
+            // whether this panel was told to stay. See Dismiss.
+            CloseButton.PointerPressed += (_, e) => { e.Handled = true; Dismiss(); };
+
+            PinButton.PointerPressed += (_, e) => { e.Handled = true; TogglePin(); };
+
+            // A pinned panel is a window the user placed, so it has to be
+            // movable, and with WindowDecorations="None" there is no title bar
+            // to drag it by — the header is the title bar.
+            //
+            // Only when pinned. An unpinned panel is recentred on its orb by
+            // RepositionFor every time the arrangement moves, so a drag would
+            // be silently undone somewhere between the next frame and the next
+            // scan; offering a gesture that gets reverted is worse than not
+            // offering it. Presses the header's own controls claimed are
+            // already marked handled and never arrive here.
+            HeaderRow.PointerPressed += (_, e) =>
+            {
+                if (!_pinned) return;
+
+                BeginMoveDrag(e);
+            };
 
             // The portrait opens at four times the size, centred on itself.
-            // Handled so the click doesn't also travel on to anything behind it.
+            // Handled so the click doesn't also travel on to anything behind it
+            // — and handled before the null check now, not after. The portrait
+            // is a control whether or not a picture has arrived in it yet, and
+            // the header behind it starts a window drag: leaving an empty
+            // portrait's press unhandled would make one gesture mean "enlarge
+            // this" or "move the window" depending on whether a download had
+            // finished, which is the worse of the two inconsistencies.
             AvatarBox.PointerPressed += (_, e) =>
             {
-                if (_avatar is null) return;
-
                 e.Handled = true;
+
+                if (_avatar is null) return;
 
                 var centre = AvatarBox.Bounds.Center;
                 AvatarPopup.Show(_avatar, this.PointToScreen(new Point(
@@ -239,6 +319,14 @@ namespace ClaudeBuddy
                 // panel behind it would take the menu with it.
                 if (ContextMenuIsOpen) return;
 
+                // The fourth carve-out, and the only one that is permanent
+                // rather than about this instant. The three above are "not
+                // yet"; this one is "not this panel". A pinned panel was told
+                // to stay, and dismiss-on-deactivate is the whole of what
+                // pinning turns off — see the class comment on why that is the
+                // rule the old singleton was really enforcing.
+                if (_pinned) return;
+
                 HideNow();
             }, DispatcherPriority.Background);
 
@@ -283,45 +371,92 @@ namespace ClaudeBuddy
 
                 _ = LoadOlderAsync();
             };
+
+            // Whatever closes this window, the registry stops holding it. On
+            // the event rather than beside the one Close() call, because a
+            // stale entry is not a visible bug — it is Transient or PanelFor
+            // handing out a panel whose window is gone, which shows up later
+            // and somewhere else.
+            Closed += (_, _) => Panels.Remove(this);
+
+            ApplyPinAffordance();
+
+            // Last, so a panel is never in the registry before it is built.
+            Panels.Add(this);
         }
 
+        // Any visible panel showing this conversation, not just the transient
+        // one. The callers are asking "is this session already on screen" —
+        // dictation looking for somewhere to land, a backlog test — and a
+        // pinned panel is as much on screen as the transient is.
         public static bool IsOpenFor(string sessionId) =>
-            _instance is { IsVisible: true } panel
-            && panel._session?.SessionId == sessionId;
+            Panels.Any(p => p.IsVisible && p._session?.SessionId == sessionId);
 
         public static void OpenFor(OrbWindow orb, IRemoteChatSession session)
         {
-            _instance ??= new ChatPanel();
-            _instance.Bind(orb, session);
+            // Already pinned somewhere: raise that window rather than binding
+            // this conversation into the transient as well. Two windows on one
+            // transcript is the second invariant in the class comment, and it
+            // is not a tidiness rule — both would subscribe to the session, and
+            // the one you were not looking at would answer a permission prompt
+            // out from under the one you were.
+            if (PanelFor(session.SessionId) is { _pinned: true } pinned)
+            {
+                // The orb's arc stays available. Pinning gave it back (see
+                // Pin), and clicking the orb again must not take it away for a
+                // panel that is not sitting in that space.
+                orb.SetChatOpen(false);
+                pinned.Activate();
+                return;
+            }
+
+            var panel = Transient ?? new ChatPanel();
+            panel.Bind(orb, session);
         }
 
-        // Used when the orb goes away, or is about to move under the panel —
-        // an arrangement animation, or the orb's own close.
+        // Used when the orb is about to move under the panel — an arrangement
+        // animation. The transient only, deliberately: a pinned panel is
+        // somewhere the user put it, and an orb sliding across the screen has
+        // no business taking it along. An orb that is actually going away is a
+        // different question and asks CloseFor instead.
         public static void HideFor(string sessionId)
         {
-            if (_instance is null) return;
-            if (_instance._session?.SessionId != sessionId) return;
+            if (Transient is not { } panel) return;
+            if (panel._session?.SessionId != sessionId) return;
 
-            _instance.HideNow();
+            panel.HideNow();
+        }
+
+        // The orb this conversation belongs to has gone. Unlike HideFor this
+        // reaches a pinned panel too — a chat with no session behind it any
+        // more is not something pinning should be able to keep on screen.
+        public static void CloseFor(string sessionId)
+        {
+            if (PanelFor(sessionId) is not { } panel) return;
+
+            panel.Dismiss();
         }
 
         public static void RepositionFor(OrbWindow orb)
         {
-            if (_instance is not { IsVisible: true } panel) return;
+            if (Transient is not { IsVisible: true } panel) return;
             if (!ReferenceEquals(panel._owner, orb)) return;
 
             panel.Reposition();
         }
 
         // Speech is global rather than per-orb, so the panel is told about it
-        // the same way the flyout is, from one place.
-        public static void SetSpeakState(TextToSpeech.SpeakState state) =>
-            _instance?.ApplySpeakState(state);
+        // the same way the flyout is, from one place — and now every panel is,
+        // because the button says whether the one voice is talking and they
+        // would otherwise disagree about it.
+        public static void SetSpeakState(TextToSpeech.SpeakState state)
+        {
+            foreach (var panel in Panels) panel.ApplySpeakState(state);
+        }
 
         public static void SetRecording(OrbWindow orb, bool recording)
         {
-            if (_instance is not { IsVisible: true } panel) return;
-            if (!ReferenceEquals(panel._owner, orb)) return;
+            if (OwnedBy(orb) is not { } panel) return;
 
             panel.MicFill.Fill = recording ? RecordingFill : IdleFill;
         }
@@ -330,15 +465,27 @@ namespace ClaudeBuddy
         // TerminalFocuser.SendText has always followed and explains at its own
         // definition: transcription is a typing aid, and it does not get to
         // decide that you meant it.
-        public static void AppendToInput(string text)
+        //
+        // Takes the orb now. It used to mean "the one panel", which was
+        // unambiguous while there was one; with several open, words spoken at
+        // one orb landing in whichever panel happened to be transient is the
+        // worst kind of wrong — silent, and in someone else's message box.
+        public static void AppendToInput(OrbWindow orb, string text)
         {
-            if (_instance is not { IsVisible: true } panel) return;
+            if (OwnedBy(orb) is not { } panel) return;
 
             var existing = panel.Input.Text ?? "";
             panel.Input.Text = existing.Length == 0 ? text : existing.TrimEnd() + " " + text;
             panel.Input.CaretIndex = panel.Input.Text.Length;
             panel.Input.Focus();
         }
+
+        // The visible panel a given orb opened, pinned or not. One orb shows
+        // one session and one session has one panel, so this is a lookup rather
+        // than a choice — but it is written once here because three callers
+        // used to spell it out and all three had to be kept in step.
+        private static ChatPanel? OwnedBy(OrbWindow orb) =>
+            Panels.FirstOrDefault(p => p.IsVisible && ReferenceEquals(p._owner, orb));
 
         private static readonly IBrush IdleFill = new SolidColorBrush(Color.Parse("#E0202024"));
         private static readonly IBrush RecordingFill = new SolidColorBrush(Color.Parse("#E0D93B3B"));
@@ -409,13 +556,14 @@ namespace ClaudeBuddy
                 previousRemote.PanelClosed();
             }
 
-            // The last good name is per session, not per panel. The panel is a
-            // singleton and the box outlives a session, so leaving it set meant
-            // the *next* conversation inherited it — and because "we already
-            // knew a name" beats "we do not know one yet", a session whose
-            // title had not arrived would wear the previous session's initials
-            // on every bubble rather than none. Wrong is worse than absent
-            // here: the chip is there to say who is talking.
+            // The last good name is per session, not per panel. The transient
+            // panel outlives the sessions bound into it and so does this box,
+            // so leaving it set meant the *next* conversation inherited it —
+            // and because "we already knew a name" beats "we do not know one
+            // yet", a session whose title had not arrived would wear the
+            // previous session's initials on every bubble rather than none.
+            // Wrong is worse than absent here: the chip is there to say who is
+            // talking.
             _soleSpeaker.Name = null;
         }
 
@@ -548,14 +696,15 @@ namespace ClaudeBuddy
             // ScrollToEndIfPinned and that is why a panel sometimes opened
             // halfway up a conversation.
             //
-            // There is one ChatPanel for every orb (its own comment above says
-            // why: two of them would fight over being the key window), so the
-            // scroll position this instance is carrying belongs to whichever
-            // session you had open last. Asking whether *that* offset is at the
-            // bottom is asking a question about a transcript that is no longer
-            // on screen: scroll up in one chat, click a different orb, and the
-            // answer is "no", so the new chat opens at the old offset with the
-            // newest message somewhere below the fold.
+            // The transient panel is reused across orbs (the class comment
+            // says why: two panels that both hide on deactivate would fight
+            // over being the key window), so the scroll position this instance
+            // is carrying belongs to whichever session you had open last.
+            // Asking whether *that* offset is at the bottom is asking a
+            // question about a transcript that is no longer on screen: scroll
+            // up in one chat, click a different orb, and the answer is "no",
+            // so the new chat opens at the old offset with the newest message
+            // somewhere below the fold.
             //
             // Same reasoning as OnHistoryReplaced: a transcript that was just
             // loaded wholesale has no read position worth preserving, and the
@@ -643,8 +792,7 @@ namespace ClaudeBuddy
         // panel, the panel checks the message is from the orb it is showing.
         public static void RefreshIdentityFor(OrbWindow orb)
         {
-            if (_instance is not { IsVisible: true } panel) return;
-            if (!ReferenceEquals(panel._owner, orb)) return;
+            if (OwnedBy(orb) is not { } panel) return;
 
             panel.ApplyBorrowedIdentity();
             panel.RefreshSoleSpeaker();
@@ -672,10 +820,131 @@ namespace ClaudeBuddy
         private void ApplyTitle()
         {
             var parts = (_session?.DisplayName ?? "").Split(" — ", 2);
+            var persona = SessionIdentity.LocalNameFor(_session?.SessionId);
 
-            TitleText.Text = parts[0];
+            // A local persona renames the header the same way it renames the
+            // orb: the CLAUDE.md beside the work says what this agent is
+            // called, and a header still reading the folder name beside an orb
+            // reading "Le" is the app disagreeing with itself in the one place
+            // both are on screen at once.
+            //
+            // Only the local half. A gateway session's DisplayName is already
+            // built from its identity — "Nova — #general", name and place — and
+            // a *room's* is the room, where the identity is whichever agent is
+            // in the session key. Overwriting that would put one agent's name on
+            // the header of a channel four of them are talking in, which is the
+            // distinction RefreshSoleSpeaker's own comment spells out below.
+            //
+            // The place half is never touched: a persona says who, never where.
+            TitleText.Text = string.IsNullOrEmpty(persona) ? parts[0] : persona;
             SubtitleText.Text = parts.Length > 1 ? parts[1] : "";
             SubtitleText.IsVisible = parts.Length > 1;
+
+            // Last, because the meta line's first rule is "not what the title
+            // already says" and the title has only just been decided.
+            ApplyMeta();
+        }
+
+        // --- CB-134: which session, which folder, which machine -------------
+
+        // What this machine is called, asked once.
+        //
+        // MachineNames.Mine() shells out to scutil on macOS. It caches its own
+        // answer, but this runs from ApplyTitle, which runs on every hook write
+        // — several a second while a session is working — and taking a lock in
+        // that path to be handed back a string that cannot change while the
+        // process lives is a cost with nothing on the other side of it.
+        //
+        // Lazily rather than in a field initializer: the field would run scutil
+        // during ChatPanel's type initialiser, which is the first time any test
+        // in the UI suite touches the class, and a subprocess in a static
+        // constructor is a deadlock waiting for a machine slow enough.
+        private static string? _thisMachine;
+
+        private static string ThisMachine => _thisMachine ??= MachineNames.Mine();
+
+        // Dim, because this line is the one you go looking for rather than the
+        // one that catches your eye. Matching the TextBlock's own Foreground in
+        // the XAML: the Lead run inherits it and only the machine token
+        // overrides it, so the two have to agree.
+        private static readonly IBrush MetaInk = new SolidColorBrush(Color.Parse("#80FFFFFF"));
+
+        // The machine, when it is not this one. Bright enough to be the thing
+        // you notice in a line that is otherwise deliberately quiet, because
+        // "this conversation is happening on the mini" is the one fact here
+        // that changes what you should do about it.
+        //
+        // The orb's accent — the session's own colour — is preferred, so the
+        // panel and the ring on the orb it opened from say the same thing. Not
+        // every session has one (AccentColor is null for anything the app has
+        // not been told a colour for), and the fallback is the same light blue
+        // the transcript draws links in rather than a fourth colour nobody has
+        // seen before.
+        private static readonly IBrush RemoteMachineInk = new SolidColorBrush(Color.Parse("#FF9FD0FF"));
+
+        // Fills in the header's third line, or collapses it.
+        //
+        // Every fact here can arrive after the panel is already open — a title
+        // comes from a hook write that may not have happened yet, and a
+        // mirrored session's machine comes off a roster that answers a moment
+        // later — so this is re-run from ApplyTitle and from OnMachineChanged
+        // rather than once at Bind. That is the same lesson ApplyTitle's own
+        // comment records: the header used to keep whatever it was born with.
+        private void ApplyMeta()
+        {
+            // The orb first, and SessionManager only where there is no orb
+            // status to read — a panel can be bound before the session's first
+            // hook write, and in that window the manager may already hold what
+            // the orb has not been handed yet.
+            var status = _owner?.LastStatus
+                ?? SessionManager.Instance?.StatusFor(_session?.SessionId);
+
+            var machine = ChatHeaderMeta.MachineFor(
+                (_session as IRemoteChatMachine)?.MachineName, ThisMachine);
+
+            // What the header's first line already says, in full — not just
+            // TitleText.Text. A gateway session's title is "Annabel Lee —
+            // #cascadia-forensics-marketing", and ApplyTitle above already
+            // split that across TitleText and SubtitleText; comparing
+            // Unrepeated against TitleText alone sees "Annabel Lee" next to
+            // status?.Title's whole "Annabel Lee — #cascadia-forensics-
+            // marketing" and calls them different, so the meta row draws the
+            // detail a second time directly under the chip that already shows
+            // it. Rebuilding the same "name — place" shape the split came from
+            // is what makes the comparison see them as the repeat they are.
+            var shownTitle = SubtitleText.IsVisible && SubtitleText.Text is { Length: > 0 }
+                ? $"{TitleText.Text} — {SubtitleText.Text}"
+                : TitleText.Text;
+
+            var meta = ChatHeaderMeta.Compose(
+                shownTitle,
+                status?.Title,
+                status?.Cwd,
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                MachineNames.Readable(machine.Name),
+                machine.IsLocal);
+
+            MetaRow.IsVisible = meta.IsVisible;
+
+            // On the row rather than on either block, so the hover answers
+            // wherever the pointer lands on the line — including the gap the
+            // ellipsis just made, which is exactly where somebody who cannot
+            // read the path will put it.
+            ToolTip.SetTip(MetaRow, meta.IsVisible ? meta.Tooltip : null);
+
+            // Set both rows every time, visibility included. The panel is
+            // reused across sessions, so a row left showing from the last
+            // conversation is drawn over this one — the same reason ApplyTitle
+            // re-reads rather than patching, and here the thing left behind
+            // would be another session's machine.
+            MetaText.IsVisible = meta.Lead.Length > 0;
+            MetaText.Text = meta.Lead;
+
+            MetaMachineText.IsVisible = meta.Machine.Length > 0;
+            MetaMachineText.Text = meta.Machine;
+            MetaMachineText.Foreground = meta.RemoteMachine
+                ? (_owner?.AccentColor is { } accent ? new SolidColorBrush(accent) : RemoteMachineInk)
+                : MetaInk;
         }
 
         private void RefreshSoleSpeaker()
@@ -684,15 +953,18 @@ namespace ClaudeBuddy
 
             var was = _soleSpeaker.Name;
 
-            var identity = _session is null
-                ? null
-                : OpenClawSessions.IdentityForSession(_session.SessionId);
+            // Asked of SessionIdentity rather than of OpenClawSessions, which is
+            // what makes the chips on a local session's messages say "Leota"
+            // instead of the folder. The identityName slot is exactly the right
+            // one for a persona: it is "the name we were told, as opposed to
+            // whatever the panel is titled", and a CLAUDE.md is being told.
+            var identityName = SessionIdentity.NameFor(_session?.SessionId);
 
             // The rule itself is in ChatSpeaker, pure and tested — including
             // the part that matters here, that a name we already knew is never
             // replaced by not knowing it. That is what made the chips vanish
             // after a while rather than simply never appear.
-            var name = ChatSpeaker.Resolve(identity?.Name, TitleText.Text, was);
+            var name = ChatSpeaker.Resolve(identityName, TitleText.Text, was);
 
             if (name == was) return;
 
@@ -778,20 +1050,24 @@ namespace ClaudeBuddy
         {
             StopAvatarAnimation();
 
-            var avatar = OpenClawSessions.AvatarForSession(sessionId);
-            var identity = OpenClawSessions.IdentityForSession(sessionId);
+            var face = SessionIdentity.For(sessionId);
+            var avatar = face.Avatar;
 
-            // Neither a portrait nor an emoji, which is every local session and
-            // a gateway one whose agent list hasn't landed yet. Its orb already
-            // carries both halves of an identity — a letter and a colour, the
-            // ones just clicked — so the header borrows them. Better than an
-            // empty circle, and better than a second scheme invented for this
-            // window: the panel ends up looking like the orb it came out of.
+            // Neither a portrait nor an emoji, which is every local session
+            // without a persona picture and a gateway one whose agent list
+            // hasn't landed yet. Its orb already carries both halves of an
+            // identity — a letter and a colour, the ones just clicked — so the
+            // header borrows them. Better than an empty circle, and better than
+            // a second scheme invented for this window: the panel ends up
+            // looking like the orb it came out of.
             //
-            // Keyed on there being no OpenClaw identity rather than on the
+            // Keyed on there being no identity to draw rather than on the
             // session's type, because the panel deliberately doesn't know what
-            // kinds of session exist.
-            if (avatar is null && identity is null && _owner is not null)
+            // kinds of session exist. SessionIdentity owns which of the two
+            // registries answered and what counts as a face of one's own — a
+            // local persona's *name* deliberately does not, because the orb is
+            // already carrying it and borrowing is how it gets here.
+            if (!face.DrawsItsOwnCircle && _owner is not null)
             {
                 _avatar = null;
                 _avatarFrame = 0;
@@ -847,14 +1123,14 @@ namespace ClaudeBuddy
                 // name when there is no emoji to use instead.
                 var agentColor = AgentColorFor(sessionId);
 
-                AvatarEmoji.Text = !string.IsNullOrEmpty(identity?.Emoji)
-                    ? identity!.Emoji!
-                    : OrbGlyph.Initials(identity?.Name);
+                AvatarEmoji.Text = !string.IsNullOrEmpty(face.Emoji)
+                    ? face.Emoji!
+                    : OrbGlyph.Initials(face.Name);
                 AvatarEmoji.IsVisible = !string.IsNullOrEmpty(AvatarEmoji.Text);
 
                 // Initials are letterforms, not a pictograph, so they want the
                 // smaller size an emoji would overflow at.
-                if (string.IsNullOrEmpty(identity?.Emoji)) AvatarEmoji.FontSize = 26;
+                if (string.IsNullOrEmpty(face.Emoji)) AvatarEmoji.FontSize = 26;
 
                 if (agentColor is { } c)
                 {
@@ -892,7 +1168,14 @@ namespace ClaudeBuddy
             Avatar.IsVisible = true;
             // A portrait gets the ring too. Without it the one avatar with a
             // picture is the only one in the app not wearing its own colour.
-            RingFor(AgentColorFor(sessionId));
+            //
+            // A local persona has no agent colour to ask for, there being no
+            // agent — so it takes the orb's accent instead, which is the colour
+            // the orb is drawing its own ring in around this same picture. The
+            // fallback is deliberately not offered to a gateway session: there,
+            // a null answer means the agent list has not landed yet, and the
+            // hairline is the honest thing to draw until it does.
+            RingFor(AgentColorFor(sessionId) ?? (face.Gateway ? null : _owner?.AccentColor));
 
             if (!avatar.IsAnimated) return;
 
@@ -1191,20 +1474,53 @@ namespace ClaudeBuddy
             // Width and Height are the resize target (see the XAML comment),
             // so unlike the old SizeToContent world these are already final —
             // no need to wait on Root's laid-out bounds.
-            var width = (int)(Width * scale);
-            var height = (int)(Height * scale);
+            var size = new PixelSize((int)(Width * scale), (int)(Height * scale));
             var gap = (int)(Gap * scale);
 
-            // Below by default, flipped above when it would run off the bottom.
-            // Flipped rather than clamped upward: a clamped panel ends up
-            // covering the orb you just clicked.
-            var y = anchor.Y + gap;
-            if (y + height > work.Bottom) y = anchor.Y - gap - height;
+            // Below the orb, flipped above when below would run off the bottom,
+            // clamped into the work area — the maths this method used to do
+            // inline, now in ChatPanelPlacement so it can be swept by a unit
+            // test and so it has somewhere to put the part that is new: not
+            // landing on top of a panel somebody pinned there.
+            Position = ChatPanelPlacement.Resolve(anchor, size, gap, work, OccupiedBy(screen));
+        }
 
-            var x = Math.Clamp(anchor.X - width / 2, work.X, Math.Max(work.X, work.Right - width));
-            y = Math.Clamp(y, work.Y, Math.Max(work.Y, work.Bottom - height));
+        // The pinned panels already on this screen, as physical rectangles.
+        //
+        // Pinned only. The transient is the panel being placed in every case
+        // that reaches here, and a panel cannot be asked to avoid itself; and
+        // there is never a second unpinned one to avoid, which is the first
+        // invariant in the class comment doing a job rather than just being
+        // true.
+        //
+        // Same screen only: a rectangle on another display can never overlap
+        // this one, and including it would push a panel sideways to dodge
+        // something the user cannot see beside it. Decided by whether the
+        // screen's bounds hold the panel's top-left rather than by comparing
+        // two Screen objects, which is a question about identity that Avalonia
+        // does not promise an answer to.
+        private IReadOnlyList<PixelRect> OccupiedBy(Screen screen)
+        {
+            var occupied = new List<PixelRect>();
 
-            Position = new PixelPoint(x, y);
+            foreach (var panel in Panels)
+            {
+                if (!panel._pinned || !panel.IsVisible) continue;
+                if (ReferenceEquals(panel, this)) continue;
+                if (!screen.Bounds.Contains(panel.Position)) continue;
+
+                // Width and Height are DIPs and Position is physical, the same
+                // mismatch Reposition converts across a few lines above. This
+                // panel is on `screen` by the test just made, so its scaling is
+                // the right one to convert with.
+                occupied.Add(new PixelRect(
+                    panel.Position,
+                    new PixelSize(
+                        (int)(panel.Width * screen.Scaling),
+                        (int)(panel.Height * screen.Scaling))));
+            }
+
+            return occupied;
         }
 
         private void OnInputKeyDown(object? sender, KeyEventArgs e)
@@ -1696,10 +2012,16 @@ namespace ClaudeBuddy
         }
 
         // The settings slider changes the same number this window's keyboard
-        // does, so an open panel has to hear about it. Null-safe and
-        // visibility-blind on purpose: a panel that exists but is hidden still
-        // holds rows that will be shown again without being rebuilt.
-        internal static void ReapplyTextScale() => _instance?.ApplyTextScale();
+        // does, so every open panel has to hear about it — the scale is one
+        // global setting, and two panels drawing it at different sizes would
+        // be a bug you could only see by putting them side by side, which
+        // pinning now makes easy. Visibility-blind on purpose: a panel that
+        // exists but is hidden still holds rows that will be shown again
+        // without being rebuilt.
+        internal static void ReapplyTextScale()
+        {
+            foreach (var panel in Panels) panel.ApplyTextScale();
+        }
 
         private void OnPanelKeyDown(object? sender, KeyEventArgs e)
         {
@@ -1720,7 +2042,7 @@ namespace ClaudeBuddy
                 return;
             }
 
-            HideNow();
+            Dismiss();
         }
 
         private void Send()
@@ -1773,8 +2095,29 @@ namespace ClaudeBuddy
             var last = _turns.LastOrDefault(t => t.Role == ChatRole.Assistant);
             if (last is null || string.IsNullOrWhiteSpace(last.Text)) return;
 
-            Speak(last.Text);
+            Speak(last.Text, VoiceFor(_session), RateFor(_session));
         }
+
+        // A panel can hold several remote session kinds. Only OpenClaw agent
+        // sessions have workspace identity metadata; a room deliberately has
+        // no single agent voice, so both it and every other session keep the
+        // user's global speech selection.
+        internal static TextToSpeech.VoiceOption? VoiceFor(
+            IRemoteChatSession? session,
+            IEnumerable<TextToSpeech.VoiceOption>? options = null) =>
+            session?.SessionId.StartsWith("openclaw:agent:", StringComparison.Ordinal) != true
+                ? null
+                : options is null
+                    ? OpenClawSessions.VoiceForSession(session.SessionId)
+                    : OpenClawSessions.VoiceForSession(session.SessionId, options);
+
+        // Same eligibility as VoiceFor: a rate with no voice behind it has
+        // nothing to qualify, and a room's shared global voice has no single
+        // agent's rate to use either.
+        internal static double? RateFor(IRemoteChatSession? session) =>
+            session?.SessionId.StartsWith("openclaw:agent:", StringComparison.Ordinal) != true
+                ? null
+                : OpenClawSessions.RateForSession(session.SessionId);
 
         // TextToSpeech.Speak is itself excluded from coverage ("starts a speech
         // engine and makes the machine make a noise" — see its own comment) —
@@ -1784,7 +2127,11 @@ namespace ClaudeBuddy
         // line — actually reaching a real utterance — has no headless seam and
         // is deliberately left uncovered rather than exercised for real.
         [ExcludeFromCodeCoverage]
-        private static void Speak(string text) => TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+        private static void Speak(string text, TextToSpeech.VoiceOption? voice, double? rate = null)
+        {
+            if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
+            else TextToSpeech.Speak(text, voice, rate);
+        }
 
         private void ApplySpeakState(TextToSpeech.SpeakState state)
         {
@@ -1942,6 +2289,15 @@ namespace ClaudeBuddy
             KindChipText.Text = KindChipLabel(
                 _owner.KindGlyphText, _owner.KindLabel, _owner.PresenceLabel,
                 (_session as IRemoteChatMachine)?.MachineName);
+
+            // The same answer arriving changes the meta line too, and it is the
+            // half that changes colour: until the roster names the machine, a
+            // mirrored session is indistinguishable from a local one and the
+            // line says this machine in the ordinary dim ink. Left out at
+            // first, which meant the panel picked the accent up only on the
+            // next hook write — and a mirrored session's hook writes happen on
+            // the other machine, so for that case there was no next one.
+            ApplyMeta();
         }
 
         // What the chip says, including which machine when that is known.
@@ -2083,7 +2439,12 @@ namespace ClaudeBuddy
             // Dismissed, because this asked to be somewhere else. Leaving the
             // panel up over the terminal it just brought forward would be
             // covering the dialog it sent you to answer.
-            HideNow();
+            //
+            // Dismiss rather than HideNow so a pinned panel goes away properly
+            // rather than being hidden: a hidden pinned panel is in the
+            // registry, is not the transient, and holds no session, so nothing
+            // would ever show it again.
+            Dismiss();
         }
 
         // Whether the view is sitting at the bottom — read *now*, on the same
@@ -2132,6 +2493,94 @@ namespace ClaudeBuddy
             }, DispatcherPriority.Loaded);
         }
 
+        // The pin toggle, exposed so a test can drive the state change without
+        // synthesizing a click on the header — the same reason UpdateFrom is
+        // reachable on OrbWindow. The button calls this too, so there is one
+        // path rather than a test-only one beside the real one.
+        internal void TogglePin()
+        {
+            if (_pinned) Unpin();
+            else Pin();
+        }
+
+        private void Pin()
+        {
+            _pinned = true;
+            ApplyPinAffordance();
+
+            // The window does not move. "Pin" means leave this exactly where
+            // it is, and a panel that relocated itself to some placement of its
+            // own the moment it was told to stay would be answering a question
+            // nobody asked. Where the *next* panel opens is a different problem
+            // and lives in ChatPanelPlacement.
+            //
+            // The orb gets its hover arc back, which reads backwards until you
+            // say the rule out loud. The arc is suppressed while a chat is open
+            // because the panel is drawn a Gap away from the orb's centre —
+            // over exactly the radius the arc wants. So the rule is not "a chat
+            // is open", it is "the panel has that space", and a pinned panel
+            // does not: it can be dragged to the other side of the screen, and
+            // the next click on this orb opens a transient beside it anyway.
+            _owner?.SetChatOpen(false);
+        }
+
+        private void Unpin()
+        {
+            // At most one unpinned panel, so whatever holds that role now has
+            // to give it up before this window takes it. Dissolved rather than
+            // hidden: a hidden unpinned panel is still unpinned, so Transient
+            // would go on handing *it* out — every orb click, every arrangement
+            // hide — while this window sat in front of the user believing it
+            // was the transient. Two panels claiming one role is worse than
+            // building a window again on the next orb click.
+            if (Transient is { } other && !ReferenceEquals(other, this)) other.Dissolve();
+
+            _pinned = false;
+            ApplyPinAffordance();
+
+            // In place, not repositioned: unpinning says "this one can behave
+            // normally again", not "put it back". It stays where it was dragged
+            // until the next Reposition moves it, and the orb goes back to
+            // treating the arc's space as spoken for.
+            _owner?.SetChatOpen(true);
+        }
+
+        private void ApplyPinAffordance()
+        {
+            // The same blue the speak button wears while it is doing something,
+            // for the same reason: a filled circle in this header means "this
+            // control is currently on".
+            PinFill.Fill = _pinned ? SpeakActiveFill : IdleFill;
+
+            ToolTip.SetTip(PinButton, _pinned ? "Unpin" : "Pin — keep this chat open");
+        }
+
+        // What the close button and Escape mean, which is not the same thing
+        // for the two kinds of panel. The transient is hidden and kept, because
+        // it is the window every future orb click reuses. A pinned one is gone
+        // for good — it was a window the user deliberately created, and hiding
+        // it would leave something in the registry that nothing can ever show
+        // again.
+        private void Dismiss()
+        {
+            if (_pinned) Dissolve();
+            else HideNow();
+        }
+
+        // Tear-down for a panel that is not coming back: unbound and hidden the
+        // ordinary way first, so nothing is left subscribed, then out of the
+        // registry and closed.
+        private void Dissolve()
+        {
+            HideNow();
+
+            // Before Close() as well as on the Closed event, so a caller that
+            // reads Transient on the very next line sees the truth even if the
+            // platform defers the event.
+            Panels.Remove(this);
+            Close();
+        }
+
         private void HideNow()
         {
             if (_session is not null) Drafts[_session.SessionId] = Input.Text ?? "";
@@ -2151,8 +2600,8 @@ namespace ClaudeBuddy
             PromptBox.IsVisible = false;
             PromptOptions.ItemsSource = null;
 
-            // Detached while hidden. The panel is a singleton that stays alive
-            // between openings, and a hidden panel left subscribed goes on
+            // Detached while hidden. The transient panel stays alive between
+            // openings, and a hidden panel left subscribed goes on
             // appending a row per event for a conversation nobody is watching —
             // the session's own history is bounded, this collection was not.
             // Bind rebuilds from History anyway, so there is nothing to keep.
@@ -2201,6 +2650,43 @@ namespace ClaudeBuddy
                     {
                         _body = null;
                         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Body)));
+                    }
+
+                    // A live turn can start with no picture and gain one once
+                    // OpenClawChatSession.TryResolveLiveImage resolves it
+                    // against the gateway's own history — this row already
+                    // exists by then, so it has to notice rather than being
+                    // recreated. !HasImage guards against loading twice were
+                    // ImageUrl to change again after already resolving once.
+                    if (e.PropertyName == nameof(ChatTurn.ImageUrl) && !HasImage
+                        && !string.IsNullOrEmpty(turn.ImageUrl))
+                    {
+                        LoadImage();
+                    }
+
+                    // Same shape, for a picture resolved via
+                    // OpenClawChatSession.TryResolveLocalMedia (CB-88) rather
+                    // than a URL — an agent's own generated file, fetched as
+                    // bytes rather than fetched from one.
+                    if (e.PropertyName == nameof(ChatTurn.ImageBytes) && !HasImage
+                        && turn.ImageBytes is { Length: > 0 } lateBytes)
+                    {
+                        LoadImageBytes(lateBytes);
+                    }
+
+                    // CB-93: ImageNote and ImageNoteDetail are set together
+                    // (see LoadImage below), but only ImageNote's own setter
+                    // raises a change — ImageNoteDetail is plain, the same
+                    // pairing ChatTurn.ImageAlt already has with
+                    // ImageBytes/ImageUrl. So the one event that does fire
+                    // has to stand in for both bindings, HasImageNote (the
+                    // row's own IsVisible) included.
+                    if (e.PropertyName == nameof(ChatTurn.ImageNote))
+                    {
+                        PropertyChanged?.Invoke(this,
+                            new System.ComponentModel.PropertyChangedEventArgs(nameof(HasImageNote)));
+                        PropertyChanged?.Invoke(this,
+                            new System.ComponentModel.PropertyChangedEventArgs(nameof(ImageNoteDetail)));
                     }
 
                     PropertyChanged?.Invoke(this, e);
@@ -2450,6 +2936,17 @@ namespace ClaudeBuddy
             private static readonly IBrush QuoteEdge = new SolidColorBrush(Color.Parse("#4DFFFFFF"));
             public bool HasImage => _image is not null;
 
+            // CB-93: why a picture that should have shown didn't, drawn in
+            // the slot it would have occupied. See ChatTurn.ImageNote's own
+            // header for why this is a line rather than a tooltip on the
+            // 📎 marker or a System-turn note appended to the end of the
+            // transcript.
+            public string? ImageNote => _turn.ImageNote;
+
+            public bool HasImageNote => !string.IsNullOrEmpty(_turn.ImageNote);
+
+            public string? ImageNoteDetail => _turn.ImageNoteDetail;
+
             private Bitmap? _image;
             private byte[]? _bytes;
 
@@ -2510,10 +3007,60 @@ namespace ClaudeBuddy
             {
                 if (string.IsNullOrEmpty(_turn.ImageUrl)) return;
 
-                var bytes = await OpenClawSessions.FetchMediaAsync(_turn.ImageUrl!, CancellationToken.None);
-                if (bytes is null || bytes.Length == 0) return;
+                // Fetched verbatim. Since CB-109 the url is a fully-formed
+                // request — path, session and agent — built where the turn was
+                // built, by whoever knew which session it belonged to. This
+                // row reconstructs nothing and has no business knowing what is
+                // in it.
+                var url = _turn.ImageUrl!;
+                var bytes = await OpenClawSessions.FetchMediaAsync(url, CancellationToken.None);
+                if (bytes is { Length: > 0 })
+                {
+                    await DecodeAndShowAsync(bytes);
+                    return;
+                }
 
-                await DecodeAndShowAsync(bytes);
+                // CB-93: this is the dominant failure site — every reopen,
+                // reconnect and scroll reads history back through here, where
+                // the live path above only fires once per streamed reply. A
+                // path outside the gateway's media allowlist used to leave
+                // this exact row with nothing in it and no explanation.
+                if (!OpenClawMediaRefusal.ShouldAskWhy(bytes, url)) return;
+
+                // The path is read, never recovered. CB-93 had to unescape it
+                // back out of the url because a ChatTurn carried nothing else;
+                // it is now set alongside ImageUrl by both producers
+                // (TurnsFromHistory's arms, TryResolveLocalMedia), so there is
+                // nothing left to reverse.
+                //
+                // A null here means an assistant-media url arrived on a turn
+                // whose path was not set with it, which no producer does. The
+                // note is skipped rather than captioned with a guess — the
+                // whole point of CB-93 is that a wrong reason is worse than
+                // none — and ATurnWithNoSourcePathIsNeverAskedWhy pins it.
+                var path = _turn.ImageSourcePath;
+                if (path is null) return;
+
+                // CB-116: a low-confidence candidate — ordinary prose that
+                // merely ends in something filename-shaped, with nothing
+                // (no explicit "MEDIA:" line, no automation delivery) to say
+                // this turn was a real picture — stays silent on a failure
+                // rather than asking the gateway why and showing a
+                // confident-sounding note for a picture that was never real.
+                // "I deleted photo.png" is exactly this case. See
+                // ChatTurn.Confidence and MediaConfidence, next to ChatRole
+                // in RemoteChat.cs, for the full reasoning.
+                if (_turn.Confidence != MediaConfidence.High) return;
+
+                // Asked against the very url that just failed, plus the flag.
+                // An explanation asked with a different identity than the
+                // fetch does not fail — it *lies*, which is worse than the
+                // silence CB-93 set out to remove. Before CB-109 the meta call
+                // sent no session at all, which was harmless only because the
+                // fetch didn't either.
+                var json = await OpenClawSessions.FetchLocalMediaMetaAsync(url, CancellationToken.None);
+                _turn.ImageNoteDetail = OpenClawMediaRefusal.Detail(json, path);
+                _turn.ImageNote = OpenClawMediaRefusal.Explain(json);
             }
 
             // The bytes are already in hand — decoded from a local CLI's own

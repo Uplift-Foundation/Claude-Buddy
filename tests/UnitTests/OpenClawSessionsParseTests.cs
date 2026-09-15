@@ -204,10 +204,10 @@ namespace ClaudeBuddy.Tests
         }
 
         // origin.label is the fallback, and it needs unpicking: it is written as
-        // "#general channel id:100000000000000003" and only the front is useful.
+        // "#general channel id:1900000000000000001" and only the front is useful.
         [Theory]
-        [InlineData("#general channel id:100000000000000003", "#general")]
-        [InlineData("wtvamp user id:100000000000000001", "wtvamp")]
+        [InlineData("#general channel id:1900000000000000001", "#general")]
+        [InlineData("riverbend user id:200000000000000001", "riverbend")]
         [InlineData("discord:amber", "amber")]
         [InlineData("engineering group id:99", "engineering")]
         public void TheLogLabelIsCutBackToTheUsefulPart(string label, string want)
@@ -330,6 +330,56 @@ namespace ClaudeBuddy.Tests
             var members = OpenClawSessions.MembersOfRoom("discord:1474");
             Assert.Contains("agent:amber:discord:channel:1474", members);
             Assert.Contains("agent:main:discord:channel:1474", members);
+        }
+
+        // Most recently active first, which is what decides who gets a wedge
+        // on the room's orb when more agents are in the channel than an orb can
+        // hold — see OpenClawSessions.RoomAvatar. The gateway's own order is
+        // whatever it likes and does move between polls, so this is the one
+        // place the answer is made stable.
+        [Fact]
+        public void ARoomsMembersComeBackMostRecentlyActiveFirst()
+        {
+            Parse($$"""
+                {"sessions":[
+                  {"key":"agent:amber:discord:channel:1474","lastActivityAt":{{Ms(Now.AddMinutes(-30))}}},
+                  {"key":"agent:nova:discord:channel:1474","lastActivityAt":{{JustNow}}},
+                  {"key":"agent:main:discord:channel:1474","lastActivityAt":{{Ms(Now.AddMinutes(-5))}}}
+                ]}
+                """);
+
+            Assert.Equal(
+                new[]
+                {
+                    "agent:nova:discord:channel:1474",
+                    "agent:main:discord:channel:1474",
+                    "agent:amber:discord:channel:1474",
+                },
+                OpenClawSessions.MembersOfRoom("discord:1474"));
+        }
+
+        // Two members whose last activity is the same instant — which a gateway
+        // reporting whole seconds produces all the time. Broken on the key, so
+        // the order is the same twice running rather than however the list
+        // happened to arrive; an unstable answer here reshuffles a room orb's
+        // wedges under a conversation that has not changed.
+        [Fact]
+        public void MembersTiedOnActivityAreOrderedByKey()
+        {
+            Parse($$"""
+                {"sessions":[
+                  {"key":"agent:nova:discord:channel:1474","lastActivityAt":{{JustNow}}},
+                  {"key":"agent:amber:discord:channel:1474","lastActivityAt":{{JustNow}}}
+                ]}
+                """);
+
+            Assert.Equal(
+                new[]
+                {
+                    "agent:amber:discord:channel:1474",
+                    "agent:nova:discord:channel:1474",
+                },
+                OpenClawSessions.MembersOfRoom("discord:1474"));
         }
 
         // --- where a session delivers ---

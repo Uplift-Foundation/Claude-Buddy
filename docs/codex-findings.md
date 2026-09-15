@@ -392,8 +392,90 @@ scale Claude Code's `utilization` uses. `resets_at` is unix seconds.
 `credits.balance` without a cap is not a percentage and is not drawn as a
 ring.
 
-The usage orb reads the newest rollout's last such snapshot. Freshness is
-"as of the last Codex session". It does not call `/status`, does not hit
+### The window-less snapshot, measured 2 Sep 2026 (CB-83)
+
+**Not every `token_count` carries a window, and the empty one is often the
+newest thing on disk.** When the workspace runs out of credits Codex sends a
+snapshot whose windows are both null, carrying only a reason:
+
+```json
+{
+  "limit_id": "premium",
+  "primary": null,
+  "secondary": null,
+  "credits": { "has_credits": false, "unlimited": false, "balance": null },
+  "plan_type": null,
+  "rate_limit_reached_type": "workspace_owner_credits_depleted"
+}
+```
+
+It goes to **every live session at once**. On this machine, four rollouts
+received it inside one second (18:57:26–18:57:45 UTC), and the line 0.3s before
+it in the same file read `primary` 98%, `secondary` 38%. So a reader that keeps
+the last `rate_limits` line, in the newest-modified file, gets null/null — and
+reports an account with no subscription limits while the account is at 99% of
+its five-hour window.
+
+Two rules follow, and both are load-bearing:
+
+- **Keep only snapshots that carry a window.** An empty one is legible but is
+  not a reading.
+- **Order by the snapshot's own `timestamp`, not by file mtime.** mtime says
+  which rollout was written to last, which on a machine running several
+  sessions is whichever one emitted any event last — not the one holding the
+  newest usage. mtime is still sound as an *upper bound*, since no line can
+  post-date its file's last write, and the scan uses it to stop early.
+
+### Polling usage live, measured 2 Sep 2026 (CB-85)
+
+**`codex app-server` answers a rate-limits request with no session, no model
+call and no credential read.** This was the open question below for two
+tickets; it is now measured, and the orb no longer has to wait for a session to
+happen.
+
+Spawn `codex app-server`, then write newline-delimited JSON-RPC on stdin:
+
+```
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"claude-buddy","title":"Claude Buddy","version":"1"}}}
+{"jsonrpc":"2.0","id":2,"method":"account/rateLimits/read","params":null}
+```
+
+The `id: 2` response carries `result.rateLimits`, plus a `rateLimitsByLimitId`
+map this app does not yet model:
+
+```json
+{"rateLimits": {"limitId": "codex", "planType": "team",
+  "primary":   {"usedPercent": 100, "windowDurationMins": 300,   "resetsAt": 1788391232},
+  "secondary": {"usedPercent": 38,  "windowDurationMins": 10080, "resetsAt": 1788807866},
+  "credits": {"hasCredits": false, "unlimited": false, "balance": null},
+  "spendControlReached": false, "rateLimitReachedType": "workspace_owner_credits_depleted"}}
+```
+
+Three things that are not obvious and cost time to find:
+
+- **The field names are camelCase here and snake_case in the rollout.**
+  `usedPercent` / `used_percent`, `windowDurationMins` / `window_minutes`,
+  `resetsAt` / `resets_at`, `planType` / `plan_type`, `hasCredits` /
+  `has_credits`. Same numbers, two transports, and nothing reconciles them —
+  `CodexUsageParse` reads both spellings for every field.
+- **Do not close stdin.** `UsagePoller` closes it so `claude` knows no more
+  requests are coming and exits; `codex app-server` treats a closed stdin as
+  shutdown and exits *before* answering. The first version of this printed
+  nothing at all. Write the requests, read the response, kill the process.
+- **`CODEX_HOME` selects the account**, the way `CLAUDE_CONFIG_DIR` does for
+  Claude Code. It is the only reason a second Codex account can be polled.
+
+Measured at ~800ms end to end, and it returned 100% of the five-hour window
+while the newest snapshot on disk still read 99% from three hours earlier — so
+it is genuinely live rather than a replay of the same file.
+
+`account/rateLimits/updated` is a *server push* on the same connection. Nothing
+uses it yet; a long-lived connection would let the orb update when Codex says so
+rather than on a five-minute timer.
+
+The usage orb tries this first and falls back to the newest windowed snapshot
+across the rollout tree, carrying that snapshot's timestamp so the card can date
+the number rather than the read. It does not call `/status`, does not hit
 chatgpt.com, and does not read `auth.json`'s `tokens` or `OPENAI_API_KEY`.
 
 ## Still unknown
@@ -419,9 +501,12 @@ Not measured. Do not write these down as facts until they are.
 - Whether a side conversation shares a pid or a session id with its parent.
 - Whether compaction rewrites a rollout in place — a reader that treats a
   shrinking file as "start over" depends on the answer.
-- How to poll Codex usage without a session or a token. Until that is
-  measured, usage orbs read the last `token_count` snapshot rather than
-  pretending a five-minute poll.
+- Whether `rateLimitsByLimitId` ever carries more than one bucket, and what a
+  second `limit_id` would mean for an orb that draws two rings. Only `codex` has
+  been seen.
+- Whether `account/rateLimits/read` works against an app-server old enough not
+  to know the method, and what it answers if not. The fallback covers it either
+  way, but the shape of the failure has not been seen.
 - What `credits.balance` is denominated in, and whether a cap ever arrives
   beside it. No snapshot here had `has_credits: true`.
 - Windows Codex and a second `CODEX_HOME` account, neither of which have

@@ -16,4 +16,12 @@ namespace ClaudeBuddy
     {
         public const string DefaultVoiceName = "";
     }
+
+    // Only PortToBind's default reaches for this, and the probe never binds a
+    // peer listener. The real PeerLink is 800 lines with the whole peer
+    // protocol behind it, so the constant is restated rather than dragged in.
+    internal static class PeerLink
+    {
+        public const int DefaultPort = 7677;
+    }
 }

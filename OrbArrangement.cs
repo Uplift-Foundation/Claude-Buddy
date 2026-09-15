@@ -676,6 +676,7 @@ namespace ClaudeBuddy
                 "star" => Sampled(StarAt, n),
                 "grid" => Grid(n),
                 "line" => Line(n),
+                "vline" => VLine(n),
                 _ => Sampled(HeartAt, n)
             };
         }
@@ -774,6 +775,40 @@ namespace ClaudeBuddy
         {
             var pts = new (double X, double Y)[n];
             for (var i = 0; i < n; i++) pts[i] = (i - (n - 1) / 2.0, 0.0);
+            return pts;
+        }
+
+        // Line, turned 90 degrees — but only up to MaxPerColumn orbs. Past that
+        // it wraps into a second column, then a third, rather than staying a
+        // single column that outgrows every screen's height: a column only has
+        // the screen's height to spend, which runs out sooner than the width
+        // Line spends, and Fit's job is to keep the *pattern* on screen, not to
+        // shrink individual orbs — so a single unbounded column can be pushed
+        // closer together than the orbs actually are, which is overlap, not
+        // spacing. Wrapping early avoids ever asking Fit to do that.
+        //
+        // MaxPerColumn is picked well under what the shortest test screen can
+        // hold (small laptop, 800 DIP tall, fits about 22 orbs at the smallest
+        // circle size) so the margin survives the extra room a wide spacing
+        // setting or a fanned-out team asks for. Below the cap this is a plain
+        // single column, same as Line is a plain single row; above it, still
+        // narrow — a handful of tall columns, not the square Grid already is.
+        private static (double X, double Y)[] VLine(int n)
+        {
+            const int MaxPerColumn = 15;
+
+            var cols = (int)Math.Ceiling(n / (double)MaxPerColumn);
+            var rows = (int)Math.Ceiling(n / (double)cols);
+
+            var pts = new (double X, double Y)[n];
+
+            for (var i = 0; i < n; i++)
+            {
+                var col = i / rows;
+                var row = i % rows;
+                pts[i] = (col - (cols - 1) / 2.0, row - (rows - 1) / 2.0);
+            }
+
             return pts;
         }
 

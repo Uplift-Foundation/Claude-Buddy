@@ -80,7 +80,7 @@ namespace ClaudeBuddy
             }
 
             // The key's fourth segment carries the same word when origin is
-            // absent: "agent:main:discord:direct:2467…".
+            // absent: "agent:main:discord:direct:1000…".
             var type = string.IsNullOrWhiteSpace(chatType)
                 ? parts.Length >= 4 ? parts[3] : null
                 : chatType;
@@ -101,7 +101,7 @@ namespace ClaudeBuddy
         //
         // Taken from the session key rather than from origin.label, which is
         // written for a log and varies — the id at the end of
-        // "agent:main:discord:channel:100000000000000003" is the room, and the
+        // "agent:main:discord:channel:1900000000000000001" is the room, and the
         // agent in front of it is who is standing in it.
         //
         // Null for anything that is not a channel, including a DM: two people

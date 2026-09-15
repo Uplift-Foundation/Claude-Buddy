@@ -18,8 +18,22 @@ namespace ClaudeBuddy.Tests;
 // way the live scan's constructor defaults are.
 //
 // The two LocalSessions cases mutate process-wide statics (the provider and
-// the fallback), so they live in this one class — classes are xunit's
-// parallelism unit — and put both back in a finally.
+// the fallback) and put both back in a finally.
+//
+// Keeping them in one class is not enough, which is what the collection below
+// is for. A class is xunit's parallelism unit, so same-class cases cannot race
+// each other — but HeadlessSessionsTests mutates these same two statics, and
+// nothing stopped the two classes running at once. That is a real flake, not a
+// theoretical one: LocalSessionsAsksTheDiskRatherThanTheOrbList failed once
+// here in 1ms while another class held the fallback, then passed on a rerun
+// over an identical binary.
+//
+// "Settings" rather than a collection of its own, deliberately:
+// HeadlessSessionsTests is already in it, and a new name would serialise this
+// class against nothing. The collection is the repo's existing answer to
+// process-wide statics — see SettingsCollection's own comment — and a static
+// delegate is the same hazard as a static settings object.
+[Collection("Settings")]
 public class HeadlessSnapshotTests
 {
     private static readonly Func<Dictionary<string, string>?> NoJobs =
@@ -57,6 +71,37 @@ public class HeadlessSnapshotTests
             var one = Assert.Single(kept);
             Assert.Equal("abc123", one.SessionId);
             Assert.Equal("job-hunter", one.Status.Title);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // A session with a live pid but no session record on this machine — which
+    // is every session in this suite, since the pids are invented — must come
+    // back kept. SessionPark is consulted before TranscriptHandoff in the
+    // composition above, so a rule that answered "parked" on a missing record
+    // would empty this whole file rather than fail one case.
+    [Fact]
+    public void AnInventedPidWithNoSessionRecordIsNotTreatedAsParked()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "abc123", new SessionStatus
+            {
+                State = "idle",
+                Title = "job-hunter",
+                Cwd = "/tmp/somewhere",
+                SessionPid = 999999,
+                TranscriptPath = "/tmp/nonexistent/abc123.jsonl"
+            });
+
+            var kept = SessionManager.HeadlessSnapshot(
+                dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow);
+
+            Assert.Single(kept);
         }
         finally
         {
@@ -435,6 +480,63 @@ public class HeadlessSnapshotTests
             Assert.Empty(SessionManager.HeadlessSnapshot(
                 dir, NoJobs, isRunning: _ => false, nowUtc: DateTime.UtcNow,
                 honourOrbLifetime: false));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // A pid-less Claude Code record is not proof of a live session. It is kept
+    // only while the daemon still names it as a background job; otherwise a
+    // headless machine would offer every abandoned subagent to its peers forever
+    // when the remote-serving path ignores the display lifetime.
+    [Fact]
+    public void APidlessStatusTheDaemonDoesNotKnowIsNotOfferedWithLifetimeIgnored()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "leftover", new SessionStatus
+            {
+                State = "idle",
+                Cwd = "/tmp/somewhere",
+                Source = SessionSource.ClaudeCode,
+                SessionPid = 0
+            });
+
+            Assert.Empty(SessionManager.HeadlessSnapshot(
+                dir, NoJobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                honourOrbLifetime: false));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // The inverse keeps the fail-safe intact: a pid-less background worker is
+    // real when the daemon names it, even though it has no terminal pid for the
+    // headless scan to probe.
+    [Fact]
+    public void APidlessStatusTheDaemonStillNamesIsOfferedWithLifetimeIgnored()
+    {
+        var dir = NewStatusDir();
+        try
+        {
+            WriteStatus(dir, "background", new SessionStatus
+            {
+                State = "idle",
+                Cwd = "/tmp/somewhere",
+                Source = SessionSource.ClaudeCode,
+                SessionPid = 0
+            });
+
+            var jobs = new Dictionary<string, string> { ["background"] = "blocked" };
+
+            Assert.Equal("background", Assert.Single(SessionManager.HeadlessSnapshot(
+                dir, () => jobs, isRunning: _ => true, nowUtc: DateTime.UtcNow,
+                honourOrbLifetime: false)).SessionId);
         }
         finally
         {

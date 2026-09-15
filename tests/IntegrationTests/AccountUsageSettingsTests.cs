@@ -136,4 +136,33 @@ public class AccountUsageSettingsTests
         Assert.Equal(10, session!.X);
         Assert.Equal(300, account!.X);
     }
+
+    // GrokAutoRefreshEnabled, added by CB-96, through the same file round trip.
+    // The comment at the top of this class names exactly the failure this
+    // guards against: a setting present in the model but missing from
+    // ClaudeBuddySettings.KnownKeys round-trips through _unknownKeys as well
+    // as being written properly, which JsonObject rejects as a duplicate key —
+    // a failure that shows up only against a real file, never in memory.
+    [Fact]
+    public void GrokAutoRefreshIsOffByDefaultAndSurvivesAReload()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        // Starting a real application in the background, however briefly, is
+        // not something to do to someone who has not asked — off by default
+        // even though GrokAccountUsageEnabled sits right next to it in the
+        // model, the same argument SettingsWindow's own comment on the row
+        // makes for showing the switch at all.
+        Assert.False(ClaudeBuddySettings.GrokAutoRefreshEnabled);
+
+        ClaudeBuddySettings.GrokAutoRefreshEnabled = true;
+
+        var path = Path.Combine(dir, "settings.json");
+        var root = JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
+        Assert.True(root!["grokAutoRefreshEnabled"]!.GetValue<bool>());
+
+        PointSettingsAt(dir);
+        Assert.True(ClaudeBuddySettings.GrokAutoRefreshEnabled);
+    }
 }

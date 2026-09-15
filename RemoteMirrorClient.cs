@@ -176,6 +176,29 @@ namespace ClaudeBuddy
         // there is no way to learn one.
         public async Task AskWhatTheyHaveAsync(IReadOnlyList<string> peers)
         {
+            // A direct-link roster is a complete answer from each connected
+            // machine, not a stream of additions. Forgetting a peer that is no
+            // longer connected is therefore safe; retaining it made its last
+            // roster permanent after a machine was switched off.
+            var connected = new HashSet<string>(peers, StringComparer.OrdinalIgnoreCase);
+            var disconnectedChanged = false;
+
+            lock (_gate)
+            {
+                foreach (var name in _servedBy
+                    .Where(pair => !connected.Contains(pair.Value))
+                    .Select(pair => pair.Key)
+                    .ToList())
+                {
+                    _servedBy.Remove(name);
+                    _roster.Remove(name);
+                    _answeredNo.Add(name);
+                    disconnectedChanged = true;
+                }
+            }
+
+            if (disconnectedChanged) RosterUpdated?.Invoke();
+
             foreach (var peer in peers)
             {
                 lock (_gate)
@@ -206,22 +229,47 @@ namespace ClaudeBuddy
                 var entries = MirrorProtocol.DecodeRoster(reply.Payload);
                 if (entries is null) continue;
 
+                var offered = new Dictionary<string, MirrorProtocol.MirrorRosterEntry>(
+                    StringComparer.OrdinalIgnoreCase);
+                foreach (var entry in entries)
+                {
+                    if (entry.HasTranscript) offered[entry.Name] = entry;
+                }
+
                 var changed = false;
 
                 lock (_gate)
                 {
-                    foreach (var entry in entries)
+                    // This reply is authoritative for this peer alone. A
+                    // similarly named session may have been answered by a
+                    // different connected machine, so it must not be removed
+                    // merely because this peer did not mention it.
+                    foreach (var name in _servedBy
+                        .Where(pair => string.Equals(pair.Value, peer,
+                            StringComparison.OrdinalIgnoreCase)
+                            && !offered.ContainsKey(pair.Key))
+                        .Select(pair => pair.Key)
+                        .ToList())
                     {
-                        // Unlike the named ask, nothing is settled as
-                        // unavailable here. A machine that did not mention a
-                        // session is not saying it does not have one — it was
-                        // never asked about anything in particular.
-                        if (!entry.HasTranscript) continue;
+                        _roster.Remove(name);
+                        _servedBy.Remove(name);
+                        _answeredNo.Add(name);
+                        changed = true;
+                    }
+
+                    foreach (var entry in offered.Values)
+                    {
+                        if (!_roster.TryGetValue(entry.Name, out var previous)
+                            || previous != entry
+                            || !_servedBy.TryGetValue(entry.Name, out var servedBy)
+                            || !string.Equals(servedBy, peer, StringComparison.OrdinalIgnoreCase))
+                        {
+                            changed = true;
+                        }
 
                         _roster[entry.Name] = entry;
                         _servedBy[entry.Name] = peer;
                         _answeredNo.Remove(entry.Name);
-                        changed = true;
                     }
                 }
 
@@ -636,19 +684,32 @@ namespace ClaudeBuddy
                 TimeSpan.FromSeconds(30), watch, awaitReply: false).ConfigureAwait(false);
         }
 
-        // Types a line into the far session's own terminal.
+        // The richer answer to an INPUT. A typed send has nothing more to say
+        // than whether it worked; a CB-105 delivery over the far session's
+        // messaging socket also carries which channel was used and that
+        // session's own agent status, which the composer hint and the
+        // delivered-note both need to say something honest.
+        internal readonly record struct InputOutcome(string? Error, string? Via, string? AgentStatus);
+
+        // Types a line into the far session's own terminal, or — since
+        // CB-105 — hands it to that session's own messaging socket when
+        // there is no terminal to type into at all.
         //
-        // Null on success; otherwise the error code, which the caller turns into
-        // wording. This is the path that makes /color work again: the text is
-        // typed into that CLI's input line by the Buddy running beside it, so
-        // its own command handler runs it, exactly as it would locally.
-        public async Task<string?> SendInputAsync(string name, string text)
+        // Null Error on success; otherwise the error code, which the caller
+        // turns into wording. A typed send is the path that makes /color
+        // work again: the text is typed into that CLI's input line by the
+        // Buddy running beside it, so its own command handler runs it,
+        // exactly as it would locally. A delivered send has no such
+        // guarantee — see MirrorProtocol's note on why there is no ack on
+        // this wire at all.
+        public async Task<InputOutcome> SendInputDetailedAsync(string name, string text)
         {
             string relay;
 
             lock (_gate)
             {
-                if (!_servedBy.TryGetValue(name, out var found)) return MirrorProtocol.ErrNoSession;
+                if (!_servedBy.TryGetValue(name, out var found))
+                    return new InputOutcome(MirrorProtocol.ErrNoSession, null, null);
                 relay = found;
             }
 
@@ -659,10 +720,17 @@ namespace ClaudeBuddy
                 TimeSpan.FromSeconds(MirrorProtocol.InputTimeoutSeconds))
                 .ConfigureAwait(false);
 
-            if (reply.Ok) return null;
+            if (!reply.Ok) return new InputOutcome(reply.ErrCode ?? MirrorProtocol.ErrUnsupported, null, null);
 
-            return reply.ErrCode ?? MirrorProtocol.ErrUnsupported;
+            return new InputOutcome(
+                null,
+                reply.Fields is not null && reply.Fields.TryGetValue("via", out var via) ? via : null,
+                reply.Fields is not null && reply.Fields.TryGetValue("agent", out var agent) ? agent : null);
         }
+
+        // Kept for callers that only ever cared whether a send worked.
+        public async Task<string?> SendInputAsync(string name, string text) =>
+            (await SendInputDetailedAsync(name, text).ConfigureAwait(false)).Error;
 
         // Excluded from coverage: reaching it needs a payload that passes every
         // per-piece hash *and* the whole-payload hash and still is not a turn

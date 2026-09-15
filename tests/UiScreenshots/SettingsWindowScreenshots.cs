@@ -202,4 +202,40 @@ public class SettingsWindowScreenshots
 
         ScreenshotHelper.CaptureControl(group, "settings-grok-build-group.png");
     }
+
+    // CB-96's row, which only exists once Grok's usage orbs are already on —
+    // the default capture above never shows it, and adding a UiTests scenario
+    // for the toggle does not add its screenshot the way this repo's own rule
+    // says it should not.
+    [AvaloniaFact]
+    public void GrokBuildGroupShowsTheAutoRefreshRowOnceUsageOrbsAreOn()
+    {
+        ClaudeBuddySettings.GrokAccountUsageEnabled = true;
+
+        var ctor = typeof(SettingsWindow).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            types: Type.EmptyTypes)
+            ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+        var window = (Avalonia.Controls.Window)ctor.Invoke(null);
+
+        window.Show();
+        ScreenshotHelper.Flush();
+
+        var anchor = window.GetLogicalDescendants()
+            .OfType<TextBlock>()
+            .FirstOrDefault(block => block.Text == "Keep Grok usage fresh automatically");
+
+        Assert.NotNull(anchor);
+
+        var group = anchor!.GetLogicalAncestors().OfType<Control>()
+            .FirstOrDefault(control => control.GetLogicalDescendants()
+                .OfType<TextBlock>()
+                .Any(block => block.Text == "Grok Build"))
+            ?? (Control)anchor;
+
+        ScreenshotHelper.CaptureControl(group, "settings-grok-auto-refresh.png");
+
+        ClaudeBuddySettings.GrokAccountUsageEnabled = false;
+    }
 }

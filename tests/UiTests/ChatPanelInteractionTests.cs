@@ -183,6 +183,51 @@ public class ChatPanelInteractionTests : IDisposable
         Assert.Equal(TextToSpeech.SpeakState.Idle, TextToSpeech.State);
     }
 
+    // The platform speech call is intentionally outside headless coverage, but
+    // choosing whether that call receives a workspace voice is a panel decision
+    // and must not drift from the orb's equivalent path.
+    [AvaloniaFact]
+    public void AnOpenClawAgentPanelSelectsItsWorkspaceVoiceOnly()
+    {
+        var agent = "voice-" + Guid.NewGuid().ToString("N");
+        var sessionId = $"openclaw:agent:{agent}:discord:direct:1";
+        // The resolver deliberately refuses a voice which is not installed.
+        // Choose one published by this runner so this UI seam verifies that an
+        // accepted workspace voice reaches the panel on every supported RID.
+        var workspaceVoice = TextToSpeech.SystemVoices()[0];
+        try
+        {
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>
+                {
+                    [agent] = new("Voice agent", null, null, workspaceVoice),
+                });
+
+            var openClaw = new OpenClawChatSession(sessionId, sessionId["openclaw:".Length..], "Voice agent");
+
+            var voice = Assert.IsType<TextToSpeech.VoiceOption>(ChatPanel.VoiceFor(openClaw));
+            Assert.Equal(TextToSpeech.SpeakEngine.System, voice.Engine);
+            Assert.Equal(workspaceVoice, voice.Name);
+
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>
+                {
+                    [agent] = new("Voice agent", null, null, "af_bella", 1.3),
+                });
+            var neural = new TextToSpeech.VoiceOption(
+                TextToSpeech.SpeakEngine.Neural, "af_bella", "af_bella (Kokoro)");
+            Assert.Equal(neural, ChatPanel.VoiceFor(openClaw, new[] { neural }));
+            Assert.Equal(1.3, ChatPanel.RateFor(openClaw));
+            Assert.Null(ChatPanel.VoiceFor(NewFake(sessionId: "fake-voice-" + agent)));
+            Assert.Null(ChatPanel.RateFor(NewFake(sessionId: "fake-voice-" + agent)));
+        }
+        finally
+        {
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>());
+        }
+    }
+
     // --- OnPanelKeyDown: Escape and Cmd+W ---
 
     [AvaloniaFact]

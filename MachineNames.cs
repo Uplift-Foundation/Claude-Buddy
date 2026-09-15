@@ -154,6 +154,25 @@ namespace ClaudeBuddy
             return safe.Length == 0 ? "machine" : safe;
         }
 
+        // Clean(), read out loud rather than matched against.
+        //
+        // LocalHostName is a Bonjour name: macOS itself turns "Warren's
+        // MacBook Pro" into "Warrens-MacBook-Pro" before ever handing it to
+        // this app, because a Bonjour label cannot carry an apostrophe or a
+        // space. Every hyphen still there is standing in for one of those, so
+        // a space is closer to what the owner actually typed than a hyphen
+        // is — it just cannot get the apostrophe back, since Clean() already
+        // discarded the one bit that would say where it went.
+        //
+        // Only where a machine name is read, never where it is compared:
+        // Mine()'s answer is a pairing key and a certificate subject, and
+        // "warrens-macbook-pro" meeting "warrens macbook pro" would be two
+        // machines the rest of this file no longer recognises as the same
+        // one. Call this at the point of display — MetaMachineText and
+        // similar — after any equality check the raw name was needed for,
+        // never before.
+        internal static string Readable(string name) => name.Replace('-', ' ');
+
         // Split from the call to Environment.MachineName so every branch below
         // can be tested: a headless runner has exactly one machine name, and the
         // interesting cases are the ones it does not have.

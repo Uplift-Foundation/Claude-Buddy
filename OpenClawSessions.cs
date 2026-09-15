@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using System.Text.Json;
 using Avalonia.Threading;
 
@@ -78,7 +79,14 @@ namespace ClaudeBuddy
         private static readonly Dictionary<string, AgentIdentity> Identities =
             new(StringComparer.OrdinalIgnoreCase);
 
-        internal sealed record AgentIdentity(string Name, string? Emoji, byte[]? Avatar);
+        private static readonly Dictionary<string, PeerVoiceCache> PeerVoices =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private sealed record PeerVoiceCache(
+            string GatewayPin, Dictionary<string, (string Voice, double? Rate)> Voices);
+
+        internal sealed record AgentIdentity(
+            string Name, string? Emoji, byte[]? Avatar, string? Voice = null, double? Rate = null);
 
         // A test seam, matching SetSnapshotForTests: the only thing that fills the
         // identity table is LoadAgentNamesAsync, which is an agents.list request
@@ -106,6 +114,7 @@ namespace ClaudeBuddy
             lock (Gate)
             {
                 Identities.Clear();
+                PeerVoices.Clear();
                 foreach (var (id, identity) in identities) Identities[id] = identity;
 
                 if (names is null) return;
@@ -125,11 +134,88 @@ namespace ClaudeBuddy
         // the cache is keyed by agent, so both surfaces draw the same objects.
         public static OpenClawAvatars.Avatar? AvatarForSession(string sessionId)
         {
+            // A room is not an agent and has no picture of its own, so it wears
+            // its members' — see RoomAvatar. Handled here rather than by each
+            // caller so the orb and the chat panel's header cannot disagree
+            // about what a room looks like; both already ask this one function.
+            if (sessionId.StartsWith(RoomPrefix, StringComparison.Ordinal))
+                return RoomAvatar(sessionId[RoomPrefix.Length..]);
+
             var identity = IdentityForSession(sessionId);
             if (identity is null) return null;
 
             var agent = AgentIdOf(sessionId);
             return agent is null ? null : OpenClawAvatars.For(agent, identity.Avatar);
+        }
+
+        // Minted by SessionManager.RoomId. Named here as well because this is
+        // the other end of it — a room id is the one session id that names no
+        // gateway session at all, and both halves have to agree on the shape.
+        private const string RoomPrefix = "openclaw:room:";
+
+        // The people in a channel, drawn as one picture: the orb cut into a
+        // wedge each.
+        //
+        // A room orb used to be the only orb in its own cluster with nothing on
+        // it — every agent pointing at it wore a face, and the thing they were
+        // all pointing at wore two letters. The channel's initials say *which*
+        // conversation, which the ring's colour also says; who is in it was said
+        // nowhere.
+        //
+        // Cut from the channel's *participants* — the members with an orb — and
+        // not from its membership, which is deliberately every agent the gateway
+        // lists there however long ago it last spoke. Membership is what the
+        // room's chat merges and it is right for that; using it here drew
+        // #social-media as four faces while two agents were talking in it.
+        //
+        // The fallback to the full membership is for a room orb outliving its
+        // sessions: "Keep orbs for" can hold one on screen after every member
+        // has dropped out of the recency window, and the faces of who was in it
+        // are still true. Reverting to the channel's initials at that moment
+        // would be a change on screen with no event behind it.
+        //
+        // Ordering is the part worth being careful about. They arrive
+        // most-recently-active first, which is how the four that get a wedge are
+        // chosen — a channel with seven agents talking in it should show the
+        // four most recent. They are then sorted by agent id, so the wedges stay
+        // put: chosen *and* ordered by recency, two agents in a fast exchange
+        // would swap halves of the orb every time either of them spoke.
+        public static OpenClawAvatars.Avatar? RoomAvatar(string roomKey)
+        {
+            var agents = AgentsInRoom(roomKey);
+            if (agents.Count == 0) agents = Distinct(MembersOfRoom(roomKey));
+
+            if (agents.Count == 0) return null;
+
+            if (agents.Count > AvatarPie.MaxParts)
+                agents = agents.Take(AvatarPie.MaxParts).ToList();
+
+            agents.Sort(StringComparer.OrdinalIgnoreCase);
+
+            // One member is not a composite. Returning their avatar directly
+            // rather than a one-wedge pie keeps the animation an animated
+            // avatar has — a composite is a still — and means a channel only
+            // one agent talks in looks exactly like that agent, which is true.
+            if (agents.Count == 1)
+            {
+                var only = IdentityOf(agents[0]);
+                return only is null ? null : OpenClawAvatars.For(agents[0], only.Avatar);
+            }
+
+            var colours = agents.Select(ColourForAgent).ToList();
+
+            var parts = agents
+                .Select((agent, i) => new OpenClawAvatars.Part(IdentityOf(agent)?.Avatar, colours[i]))
+                .ToList();
+
+            // The colours are in the cache key as well as the agents, because
+            // the palette deals its colours across *every* agent the gateway
+            // knows — so an agent joining a different channel can recolour a
+            // wedge here without this room's membership changing at all.
+            var cacheKey = RoomPrefix + roomKey + "|" + string.Join(
+                '|', agents.Select((agent, i) => agent + "=" + colours[i]));
+
+            return OpenClawAvatars.Composite(cacheKey, parts);
         }
 
         public static string? AgentIdOf(string sessionId)
@@ -153,6 +239,113 @@ namespace ClaudeBuddy
 
             var parts = key.Split(':');
             return parts.Length >= 2 && parts[0] == "agent" ? IdentityOf(parts[1]) : null;
+        }
+
+        // Speech stays with the user's selected voice unless this agent named an
+        // available voice in its workspace metadata. A missing (or rejected)
+        // field is deliberately not a different kind of default.
+        public static TextToSpeech.VoiceOption? VoiceForSession(string sessionId)
+            => VoiceForSession(sessionId, TextToSpeech.AllVoiceOptions());
+
+        // Kept separate from enumeration so the session rule can be exercised
+        // without asking the host to launch Kokoro or a user's voice command.
+        // The production overload above is the only caller which owns that
+        // machine-specific list.
+        internal static TextToSpeech.VoiceOption? VoiceForSession(
+            string sessionId, IEnumerable<TextToSpeech.VoiceOption> options)
+        {
+            // VoiceForPersona rather than MatchVoiceOption since CB-136: a
+            // workspace IDENTITY.md is read by the same parser a CLAUDE.md is,
+            // so a voice written as a mixture there means the same thing it
+            // means here. Honouring a blend on one orb and ignoring it on the
+            // other is the drift PersonaMarkdown was lifted out of this file
+            // to prevent.
+            var requested = IdentityForSession(sessionId)?.Voice ?? PeerVoiceFor(AgentIdOf(sessionId)).Voice;
+            return requested is null ? null : TextToSpeech.VoiceForPersona(requested, options);
+        }
+
+        // Only the neural (Kokoro) engine has a speaking rate to set — a
+        // system voice or a user's own custom command has no such knob here,
+        // so a rate resolved for either is simply never read. Kept separate
+        // from VoiceForSession rather than folded into VoiceOption: that
+        // record is also the shape of every entry in "every voice from every
+        // engine" (the settings picker's list), where a per-utterance rate
+        // has no meaning at all.
+        internal static double? RateForSession(string sessionId) =>
+            IdentityForSession(sessionId)?.Rate ?? PeerVoiceFor(AgentIdOf(sessionId)).Rate;
+
+        internal static IReadOnlyList<OpenClawPeerIdentity.Row> PeerProfileVoices(
+            string gatewayPin, IReadOnlyList<string> agentIds)
+        {
+            if (!OpenClawPeerIdentity.ValidPin(gatewayPin)
+                || agentIds.Count > OpenClawPeerIdentity.MaxAgents
+                || !string.Equals(gatewayPin, ClaudeBuddySettings.OpenClawFingerprint, StringComparison.OrdinalIgnoreCase))
+                return Array.Empty<OpenClawPeerIdentity.Row>();
+
+            lock (Gate) return agentIds
+                .Where(OpenClawPeerIdentity.ValidAgentId)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(id => Identities.TryGetValue(id, out var identity)
+                    ? (AgentId: id, Voice: identity.Voice, Rate: identity.Rate)
+                    : (AgentId: id, Voice: (string?)null, Rate: (double?)null))
+                .Where(row => OpenClawPeerIdentity.ValidVoice(row.Voice))
+                .Select(row => new OpenClawPeerIdentity.Row(row.AgentId, row.Voice!,
+                    OpenClawPeerIdentity.ValidRate(row.Rate) ? row.Rate : null)).ToList();
+        }
+
+        internal static void ApplyPeerProfileVoices(string peer, string gatewayPin,
+            IReadOnlyList<OpenClawPeerIdentity.Row> rows)
+        {
+            if (string.IsNullOrWhiteSpace(peer) || rows.Count > OpenClawPeerIdentity.MaxAgents
+                || !OpenClawPeerIdentity.ValidPin(gatewayPin)
+                || !string.Equals(gatewayPin, ClaudeBuddySettings.OpenClawFingerprint, StringComparison.OrdinalIgnoreCase)) return;
+            lock (Gate)
+            {
+                var accepted = rows.Where(row => OpenClawPeerIdentity.ValidAgentId(row.AgentId)
+                    && OpenClawPeerIdentity.ValidVoice(row.Voice) && OpenClawPeerIdentity.ValidRate(row.Rate)
+                    && Identities.ContainsKey(row.AgentId))
+                    .ToDictionary(row => row.AgentId, row => (row.Voice, row.Rate), StringComparer.OrdinalIgnoreCase);
+                if (accepted.Count > OpenClawPeerIdentity.MaxAgents) return;
+                PeerVoices[peer] = new PeerVoiceCache(gatewayPin, accepted);
+            }
+        }
+
+        internal static void ForgetPeerProfileVoices(string peer)
+        {
+            lock (Gate) PeerVoices.Remove(peer);
+        }
+
+        // A direct link can come up after agents.list did. Re-asking then is
+        // necessary: a cached answer is intentionally never read across a
+        // disconnect, but a later successful pairing should not need a gateway
+        // reconnect before its already-known agents can speak correctly.
+        internal static void RequestPeerProfileVoices()
+        {
+            var pin = ClaudeBuddySettings.OpenClawFingerprint;
+            if (!OpenClawPeerIdentity.ValidPin(pin)) return;
+
+            List<string> ids;
+            lock (Gate) ids = Identities.Keys
+                .Where(OpenClawPeerIdentity.ValidAgentId)
+                .Take(OpenClawPeerIdentity.MaxAgents).ToList();
+            if (ids.Count > 0)
+                _ = PeerSessions.Host?.RequestOpenClawProfileVoicesAsync(pin!, ids);
+        }
+
+        private static (string? Voice, double? Rate) PeerVoiceFor(string? agentId)
+        {
+            if (agentId is null) return (null, null);
+            lock (Gate)
+            {
+                var pin = ClaudeBuddySettings.OpenClawFingerprint;
+                if (!OpenClawPeerIdentity.ValidPin(pin)) return (null, null);
+                var matches = PeerVoices.Values
+                    .Where(cache => string.Equals(cache.GatewayPin, pin, StringComparison.OrdinalIgnoreCase)
+                        && cache.Voices.TryGetValue(agentId, out _))
+                    .Select(cache => cache.Voices[agentId])
+                    .GroupBy(m => (m.Voice.ToLowerInvariant(), m.Rate)).Select(g => g.First()).ToList();
+                return matches.Count == 1 ? matches[0] : (null, null);
+            }
         }
 
         // How long a session stays "working" after its last event. A turn emits
@@ -362,6 +555,56 @@ namespace ClaudeBuddy
                 return _roomMembers.TryGetValue(roomKey, out var members)
                     ? members.ToList()
                     : Array.Empty<string>();
+        }
+
+        // Everyone in the channel who has an orb right now: the members that
+        // came through the recency and cluster filters rather than every agent
+        // the gateway has ever listed there.
+        //
+        // The narrower of the two answers, and the one the room's *picture*
+        // wants. A conversation that is happening between two agents should not
+        // be drawn as four because two more have a session in the channel and
+        // nothing to say — which is what shipping the wide answer to the orb
+        // did on #social-media.
+        //
+        // The wide one stays exactly as it was for the room's chat, which needs
+        // a quiet agent's transcript to merge (CB-27). Neither is the "right"
+        // list; they answer different questions.
+        private static Dictionary<string, List<string>> _roomParticipants =
+            new(StringComparer.Ordinal);
+
+        public static IReadOnlyList<string> ParticipantsOfRoom(string roomKey)
+        {
+            lock (Gate)
+                return _roomParticipants.TryGetValue(roomKey, out var standing)
+                    ? standing.ToList()
+                    : Array.Empty<string>();
+        }
+
+        // How many *people* are in a channel, rather than how many sessions —
+        // still most-recently-active first.
+        //
+        // The two differ: one agent can hold more than one session in the same
+        // channel, and counting sessions would call that a crowd. Which matters
+        // now that the count decides whether a room orb exists at all, and it
+        // already mattered to the picture, where the same agent twice would have
+        // divided the orb between two copies of one face.
+        public static List<string> AgentsInRoom(string roomKey) =>
+            Distinct(ParticipantsOfRoom(roomKey));
+
+        private static List<string> Distinct(IReadOnlyList<string> sessionKeys)
+        {
+            var agents = new List<string>();
+
+            foreach (var key in sessionKeys)
+            {
+                var agent = AgentIdOf(key);
+                if (agent is null || agents.Contains(agent, StringComparer.OrdinalIgnoreCase)) continue;
+
+                agents.Add(agent);
+            }
+
+            return agents;
         }
 
         public static IRemoteChatSession? RoomChatFor(
@@ -739,31 +982,14 @@ namespace ClaudeBuddy
                 {
                     var id = Str(agent, "id");
                     if (string.IsNullOrWhiteSpace(id)) continue;
-
-                    var identity = agent.TryGetProperty("identity", out var block)
-                        && block.ValueKind == JsonValueKind.Object
-                            ? block
-                            : default;
-
-                    var name = Str(agent, "displayName");
-                    if (string.IsNullOrWhiteSpace(name)) name = Str(agent, "name");
-                    if (string.IsNullOrWhiteSpace(name) && identity.ValueKind == JsonValueKind.Object)
-                    {
-                        name = Str(identity, "name");
-                    }
-
-                    parsed.Add((id!, new AgentIdentity(
-                        name?.Trim() ?? id!,
-                        identity.ValueKind == JsonValueKind.Object ? Str(identity, "emoji") : null,
-                        identity.ValueKind == JsonValueKind.Object
-                            ? DecodeDataUri(Str(identity, "avatarUrl"))
-                            : null)));
+                    parsed.Add((id!, IdentityFrom(agent)));
                 }
 
                 lock (Gate)
                 {
                     AgentNames.Clear();
                     Identities.Clear();
+                    PeerVoices.Clear();
 
                     foreach (var (id, identity) in parsed)
                     {
@@ -771,6 +997,8 @@ namespace ClaudeBuddy
                         Identities[id] = identity;
                     }
                 }
+
+                RequestPeerProfileVoices();
 
                 // Decoded here, on this background task, rather than the first
                 // time an orb asks for one. OpenClawAvatars.For runs SkiaSharp
@@ -788,6 +1016,30 @@ namespace ClaudeBuddy
                 // Names are a courtesy; without them the ids still identify a
                 // session perfectly well.
             }
+        }
+
+        // Kept beside the wire call but pure so the precedence between local
+        // workspace metadata and the gateway's published identity is testable.
+        internal static AgentIdentity IdentityFrom(JsonElement agent)
+        {
+            var id = Str(agent, "id") ?? "";
+            var identity = agent.TryGetProperty("identity", out var block)
+                && block.ValueKind == JsonValueKind.Object ? block : default;
+
+            var name = Str(agent, "displayName");
+            if (string.IsNullOrWhiteSpace(name)) name = Str(agent, "name");
+            if (string.IsNullOrWhiteSpace(name) && identity.ValueKind == JsonValueKind.Object)
+                name = Str(identity, "name");
+
+            var local = OpenClawWorkspaceIdentity.Read(Str(agent, "workspace"));
+            return new AgentIdentity(
+                local.Name ?? name?.Trim() ?? id,
+                identity.ValueKind == JsonValueKind.Object ? Str(identity, "emoji") : null,
+                local.Avatar ?? (identity.ValueKind == JsonValueKind.Object
+                    ? DecodeDataUri(Str(identity, "avatarUrl"))
+                    : null),
+                local.Voice,
+                local.Rate);
         }
 
         // "data:image/png;base64,iVBOR…" -> the bytes. Anything else, including a
@@ -870,7 +1122,20 @@ namespace ClaudeBuddy
             var asOf = now ?? DateTime.UtcNow;
             var result = new List<Session>();
 
-            var roomMembers = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            // Carried with each member's last activity, because the order this
+            // ends up in is load-bearing: a room orb draws the four members it
+            // is given first (see RoomAvatar), and "the four the gateway
+            // happened to list first" is not an answer anyone can read. Sorted
+            // once below rather than by each caller, so the room's chat and the
+            // room's picture are built from the same order.
+            var roomMembers = new Dictionary<string, List<(string Key, DateTime Activity)>>(
+                StringComparer.Ordinal);
+
+            // The subset of those that got an orb — see where this is filled,
+            // below the filters rather than above them.
+            var roomParticipants = new Dictionary<string, List<(string Key, DateTime Activity)>>(
+                StringComparer.Ordinal);
+
             var deliveries = new Dictionary<string, Delivery?>(StringComparer.Ordinal);
 
             // Every agent the gateway knows of, filtered or not, so that a
@@ -910,9 +1175,9 @@ namespace ClaudeBuddy
                 if (roomKey is not null)
                 {
                     if (!roomMembers.TryGetValue(roomKey, out var members))
-                        roomMembers[roomKey] = members = new List<string>();
+                        roomMembers[roomKey] = members = new List<(string, DateTime)>();
 
-                    members.Add(key);
+                    members.Add((key, activity));
                 }
 
                 // ...and where it delivers, on the same terms and for the same
@@ -957,6 +1222,27 @@ namespace ClaudeBuddy
                         OrbClusters.Of(heartbeat, kind), HeartbeatMode, CronMode))
                     continue;
 
+                // Recorded here, past every filter above, rather than beside
+                // the membership at the top of the loop — which is the whole
+                // difference between the two, and the point this file already
+                // makes twice: "who is in this channel" and "who is worth
+                // drawing" are different questions with different answers.
+                //
+                // The room's *picture* wants the second one. Membership is
+                // deliberately generous, holding every agent the gateway lists
+                // for the channel however long ago it last spoke, because the
+                // room's chat needs their transcript to merge. Cutting the pie
+                // from that list put four faces on #social-media while two
+                // agents were talking in it — the other two had sessions there
+                // and nothing to say.
+                if (roomKey is not null)
+                {
+                    if (!roomParticipants.TryGetValue(roomKey, out var standing))
+                        roomParticipants[roomKey] = standing = new List<(string, DateTime)>();
+
+                    standing.Add((key, activity));
+                }
+
                 result.Add(new Session(
                     key,
                     TitleFor(s, origin, key),
@@ -976,9 +1262,26 @@ namespace ClaudeBuddy
                 .ToDictionary(pair => pair.Key["room:".Length..], pair => pair.Value,
                     StringComparer.Ordinal);
 
+            // Most recently active first, and ties broken on the key so the
+            // answer is the same twice running. A gateway lists its sessions in
+            // whatever order it likes and that order does move between polls;
+            // an unstable one here would reshuffle a room orb's wedges under a
+            // conversation that had not changed at all.
+            static Dictionary<string, List<string>> Ordered(
+                Dictionary<string, List<(string Key, DateTime Activity)>> rooms) =>
+                rooms.ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value
+                        .OrderByDescending(member => member.Activity)
+                        .ThenBy(member => member.Key, StringComparer.Ordinal)
+                        .Select(member => member.Key)
+                        .ToList(),
+                    StringComparer.Ordinal);
+
             lock (Gate)
             {
-                _roomMembers = roomMembers;
+                _roomParticipants = Ordered(roomParticipants);
+                _roomMembers = Ordered(roomMembers);
                 _roomColours = roomColours;
                 _deliveries = deliveries;
             }
@@ -1072,7 +1375,7 @@ namespace ClaudeBuddy
         }
 
         // origin.label is written for a log, not for a person: "#general channel
-        // id:100000000000000003", "wtvamp user id:100000000000000001",
+        // id:1900000000000000001", "riverbend user id:200000000000000001",
         // "discord:amber". The useful part is always at the front, so cut at the
         // id and drop the noun that introduces it.
         internal static string? Where(JsonElement origin)
@@ -1171,7 +1474,18 @@ namespace ClaudeBuddy
         // observable through Parse, which reads what this records.
         internal static void OnEvent(string name, JsonElement payload)
         {
-            if (name is "tick" or "health" or "presence" or "connect.challenge") return;
+            // "sessions.changed" is the gateway telling every client "go
+            // re-fetch the list", not "this session just did something" — see
+            // CB-152. It arrives once per session on the *whole roster* on
+            // every reconnect (confirmed live: a single reconnect fired it for
+            // an agent's cron-internal session, its own main DM, and — the
+            // reproduction case — a stale channel with no real activity in
+            // three days), including sessions nobody has touched in days. It
+            // carries the same sessionKey shape as a real turn-progress event,
+            // so without this exclusion it reads exactly like one and arms
+            // Running/LastSeen for the entire roster at once.
+            if (name is "tick" or "health" or "presence" or "connect.challenge"
+                or "sessions.changed") return;
             if (payload.ValueKind != JsonValueKind.Object) return;
 
             var key = Str(payload, "sessionKey");
@@ -1193,8 +1507,27 @@ namespace ClaudeBuddy
                 // one worth keeping on screen.
                 LastSeen[key] = DateTime.UtcNow;
 
-                if (name is "cron" && Str(payload, "action") == "finished") Running.Remove(key);
-                else Running[key] = DateTime.UtcNow;
+                // "task"/"upserted" is a background task's result landing in the
+                // conversation, not a session starting to generate one — see
+                // OpenClawChatSession.OnAgentEvent, which treats the identical
+                // event as Complete() rather than as new streaming text. Left to
+                // fall through to the Running arm below, a task the gateway keeps
+                // touching (its own housekeeping re-upserting an old, permanently
+                // blocked record among them — CB-149) reads as a session that is
+                // perpetually mid-reply, and its orb never leaves the screen: the
+                // event both defeats "Keep orbs for" (State != "generating" is
+                // the only escape from the recency filter) and never ages out on
+                // its own, since every fresh touch rearms Running before RunIdle
+                // can retire the last one.
+                if ((name is "cron" && Str(payload, "action") == "finished")
+                    || (name is "task" && Str(payload, "action") == "upserted"))
+                {
+                    Running.Remove(key);
+                }
+                else
+                {
+                    Running[key] = DateTime.UtcNow;
+                }
             }
 
             // Only for a session someone has opened: building a transcript for
@@ -1424,7 +1757,7 @@ namespace ClaudeBuddy
         // One agent messaging another arrives as a user turn with a machine
         // header glued to the front:
         //
-        //   [Inter-session message] sourceSession=agent:comfyui:discord:direct:2467…
+        //   [Inter-session message] sourceSession=agent:comfyui:discord:direct:1000…
         //   sourceChannel=discord sourceTool=sessions_send isUser=false <the actual message>
         //
         // Left as-is, a transcript in a multi-agent setup is mostly routing
@@ -1438,9 +1771,69 @@ namespace ClaudeBuddy
         // here controls, so it is the half that has to be tested against
         // fixtures — the same reasoning that keeps ChatTranscript and
         // CodexTranscript pure.
-        internal static List<HistoryTurn> TurnsFromHistory(JsonElement messages)
+        // The text of one message, whichever of the three shapes its content
+        // arrived in. Factored out because the page has to be read twice: once
+        // for the paths in it, before any turn is built, and then again to
+        // build them. Two spellings of "the text of this message" would be two
+        // things to keep in step.
+        internal static string TextOf(JsonElement content) => content.ValueKind switch
+        {
+            JsonValueKind.String => content.GetString() ?? "",
+
+            JsonValueKind.Array => string.Join("\n", content.EnumerateArray()
+                .Where(b => Str(b, "type") == "text")
+                .Select(b => Str(b, "text"))
+                .Where(t => !string.IsNullOrWhiteSpace(t))),
+
+            JsonValueKind.Object => Str(content, "text") ?? "",
+
+            _ => ""
+        };
+
+        // sessionKey is whose conversation this page is — the gateway key, not
+        // this app's own "openclaw:" prefixed session id, though
+        // OpenClawMediaSource copes with either. It goes onto every picture
+        // route this builds, because the gateway resolves its media policy
+        // against the agent behind that key and answers a fetch that omits it
+        // against a default agent instead (CB-109, and see
+        // OpenClawMediaSource's header for the measurements).
+        //
+        // Passed in rather than read off anything here: this method is pure
+        // and takes a page of JSON, and the only thing that knows which
+        // session asked for that page is the caller that asked
+        // (FetchHistoryPageAsync, which has chat.GatewayKey in hand). Nullable
+        // so a fixture or a caller with genuinely no session gets exactly the
+        // routes this built before.
+        internal static List<HistoryTurn> TurnsFromHistory(JsonElement messages, string? sessionKey)
         {
             var turns = new List<HistoryTurn>();
+
+            // Read the whole page for paths before building any turn. A
+            // delivered picture's own record names only the file, and the
+            // directory it lives in is somewhere else on the page — see
+            // MediaPathsByFileName, including why this is each message's raw
+            // JSON rather than the text this loop goes on to render.
+            var mediaPaths = MediaPathsByFileName(
+                messages.EnumerateArray().Select(m => m.GetRawText()));
+
+            // Which sources each picture-drawing arm claimed, so a file drawn
+            // by both can be collapsed once the page is read. See the end of
+            // this method for why the mirror copy is the one that goes.
+            //
+            // Indices rather than turn values because a HistoryTurn is a
+            // struct: two identical mirror turns would be equal by value and
+            // there would be no way to say which one to remove.
+            // A list of turn indices per source rather than a bare count
+            // (CB-120): the merge below has to write the surviving turn's
+            // *own* Confidence, so it needs to know which named turn a given
+            // mirror pairs with, not just how many are left to pair. The list
+            // still behaves as the same budget the count used to be — one
+            // named turn cancels one mirror and not every mirror of that
+            // file, so a page carrying two deliveries of a picture the agent
+            // also named by path still has one cross-arm pair and one genuine
+            // second delivery, never both swallowed.
+            var namedIndices = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+            var mirrorDrawn = new List<(int Index, string Source)>();
 
             foreach (var message in messages.EnumerateArray())
             {
@@ -1466,31 +1859,50 @@ namespace ClaudeBuddy
                     {
                         if (Str(block, "type") != "image") continue;
 
+                        // Two shapes, and the inline one is the shape this
+                        // gateway actually emits: every real image block in
+                        // its own stored transcripts is
+                        // `{type:"image", data:"<base64>", mimeType:...}`
+                        // with no url whatsoever. Reading only the url form
+                        // silently dropped every picture the gateway ever
+                        // sent — CB-91, and the oldest of the picture bugs.
+                        //
+                        // The url form is kept rather than replaced: it costs
+                        // one branch, other deployments (or a later gateway)
+                        // may well send it, and nothing here can tell which
+                        // it is going to get.
+                        // Whitespace is not a url, and normalising it to null
+                        // here rather than leaving it for the panel matters:
+                        // the panel asks IsNullOrEmpty, so a "   " would send
+                        // it fetching nothing and it would never look at the
+                        // bytes sitting beside it. One spelling of "no url"
+                        // for both this parser and everything downstream.
                         var url = Str(block, "url");
-                        if (string.IsNullOrWhiteSpace(url)) continue;
+                        if (string.IsNullOrWhiteSpace(url)) url = null;
+
+                        var bytes = url is null ? InlineImageBytes(block) : null;
+                        if (url is null && bytes is null) continue;
 
                         var ms2 = Num(message, "timestamp");
-                        turns.Add(new HistoryTurn(role, "", url!, Str(block, "alt") ?? "",
+
+                        // ImageSourcePath stays null here, deliberately and
+                        // explicitly. This `url` is the gateway's own — it
+                        // came out of the image block, not out of
+                        // AssistantMediaRoute — so there is no local path and
+                        // no media policy for a sessionKey to be resolved
+                        // against. Attaching an identity to it would claim
+                        // this is an assistant-media fetch when it is not, and
+                        // asking `&meta=1` about it later would be a wasted
+                        // round trip against a route that cannot answer.
+                        turns.Add(new HistoryTurn(role, "", url, Str(block, "alt") ?? "",
                             ms2 <= 0
                                 ? DateTimeOffset.Now
                                 : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
-                            null, null));
+                            null, null, false, bytes, ImageSourcePath: null));
                     }
                 }
 
-                var text = content.ValueKind switch
-                {
-                    JsonValueKind.String => content.GetString() ?? "",
-
-                    JsonValueKind.Array => string.Join("\n", content.EnumerateArray()
-                        .Where(b => Str(b, "type") == "text")
-                        .Select(b => Str(b, "text"))
-                        .Where(t => !string.IsNullOrWhiteSpace(t))),
-
-                    JsonValueKind.Object => Str(content, "text") ?? "",
-
-                    _ => ""
-                };
+                var text = TextOf(content);
 
                 if (string.IsNullOrWhiteSpace(text)) continue;
 
@@ -1554,12 +1966,787 @@ namespace ClaudeBuddy
 
                 if (string.IsNullOrWhiteSpace(text)) continue;
 
+                // A picture the gateway actually delivered somewhere. Its own
+                // record of having done so is all a client ever sees of it —
+                // see DeliveredPictureName for why that record, rather than
+                // anything the agent wrote, is the signal worth trusting.
+                var delivered = DeliveredPictureName(Str(message, "model"), text);
+                if (delivered is not null)
+                {
+                    // Carried as the route rather than as a path, because that
+                    // is what ImageUrl already means to everything downstream:
+                    // FetchMediaAsync uses it as the GET path and the panel
+                    // needs no new branch to draw it.
+                    //
+                    // The path off the page where the page has one, and the
+                    // shared media directory only where it does not. The
+                    // difference is not cosmetic: the mirror record's filename
+                    // is a basename with the directory stripped, so the
+                    // fallback is a guess that is right for a file an agent
+                    // copied into the shared directory and wrong for one that
+                    // lives anywhere else.
+                    var source = mediaPaths.TryGetValue(delivered, out var known)
+                        ? known
+                        : SharedMediaDir + delivered;
+
+                    // The filename is kept as the turn's text, not dropped for
+                    // a cleaner picture-only bubble. Nothing here can know
+                    // whether the fetch will succeed — the fallback may be
+                    // wrong, a gateway under --profile has a different media
+                    // root, and a file can be cleaned up — and a turn with an
+                    // unresolvable url and no text is an empty bubble, which is
+                    // worse than the bare filename this shows today. So it
+                    // degrades to exactly today's appearance instead. Text
+                    // beside a thumbnail is already what CB-88's MEDIA:
+                    // pictures render as.
+                    // The route comes off the media value rather than being
+                    // concatenated here, so the sessionKey cannot be left off
+                    // one arm and remembered on the others — which is exactly
+                    // the class of bug CB-109 was, three call sites each
+                    // building the same string slightly differently. What goes
+                    // on the turn is the finished url plus the clean path
+                    // beside it; the builder itself is not stored anywhere.
+                    var media = new OpenClawMediaSource(source, sessionKey);
+
+                    mirrorDrawn.Add((turns.Count, source));
+                    turns.Add(new HistoryTurn(
+                        role, delivered, media.Route,
+                        delivered, at, speaker, colour, mine, null, media.Path,
+
+                        // CB-116: the gateway wrote this record itself to say
+                        // it delivered something — a delivery-mirror is never
+                        // a guess about what an agent's prose might mean, so a
+                        // failed fetch behind it is always worth explaining.
+                        Confidence: MediaConfidence.High));
+                    continue;
+                }
+
+                // A picture the agent named by path — CB-101.
+                //
+                // CB-88 taught LocalMediaPathFrom to recognise this and wired
+                // it into the live stream only, so the convention worked while
+                // a reply was arriving and not when the same message was read
+                // back. That is every reopen, every reconnect and every scroll
+                // — which is to say, almost always.
+                //
+                // Owner's two screenshots caught the asymmetry three minutes
+                // apart: a delivered picture drew a thumbnail (the branch
+                // above) and a MEDIA: line drew its own text. The file was on
+                // disk and the gateway served it on request; only this parser
+                // never asked.
+                //
+                // After the delivery-mirror branch. The two arms cannot both
+                // fire for one *message* — a mirror's text is a bare filename,
+                // which LooksLikeAnImagePath refuses for not being rooted —
+                // but they can each fire on a different message of the same
+                // page and land on the same file. That is what namedSources
+                // below is for.
+                // CB-115: the first conjunct of the cron-recovery trigger,
+                // computed before the named-path arm rather than after it.
+                //
+                // It lived in the fallback arm below and was wrong there. Once
+                // CB-107 landed, LocalMediaPathFrom recognises `caption\n<bare
+                // filename>` — so the arm below `continue`s, the fallback is
+                // never reached, and the turn was never tagged. The recovery
+                // pass then skipped every one of Owner's cron pictures and
+                // made this whole feature inert, with eight tests as the only
+                // witness.
+                //
+                // The deeper reason is that the arm below resolves a bare
+                // filename by *guessing* ~/.openclaw/media/<basename>, which
+                // sets a route that will 404. A guess is a resolution in name
+                // only, so "did something already resolve this" was never the
+                // right question to gate on. Tagging regardless lets the async
+                // pass consult the run record — the authoritative source —
+                // and override the guess when it answers, which is the same
+                // rule that retired PathFromUrl and client-side agentId:
+                // never prefer a downstream re-derivation to what the
+                // producer already knows.
+                var automation = OpenClawCronRecovery.AutomationOf(message);
+                var cronAutomation = automation is { Kind: OpenClawCronRecovery.CronKind }
+                    ? automation
+                    : (OpenClawAutomation?)null;
+
+                // CB-116: whether this turn's own origin is reason enough to
+                // trust a *failed* fetch's explanation, decided here — the one
+                // place that has both the candidate's provenance (Explicit,
+                // from LocalMediaPathFrom itself) and the turn's provenance
+                // (cronAutomation, just above) in hand. Never re-derived from
+                // the text downstream: OpenClawMediaRefusal's callers act on
+                // this value and never look at the candidate's shape again.
+                //
+                // High whenever the candidate is Explicit — an agent that
+                // wrote a "MEDIA:" line is asserting a picture regardless of
+                // whether the turn came from an automation — or whenever the
+                // turn is a confirmed openclawAutomation delivery, even if the
+                // candidate itself is only a trailing token. Low otherwise:
+                // ordinary prose that merely ends in something filename-
+                // shaped, which is exactly "I deleted photo.png" and exactly
+                // "I deleted /Users/me/photo.png" — the rootedness of the
+                // second does not make it any more trustworthy than the
+                // first, because both are shape, and shape is not what this
+                // tiers on.
+                var namedCandidate = LocalMediaPathFrom(text);
+                if (namedCandidate is not null)
+                {
+                    var candidate = namedCandidate.Value;
+                    var confidence = candidate.Explicit || cronAutomation is not null
+                        ? MediaConfidence.High
+                        : MediaConfidence.Low;
+
+                    // A bare filename resolves against this page's own
+                    // harvested paths (CB-94) before falling back to a guess
+                    // — see ResolveLocalMediaPath's own comment.
+                    var named = ResolveLocalMediaPath(candidate.Path, mediaPaths);
+
+                    // Text kept and the picture beside it, which is the shape
+                    // the live path already produces — TryResolveLocalMedia
+                    // sets bytes on a turn that keeps its prose. So a fetch
+                    // that cannot succeed degrades to exactly what this
+                    // rendered before, rather than to an empty bubble.
+                    // Same media value as the mirror arm above, and for the
+                    // same reason: one place builds the route, so one place
+                    // decides what identity goes on it.
+                    var namedMedia = new OpenClawMediaSource(named, sessionKey);
+
+                    turns.Add(new HistoryTurn(role, text.Trim(), namedMedia.Route,
+                        named[(named.LastIndexOf('/') + 1)..],
+                        at, speaker, colour, mine, null, namedMedia.Path,
+                        Automation: cronAutomation, Confidence: confidence));
+
+                    // Recorded after the Add, as the index of the turn just
+                    // pushed — see the merge below for why this needs the
+                    // index and not just a count.
+                    if (!namedIndices.TryGetValue(named, out var indices))
+                        namedIndices[named] = indices = new List<int>();
+                    indices.Add(turns.Count - 1);
+                    continue;
+                }
+
+                // No candidate at all, so nothing here draws a picture yet —
+                // but a cron-tagged turn can still gain one later, through the
+                // recovery pass in FetchHistoryPageAsync, which is why the
+                // same automation-based tier is set here too rather than left
+                // at the default. See that method's own Confidence: High for
+                // why a recovered path does not need to re-derive this.
                 turns.Add(new HistoryTurn(role, text.Trim(), null, "", at,
-                    speaker, colour, mine));
+                    speaker, colour, mine, Automation: cronAutomation,
+                    Confidence: cronAutomation is not null ? MediaConfidence.High : MediaConfidence.Low));
+            }
+
+            // One delivery, two arms, one bubble — CB-98's cross-arm case,
+            // which turned out to be live rather than latent.
+            //
+            // A page can carry both an agent's own message naming a file and
+            // the gateway's mirror of having delivered it. CB-94 recovers the
+            // mirror's directory from that very path, so the two arms resolve
+            // to the *identical* source and draw the same picture twice, back
+            // to back. QA measured two instances in the real corpus and both
+            // load — this is not the refused-and-degraded case CB-98 first
+            // described.
+            //
+            // The mirror copy is the one dropped, not the named one. In the
+            // general shape the named turn carries the agent's prose — "here
+            // you go", a question about the picture — where the mirror turn's
+            // entire content is the filename the picture above already shows.
+            // Dropping the richer bubble to keep the barer one would be the
+            // wrong way round. That choice is about which *text* survives and
+            // stays exactly as it was — CB-120 below does not revisit it.
+            //
+            // Two *mirrors* for one file are deliberately left alone: those are
+            // two separate deliveries with distinct records and timestamps
+            // (36 seconds apart in one measured case, 47 minutes in another),
+            // and collapsing them would hide an event the gateway recorded.
+            // Only a cross-arm pair is one event seen twice.
+            // One named turn cancels one mirror. Written as a budget rather
+            // than a membership test because "drop every mirror of this file"
+            // would silently eat a real second delivery on a page that has
+            // both — the very thing the paragraph above preserves. QA found
+            // that edge by reading the rule rather than the corpus, where it
+            // does not occur.
+            //
+            // Chosen earliest-first, so the mirror that pairs with the named
+            // turn is the one that goes and any later delivery keeps its own
+            // timestamp. Removed highest-index-first afterwards so no earlier
+            // index is invalidated on the way.
+            if (namedIndices.Count > 0)
+            {
+                var doomed = new List<int>();
+
+                foreach (var (index, source) in mirrorDrawn)
+                {
+                    if (!namedIndices.TryGetValue(source, out var indices) || indices.Count == 0)
+                        continue;
+
+                    var namedIndex = indices[0];
+                    indices.RemoveAt(0);
+
+                    // CB-120: the mirror arm is always High (CB-116 kept it
+                    // unconditional) and the named arm can be Low, so merging
+                    // the two used to keep the named turn's text and silently
+                    // drop the mirror's confirmed-delivery provenance with it
+                    // — a gateway-confirmed picture landing in the Low tier
+                    // and losing CB-116's explanation on a failed fetch. The
+                    // merge already knows, right here, that both turns are
+                    // one delivery — that is the entire basis on which it
+                    // merges them — so the provenance is in hand at the exact
+                    // moment it would otherwise be thrown away with the turn
+                    // that carried it. Carry it onto the survivor instead.
+                    //
+                    // Never downgraded, only ever raised: a named turn that
+                    // was already High (an explicit MEDIA: line, its own
+                    // cron-automation tag) stays exactly as High as it was.
+                    if (turns[namedIndex].Confidence != MediaConfidence.High)
+                    {
+                        turns[namedIndex] = turns[namedIndex] with { Confidence = MediaConfidence.High };
+                    }
+
+                    doomed.Add(index);
+                }
+
+                for (var i = doomed.Count - 1; i >= 0; i--) turns.RemoveAt(doomed[i]);
             }
 
             return turns;
         }
+
+        // The picture out of an image block that carried it inline. Real
+        // blocks from this gateway put the whole thing in `data` as base64
+        // with a `mimeType` beside it (CB-91).
+        //
+        // mimeType is deliberately not read: Avalonia's decoder sniffs the
+        // format off the bytes themselves, so trusting a declared type would
+        // only add a way to be wrong. Both the bare-base64 and the
+        // `data:image/...;base64,` spellings are accepted, because this
+        // gateway genuinely uses both — bare in these blocks, the data: form
+        // in agents.list's avatarUrl, which DecodeDataUri already exists for.
+        internal static byte[]? InlineImageBytes(JsonElement block)
+        {
+            var data = Str(block, "data");
+            if (string.IsNullOrWhiteSpace(data)) return null;
+
+            byte[]? bytes;
+            try
+            {
+                bytes = DecodeDataUri(data) ?? Convert.FromBase64String(data!);
+            }
+            catch
+            {
+                // Not base64 at all. A block we cannot read is a picture that
+                // does not show; the turn's text still does.
+                return null;
+            }
+
+            // Zero bytes is not a picture, and the guard belongs here rather
+            // than on the bare-base64 arm alone. `data:image/png;base64,` — an
+            // empty payload — decodes through DecodeDataUri to a real,
+            // zero-length array, and that is the *only* way this is reachable:
+            // Convert.FromBase64String skips exactly ' ', tab, CR and LF, every
+            // one of which IsNullOrWhiteSpace above already rejects, so the bare
+            // path can never hand back an empty array. Guarding only that arm
+            // therefore let the real case through as a turn with no text, no url
+            // and no drawable picture — an empty bubble — while making the guard
+            // itself unexecutable.
+            return bytes.Length == 0 ? null : bytes;
+        }
+
+        // Which of a freshly-fetched page's turns is the picture a live reply
+        // was talking about. There is nothing to join on but time: a live
+        // "agent" event carries no id that also appears in a chat.history
+        // message, so the turn whose timestamp is nearest the live one's is
+        // the answer — the two are, at most, one round trip apart. Pure and
+        // taking plain HistoryTurns rather than a page fetch, so
+        // TryResolveLiveImage's actual gateway call is the only excluded half.
+        //
+        // Filtered to the live turn's own role first: a session's chat.history
+        // mixes that agent's own replies with everyone else's messages
+        // arriving as its input (a room's other agents, or a real person —
+        // see OpenClawRoomChat's own header comment on that shape), and the
+        // nearest picture in time is not necessarily the agent's own picture
+        // once other traffic can land on the same page. Restricting to the
+        // matching role is what keeps a busy room from occasionally handing
+        // an agent's reply somebody else's attachment.
+        // Either kind of picture counts as a match, not just a url-bearing
+        // one: CB-87 was written filtering on ImageUrl alone, which on this
+        // gateway can never match, because its blocks carry bytes inline and
+        // no url at all (CB-91). A live reply reconciling against "the
+        // nearest picture" has to mean either shape or it means nothing here.
+        internal static HistoryTurn? BestImageMatch(
+            IEnumerable<HistoryTurn> turns, ChatRole role, DateTimeOffset near) =>
+            turns.Where(t => t.Role == role
+                             && (!string.IsNullOrEmpty(t.ImageUrl) || t.ImageBytes is { Length: > 0 }))
+                 .OrderBy(t => Math.Abs((t.At - near).Ticks))
+                 // HistoryTurn is a struct, so a plain FirstOrDefault on an
+                 // empty sequence returns a zeroed HistoryTurn — a real value,
+                 // not null. Boxing into the nullable first is what makes "no
+                 // match" actually come back as null.
+                 .Select(t => (HistoryTurn?)t)
+                 .FirstOrDefault();
+
+        // A picture an agent generated itself and references by its own path
+        // on the gateway host — a second convention alongside
+        // MediaAttachedMarker, and a different one: that marker names
+        // something a *person* attached, staged under the gateway's own
+        // inbound directory and already reachable through FetchMediaAsync's
+        // ordinary URL fetch. This is an agent's own local file, named by
+        // "MEDIA:<path>" in CB-88's captured real traffic (confirmed via
+        // tools/openclaw-probe against a live gateway, not assumed). It names
+        // a file rather than a url, so FetchLocalMediaAsync reads it through
+        // the gateway's own read-scoped media route — see that method for why
+        // the admin-gated media.get RPC this used to call was the wrong
+        // endpoint (CB-90).
+        //
+        // The second arm — the whole message being nothing but a path — is a
+        // real observed shape too: the same automation's duplicate-post bug
+        // (before Owner asked it fixed) left a bare path as an entire
+        // assistant turn, with no MEDIA: prefix at all. Matched only when the
+        // ENTIRE trimmed text is the path, so an ordinary sentence that
+        // happens to mention a ".png" in passing is never mistaken for one.
+        internal const string LocalMediaMarker = "MEDIA:";
+
+        private static readonly string[] ImageExtensions =
+            { ".png", ".jpg", ".jpeg", ".gif", ".webp" };
+
+        // CB-116: which of the two ways LocalMediaPathFrom can find a
+        // candidate produced this one — the input to tiering the note a
+        // failed fetch leaves behind (see MediaConfidence, next to ChatRole
+        // in RemoteChat.cs, for the full reasoning, and HistoryTurn.Confidence
+        // below for where a candidate's Explicit combines with a turn's own
+        // automation tag to decide it). A record rather than the bare
+        // string this returned before, for the same reason HistoryTurn is a
+        // record and not a tuple: the caller needs *why* a candidate was
+        // found, not only what it was, and a downstream re-derivation of that
+        // "why" from the string alone is exactly the bug this ticket exists
+        // to fix (see LocalMediaPathFrom's own comment).
+        //
+        // Explicit is true only for a "MEDIA:" line — an agent that writes
+        // that prefix is asserting a picture, regardless of anything else
+        // about the turn. It is false for both other arms below (a message
+        // that is nothing but a path, and CB-107's caption-plus-trailing-
+        // token shape): neither one is a stated assertion, and the caller
+        // decides their tier from provenance the parser has no access to —
+        // whether the turn came off an openclawAutomation delivery — not from
+        // this flag. See CB-116's design note on why that split is by
+        // provenance and never by shape: a rooted path in prose is exactly as
+        // untrustworthy as a bare one.
+        internal readonly record struct LocalMediaCandidate(string Path, bool Explicit);
+
+        // Returns a rooted path (starting with "/" or "~/") or, since CB-107,
+        // a bare filename with no directory at all — the caller decides how
+        // to turn either into something fetchable (ResolveLocalMediaPath).
+        internal static LocalMediaCandidate? LocalMediaPathFrom(string text)
+        {
+            // A line of its own, not necessarily the first line: the real
+            // captured example (CB-88) has two paragraphs of in-character
+            // reply before the MEDIA: line, so anchoring on the start of the
+            // whole message would miss the one real case this exists for.
+            //
+            // Validated the same way as the bare-path arm below rather than
+            // trusting anything after the prefix — QA (CB-88) found that an
+            // ordinary sentence starting a line with "MEDIA:" ("MEDIA: is a
+            // broad term...") would otherwise extract "is a broad term..." as
+            // a "path" and fire a real request for it.
+            foreach (var rawLine in text.Split('\n'))
+            {
+                var line = rawLine.Trim();
+                if (!line.StartsWith(LocalMediaMarker, StringComparison.Ordinal)) continue;
+
+                var path = line[LocalMediaMarker.Length..].Trim();
+                return LooksLikeAnImagePath(path)
+                    ? new LocalMediaCandidate(path, Explicit: true)
+                    : null;
+            }
+
+            var trimmed = text.Trim();
+            if (LooksLikeAnImagePath(trimmed)) return new LocalMediaCandidate(trimmed, Explicit: false);
+
+            // CB-107: an agent's caption can pair descriptive prose with the
+            // file rather than sending it alone — a caption line followed by
+            // a bare filename on the next line, or a caption and a path
+            // trailing on the same line. The two checks above only ever
+            // matched a message that was *nothing but* the path, so neither
+            // fired and the picture rendered as plain text.
+            //
+            // Scanning the trailing whitespace-separated token catches both
+            // shapes (a bare filename on its own final line is also the last
+            // token of the whole message) without loosening the checks
+            // above: an ordinary sentence would have to happen to *end* with
+            // something extension-shaped, which is a much narrower accident
+            // than "mentions a .png anywhere".
+            var tokens = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length == 0) return null;
+
+            var last = tokens[^1];
+            if (LooksLikeAnImagePath(last)) return new LocalMediaCandidate(last, Explicit: false);
+
+            // A bare filename alone, with nothing else in the message, already
+            // failed the whole-message check above and stays plain text — an
+            // agent naming a file with no caption around it is exactly the
+            // ambiguous case DeliveredPictureName exists for, trusted only
+            // once the gateway's own delivery-mirror record confirms it, not
+            // from prose alone (AnOrdinaryTurnNamingAFileStaysText). Paired
+            // with a caption, it's the CB-107 shape and is returned
+            // unresolved; ResolveLocalMediaPath is what turns this into
+            // something fetchable, the same way the delivery-mirror branch
+            // already does for its own bare filenames.
+            return tokens.Length > 1 && LooksLikeABareImageFilename(last)
+                ? new LocalMediaCandidate(last, Explicit: false)
+                : null;
+        }
+
+        // No directory separator at all, as opposed to LooksLikeAnImagePath's
+        // rooted paths. Deliberately narrower than "no slash": a filename
+        // with a space in it would already have failed the whitespace-token
+        // split above, so the checks here are about the extension and
+        // nothing else being present.
+        private static bool LooksLikeABareImageFilename(string text) =>
+            text.Length > 0
+            && !text.Contains('/')
+            && !text.Contains('\\')
+            && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+
+        // Turns whatever LocalMediaPathFrom found into something actually
+        // fetchable. A rooted path is already that; a bare filename is the
+        // same guess DeliveredPictureName's own branch makes — a known
+        // directory from this page's mediaPaths where CB-94's JSON harvest
+        // found one, the shared media directory otherwise. Callers with no
+        // page to harvest from (the live stream — see OpenClawChatSession)
+        // pass null and get the guess alone, which is right for the same
+        // reason it is right there: a wrong guess costs nothing but an
+        // "unavailable" fetch, and the filename stays as the turn's text.
+        internal static string ResolveLocalMediaPath(
+            string candidate, IReadOnlyDictionary<string, string>? mediaPaths)
+        {
+            if (candidate.StartsWith('/') || candidate.StartsWith("~/", StringComparison.Ordinal))
+                return candidate;
+
+            if (mediaPaths is not null && mediaPaths.TryGetValue(candidate, out var known))
+                return known;
+
+            return SharedMediaDir + candidate;
+        }
+
+        // `~/` as well as `/` (CB-97). The gateway expands a leading tilde
+        // itself — `resolveLocalMediaPath` calls `resolveUserPath` on one —
+        // and it is the form an agent naturally writes, so rejecting it threw
+        // away pictures the gateway would have served happily. Confirmed by
+        // probe: `~/.openclaw/media/browser/03a1be83-….png` answers
+        // `available:true`.
+        //
+        // `..` refused outright (CB-89), and `//` with it. This builds a
+        // gateway request out of a string an agent wrote into a transcript,
+        // and refusing traversal is cheaper than reasoning about what it
+        // resolves to on a host this process cannot see. `//host/a.png` is a
+        // protocol-relative URL wearing a path's clothes.
+        //
+        // These two checks used to be described here as defence in depth
+        // behind the gateway's own allowlist, which was the control that
+        // actually mattered. CB-109 measured that the other way round:
+        // supplying the asking session — which every fetch now does — does
+        // not narrow the allowlist to that agent's own folders, it switches
+        // the folder check off, and a path is then judged only on whether it
+        // exists and is an image. Owner signed that trust model off
+        // deliberately.
+        //
+        // So these are no longer the outer layer of two. They are the only
+        // structural guard left on this side, and the reason to keep them is
+        // no longer that they are cheap — it is that nothing else refuses a
+        // traversal at all. Do not remove them as redundant; they stopped
+        // being redundant when the session started travelling with the
+        // request.
+        //
+        // The original point still stands on its own terms: a client that
+        // sends a traversal and waits to be told no is a client asking the
+        // wrong question.
+        //
+        // Internal rather than private since CB-115: OpenClawCronRecovery's
+        // trigger reuses this exact rule for the rooted-path half of "is this
+        // trailing token image-shaped", rather than restating it — see that
+        // file's header for why only the bare-filename half needed a new
+        // predicate.
+        internal static bool LooksLikeAnImagePath(string text) =>
+            (text.StartsWith('/') || text.StartsWith("~/", StringComparison.Ordinal))
+            && !text.StartsWith("//", StringComparison.Ordinal)
+            && !text.Contains("..", StringComparison.Ordinal)
+            && !text.Contains(' ') && !text.Contains('\n')
+            && Array.Exists(ImageExtensions, ext => text.EndsWith(ext, StringComparison.OrdinalIgnoreCase));
+
+        // The gateway writes one of these whenever it actually delivers a
+        // message somewhere, and for a picture it is the only trace a client
+        // gets: content is the bare filename, with no directory and no url
+        // (CB-94, read out of the gateway's own stored transcript).
+        //
+        // Keyed on this record rather than on anything the agent said, and
+        // that is the point. CB-88's MEDIA: convention works, but it depends
+        // on the agent remembering to write it — the automation here skipped
+        // it twice in a row while delivering pictures perfectly well. The
+        // mirror is written by the gateway, so it cannot be forgotten.
+        internal const string DeliveryMirrorModel = "delivery-mirror";
+
+        // The last resort for a delivered picture whose real directory is
+        // nowhere on the page — a guess, and named as one.
+        //
+        // It is a guess because the gateway builds the mirror text as
+        // `mediaUrls.map(basename).join(", ")`
+        // (`resolveMirroredTranscriptText`, read out of the running gateway's
+        // own bundle): the directory is *deliberately* stripped, so the bare
+        // filename says nothing whatsoever about where the file is. This was
+        // originally written as though it did, and QA measured the cost —
+        // right for the drop that prompted the ticket, wrong for a browser
+        // capture living one directory deeper in
+        // `~/.openclaw/media/browser/`, which 404s here.
+        //
+        // Kept as a fallback rather than deleted because it is right for the
+        // common case an agent is told to arrange (copy the file into the
+        // shared media directory, which is what Aurora's own runbook says),
+        // and because a wrong guess costs nothing: the fetch comes back
+        // unavailable and the filename stays as the turn's text. See
+        // MediaPathsByFileName for the answer that is not a guess.
+        //
+        // `~` deliberately: resolveUserPath expands it on the *gateway* side,
+        // so a client that only ever learns a filename never has to know the
+        // host's absolute paths. It does assume the default state-directory
+        // name, so a gateway under --profile or OPENCLAW_STATE_DIR falls
+        // through to the same harmless unavailable.
+        internal const string SharedMediaDir = "~/.openclaw/media/";
+
+        // What separates one candidate path from the next. Whitespace, plus
+        // the double quote, because the page is scanned as raw JSON and a path
+        // in there is `"…":"/Users/…/a.png"` with no whitespace around it —
+        // without the quote the whole object is one token and nothing is found.
+        //
+        // `:` is deliberately *not* a separator: splitting on it would turn
+        // `https://example.com/a.png` into a token beginning `//example.com/…`,
+        // which looks rooted. That token shape is refused explicitly instead
+        // (see AbsoluteImagePathIn), because a *literal* `//host/…` can appear
+        // in text without a scheme in front of it.
+        //
+        // A path containing a space is therefore missed. That is accepted:
+        // nothing here can tell a spaced path from two tokens, and guessing
+        // wrong would build a request for a file that does not exist. None
+        // appears in the corpus this was measured against.
+        private static readonly char[] TokenBreaks = { ' ', '\t', '\n', '\r', '"' };
+
+        // The whitespace escapes, which have to be handled separately because
+        // the page is scanned as raw JSON: in there a newline is the *two
+        // characters* `\` and `n`, not a newline, so TokenBreaks never splits
+        // on it however many real newlines it lists.
+        //
+        // That is not a hypothetical. The first version of the raw-JSON scan
+        // lost the very picture this ticket was filed about: its path is on a
+        // line of its own inside a text block, so the escape glued it to the
+        // sentence in front of it and nothing matched. The fallback happened
+        // to be right for that one file, which is exactly the kind of luck
+        // this ticket exists to stop relying on.
+        private static readonly string[] EscapedWhitespace = { "\\n", "\\r", "\\t" };
+
+        // No real path is longer than this — PATH_MAX is 1024 on macOS and
+        // 4096 on Linux. The guard is not about paths, though: a message
+        // carrying an inline picture has a single base64 token megabytes long,
+        // and there is no reason to trim and test that.
+        private const int LongestPath = 4096;
+
+        // Punctuation a path picks up from the prose around it — quoted,
+        // parenthesised, or ending a sentence. Trimmed from both ends before
+        // the shape test, since otherwise a perfectly good path fails it for
+        // having been written inside a sentence.
+        //
+        // `.`, `!` and `?` are in here for the sentence-final case, and are
+        // safe rather than merely convenient: a path's last character is part
+        // of its extension, so trimming cannot damage one, and a *leading*
+        // full stop cannot survive the rooted-prefix test below anyway. The
+        // backslash is here for JSON's escaped quote, which otherwise leaves
+        // one clinging to a token.
+        private static readonly char[] PathWrappers =
+        {
+            '"', '\'', '`', '(', ')', '[', ']', '{', '}', '<', '>',
+            ',', ';', ':', '.', '!', '?', '\\'
+        };
+
+        // The directory a delivered picture actually lives in, recovered from
+        // the page it was delivered on rather than assumed.
+        //
+        // The mirror record names the file and nothing else (see
+        // SharedMediaDir for why), but the real path is generally somewhere
+        // else on the same page. So the page is read for paths first, and a
+        // mirror's filename is matched against them by basename.
+        //
+        // Fed the **raw JSON** of each message rather than the text this parser
+        // renders, and that is the difference between working and nearly not.
+        // TurnsFromHistory deliberately skips tool_use blocks — a replayed one
+        // is a wall of JSON — but those blocks are exactly where the paths are:
+        // a `--media ~/.openclaw/media/browser/…png` argument, an `aggregated`
+        // field. Measured over every delivery-mirror record on the gateway
+        // host, harvesting the rendered text resolves 3 of 41; harvesting the
+        // raw JSON resolves 27 of 41. Same rendering, nine times the pictures.
+        //
+        // A basename found under two different directories is dropped rather
+        // than chosen between. Fetching the wrong one of two real files would
+        // draw a picture that is not the delivered one — actively misleading,
+        // and worse than drawing none — where dropping it falls back to the
+        // guess and, at worst, to the text that is there today. (No genuine
+        // ambiguity appears in the corpus: the nearest path is 1-2 records
+        // from its mirror, min to p90. The rule is for the case that has not
+        // happened yet.)
+        internal static Dictionary<string, string> MediaPathsByFileName(IEnumerable<string> texts)
+        {
+            var found = new Dictionary<string, string>(StringComparer.Ordinal);
+            var ambiguous = new List<string>();
+
+            foreach (var text in texts)
+            {
+                if (string.IsNullOrEmpty(text)) continue;
+
+                // See EscapedWhitespace: a raw-JSON newline is two characters
+                // and would otherwise glue a line-initial path to the line
+                // before it.
+                var scannable = text;
+                foreach (var escape in EscapedWhitespace)
+                {
+                    if (scannable.Contains(escape, StringComparison.Ordinal))
+                        scannable = scannable.Replace(escape, " ", StringComparison.Ordinal);
+                }
+
+                foreach (var token in scannable.Split(TokenBreaks, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (token.Length > LongestPath) continue;
+
+                    var path = AbsoluteImagePathIn(token);
+                    if (path is null) continue;
+
+                    var name = path[(path.LastIndexOf('/') + 1)..];
+
+                    if (!found.TryGetValue(name, out var seen)) found[name] = path;
+                    else if (!string.Equals(seen, path, StringComparison.Ordinal)) ambiguous.Add(name);
+                }
+            }
+
+            foreach (var name in ambiguous) found.Remove(name);
+            return found;
+        }
+
+        // What counts as a path worth fetching, and the answer is deliberately
+        // narrow. Rooted at `/` or `~/`, a known image extension, and no `..`
+        // anywhere.
+        //
+        // That last one is not decoration. This builds a gateway request out
+        // of a string an agent wrote into a transcript, and traversal is the
+        // open question on the sibling path (CB-89) — refusing `..` outright
+        // is cheaper than reasoning about what it would resolve to on a host
+        // this process cannot see. A relative path is refused for the related
+        // reason that there is nothing here to resolve it against.
+        internal static string? AbsoluteImagePathIn(string token)
+        {
+            var path = token.Trim(PathWrappers);
+
+            if (!path.StartsWith('/') && !path.StartsWith("~/", StringComparison.Ordinal)) return null;
+
+            // A protocol-relative URL — `//cdn.example.com/…/a.png`, which is
+            // how a Discord attachment can appear in a transcript with the
+            // scheme left off. It is rooted-looking and it is not a path.
+            //
+            // The gateway would refuse it anyway (`outside-allowed-folders`),
+            // so the reason to reject it here is subtler: accepting it puts a
+            // second directory under a basename, and the ambiguity rule then
+            // *drops* the real path that was sitting next to it. A bogus
+            // candidate does not just fail, it takes a good one with it.
+            if (path.StartsWith("//", StringComparison.Ordinal)) return null;
+
+            if (path.Contains("..", StringComparison.Ordinal)) return null;
+
+            return Array.Exists(ImageExtensions, ext => path.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                ? path
+                : null;
+        }
+
+        // Both conditions are load-bearing. delivery-mirror is *not* only used
+        // for pictures — an ordinary text message sent through this app is
+        // mirrored the same way ("**(via Claude Buddy)** try send me a
+        // picture", observed live) — so the model alone would send perfectly
+        // good prose off to be fetched as a file. And a bare filename alone is
+        // no signal either: an agent can simply mention one mid-conversation.
+        // Only the two together mean "a picture was delivered".
+        internal static string? DeliveredPictureName(string? model, string text)
+        {
+            if (model != DeliveryMirrorModel) return null;
+
+            // No emptiness guard, deliberately. The one caller has already
+            // skipped a whitespace-only text, and an empty name is refused by
+            // the extension test at the bottom anyway — "" ends with none of
+            // them — so a check here would be a line no input can change the
+            // answer of. Same reasoning that removed the third arm of the
+            // live-image resolution rather than writing a test around it.
+            var name = text.Trim();
+            if (name.Contains('/') || name.Contains('\\')) return null;
+            if (name.Contains(' ') || name.Contains('\n')) return null;
+
+            return Array.Exists(ImageExtensions, ext => name.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                ? name
+                : null;
+        }
+
+        // The gateway route that serves a file the agent named by path.
+        //
+        // CB-88 originally asked the `media.get` RPC for this, concluded from
+        // its refusal that the feature needed `operator.admin`, and shipped
+        // against a guessed response shape. All three were wrong. Read out of
+        // the gateway's own descriptor table:
+        //
+        //     { name: "assistant.media.get", scope: "operator.read",
+        //       advertise: false }
+        //
+        // It is an HTTP route rather than a WS method — asking for it over
+        // RPC answers "unknown method" — and it needs only the scope this app
+        // already pairs with. `advertise: false` is why it appears in neither
+        // the docs nor `openclaw docs`, and why the admin-tier `media.get`
+        // was the one that turned up first. That one is the read-any-path
+        // version, which is exactly why it is gated the way it is.
+        //
+        // Verified against the live gateway with this device's own read
+        // token: 200, 716535 bytes, image/png, for both a raw and a
+        // percent-encoded source. Adding `&meta=1` asks whether a path is
+        // servable at all and answers with a reason — a path outside the
+        // gateway's hardcoded media allowlist comes back
+        // `{"available":false,"code":"outside-allowed-folders"}`, which is
+        // what an agent's picture written into *another* agent's workspace
+        // does (CB-90).
+        // The endpoint without any parameter, for *recognising* one of these
+        // urls rather than building one.
+        //
+        // Split out by CB-109 because the two jobs had been sharing one
+        // string: AssistantMediaRoute below ends in `?source=`, so a
+        // StartsWith against it is really a test that `source` is the first
+        // parameter. It is today, deliberately (see OpenClawMediaSource.Route
+        // for why), but that made parameter order silently load-bearing for
+        // something unrelated to parameter order — reorder the query and every
+        // CB-93 explanation vanishes, with no test failing and no picture
+        // visibly breaking, because the note is the only thing that depends on
+        // the recognition. This is what ShouldAskWhy gates on instead.
+        internal const string AssistantMediaPathPrefix = "/__openclaw__/assistant-media?";
+
+        // Composed from the prefix above rather than restated, but the
+        // composed *value* must stay exactly what it always was —
+        // OpenClawLocalMediaResolutionTests asserts the literal string.
+        internal const string AssistantMediaRoute = AssistantMediaPathPrefix + "source=";
+
+        // Delegating rather than opening a second fetch path: FetchMediaAsync
+        // already speaks this exact transport and keys a bounded cache by the
+        // url it is handed, so routing through it means a picture scrolled
+        // past twice is fetched once.
+        //
+        // Takes the whole OpenClawMediaSource rather than a bare path, so the
+        // originating session travels with the file it belongs to (CB-109).
+        // A path on its own was the bug: the route it built asked the gateway
+        // about a file without saying whose conversation named it, and the
+        // gateway answered against a default agent's media policy instead.
+        //
+        // FetchMediaAsync's cache is keyed by the url, which now carries the
+        // sessionKey — so the same file asked about by two different agents is
+        // two cache entries. That is right rather than wasteful: the two
+        // requests can legitimately get different answers, which is the whole
+        // point of sending the key.
+        internal static Task<byte[]?> FetchLocalMediaAsync(OpenClawMediaSource source, CancellationToken ct) =>
+            FetchMediaAsync(source.Route, ct);
 
         internal static string Readable(string text) => Readable(text, out _);
 
@@ -1718,9 +2905,16 @@ namespace ClaudeBuddy
         // The path is a detail of where the gateway put the file, and it is
         // longer than most messages. The filename is the only part worth
         // showing, and even that mostly to say something was attached at all.
+        //
+        // internal rather than private to this method: OpenClawChatSession's
+        // live path (OnAgentText) needs to recognise the same marker to know
+        // a streaming reply is worth resolving against history — see
+        // TryResolveLiveImage.
+        internal const string MediaAttachedMarker = "[media attached: ";
+
         private static string WithShortAttachments(string text)
         {
-            const string Marker = "[media attached: ";
+            const string Marker = MediaAttachedMarker;
 
             var start = text.IndexOf(Marker, StringComparison.Ordinal);
             while (start >= 0)
@@ -1762,6 +2956,14 @@ namespace ClaudeBuddy
         // Cached by url: a transcript is re-read every time its panel opens, and
         // refetching a megabyte per image per open would be wasteful and slow
         // in exactly the moment the user is waiting to see something.
+        //
+        // By the *whole* url, which since CB-109 carries the asking session —
+        // so a cache entry can never serve bytes fetched under one session to
+        // a request made under another. That safety came free with the fix and
+        // keying this on the path instead would give it away: the cost of
+        // keeping it is two of the 24 entries below for a file referenced from
+        // two sessions, which is a fine price. This is the place the collapse
+        // looks tempting; it is a behaviour change, not a tidy-up.
         private static readonly Dictionary<string, byte[]?> Media = new(StringComparer.Ordinal);
 
         // Excluded from coverage: an HTTP GET against the gateway host.
@@ -1814,6 +3016,235 @@ namespace ClaudeBuddy
 
                 return bytes;
             }
+        }
+
+        // CB-93: whether a path the fetch above refused is refused because it
+        // sits outside the gateway's media allowlist, or for some other
+        // reason — asked with `&meta=1` on the same route rather than opened
+        // as a second fetch path, so a refusal is one round trip and not two.
+        //
+        // Cached separately from Media above rather than through it: a
+        // capability answer is JSON text, not a decoded picture, and Media's
+        // cache is keyed for values that are megabytes each — mixing the two
+        // would mean either caching a refusal as an empty byte array
+        // (indistinguishable from "no image") or growing that cache's value
+        // type for a return shape only this caller uses.
+        //
+        // Keyed by the meta *route* and not by the path (CB-109), which is the
+        // same rule Media above now lives by and for the same reason: the whole
+        // premise of sending a session is that the answer depends on who asked.
+        // A path-keyed cache would hand the second asker the first asker's
+        // answer, and since a refusal is the thing being cached, this fix would
+        // appear not to work at all on the second panel opened.
+        //
+        // The temptation to collapse the key to the path is real — the same
+        // file referenced from two sessions costs two of the 24 entries — and
+        // it should be resisted rather than engineered around. Two entries is
+        // a fine price for an answer that cannot be attributed to the wrong
+        // asker, and no machinery is warranted here.
+        private static readonly Dictionary<string, string> MediaMeta = new(StringComparer.Ordinal);
+
+        // Excluded from coverage: an HTTP GET against the gateway host, the
+        // same transport FetchMediaAsync above uses and excluded for the same
+        // reason. The decisions that matter — which route to ask, and what
+        // the answer means — live in OpenClawMediaRefusal, which is covered.
+        [ExcludeFromCodeCoverage]
+        // requestUrl is the fully-formed url whose *bytes* were just asked
+        // for and refused — not a path, and not something to rebuild. The meta
+        // flag is appended to that exact string, so the explanation is asked
+        // with the identity the fetch used. An explanation asked with a
+        // different identity than the fetch does not fail: it lies, which is
+        // worse than the silence CB-93 set out to remove. Before CB-109 that
+        // was not hypothetical — the meta call sent no session at all, so once
+        // a fetch with a session succeeds an identity-less explanation would
+        // have described a refusal that never happened.
+        public static async Task<string?> FetchLocalMediaMetaAsync(
+            string requestUrl, CancellationToken ct)
+        {
+            var route = OpenClawMediaSource.MetaOf(requestUrl);
+
+            lock (Gate)
+            {
+                if (MediaMeta.TryGetValue(route, out var cached)) return cached;
+            }
+
+            var host = ClaudeBuddySettings.OpenClawHost;
+            var token = OpenClawIdentity.GatewayTokenFor(host);
+            if (string.IsNullOrWhiteSpace(host) || string.IsNullOrEmpty(token)) return null;
+
+            string? json = null;
+
+            try
+            {
+                var pinned = ClaudeBuddySettings.OpenClawFingerprint;
+
+                var bytes = await OpenClawSocket.GetAsync(
+                    host, ClaudeBuddySettings.OpenClawPort, route, token!,
+                    string.IsNullOrEmpty(pinned) ? null : pinned, ct);
+
+                if (bytes is { Length: > 0 }) json = Encoding.UTF8.GetString(bytes);
+            }
+            catch
+            {
+                // A meta answer that never arrives is itself an answer —
+                // OpenClawMediaRefusal.Explain's own fallback line — rather
+                // than something to retry here.
+            }
+
+            lock (Gate)
+            {
+                // Only a real answer is cached, the same rule as Media above
+                // and for the same reason: a refusal (available:false) is one
+                // and is worth caching, because it is a stable fact about the
+                // allowlist rather than a hiccup. What is not cached is the
+                // gateway failing to answer at all — that shouldn't hide the
+                // reason for the rest of the process's life the way caching a
+                // "not now" would.
+                if (string.IsNullOrEmpty(json)) return null;
+
+                MediaMeta[route] = json;
+
+                const int Keep = 24;
+                while (MediaMeta.Count > Keep)
+                {
+                    MediaMeta.Remove(MediaMeta.Keys.First());
+                }
+
+                return json;
+            }
+        }
+
+        // CB-115: jobId -> every basename that job's cron.runs history can
+        // account for, mapped to the MEDIA: path behind it (or to null for a
+        // refused collision — see OpenClawCronRecovery.MediaPathsByBasenameForJob).
+        // Bounded the same way Media above is: a handful of active cron jobs
+        // stay warm, and a job pushed out simply costs one more page fetch
+        // rather than anything visibly wrong.
+        private static readonly Dictionary<string, Dictionary<string, string?>> CronRunsByJob =
+            new(StringComparer.Ordinal);
+
+        // CB-115: basenames a fresh fetch of that job could not account for.
+        //
+        // Needed because the cache above is keyed by *job*, and a job outlives
+        // the pictures in it. Reading a cached miss as "absent" meant only the
+        // first picture per job per process ever recovered: Owner opens the
+        // panel, fourteen recover, the job is cached — and the next cron
+        // delivery, twenty-five minutes later, silently gets the wrong-directory
+        // guess instead. The paging above was designed for runs falling off the
+        // *back* of the window; nothing considered new runs not being in a
+        // cache populated before they existed.
+        //
+        // So a cached miss now means *unresolved*, and re-asks once. This set
+        // is what stops that becoming a fetch on every render: a basename a
+        // fresh fetch genuinely did not know is remembered as absent. Per
+        // basename rather than per job, because per job is the same bug
+        // inverted — one unknown name would suppress every later picture.
+        private static readonly Dictionary<string, HashSet<string>> CronMissesByJob =
+            new(StringComparer.Ordinal);
+
+        // Matches the real job this was measured against — 51 runs answers
+        // in a single page at this size — while staying bounded for one that
+        // grows well past it. See OpenClawCronRecovery's header for why a
+        // small limit is actively dangerous here: an early capture of that
+        // same job at limit:5 silently held only 4 of the 35 real paths, no
+        // error and no empty result to notice.
+        private const int CronRunsPageLimit = 60;
+        private const int CronRunsMaxPages = 5;
+
+        // Excluded from coverage: the cron.runs request itself and the
+        // paging loop around it. Everything it hands off to — RunsFrom,
+        // MediaPathsByBasenameForJob — is pure and covered against fixtures;
+        // this is only the asking, cached so a whole page of pictures from
+        // one job costs exactly one round trip (or a few, for a job long
+        // enough to need paging) no matter how many turns on the history
+        // page need recovering.
+        [ExcludeFromCodeCoverage]
+        internal static async Task<string?> RecoverCronMediaPathAsync(
+            string jobId, string basename, CancellationToken ct)
+        {
+            lock (Gate)
+            {
+                // A key that is present answers, even when its value is null —
+                // that null is MediaPathsByBasenameForJob refusing a collision,
+                // which is a decision and not a gap, so it must not re-ask.
+                if (CronRunsByJob.TryGetValue(jobId, out var cached)
+                    && cached.TryGetValue(basename, out var cachedPath))
+                {
+                    return cachedPath;
+                }
+
+                if (CronMissesByJob.TryGetValue(jobId, out var known)
+                    && known.Contains(basename))
+                {
+                    return null;
+                }
+            }
+
+            OpenClawGateway? gateway;
+            lock (Gate) gateway = _gateway;
+            if (gateway is null) return null;
+
+            var runs = new List<OpenClawCronRun>();
+
+            try
+            {
+                var offset = 0;
+                for (var page = 0; page < CronRunsMaxPages; page++)
+                {
+                    var res = await gateway.RequestAsync("cron.runs", new Dictionary<string, object>
+                    {
+                        ["jobId"] = jobId,
+                        ["limit"] = CronRunsPageLimit,
+                        ["offset"] = offset
+                    }, ct);
+
+                    runs.AddRange(OpenClawCronRecovery.RunsFrom(res));
+
+                    if (!OpenClawCronRecovery.HasMore(res)) break;
+
+                    var next = OpenClawCronRecovery.NextOffset(res);
+                    if (next is null) break;
+
+                    offset = next.Value;
+                }
+            }
+            catch
+            {
+                // A run history that will not answer is not a reason to
+                // refuse the conversation — same rule FetchHistoryPageAsync's
+                // own catch follows, one level up.
+                return null;
+            }
+
+            var map = OpenClawCronRecovery.MediaPathsByBasenameForJob(runs, jobId);
+
+            lock (Gate)
+            {
+                CronRunsByJob[jobId] = map;
+
+                // This fetch was fresh, so a basename still missing from it is
+                // one this job has never delivered. Remember that, or the
+                // re-ask above becomes a fetch per render.
+                if (!map.ContainsKey(basename))
+                {
+                    if (!CronMissesByJob.TryGetValue(jobId, out var misses))
+                    {
+                        CronMissesByJob[jobId] = misses = new HashSet<string>(StringComparer.Ordinal);
+                    }
+
+                    misses.Add(basename);
+                }
+
+                const int KeepJobs = 8;
+                while (CronRunsByJob.Count > KeepJobs)
+                {
+                    var oldest = CronRunsByJob.Keys.First();
+                    CronRunsByJob.Remove(oldest);
+                    CronMissesByJob.Remove(oldest);
+                }
+            }
+
+            return map.TryGetValue(basename, out var path) ? path : null;
         }
 
         internal static List<OpenClawChatSession> OpenChats()
@@ -1883,8 +3314,13 @@ namespace ClaudeBuddy
         // the half LoadOlderAsync's tests assert through — reaching the other
         // half means a chat.history request over a live socket, which is the
         // reason FetchHistoryPageAsync below is excluded too.
+        //
+        // internal rather than private: OpenClawChatSession.TryResolveLiveImage
+        // reaches for the newest page (offset 0) the same way LoadOlderAsync
+        // reaches for an older one, rather than opening a second request shape
+        // for the same "one page of chat.history" idea.
         [ExcludeFromCodeCoverage]
-        private static async Task<(List<HistoryTurn> Turns, int Messages)?>
+        internal static async Task<(List<HistoryTurn> Turns, int Messages)?>
             FetchPageAsync(OpenClawChatSession chat, int offset, CancellationToken ct)
         {
             OpenClawGateway? gateway;
@@ -1922,7 +3358,62 @@ namespace ClaudeBuddy
                     return null;
                 }
 
-                var turns = TurnsFromHistory(messages);
+                // The same key the request above was made with. The page's
+                // pictures are fetched over a separate HTTP route that has to
+                // be told whose conversation they belong to (CB-109), and
+                // this is the one place that knows.
+                var turns = TurnsFromHistory(messages, chat.GatewayKey);
+
+                // CB-115: recover a cron-delivered picture whose transcript
+                // lost its directory. Only turns TurnsFromHistory tagged with
+                // Automation reach this loop at all, which is the efficiency
+                // half of the trigger in OpenClawCronRecovery's header. Note a
+                // tagged turn may already carry a route: the named-path arm's
+                // ~/.openclaw/media/<basename> guess sets one that will 404,
+                // and overriding it with the run record's answer is the point
+                // rather than a special case — a successful recovery replaces
+                // the guess, a failed one leaves it exactly as before. CandidateBasenameFrom
+                // returning null is the trigger's second conjunct failing (a
+                // cron reply that never mentions a picture at all) and is
+                // checked here, against the same Text TurnsFromHistory built,
+                // rather than inside that pure method.
+                for (var i = 0; i < turns.Count; i++)
+                {
+                    if (turns[i].Automation is not { } automation) continue;
+
+                    var basename = OpenClawCronRecovery.CandidateBasenameFrom(turns[i].Text);
+                    if (basename is null) continue;
+
+                    var recovered = await RecoverCronMediaPathAsync(automation.JobId, basename, ct);
+                    if (recovered is null) continue;
+
+                    // Same media value the named-path arm inside
+                    // TurnsFromHistory builds for the identical shape — one
+                    // place decides what a resolved cron picture's route and
+                    // path look like, whether the MEDIA: line came straight
+                    // off the message or, as here, off the run record that
+                    // produced it.
+                    var media = new OpenClawMediaSource(recovered, chat.GatewayKey);
+                    turns[i] = turns[i] with
+                    {
+                        ImageUrl = media.Route,
+                        ImageAlt = OpenClawCronRecovery.BasenameOf(recovered),
+                        ImageSourcePath = media.Path,
+
+                        // CB-116: already High going in — this loop only ever
+                        // reaches a turn whose Automation is set, which is
+                        // exactly what makes TurnsFromHistory's own tiering
+                        // High for it. Restated explicitly anyway, because
+                        // this is the single most confirmed source of the
+                        // five in CB-116's tier table — a path read back off
+                        // the cron run that produced the delivery — and
+                        // because leaving it implicit is exactly the shape of
+                        // bug CB-115 itself was: a value that stayed right
+                        // only until something else in this area moved.
+                        Confidence = MediaConfidence.High
+                    };
+                }
+
                 // The message count, not the turn count: it is what the next
                 // page's offset is measured in, and one message can produce
                 // several turns or none.

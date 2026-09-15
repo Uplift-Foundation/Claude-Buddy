@@ -619,10 +619,10 @@ namespace ClaudeBuddy.Tests
                 Kind("agent:alexis:main") == SessionKind.Main);
 
             Check("a DM is Direct",
-                Kind("agent:main:discord:direct:100000000000000001") == SessionKind.Direct);
+                Kind("agent:main:discord:direct:200000000000000001") == SessionKind.Direct);
 
             Check("a channel is a Channel",
-                Kind("agent:main:discord:channel:100000000000000003") == SessionKind.Channel);
+                Kind("agent:main:discord:channel:1900000000000000001") == SessionKind.Channel);
 
             // origin.chatType is what separates these two when the key says only the
             // surface, which is the usual case.
@@ -671,10 +671,10 @@ namespace ClaudeBuddy.Tests
             // The distinction the badge exists to draw: these are the orbs that light up
             // because somebody typed something.
             Check("a discord channel is not a heartbeat",
-                !OpenClawHeartbeat.Is("agent:main:discord:channel:100000000000000003"));
+                !OpenClawHeartbeat.Is("agent:main:discord:channel:1900000000000000001"));
 
             Check("a discord DM is not a heartbeat",
-                !OpenClawHeartbeat.Is("agent:main:discord:direct:100000000000000001"));
+                !OpenClawHeartbeat.Is("agent:main:discord:direct:200000000000000001"));
 
             // A cron job is scheduled too, and is deliberately *not* a heartbeat: it has its
             // own session, its own label and its own clock badge, and the two would be
@@ -747,9 +747,9 @@ namespace ClaudeBuddy.Tests
             static string? Room(string key) => OpenClawSessionKind.RoomOf(key);
 
             Check("agents in one channel agree on the room",
-                Room("agent:aurora:discord:channel:100000000000000003")
-                == Room("agent:nova:discord:channel:100000000000000003")
-                && Room("agent:nova:discord:channel:100000000000000003") == "discord:100000000000000003");
+                Room("agent:aurora:discord:channel:1900000000000000001")
+                == Room("agent:nova:discord:channel:1900000000000000001")
+                && Room("agent:nova:discord:channel:1900000000000000001") == "discord:1900000000000000001");
 
             Check("different channels are different rooms",
                 Room("agent:nova:discord:channel:111") != Room("agent:nova:discord:channel:222"));
@@ -770,10 +770,10 @@ namespace ClaudeBuddy.Tests
             // It reports itself as a group and carries no channel name, and treating it as
             // a room split #arch into two — the real one and a nameless twin.
             Check("a key nested inside a key is not a room",
-                Room("agent:main:discord:channel:agent:ea-hope:discord:channel:100000000000000005") is null);
+                Room("agent:main:discord:channel:agent:ea-hope:discord:channel:1900000000000000002") is null);
 
             Check("the real session for that channel still is a room",
-                Room("agent:ea-hope:discord:channel:100000000000000005") == "discord:100000000000000005");
+                Room("agent:ea-hope:discord:channel:1900000000000000002") == "discord:1900000000000000002");
 
             // A channel id containing a colon must not be truncated into a different room.
             Check("a colon in the channel id survives",

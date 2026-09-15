@@ -26,6 +26,11 @@
          Pure and window-free, so compiling it in costs nothing. -->
     <Compile Include="../../OrbClusters.cs" />
     <Compile Include="../../OpenClawSessionKind.cs" />
+    <!-- Pure and window-free, the same argument as OrbClusters above: the
+         settings' text-scale and status-directory members are typed against
+         these, so they cost a compile and no behaviour. -->
+    <Compile Include="../../ChatZoom.cs" />
+    <Compile Include="../../StatusDirectory.cs" />
     <Compile Include="../../OpenClawIdentity.cs" />
     <Compile Include="../../OpenClawSocket.cs" />
     <Compile Include="../../OpenClawGateway.cs" />

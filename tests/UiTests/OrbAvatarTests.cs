@@ -88,6 +88,85 @@ public class OrbAvatarTests
         }
     }
 
+    // The workspace resolver publishes the same identity table as agents.list.
+    // Drive that table through a real orb as well as asserting its parser in the
+    // console suites: this catches a metadata picture being accepted but never
+    // reaching the visible OpenClaw surface.
+    [AvaloniaFact]
+    public void AWorkspaceIdentityPictureAndVoiceReachTheAgentOrb()
+    {
+        var agent = Agent();
+        // Matching is intentionally constrained to voices installed on the
+        // current platform, so use this runner's list rather than a macOS-only
+        // fixture name while exercising the orb's identity seam.
+        var workspaceVoice = TextToSpeech.SystemVoices()[0];
+        try
+        {
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>
+                {
+                    [agent] = new("Workspace Nova", "✨", Png(), workspaceVoice),
+                });
+            var sessionId = $"openclaw:agent:{agent}:discord:channel:1";
+            var orb = new OrbWindow(sessionId);
+
+            orb.UpdateFrom(Gateway("Workspace Nova"));
+
+            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            var voice = Assert.IsType<TextToSpeech.VoiceOption>(OpenClawSessions.VoiceForSession(sessionId));
+            Assert.Equal(TextToSpeech.SpeakEngine.System, voice.Engine);
+            Assert.Equal(workspaceVoice, voice.Name);
+
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>
+                {
+                    [agent] = new("Workspace Nova", "✨", Png(), "af_bella", 1.3),
+                });
+            var neural = new TextToSpeech.VoiceOption(
+                TextToSpeech.SpeakEngine.Neural, "af_bella", "af_bella (Kokoro)");
+            Assert.Equal(neural, OrbWindow.VoiceForRemoteSpeech(sessionId, new[] { neural }));
+            Assert.Equal(1.3, OpenClawSessions.RateForSession(sessionId));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    [AvaloniaFact]
+    public void APairedPeerProfileVoiceReachesTheAgentOrbWithoutReplacingItsIdentity()
+    {
+        var savedPin = ClaudeBuddySettings.OpenClawFingerprint;
+        var agent = Agent();
+        const string pin = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var neural = new TextToSpeech.VoiceOption(
+            TextToSpeech.SpeakEngine.Neural, "af_bella", "af_bella (Kokoro)");
+        try
+        {
+            ClaudeBuddySettings.OpenClawFingerprint = pin;
+            OpenClawSessions.SetIdentitiesForTests(
+                new Dictionary<string, OpenClawSessions.AgentIdentity>
+                {
+                    [agent] = new("Gateway Nova", "✨", Png()),
+                });
+            OpenClawSessions.ApplyPeerProfileVoices("paired-mini", pin,
+                new[] { new OpenClawPeerIdentity.Row(agent, "af_bella", 1.3) });
+
+            var sessionId = $"openclaw:agent:{agent}:discord:channel:1";
+            var orb = new OrbWindow(sessionId);
+            orb.UpdateFrom(Gateway("Gateway Nova"));
+
+            Assert.IsType<ImageBrush>(orb.Orb.Fill);
+            Assert.Equal(neural, OrbWindow.VoiceForRemoteSpeech(sessionId, new[] { neural }));
+            Assert.Equal(1.3, OpenClawSessions.RateForSession(sessionId));
+        }
+        finally
+        {
+            ClaudeBuddySettings.OpenClawFingerprint = savedPin;
+            PublishNothing();
+        }
+    }
+
     // Applying the same picture twice is a no-op rather than a rebuild: the scan
     // runs a couple of times a second, and rebuilding the brush on every tick
     // would restart an animated avatar continuously.

@@ -245,6 +245,19 @@ namespace ClaudeBuddy
                     {
                         Role = ChatRole.Assistant,
                         Text = turn.Text,
+
+                        // ImageSourcePath travels with ImageUrl through every
+                        // one of the four copies in this method, and not
+                        // because a room needs it to fetch: the url already
+                        // carries the session baked into it by
+                        // TurnsFromHistory, so the picture loads either way.
+                        // It is the *refusal* that needs it — CB-93's "why
+                        // didn't that load" line captions itself with this
+                        // path, and a merged copy that dropped it would go
+                        // back to an empty slot with no explanation in exactly
+                        // the view where several agents' pictures sit side by
+                        // side.
+                        ImageSourcePath = turn.ImageSourcePath,
                         ImageUrl = turn.ImageUrl,
                         ImageAlt = turn.ImageAlt,
                         At = turn.At,
@@ -302,6 +315,7 @@ namespace ClaudeBuddy
                         {
                             Role = ChatRole.User,
                             Text = turn.Text,
+                            ImageSourcePath = turn.ImageSourcePath,
                             ImageUrl = turn.ImageUrl,
                             ImageAlt = turn.ImageAlt,
                             At = turn.At,
@@ -341,6 +355,7 @@ namespace ClaudeBuddy
                         {
                             Role = ChatRole.Assistant,
                             Text = turn.Text,
+                            ImageSourcePath = turn.ImageSourcePath,
                             ImageUrl = turn.ImageUrl,
                             ImageAlt = turn.ImageAlt,
                             At = turn.At,
@@ -371,6 +386,7 @@ namespace ClaudeBuddy
                     {
                         Role = ChatRole.Assistant,
                         Text = turn.Text,
+                        ImageSourcePath = turn.ImageSourcePath,
                         ImageUrl = turn.ImageUrl,
                         ImageAlt = turn.ImageAlt,
                         At = turn.At,

@@ -50,10 +50,18 @@
                 <!-- Only shown for an orb the user has dragged; see
                      OrbWindow.SetPinned. -->
                 <MenuItem x:Name="ResetPositionItem"
-                          Header="Return this orb to the stack"
+                          Header="Reset this orb's position"
                           IsVisible="False"
                           Click="ResetPosition_Click"/>
-                <MenuItem Header="Reset this session to idle" Click="ResetIdle_Click"/>
+                <!-- Local hooks own their status files, so their displayed
+                     state can be reset here. OpenClaw and remote-control
+                     sessions instead receive a disabled explanation from
+                     UpdateFrom: their owner is the only thing that can change
+                     their state. -->
+                <MenuItem x:Name="ResetIdleItem"
+                          Header="Reset this session to idle"
+                          ToolTip.Tip="Changes this orb's displayed state only; the next hook event may update it again."
+                          Click="ResetIdle_Click"/>
                 <!-- The `claude agents` roster, for the orbs it lists. Above
                      the two lifecycle items because it is the harmless one of
                      the three, and hidden rather than greyed for the same

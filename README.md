@@ -48,7 +48,7 @@ same mark.
 it holds that spot as other sessions come and go (the rest of the stack
 closes up behind it), and it's remembered across restarts of Claude Buddy —
 per working directory, since session ids are new every time. Right-click →
-**"Return this orb to the stack"** to give the placement up and have that
+**"Reset this orb's position"** to give the placement up and have that
 orb rejoin the default top-right column. Two live sessions in the same
 directory share one remembered spot: the first orb to appear takes it and
 the other stacks normally, so they never land on top of each other. An orb
@@ -497,6 +497,8 @@ Mandarin and filtered out of an English list. A name with no recognisable prefix
 at all is *not* dropped; it falls through to the American English list and
 appears like any other voice. Copying the naming of the bundled ones is still
 the safe move, since it's the prefix that decides how the voice is treated.
+This is also where a blended persona voice is written — see *A voice can be a
+blend* — which is why a blend wears the prefix of its first part.
 
 Worth knowing what a Kokoro "voice" is before hunting for more: it's a 510 KB
 array of style vectors for that one model, not an engine and not a recording. So
@@ -841,8 +843,12 @@ are statements about what this app can *see*, and a status file is the only plac
 a live session's terminal coordinates and colour live. If the app does delete one
 it should not have, the session's next hook event writes it back.
 
-Right-click → "Reset this session to idle" is still there for a session whose
-process is alive but whose orb is stuck amber.
+Right-click → "Reset this session to idle" is still there for a local CLI
+session whose process is alive but whose orb is stuck amber. It changes only
+Claude Buddy's local status record and the next hook event can replace it with
+the session's real state. OpenClaw sessions instead say that OpenClaw controls
+their state, and remote-control sessions say that their other machine does;
+Claude Buddy does not offer a reset that cannot change either one.
 
 **Scope**: this only tracks Claude Code sessions that read a `settings.json`
 you've wired up per step 2 below. Each Claude Code install — WSL (per Linux
@@ -897,6 +903,20 @@ be a lie about work you are watching happen.
 Nothing here hides an orb. A parked job is real, resumable and worth clicking,
 and how long a quiet session stays on screen is what **"Keep orbs for"** is for.
 
+**Messaging one.** A background job or an `--agent` child never has a terminal
+to type into or attach to at all, on any machine — the ⚙ badge above is what it
+is, not a temporary state. Its chat panel offers a send anyway: the message is
+handed to Claude Code's own IPC socket for that session rather than typed
+into a pane that doesn't exist, and it reads at the session's next turn, not
+immediately — the composer says so ("Message it — it reads this at its next
+turn") rather than implying a pane it doesn't have. It arrives as a message
+from Claude Buddy, not as keystrokes, so **built-in slash commands don't run**
+this way, though a project's own custom skill commands do, since those are
+just instructions the model reads. This works both for a background job on
+this machine and, over the mirror link, for one on a peer machine — the same
+mechanism either way, just addressed through the far Buddy instead of straight
+to the socket. See `docs/headless-delivery-findings.md` for what was measured.
+
 ## Chatting with a session from its orb
 
 Hover an orb and the flyout has a keyboard button (⌨). It opens a small panel
@@ -909,6 +929,24 @@ where, and the panel reads it. So anything you type in the terminal shows up in
 the panel. And sending from the panel types into the session's tmux pane, so
 anything you send from the orb shows up in the terminal too, exactly as if you
 had typed it there. There is no second conversation to get out of step.
+
+**The header says which conversation this is, and where it is happening.** The
+name and the picture on the first line, the room or the place on the second,
+and under those the facts that are true whether or not anybody has named the
+session: what Claude Code calls this chat and the directory it is working in,
+written `~/Source/Claude-Buddy`, with the whole path in a tooltip when the
+panel is too narrow for it — then the machine it is running on, dimmest and on
+a row of its own. (Two rows rather than one because a panel opens 340 points
+wide and three facts do not fit across it; the portrait beside them is taller
+than all three lines together, so the second row costs the header no height.)
+The session's own name is left out when the line above already says it, which
+is the ordinary case for a local session and stops the header saying one thing
+twice; a `CLAUDE.md` persona or an OpenClaw room taking the first line is what
+gives it somewhere to go. A conversation in a room has no directory on this
+disk, so it shows the machine alone. **The machine is named always, and drawn
+in the session's own colour when it is not this machine** — a panel open here
+on a session running on the Mac mini says so, rather than leaving you to work
+it out.
 
 Two honest limits. The panel updates a **block at a time** rather than a word at
 a time — each thinking pass, each tool call and each paragraph appears as it
@@ -928,11 +966,15 @@ and being able to drive it are different powers, so the second one is asked for
 separately — the same split the OpenClaw section below makes, for the same
 reason.
 
-**Sessions not running under tmux stay read-only.** The only way to type into
-those is to bring their terminal to the front first, which defeats the point of
+**A session with no pane stays read-only unless it has a live messaging
+socket.** The only way to type into one running under something other than
+tmux is to bring its terminal to the front first, which defeats the point of
 chatting from an orb; dictation already does that and is welcome to, but a chat
-panel that raised a window on every message would not be one. The input box says
-so rather than being greyed out.
+panel that raised a window on every message would not be one. A background job
+or an `--agent` child never has a pane to bring forward at all — for those the
+panel falls back to messaging instead, per "Messaging one" above, rather than
+refusing outright. The input box says which is true rather than being greyed
+out either way.
 
 When a session stops for a **permission prompt**, the panel says so and offers
 the dialog's own options as buttons. It reads them off the pane with
@@ -943,6 +985,288 @@ the terminal", because a button labelled "Approve" that sent something else
 would be worse than no button. That parsing has a test suite of its own
 (`dotnet run --project tests/TranscriptTests`) whose fixtures are transcribed
 from real captures.
+
+## Personas from CLAUDE.md
+
+An orb is normally named for whatever Claude Code decided the conversation was
+about, falling back to the folder. **If a project's `CLAUDE.md` says what the
+agent working there is called, the orb wears that instead** — its name, its
+picture, and the voice it reads a turn out in.
+
+Nothing is turned on and no new file is introduced. It reads the Markdown that
+is already beside the work, and a project that says nothing about a persona is
+drawn exactly as it was before.
+
+**The fields, in the grammar the OpenClaw workspace files already use:**
+
+```markdown
+- Name: Leota
+- Profile picture: leota.png
+- Voice: Bella
+```
+
+A bullet, with or without a bold label, carries all three fields, and so does
+YAML front matter — labels are case-insensitive, and the first valid value for
+each field wins. A standalone bold field (`**Name:** Leota`) and a two-cell
+table row carry all three as well, except that a name is read from either only
+underneath a persona heading — described below — because `| Name | string |` in
+an ordinary schema table must not rename an orb. `Avatar`, `Profile
+Picture`, `Profile Pic`, `Profile Image`, `Profile Photo`, `Picture`,
+`Portrait`, `Photo`, `Image` and `Image Animated` (or `image_animated:` in
+front matter) all name the picture; `Voice`, `Voice Name`, `Speech Voice` and
+`TTS Voice` all name the voice; `Name` and `Slug` both name the agent, with
+`Name` winning when a file states both.
+
+**Front matter carries all three fields, and its quotes are YAML's rather than
+part of the value.** A generator that writes
+
+```yaml
+---
+name: "Leota"
+slug: "leota"
+image: "avatars/leota.png"
+voice: "af_bella"
+---
+```
+
+has its quotes stripped before any of the above is asked — `name:` reads as
+`Leota`, not `"Leota"` — because a quote there is YAML's own syntax rather
+than something the writer meant to name their agent with. A bullet, a bold
+field or a table cell get no such strip: a quote written there is Markdown a
+person typed, and is read exactly as written. `image_animated:` is a second
+label for the picture field, not a second field — writing both `image:` and
+`image_animated:` keeps the still, because the first one stated wins.
+
+**A marked persona block carries the same front matter inside a fence.** A
+generator embedding a persona in a `CLAUDE.md` that already has content in it
+cannot use front matter — there is only one set of `---` rules and they belong
+to the top of the file — so it wraps the persona in a pair of HTML comments and
+puts the fields in a fenced `yaml` block instead:
+
+````markdown
+<!-- persona:start -->
+### Leota
+
+![Leota](avatars/leota.png)
+
+```yaml
+name: "Leota"
+slug: "leota"
+image: "avatars/leota.png"
+voice: "af_bella"
+```
+<!-- persona:end -->
+````
+
+Between `persona:start` and `persona:end`, a ` ```yaml ` (or ` ```yml `) block
+is read exactly as front matter is — same labels, same quote stripping, same
+first-value-wins. `profile-gen:start` and `profile-gen:end` are accepted as
+alternative spellings of the same markers, because the `profile-gen` skill is
+the generator that writes this shape today; the contract is *a marked persona
+block*, not any one tool's output, so a second generator — or a person writing
+one by hand — need not spell another project's name to be understood.
+
+**Everywhere else, a fenced block is still skipped whole** — that is the entire
+point of requiring the markers. A `CLAUDE.md` showing you how to write a config
+file is the commonest ` ```yaml ` block there is, and a `name:` inside one is
+documentation, not a declaration. It stays documentation even under a
+`## Persona` heading; only the markers change what a fence means. The heading
+and the Markdown image above the fence carry nothing either, the same as
+anywhere else: a heading labels what follows rather than stating it.
+
+**"Skipped whole" means every shape, not just prose.** Inside a fence, a
+bullet, a bold field, a two-cell table row, a colon-less `Label Value` line and
+a sentence are all examples rather than statements — so `- name: Build the
+thing` in a pasted GitHub Actions step names nobody, and neither does
+`| Voice | af_bella |` in a table showing you the format. The single exception
+is the marked block above. This is stated per shape because it was not always
+true of all of them: until CB-144 only the prose arm honoured the fence, and a
+workflow pasted into a `CLAUDE.md` renamed the orb after its build step.
+
+**Write the picture path however you would write it in Markdown.** A code span
+around it and a note after it are both read straight through, which is how real
+profiles are written:
+
+```markdown
+- Profile picture: `avatars/annabel-lee.gif` (animated, updated 2026-09-09)
+```
+
+**A path may be absolute, and it still cannot leave the Markdown's own
+directory.** It is read only if it canonicalises inside the directory of the
+file that named it — an absolute path that does is read, which is what a
+profile generator needs when its persona file is `@`-imported from an
+arbitrary directory and a relative path would not survive that; one that
+does not is refused, under **escapes root**. A URL and a `data:` URI are
+refused whatever they are wrapped in, absolute or not, under **not a picture
+path**.
+
+**A labelled field is one whole value.** `- Profile picture: my pictures/leota.png`
+names a file whose directory has a space in it, read exactly as written — only
+a *sentence* ("Her picture is the file leota.png") has its last word taken as
+the path, because a sentence has other words in it that are not part of the
+filename. A sentence carrying an absolute path is read as that whole path
+too, provided nothing else in the sentence is itself rooted; where a rooted
+*fragment* sits ahead of the sentence's own last word, the value is refused
+rather than guessed at.
+
+**A sentence works too, because a `CLAUDE.md` is prose.** These three are read:
+
+```markdown
+Her name is Leota.
+Her profile picture is leota.png.
+Her voice is Bella.
+```
+
+**One sentence per line**, which is grammar rather than housekeeping: a line is
+what gets read, so two of these sharing one make a value long enough that the
+bounds below reject it and neither field is set.
+
+The shape is deliberately narrow: an optional possessive (`her`, `his`,
+`their`, `its`, `the`, `my`, `your`, `this agent's`, `the agent's`, `agent`),
+one of the field nouns, `is` / `should be` / `will be`, and a value. A name or a
+voice must be one to three words and at most 40 characters, of letters, digits,
+spaces and `_ - ' ( )` — so **"The name is derived from the folder unless the
+user renames it"** names nothing, and neither does "Her voice is lovely and warm
+and low". A **voice** has one allowance more, described under *A voice can be a
+blend* below: it may be a mixture, up to eleven words and 120 characters, if it
+carries a percentage and reads as one. A picture must be a path ending in
+`.png`, `.jpg`, `.jpeg`, `.gif` or `.webp`. Anything outside that shape is
+left alone as the prose it is.
+
+**Under a persona heading, the colon is optional.** A file whose whole purpose
+is to describe the agent tends to be written as a list of attributes rather than
+as sentences, so inside such a section a bare `Label Value` line is a field:
+
+```markdown
+## Attributes
+
+Name Jennifer
+Profile Photo cto.png
+```
+
+A **persona section** is a heading at any level whose text mentions `persona`,
+`attributes`, `identity`, `character`, `profile`, `about me` or `who i am`
+(case-insensitively), and it runs until the next heading of the same level or
+higher — so a `### Voice` underneath `## Attributes` is still inside it, and a
+second `## Build and run` ends it.
+
+**Outside such a section this form is not read at all**, which is the whole of
+why it is safe. "Name resolution is handled by the folder" in an ordinary
+paragraph is a sentence about naming, and it stays one. Inside a section the
+value still has to pass the same bounds every other shape applies, so that
+sentence names nothing there either — it is six words long, and a name is at
+most three. Fenced code blocks and YAML front matter are ignored exactly as they
+were, including headings written inside them — a persona section does not make a
+fence readable, and only the markers described above do.
+
+**Which files, nearest first.** From the session's working directory upwards to
+the root, each directory contributes `CLAUDE.md`, `CLAUDE.local.md`,
+`.claude/CLAUDE.md` and `AGENTS.md`, in that order; `@path` imports inside them
+are followed, five hops deep and twenty files at most. **The nearest file that
+names a field wins it**, so a repository can set a name and one subdirectory can
+override the picture without restating the rest.
+
+**Then, for Claude Code only, your user-level `~/.claude/CLAUDE.md`** (and any
+extra profile directories configured in Settings → Claude Code profiles, plus
+`CLAUDE_CONFIG_DIR` if the app was started with one). It is last for a reason
+worth knowing before you use it: **a persona there applies to every Claude Code
+session on the machine that no project has already named.** That is occasionally
+what someone wants and is more often a surprise, so put a persona in the project
+unless you mean all of them. Codex and Grok sessions read the directory walk
+only — their own user-level conventions are a separate question and this does
+not guess at them.
+
+**An agent name still wins.** Every member of an agent team inherits the team
+session's directory and so would inherit one persona between them, which is the
+collision the agent name exists to break. The order is agent name, then persona,
+then the session title, then the folder — and **the tooltip still says the
+title**, because "who" replacing "which conversation" would cost more than it
+gave.
+
+**The security bounds are the same ones the OpenClaw workspace files get**, and
+they are what makes reading files nobody was asked about acceptable at all. A
+picture path is local, and cannot leave the directory of the Markdown file
+that named it — not through `..`, not through a symlink, not as a URL or a
+`data:` URI, and not by being absolute: an absolute path is resolved and then
+held to the same containment as a relative one, so it is read when it stays
+inside that directory and refused, exactly like any other path that tries to
+leave, when it does not. Pictures are capped at 16 MiB and Markdown files at
+256 KB; anything larger is skipped rather than truncated. The files are
+re-read only when one of them actually changes: the app stats them on its
+ordinary two-second poll and opens nothing until a size or a timestamp moves.
+
+**A picture that is skipped says so.** One line goes into `persona.log`, beside
+the crash log — `~/Library/Logs/ClaudeBuddy` on macOS,
+`%LOCALAPPDATA%\ClaudeBuddy\Logs` on Windows — naming the file, the reason (too
+large, escapes root, not a picture path, or unreadable)
+and the cap, once per distinct message however many sessions ask. Before that line existed an oversized
+portrait was dropped in silence and looked exactly like a persona that had named
+no picture at all.
+
+**A voice falls back rather than failing.** The name is matched against the
+voices this machine actually has — system voices, Kokoro's if the neural engine
+is switched on, and a custom command's — exactly first, then by given name
+(`Bella` finds Kokoro's `af_bella`), then by an unambiguous shorthand. A voice
+that matches nothing, or matches two things, leaves the session speaking in your
+global voice. That is deliberate: a `CLAUDE.md` written on somebody else's
+machine, or read with the neural engine off, should sound ordinary rather than
+silent. `**Voice:** af_bella (Kokoro TTS, rate 1.3)` sets a speaking rate for
+the neural engine the same way an OpenClaw profile does; system voices and
+custom commands have no rate.
+
+### A voice can be a blend
+
+A voice may also be written as a **mixture of two to four Kokoro voices**, which
+is what you want when no single one sounds like the agent you have in mind:
+
+```markdown
+## Attributes
+
+Voice is 50% sky and 50% nicole
+```
+
+`and`, `plus`, a comma and `+` all separate the parts, and a percentage may lead
+its voice or follow it — `sky 60%, nicole 40%` says the same thing as
+`60% sky and 40% nicole`. Leave the percentages out entirely and the parts share
+equally: `Voice is sky and nicole` is a 50/50 mixture. Each part is resolved by
+the same rules a single voice is, so `sky` finds `af_sky`.
+
+**What happens then**: the app averages the parts' style vectors, weighted, and
+writes the result once into the same voices directory *Adding voices* above
+describes — `%APPDATA%\ClaudeBuddy\voices`, or
+`~/Library/Application Support/ClaudeBuddy/voices` — as a real Kokoro voice
+named for the mixture, `af_blend_sky50-nicole50.npy` for the example above. It
+is built on the first speak and reused after that, appears in the engine's own
+voice list, and survives an engine upgrade like anything else in that directory.
+Nothing has to be downloaded and nothing about the engine changes.
+
+**Anything the app cannot read as a mixture leaves you speaking in your global
+voice**, never in silence — the same rule a single unmatched voice follows. That
+covers a part naming a voice this machine has not got (the whole mixture is
+refused, not just that part), stated percentages that do not total 100 give or
+take one (`60% and 60%` is somebody who meant something else, while 99 and 101
+are rounding and are normalised), a percentage on some parts and not others, and
+more than four parts. Blends are Kokoro-only, so a mixture is also ignored
+outright when the neural engine is switched off. A mixture that could not be
+built says why in `persona.log`.
+
+Two bounds worth knowing, both about prose rather than about blends. A sentence
+value carrying a percentage may be up to eleven words, but **the percentage is
+what buys those words** — without one, "Her voice is lovely and warm and low" and
+"sky, nicole and bella" are the same shape, and nothing can tell them apart. So a
+*weightless* mixture of three or four parts has to be written as an explicit
+field (`- Voice: sky, nicole and bella`), which has never had a word limit; two
+weightless parts fit the ordinary three-word bound and need nothing special.
+
+**Almost nothing is written anywhere** — that log, and a blended voice's own
+`.npy` if a persona asked for one. The persona itself lives in memory for as long
+as the orb does, is never copied into the status file the hooks write, and never
+leaves this machine. The picture's *bytes* are not kept either: the persona
+remembers where the file is, and the decoded 144-pixel frames an orb actually
+draws are the only copy that stays resident — sized by how many frames a
+picture decodes to, not by how many bytes it arrived as, which is what makes
+raising the file-size cap to 16 MiB cost nothing extra on a machine running
+twenty or thirty agents out of one repository.
 
 ## OpenClaw agents (experimental, off by default)
 
@@ -973,6 +1297,61 @@ an orb reads **Aurora — #general** rather than `main`, and its letter is L
 rather than a fourth M. The second half says which conversation it is, because
 one agent commonly has a DM with you, a DM with someone else and two channels
 going at once.
+
+**Workspace identity overrides are local and explicit.** When `agents.list`
+names an agent workspace, Claude Buddy reads root-level Markdown files there:
+`IDENTITY.md` first, then `SOUL.md`, then the remaining `*.md` files by filename.
+Use OpenClaw's bullet format, for example `- Name: Aurora`,
+`- Avatar: avatars/aurora.png`, and Claude Buddy's `- Voice: Samantha`. Voice
+also accepts the deliberate field labels `Voice Name`, `Speech Voice`, and `TTS
+Voice`, in Markdown bullets, bold fields, two-cell tables, or YAML front matter.
+Labels are case-insensitive and the first valid value for each field wins. A
+profile can document a Kokoro choice as `**Voice:** af_bella (Kokoro TTS)`:
+the engine annotation is ignored and `af_bella` is matched. The same
+annotation may also qualify a speaking rate for the neural (Kokoro) engine —
+`(Kokoro TTS, rate 1.3)` or `(Kokoro TTS, speed 1.3x)` — recognized generically
+for any agent's profile, not tied to a specific voice or value. A rate outside
+0.5–2.0, or one that doesn't parse, is ignored and the engine speaks at its own
+default speed; only a voice's own workspace file can set its rate, and system
+voices and custom commands have no rate here at all. Voices match the
+available system, Kokoro, and custom-command options exactly when possible,
+then by an unambiguous normalized shorthand; a missing or ambiguous match keeps
+the global voice. Avatar paths are
+local to that workspace (no URLs or data URIs), cannot escape it, and are capped
+at 2 MB. Missing or invalid fields retain the identity or voice supplied by the
+gateway and Claude Buddy settings.
+
+When the gateway is on a paired Claude Buddy peer rather than this machine,
+the direct Peer Link can optionally provide the already-resolved profile voice
+and rate. It sends only the requested agent id, voice label, rate, and the
+gateway certificate pin; it never reads or transfers workspace files. Both
+Buddies must support the optional exchange and be directly paired. The answer
+is discarded when that peer disconnects or its gateway pin no longer matches,
+so an unavailable peer continues to use the normal global-voice fallback.
+
+**An agent's picture is its orb, and a channel's orb is everyone in it.** An
+agent with an avatar set in OpenClaw wears it instead of its letters, with the
+state moving out to the ring. The orb Claude Buddy draws for a *channel* — the
+one every agent talking in that channel points at — is cut into a wedge per
+member: half each for two agents, quarters for four. Someone with no picture
+still takes a wedge, in the colour their ring wears everywhere else, and a
+channel where nobody has one keeps the channel's initials. At most four are
+drawn, and they are the four most recently active; the wedges are ordered so
+that somebody speaking does not move anyone's face.
+
+**A channel gets its own orb only once a second agent is in it.** One agent
+talking in a channel is drawn as that agent — its own orb, wearing its own face,
+with the `#` badge saying which kind of conversation it is. A second agent
+joining is what makes the channel a thing in its own right, and that is when the
+room orb appears with both of them pointing at it.
+
+**Only agents with an orb of their own get a wedge** — so a channel two agents
+are working in is drawn as two, not as everyone who has ever spoken there. An
+agent that has been quiet for longer than **Show sessions active within** is
+still in the channel's *conversation*, and its messages still appear when you
+open the room, but it is no longer one of the faces on it. That setting is the
+dial: widen it and more of the channel's regulars count as present, narrow it
+and the orb tracks who is talking right now.
 
 **Only recently active sessions get orbs.** A gateway remembers every
 conversation it has ever had — 59 of them on the machine this was developed
@@ -1035,6 +1414,19 @@ in. Escape, Cmd-W, the close button or clicking away all dismiss it, and your
 half-typed draft survives being dismissed. Enter sends, Shift+Enter starts a new
 line, and with voice input on the mic drops what you said into the box rather
 than sending it, exactly as dictation into a terminal already does.
+
+**The pin in the header keeps a chat open.** A panel normally hides the moment
+you click anywhere else — that is what makes it feel like part of the orb rather
+than a window you have to tidy up — but it also means you cannot watch two
+agents at once, or leave one conversation up while you work in another. Pin it
+and it stops hiding: it stays where it is, its close button now closes it for
+good rather than tucking it away, and its header becomes a title bar you can
+drag it anywhere by. Pin as many as you like. The next orb you click opens the
+ordinary come-and-go panel beside them, placed so it does not land on top of
+anything you pinned, and the pinned panel's orb gets its hover arc back, since
+the panel is no longer sitting in that space. Click the pin again to unpin: that
+panel becomes the come-and-go one, in place, and whichever panel was playing
+that part goes away.
 
 Drag any edge or corner and the panel resizes — new turns then scroll inside it
 rather than growing it out from under your hands. **The size belongs to the
@@ -1131,7 +1523,14 @@ Some things the rings deliberately do not do:
   translate one, and told somebody their organisation had disabled extra usage
   when in truth they had simply spent that month's budget.
 - **An orb that could not be read goes dim** rather than dropping to zero, with
-  how old the reading is in its card.
+  how old the reading is in its card. Age means the age of the *number*, not of
+  the read: a Codex or Grok figure comes out of a file its CLI last wrote
+  whenever it last ran, so the card dates it "Usage as of 2h ago" and the orb
+  dims once that number is more than fifteen minutes old, even though Claude
+  Buddy re-read the file seconds ago. A Codex orb usually escapes this, because
+  Codex can be asked for its usage directly and answers about now; a Grok orb
+  cannot, because Grok writes its credit figure once when it starts and never
+  again for the life of that process.
 
 **Where the numbers come from.** Claude Buddy asks Claude Code itself, once
 every five minutes per account, over the same control protocol its SDK uses —
@@ -1524,7 +1923,20 @@ Two differences from a Claude Code orb, both because Grok works differently:
 - **Usage orbs** (Settings → Grok Build) draw the weekly credit window Grok
   already fetches. Grok has no five-hour cap, so that ring is omitted rather
   than drawn at zero. The figure is as fresh as the last Grok session on this
-  machine — Claude Buddy does not hold Grok's login token.
+  machine — Claude Buddy does not hold Grok's login token — and the orb says so
+  rather than implying otherwise: Grok writes its credit figure once, at
+  startup, so a machine that last ran `grok` on Monday shows a dimmed orb and a
+  card reading "Usage as of 2d ago".
+- **Keep Grok usage fresh automatically** (same section, off by default) starts
+  and stops Grok in the background roughly every twenty minutes purely to force
+  that number to refresh, since there is no lighter way to ask Grok for it —
+  confirmed against `grok models`, `doctor`, `inspect`, `sessions` and `grok
+  agent stdio`, none of which trigger it. It runs in a scratch folder rather
+  than one of your projects, needs macOS (Windows would need a pty API this
+  app does not wrap, so it no-ops there rather than guessing), and is
+  deliberately a second switch from the orb itself: reading a log file and
+  starting your real terminal app in the background are different classes of
+  action.
 
 See `docs/grok-findings.md` for what was measured on a real session.
 
@@ -1549,9 +1961,16 @@ rather than because the support is unfinished:
   from Codex — `/rename` if you've set one, otherwise Codex's own title, taken
   from your first message.
 - **Usage orbs** (Settings → Codex sessions) draw the five-hour and weekly
-  windows Codex already writes onto each turn of the rollout. The figure is as
-  fresh as the last Codex session on this machine — Claude Buddy does not hold
-  Codex's login token. See `docs/codex-findings.md`.
+  windows, and they are **live**: Claude Buddy asks `codex app-server` for them
+  directly, which costs no model call, needs no session open, and never touches
+  Codex's login token. If Codex cannot be reached that way it falls back to the
+  windows Codex writes onto each turn of the rollout — the newest snapshot that
+  carries a window, across every rollout, which is not the same as the newest
+  line in the newest file: Codex sends a *window-less* snapshot to every live
+  session when the workspace runs out of credits, and that one is routinely the
+  most recent thing on disk. A fallback figure is only as fresh as the last
+  Codex session, and the orb dims and the card dates it when that is what you
+  are looking at. See `docs/codex-findings.md`.
 - **A Codex orb appears on the session's first message, not when Codex opens.**
   Codex fires no hooks until a thread exists, and a thread is created when you
   first speak to it — so an open-but-untouched session has no orb, and neither

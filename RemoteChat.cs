@@ -30,6 +30,42 @@ namespace ClaudeBuddy
     //     shows what it is given and never trims or pages.
     public enum ChatRole { User, Assistant, System }
 
+    // CB-116: how much a candidate picture's own origin is worth trusting
+    // when the fetch behind it fails — the fix for a bug that had nothing to
+    // do with fetching. OpenClaw's LocalMediaPathFrom recognises any
+    // caption-shaped prose ending in something extension-shaped (CB-107),
+    // which is right for finding real pictures and wrong for deciding
+    // whether a *failure* is worth a visible "picture not shown" note:
+    // "I deleted photo.png" matches the same shape as a real delivery and,
+    // unlike a real delivery, is an unbounded population — any message in any
+    // conversation that happens to end in a filename, forever.
+    //
+    // The fetch itself is unaffected by this — every producer still tries,
+    // cheaply and cached, because that is how real pictures named this way
+    // are found at all. This only tiers whether a *failed* fetch gets to say
+    // why. High for a candidate this app has independent reason to trust —
+    // an explicit "MEDIA:" line, the gateway's own delivery-mirror record, a
+    // path CB-115 recovered from the cron run that produced it, or a
+    // trailing token on a turn the gateway tagged as an openclawAutomation
+    // delivery. Low for everything else: ordinary prose that merely ends in
+    // something filename-shaped, which is exactly comfyui-style narration
+    // turns (accepted as a trade — see CB-116's PR body) and exactly
+    // "I deleted photo.png".
+    //
+    // Deliberately not derived from the candidate's *shape* — a rooted path
+    // in prose is exactly as untrustworthy as a bare one, and the real
+    // corpus has genuine deliveries in both shapes. Provenance is metadata
+    // about who produced the turn; shape is a property of the text, and
+    // CB-107 already proved shape alone cannot tell a caption from a
+    // delivery.
+    //
+    // A transport-neutral type living beside ChatRole rather than nested in
+    // OpenClawSessions, even though every producer of it today is OpenClaw's:
+    // ChatTurn.Confidence is a public member of a deliberately
+    // transport-agnostic model, and a public member cannot expose a less
+    // accessible — or more tightly coupled — type than itself.
+    public enum MediaConfidence { High, Low }
+
     public enum RemoteChatState { Disconnected, Connecting, Connected, Error }
 
     // Mutable on purpose: a streaming reply updates Text in place and raises
@@ -64,12 +100,106 @@ namespace ClaudeBuddy
         // overwritten from the backlog for one that wasn't.
         public DateTimeOffset At { get; init; } = DateTimeOffset.Now;
 
+        private string? _imageUrl;
+
         // A picture sent in the conversation, as a path on the gateway rather
         // than bytes: a transcript can hold a dozen of them and only the ones
         // actually scrolled to are worth a megabyte each. The panel resolves it.
-        public string? ImageUrl { get; init; }
+        //
+        // Settable rather than init-only: a live turn can start with no
+        // picture and gain one once OpenClawChatSession resolves a
+        // "[media attached: ...]" marker against the gateway's own history
+        // (see TryResolveLiveImage) — the same reason Text is mutable rather
+        // than the row being recreated.
+        public string? ImageUrl
+        {
+            get => _imageUrl;
+            set
+            {
+                if (_imageUrl == value) return;
+                _imageUrl = value;
+                Raise();
+            }
+        }
 
-        public string ImageAlt { get; init; } = "";
+        public string ImageAlt { get; set; } = "";
+
+        // The file behind ImageUrl, for the OpenClaw case (CB-109).
+        //
+        // Null on a turn with no picture at all, and on a picture that did not
+        // come from the assistant-media route — an image block carrying its
+        // own url, a local CLI's inline bytes. It is **never** null on a turn
+        // whose ImageUrl *is* an assistant-media request: both producers set
+        // the two together, and TurnView.LoadImage's null check is a refusal
+        // to caption a note with a guess rather than a media case to handle.
+        // Do not read this nullability as a picture scenario needing a
+        // fallback; there isn't one.
+        //
+        // A plain string on purpose. This model is deliberately
+        // transport-agnostic — it does not know what a gateway is, which is
+        // what lets a Codex transcript and a room merge share it — so the
+        // structured request lives in OpenClawMediaSource, is used where the
+        // url is built, and is not stored here. What a turn needs afterwards
+        // is not the request: it is the readable path for the tooltip on a
+        // refusal, which is the same category of value ImageAlt above already
+        // holds, only whole rather than reduced to a basename.
+        //
+        // Set by whoever built ImageUrl, which is the point: before CB-109 the
+        // panel had nothing but the url and had to unescape the path back out
+        // of it, and the one place that knew the answer had thrown it away.
+        //
+        // Plain rather than notifying on its own, like ImageNoteDetail below:
+        // it is always set immediately *before* ImageUrl, whose Raise() is
+        // what tells the row to look again.
+        public string? ImageSourcePath { get; set; }
+
+        // CB-116: whether a *failed* fetch for ImageUrl is worth explaining
+        // with the note below, rather than staying silent — see
+        // MediaConfidence's own header for the full reasoning. Set by
+        // whoever set ImageSourcePath, the same pairing that field already
+        // has with ImageUrl; see OpenClawSessions.HistoryTurn.Confidence for
+        // where the OpenClaw producers actually decide the value.
+        //
+        // Plain rather than notifying, for the same reason ImageSourcePath is:
+        // it is always set before ImageUrl, whose own setter is what tells
+        // the row to look again, so nothing here needs its own Raise().
+        //
+        // Defaults High: a turn built by anything other than the OpenClaw
+        // producers — a local CLI transcript, a room merge — never had a
+        // reason not to ask why, and keeps not having one.
+        public MediaConfidence Confidence { get; set; } = MediaConfidence.High;
+
+        private string? _imageNote;
+
+        // Why a picture that should have shown didn't — CB-93. Set once a
+        // resolution attempt comes back empty and the gateway's own &meta=1
+        // answer explains the refusal (see OpenClawMediaRefusal). Null in the
+        // ordinary case where nothing failed, which draws nothing.
+        //
+        // Mutable rather than init-only for the same reason ImageUrl and
+        // ImageBytes are: a turn starts with neither a picture nor a reason,
+        // and gains one once the async resolution — on the live path or the
+        // history path — finishes.
+        public string? ImageNote
+        {
+            get => _imageNote;
+            set
+            {
+                if (_imageNote == value) return;
+                _imageNote = value;
+                Raise();
+            }
+        }
+
+        // The tooltip for ImageNote: the path and the gateway's own code,
+        // kept out of the line itself so the bubble doesn't grow past one
+        // sentence. Plain rather than notifying on its own — always set
+        // immediately before ImageNote, whose Raise() is what tells the view
+        // to look again, the same pairing ImageAlt already has with
+        // ImageBytes/ImageUrl above.
+        public string? ImageNoteDetail { get; set; }
+
+        private byte[]? _imageBytes;
 
         // A picture already decoded, for the two cases where there is no
         // gateway to resolve ImageUrl against: a local CLI's own transcript
@@ -78,7 +208,16 @@ namespace ClaudeBuddy
         // wrote to disk is read straight back rather than round-tripped
         // through a fetch it would only fail. Never both this and ImageUrl
         // on the same turn.
-        public byte[]? ImageBytes { get; init; }
+        public byte[]? ImageBytes
+        {
+            get => _imageBytes;
+            set
+            {
+                if (_imageBytes == value) return;
+                _imageBytes = value;
+                Raise();
+            }
+        }
 
         // Who said this, when that is someone other than the two ends of the
         // conversation. In a channel an agent's transcript carries messages from

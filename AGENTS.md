@@ -51,6 +51,22 @@ types are `Epic`, `Feature`, `Story`, `Task`, `Bug`, `Subtask` (one word);
 `Feature` is level with `Story`, not above it, so an `Epic` still groups a
 multi-ticket effort.
 
+**A follow-up that fixes an existing feature is a `Bug` against that feature's
+ticket, not a new `Feature`.** The test is whether a reasonable reading of the
+original ticket's acceptance criteria already covered the case. If it did, the
+feature is incomplete, and filing the gap as fresh scope quietly redefines the
+original as having succeeded — and picks the wrong branch prefix, since
+`bugfix/` is what says "wrong on `develop`, not yet released".
+
+CB-133 paid for it: personas parsed out of markdown shipped, and the same day
+`.claude/PERSONA.MD` in this repository — naming a name, a profile photo and a
+voice, in a file the resolver provably reads — resolved to nothing. Two
+follow-ups went up as `Feature`s and had to be refiled as `Bug`s. Scope asked
+for *afterwards* stays a `Feature` (CB-134). Retyping a mis-filed ticket in
+place beats re-keying it, but rewrite the summary and description as a defect —
+what was written, what the app did, what it should have done, with the real
+input as reproduction steps.
+
 **CB's board has four columns, and they are now confirmed** — read off CB-1, the
 first ticket filed, which is what this paragraph used to ask for. They are
 **Refinement → Development → Testing → Done**, with transition ids 11, 21, 31 and
@@ -245,6 +261,188 @@ Clones from the canonical repo call it `origin`; clones from the
 `wtvamp/Claude-Buddy` fork call the fork `origin` and the canonical repo
 `upstream`.
 
+## Reading the code: never from this clone
+
+**The checkout you are probably standing in is not `develop`.**
+`/Users/user/Source/Claude-Buddy` is Owner's own working clone and is
+routinely parked on an in-progress branch, so a file read from it describes
+*that branch's* behaviour — and whoever reads it goes on to describe that as
+current. Read from the ref you mean:
+
+```bash
+git show upstream/develop:OpenClawSessions.cs    # a one-off check
+git worktree add /tmp/wt upstream/develop        # several files
+```
+
+**Don't switch this clone's branch to make reading convenient.** It holds
+uncommitted work that isn't yours; an agent did that once and had it reverted
+within the hour.
+
+CB-109 paid for this: it was planned for hours against `LocalMediaPathFrom` as
+read from this clone, which was sitting on CB-107's branch, so the plan
+described a parser arm `develop` does not have. Everything measured against the
+live gateway survived; every statement about *what the app does today* had to be
+withdrawn.
+
+## Claims, and the checks that are worth their cost
+
+The failure above has a general shape, and it appeared six times in one evening
+across CB-93/108/109/112/115/116, from three different agents: **a claim
+inheriting confidence from evidence about something adjacent.**
+
+| the claim | what the evidence was actually about |
+| --- | --- |
+| "the same file" | a byte count from a different file in a sibling directory |
+| "the gateway is gone, a restart won't fix it" | one hung request, plus another agent's stale process table |
+| "this is what the app does today" | source read from a feature branch |
+| "these turns name a picture" | a paraphrase of the parser's rule, not the rule |
+| "harvesting recovers most of them" | files existing on disk, not the transcript saying where |
+| "no client-side fix exists" | the transcript alone, never asking what else the gateway knew |
+
+Each time the evidence was real and about the wrong thing. Four checks that cost
+seconds and each of which has already cost hours by being skipped:
+
+**Don't reimplement the rule you're measuring — run it.** "Names a picture" got
+paraphrased as "contains an image-extension token" where the rule is "the
+*trailing* token is one" — wrong in both directions at once. The parsers here are
+pure and cheap to call, precisely so nobody has to paraphrase them. Related:
+"a message mentioning a `.png`" and "a picture turn" are different counts.
+
+**Pair every positive result with a negative control that would have failed if
+your setup were wrong.** `cron.runs → data` alongside `tasks.flows → missing
+scope: operator.admin`, on one token, is what makes "this works at read scope" a
+measurement rather than a hope. Without the paired refusal you cannot tell it
+from *I happen to be over-privileged*, which nearly invalidated two tickets.
+**Prefer a declaration where the system publishes one** — the gateway states
+per-method scopes in `dist/method-scopes-*.js` — but the two are peers: the
+table can't prove your credential lacks admin, your probe can't prove the
+requirement survives the next release.
+
+**A confident negative ends the inquiry, so it earns more suspicion than a
+confident error.** "We can't test that from here" and "I already scrubbed that"
+were both false and both stopped anyone looking again; a wrong positive gets
+contradicted by the next measurement. The sixth row above is the dangerous
+version of this: every claim was correctly sourced and correctly caveated, and
+the conclusion was still wrong because nobody asked whether the transcript was
+the whole world. **Rigour inside a wrong frame produces confident error, and it
+arrives with receipts.** When a conclusion says something is impossible, ask
+what *else* knows about this — not whether your evidence is sound.
+
+**In `pwsh`, a bare property path can't tell an XML attribute from a same-named
+child element.** `$xml.assembly.errors` in CB-119's guard silently resolved to
+an object array, so the check read healthy against a report that said
+`errors="1"`. Use `GetAttribute()` / `SelectNodes()`.
+
+**Naming a real value is necessary in a non-goal record and gratuitous in a
+report.** A non-goal nobody can check against is a shrug, not a decision — so
+"we are deliberately not chasing X, measured at N on ref R" has to name X. A
+body reporting a finding needs only the category — "a home path", "a
+four-digit id prefix" — because the value adds nothing a reader can act on.
+
+**Everything above reads as a warning about optimism. It is not.** Of six wrong
+conclusions in one day, four were too strong and two were too weak — a freeze
+reported as real that was not, and a defect written off as a perception problem
+that was not either. The direction is incidental, and a rule tuned to catch only
+the confident half will keep letting the other half through. What all six share
+is that something was *concluded* where it could have been *gone and looked at*.
+Five more checks, in that light:
+
+**A comment asserting a fact about an external system is not evidence — it is a
+hypothesis with good grammar.** `UsagePoller.MinimumInterval` said Claude Code
+caches the usage fetch behind a five-minute write guard, so polling faster
+"cannot produce a newer number". Nobody had ever checked. A fresher figure comes
+back twelve seconds later. Because the sentence read like a finding rather than
+an assumption, the cadence was never weighed against a real cost — it was
+deferred to — and an investigation into orbs a user reported as frozen spent
+hours downstream of it, since a comment saying fresher data does not exist rules
+out the cheapest explanation first. CB-122 is what that cost. The check was one
+command in a loop.
+
+**A measurement taken during one regime is not a measurement of the system.**
+This happened twice in one afternoon, and the repeat is the point, because the
+second came *after* the first had been understood and written down. First an
+eight-second opacity trace was taken as evidence about indefinite behaviour.
+Then, having learned that, a ten-minute window in which usage did not move was
+nearly reported as the cache granularity — but the account was idle, so a flat
+series is equally consistent with a five-minute cache and with no cache at all.
+The instrument was perfect both times: the right command, the right environment,
+sixty-second intervals, thirteen clean rounds, zero dropped samples. **Care at
+the point of measurement cannot catch this.** Only one question can, and it has
+to be asked before generalising rather than after: *is this system stationary
+over the window I sampled?* If it is bursty, a quiet sample measures the quiet.
+
+**A line-based search over wrapped prose can return a false zero.** Two greps for
+phrases that were present came back empty purely because the text had been
+reflowed across a line break, and both were a keystroke away from being reported
+as missing. Confirm a negative by reading, not by rerunning. This compounds with
+the confident-negative rule above: a false zero ends the inquiry, which is
+exactly why it deserves more suspicion than a false positive would.
+
+**A review is a statement about a sha, and it expires when the branch moves.** A
+PR read, reasoned about and reported on can be merged, rebased or force-pushed
+between the reading and the report, and every identifier in that report then
+describes something that no longer exists. Re-resolve the head sha immediately
+before reporting, and say which one you checked. This is the reused-window-id
+trap in another costume: a stale identifier does not error, it answers about
+something else, plausibly.
+
+**Auditing part of a claim and reporting the whole of it is that same failure in
+miniature.** Resolving a rebase conflict here deleted a paragraph the other
+branch had added. The audit that followed checked that every **measurement**
+from that branch survived, found that they had, and reported that **nothing**
+had. The check was structurally incapable of finding the missing thing, because
+the missing thing was not a measurement — a claim about the whole from evidence
+about one part, stated in the same sentence that claimed a careful audit. Report
+what you checked *for*, not merely that you checked.
+
+## Auditing a diff: range, scope, and refusals
+
+**Name the range you audited, and whether it was per-commit or net.** A PR is
+audited against the base it merges into, not against your own commit's parent —
+and net-zero across a range is not the same as never present, because a scrub
+committed *on top of* an introduction cancels it in the net diff while both
+commits stay in history:
+
+```bash
+for c in $(git rev-list upstream/develop..HEAD); do
+  tools/audit-diff.sh $c | grep "^+" | grep -i "<pattern>"  # code
+  git log -1 --format=%B $c | grep -i "<pattern>"           # message
+done
+```
+
+**Name the file you checked, not just the pattern, counter and ref — three of
+four looks exactly like four.** A check with the right pattern, the right
+counter (`grep -io`, not `grep -c`) and the right ref, run against the wrong
+file, returns a clean zero that reads exactly like a refutation. It happened
+twice while this section's own hostname counts were being confirmed:
+querying `CLAUDE.md`/`AGENTS.md` for them returns 0 in both, because the
+record lives in `docs/openclaw-findings.md`, not the convention files.
+
+**Audit the commit message before you commit, not the PR body after you
+push.** Reading a body back is a step someone remembers to do; nobody
+re-reads a commit message once it exists. The reflex of quoting a scrubbed
+value while explaining that it was scrubbed has needed correcting in a PR
+body three times in this project, and landed uncorrected in a merged commit
+message once — where it can't be fixed without a history rewrite.
+
+`tools/audit-diff.sh` is `git show` with one extra check: it refuses a commit
+with two or more parents instead of silently handing back the empty diff
+`git show <merge-sha>` returns, which examines nothing and looks exactly like
+a clean pass. That trap has bitten three times in this project in one
+evening, once against someone who had written this very rule down an hour
+earlier — use the wrapper rather than a bare `git show` for any per-commit
+audit. **And treat its refusal as a refusal, not a zero:** a wrapper that
+pipes the tool's error into a counter turns a correct refusal into `0 hits`,
+which is what happened the first time this wrapper caught an
+accidentally-amended merge commit — the guard worked and the harness
+discarded the signal. Fail loudly on a refusal; "no output" is not "no
+problem."
+
+Better still, **prefer un-stacking over remembering you're stacked**: while a
+branch sits on someone else's unmerged commit, "my added lines" and "this PR's
+diff" are different ranges. Rebasing onto merged `develop` collapses them and
+the audit is right by construction. A structural fix beats a discipline.
+
 ## Commits
 
 Messages here are prose, not changelog lines: a short summary in the
@@ -331,15 +529,26 @@ where the change happens to live:
   automatically.
 
 A change to geometry, transcript parsing or orb initials extends the three
-Also run `dotnet test tests/UiTests -c Release` before pushing. `dotnet test`
-defaults to Debug and CI builds Release, and Release is not just faster code — it
+console suites too — `dotnet test tests/Tests.sln` does not run them, and CI
+failing on `ArrangementTests` after a green `dotnet test` is a bad way to find
+that out. CI runs every suite on both runners, so a test that only passes on
+the machine you wrote it on blocks the build.
+
+Also run `dotnet test tests/UiTests -c Release` before pushing, and run
+CB-119's guard on the report it writes (`tools/check-xunit-report.ps1` —
+see `.github/workflows/ci.yml`) rather than trusting `dotnet test`'s own exit
+code: it fired three times unnoticed during CB-120's work alone, each time a
+test count one short with zero failures, because the guard only ran in CI.
+`dotnet test` defaults to Debug and CI builds Release, and Release is not just faster code — it
 reorders a parallel suite and tightens the gaps between writes to a scratch
 directory. CB-3 landed six SessionScanTests green in Debug and red in Release on
 both CI legs, every attempt. The other suites have been clean in both; it is the
 UI one, with a dispatcher and real timers and process-wide statics, that is worth
 the extra half-minute. A test that passes in one configuration and not the other
 gets made independent of what else is running — never a sleep, never a widened
-tolerance.
+tolerance. That advice is only for a flake that *fails*; a flake that silently
+drops the test count has nothing to chase until CB-119's guard turns it back
+into an ordinary failure.
 
 Remember the three console suites too — `dotnet test tests/Tests.sln` does not run them. CI runs
 every suite on both runners, so a test that only passes on your machine blocks
@@ -417,6 +626,45 @@ wrong when the halves start with different letters, and partly because reading
 the answer meant looking at the screen. Same rule as the geometry: `OrbGlyph` is
 pure and takes the two-letter *setting* as an argument rather than reading it,
 so the tests do not depend on the machine they run on.
+
+### Measuring a running app from outside
+
+Reading geometry and pixels back out of the window server is the right instrument
+when a change is about what actually reached the screen — a property can update
+while no frame is ever presented, and only the pixels can tell you which happened.
+It has three traps in it, and **all three hand back plausible data rather than an
+error**, which is what makes them worth writing down. All three were hit in one
+afternoon reading account orbs off a live app.
+
+**A macOS window id is not stable across a process restart, and a freed id is
+reused rather than retired.** `screencapture -x -o -l<dead id>` does not fail; it
+returns a perfectly good PNG of whatever window inherited the number. That was
+caught only because a weekly ring appeared to move eighty points in a minute,
+which is not a rate any weekly window moves at — a two-point drift would have
+been reported as exactly the movement being looked for. Re-resolve the pid *and*
+the window ids on every sample, and log them beside the data, so a restart shows
+up in the series instead of hiding in it. Note `MacOSWindowList.ForPid` will not
+find orbs: it drops anything under 80x80 and anything off layer 0, and orbs are
+72x72 and topmost, so this needs its own `CGWindowListCopyWindowInfo` query.
+
+**An arc sweep read off pixels overshoots — about +2.5% at r=32 and +3.2% at
+r=25.** The stroke is 5 dip with a round cap, so the drawn arc runs 2.5 dip past
+each end, and the antialiased fringe counts as coloured on top of that. The error
+is proportionally worse on a short arc, where the caps are a large fraction of
+the whole. Subtract it before calling a drawn value wrong: the orbs matched their
+source exactly once it was accounted for, having read about eleven points high
+before. And mask the CLI badge — it sits 32.5 dip from the orb centre at roughly
+225 degrees, which is *on* the weekly ring, so a naive "coloured pixel at r=32"
+scan reports about 6.7% weekly for an orb drawing none at all.
+
+**A background job has no window server session, and that failure is silent.**
+`CGSessionCopyCurrentDictionary` returns null there, `MacOSScreenLock` reads null
+as locked, and the main thread parks for up to two hours having printed nothing
+whatsoever. Patching that out only moves the failure along to `Avalonia.Native
+was not able to start the RenderTimer. Native error code is: -6661`, and
+`screencapture` refuses both `-l<id>` and `-R<rect>` in that context too. So
+anything that has to see the screen goes to a session with a real GUI context, or
+to a human. It cannot be made to work from a background job by trying harder.
 
 ## The automated suite
 
