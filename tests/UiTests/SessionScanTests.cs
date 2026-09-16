@@ -212,7 +212,9 @@ public class SessionScanTests
         // and send the scan to the real daemon.
         using var scratch = new Scratch();
 
-        var huskTail = scratch.WriteTranscript("husk", BackgroundingMarker);
+        var huskMarker = BackgroundingMarker.Replace(
+            "6d3a9d57-10c6-4e9d-bf25-38194fae23c0", "husk", StringComparison.Ordinal);
+        var huskTail = scratch.WriteTranscript("husk", huskMarker);
         scratch.Write("husk", state: "generating", title: "Unmerged branches and PRs",
             transcriptPath: huskTail);
 
@@ -233,6 +235,22 @@ public class SessionScanTests
 
         Assert.Equal(2, OrbIds(manager).Count);
         Assert.NotNull(manager.StatusFor("husk"));
+    }
+
+    [AvaloniaFact]
+    public void AnInheritedBackgroundMarkerDoesNotHideAForkBeforeItsFirstReply()
+    {
+        // BackgroundJobs has not listed the new job yet, so the phase remains
+        // Unknown. The copied marker belongs to the parent and must not make
+        // the fork disappear in that first scan window.
+        using var scratch = new Scratch();
+        var forkTail = scratch.WriteTranscript("fork", BackgroundingMarker);
+        scratch.Write("fork", state: "generating", title: "Unmerged branches and PRs",
+            transcriptPath: forkTail);
+
+        var manager = Scan(scratch);
+
+        Assert.Contains("fork", OrbIds(manager));
     }
 
     [AvaloniaFact]

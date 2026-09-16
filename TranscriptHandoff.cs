@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Text.Json;
 
 namespace ClaudeBuddy
 {
@@ -91,12 +92,15 @@ namespace ClaudeBuddy
             internal static readonly object Gate = new();
         }
 
-        // Answer per transcript path, keyed by the file's length and mtime so
-        // a transcript that has not grown is never re-read. A husk's transcript
+        // Answer per transcript and candidate session, keyed by the file's
+        // length and mtime so a transcript that has not grown is never re-read.
+        // A fork can share its parent's transcript bytes but not its id; caching
+        // by path alone would turn that inherited marker back into a false hide.
+        // A husk's transcript
         // never grows again, which is the common case this exists for: after
         // the first read, the scan pays one stat per pass for it, forever.
-        private static readonly Dictionary<string, (long Length, DateTime Written, bool Answer)>
-            _answers = new(StringComparer.Ordinal);
+        private static readonly Dictionary<(string Path, string SessionId), (long Length, DateTime Written, bool Answer)>
+            _answers = new();
 
         // The I/O half: stat, consult the cache, read the tail only when the
         // file has changed. Covered by TranscriptHandoffWindowTests against
@@ -111,16 +115,16 @@ namespace ClaudeBuddy
         // is itself the hiding, so an unreadable transcript must assert
         // nothing — the orb stays, which is what the screen showed before
         // this file existed.
-        internal static bool EndsBackgrounded(string? transcriptPath)
+        internal static bool EndsBackgrounded(string? transcriptPath, string? sessionId)
         {
-            if (string.IsNullOrEmpty(transcriptPath)) return false;
+            if (string.IsNullOrEmpty(transcriptPath) || string.IsNullOrEmpty(sessionId)) return false;
 
             var stat = Stat(transcriptPath);
             if (stat is null) return false;
 
             lock (Cache.Gate)
             {
-                if (_answers.TryGetValue(transcriptPath, out var seen)
+                if (_answers.TryGetValue((transcriptPath, sessionId), out var seen)
                     && seen.Length == stat.Value.Length
                     && seen.Written == stat.Value.Written)
                 {
@@ -129,7 +133,7 @@ namespace ClaudeBuddy
             }
 
             var answer = EndsBackgrounded(
-                TranscriptReader.TailLines(transcriptPath, TailWindowBytes));
+                TranscriptReader.TailLines(transcriptPath, TailWindowBytes), sessionId);
 
             lock (Cache.Gate)
             {
@@ -138,7 +142,7 @@ namespace ClaudeBuddy
                 // costs one extra read per entry when it fires.
                 if (_answers.Count >= 512) _answers.Clear();
 
-                _answers[transcriptPath] = (stat.Value.Length, stat.Value.Written, answer);
+                _answers[(transcriptPath, sessionId)] = (stat.Value.Length, stat.Value.Written, answer);
             }
 
             return answer;
@@ -156,8 +160,10 @@ namespace ClaudeBuddy
         // every observed handoff must not hide the marker, and an unknown row
         // must not clear it, or the rule would quietly stop working the first
         // time Claude Code appends something new after the handoff.
-        internal static bool EndsBackgrounded(IReadOnlyList<string> lines)
+        internal static bool EndsBackgrounded(IReadOnlyList<string> lines, string? sessionId)
         {
+            if (string.IsNullOrEmpty(sessionId)) return false;
+
             for (var i = lines.Count - 1; i >= 0; i--)
             {
                 var line = lines[i];
@@ -175,7 +181,22 @@ namespace ClaudeBuddy
                 if (line.Contains(SystemMark, StringComparison.Ordinal)
                     && line.Contains(BackgroundingMark, StringComparison.Ordinal))
                 {
-                    return true;
+                    // A fork begins with the parent transcript, including this
+                    // marker. Only the status file whose id the marker names is
+                    // the husk; anything else stays visible until it writes a
+                    // row of its own. Missing or malformed JSON fails open.
+                    try
+                    {
+                        using var row = JsonDocument.Parse(line);
+                        return row.RootElement.ValueKind == JsonValueKind.Object
+                            && row.RootElement.TryGetProperty("sessionId", out var markerSessionId)
+                            && markerSessionId.ValueKind == JsonValueKind.String
+                            && markerSessionId.GetString() == sessionId;
+                    }
+                    catch (JsonException)
+                    {
+                        return false;
+                    }
                 }
             }
 
