@@ -1135,7 +1135,7 @@ namespace ClaudeBuddy
                 Func<bool> handedToBackground = () =>
                     SessionPresence.CouldBeABackgroundedHusk(status, phase)
                     && (SessionPark.IsParked(status.SessionPid, entry.SessionId)
-                        || TranscriptHandoff.EndsBackgrounded(status.TranscriptPath));
+                        || TranscriptHandoff.EndsBackgrounded(status.TranscriptPath, entry.SessionId));
 
                 // **Orb lifetime is a display preference and does not belong in
                 // an answer to another machine.** Its own definition says "how
@@ -2012,7 +2012,7 @@ namespace ClaudeBuddy
                 Func<bool> handedToBackground = () =>
                     SessionPresence.CouldBeABackgroundedHusk(status, phase)
                     && (SessionPark.IsParked(status.SessionPid, sessionId)
-                        || TranscriptHandoff.EndsBackgrounded(status.TranscriptPath));
+                        || TranscriptHandoff.EndsBackgrounded(status.TranscriptPath, sessionId));
 
                 // Two verdicts rather than one, with the viewer hunt sitting
                 // between them, because the order is load-bearing in both

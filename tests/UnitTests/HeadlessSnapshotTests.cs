@@ -267,7 +267,7 @@ public class HeadlessSnapshotTests
 
         Func<bool> handedToBackground = () =>
             SessionPresence.CouldBeABackgroundedHusk(status, phase)
-            && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath);
+            && TranscriptHandoff.EndsBackgrounded(status.TranscriptPath, sessionId);
 
         return SessionManager.JudgeLiveness(
             sessionId, status, written, now, SessionManager.StaleAfter,

@@ -14,6 +14,10 @@ namespace ClaudeBuddy.Tests;
 // fixture and failed on every real dialog; these were captured first.
 public class TranscriptHandoffTests
 {
+    private const string SessionId = "6d3a9d57-10c6-4e9d-bf25-38194fae23c0";
+
+    private static bool Handoff(params string[] lines) =>
+        TranscriptHandoff.EndsBackgrounded(lines, SessionId);
     // The marker row itself, verbatim but for the cwd. Note "userType":
     // "external" riding along inside it — a real reason the user-row needle
     // has to be the anchored "type":"user" and not anything looser.
@@ -42,16 +46,49 @@ public class TranscriptHandoffTests
     {
         // Exactly what the captured transcript ends with: the turn, the
         // marker, and three housekeeping rows. This is the husk.
-        Assert.True(TranscriptHandoff.EndsBackgrounded(new[]
-        {
+        Assert.True(Handoff(
             AssistantRow, Marker, CostState, BridgeSession, CostState,
-        }));
+        ));
     }
 
     [Fact]
     public void TheMarkerAloneIsEnough()
     {
-        Assert.True(TranscriptHandoff.EndsBackgrounded(new[] { Marker }));
+        Assert.True(Handoff(Marker));
+    }
+
+    [Fact]
+    public void AnInheritedMarkerBelongingToAnotherSessionKeepsTheForkVisible()
+    {
+        // Before the fork writes its first response it has an exact copy of
+        // the parent's tail. The marker names the parent, not this status file.
+        Assert.False(TranscriptHandoff.EndsBackgrounded(
+            new[] { Marker }, "b1425d42-0000-0000-0000-000000000000"));
+    }
+
+    [Fact]
+    public void AMarkerWithoutASessionIdFailsOpen()
+    {
+        var missingId = Marker.Replace(
+            @",""sessionId"":""6d3a9d57-10c6-4e9d-bf25-38194fae23c0""",
+            "", StringComparison.Ordinal);
+
+        Assert.False(Handoff(missingId));
+    }
+
+    [Fact]
+    public void AMalformedOrNonStringMarkerIdFailsOpen()
+    {
+        var numericId = Marker.Replace(
+            @"""sessionId"":""6d3a9d57-10c6-4e9d-bf25-38194fae23c0""",
+            @"""sessionId"":42", StringComparison.Ordinal);
+        var malformed = "{\"type\":\"system\",\"content\":\"Backgrounding";
+        var array = "[{\"type\":\"system\",\"content\":\"Backgrounding\"}]";
+
+        Assert.False(Handoff(numericId));
+        Assert.False(Handoff(malformed));
+        Assert.False(Handoff(array));
+        Assert.False(TranscriptHandoff.EndsBackgrounded(new[] { Marker }, ""));
     }
 
     [Fact]
@@ -59,10 +96,9 @@ public class TranscriptHandoffTests
     {
         // The self-correcting direction: whatever the tail held earlier, a
         // person typing in this session again must bring the orb back.
-        Assert.False(TranscriptHandoff.EndsBackgrounded(new[]
-        {
+        Assert.False(Handoff(
             AssistantRow, Marker, CostState, UserRow,
-        }));
+        ));
     }
 
     [Fact]
@@ -71,21 +107,19 @@ public class TranscriptHandoffTests
         // The fork's own transcript is the case this is really about: it
         // inherits the parent's rows, marker included, and the first answer it
         // writes is what separates it from the husk it was forked from.
-        Assert.False(TranscriptHandoff.EndsBackgrounded(new[]
-        {
+        Assert.False(Handoff(
             Marker, CostState, AssistantRow,
-        }));
+        ));
     }
 
     [Fact]
     public void AnOrdinaryWorkingTailSaysNothing()
     {
-        Assert.False(TranscriptHandoff.EndsBackgrounded(new[]
-        {
+        Assert.False(Handoff(
             UserRow, AssistantRow, CostState,
-        }));
+        ));
 
-        Assert.False(TranscriptHandoff.EndsBackgrounded(Array.Empty<string>()));
+        Assert.False(Handoff());
     }
 
     [Fact]
@@ -98,13 +132,12 @@ public class TranscriptHandoffTests
             "Backgrounding after the current tool finishes…",
             "Compacting conversation history…", StringComparison.Ordinal);
 
-        Assert.True(TranscriptHandoff.EndsBackgrounded(new[]
-        {
+        Assert.True(Handoff(
             Marker, otherSystem,
-        }));
+        ));
 
         // And on its own it asserts nothing.
-        Assert.False(TranscriptHandoff.EndsBackgrounded(new[] { otherSystem }));
+        Assert.False(Handoff(otherSystem));
     }
 
     [Fact]
@@ -118,10 +151,10 @@ public class TranscriptHandoffTests
         var quoting =
             @"{""type"":""summary"",""summary"":""the row was {\""type\"":\""system\"",\""content\"":\""Backgrounding after the current tool finishes…\""}"",""leafUuid"":""4f19d42a-80a5-4f9e-afe6-f234587acbf5""}";
 
-        Assert.False(TranscriptHandoff.EndsBackgrounded(new[] { quoting }));
+        Assert.False(Handoff(quoting));
 
         // And after a real marker it is skipped like any other unknown row.
-        Assert.True(TranscriptHandoff.EndsBackgrounded(new[] { Marker, quoting }));
+        Assert.True(Handoff(Marker, quoting));
     }
 
     [Fact]
@@ -133,6 +166,6 @@ public class TranscriptHandoffTests
         // here too rather than relied on being absent.
         var torn = CostState[300..];
 
-        Assert.True(TranscriptHandoff.EndsBackgrounded(new[] { torn, Marker }));
+        Assert.True(Handoff(torn, Marker));
     }
 }
