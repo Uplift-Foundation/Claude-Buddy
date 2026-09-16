@@ -266,8 +266,19 @@ try {
         # rather than in the image name, and both CLIs ship that way.
         if ($sessionPid -eq 0 -and $cur) {
             $name = "$($cur.Name)"
-            if ($name -like "$Agent.exe*" -or
-                ($name -eq 'node.exe' -and "$($cur.CommandLine)" -match $Agent)) {
+            $commandLine = "$($cur.CommandLine)"
+
+            # Claude's viewer and background-spare processes are not the
+            # session that fired this hook. Keeping either makes a dispatched
+            # agent claim the viewer's pid, so its orb later focuses the wrong
+            # session. CIM sees argv even though Get-Process does not, which is
+            # why this belongs here rather than in a name-only predicate.
+            $isClaudeWrapper = $Agent -eq 'claude' -and
+                $commandLine -match '(?i)(bg-pty-host|daemon run|--bg-spare|\sagents(?:\s|$))'
+
+            if (-not $isClaudeWrapper -and
+                ($name -like "$Agent.exe*" -or
+                 ($name -eq 'node.exe' -and $commandLine -match $Agent))) {
                 $sessionPid = [int]$parentId
             }
         }

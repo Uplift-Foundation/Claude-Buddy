@@ -908,8 +908,7 @@ namespace ClaudeBuddy
 
             if (OperatingSystem.IsWindows())
             {
-                FocusWindows(status);
-                return true;
+                return FocusWindows(status);
             }
 
             if (!OperatingSystem.IsMacOS()) return false;
@@ -1650,7 +1649,7 @@ namespace ClaudeBuddy
         // not something that should steal keyboard focus just by existing),
         // so clicking it never makes ClaudeBuddy.exe the foreground process —
         // hence WindowsForegroundWindow's AttachThreadInput dance below.
-        private static void FocusWindows(SessionStatus status)
+        private static bool FocusWindows(SessionStatus status)
         {
             try
             {
@@ -1677,8 +1676,7 @@ namespace ClaudeBuddy
                 if (status.TermProgram == "WindowsTerminal"
                     && TrySelectWindowsTerminalTab(status, out var tabWindow))
                 {
-                    WindowsForegroundWindow.BringToFront(tabWindow);
-                    return;
+                    return WindowsForegroundWindow.BringToFront(tabWindow);
                 }
 
                 var hwnd = IntPtr.Zero;
@@ -1700,18 +1698,19 @@ namespace ClaudeBuddy
                         "vscode" => "Code",
                         _ => null
                     };
-                    if (processName is null) return;
+                    if (processName is null) return false;
 
                     hwnd = Process.GetProcessesByName(processName)
                         .Select(p => p.MainWindowHandle)
                         .FirstOrDefault(h => h != IntPtr.Zero);
                 }
 
-                WindowsForegroundWindow.BringToFront(hwnd);
+                return WindowsForegroundWindow.BringToFront(hwnd);
             }
             catch
             {
                 // Same convenience-only rule as macOS.
+                return false;
             }
         }
 
