@@ -644,6 +644,7 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         public static string? AttachSession(string sessionId, string cwd)
         {
+            if (OperatingSystem.IsWindows()) return AttachSessionOnWindows(sessionId, cwd);
             if (!OperatingSystem.IsMacOS()) return null;
             if (string.IsNullOrEmpty(sessionId)) return null;
 
@@ -774,6 +775,73 @@ namespace ClaudeBuddy
                 // open a window is a click that did nothing, never a crash.
                 return null;
             }
+        }
+
+        // Windows has no tmux destination to reuse, so a background or
+        // terminal-less session needs a visible terminal of its own. Windows
+        // Terminal is preferred because it gives the attach an ordinary tab;
+        // cmd.exe is the documented fallback on installations without wt.
+        // Both pass the CLI path and arguments separately, never through a
+        // shell string, so a directory or CLI path containing spaces remains
+        // one argument.
+        [ExcludeFromCodeCoverage]
+        private static string? AttachSessionOnWindows(string sessionId, string cwd)
+        {
+            if (string.IsNullOrEmpty(sessionId)) return null;
+
+            var claude = ClaudeBinary.Path;
+            if (string.IsNullOrEmpty(claude)) return null;
+
+            var directory = Directory.Exists(cwd) ? cwd : Environment.CurrentDirectory;
+
+            try
+            {
+                var wt = WindowsAttachStartInfo(claude, directory, sessionId, useWindowsTerminal: true)!;
+                Process.Start(wt);
+                return null;
+            }
+            catch
+            {
+                try
+                {
+                    var cmd = WindowsAttachStartInfo(claude, directory, sessionId, useWindowsTerminal: false)!;
+                    Process.Start(cmd);
+                    return null;
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+        }
+
+        // The launch description is pure so the command can be checked on any
+        // runner. Starting it remains in AttachSessionOnWindows, where a real
+        // Windows Terminal is the only honest integration test.
+        internal static ProcessStartInfo? WindowsAttachStartInfo(
+            string? claude, string cwd, string? sessionId, bool useWindowsTerminal)
+        {
+            if (string.IsNullOrEmpty(claude) || string.IsNullOrEmpty(sessionId)) return null;
+
+            var jobId = JobIdOf(sessionId);
+            var start = new ProcessStartInfo(useWindowsTerminal ? "wt.exe" : "cmd.exe")
+            {
+                UseShellExecute = true,
+                WorkingDirectory = cwd
+            };
+
+            if (useWindowsTerminal)
+            {
+                start.ArgumentList.Add("-d");
+                start.ArgumentList.Add(cwd);
+                start.ArgumentList.Add("cmd.exe");
+            }
+
+            start.ArgumentList.Add("/k");
+            start.ArgumentList.Add(claude);
+            start.ArgumentList.Add("attach");
+            start.ArgumentList.Add(jobId);
+            return start;
         }
 
         // Opens a terminal attached to an existing tmux server, for a session
