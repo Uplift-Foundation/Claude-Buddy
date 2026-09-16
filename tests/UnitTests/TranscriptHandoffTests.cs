@@ -47,7 +47,7 @@ public class TranscriptHandoffTests
         // Exactly what the captured transcript ends with: the turn, the
         // marker, and three housekeeping rows. This is the husk.
         Assert.True(Handoff(
-            AssistantRow, Marker, CostState, BridgeSession, CostState,
+            AssistantRow, Marker, CostState, BridgeSession, CostState
         ));
     }
 
@@ -97,7 +97,7 @@ public class TranscriptHandoffTests
         // The self-correcting direction: whatever the tail held earlier, a
         // person typing in this session again must bring the orb back.
         Assert.False(Handoff(
-            AssistantRow, Marker, CostState, UserRow,
+            AssistantRow, Marker, CostState, UserRow
         ));
     }
 
@@ -108,7 +108,7 @@ public class TranscriptHandoffTests
         // inherits the parent's rows, marker included, and the first answer it
         // writes is what separates it from the husk it was forked from.
         Assert.False(Handoff(
-            Marker, CostState, AssistantRow,
+            Marker, CostState, AssistantRow
         ));
     }
 
@@ -116,7 +116,7 @@ public class TranscriptHandoffTests
     public void AnOrdinaryWorkingTailSaysNothing()
     {
         Assert.False(Handoff(
-            UserRow, AssistantRow, CostState,
+            UserRow, AssistantRow, CostState
         ));
 
         Assert.False(Handoff());
@@ -133,7 +133,7 @@ public class TranscriptHandoffTests
             "Compacting conversation history…", StringComparison.Ordinal);
 
         Assert.True(Handoff(
-            Marker, otherSystem,
+            Marker, otherSystem
         ));
 
         // And on its own it asserts nothing.
