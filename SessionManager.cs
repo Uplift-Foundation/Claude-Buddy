@@ -177,6 +177,13 @@ namespace ClaudeBuddy
         [JsonPropertyName("session_pid")]
         public int SessionPid { get; set; }
 
+        // The filename is the session id, not a hook payload property. Kept on
+        // the in-memory status so a pane operation can verify that the Claude
+        // process it found is still this conversation before it focuses or
+        // types. Never serialize it back into a hook-owned status file.
+        [JsonIgnore]
+        public string SessionId { get; set; } = "";
+
         // Absolute path to the session's JSONL transcript file. The hooks
         // receive it from Claude Code's hook payload and pass it through so
         // the app can read conversation content (e.g. to speak the latest
@@ -858,6 +865,50 @@ namespace ClaudeBuddy
                     if (string.IsNullOrEmpty(status.Tty)) status.Tty = donor.Status.Tty;
                 }
             }
+        }
+
+        // Reconcile a pane claim with the session id in that pane's current
+        // Claude process. This is deliberately narrower than a liveness rule:
+        // it says only that a particular coordinate is no longer this status's
+        // coordinate. We remove the stale claimant only when the verified owner
+        // is another status in the same scan, so a failed or partial hook pass
+        // never makes a live conversation disappear.
+        internal static HashSet<string> ReconcileTmuxPaneClaims(
+            List<ScanEntry> found, Func<ScanEntry, string?> paneOwner)
+        {
+            var stale = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var claim in found.Where(entry =>
+                entry.Status.Source == SessionSource.ClaudeCode
+                && !string.IsNullOrEmpty(entry.Status.TmuxPane)))
+            {
+                var owner = paneOwner(claim);
+                if (string.IsNullOrEmpty(owner)
+                    || string.Equals(owner, claim.SessionId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var recipients = found.Where(entry =>
+                    string.Equals(entry.SessionId, owner, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (recipients.Count != 1) continue;
+
+                var recipient = recipients[0];
+                if (!KnowsATerminal(recipient.Status))
+                {
+                    recipient.Status.TermProgram = claim.Status.TermProgram;
+                    recipient.Status.TermId = claim.Status.TermId;
+                    recipient.Status.TermPid = claim.Status.TermPid;
+                    recipient.Status.TmuxSocket = claim.Status.TmuxSocket;
+                    recipient.Status.TmuxPane = claim.Status.TmuxPane;
+                    recipient.Status.TmuxBin = claim.Status.TmuxBin;
+                    if (string.IsNullOrEmpty(recipient.Status.Tty)) recipient.Status.Tty = claim.Status.Tty;
+                }
+
+                stale.Add(claim.SessionId);
+            }
+
+            return stale;
         }
 
         // Ids whose file shares its (pid, source) with another file in this scan.
@@ -1628,6 +1679,7 @@ namespace ClaudeBuddy
                 var sessionId = Path.GetFileNameWithoutExtension(file);
 
                 status.Source = SourceOf(status);
+                status.SessionId = sessionId;
 
                 // A transcript that is not where the hook said gets re-found by
                 // session id, before anything reads the path: the identity read
@@ -1866,6 +1918,16 @@ namespace ClaudeBuddy
             // three shapes are in SessionPresence.WorthAskingTheDaemon.
             var worthAsking = found.Any(e => SessionPresence.WorthAskingTheDaemon(
                 e.Status, KnowsATerminal(e.Status), sharingAPid.Contains(e.SessionId)));
+
+            // A tmux pane is reusable infrastructure, not a session identity.
+            // Before ordinary same-pid inheritance can spread a recorded pane,
+            // ask the pane's live Claude child which session it is actually
+            // running. A positive mismatch is enough to remove the obsolete
+            // claimant when this scan also has the current owner; an absent or
+            // ambiguous answer changes nothing.
+            var stalePaneClaims = ReconcileTmuxPaneClaims(found, entry =>
+                TerminalFocuser.TmuxPaneOwner(entry.Status));
+            found.RemoveAll(entry => stalePaneClaims.Contains(entry.SessionId));
 
             InheritTerminalInfo(found);
 
