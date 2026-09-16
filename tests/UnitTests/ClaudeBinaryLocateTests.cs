@@ -63,6 +63,21 @@ namespace ClaudeBuddy.Tests
                 ClaudeBinary.Locate(Path.Combine(_root, "home"), "", NoSystemInstalls));
         }
 
+        // This is the Windows desktop-app case from CB-157: an npm install puts
+        // claude.exe in ~/.local/bin, while Claude Buddy cannot rely on the
+        // launching session's PATH to find it.
+        [Fact]
+        public void AWindowsExecutableInLocalBinIsFoundWithoutPath()
+        {
+            var home = Path.Combine(_root, "home");
+            var expected = Touch("home", ".local", "bin", "claude.exe");
+
+            Assert.Null(ClaudeBinary.Locate(home, "", NoSystemInstalls, ClaudeBinary.UnixExtensions));
+            Assert.Equal(
+                expected,
+                ClaudeBinary.Locate(home, "", NoSystemInstalls, ClaudeBinary.WindowsExtensions));
+        }
+
         // ~/.local/bin wins over ~/.claude/local. Both are real install
         // locations and a machine can have both, so which one answers is a
         // decision rather than an accident — pinned here so a reordering has to
@@ -114,6 +129,18 @@ namespace ClaudeBuddy.Tests
                     Path.Combine(_root, "nothing-here"),
                     Path.Combine(_root, "elsewhere"),
                     NoSystemInstalls));
+        }
+
+        [Fact]
+        public void WindowsPathFallbackFindsAnExecutable()
+        {
+            var expected = Touch("elsewhere", "claude.exe");
+
+            Assert.Equal(
+                expected,
+                ClaudeBinary.Locate(
+                    Path.Combine(_root, "nothing-here"), Path.Combine(_root, "elsewhere"),
+                    NoSystemInstalls, ClaudeBinary.WindowsExtensions));
         }
 
         [Fact]

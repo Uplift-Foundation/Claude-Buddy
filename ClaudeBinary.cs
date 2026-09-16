@@ -49,6 +49,17 @@ namespace ClaudeBuddy
             "/usr/bin/claude"
         };
 
+        // A background-orb click starts Claude Buddy as a desktop app, not from
+        // the shell that installed Claude. On Windows that means its PATH can
+        // omit ~/.local/bin, while npm's actual file there is claude.exe. Match
+        // Windows' ordinary bare-command resolution explicitly rather than
+        // depending on either environment.
+        internal static readonly string[] WindowsExtensions = { "", ".exe", ".cmd", ".bat" };
+        internal static readonly string[] UnixExtensions = { "" };
+
+        private static string[] DefaultExtensions =>
+            OperatingSystem.IsWindows() ? WindowsExtensions : UnixExtensions;
+
         // Every input is a parameter with the real one as its default, so a test
         // can hand it a temp directory, a PATH and a candidate list of its own
         // rather than depending on the machine it runs on.
@@ -62,9 +73,11 @@ namespace ClaudeBuddy
         // written. Setting HOME for the whole process was the other option, and
         // every other test in the assembly would have been sharing it.
         internal static string? Locate(
-            string? home = null, string? searchPath = null, string[]? systemInstalls = null)
+            string? home = null, string? searchPath = null, string[]? systemInstalls = null,
+            string[]? extensions = null)
         {
             home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            extensions ??= DefaultExtensions;
 
             string[] candidates =
             [
@@ -75,7 +88,8 @@ namespace ClaudeBuddy
 
             foreach (var candidate in candidates)
             {
-                if (File.Exists(candidate)) return candidate;
+                var found = FirstThatExists(candidate, extensions);
+                if (found is not null) return found;
             }
 
             // Last resort: whatever PATH this process did inherit. Worth trying
@@ -99,7 +113,20 @@ namespace ClaudeBuddy
             foreach (var dir in path.Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             {
                 var candidate = SafeCombine(dir, "claude");
-                if (candidate is not null && File.Exists(candidate)) return candidate;
+                if (candidate is null) continue;
+                var found = FirstThatExists(candidate, extensions);
+                if (found is not null) return found;
+            }
+
+            return null;
+        }
+
+        private static string? FirstThatExists(string basePath, string[] extensions)
+        {
+            foreach (var extension in extensions)
+            {
+                var candidate = basePath + extension;
+                if (File.Exists(candidate)) return candidate;
             }
 
             return null;
