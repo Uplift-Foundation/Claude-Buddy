@@ -40,9 +40,12 @@ internal static class TestBootstrap
         // (much longer) settings scratch path here pushed that over the limit;
         // an 8-hex-char suffix, the same budget SessionMessengerSocketTests
         // already uses for its own directory, leaves it room.
-        Environment.SetEnvironmentVariable(
-            "TMPDIR",
-            Path.Combine(Path.GetTempPath(), "cbt-" + Guid.NewGuid().ToString("N")[..8]));
+        var tempDir = Path.Combine(Path.GetTempPath(), "cbt-" + Guid.NewGuid().ToString("N")[..8]);
+        // Path.GetTempPath honours TMPDIR. Once this initializer changes it,
+        // every later CreateTempSubdirectory needs this parent to exist; CI can
+        // initialize before any other test happens to create it for us.
+        Directory.CreateDirectory(tempDir);
+        Environment.SetEnvironmentVariable("TMPDIR", tempDir);
 
         // ...and no test here may start a real relay by accident — a live Claude
         // Code session in tmux, on the developer's own account. Unless the
