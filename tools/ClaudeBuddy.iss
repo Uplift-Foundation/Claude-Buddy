@@ -205,7 +205,10 @@ begin
   Result := False;
   { %APPDATA%\ClaudeBuddy\settings.json -- ClaudeBuddySettings.Directory
     resolves via SpecialFolder.ApplicationData, which is roaming AppData on
-    Windows, not the {localappdata} this installer itself lives under. }
+    Windows, not the LocalAppData directory this installer itself lives
+    under. Do not write an Inno constant in brace form inside this comment --
+    comments don't nest, so a brace pair anywhere in here closes the comment
+    at the first closing brace and leaves the rest to be parsed as code. }
   SettingsPath := ExpandConstant('{userappdata}\ClaudeBuddy\settings.json');
   if not FileExists(SettingsPath) then Exit;
   if not LoadStringFromFile(SettingsPath, Contents) then Exit;
