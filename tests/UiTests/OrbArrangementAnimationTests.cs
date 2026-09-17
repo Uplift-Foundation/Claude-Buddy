@@ -44,6 +44,29 @@ public class OrbArrangementAnimationTests
                     Tty = "/dev/ttys004",
                 }));
 
+        // A heartbeat-driven orb, for AnOrbEndingThatCollapsesAGroupStillLeaves-
+        // SurvivorsInPlace — OrbClusters.GroupOf only puts an orb in the
+        // Heartbeats group when this bit is set, which is what makes ending it
+        // (rather than a plain chat orb) the case that changes the group count.
+        //
+        // A distinct CLI, not the default one "a" already uses: Superseded
+        // keys on (pid, source), and sharing "a"'s source with the same test-
+        // process pid would have this file judged a newer duplicate of "a" and
+        // never get an orb — see the near-identical note on AnOrbEndingLeaves-
+        // TheSurvivorsExactlyWhereTheyWere's "c", which is exactly the failure
+        // that first shipped here before this comment existed.
+        public void WriteHeartbeat(string sessionId) =>
+            File.WriteAllText(Path.Combine(Dir, sessionId + ".txt"),
+                System.Text.Json.JsonSerializer.Serialize(new SessionStatus
+                {
+                    Cli = "grok",
+                    Cwd = "/Users/user/heartbeat",
+                    SessionPid = Environment.ProcessId,
+                    TermProgram = "iTerm.app",
+                    Tty = "/dev/ttys005",
+                    Heartbeat = true,
+                }));
+
         public void Dispose()
         {
             try { Directory.Delete(Dir, recursive: true); } catch { /* best effort */ }
@@ -336,6 +359,109 @@ public class OrbArrangementAnimationTests
         finally
         {
             ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+        }
+    }
+
+    // CB-161: an orb ending must not move anyone else. Before this fix,
+    // AbsorbIntoArrangement re-fitted the whole shape on every membership
+    // change, arrivals and departures alike — which meant the two survivors
+    // here would have been recomputed onto an entirely different two-point
+    // shape (Unit's arc-length sampling has no notion of "the same points
+    // minus one") the instant the third orb ended, and glided there. That is
+    // "the entire shape relocates" from CB-161's report, reproduced with
+    // nothing more exotic than three orbs and a normal session end.
+    [AvaloniaFact]
+    public void AnOrbEndingLeavesTheSurvivorsExactlyWhereTheyWere()
+    {
+        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        try
+        {
+            ClaudeBuddySettings.ArrangeAnchor = null;
+
+            using var scratch = new Scratch();
+            scratch.Write("a");
+            scratch.Write("b", cli: "codex");
+            // A third CLI, not a third default-CLI file: Superseded keys on
+            // (pid, source), and a third file with the same pid and the same
+            // ClaudeCode source as "a" would be judged a newer duplicate of it
+            // and never get an orb at all, which is a different bug than the
+            // one this test is for.
+            scratch.Write("c", cli: "grok");
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+            Assert.Equal(3, Windows(manager).Count);
+
+            manager.ArrangeOrbsInPattern();
+            CompleteTheGlide(manager);
+            Assert.True(manager.IsArranged);
+
+            var before = Windows(manager)
+                .Where(kv => kv.Key != "c")
+                .ToDictionary(kv => kv.Key, kv => kv.Value.Position);
+
+            File.Delete(Path.Combine(scratch.Dir, "c.txt"));
+            manager.ScanAndUpdate(); // "c" ends; ReflowPositions re-fits via AbsorbIntoArrangement
+
+            // No glide at all — the survivors' positions never became a
+            // target to animate toward, because nothing computed new ones.
+            Assert.Null(GetPrivate<object?>(manager, "_arrangeAnimTargets"));
+
+            foreach (var (id, position) in before)
+                Assert.Equal(position, Windows(manager)[id].Position);
+        }
+        finally
+        {
+            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+        }
+    }
+
+    // The other half of CB-161's acceptance criteria: the stability above
+    // holds even for an orb whose ending changes the *group* count — the
+    // case OrbArrangement.CentreFor's single/multi-group split makes
+    // structurally different, and the one the ticket's own diagnosis singled
+    // out as least understood. Heartbeat sessions get their own shape once
+    // ClaudeBuddySettings.OpenClawHeartbeatMode is on, so ending the only
+    // heartbeat orb collapses two groups into one mid-arrangement.
+    [AvaloniaFact]
+    public void AnOrbEndingThatCollapsesAGroupStillLeavesTheSurvivorsInPlace()
+    {
+        var anchorBefore = ClaudeBuddySettings.ArrangeAnchor;
+        var heartbeatBefore = ClaudeBuddySettings.OpenClawHeartbeatMode;
+        try
+        {
+            ClaudeBuddySettings.ArrangeAnchor = null;
+            ClaudeBuddySettings.OpenClawHeartbeatMode = ClusterMode.OwnShape;
+
+            using var scratch = new Scratch();
+            scratch.Write("a");
+            scratch.Write("b", cli: "codex");
+            scratch.WriteHeartbeat("hb");
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+            Assert.Equal(3, Windows(manager).Count);
+
+            manager.ArrangeOrbsInPattern();
+            CompleteTheGlide(manager);
+            Assert.True(manager.IsArranged);
+
+            var before = Windows(manager)
+                .Where(kv => kv.Key != "hb")
+                .ToDictionary(kv => kv.Key, kv => kv.Value.Position);
+
+            File.Delete(Path.Combine(scratch.Dir, "hb.txt"));
+            manager.ScanAndUpdate();
+
+            Assert.Null(GetPrivate<object?>(manager, "_arrangeAnimTargets"));
+
+            foreach (var (id, position) in before)
+                Assert.Equal(position, Windows(manager)[id].Position);
+        }
+        finally
+        {
+            ClaudeBuddySettings.ArrangeAnchor = anchorBefore;
+            ClaudeBuddySettings.OpenClawHeartbeatMode = heartbeatBefore;
         }
     }
 
