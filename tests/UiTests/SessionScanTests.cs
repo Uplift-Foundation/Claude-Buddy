@@ -1281,7 +1281,8 @@ public class SessionScanTests
         Scratch scratch,
         Func<Dictionary<string, string>?>? jobListing = null,
         TimeSpan? sweepGrace = null,
-        Func<HashSet<string>?>? attachClients = null)
+        Func<HashSet<string>?>? attachClients = null,
+        Func<int, SessionDependents.Verdict>? dependents = null)
     {
         // Both CLIs on, for the reason Scan above states at length.
         ClaudeBuddySettings.ClaudeCodeEnabled = true;
@@ -1291,9 +1292,14 @@ public class SessionScanTests
         // for the same reason the listing is: the real one walks the process
         // table, and on this machine that table holds the user's own attached
         // sessions.
+        // Nothing underneath any pid unless a test says so, and handed over for
+        // the reason the two above are: the real one walks this machine's
+        // process table, which on a developer's Mac holds their own daemon and
+        // their own background jobs, and on a CI runner holds neither.
         var manager = new SessionManager(
             scratch.Dir, jobListing,
-            attachClients ?? (() => new HashSet<string>(StringComparer.Ordinal)));
+            attachClients ?? (() => new HashSet<string>(StringComparer.Ordinal)),
+            dependents: dependents ?? (_ => SessionDependents.Nothing));
         if (sweepGrace is not null) manager.SweepGrace = sweepGrace.Value;
         return manager;
     }
@@ -2144,6 +2150,118 @@ public class SessionScanTests
         // the next scan sees the pid stop answering, which is the same path any
         // other ending session takes.
         Assert.Null(manager.StatusFor("no-orb-was-touched"));
+    }
+
+    // CB-26. A pid with a live `claude daemon run` underneath it is the husk a
+    // backgrounded turn left behind: it is the window the user is reading a
+    // running job in, and on Windows the tree kill would take the daemon and
+    // every other job on the machine with it.
+    //
+    // What is asserted is the refusal and its arithmetic, not the syscall — the
+    // pid handed over is one nothing can be behind, so a guard that failed to
+    // refuse would still not end anything on this machine. The seam is what
+    // makes the case constructible at all: asking the real process table would
+    // be asking about whichever daemon happens to be running beside the suite.
+    [AvaloniaFact]
+    public void EndingASessionThatIsHostingTheDaemonIsRefused()
+    {
+        using var scratch = new Scratch();
+
+        var asked = new List<int>();
+        var manager = Manager(scratch, () => Listing(), dependents: pid =>
+        {
+            asked.Add(pid);
+            return new SessionDependents.Verdict(DaemonBelow: true, JobsBelow: 3);
+        });
+
+        var statuses = (Dictionary<string, SessionStatus>)typeof(SessionManager)
+            .GetField("_statuses", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(manager)!;
+
+        statuses["husk"] = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            SessionPid = NeverAllocatedPid,
+        };
+
+        manager.EndSession("husk");
+
+        // Asked about the session's own pid, and only that one — the whole
+        // point of the rule is that this pid is not the ordinary case, so a
+        // guard that asked about the terminal's pid instead would be answering
+        // a different question correctly.
+        Assert.Equal(new[] { NeverAllocatedPid }, asked);
+
+        // And the menu row for it says so, from the same reading.
+        var verdict = manager.DependentsOf("husk");
+        Assert.True(SessionDependents.BlocksTermination(verdict));
+        Assert.Equal("Can't end this: it is your view of 3 background jobs",
+            SessionDependents.Explain(verdict));
+    }
+
+    // The other half of the acceptance, and the half the guard is most likely to
+    // break: an ordinary session with nothing underneath it still reaches the
+    // terminator exactly as it did before.
+    [AvaloniaFact]
+    public void EndingAnOrdinarySessionStillAsksAndStillProceeds()
+    {
+        using var scratch = new Scratch();
+
+        var asked = new List<int>();
+        var manager = Manager(scratch, () => Listing(), dependents: pid =>
+        {
+            asked.Add(pid);
+            return SessionDependents.Nothing;
+        });
+
+        var statuses = (Dictionary<string, SessionStatus>)typeof(SessionManager)
+            .GetField("_statuses", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(manager)!;
+
+        statuses["ordinary"] = new SessionStatus
+        {
+            Source = SessionSource.ClaudeCode,
+            SessionPid = NeverAllocatedPid,
+        };
+
+        manager.EndSession("ordinary");
+
+        Assert.Equal(new[] { NeverAllocatedPid }, asked);
+        Assert.Equal("End this session",
+            SessionDependents.Explain(manager.DependentsOf("ordinary")));
+    }
+
+    // A session the menu would never offer the row for is not asked about at
+    // all. Cheap to get wrong in the direction that costs a `ps` of the whole
+    // process table every time a gateway orb's menu opens, for a row that is
+    // not on it.
+    [AvaloniaFact]
+    public void ASessionThatCannotBeEndedIsNotAskedWhatIsUnderneathIt()
+    {
+        using var scratch = new Scratch();
+
+        var asked = 0;
+        var manager = Manager(scratch, () => Listing(), dependents: _ =>
+        {
+            asked++;
+            return SessionDependents.Nothing;
+        });
+
+        var statuses = (Dictionary<string, SessionStatus>)typeof(SessionManager)
+            .GetField("_statuses", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(manager)!;
+
+        statuses["pidless"] = new SessionStatus { Source = SessionSource.ClaudeCode, SessionPid = 0 };
+        statuses["gateway"] = new SessionStatus { Source = SessionSource.OpenClaw, SessionPid = 4321 };
+
+        Assert.Equal(SessionDependents.Nothing, manager.DependentsOf("pidless"));
+        Assert.Equal(SessionDependents.Nothing, manager.DependentsOf("gateway"));
+        Assert.Equal(SessionDependents.Nothing, manager.DependentsOf("never-heard-of-it"));
+
+        manager.EndSession("pidless");
+        manager.EndSession("gateway");
+
+        Assert.Equal(0, asked);
     }
 
     // --- PaneClaimsByOthers -----------------------------------------------

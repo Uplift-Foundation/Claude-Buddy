@@ -41,7 +41,13 @@
           Width="56" Height="56"
           HorizontalAlignment="Left" VerticalAlignment="Top">
         <Grid.ContextMenu>
-            <ContextMenu>
+            <!-- Opening is where "End this session" finds out what is running
+                 underneath this session's pid. Not in UpdateFrom, which runs
+                 for every orb every couple of seconds: the answer costs a `ps`
+                 of the whole process table, and the question only matters at
+                 the instant somebody is aiming at the row. See
+                 OrbWindow.SessionMenu_Opening and SessionDependents. -->
+            <ContextMenu Opening="SessionMenu_Opening">
                 <!-- Chat name, then its directory. The path row hides itself
                      when there's no name yet, since it'd just repeat. -->
                 <MenuItem x:Name="SessionInfoItem" IsEnabled="False"/>
@@ -89,6 +95,16 @@
                           Header="Dismiss this orb"
                           IsVisible="False"
                           Click="Dismiss_Click"/>
+                <!-- Header, tooltip and IsEnabled are all rewritten on Opening
+                     for a session that turns out to be hosting the background
+                     daemon — CB-26. Disabled with an explanation rather than
+                     hidden, which is the opposite call from the one above it:
+                     hiding is right when the answer to "why not" is "this
+                     conversation lives somewhere else", and wrong here, where
+                     the answer is "this orb looks finished and is actually your
+                     window onto running work" — which is precisely the thing
+                     the user does not know and the reason they were about to
+                     click. -->
                 <MenuItem x:Name="EndSessionItem"
                           Header="End this session"
                           IsVisible="False"

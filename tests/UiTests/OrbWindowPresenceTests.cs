@@ -432,6 +432,62 @@ public class OrbWindowPresenceTests
         Assert.False(orb.FindControl<MenuItem>("EndSessionItem")!.IsVisible);
     }
 
+    // CB-26. The row is offered, and it says what it will do, until something
+    // turns out to be running underneath this session's pid.
+    [AvaloniaFact]
+    public void TheEndRowSaysWhatItDoesForASessionWithNothingUnderneathIt()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+
+        var item = orb.FindControl<MenuItem>("EndSessionItem")!;
+        Assert.True(item.IsEnabled);
+        Assert.Equal("End this session", item.Header);
+        Assert.Equal(
+            "Stops the process behind this session. This cannot be undone.",
+            ToolTip.GetTip(item));
+    }
+
+    // Disabled with the count in the header, rather than hidden — the opposite
+    // call from the one CanEndSession makes for a gateway session. Hiding is
+    // right when the answer to "why not" is "this conversation lives somewhere
+    // else"; here the answer is "this orb looks finished and is actually your
+    // window onto three running jobs", which is the thing the user does not
+    // know and the reason they were about to click.
+    [AvaloniaFact]
+    public void TheEndRowRefusesAndNamesTheJobsWhenTheDaemonIsUnderneath()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+        orb.ApplyEndSessionGuard(new SessionDependents.Verdict(DaemonBelow: true, JobsBelow: 3));
+
+        var item = orb.FindControl<MenuItem>("EndSessionItem")!;
+        Assert.True(item.IsVisible);
+        Assert.False(item.IsEnabled);
+        Assert.Equal("Can't end this: it is your view of 3 background jobs", item.Header);
+        Assert.Contains("on Windows would stop the background daemon", (string)ToolTip.GetTip(item)!);
+    }
+
+    // The stale-sentence failure a menu written at open-time can still have: a
+    // husk whose job has since finished has no daemon under it any more, and
+    // the row it left behind would otherwise go on refusing an action that is
+    // now ordinary. UpdateFrom puts the plain wording back on every scan, and
+    // the Opening handler puts the real answer there a moment before anyone can
+    // read it.
+    [AvaloniaFact]
+    public void ARefusalDoesNotOutliveTheThingItWasAbout()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(Status());
+        orb.ApplyEndSessionGuard(new SessionDependents.Verdict(DaemonBelow: true, JobsBelow: 1));
+
+        orb.UpdateFrom(Status());
+
+        var item = orb.FindControl<MenuItem>("EndSessionItem")!;
+        Assert.True(item.IsEnabled);
+        Assert.Equal("End this session", item.Header);
+    }
+
     [AvaloniaFact]
     public void ALocalSessionCanResetOnlyItsDisplayedStateToIdle()
     {

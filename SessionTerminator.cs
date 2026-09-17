@@ -29,6 +29,24 @@ namespace ClaudeBuddy
     // on the machine. One worker hosts exactly one session — each row of
     // `claude agents --json` names a distinct pid — so this ends exactly what
     // the menu item said it would.
+    //
+    // **That last paragraph is false for exactly one shape, and this is what
+    // CB-26 added.** For the husk a backgrounded turn leaves behind, the
+    // session's own pid is simultaneously the terminal the user is typing in
+    // *and* the ancestor of the daemon: both exclusions are violated by the
+    // same pid, so neither of them is doing the work the comment credits it
+    // with. The Unix arm signalled one pid and killed the user's only window
+    // onto a running job; the Windows arm would have taken the whole tree,
+    // daemon included, with no SessionEnd and no transcript flush.
+    //
+    // So a pid is now asked what is underneath it before it is signalled at
+    // all, and the answer travels with it rather than being looked up here —
+    // SessionDependents.Of reads the process table, SessionDependents.Inspect
+    // decides, and the same verdict that disabled the menu row is the one
+    // handed to this call. A required parameter rather than a lookup inside,
+    // because a caller cannot forget an argument the compiler demands, and
+    // because looking it up here would ask the machine twice for one gesture
+    // and could get two different answers.
     internal static class SessionTerminator
     {
         private const int SIGTERM = 15;
@@ -50,7 +68,7 @@ namespace ClaudeBuddy
         // vocabulary — and the orb going away on the next scan is the only
         // feedback the gesture has ever needed.
         [ExcludeFromCodeCoverage]
-        public static void Terminate(int pid)
+        public static void Terminate(int pid, SessionDependents.Verdict dependents)
         {
             // Belt to CanEndSession's braces. Signalling 0 on Unix means "every
             // process in my process group", which is this app and every helper
@@ -58,15 +76,32 @@ namespace ClaudeBuddy
             // back, so it is refused twice.
             if (pid <= 0) return;
 
+            // And the same belt for the new rule. SessionManager.EndSession has
+            // already refused this, and the menu row the click came from was
+            // disabled — this is the third refusal, and it is here for the same
+            // reason the pid check above is: the cost of one redundant branch is
+            // nothing, and the cost of the one path that reaches here without
+            // having asked is a daemon and every job under it.
+            if (SessionDependents.BlocksTermination(dependents)) return;
+
             try
             {
                 if (OperatingSystem.IsWindows())
                 {
                     // The whole tree, because a Claude Code session owns its MCP
-                    // servers as children and they do not exit on their own. Safe
-                    // in the direction that matters: the terminal is this
-                    // process's *parent*, never a descendant, so it cannot be
-                    // caught by this.
+                    // servers as children and they do not exit on their own.
+                    //
+                    // The adjacent claim used to be that this is safe "in the
+                    // direction that matters: the terminal is this process's
+                    // *parent*, never a descendant". That is true of an ordinary
+                    // session and exactly backwards for a husk, whose
+                    // descendants are the daemon and every background job on the
+                    // machine. Nothing about the tree kill is narrowed here —
+                    // narrowing it would mean deciding which of a session's own
+                    // children deserve to survive, which nothing can answer — so
+                    // the guard is instead that such a pid never reaches this
+                    // line. Inferred from the code and a macOS process tree,
+                    // **not reproduced on Windows**; see SessionDependents.
                     using var process = System.Diagnostics.Process.GetProcessById(pid);
                     process.Kill(entireProcessTree: true);
                     return;

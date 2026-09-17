@@ -338,7 +338,8 @@ namespace ClaudeBuddy
             Func<Dictionary<string, string>?>? jobListing,
             Func<HashSet<string>?>? attachClients = null,
             Func<string, string?>? transcriptHunt = null,
-            Func<IReadOnlyList<string>>? userConfigDirs = null)
+            Func<IReadOnlyList<string>>? userConfigDirs = null,
+            Func<int, SessionDependents.Verdict>? dependents = null)
         {
             _statusDir = statusDir;
             _jobListing = jobListing ?? BackgroundJobs.SnapshotForScan;
@@ -356,9 +357,20 @@ namespace ClaudeBuddy
             // that the scan never passes, and an optional parameter stops a
             // method group converting to a zero-argument Func.
             _userConfigDirs = userConfigDirs ?? (() => LocalPersona.UserConfigDirs());
+            _dependents = dependents ?? SessionDependents.Of;
         }
 
         private readonly Func<Dictionary<string, string>?> _jobListing;
+
+        // What is running underneath a session's pid, for the one irreversible
+        // action in the app — a seam for exactly the reason _attachClients is
+        // one, and more sharply. The real implementation walks this machine's
+        // process table, and the machine this suite runs on has the user's own
+        // daemon and their own background jobs on it: a test that asked the real
+        // one would be asserting about whatever happened to be running beside
+        // it, and would answer differently on a CI runner and on a developer's
+        // Mac. Handed over instead, so every arm of the refusal has a case.
+        private readonly Func<int, SessionDependents.Verdict> _dependents;
 
         // How a transcript that is not where the status file says is re-found —
         // TranscriptReader.FindTranscriptFor, behind a seam because the real one
@@ -3243,13 +3255,43 @@ namespace ClaudeBuddy
         // Requires a known session rather than falling back on the id, unlike
         // Dismiss above: the guard needs a pid, and the only place a pid is is in
         // the status this scan read.
+        //
+        // And refuses outright for one shape, which is CB-26. A session whose
+        // pid is the ancestor of a live `claude daemon run` is not an ordinary
+        // session: it is the husk a backgrounded turn left behind, it is the
+        // window the user is reading that job's conversation in, and on Windows
+        // the tree kill would take the daemon and every other job on the machine
+        // with it. The orb presents itself as stale, so the gesture looks free
+        // and is not.
+        //
+        // Refused rather than warned-and-proceeded, and the difference is what
+        // the app can actually say. There is no dialog vocabulary anywhere in it
+        // — OrbWindow.axaml's own comment says so, and says that is a decision
+        // rather than an omission — so "warn" here could only mean acting first
+        // and explaining afterwards, on the one action that cannot be undone.
+        // The explanation instead goes where the user is already looking: the
+        // menu row is disabled and re-worded with the count of jobs at stake,
+        // the same shape ResetIdleItem already uses for a session it cannot
+        // serve. This guard is what makes that row's promise true, because a
+        // menu can be read from a snapshot taken a moment before the click.
         public void EndSession(string sessionId)
         {
             if (!_statuses.TryGetValue(sessionId, out var status)) return;
             if (!SessionPresence.CanEndSession(status)) return;
 
-            SessionTerminator.Terminate(status.SessionPid);
+            var dependents = _dependents(status.SessionPid);
+            if (SessionDependents.BlocksTermination(dependents)) return;
+
+            SessionTerminator.Terminate(status.SessionPid, dependents);
         }
+
+        // What the orb's menu asks before it draws "End this session", so the
+        // row and this method's refusal come from one reading of the machine
+        // rather than two. See OrbWindow.SessionMenu_Opening.
+        internal SessionDependents.Verdict DependentsOf(string sessionId) =>
+            _statuses.TryGetValue(sessionId, out var status) && SessionPresence.CanEndSession(status)
+                ? _dependents(status.SessionPid)
+                : SessionDependents.Nothing;
 
         public void ResetAllSessionsToIdle()
         {
