@@ -686,7 +686,8 @@ namespace ClaudeBuddy
         private string _pendingCaption = "";
         private DateTimeOffset _pendingAt;
 
-        public Task SendAsync(string text) => SendCoreAsync(typedText: text, displayText: text, imageBytes: null);
+        public Task<ChatSendOutcome> SendAsync(string text) =>
+            SendCoreAsync(typedText: text, displayText: text, imageBytes: null);
 
         // The picture is already a file by the time this is called — the
         // panel wrote it there before pasting its path in, the same way a
@@ -702,13 +703,9 @@ namespace ClaudeBuddy
         // row lands, matching the one-picture-per-turn a received image
         // already has; every path is still typed, so nothing beyond the
         // preview is limited to one.
-        public async Task SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths)
+        public async Task<ChatSendOutcome> SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths)
         {
-            if (imagePaths.Count == 0)
-            {
-                await SendAsync(text);
-                return;
-            }
+            if (imagePaths.Count == 0) return await SendAsync(text);
 
             var caption = text.Trim();
             var typed = imagePaths.Aggregate(caption, (line, path) => line.Length == 0 ? path : line + " " + path);
@@ -722,7 +719,7 @@ namespace ClaudeBuddy
                 // terminal still gets its path.
             }
 
-            await SendCoreAsync(typed, caption, thumbnail);
+            return await SendCoreAsync(typed, caption, thumbnail);
         }
 
         // Excluded from coverage for its last line, which no test may execute:
@@ -735,27 +732,24 @@ namespace ClaudeBuddy
         // and NoPaneNote. Driving this method with replying off is also still
         // asserted; those assertions simply are not counted.
         [ExcludeFromCodeCoverage]
-        private async Task SendCoreAsync(string typedText, string displayText, byte[]? imageBytes)
+        private async Task<ChatSendOutcome> SendCoreAsync(string typedText, string displayText, byte[]? imageBytes)
         {
             if (!_format.ReplyEnabled())
             {
                 Note(ReplyingOffNote);
-                return;
+                return ChatSendOutcome.Failed;
             }
 
             if (!TerminalFocuser.CanSendQuietly(_status))
             {
                 if (TerminalFocuser.CanDeliver(_status, SessionId, _findRegistry))
-                {
-                    await DeliverViaMessengerAsync(typedText, displayText, imageBytes);
-                    return;
-                }
+                    return await DeliverViaMessengerAsync(typedText, displayText, imageBytes);
 
                 Note(NoPaneNote(_status, _status.Shape, OperatingSystem.IsMacOS(), OperatingSystem.IsWindows()));
-                return;
+                return ChatSendOutcome.Failed;
             }
 
-            await TypeIntoTerminalAsync(typedText, displayText, imageBytes);
+            return await TypeIntoTerminalAsync(typedText, displayText, imageBytes);
         }
 
         // Not excluded from coverage, unlike TypeIntoTerminalAsync beside it:
@@ -769,7 +763,8 @@ namespace ClaudeBuddy
         // reason: Add() runs every turn through Reconcile, so _pending has to
         // be set after the turn is on screen or the user's own message would
         // settle against itself before DeliverAsync is ever awaited.
-        private async Task DeliverViaMessengerAsync(string typedText, string displayText, byte[]? imageBytes)
+        private async Task<ChatSendOutcome> DeliverViaMessengerAsync(
+            string typedText, string displayText, byte[]? imageBytes)
         {
             var mine = new ChatTurn
             {
@@ -790,6 +785,17 @@ namespace ClaudeBuddy
                 SessionId, SessionMessenger.FromName(MachineNames.Tag()), typedText, CancellationToken.None);
 
             Note(DeliveryNote(receipt, DisplayName));
+
+            // CB-35: Accepted is the only receipt that means the socket took
+            // the bytes — DeliveryNote's own comment says the same thing
+            // about wording ("never 'sent' or 'delivered' outright for
+            // anything but Accepted"), and the composer's retain/clear
+            // decision draws the line in the same place. Every other arm is
+            // a reason nothing reached the far side, which is exactly what
+            // "the text is still worth keeping in the box" means.
+            return receipt.Result == DeliveryResult.Accepted
+                ? ChatSendOutcome.Sent
+                : ChatSendOutcome.Failed;
         }
 
         // What the composer says once a delivery attempt has actually been
@@ -897,7 +903,7 @@ namespace ClaudeBuddy
         // on the spot, never reached the history, and sending appeared to do
         // nothing.
         [ExcludeFromCodeCoverage]
-        private async Task TypeIntoTerminalAsync(
+        private async Task<ChatSendOutcome> TypeIntoTerminalAsync(
             string typedText, string displayText, byte[]? imageBytes)
         {
             var mine = new ChatTurn
@@ -916,10 +922,11 @@ namespace ClaudeBuddy
             _pendingAt = DateTimeOffset.Now;
 
             var sent = await TerminalFocuser.SendTextAndSubmit(_status, typedText);
-            if (sent) return;
+            if (sent) return ChatSendOutcome.Sent;
 
             _pending = null;
             Note("Couldn't send that to the terminal.");
+            return ChatSendOutcome.Failed;
         }
 
         // The body of a delivered message, unwrapped from the tag Claude Code's

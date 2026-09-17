@@ -66,14 +66,14 @@ public class ChatPanelAttachTests : IDisposable
         public event Action<ChatTurn>? TurnUpdated;
         public event Action<RemoteChatState>? StateChanged;
 
-        public Task SendAsync(string text)
+        public Task<ChatSendOutcome> SendAsync(string text)
         {
             // Nothing is ever sent through this one; the events exist because the
             // interface has them and the panel subscribes.
             TurnAdded?.Invoke(new ChatTurn { Role = ChatRole.User, Text = text });
             TurnUpdated?.Invoke(new ChatTurn());
             StateChanged?.Invoke(RemoteChatState.Connected);
-            return Task.CompletedTask;
+            return Task.FromResult(ChatSendOutcome.Sent);
         }
 
         public void Cancel()

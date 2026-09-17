@@ -67,7 +67,7 @@ public class RemoteControlChatSessionTurnTests
         var session = Session();
         var before = session.History.Count;
 
-        await session.SendAsync("are you there?");
+        var outcome = await session.SendAsync("are you there?");
 
         var added = session.History.Skip(before).ToList();
 
@@ -83,6 +83,11 @@ public class RemoteControlChatSessionTurnTests
                 Assert.Contains("switched off", note.Text);
                 Assert.Contains("Show sessions from other machines", note.Text);
             });
+
+        // CB-35: the return value is what ChatPanel.Send() actually reads;
+        // the kept-message behaviour above is this transport's own choice
+        // (and predates this ticket), not something the outcome enum decides.
+        Assert.Equal(ChatSendOutcome.Failed, outcome);
     }
 
     // Raised inline when already on the UI thread, which is the case for

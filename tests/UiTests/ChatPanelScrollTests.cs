@@ -280,7 +280,7 @@ public class ChatPanelScrollTests : IDisposable
 
         public Task<bool> LoadOlderAsync(CancellationToken ct) => Task.FromResult(false);
 
-        public Task SendAsync(string text) => Task.CompletedTask;
+        public Task<ChatSendOutcome> SendAsync(string text) => Task.FromResult(ChatSendOutcome.Sent);
 
         public void Cancel()
         {

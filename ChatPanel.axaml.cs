@@ -2050,7 +2050,15 @@ namespace ClaudeBuddy
             var text = (Input.Text ?? "").Trim();
             if ((text.Length == 0 && _pendingImages.Count == 0) || _session is null) return;
 
-            Input.Text = "";
+            // CB-35: no longer cleared here. It used to be — unconditionally,
+            // before the send was even attempted — which is exactly the bug:
+            // a session that cannot send at all (replying switched off, no
+            // pane, nobody in the room) still returns from SendAsync having
+            // written nothing but a note, and the sentence that produced that
+            // note was already gone from the box by the time the note
+            // appeared. SendAndClearOnSuccessAsync below clears it once the
+            // send has actually told us whether it went anywhere.
+            var session = _session;
 
             var images = _pendingImages.Select(p => p.Path).ToList();
             _pendingImages.Clear();
@@ -2064,15 +2072,40 @@ namespace ClaudeBuddy
 
             // Deliberately not inserting the user's turn here: the session
             // raises TurnAdded for it, so one thing owns the transcript and a
-            // failed send leaves nothing behind to clean up.
-            if (images.Count > 0 && _session is IRemoteChatImages withImages)
-            {
-                _ = withImages.SendWithImagesAsync(text, images);
-            }
-            else
-            {
-                _ = _session.SendAsync(text);
-            }
+            // failed send leaves nothing behind to clean up beyond the note it
+            // writes itself.
+            _ = SendAndClearOnSuccessAsync(session, text, images);
+        }
+
+        // The part of Send() that has to wait for an answer before deciding
+        // what happens to the box.
+        //
+        // Pictures are cleared from the composer in Send() itself regardless
+        // of outcome, not held back the way text is: they are already written
+        // to disk (see AttachImageAsync), so nothing is lost by clearing the
+        // strip, and a failed image send still explains itself in the
+        // transcript the same way a failed text-only one does. Retrying a
+        // failed picture means pasting it again, which is unchanged from
+        // before this ticket and out of its scope — CB-35 is about the one
+        // thing that had no copy anywhere else once the box was cleared: the
+        // sentence itself.
+        //
+        // Not disabling Input while this is in flight, on purpose. Every
+        // implementation's SendAsync returns as soon as the message has been
+        // handed to a gateway, typed into a terminal, or queued on a socket —
+        // none of them wait for a reply — so the window this covers is a
+        // single write, not the minutes a mirror's first fetch can take (see
+        // IRemoteChatFetchWait). Disabling the box for that instant would add
+        // a visible flicker for no protection worth having, and would need
+        // its own recovery path if the awaited call never completed.
+        private async Task SendAndClearOnSuccessAsync(
+            IRemoteChatSession session, string text, List<string> images)
+        {
+            var outcome = images.Count > 0 && session is IRemoteChatImages withImages
+                ? await withImages.SendWithImagesAsync(text, images)
+                : await session.SendAsync(text);
+
+            if (outcome == ChatSendOutcome.Sent) Input.Text = "";
         }
 
         // Excluded from coverage: the one line a test cannot reach is Speak(),

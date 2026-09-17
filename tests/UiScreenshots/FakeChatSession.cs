@@ -37,7 +37,7 @@ internal sealed class FakeChatSession :
         _history = seedHistory?.ToList() ?? new List<ChatTurn>();
     }
 
-    public Task SendAsync(string text)
+    public Task<ChatSendOutcome> SendAsync(string text)
     {
         SentTexts.Add(text);
 
@@ -45,7 +45,7 @@ internal sealed class FakeChatSession :
         _history.Add(turn);
         TurnAdded?.Invoke(turn);
 
-        return Task.CompletedTask;
+        return Task.FromResult(ChatSendOutcome.Sent);
     }
 
     public void Cancel()

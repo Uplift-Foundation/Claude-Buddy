@@ -56,12 +56,22 @@ internal sealed class FakeChatSession :
     // reply.
     public List<string> SentTexts { get; } = new();
 
+    // What SendAsync (and SendWithImagesAsync below) hand back — CB-35's
+    // whole reason for existing. Settable per test rather than a
+    // constructor argument: most of this suite predates the ticket and
+    // wants the ordinary "it went through" answer, and defaulting to Sent
+    // is what keeps every one of those tests passing unchanged. A test of
+    // the retain-on-failure behaviour sets this to Failed before calling
+    // Send() on the panel, the same way ComposerHint is set for a
+    // can't-type panel.
+    public ChatSendOutcome SendOutcome { get; set; } = ChatSendOutcome.Sent;
+
     public FakeChatSession(IEnumerable<ChatTurn>? seedHistory = null)
     {
         _history = seedHistory?.ToList() ?? new List<ChatTurn>();
     }
 
-    public Task SendAsync(string text)
+    public Task<ChatSendOutcome> SendAsync(string text)
     {
         SentTexts.Add(text);
 
@@ -69,7 +79,7 @@ internal sealed class FakeChatSession :
         _history.Add(turn);
         TurnAdded?.Invoke(turn);
 
-        return Task.CompletedTask;
+        return Task.FromResult(SendOutcome);
     }
 
     public void Cancel()
@@ -82,7 +92,7 @@ internal sealed class FakeChatSession :
     // least one pending picture (see IRemoteChatImages).
     public List<(string Text, List<string> ImagePaths)> SentWithImages { get; } = new();
 
-    public Task SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths)
+    public Task<ChatSendOutcome> SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths)
     {
         SentWithImages.Add((text, imagePaths.ToList()));
 
@@ -90,7 +100,7 @@ internal sealed class FakeChatSession :
         _history.Add(turn);
         TurnAdded?.Invoke(turn);
 
-        return Task.CompletedTask;
+        return Task.FromResult(SendOutcome);
     }
 
     // Test helpers, not part of the interface: raise the two events the
