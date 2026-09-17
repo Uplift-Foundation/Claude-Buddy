@@ -69,6 +69,13 @@ namespace ClaudeBuddy
 
                 new SessionManager().Start();
 
+                // Hide/show orbs (and room for more — see HotkeyRegistry) from
+                // a system-wide key combo, so the toggle already on the tray
+                // menu doesn't require finding the menu bar icon first. Started
+                // after SessionManager so TrayController.ToggleOrbsVisible has
+                // something real to toggle the moment a key could fire.
+                GlobalHotkeys.Start();
+
                 // Claude Desktop's URL schemes resolve to a bundle *id*, and
                 // every tinted clone shares Claude Desktop's — so a sign-in
                 // callback cannot say which profile it belongs to and always

@@ -403,6 +403,16 @@ namespace ClaudeBuddy
             // point of it.
             public bool PeerLinkEnabled { get; set; }
 
+            // Overrides HotkeyRegistry.Default(ToggleOrbsVisible) — e.g.
+            // "Ctrl+Shift+H". Null (the default) means "use the built-in
+            // binding"; a value that fails HotkeyRegistry.TryParse is treated
+            // the same way rather than leaving the hotkey unregistered, since
+            // a typo in a hand-edited settings.json shouldn't cost the whole
+            // feature. No settings-window control for this yet — CB-155 didn't
+            // confirm a remapping UI was wanted, only that the value be
+            // overridable, and settings.json already is.
+            public string? ToggleOrbsHotkey { get; set; }
+
             // Which port to listen on. Zero means "let the operating system
             // choose", which is the sensible default because discovery
             // announces whatever was chosen — a fixed port only matters to
@@ -849,6 +859,12 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.PeerLinkEnabled; }
             set { Load(); lock (Gate) _model.PeerLinkEnabled = value; Save(); }
+        }
+
+        public static string? ToggleOrbsHotkey
+        {
+            get { Load(); lock (Gate) return _model.ToggleOrbsHotkey; }
+            set { Load(); lock (Gate) _model.ToggleOrbsHotkey = value; Save(); }
         }
 
         // The port to listen on, with 0 meaning "the one everybody expects".
@@ -1349,6 +1365,7 @@ namespace ClaudeBuddy
                             root["remoteControlServeOnLaunch"]?.GetValue<bool>() ?? false,
                         PeerLinkEnabled = root["peerLinkEnabled"]?.GetValue<bool>() ?? false,
                         PeerLinkPort = root["peerLinkPort"]?.GetValue<int>() ?? 0,
+                        ToggleOrbsHotkey = Text(root["toggleOrbsHotkey"]),
                         ClaudeCodeChatEnabled = root["claudeCodeChatEnabled"]?.GetValue<bool>() ?? true,
                         ClaudeCodeReplyEnabled = root["claudeCodeReplyEnabled"]?.GetValue<bool>() ?? false,
                         CodexChatEnabled = root["codexChatEnabled"]?.GetValue<bool>() ?? true,
@@ -1747,6 +1764,7 @@ namespace ClaudeBuddy
                         ["remoteControlEnabled"] = _model.RemoteControlEnabled,
                         ["peerLinkEnabled"] = _model.PeerLinkEnabled,
                         ["peerLinkPort"] = _model.PeerLinkPort,
+                        ["toggleOrbsHotkey"] = _model.ToggleOrbsHotkey,
                         // Null when never chosen rather than a copy of the
                         // current default, the same as speakVoice below — so
                         // changing which profile ships as the default still

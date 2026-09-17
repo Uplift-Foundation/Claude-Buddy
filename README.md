@@ -999,6 +999,32 @@ would be worse than no button. That parsing has a test suite of its own
 (`dotnet run --project tests/TranscriptTests`) whose fixtures are transcribed
 from real captures.
 
+## Global hotkeys
+
+**Ctrl+Alt+H** hides or shows every orb, from anywhere — the same toggle as
+the tray menu's "Show orbs" checkbox, reachable without finding the menu bar
+icon first. It works whether or not Claude Buddy has focus: macOS registers it
+through Carbon's `RegisterEventHotKey`, which asks the window server for one
+exact key combination rather than a feed of every keystroke, so — unlike an
+`NSEvent` global monitor or a `CGEventTap` — it needs no Accessibility or
+Input Monitoring permission. Windows registers the same combination with
+`RegisterHotKey` against a hidden window created for the purpose.
+
+Override the combination in `settings.json`:
+
+```json
+{ "toggleOrbsHotkey": "Ctrl+Shift+H" }
+```
+
+Modifiers are `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, and `Cmd`/`Command`/
+`Win`/`Windows`/`Super`/`Meta` (all four spellings mean the same physical key,
+whichever platform you're on), joined with `+` and ending in a letter or digit
+key. An unparseable value falls back to the built-in default rather than
+leaving the hotkey unregistered, so a typo costs you the override, not the
+feature. There is no settings-window control for this yet — only the one
+hotkey exists so far, and this file's whole point is that the registry
+(`HotkeyRegistry.cs`) has room for more without needing one added first.
+
 ## Personas from CLAUDE.md
 
 An orb is normally named for whatever Claude Code decided the conversation was
