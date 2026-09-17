@@ -143,6 +143,19 @@ public sealed class MacFactAttribute : FactAttribute
     }
 }
 
+// CB-49's crash keep-alive LaunchAgent lives entirely in
+// tools/install-hooks.sh, which is bash -- runnable on Linux too, but the
+// feature itself (launchd, ~/Library/LaunchAgents) is macOS-only, so a green
+// run anywhere else would be exercising bash syntax rather than the feature.
+public sealed class MacKeepAliveFactAttribute : FactAttribute
+{
+    public MacKeepAliveFactAttribute()
+    {
+        if (!OperatingSystem.IsMacOS())
+            Skip = "the crash keep-alive LaunchAgent is macOS-only";
+    }
+}
+
 // Creating a symbolic link is a privileged operation on Windows unless the
 // machine is in Developer Mode, and the tests that need one are testing what
 // happens when a persona's picture tries to leave its directory through a link
