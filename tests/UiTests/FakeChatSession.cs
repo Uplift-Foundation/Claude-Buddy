@@ -15,11 +15,17 @@ namespace ClaudeBuddy.Tests;
 //     sorting of its own.
 internal sealed class FakeChatSession :
     IRemoteChatSession, IRemoteChatImages, IRemoteChatSlashCommands,
-    IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatFetchWait
+    IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatFetchWait, IRemoteChatRoom
 {
     public string SessionId { get; init; } = "fake-session";
     public string DisplayName { get; init; } = "Fake Session";
     public RemoteChatState State { get; set; } = RemoteChatState.Connected;
+
+    // False by default, the same as any ordinary one-to-one session that
+    // doesn't implement IRemoteChatRoom at all — this fake implements it
+    // unconditionally only so a test can flip the property, per CB-36's own
+    // comment on why it is a property rather than a bare marker.
+    public bool IsRoom { get; set; }
 
     // Empty by default, the same as a session with nothing to say about
     // IRemoteChatSlashCommands. Settable rather than init-only, and after
