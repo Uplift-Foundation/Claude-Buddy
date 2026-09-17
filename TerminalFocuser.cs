@@ -91,6 +91,8 @@ namespace ClaudeBuddy
             // duration of the click.
             Task.Run(() =>
             {
+                if (!HasVerifiedTmuxPane(status)) return;
+
                 // detached is what the tmux attempt learned on its way past: the
                 // pane is alive, it has been selected, and no client is attached
                 // to that server anywhere. Kept rather than re-asked, because
@@ -357,6 +359,8 @@ namespace ClaudeBuddy
 
             return Task.Run(async () =>
             {
+                if (!HasVerifiedTmuxPane(status)) return;
+
                 // Reuses FocusCore as-is rather than a bespoke synchronous
                 // variant: FocusCore's own osascript calls are fire-and-forget
                 // (see RunOsaScript), so there's no return value to await
@@ -982,6 +986,51 @@ namespace ClaudeBuddy
         }
 
         // --- tmux ---
+
+        // A status file remembers a pane id, but tmux reuses that id after a
+        // conversation exits. Do not focus or type into a pane unless its live
+        // Claude process names the session whose orb was clicked. Missing
+        // identity is retained for older or synthetic callers; a real status
+        // scan always supplies it from the filename.
+        private static bool HasVerifiedTmuxPane(SessionStatus status)
+        {
+            if (string.IsNullOrEmpty(status.TmuxPane) || string.IsNullOrEmpty(status.SessionId)) return true;
+            if (!OperatingSystem.IsMacOS()) return true;
+
+            var owner = TmuxPaneOwner(status);
+            return string.Equals(owner, status.SessionId, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Exposed for the scan's reconciliation pass. Null is intentionally not
+        // a negative answer: tmux or ps can fail while a session is otherwise
+        // healthy, so callers must fail closed for actions and keep status data.
+        internal static string? TmuxPaneOwner(SessionStatus status)
+        {
+            if (!OperatingSystem.IsMacOS() || string.IsNullOrEmpty(status.TmuxPane)) return null;
+
+            var tmux = ResolveTmuxBinary(status.TmuxBin);
+            if (tmux is null
+                || !TryRun(tmux, out var panePidText,
+                    TmuxArgs(status, "display-message", "-p", "-t", status.TmuxPane, "#{pane_pid}"))
+                || !int.TryParse(panePidText.Trim(), out var panePid))
+            {
+                return null;
+            }
+
+            if (!TryRun("/bin/ps", out var listing, "-eo", "pid=,ppid=,args=")) return null;
+
+            var processes = new List<ProcessCommand>();
+            foreach (var line in listing.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Trim().Split((char[]?)null, 3, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 3
+                    || !int.TryParse(parts[0], out var pid)
+                    || !int.TryParse(parts[1], out var parentPid)) continue;
+                processes.Add(new ProcessCommand(pid, parentPid, parts[2]));
+            }
+
+            return TmuxPaneOwnershipRules.SessionIdIn(processes, panePid);
+        }
         //
         // Two separate jobs, and skipping either one leaves you looking at the
         // wrong thing:
