@@ -401,6 +401,15 @@ namespace ClaudeBuddy
             AgentsViewItem.IsVisible = ClickRouting.OffersTheAgentsView(status);
             DismissItem.IsVisible = SessionPresence.CanDismiss(status);
             EndSessionItem.IsVisible = SessionPresence.CanEndSession(status);
+
+            // Back to the plain wording on every pass, so a refusal explained
+            // once does not outlive the thing it was about. A husk whose job has
+            // since finished has no daemon under it any more, and the row it
+            // left behind would otherwise go on refusing an action that is now
+            // ordinary — a stale sentence being the one failure mode a menu
+            // written at open-time can still have. SessionMenu_Opening puts the
+            // real answer back a moment before anyone can read it.
+            ApplyEndSessionGuard(SessionDependents.Nothing);
             var resetIdleExplanation = status.Source switch
             {
                 SessionSource.OpenClaw => (
@@ -2445,6 +2454,45 @@ namespace ClaudeBuddy
         internal void EndSession_Click(object? sender, RoutedEventArgs e)
         {
             SessionManager.Instance?.EndSession(SessionId);
+        }
+
+        // What is running underneath this session, asked once, as the menu
+        // opens — CB-26.
+        //
+        // Here rather than in UpdateFrom because of what it costs: the answer
+        // comes from a `ps` over the whole process table, and UpdateFrom runs
+        // for every orb on screen every couple of seconds. Opening a context
+        // menu is a gesture a person makes a few times an hour, and the answer
+        // is cached for two seconds either side of it, so the click that follows
+        // shares this read rather than paying for a second one.
+        //
+        // Excluded from coverage: reads the live process table by way of
+        // SessionManager.Instance, which this suite never sets — the same reason
+        // TryOpenRemoteChat below carries the attribute. What it decides is
+        // ApplyEndSessionGuard, which is internal and driven directly.
+        [ExcludeFromCodeCoverage]
+        internal void SessionMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
+        {
+            var manager = SessionManager.Instance;
+            if (manager is null) return;
+
+            ApplyEndSessionGuard(manager.DependentsOf(SessionId));
+        }
+
+        // The row that says what it will do, or why it will not.
+        //
+        // Disabled rather than hidden, and worded as what the user would lose
+        // rather than as what the app refuses — SessionDependents.Explain and
+        // ExplainTip own both sentences, so the menu and the manager's guard
+        // cannot end up describing different rules. The visibility above is
+        // untouched: whether this session can be ended *at all* is
+        // CanEndSession's question, and this only answers whether it may be
+        // ended right now.
+        internal void ApplyEndSessionGuard(SessionDependents.Verdict dependents)
+        {
+            EndSessionItem.IsEnabled = !SessionDependents.BlocksTermination(dependents);
+            EndSessionItem.Header = SessionDependents.Explain(dependents);
+            ToolTip.SetTip(EndSessionItem, SessionDependents.ExplainTip(dependents));
         }
 
         // Excluded from coverage: needs SessionManager.Instance to hand back a

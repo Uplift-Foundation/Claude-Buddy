@@ -818,6 +818,19 @@ An orb goes away when any of six things happens.
    the fork (whose transcript inherits the marker) from reading itself as the
    leftover.
 
+   **Such a session also cannot be ended from its orb, and that is deliberate.**
+   The leftover is hidden, not gone, and a transcript that could not be read
+   leaves it on screen — so it is still possible to right-click one. Its process
+   is the window you are reading the background job's conversation in *and* the
+   ancestor of the daemon hosting every other job on the machine, which is both
+   of the things "End this session" promises never to touch. Right-clicking it
+   therefore gets a disabled row naming how many background jobs are at stake
+   instead of the ordinary one. On macOS ending it used to kill only that
+   window, leaving the job running with its transcript intact; on Windows the
+   same gesture kills the whole process tree, so it would have taken the daemon
+   and every background job with it. Close the terminal if you want the window
+   gone, or end the job from the job's own orb.
+
 **The app also deletes status files it is sure are finished with.** Until
 recently nothing did, apart from the `SessionEnd` hook — so a Ctrl+C'd session's
 file stayed in the temp directory for good, and a finished background job's
