@@ -359,6 +359,29 @@ namespace ClaudeBuddy
         void OpenElsewhere();
     }
 
+    // A conversation several agents (or people) can be talking in at once.
+    //
+    // CB-36: what an unattributed assistant turn's chip needs to know before
+    // it borrows the panel's sole-speaker name for itself. A one-to-one
+    // session — a terminal, or a single gateway agent — has exactly one
+    // speaker, so an assistant turn with no Speaker of its own genuinely is
+    // that one speaker, and TurnView.SpeakerName is right to fall back to
+    // it. A room is not one-to-one: OpenClawRoomChatSession.Rebuild stamps
+    // every turn it can attribute and deliberately leaves the rest with no
+    // Speaker, meaning "we do not know who said this" — and falling back to
+    // the sole-speaker name there would answer with the panel's title, the
+    // room itself, asserting a speaker the app does not know.
+    //
+    // A property rather than a bare marker so a fake can flip it per
+    // instance in a test, the same way IRemoteChatMachine's MachineName is a
+    // property rather than a second interface for "has a machine". A room
+    // implementation always answers true; nothing here needs it to vary
+    // after construction, so there is no change event to raise.
+    public interface IRemoteChatRoom
+    {
+        bool IsRoom { get; }
+    }
+
     // A conversation that is somewhere else, and can say where.
     //
     // The panel used to badge these "another machine", which is true and is not

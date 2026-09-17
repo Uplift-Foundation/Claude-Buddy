@@ -102,7 +102,21 @@ namespace ClaudeBuddy
         // and the chips never appeared; boxed, filling it in later fills in the
         // rows that were waiting for it. Same one-shot-read mistake the header
         // made two commits ago, in a second place.
-        private sealed class Speaker { public string? Name; }
+        //
+        // IsRoom (CB-36) is what tells TurnView.SpeakerName whether Name is
+        // safe to fall back to. ChatSpeaker.Resolve's own comment already
+        // concedes that Name is the panel's title for a room — the channel,
+        // not a speaker — because a room is not an agent and has no identity
+        // to prefer instead. That answer is exactly right for what
+        // ChatSpeaker was written for (the header, and a terminal session's
+        // one-agent fallback) and exactly wrong for an unattributed turn in a
+        // room, which OpenClawRoomChatSession.Rebuild deliberately built with
+        // no Speaker to mean "we do not know who said this" — not "the
+        // channel said this". TurnView reads this flag rather than asking the
+        // session's type itself, so the one place a turn decides whether it
+        // may borrow the sole speaker's name is a plain field next to the
+        // name it would borrow.
+        private sealed class Speaker { public string? Name; public bool IsRoom; }
 
         private readonly Speaker _soleSpeaker = new();
 
@@ -565,6 +579,7 @@ namespace ClaudeBuddy
             // Wrong is worse than absent here: the chip is there to say who is
             // talking.
             _soleSpeaker.Name = null;
+            _soleSpeaker.IsRoom = false;
         }
 
         private void Bind(OrbWindow orb, IRemoteChatSession session)
@@ -579,6 +594,21 @@ namespace ClaudeBuddy
 
             _owner = orb;
             _session = session;
+
+            // Set before RefreshSoleSpeaker/turn construction below, so every
+            // TurnView built for this session — including the ones the
+            // History loop is about to build — sees the right answer from its
+            // first read rather than a stale one from whatever was bound
+            // before it. See the Speaker.IsRoom comment for what this gates.
+            //
+            // Read off the optional interface rather than a concrete type
+            // check against OpenClawRoomChatSession, the same reason every
+            // other optional capability here (IRemoteChatMachine,
+            // IRemoteChatFetchWait, …) is asked for rather than switched on:
+            // a test's FakeChatSession can then stand in for a room by
+            // implementing IRemoteChatRoom itself, which a sealed concrete
+            // type it is not could never satisfy.
+            _soleSpeaker.IsRoom = (session as IRemoteChatRoom)?.IsRoom == true;
 
             // Whatever this agent's panel was last dragged to. Before the
             // transcript is built and before Reposition(), because the height
@@ -3127,12 +3157,21 @@ namespace ClaudeBuddy
             public bool HasSpeaker => !string.IsNullOrEmpty(SpeakerName);
 
             // Falls back to the session's one agent, but only on the agent's
-            // own turns. Your messages are yours whoever else is in the room,
-            // and a system note is about the conversation rather than in it —
-            // stamping either with the agent's name would say it spoke them.
+            // own turns, and never in a room. Your messages are yours
+            // whoever else is in the room, and a system note is about the
+            // conversation rather than in it — stamping either with the
+            // agent's name would say it spoke them.
+            //
+            // CB-36: the room exclusion is ChatSpeaker.CanFallBackToSoleSpeaker,
+            // pure and tested there rather than inlined here — see its own
+            // comment for why an unattributed room turn must not borrow
+            // _soleSpeaker.Name (the panel's title, i.e. the channel) the way
+            // a one-to-one session's genuinely can.
             public string SpeakerName =>
                 !string.IsNullOrEmpty(_turn.Speaker) ? _turn.Speaker!
-                : _turn.Role == ChatRole.Assistant ? _soleSpeaker?.Name ?? ""
+                : _turn.Role == ChatRole.Assistant
+                    && ChatSpeaker.CanFallBackToSoleSpeaker(_soleSpeaker?.IsRoom ?? false)
+                    ? _soleSpeaker?.Name ?? ""
                 : "";
 
             // The name in words, beside the chip, only when the transcript

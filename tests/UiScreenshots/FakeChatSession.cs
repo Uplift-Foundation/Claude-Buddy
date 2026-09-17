@@ -6,13 +6,18 @@ namespace ClaudeBuddy.Tests;
 // fake itself needs nothing internal, so a plain copy costs nothing. See
 // the original for the four IRemoteChatSession rules this honours.
 internal sealed class FakeChatSession :
-    IRemoteChatSession, IRemoteChatComposer, IRemoteChatElsewhere
+    IRemoteChatSession, IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatRoom
 {
     // Both default to what an ordinary typeable session answers — an ordinary
     // hint and no button — so every capture that predates them is unchanged.
     public string ComposerHint { get; set; } = "Message…";
 
     public bool CanOpenElsewhere { get; set; }
+
+    // False by default, same reasoning as tests/UiTests/FakeChatSession.cs:
+    // an ordinary capture is a one-to-one conversation, and only the
+    // room-attribution scenario (CB-36) sets this.
+    public bool IsRoom { get; set; }
 
     // Never called from a capture, and it would open a window if it were.
     public void OpenElsewhere()

@@ -32,6 +32,12 @@ namespace ClaudeBuddy.Tests
         internal readonly record struct SpeakerCase(
             string Why, string? Identity, string? Title, string? Previous, string? Want);
 
+        // CB-36: whether an unattributed assistant turn's chip may borrow the
+        // panel's sole-speaker name. IsRoom is the only input — the caller
+        // (ChatPanel.TurnView.SpeakerName) has already checked the role and
+        // that the turn carries no Speaker of its own before asking this.
+        internal readonly record struct FallbackCase(string Why, bool IsRoom, bool Want);
+
         internal static readonly GlyphCase[] Glyphs =
         {
             // Kebab and snake case — a session is named for its directory, and
@@ -142,12 +148,33 @@ namespace ClaudeBuddy.Tests
             new("all blank",             "",         "",                     "",   ""),
         };
 
+        // Both outcomes CB-36's exclusion has to produce, named for what a
+        // wrong answer in either direction would look like on screen. Two
+        // rows rather than one because the whole ticket is that these used to
+        // be conflated: a terminal session's fallback (true) and a room's
+        // (false) look identical from inside SpeakerName until this is asked.
+        internal static readonly FallbackCase[] Fallbacks =
+        {
+            // A one-to-one session — a terminal, or a single gateway agent —
+            // has exactly one speaker, so an assistant turn with none of its
+            // own genuinely is that one speaker.
+            new("terminal or single agent", false, true),
+
+            // A room's unattributed turn was built by Rebuild's own "left,
+            // neutral, no name" branch specifically because several agents
+            // talk in it and none could be named — falling back here would
+            // answer with the room's own title, asserting the channel itself
+            // spoke.
+            new("room",                     true,  false),
+        };
+
         internal static string Show(string? s) => s is null ? "null" : $"\"{s}\"";
 
         // Null is counted as its own case rather than added to the Initials
         // table, because that table is not nullable and making it so to hold one
         // row would weaken every other row's type.
-        internal static int Total => Glyphs.Length + Initials.Length + Speakers.Length + 1;
+        internal static int Total =>
+            Glyphs.Length + Initials.Length + Speakers.Length + Fallbacks.Length + 1;
 
         internal static string? CheckGlyph(GlyphCase c)
         {
@@ -175,6 +202,17 @@ namespace ClaudeBuddy.Tests
                     + $"{Show(c.Previous)}) = {Show(got)}, wanted {Show(c.Want)}";
         }
 
+        internal static string? CheckFallback(FallbackCase c)
+        {
+            var got = ChatSpeaker.CanFallBackToSoleSpeaker(c.IsRoom);
+            return got == c.Want
+                ? null
+                : $"fallback ({c.Why}): CanFallBackToSoleSpeaker(isRoom: "
+                    + $"{c.IsRoom.ToString().ToLowerInvariant()}) = "
+                    + $"{got.ToString().ToLowerInvariant()}, wanted "
+                    + $"{c.Want.ToString().ToLowerInvariant()}";
+        }
+
         internal static string? CheckNullInitials()
             => OrbGlyph.Initials(null) is var got && got == ""
                 ? null
@@ -186,6 +224,9 @@ namespace ClaudeBuddy.Tests
 
             foreach (var c in Speakers)
                 if (CheckSpeaker(c) is { } failure) failures.Add(failure);
+
+            foreach (var c in Fallbacks)
+                if (CheckFallback(c) is { } failure) failures.Add(failure);
 
             foreach (var c in Glyphs)
                 if (CheckGlyph(c) is { } failure) failures.Add(failure);

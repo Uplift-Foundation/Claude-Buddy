@@ -21,8 +21,16 @@ namespace ClaudeBuddy
     //
     // Owns nothing: it subscribes to the member sessions that do, and rebuilds
     // its view when any of them changes.
-    internal sealed class OpenClawRoomChatSession : IRemoteChatSession, IRemoteChatComposer, IRemoteChatBacklog
+    internal sealed class OpenClawRoomChatSession :
+        IRemoteChatSession, IRemoteChatComposer, IRemoteChatBacklog, IRemoteChatRoom
     {
+        // Always true: a room is the one implementation IRemoteChatRoom
+        // exists to mark. See that interface's own comment for why this is a
+        // property rather than a bare marker, and ChatPanel.TurnView.SpeakerName
+        // (CB-36) for the one place that reads it.
+        public bool IsRoom => true;
+
+
         private readonly List<ChatTurn> _history = new();
         private readonly List<Member> _members = new();
 

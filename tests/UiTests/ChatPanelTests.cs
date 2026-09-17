@@ -108,6 +108,20 @@ public class ChatPanelTests : IDisposable
     private static Border BubbleBorderOf(Avalonia.Controls.Control row) =>
         row.GetVisualDescendants().OfType<Border>().First();
 
+    // CB-36: the whole speaker row — avatar/initials chip and name — is one
+    // StackPanel bound IsVisible="{Binding HasSpeaker}" (see ChatPanel.axaml).
+    // Matched by shape (horizontal, Spacing="5") rather than by name, since
+    // the template gives it none; nothing else in a turn's template is a
+    // horizontal StackPanel with that spacing. IsVisible is read directly
+    // rather than inferred from Bounds, since a control bound false keeps
+    // its place in the visual tree GetVisualDescendants walks — only its
+    // arrange/render is skipped.
+    private static bool HasVisibleSpeakerChip(Avalonia.Controls.Control row) =>
+        row.GetVisualDescendants().OfType<StackPanel>().Any(sp =>
+            sp.Orientation == Avalonia.Layout.Orientation.Horizontal
+            && sp.Spacing == 5
+            && sp.IsVisible);
+
     // A resize handle's centre, in panel coordinates — used as the position
     // carried by Drag's synthesized pointer events, not as a hit-test
     // target (see Drag's own comment for why hit-testing isn't used here).
@@ -262,6 +276,34 @@ public class ChatPanelTests : IDisposable
 
         var texts = TextBlocksIn(row).Select(RenderedText).ToList();
         Assert.Contains("Nova", texts);
+    }
+
+    // CB-36's other half, and the one the ticket says must not change: a
+    // one-to-one session's assistant turn with no Speaker of its own is
+    // still the session's one agent, and the panel still says so with a
+    // chip. This fake is not a room (IsRoom defaults false), so the fallback
+    // in ChatPanel.TurnView.SpeakerName applies exactly as it always has —
+    // only a room turns it off.
+    [AvaloniaFact]
+    public void TurnWithNoSpeakerInATerminalSessionStillWearsTheSoleAgentsChip()
+    {
+        var orb = NewOrb();
+        var fake = NewFake(new[]
+        {
+            new ChatTurn { Role = ChatRole.Assistant, Text = "hello back" },
+        });
+
+        ChatPanel.OpenFor(orb, fake);
+        Flush();
+
+        var panel = ChatPanelTestAccess.Instance!;
+        var row = RenderedRows(panel)[0];
+
+        // "Fake Session" is this fake's DisplayName, which is what
+        // ChatSpeaker.Resolve falls back to with no persona identity behind
+        // the session id — the same answer a real terminal session's title
+        // gives once its first hook write lands.
+        Assert.True(HasVisibleSpeakerChip(row));
     }
 
     // This brief expected HeadlessWindowExtensions.KeyTextInput/KeyPress (the
