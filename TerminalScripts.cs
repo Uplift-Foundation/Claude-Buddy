@@ -109,6 +109,57 @@ namespace ClaudeBuddy
                 : null;
         }
 
+        // Whether the target session has a client attached at all, even one
+        // ChooseClient had to pass over because its tty came back empty.
+        //
+        // CB-158: a click on an orb whose session had a client attached the
+        // whole time still opened a brand new iTerm tab, every time. ChooseClient
+        // returning null already covers two different facts under one answer —
+        // "nobody is attached to this session" and "somebody is attached, but
+        // list-clients reported no tty for them" — and FocusTmux treated both as
+        // the first: paneAliveButDetached, the flag that sends the click straight
+        // into AttachSocket's `open -a`, which stops for neither reason nor for
+        // an existing window. The second fact was silently making the exact
+        // mistake this file's own comment already names for a different guard —
+        // "Nobody wants the same chat in two windows next to each other!!" — just
+        // reached through the client's tty instead of the pane's title.
+        //
+        // A client with an empty tty is real, not a parsing artifact:
+        // MostRecentClient's own comment already says list-clients can produce
+        // one, which is why it is skipped there in the first place — skipped
+        // because nothing downstream can aim a window-selection script at it,
+        // not because it means the session is unattended. This function asks the
+        // second question separately, so FocusTmux can tell "truly nobody here,
+        // open a terminal" apart from "someone is here and a new terminal would
+        // duplicate them, so do nothing further" — the same shape of caution
+        // ClickFallback.None already uses for a coordinate that could not be
+        // resolved.
+        //
+        // Pure and separate from ChooseClient rather than folded into its return
+        // value, for the same reason paneAliveButDetached is threaded out of
+        // FocusCore as a second answer instead of a richer bool: it is not a
+        // kind of choice, it is a fact about what was seen on the way to making
+        // one, and the caller needs it exactly once, after the choice has
+        // already come back empty.
+        internal static bool AttachedWithNoUsableTty(
+            IReadOnlyList<TmuxClient> clients, string targetSession)
+        {
+            var onTargetSession = false;
+
+            foreach (var client in clients)
+            {
+                if (!string.Equals(client.Session, targetSession, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                onTargetSession = true;
+                if (!string.IsNullOrEmpty(client.Tty)) return false; // ChooseClient will have found this one
+            }
+
+            return onTargetSession;
+        }
+
         // The client a person is most likely sitting at: the one touched last.
         //
         // Its own function because two callers want it and one of them is not

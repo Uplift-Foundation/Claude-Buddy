@@ -1064,7 +1064,7 @@ namespace ClaudeBuddy
             TryRun(tmux, out _, TmuxArgs(status, "select-window", "-t", pane));
             TryRun(tmux, out _, TmuxArgs(status, "select-pane", "-t", pane));
 
-            var client = ResolveClient(tmux, status, sessionName);
+            var client = ResolveClient(tmux, status, sessionName, out var attachedWithNoUsableTty);
 
             // No client attached anywhere: the pane is now selected, so the
             // session is waiting correctly for whenever it's next attached,
@@ -1079,9 +1079,25 @@ namespace ClaudeBuddy
             // selected two lines up. Left as a bare false, this was the exact
             // path a click on an agent-team member in a detached swarm socket
             // took to doing nothing at all.
+            //
+            // CB-158: those are not the only two facts a null client can carry.
+            // list-clients can report a client attached to exactly this session
+            // with an empty tty — TerminalScripts.AttachedWithNoUsableTty is what
+            // ResolveClient checked on the way here — and that is someone
+            // sitting at the session right now, not an empty server. Reporting
+            // that as paneAliveButDetached sent it straight into AttachSocket's
+            // `open -a`, which opens a fresh terminal unconditionally: the click
+            // that was supposed to bring the user's own tab forward instead gave
+            // them a second one, every time list-clients answered that way. Only
+            // the genuinely-nobody case gets to say "detached, safe to attach a
+            // new terminal"; the attached-but-unaimable case reports plain
+            // failure instead, the same as not knowing which app owns a tty at
+            // all a few lines down, so the click falls through to this session's
+            // own tty/TermId heuristics rather than duplicating a window someone
+            // is already reading.
             if (client is null)
             {
-                paneAliveButDetached = true;
+                paneAliveButDetached = !attachedWithNoUsableTty;
                 return false;
             }
 
@@ -1166,8 +1182,18 @@ namespace ClaudeBuddy
         // on screen at all. Either way, ties break toward the most recently
         // active client: a session can be attached from several terminals at
         // once, and the one you touched last is the one you're sitting at.
-        private static (string Tty, bool ControlMode)? ResolveClient(string tmux, SessionStatus status, string sessionName)
+        //
+        // attachedWithNoUsableTty is CB-158's addition: null from here used to
+        // mean one thing to FocusTmux — "detached, safe to open a new terminal"
+        // — when it could also mean "attached, but list-clients gave nothing to
+        // aim a window-selection script at". See
+        // TerminalScripts.AttachedWithNoUsableTty for which is which and why the
+        // difference matters.
+        private static (string Tty, bool ControlMode)? ResolveClient(
+            string tmux, SessionStatus status, string sessionName, out bool attachedWithNoUsableTty)
         {
+            attachedWithNoUsableTty = false;
+
             if (!TryRun(tmux, out var listing, TmuxArgs(
                     status, "list-clients", "-F", TerminalScripts.ClientListFormat)))
             {
@@ -1185,7 +1211,11 @@ namespace ClaudeBuddy
             // window selection. With one client attached none of that mattered;
             // with two, choosing wrong brings the wrong window of the same
             // application to the front.
-            if (TerminalScripts.ChooseClient(clients, sessionName) is not { } choice) return null;
+            if (TerminalScripts.ChooseClient(clients, sessionName) is not { } choice)
+            {
+                attachedWithNoUsableTty = TerminalScripts.AttachedWithNoUsableTty(clients, sessionName);
+                return null;
+            }
 
             // Only when it is not already there. A client on the target session
             // needs no switch, and switching a *second* client onto it would drag
