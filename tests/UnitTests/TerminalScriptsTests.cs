@@ -606,6 +606,58 @@ namespace ClaudeBuddy.Tests
             Assert.True(choice!.Value.Client.ControlMode);
         }
 
+        // --- AttachedWithNoUsableTty (CB-158) -----------------------------
+
+        // The exact case that used to open a new iTerm tab on a session someone
+        // was already looking at: a client attached to the right session, but
+        // list-clients gave it no tty. ChooseClient rightly can't choose it —
+        // nothing downstream can aim a window-selection script at an empty tty
+        // — but that is not the same fact as nobody being attached at all, and
+        // this is the function that tells the two apart.
+        [Fact]
+        public void AttachedClientWithEmptyTtyIsReported()
+        {
+            Assert.True(TerminalScripts.AttachedWithNoUsableTty(
+                new[] { Client("", "0") }, "0"));
+        }
+
+        // Truly nobody attached: no rows at all, and no row names the target
+        // session either. Both are the genuine "detached" fact this function
+        // must not blur with the case above.
+        [Fact]
+        public void NoClientsAtAllIsNotReportedAsAttached()
+        {
+            Assert.False(TerminalScripts.AttachedWithNoUsableTty(
+                Array.Empty<TerminalScripts.TmuxClient>(), "0"));
+        }
+
+        [Fact]
+        public void ClientsOnlyOnOtherSessionsAreNotReportedAsAttached()
+        {
+            Assert.False(TerminalScripts.AttachedWithNoUsableTty(
+                new[] { Client("/dev/ttys009", "1") }, "0"));
+        }
+
+        // A usable client on the target session means ChooseClient will have
+        // found it already — this function only needs to answer for the case
+        // ChooseClient passed over.
+        [Fact]
+        public void UsableClientOnTargetSessionIsNotReportedAsUnaimable()
+        {
+            Assert.False(TerminalScripts.AttachedWithNoUsableTty(
+                new[] { Client("/dev/ttys002", "0") }, "0"));
+        }
+
+        // Mixed rows: one elsewhere with a fine tty, one on the target session
+        // with none. The target session's own row is what decides this, not
+        // whichever row happens first or has the tty.
+        [Fact]
+        public void MixedRowsStillFindTheUnaimableOneOnTheTargetSession()
+        {
+            Assert.True(TerminalScripts.AttachedWithNoUsableTty(
+                new[] { Client("/dev/ttys009", "1"), Client("", "0") }, "0"));
+        }
+
         // --- MostRecentClient / ParseClients / PaneTargetForSession -----------
 
         // The client a person is most likely sitting at. PlaceInTmux used to take
