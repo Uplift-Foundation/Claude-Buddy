@@ -2819,28 +2819,34 @@ namespace ClaudeBuddy
         }
 
         // A new orb appeared or an old one vanished while the shape is active.
-        // Re-fit the whole shape and glide everything into it.
+        // An arrival still re-fits the whole shape and glides everything into
+        // it; a departure just drops that one orb and leaves everyone else
+        // exactly where they were. CB-161 is why the two are no longer the
+        // same branch — read the rest of this comment as the record of both
+        // decisions, since the first is still in force and the second reverses
+        // what used to be here.
         //
-        // The opposite of what this did until now, and the reversal is
-        // deliberate rather than a regression, so the old reasoning is worth
-        // keeping. Only the newcomer used to move, because re-fitting means an
-        // orb that was sitting still moves for a reason that has nothing to do
-        // with it — measured against the real geometry, an orb already on
-        // screen shifts 33px on average when a sixth joins a circle, 111px in a
-        // heart and up to 161px in a grid. The judgement was that a display
-        // which rearranges itself because something unrelated started is a
-        // display you stop trusting.
+        // Only the newcomer used to move, because re-fitting means an orb that
+        // was sitting still moves for a reason that has nothing to do with it —
+        // measured against the real geometry, an orb already on screen shifts
+        // 33px on average when a sixth joins a circle, 111px in a heart and up
+        // to 161px in a grid. The judgement was that a display which
+        // rearranges itself because something unrelated started is a display
+        // you stop trusting.
         //
-        // Living with it says otherwise. A shape that absorbs arrivals where
-        // they happen to fit stops being the shape after a handful of them, and
-        // one orb hanging off the edge of a heart is read as something wrong —
-        // it draws the eye every time, where six orbs sliding a few dozen pixels
-        // is over in half a second and leaves a heart. Stillness was the wrong
-        // thing to optimise for; the shape is the point of the shape.
-        //
-        // Removals re-fit too, on the same reasoning. A gap in a ring is the
-        // same wrongness as a stray orb beside it, and "the gap is the honest
-        // picture of what is running" was true and not worth the look of it.
+        // Then "living with it" said the opposite, and extended that reversal
+        // to a departure as well — "a gap in a ring is the same wrongness as a
+        // stray orb beside it". CB-161 is a user filing exactly the complaint
+        // the first paragraph predicted, for the departure half of that: an
+        // orb ending relocated every survivor, which reads as the whole
+        // display being unreliable rather than as one gap in a ring. Ending a
+        // session is not a drag, and OrbArrangement.Layout.Center's own
+        // doc comment already promised a shape does not recentre "every time
+        // an orb joins or leaves" — a promise the removal path was not
+        // keeping. So departures go back to leaving everyone else alone;
+        // arrivals keep re-fitting, because that half of the reversal was
+        // never the complaint and a shape that never absorbs a newcomer has
+        // the opposite problem.
         private void AbsorbIntoArrangement()
         {
             // Orbs gone since the pattern was drawn — drop their saved state.
@@ -2877,7 +2883,25 @@ namespace ClaudeBuddy
 
             if (allOrbs.Count < 1) return;
 
+            // Every remaining orb was already placed by the shape currently on
+            // screen, and none of them is new — this scan's only change was
+            // one or more orbs disappearing. Nothing here needs to move: the
+            // gap left behind is the honest picture of who is still running,
+            // and re-fitting around it is exactly the relocation CB-161
+            // reported. Just forget the id that left and leave the rest be.
+            if (allOrbs.All(o => _arrangedIds.Contains(o.SessionId)))
+            {
+                _arrangedIds.IntersectWith(allOrbs.Select(o => o.SessionId));
+                TeamLinks.Refresh();
+                return;
+            }
+
             var positioned = ComputeClusteredPositions(allOrbs);
+
+            // Whoever is in this set now has a position the current shape
+            // actually assigned, whichever branch below runs — settled or
+            // animated, an arrival is "arranged" the moment it has a target.
+            _arrangedIds.UnionWith(allOrbs.Select(o => o.SessionId));
 
             // Nothing to do if every orb is already where the new shape wants
             // it. Worth the check: this runs on every scan that changes the set
@@ -3328,6 +3352,16 @@ namespace ClaudeBuddy
         private readonly Dictionary<string, (PixelPoint Position, bool Pinned)> _preArrangeState = new();
         private bool _isArranged;
 
+        // Session ids the current shape has actually placed an orb for — not
+        // the same job as _preArrangeState, which is keyed the same way but
+        // remembers where an orb was *before* arranging, for RestoreFromPattern
+        // to put it back. This one exists only for AbsorbIntoArrangement to
+        // tell a pure departure (every remaining id already in here) from a
+        // real arrival (an id that is not), which is the distinction CB-161
+        // needed: an orb ending must not move anyone else, but an orb joining
+        // still re-fits the whole shape around it, as before.
+        private readonly HashSet<string> _arrangedIds = new();
+
         public bool IsArranged => _isArranged;
 
         private DispatcherTimer? _arrangeAnimTimer;
@@ -3374,6 +3408,8 @@ namespace ClaudeBuddy
                 _arrangeAnimTargets[orb.SessionId] = (orb.Position, target);
 
             _isArranged = true;
+            _arrangedIds.Clear();
+            foreach (var orb in allOrbs) _arrangedIds.Add(orb.SessionId);
             AnimateArrangement(PinEveryOrbAtItsTarget);
 
             foreach (var w in _windows.Values)
@@ -3490,6 +3526,7 @@ namespace ClaudeBuddy
 
             _arrangeAnimTargets = targets;
             _isArranged = false;
+            _arrangedIds.Clear();
 
             AnimateArrangement(() =>
             {
