@@ -154,6 +154,14 @@ Filename: "{sys}\netsh.exe"; \
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\install-hooks.ps1"" -Uninstall"; \
   Flags: runhidden; RunOnceId: "unwirehooks"
+; CB-49: the crash keep-alive task, if one was ever registered, goes with the
+; app -- left behind it would name an exe that no longer exists, which is the
+; same kind of debris the firewall rule above is removed to avoid. Unlike
+; install time, uninstall doesn't need to check the setting first: the app is
+; leaving either way, so the task comes out unconditionally.
+Filename: "{sys}\schtasks.exe"; \
+  Parameters: "/delete /tn ""ClaudeBuddyCrashKeepAlive"" /f"; \
+  Flags: runhidden skipifdoesntexist; RunOnceId: "removekeepalivetask"
 ; Restart Manager only runs during install, so stop a running instance here too.
 ; Full {sys} path rather than bare "taskkill.exe" — skipifdoesntexist tests the
 ; filename as given, and an unqualified name would not resolve.
@@ -163,6 +171,147 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#AppExe}"; Flags: runhidden
 function WslIsInstalled(): Boolean;
 begin
   Result := FileExists(ExpandConstant('{sys}\wsl.exe'));
+end;
+
+{ CB-49: crash keep-alive, via a Scheduled Task that restarts the app when
+  Windows logs an Application Error against it -- not a plain "Run" key,
+  which only fires at logon and does nothing after a crash mid-session, and
+  not the task's own "restart on failure" setting either, which only judges
+  whether *launching* the task succeeded and has no way to notice that the
+  long-running process it started later died. An event-log trigger is the
+  standard way to get real crash-restart out of Task Scheduler for an
+  ordinary EXE: Event ID 1000 from source "Application Error" fires whenever
+  any process crashes, with the faulting executable's name in its AppName
+  field, so the trigger below filters on that rather than firing for every
+  crash on the machine.
+
+  Gated on the same "Serve on launch" (Remote Control) setting macOS checks
+  in install-hooks.sh, and for the same reason: a task that brings the app
+  back after every exit, deliberate or not, is the "app that will not stay
+  quit" CB-49 itself warns against, and only a machine already asked to keep
+  serving should get that. ServeOnLaunchEnabled below does a hand-rolled
+  substring check rather than a real JSON parse, because Pascal Script has
+  no JSON support and this only needs one boolean out of the file. }
+const
+  KeepAliveTaskName = 'ClaudeBuddyCrashKeepAlive';
+
+function ServeOnLaunchEnabled(): Boolean;
+var
+  SettingsPath: String;
+  Contents: AnsiString;
+  Body: String;
+  KeyPos, TruePos, FalsePos: Integer;
+begin
+  Result := False;
+  { %APPDATA%\ClaudeBuddy\settings.json -- ClaudeBuddySettings.Directory
+    resolves via SpecialFolder.ApplicationData, which is roaming AppData on
+    Windows, not the {localappdata} this installer itself lives under. }
+  SettingsPath := ExpandConstant('{userappdata}\ClaudeBuddy\settings.json');
+  if not FileExists(SettingsPath) then Exit;
+  if not LoadStringFromFile(SettingsPath, Contents) then Exit;
+
+  Body := String(Contents);
+  KeyPos := Pos('"remoteControlServeOnLaunch"', Body);
+  if KeyPos = 0 then Exit;
+
+  { Look only at what follows the key, so a same-named value elsewhere in the
+    file (there isn't one today, but nothing guarantees that) can't be
+    mistaken for this one. }
+  Body := Copy(Body, KeyPos, Length(Body) - KeyPos + 1);
+  TruePos := Pos('true', Body);
+  FalsePos := Pos('false', Body);
+  Result := (TruePos > 0) and ((FalsePos = 0) or (TruePos < FalsePos));
+end;
+
+function BuildKeepAliveTaskXml(ExePath: String): String;
+begin
+  { Task Scheduler's XML schema, not schtasks' own flag syntax -- event
+    triggers with an XPath filter aren't expressible as plain /create flags,
+    only via /xml. }
+  { UTF-8, matching what SaveStringToFile actually writes below (an
+    AnsiString, not a real UTF-16 buffer) -- fine for this task's own text,
+    which is all ASCII. An install path containing non-ASCII characters
+    (a non-Latin Windows username, most likely) is the one case this hasn't
+    been verified against; this project's per-user install already puts
+    that path under %LOCALAPPDATA%, so it inherits whatever that user's
+    system codepage does with it. }
+  Result :=
+    '<?xml version="1.0" encoding="UTF-8"?>' + #13#10 +
+    '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' + #13#10 +
+    '  <RegistrationInfo>' + #13#10 +
+    '    <Description>Restarts Claude Buddy after a crash. Installed because "Serve on launch" (Remote Control) is turned on; removed if that is turned off and this installer is re-run, and always removed on uninstall.</Description>' + #13#10 +
+    '  </RegistrationInfo>' + #13#10 +
+    '  <Triggers>' + #13#10 +
+    '    <EventTrigger>' + #13#10 +
+    '      <Enabled>true</Enabled>' + #13#10 +
+    '      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Application"&gt;&lt;Select Path="Application"&gt;*[System[Provider[@Name=''Application Error''] and EventID=1000] and EventData[Data[@Name=''AppName'']=''ClaudeBuddy.exe'']]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>' + #13#10 +
+    '    </EventTrigger>' + #13#10 +
+    '  </Triggers>' + #13#10 +
+    '  <Principals>' + #13#10 +
+    '    <Principal id="Author">' + #13#10 +
+    '      <LogonType>InteractiveToken</LogonType>' + #13#10 +
+    '      <RunLevel>LeastPrivilege</RunLevel>' + #13#10 +
+    '    </Principal>' + #13#10 +
+    '  </Principals>' + #13#10 +
+    '  <Settings>' + #13#10 +
+    '    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>' + #13#10 +
+    '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>' + #13#10 +
+    '    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>' + #13#10 +
+    '    <StartWhenAvailable>true</StartWhenAvailable>' + #13#10 +
+    '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>' + #13#10 +
+    '  </Settings>' + #13#10 +
+    '  <Actions Context="Author">' + #13#10 +
+    '    <Exec>' + #13#10 +
+    '      <Command>' + ExePath + '</Command>' + #13#10 +
+    '    </Exec>' + #13#10 +
+    '  </Actions>' + #13#10 +
+    '</Task>';
+end;
+
+{ Removes the task unconditionally; schtasks exits nonzero for a task that
+  isn't registered, which this treats the same as success -- "already gone"
+  is the outcome either way. }
+procedure RemoveKeepAliveTask();
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{sys}\schtasks.exe'),
+       '/delete /tn "' + KeepAliveTaskName + '" /f', '', SW_HIDE,
+       ewWaitUntilTerminated, ResultCode);
+end;
+
+{ Reconciles the task against the current setting, the same shape as
+  install-hooks.sh's reconcile_keepalive: on if the setting says on, off
+  (idempotently) otherwise. Runs on every install and every upgrade, via
+  CurStepChanged below, so flipping the setting and re-running this
+  installer is how the task catches up with it on Windows -- there is no
+  live, in-app equivalent of macOS's re-run-anytime install-hooks.sh here. }
+procedure ReconcileKeepAliveTask();
+var
+  ResultCode: Integer;
+  XmlPath, TaskXml: String;
+begin
+  if not ServeOnLaunchEnabled() then
+  begin
+    RemoveKeepAliveTask();
+    Exit;
+  end;
+
+  XmlPath := ExpandConstant('{tmp}\ClaudeBuddyKeepAlive.xml');
+  TaskXml := BuildKeepAliveTaskXml(ExpandConstant('{app}\{#AppExe}'));
+  SaveStringToFile(XmlPath, TaskXml, False);
+
+  if not Exec(ExpandConstant('{sys}\schtasks.exe'),
+              '/create /tn "' + KeepAliveTaskName + '" /xml "' + XmlPath + '" /f',
+              '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    MsgBox('Could not start schtasks.exe to register the crash keep-alive task.' + #13#10#13#10 +
+           'Claude Buddy is installed and will run either way; it just will not' + #13#10 +
+           'restart itself automatically after a crash.',
+           mbError, MB_OK);
+  end;
+
+  DeleteFile(XmlPath);
 end;
 
 { Hook wiring runs from code rather than a [Run] entry so its exit code can be
@@ -208,6 +357,15 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   { ssPostInstall, not ssInstall: the script has to be on disk before it runs. }
-  if (CurStep = ssPostInstall) and WizardIsTaskSelected('wirehooks') then
-    WireUpHooks();
+  if CurStep = ssPostInstall then
+  begin
+    if WizardIsTaskSelected('wirehooks') then
+      WireUpHooks();
+
+    { Unconditional (no task checkbox): this reconciles against the setting
+      itself, so an upgrade with the box unavailable (it's not offered again
+      on a repair/upgrade run) still catches up with a setting the user
+      changed since the last install. }
+    ReconcileKeepAliveTask();
+  end;
 end;

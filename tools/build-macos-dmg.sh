@@ -148,9 +148,19 @@ Claude Buddy $VERSION
 To start it automatically, add it in System Settings > General >
 Login Items & Extensions.
 
+If you turn on "Serve on launch" (Remote Control) in Settings, the next time
+you run "Install Hooks.command" it also registers a LaunchAgent that brings
+Claude Buddy back after a crash -- not after a deliberate Quit, only a crash.
+It's tied to that setting on purpose: a keep-alive agent with no way to
+actually stay quit would be worse than the crash it's meant to survive, and
+this repository ships nothing that persists past a Quit unless you've told a
+machine to serve. Re-run "Install Hooks.command" any time after changing that
+setting to bring the LaunchAgent in line with it.
+
 Uninstalling: drag the app to the Trash, and run
   "Install Hooks.command" --uninstall
-from a Terminal to take the hook entries back out of every CLI it wired.
+from a Terminal to take the hook entries back out of every CLI it wired, and
+the LaunchAgent out of ~/Library/LaunchAgents if one was registered.
 
 Source, issues and docs: https://github.com/Uplift-Foundation/Claude-Buddy
 MIT licensed.

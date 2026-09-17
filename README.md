@@ -1791,6 +1791,22 @@ yet, so SmartScreen shows a warning — choose *More info → Run anyway*.
 Uninstall through Apps & Features; that also removes the hook entries from
 `settings.json`.
 
+**Crash keep-alive.** If **Serve on launch** (Settings → Remote Control) is
+turned on, both installers also register a way for the OS to bring Claude
+Buddy back after a crash — a launchd `LaunchAgent` on macOS, a Scheduled Task
+triggered off Windows' own Application Error event on Windows. Neither is on
+by default: it only registers for a machine already told to keep serving,
+because a keep-alive that came back after every exit — including a deliberate
+Quit — would be worse than the crash it exists to survive. Both are built to
+restart the app only after it actually dies (a nonzero exit or crash), never
+after a normal Quit, and both come out again if you turn that setting back off
+and re-run the installer (macOS: re-run **Install Hooks.command**; Windows:
+re-run the setup), or if you uninstall outright. See `tools/install-hooks.sh`
+and `tools/ClaudeBuddy.iss` for the detail — this is a floor under crashes,
+not a fix for what a restart itself costs: it drops and re-registers both of
+the app's Remote Control relays, so the other end of a pairing sees an
+`HTTP 409` until its next poll.
+
 Either way, **don't skip step 2**. Orbs come from a Claude Code hook, and until
 it's wired up the app runs correctly and displays nothing, which looks broken
 but isn't. The installers offer to do it; let them.
