@@ -209,9 +209,9 @@ namespace ClaudeBuddy
         // redoing a few hundred rows of objects that are already in memory. The
         // panel is told the transcript was replaced, which it already handles
         // for a backlog landing after it opened.
-        // internal: the merge is where three shipped bugs were fixed, and it
-        // needs no dispatcher of its own — only ScheduleRebuild above does, and
-        // that exists to coalesce, not to decide anything.
+        // internal: the merge is where five shipped bugs have now been fixed,
+        // and it needs no dispatcher of its own — only ScheduleRebuild above
+        // does, and that exists to coalesce, not to decide anything.
         internal void Rebuild()
         {
             // Every agent's own words, and the text of them.
@@ -274,10 +274,17 @@ namespace ClaudeBuddy
             // Anything a person said. It appears in every transcript that
             // received it and as an assistant turn in none, which is what is
             // left once the agents' own words are accounted for.
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            //
+            // Gathered per member first and drawn afterwards, rather than drawn
+            // as it is walked. How many bubbles one text is worth is a question
+            // about every member at once — see WhoseCopiesToDraw — and it cannot
+            // be answered while still part-way through the first transcript.
+            var candidates = new List<List<(ChatTurn Turn, string Text)>>();
 
             foreach (var member in _members)
             {
+                var theirs = new List<(ChatTurn Turn, string Text)>();
+
                 foreach (var turn in member.Chat.History)
                 {
                     if (turn.Role != ChatRole.User) continue;
@@ -285,32 +292,56 @@ namespace ClaudeBuddy
                     var text = Normalise(turn.Text);
                     if (text.Length == 0) continue;
 
-                    // Yours, and said so by the gateway rather than guessed —
-                    // see OpenClawSender for the four shapes that answer this
-                    // and the one that is assumed.
+                    // Said by an agent in this room, and already in the list
+                    // attributed to whichever one. This is the same message,
+                    // seen from the other side.
                     //
-                    // Ahead of the agent-echo test on purpose. Your own words
-                    // are not an agent's however closely they happen to match
-                    // one, and a message swallowed for coincidentally opening
-                    // the way an agent opened a paragraph would be your message,
-                    // gone, with the app having decided somebody else said it.
+                    // Your own turns skip this test, and that is the CB-27 order
+                    // preserved: your words are not an agent's however closely
+                    // they happen to match one, and a message swallowed for
+                    // coincidentally opening the way an agent opened a paragraph
+                    // would be your message, gone, with the app having decided
+                    // somebody else said it. The gateway said this one was
+                    // yours — see OpenClawSender for the four shapes that answer
+                    // it and the one that is assumed.
+                    if (!turn.Mine && SaidByAnAgent(agentTexts, text)) continue;
+
+                    theirs.Add((turn, text));
+                }
+
+                candidates.Add(theirs);
+            }
+
+            // Which member's copies of each text the room draws. Everything one
+            // member holds and the winner does not is a copy of a message the
+            // winner also received, so skipping it is the room taking each
+            // message once.
+            var carrier = WhoseCopiesToDraw(
+                candidates.Select(m => (IReadOnlyList<string>)m.Select(c => c.Text).ToList())
+                          .ToList());
+
+            for (var member = 0; member < candidates.Count; member++)
+            {
+                foreach (var (turn, text) in candidates[member])
+                {
+                    if (carrier[text] != member) continue;
+
+                    // Yours, and said so by the gateway rather than guessed.
                     //
                     // Kept at ChatRole.User with no Speaker, which is what the
                     // panel already draws in your colour and on your side; the
                     // flag is what the *transcript* needed, not the panel.
                     //
-                    // Deduped through the same one set as everything else, and
-                    // that is the whole reason the three copies normalise to the
-                    // same string: the carrier's transcript holds what you
-                    // typed, everybody else's holds the mirror with its prefix
-                    // already taken off by the parser, and the optimistic copy
-                    // this window added when you pressed return is the same text
-                    // again. Before the prefix came off, the last two matched
-                    // nothing and a successful send drew twice.
+                    // Counted alongside everything else, and that is the whole
+                    // reason the three copies normalise to the same string: the
+                    // carrier's transcript holds what you typed, everybody
+                    // else's holds the mirror with its prefix already taken off
+                    // by the parser, and the optimistic copy this window added
+                    // when you pressed return is the same text again. Before the
+                    // prefix came off, the last two matched nothing and a
+                    // successful send drew twice.
                     if (turn.Mine)
                     {
-                        if (!seen.Add(text)) continue;
-
                         merged.Add(new ChatTurn
                         {
                             Role = ChatRole.User,
@@ -325,17 +356,6 @@ namespace ClaudeBuddy
 
                         continue;
                     }
-
-                    // Said by an agent in this room, and already in the list
-                    // attributed to whichever one. This is the same message,
-                    // seen from the other side.
-                    if (SaidByAnAgent(agentTexts, text)) continue;
-
-                    // The same message reaches every agent in the room, so it is
-                    // taken once. Keyed on the text alone rather than on the
-                    // time: the same message is timestamped per delivery, and
-                    // two agents can record it either side of a minute boundary.
-                    if (!seen.Add(text)) continue;
 
                     // Somebody the gateway named: an agent relayed through the
                     // channel whose own session is not in this room, or (assumed
@@ -445,9 +465,40 @@ namespace ClaudeBuddy
             // Notes are never matched against anything: nothing else in the
             // conversation is a System turn, so there is nothing they could
             // duplicate, and nothing that would ever prune them but the cap.
+            //
+            // One optimistic copy retired per copy that came back, not every
+            // copy retired because one did. Saying the same thing twice used to
+            // leave both local copies matching the single merged one, so the
+            // second send disappeared off the screen the moment the first
+            // round-tripped and stayed gone until the gateway's copy of it
+            // arrived — a message the person can see they sent, missing, which
+            // is the same failure CB-32 is about in the other half of this
+            // method.
+            //
+            // Earliest first, which is what the budget below does by walking the
+            // list in order: the copies that have come back are the older sends,
+            // so the one left on screen is the newest and its optimistic
+            // timestamp is the closest to right.
+            var returned = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            foreach (var turn in merged)
+            {
+                if (!turn.Mine) continue;
+
+                var text = Normalise(turn.Text);
+                returned[text] = returned.GetValueOrDefault(text) + 1;
+            }
+
             _local.RemoveAll(local =>
-                local.Mine
-                && merged.Any(t => t.Mine && Normalise(t.Text) == Normalise(local.Text)));
+            {
+                if (!local.Mine) return false;
+
+                var text = Normalise(local.Text);
+                if (returned.GetValueOrDefault(text) <= 0) return false;
+
+                returned[text] -= 1;
+                return true;
+            });
 
             merged.AddRange(_local);
 
@@ -622,8 +673,38 @@ namespace ClaudeBuddy
         // duplicates in place: the copy that reaches the other agents is
         // sometimes **cut short**, so Aurora's full sentence appeared once
         // attributed and once as a blue bubble ending at its first colon. So a
-        // long enough prefix counts, in either direction — the relay truncates,
-        // and nothing says the stored original is the longer of the two.
+        // long enough prefix of what an agent said counts as that message.
+        //
+        // In one direction only, and that is CB-33. This used to match a prefix
+        // either way round, on the grounds that nothing says the stored original
+        // is the longer of the two — which is true, and was never observed,
+        // where the truncating relay was. What the other direction did match,
+        // reliably, was a person quoting an agent and adding their own words: a
+        // quote-and-add always opens with what it quotes and is always longer
+        // than it, so the whole message was read as that agent's echo and
+        // dropped. Not a duplicate suppressed — the person's entire message,
+        // gone, with nothing on screen to say there had been one.
+        //
+        // Gating that arm on the person's text being no longer than the agent's
+        // was the shape the ticket suggested, and it collapses to equality,
+        // which the first line already covers. So the arm goes rather than
+        // growing a condition that can never be true on its own.
+        //
+        // The trade is deliberate and it is not symmetric. Keeping the arm costs
+        // a whole message, silently, every time somebody quotes; dropping it
+        // costs one visible duplicate bubble in a case nobody has yet seen,
+        // where an agent's own transcript holds *less* than the relay carried.
+        //
+        // Deciding this by who sent it rather than by the words was the other
+        // shape considered, and the metadata cannot carry it. A relayed agent
+        // copy arrives with senderIsOwner false plus the bot's Discord display
+        // name, and so does — by assumption, see OpenClawSender — another person
+        // in the channel, so having a name separates neither from the other. Nor
+        // does the name reach this room's members: it is a Discord display name
+        // where a member is an agent id, and the fixture this suite has always
+        // used says so, standing "Quillbot" in for the agent "Quill". A name
+        // test would be a second heuristic over a namespace nobody here
+        // controls, which is what the one being narrowed above already was.
         private static bool SaidByAnAgent(List<string> agentTexts, string text)
         {
             foreach (var said in agentTexts)
@@ -632,12 +713,64 @@ namespace ClaudeBuddy
 
                 if (text.Length >= EchoPrefix && said.StartsWith(text, StringComparison.Ordinal))
                     return true;
-
-                if (said.Length >= EchoPrefix && text.StartsWith(said, StringComparison.Ordinal))
-                    return true;
             }
 
             return false;
+        }
+
+        // How many bubbles one message text is worth, expressed as which
+        // member's copies of it the room draws — CB-32.
+        //
+        // The room has to hold two facts apart that a set cannot: the same
+        // message reaches every agent in the channel and appears in all of their
+        // transcripts, and a person can say the same thing twice. Membership of
+        // a set of texts answers the first and silently swallows the second, so
+        // saying "ok" and then "ok" again drew one bubble carrying the earlier
+        // timestamp — while an agent repeating *itself* was drawn twice, because
+        // assistant turns never went through that set at all. The transcript
+        // disagreed with what had actually been sent, in one direction only.
+        //
+        // A count per member, and the maximum across them, is what tells the two
+        // apart. Two members each holding one copy is one message that reached
+        // both; one member holding two copies is two messages, whoever else
+        // received them. Keying on the text and the time instead would be the
+        // obvious alternative and does not work — the same message is timestamped
+        // per delivery, and two agents can record it either side of a minute
+        // boundary, which is why this was keyed on text alone in the first place.
+        //
+        // Returning the winning member rather than a bare count is what keeps the
+        // timestamps coherent. Drawing "the first two copies found" can take both
+        // of them from one member's record of one message, where a member that
+        // received both says when each was actually delivered. Ties go to the
+        // earliest member, so a room whose members all agree draws the same
+        // copies every rebuild rather than shuffling which transcript it quotes.
+        //
+        // Pure, and taking the texts rather than the members, for the reason
+        // PickCarrier below is: it is a rule about how many of something to show,
+        // and it should be decidable without a gateway, a transcript or a window.
+        internal static Dictionary<string, int> WhoseCopiesToDraw(
+            IReadOnlyList<IReadOnlyList<string>> perMember)
+        {
+            var best = new Dictionary<string, (int Member, int Count)>(StringComparer.Ordinal);
+
+            for (var member = 0; member < perMember.Count; member++)
+            {
+                var held = new Dictionary<string, int>(StringComparer.Ordinal);
+
+                foreach (var text in perMember[member])
+                {
+                    held[text] = held.GetValueOrDefault(text) + 1;
+                }
+
+                foreach (var (text, count) in held)
+                {
+                    if (best.TryGetValue(text, out var winner) && winner.Count >= count) continue;
+
+                    best[text] = (member, count);
+                }
+            }
+
+            return best.ToDictionary(e => e.Key, e => e.Value.Member, StringComparer.Ordinal);
         }
 
         // Which member carries a room send: the one that spoke most recently,
