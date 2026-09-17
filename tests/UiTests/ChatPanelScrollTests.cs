@@ -1,7 +1,9 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -317,5 +319,86 @@ public class ChatPanelScrollTests : IDisposable
         Flush();
 
         AssertAtBottom(panel, "a replaced transcript should show its newest turn");
+    }
+
+    // --- a row gaining height after the initial settle (CB-160) ---
+    //
+    // CB-51's fix assumed the two dispatcher ticks ScrollToEndAfterLayout ran
+    // were always the last time a turn's height could change. They aren't:
+    // TurnView.LoadImage/LoadImageBytes both decode on a worker thread (see
+    // DecodeAndShowAsync's own comment on why) and post the bitmap back with
+    // Dispatcher.UIThread.Post, with no promise about which tick that lands
+    // on. This is the real path a live picture takes, not a synthetic
+    // resize, seeded through the same url-keyed media cache
+    // ChatPanelImageNoteTests and ChatPanelMarkdownTests already use to drive
+    // decoding without a socket ever opening.
+
+    private static void SeedMediaCache(string url, byte[] bytes)
+    {
+        var field = typeof(OpenClawSessions).GetField(
+            "Media", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        ((Dictionary<string, byte[]?>)field.GetValue(null)!)[url] = bytes;
+    }
+
+    // A 1x1 PNG — square, so Bitmap.DecodeToWidth's proportional resize to
+    // the 456 draw width leaves it 456x456 once decoded. That is a large
+    // amount of height to arrive late, which is the point: a settle loop
+    // that only watched two ticks would have missed all of it.
+    private static byte[] Pixel() => Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==");
+
+    [AvaloniaFact]
+    public async Task ARowThatGainsHeightAfterTheInitialSettleStillEndsAtTheBottom()
+    {
+        var path = "/Users/w/.openclaw/media/" + Guid.NewGuid() + ".png";
+        var source = new OpenClawMediaSource(path, "agent:comfyui:discord:direct:1");
+        SeedMediaCache(source.Route, Pixel());
+
+        var turns = Transcript(60, "picture");
+        turns[^1] = new ChatTurn
+        {
+            Role = ChatRole.Assistant,
+            Text = "MEDIA:" + path,
+            IsComplete = true,
+            ImageSourcePath = path,
+            ImageUrl = source.Route,
+        };
+
+        var session = new FakeChatSession(turns) { SessionId = "picture-" + Guid.NewGuid() };
+        _toClean.Add(session.SessionId);
+        var panel = Open(session);
+
+        // Keep pumping dispatcher jobs and render ticks — exactly what the
+        // real app's message loop does while idle — until the decoded
+        // picture actually lands, rather than the fixed handful of rounds
+        // Flush() uses for ordinary layout. That is deliberately more ticks
+        // than the old two-tick settle ever waited for; the fix under test
+        // is that ScrollToEndAfterLayout's own settle loop, not this test,
+        // is what keeps correcting the offset across them.
+        //
+        // Filtered on Source rather than merely on the 228 width every row's
+        // Image element carries in the template regardless of whether it is
+        // showing anything: a 60-turn transcript realizes several of them,
+        // and FirstOrDefault on width alone would just as happily hand back
+        // an unrelated, empty one from an ordinary text turn.
+        Image? picture = null;
+        for (var i = 0; i < 60 && picture is null; i++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+
+            picture = panel.GetVisualDescendants().OfType<Image>().FirstOrDefault(im => im.Width == 228 && im.Source != null);
+            if (picture is null) await Task.Delay(5);
+        }
+
+        Assert.NotNull(picture);
+        Assert.NotNull(picture!.Source);
+
+        Flush();
+
+        AssertAtBottom(
+            panel,
+            "a picture finishing decode after the initial settle should still leave the view at the bottom");
     }
 }

@@ -63,6 +63,15 @@ namespace ClaudeBuddy
         // means.
         private bool _pinned;
 
+        // Bumped by every call to ScrollToEndAfterLayout, and read back by
+        // whichever settle loop that call started. This panel is reused
+        // across sessions (the class comment says why), so a settle loop
+        // still watching layout from the *previous* bind must not go on
+        // fighting the offset once a new one has started its own — the
+        // generation check is what lets an in-flight loop notice it is stale
+        // and unsubscribe rather than assuming it is still the only one.
+        private int _scrollSettleGeneration;
+
         // The panel that dismiss-on-deactivate still applies to, if there is
         // one. Every caller that used to say "the panel" and mean the singleton
         // means this: an orb about to move under it, an arrangement animation,
@@ -2535,7 +2544,7 @@ namespace ClaudeBuddy
         // To the newest message, after layout has caught up with the rows that
         // put it there.
         //
-        // Twice, at two priorities, for the reason LoadOlderAsync spells out at
+        // Starts with two ticks, for the reason LoadOlderAsync spells out at
         // length: one yield gets the rows into the visual tree, and the measure
         // that gives them height happens after that. A single ScrollToEnd() at
         // Loaded priority — which is what every one of these call sites used to
@@ -2544,16 +2553,86 @@ namespace ClaudeBuddy
         // whole transcript at once adds a lot, so "short of the bottom" is not a
         // few pixels; it is the middle of the conversation.
         //
-        // The first call is kept rather than only doing the late one: it puts
-        // the view roughly right on the frame the panel appears, so the
-        // correction is a settle rather than a visible jump.
+        // CB-51 stopped there, on the assumption two ticks were always enough.
+        // CB-160 is what happens when they aren't: an inline picture decoding
+        // on a worker thread (TurnView.LoadImage/LoadImageBytes both post the
+        // decoded bitmap back after a Task.Run, with no promise about which
+        // tick that lands on), a markdown block reflowing, an attachment row
+        // resizing — any of them can grow a turn's height after the second
+        // tick, and a fixed count has no third correction waiting for it. So
+        // the second tick now hands off to SettleScrollToEnd, which keeps
+        // re-scrolling across further layout passes until the extent genuinely
+        // stops changing rather than assuming it already has.
+        //
+        // The first two calls are kept rather than going straight to the
+        // settle loop: they put the view roughly right on the frame the panel
+        // appears, so the loop is a correction for whatever arrives late
+        // rather than the only thing moving the view at all.
         private void ScrollToEndAfterLayout()
         {
+            var generation = ++_scrollSettleGeneration;
+
             Dispatcher.UIThread.Post(() =>
             {
+                if (generation != _scrollSettleGeneration) return;
                 Scroll.ScrollToEnd();
-                Dispatcher.UIThread.Post(() => Scroll.ScrollToEnd(), DispatcherPriority.Background);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (generation != _scrollSettleGeneration) return;
+                    Scroll.ScrollToEnd();
+                    SettleScrollToEnd(generation);
+                }, DispatcherPriority.Background);
             }, DispatcherPriority.Loaded);
+        }
+
+        // The correction CB-160 added: rather than trusting that the two
+        // ticks above were the last time this turn's rows could change height,
+        // this keeps re-scrolling to the end across further dispatcher passes
+        // until ScrollSettleTracker says the extent has held steady, instead
+        // of assuming a fixed count was always enough.
+        //
+        // Self-driven — a chain of Dispatcher.Post calls, not a subscription
+        // to Avalonia's LayoutUpdated event — and deliberately so. The first
+        // version of this watched LayoutUpdated instead, on the reasoning
+        // that it fires exactly when a layout pass produces a new
+        // measurement. It does, but only when something actually invalidates
+        // layout, and once every row has already reached its final height
+        // nothing does — so the handler stayed subscribed indefinitely,
+        // waiting for confirmation readings that would never arrive on their
+        // own. It only got them once *something else* touched layout later
+        // (a reader scrolling back up, a reply landing in a different
+        // conversation), which this settle loop then mistook for one of its
+        // own readings and used to justify snapping back to the bottom —
+        // fighting exactly the interactions ScrollToEndIfPinned and the
+        // pinned-reply tests below exist to protect. Driving the readings
+        // itself instead means each one happens on schedule whether or not
+        // layout actually changed, so the ordinary case — nothing left to
+        // settle — reaches ScrollSettleTracker's stable count in a small,
+        // bounded number of ticks and stops for good, while a genuinely
+        // late-arriving row (this ticket's actual case) still resets that
+        // count for as long as the extent keeps moving.
+        //
+        // Guarded by the same generation this panel's reuse already needs
+        // elsewhere: if a different session gets bound (a new
+        // ScrollToEndAfterLayout call, bumping the counter) while this chain
+        // is still running, the next scheduled tick notices and stops rather
+        // than going on fighting an offset that belongs to a conversation no
+        // longer on screen.
+        private void SettleScrollToEnd(int generation)
+        {
+            var tracker = new ScrollSettleTracker();
+
+            void Tick()
+            {
+                if (generation != _scrollSettleGeneration) return;
+
+                Scroll.ScrollToEnd();
+                tracker.Observe(Scroll.Extent.Height);
+
+                if (tracker.ShouldKeepWatching) Dispatcher.UIThread.Post(Tick, DispatcherPriority.Background);
+            }
+
+            Tick();
         }
 
         // The pin toggle, exposed so a test can drive the state change without
