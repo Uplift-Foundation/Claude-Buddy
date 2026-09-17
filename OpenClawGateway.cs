@@ -239,9 +239,54 @@ namespace ClaudeBuddy
             // seconds, which papered over the same miss rather than finding it.
             // CB-23 took that deadline away entirely — a test over an in-memory
             // socket has nothing to wait for, so a lost frame there is now a
-            // hang with a name rather than an assertion about scopes.
+            // hang with a name rather than an assertion about scopes. CB-23's
+            // own measurement — 25.5 seconds for this same handshake against a
+            // deliberately starved pool — is the direct evidence that the next
+            // comment builds on.
+            //
+            // CB-68: started on a dedicated (LongRunning) thread rather than a
+            // plain Task.Run. This is the one piece of that ticket's
+            // investigation that was actually confirmed rather than guessed,
+            // so it is worth being precise about what it does and does not fix.
+            //
+            // Measured directly, with every ThreadPool worker pinned in a
+            // blocking call (tests/UnitTests/OpenClawGatewayTests.cs has the
+            // harness this was proven against): a plain
+            // `Task.Run(() => ReceiveLoopAsync(...))` here is not guaranteed a
+            // thread promptly — under sustained saturation, some queued item in
+            // the process is left waiting for however long the pool stays
+            // saturated, and which item that turns out to be is a race, not a
+            // fixed victim. `TaskCreationOptions.LongRunning` removes the
+            // receive loop from that race entirely: instrumented, it started on
+            // a genuine non-pool thread (`Thread.IsThreadPoolThread == false`)
+            // within tens of milliseconds even with the pool fully pinned,
+            // every time. That is a real, verified improvement — the one thing
+            // in this class that runs for the whole life of the connection no
+            // longer depends on the pool having a spare worker to begin with.
+            //
+            // What this does **not** fix, and CB-68 should not be read as
+            // closed on the strength of it alone: WaitForChallengeAsync's and
+            // RequestAsync's TaskCompletionSources use
+            // RunContinuationsAsynchronously (see the comment on the one in
+            // RequestAsync for why that flag has to stay), which means the
+            // continuation that resumes this method after `await challengeTask`
+            // — and after every `await RequestAsync(...)` — is itself an
+            // ordinary Task continuation scheduled onto the same ThreadPool.
+            // Under the same saturation, that resumption can still queue.
+            // Measured: even with this fix in place, ConnectAsync's overall
+            // completion was still delayed by however long the saturation in
+            // the test harness lasted. Eliminating that would mean not using
+            // ordinary async/await for the rest of the handshake at all, which
+            // is a different and much larger change than this ticket's scope.
+            // Recorded here rather than left implicit, because a fix that reads
+            // as "the hang is solved" when only one contributing cause was is
+            // exactly the overclaim CLAUDE.md warns against.
             var challengeTask = WaitForChallengeAsync(_cts.Token);
-            _receiveLoop = Task.Run(() => ReceiveLoopAsync(_cts.Token));
+            _receiveLoop = Task.Factory.StartNew(
+                () => ReceiveLoopAsync(_cts.Token),
+                _cts.Token,
+                TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+                TaskScheduler.Default).Unwrap();
             var challenge = await challengeTask;
             if (challenge.Nonce is null)
             {
@@ -633,8 +678,17 @@ namespace ClaudeBuddy
             }
         }
 
+        // CB-68: recorded the moment the loop actually starts running, on
+        // whatever thread it got. A test seam rather than a debugging
+        // leftover — it is the only way to assert the fix above from outside
+        // the class, since "did this run on a pooled thread" has no other
+        // externally observable trace once the loop is past its first line.
+        internal bool? ReceiveLoopStartedOnAPooledThread { get; private set; }
+
         private async Task ReceiveLoopAsync(CancellationToken ct)
         {
+            ReceiveLoopStartedOnAPooledThread = Thread.CurrentThread.IsThreadPoolThread;
+
             var buffer = new byte[16 * 1024];
             var message = new ArrayBufferWriter<byte>();
 
