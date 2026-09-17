@@ -556,4 +556,26 @@ public class SettingsRoundTripTests
         Assert.Equal(500, a!.Width);
         Assert.Equal(600, a.Height);
     }
+
+    // CB-155: HotkeyRegistry.Resolve is what actually falls back to the
+    // built-in default for a null/invalid override — this only has to prove
+    // the string itself survives a save and a reload, the same round trip
+    // every other setting here is checked against.
+    [Fact]
+    public void ToggleOrbsHotkey_DefaultsToNullAndRoundTripsAnOverride()
+    {
+        var dir = NewSettingsDir();
+        PointSettingsAt(dir);
+
+        Assert.Null(ClaudeBuddySettings.ToggleOrbsHotkey);
+
+        ClaudeBuddySettings.ToggleOrbsHotkey = "Ctrl+Shift+H";
+
+        var settingsPath = Path.Combine(dir, "settings.json");
+        var root = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
+        Assert.Equal("Ctrl+Shift+H", root!["toggleOrbsHotkey"]!.GetValue<string>());
+
+        PointSettingsAt(dir);
+        Assert.Equal("Ctrl+Shift+H", ClaudeBuddySettings.ToggleOrbsHotkey);
+    }
 }
