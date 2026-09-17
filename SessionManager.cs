@@ -2073,9 +2073,9 @@ namespace ClaudeBuddy
                 // measures it: 15 live sessions with transcripts named, one of
                 // them mid-generation so its cached answer can never be
                 // reused, scanned 300 times on the Mac this was written on —
-                // 1.12-1.16ms/scan against 0.75-0.82ms/scan for the same
-                // fifteen with no transcript path at all, so roughly
-                // 0.34-0.37ms/scan is this check, comfortably inside the
+                // 1.1664-1.1665ms/scan against 1.0211-1.0236ms/scan for the
+                // same fifteen with no transcript path at all, so roughly
+                // 0.14-0.15ms/scan is this check, comfortably inside the
                 // two-second poll interval. Left ungated rather than
                 // restricted to a narrower status-file state, on the strength
                 // of that number rather than the original estimate.

@@ -31,6 +31,11 @@ namespace ClaudeBuddy.Tests;
 // every iteration, standing in for the mid-generation session the ticket
 // asks for: it is the one file whose TranscriptHandoff answer can never be
 // served from the length+mtime cache, because it never stops changing.
+// Every status file also names both a Title and a Color, which is what keeps
+// SessionManager.WantsIdentityFromTranscript false for all fifteen in both
+// arms — leaving Color unset would route the with-transcripts arm through
+// IdentityFor's own FileInfo stat and a TranscriptReader.TailLines read on
+// the growing session, attributing that cost to the husk check as well.
 [Collection("Settings")]
 public class HuskScanCostTests
 {
@@ -48,6 +53,7 @@ public class HuskScanCostTests
                     State = "generating",
                     Cli = "",
                     Title = "CB-22 scan cost",
+                    Color = "blue",
                     Cwd = "/Users/user/project-" + sessionId,
                     SessionPid = pid,
                     TermProgram = "iTerm.app",
@@ -153,15 +159,23 @@ public class HuskScanCostTests
         var huskCheckCost = withTranscripts - withoutTranscripts;
 
         // A sanity ceiling, not a tight budget. Real numbers from two runs on
-        // the Mac this was written on: 1.12ms and 1.16ms per scan with
-        // transcripts named, against 0.75ms and 0.82ms without — a husk-check
-        // cost of roughly 0.34-0.37ms per scan of 15 sessions with one
-        // growing transcript, copied by hand into ScanAndUpdate's closure
+        // the Mac this was written on: 1.1664ms and 1.1665ms per scan with
+        // transcripts named, against 1.0211ms and 1.0236ms without — a
+        // husk-check cost of roughly 0.14-0.15ms per scan of 15 sessions with
+        // one growing transcript, copied by hand into ScanAndUpdate's closure
         // comment and the README internals section rather than estimated.
-        // 25ms is about twenty times that, so this exists to catch something
-        // turning pathological later (an accidental O(n^2), a stat added per
-        // line rather than per file) rather than to hold today's number in
-        // place.
+        // (An earlier version of this fixture left Color unset, which made
+        // WantsIdentityFromTranscript true for every fake session and routed
+        // the with-transcripts arm through IdentityFor's own FileInfo stat
+        // and TranscriptReader.TailLines read on the growing session — that
+        // attributed three extra transcript code paths to the husk check
+        // alone and reported 0.34-0.37ms. Setting Color here keeps identity
+        // resolved from the status file for every fake session in both arms,
+        // so the only difference measured is the husk-check stat itself.)
+        // 25ms is well over a hundred times that, so this exists to catch
+        // something turning pathological later (an accidental O(n^2), a stat
+        // added per line rather than per file) rather than to hold today's
+        // number in place.
         Assert.True(withTranscripts < 25.0,
             $"scan of {pids.Length} sessions (1 mid-generation, transcripts named) averaged " +
             $"{withTranscripts:F4}ms/scan over {iterations} iterations ({withoutTranscripts:F4}ms/scan " +
