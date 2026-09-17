@@ -90,7 +90,7 @@ public class ChatPanelHistoryTests : IDisposable
             return Task.FromResult(true);
         }
 
-        public Task SendAsync(string text) => Task.CompletedTask;
+        public Task<ChatSendOutcome> SendAsync(string text) => Task.FromResult(ChatSendOutcome.Sent);
 
         public void Cancel()
         {
@@ -295,7 +295,7 @@ public class ChatPanelHistoryTests : IDisposable
 
         public void AnswerElsewhere() => AnsweredElsewhereCalled = true;
 
-        public Task SendAsync(string text) => Task.CompletedTask;
+        public Task<ChatSendOutcome> SendAsync(string text) => Task.FromResult(ChatSendOutcome.Sent);
 
         public void Cancel()
         {

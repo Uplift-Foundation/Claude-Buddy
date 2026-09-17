@@ -457,7 +457,7 @@ public class OpenClawRoomSendTests : IDisposable
             var room = new OpenClawRoomChatSession("openclaw:room:discord:900", "#lobby");
             room.SetMembers(new[] { (carrier, "Quill", "#7f7") });
 
-            await room.SendAsync("anyone about?");
+            var outcome = await room.SendAsync("anyone about?");
 
             // Your message, and nothing explaining itself under it.
             Assert.Contains(room.History, t => t.Mine && t.Text == "anyone about?");
@@ -465,6 +465,11 @@ public class OpenClawRoomSendTests : IDisposable
 
             // ...and it really went out, both halves of it.
             Assert.Equal(new[] { "send", "chat.send" }, Sent(socket).Select(r => r.Method));
+
+            // CB-35: the one outcome in this file that reports Sent rather
+            // than Failed — everything else here is a reason the room never
+            // heard anything.
+            Assert.Equal(ChatSendOutcome.Sent, outcome);
         }
     }
 

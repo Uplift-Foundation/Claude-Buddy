@@ -890,11 +890,15 @@ public class LocalCliChatSessionTests : IDisposable
             var session = Session(Transcript(User("u1", "hi")));
             ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
 
-            await session.SendAsync("hello there");
+            var outcome = await session.SendAsync("hello there");
 
             Assert.Contains(
                 session.History,
                 t => t.Text.Contains("Replying is off", StringComparison.Ordinal));
+
+            // CB-35: this is the return value ChatPanel.Send() reads to
+            // decide whether to keep the typed text in the composer.
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
         finally
         {
@@ -911,11 +915,13 @@ public class LocalCliChatSessionTests : IDisposable
             var session = Session(Transcript(User("u1", "hi"))); // TmuxPane empty by construction
             ClaudeBuddySettings.ClaudeCodeReplyEnabled = true;
 
-            await session.SendAsync("hello there");
+            var outcome = await session.SendAsync("hello there");
 
             Assert.Contains(
                 session.History,
                 t => t.Text.Contains(TerminalTyping.CantTypePhrase, StringComparison.Ordinal));
+
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
         finally
         {
@@ -934,11 +940,17 @@ public class LocalCliChatSessionTests : IDisposable
             var session = Session(Transcript(User("u1", "hi")));
             ClaudeBuddySettings.ClaudeCodeReplyEnabled = false;
 
-            await session.SendWithImagesAsync("hello", Array.Empty<string>());
+            var outcome = await session.SendWithImagesAsync("hello", Array.Empty<string>());
 
             Assert.Contains(
                 session.History,
                 t => t.Text.Contains("Replying is off", StringComparison.Ordinal));
+
+            // CB-35: the image-send path reports the same outcome type as
+            // the plain one, which is what lets ChatPanel.Send() treat both
+            // entry points the same way when deciding what to do with the
+            // composer.
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
         finally
         {
@@ -1262,10 +1274,16 @@ public class LocalCliChatSessionTests : IDisposable
             var (messenger, find) = FakeMessaging(RegistryEntry("s1"));
             var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
 
-            await session.SendAsync("check the deploy");
+            var outcome = await session.SendAsync("check the deploy");
 
             Assert.Contains(session.History,
                 t => t.Text.Contains("Handed to job-hunter", StringComparison.Ordinal));
+
+            // CB-35: Accepted is the one receipt that means the socket took
+            // the bytes — see DeliverViaMessengerAsync's own comment — and
+            // it is the only one of the four delivery tests in this file
+            // that reports Sent rather than Failed.
+            Assert.Equal(ChatSendOutcome.Sent, outcome);
         }
         finally
         {
@@ -1324,10 +1342,12 @@ public class LocalCliChatSessionTests : IDisposable
                 findRegistryEntry: RegistryEntry("s1"), messengerEntries: Array.Empty<SessionRegistry.Entry>());
             var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
 
-            await session.SendAsync("check the deploy");
+            var outcome = await session.SendAsync("check the deploy");
 
             Assert.Contains(session.History,
                 t => t.Text.Contains("isn't registered", StringComparison.Ordinal));
+
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
         finally
         {
@@ -1349,10 +1369,12 @@ public class LocalCliChatSessionTests : IDisposable
                 messengerEntries: new[] { RegistryEntry("s1", peerProtocol: 2) });
             var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
 
-            await session.SendAsync("check the deploy");
+            var outcome = await session.SendAsync("check the deploy");
 
             Assert.Contains(session.History,
                 t => t.Text.Contains("peer protocol", StringComparison.Ordinal));
+
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
         finally
         {
@@ -1372,10 +1394,12 @@ public class LocalCliChatSessionTests : IDisposable
             var (messenger, find) = FakeMessaging(RegistryEntry("s1"), write: false);
             var session = BackgroundSession(Transcript(User("seed", "seed")), messenger, find);
 
-            await session.SendAsync("check the deploy");
+            var outcome = await session.SendAsync("check the deploy");
 
             Assert.Contains(session.History,
                 t => t.Text.Contains("refused the connection", StringComparison.Ordinal));
+
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
         finally
         {

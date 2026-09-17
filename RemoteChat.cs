@@ -68,6 +68,28 @@ namespace ClaudeBuddy
 
     public enum RemoteChatState { Disconnected, Connecting, Connected, Error }
 
+    // CB-35: what SendAsync (and SendWithImagesAsync beside it) actually
+    // managed, so the one caller that matters — ChatPanel.Send — can decide
+    // whether the composer is done with the text or still needs to hold it.
+    //
+    // Not a bool, even though every implementation below only ever needs the
+    // two states: a result type says at the call site what a bool would make
+    // the reader go and check the method for.
+    //
+    // The line between the two states is drawn the same way in every
+    // implementation, and is worth writing down once here rather than four
+    // times: **Sent** means the message is the transport's problem now — it
+    // was handed to a gateway, typed into a terminal, or queued on a socket,
+    // and whatever the transcript shows about it afterwards (a reconciled
+    // turn, a "handed to X" note, even a later delivery failure reported
+    // asynchronously) is a fact about that attempt, not about whether the
+    // composer should keep a copy. **Failed** means the attempt never
+    // happened — replying is switched off, there is nobody to address, there
+    // is no pane and nowhere to deliver to — and in every one of those cases
+    // nothing was queued anywhere, so the only copy of what was typed is the
+    // one still sitting in the box.
+    public enum ChatSendOutcome { Sent, Failed }
+
     // Mutable on purpose: a streaming reply updates Text in place and raises
     // TurnUpdated, so the list never recreates the item. Recreating it would
     // re-template the row, which is the one thing that could steal focus from
@@ -273,7 +295,7 @@ namespace ClaudeBuddy
         event Action<ChatTurn>? TurnUpdated;
         event Action<RemoteChatState>? StateChanged;
 
-        Task SendAsync(string text);
+        Task<ChatSendOutcome> SendAsync(string text);
 
         // Stops the reply in flight. Separate from dismissing the panel: closing
         // a window should never cancel work someone asked for.
@@ -452,7 +474,7 @@ namespace ClaudeBuddy
         // instead of SendAsync exactly when the panel is holding at least
         // one pasted picture; a message with none still goes through
         // SendAsync alone.
-        Task SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths);
+        Task<ChatSendOutcome> SendWithImagesAsync(string text, IReadOnlyList<string> imagePaths);
     }
 
     // One option in a dialog the session is blocked on. Key is what gets sent —

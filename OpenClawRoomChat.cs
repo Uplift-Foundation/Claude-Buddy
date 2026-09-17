@@ -887,28 +887,36 @@ namespace ClaudeBuddy
         // into a member's transcript would be invisible here, because the merge
         // drops System turns, and the failure being reported is a failure of the
         // room rather than of that agent.
-        public async Task SendAsync(string text)
+        public async Task<ChatSendOutcome> SendAsync(string text)
         {
+            // Yours, before anything is attempted, because the interface says
+            // SendAsync raises TurnAdded for the user's own turn — so exactly one
+            // thing owns the transcript and a send that fails leaves the message
+            // on screen with the reason underneath it instead of a ghost.
+            //
+            // CB-35: this used to run after the two early refusals below,
+            // which meant "replying is off" and "nobody is in this channel"
+            // left no trace of the message at all — a note with nothing above
+            // it, reading as the app having decided on its own not to send
+            // anything, where the no-address refusal further down always
+            // showed the message first. All three refusals are the same kind
+            // of fact (nobody heard this) and now read the same way.
+            AddLocal(new ChatTurn
+            {
+                Role = ChatRole.User, Text = text, IsComplete = true, Mine = true
+            });
+
             if (!ClaudeBuddySettings.OpenClawReplyEnabled)
             {
                 Note("Replying is off. Turn on \"Allow replying to agents\" in Settings.");
-                return;
+                return ChatSendOutcome.Failed;
             }
 
             if (_members.Count == 0)
             {
                 Note("Nobody is in this channel right now.");
-                return;
+                return ChatSendOutcome.Failed;
             }
-
-            // Yours, before anything is attempted, because the interface says
-            // SendAsync raises TurnAdded for the user's own turn — so exactly one
-            // thing owns the transcript and a send that fails leaves the message
-            // on screen with the reason underneath it instead of a ghost.
-            AddLocal(new ChatTurn
-            {
-                Role = ChatRole.User, Text = text, IsComplete = true, Mine = true
-            });
 
             var index = PickCarrier(_members
                 .Select(m => (m.Chat.Delivery is not null, LastSpoke(m.Chat), m.Chat.GatewayKey))
@@ -917,7 +925,7 @@ namespace ClaudeBuddy
             if (index < 0)
             {
                 Note(OpenClawSessions.NoAddressInRoom(DisplayName));
-                return;
+                return ChatSendOutcome.Failed;
             }
 
             var carrier = _members[index];
@@ -925,29 +933,32 @@ namespace ClaudeBuddy
             var failure = await OpenClawSessions.SendToRoomAsync(
                 carrier.Chat, DisplayName, carrier.Agent, text, CancellationToken.None);
 
-            if (failure is not null) Note(failure);
+            if (failure is not null)
+            {
+                Note(failure);
+                return ChatSendOutcome.Failed;
+            }
+
+            return ChatSendOutcome.Sent;
         }
 
         private void Note(string text)
         {
-            // The same sentence twice in a row says nothing the first one did
-            // not. Three attempts with replying switched off used to leave three
-            // identical notes stacked up, which reads as three different
-            // problems and is one.
+            // CB-35 removed a dedupe check that used to live here: three
+            // attempts with replying switched off left three identical
+            // notes stacked with nothing between them, which read as three
+            // separate problems and was one, so a repeat with no message
+            // above it was suppressed.
             //
-            // Against the tail of this room's own list, not against the whole of
-            // it. A note that has your message between it and the last identical
-            // one is a note about *that* message, and repeating it there is
-            // correct — the failure happened again, to something new. What is
-            // worth suppressing is only the note with nothing at all between it
-            // and its twin, which is the shape the two early returns produce
-            // because they write a note without a message above it.
-            if (_local.Count > 0
-                && _local[^1] is { Role: ChatRole.System } last
-                && last.Text == text)
-            {
-                return;
-            }
+            // That shape can no longer occur. SendAsync now adds the user's
+            // own turn before every refusal it can produce — see its own
+            // comment on why, which is the transcript-consistency half of
+            // CB-35 — so a note is never written without a fresh message
+            // immediately above it, and "the last thing in this room's own
+            // list is an identical System turn" was the entire condition
+            // this check tested for. Removed rather than left dead: a check
+            // that can never fire reads as protecting something, and nothing
+            // here needs protecting any more.
 
             AddLocal(new ChatTurn { Role = ChatRole.System, IsComplete = true, Text = text });
         }

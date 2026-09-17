@@ -146,18 +146,8 @@ namespace ClaudeBuddy
         public event Action<ChatTurn>? TurnUpdated;
         public event Action<RemoteChatState>? StateChanged;
 
-        public async Task SendAsync(string text)
+        public async Task<ChatSendOutcome> SendAsync(string text)
         {
-            if (!ClaudeBuddySettings.OpenClawReplyEnabled)
-            {
-                // A System turn rather than an exception: the person has just
-                // typed a sentence, and losing it behind a dialog would be a
-                // poor answer to "why didn't that send".
-                Note("Replying is off. Turn on \"Allow replying to agents\" in Settings — "
-                   + "it asks the gateway for permission to write, which you approve there.");
-                return;
-            }
-
             // The user's own turn is added here rather than by the panel, so one
             // thing owns the transcript and a send that fails leaves a message
             // on screen with an explanation under it rather than a ghost.
@@ -165,14 +155,43 @@ namespace ClaudeBuddy
             // app whose author is not in doubt, and marking it keeps it matching
             // the copy that comes back from the gateway a moment later — which
             // is what lets a room dedupe the two instead of drawing both.
+            //
+            // CB-35: added before the replying-off check below, not after. It
+            // used to be after — reachable only once replying was already
+            // known to be on — so a session with replying off showed nothing
+            // at all for a send: no message, no note, just a cleared
+            // composer, which was indistinguishable from the app silently
+            // eating a keystroke. OpenClawRoomChatSession's no-address path
+            // always added the message first, and the two disagreeing about
+            // something neither transport actually decides — where the
+            // user's own words go — was the shape CB-35 asks to fix. Now both
+            // read the same: your message is on screen, and the note under it
+            // says why nothing happened, exactly like a room whose channel
+            // has nobody to carry a message to.
             var mine = new ChatTurn
             {
                 Role = ChatRole.User, Text = text, IsComplete = true, Mine = true
             };
             Add(mine);
 
+            if (!ClaudeBuddySettings.OpenClawReplyEnabled)
+            {
+                // A System turn rather than an exception: the person has just
+                // typed a sentence, and losing it behind a dialog would be a
+                // poor answer to "why didn't that send".
+                Note("Replying is off. Turn on \"Allow replying to agents\" in Settings — "
+                   + "it asks the gateway for permission to write, which you approve there.");
+                return ChatSendOutcome.Failed;
+            }
+
             var failure = await SendOrFailureAsync(text);
-            if (failure is not null) Note("Couldn't send: " + failure);
+            if (failure is not null)
+            {
+                Note("Couldn't send: " + failure);
+                return ChatSendOutcome.Failed;
+            }
+
+            return ChatSendOutcome.Sent;
         }
 
         // The request, and the catch around it, moved behind a method that

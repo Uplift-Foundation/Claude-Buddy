@@ -252,7 +252,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
 
         var session = await OpenAsync();
 
-        await session.SendAsync("/color green");
+        var outcome = await session.SendAsync("/color green");
 
         var typed = Assert.Single(_typed);
         Assert.Equal(Name, typed.Name);
@@ -262,6 +262,11 @@ public class RemoteMirrorChatSessionTests : IDisposable
         Assert.Equal(
             new[] { "a", "/color green" },
             Turns(session).Where(t => t.Role == ChatRole.User).Select(t => t.Text));
+
+        // CB-35: a typed send with no error back from the far machine is the
+        // one path that reports Sent — everything else in this file is a
+        // reason the text never reached anywhere.
+        Assert.Equal(ChatSendOutcome.Sent, outcome);
     }
 
     // The far transcript will produce the message back, because it went in
@@ -316,7 +321,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
         _replyEnabled = false;
 
         var session = await OpenAsync();
-        await session.SendAsync("hello");
+        var outcome = await session.SendAsync("hello");
 
         Assert.Empty(_typed);
 
@@ -324,6 +329,8 @@ public class RemoteMirrorChatSessionTests : IDisposable
         Assert.Equal(ChatRole.System, last.Role);
         Assert.Contains("switched off", last.Text);
         Assert.Contains("over there", last.Text);
+
+        Assert.Equal(ChatSendOutcome.Failed, outcome);
     }
 
     // --- CB-52: a relay waiting on a prompt nobody will answer -----------------
@@ -513,7 +520,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
         var session = await OpenAsync();
         var before = session.History.Count;
 
-        await session.SendAsync("are you there?");
+        var outcome = await session.SendAsync("are you there?");
 
         var added = session.History.Skip(before).ToList();
 
@@ -526,6 +533,8 @@ public class RemoteMirrorChatSessionTests : IDisposable
         // reason never crosses the wire — a code is all that does.
         Assert.Contains(added, t => t.Role == ChatRole.System
             && t.Text.Contains(TerminalTyping.CantTypePhrase, StringComparison.Ordinal));
+
+        Assert.Equal(ChatSendOutcome.Failed, outcome);
     }
 
     [AvaloniaFact]
@@ -560,7 +569,7 @@ public class RemoteMirrorChatSessionTests : IDisposable
         Wire("a", "b");
         var session = await OpenAsync();
 
-        await session.SendAsync("still there?");
+        var outcome = await session.SendAsync("still there?");
 
         Assert.Equal("still there?", Assert.Single(_delivered).Text);
         Assert.Empty(_typed);
@@ -573,6 +582,11 @@ public class RemoteMirrorChatSessionTests : IDisposable
         // the row, Echoes settles it exactly as it already does for a typed
         // send.
         Assert.Contains(session.History, t => t.Role == ChatRole.User && t.Text == "still there?");
+
+        // CB-35: a hand-off with no wire error is Sent, the same as a typed
+        // send — the socket took the bytes, which is as much as either path
+        // ever knows at send time.
+        Assert.Equal(ChatSendOutcome.Sent, outcome);
     }
 
     // The mirrored transcript settling the pending turn once the far session's
@@ -636,10 +650,12 @@ public class RemoteMirrorChatSessionTests : IDisposable
         Wire("a", "b");
         var session = await OpenAsync();
 
-        await session.SendAsync("hello?");
+        var outcome = await session.SendAsync("hello?");
 
         Assert.Contains(session.History,
             t => t.Role == ChatRole.System && t.Text.Contains("the job may have stopped"));
+
+        Assert.Equal(ChatSendOutcome.Failed, outcome);
     }
 
     [AvaloniaFact]
@@ -652,10 +668,12 @@ public class RemoteMirrorChatSessionTests : IDisposable
         Wire("a", "b");
         var session = await OpenAsync();
 
-        await session.SendAsync("hello?");
+        var outcome = await session.SendAsync("hello?");
 
         Assert.Contains(session.History,
             t => t.Role == ChatRole.System && t.Text.Contains("nothing was sent"));
+
+        Assert.Equal(ChatSendOutcome.Failed, outcome);
     }
 
     // --- keeping up ---------------------------------------------------------------
@@ -851,9 +869,10 @@ public class RemoteMirrorChatSessionTests : IDisposable
         _agents.Clear();
         _sessions.Clear();
 
-        await session.SendAsync("hello");
+        var outcome = await session.SendAsync("hello");
 
         Assert.Contains("no longer has a session", session.History[^1].Text);
+        Assert.Equal(ChatSendOutcome.Failed, outcome);
     }
 
     [AvaloniaFact]
@@ -866,10 +885,11 @@ public class RemoteMirrorChatSessionTests : IDisposable
         // rather than typed in a form the person did not write.
         _mangleInput = true;
 
-        await session.SendAsync("hello");
+        var outcome = await session.SendAsync("hello");
 
         Assert.Empty(_typed);
         Assert.Contains("didn't survive the trip", session.History[^1].Text);
+        Assert.Equal(ChatSendOutcome.Failed, outcome);
     }
 
     // The relay going away mid-conversation is invisible from the panel —
@@ -1123,11 +1143,12 @@ public class RemoteMirrorChatSessionTests : IDisposable
 
         RemoteControlSessions.UseMirrorClientForTests(Account, null);
 
-        await session.SendAsync("still there?");
+        var outcome = await session.SendAsync("still there?");
         Dispatcher.UIThread.RunJobs();
 
         Assert.Contains(session.History,
             t => t.Role == ChatRole.System && t.Text.Contains("relay session isn't running"));
+        Assert.Equal(ChatSendOutcome.Failed, outcome);
     }
 
     // And the typed message stays on screen above that note rather than being

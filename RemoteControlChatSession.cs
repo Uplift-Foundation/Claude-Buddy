@@ -549,7 +549,7 @@ namespace ClaudeBuddy
         // control off and checks that the typed turn stays on screen with the
         // refusal underneath. Those assertions run; they are simply not counted.
         [ExcludeFromCodeCoverage]
-        public async Task SendAsync(string text)
+        public async Task<ChatSendOutcome> SendAsync(string text)
         {
             // The user's own turn is added here rather than by the panel, so one
             // thing owns the transcript and a send that fails leaves the message
@@ -561,13 +561,12 @@ namespace ClaudeBuddy
             if (!ClaudeBuddySettings.PeerLinkEnabled)
             {
                 Note(RemoteControlOffNote);
-                return;
+                return ChatSendOutcome.Failed;
             }
 
             if (_mirroring)
             {
-                await SendTypedAsync(mine, text).ConfigureAwait(true);
-                return;
+                return await SendTypedAsync(mine, text).ConfigureAwait(true);
             }
 
             // **No live view means no way to send, and that is a real loss
@@ -581,6 +580,7 @@ namespace ClaudeBuddy
             // vanishes with no explanation is the failure this panel has spent
             // six tickets learning not to produce.
             Note(NoWayToSendNote(_remoteName));
+            return ChatSendOutcome.Failed;
         }
 
         // Said when there is a session on screen and no way to reach it.
@@ -604,13 +604,13 @@ namespace ClaudeBuddy
         // it went in through the input line — which is exactly what makes slash
         // commands work, and why the echo has to be reconciled rather than shown
         // twice.
-        private async Task SendTypedAsync(ChatTurn mine, string text)
+        private async Task<ChatSendOutcome> SendTypedAsync(ChatTurn mine, string text)
         {
             var client = RemoteControlSessions.MirrorClientFor(_account);
             if (client is null)
             {
                 Note("The relay session isn't running. Try again to start it back up.");
-                return;
+                return ChatSendOutcome.Failed;
             }
 
             // Marked pending after Add, never before: Add runs every turn
@@ -636,7 +636,7 @@ namespace ClaudeBuddy
                 if (string.Equals(outcome.Via, MirrorProtocol.ViaMessage, StringComparison.Ordinal))
                     Note(DeliveredRemotelyNote(_remoteName, outcome.AgentStatus));
 
-                return;
+                return ChatSendOutcome.Sent;
             }
 
             // No terminal to type into is a missing mechanism, not a refusal, and
@@ -660,6 +660,7 @@ namespace ClaudeBuddy
             _pending = null;
 
             Note(TypingRefusal(outcome.Error, _remoteName));
+            return ChatSendOutcome.Failed;
         }
 
         // What the panel says when a message was handed to a background

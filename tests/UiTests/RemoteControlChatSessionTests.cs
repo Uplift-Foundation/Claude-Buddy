@@ -109,7 +109,7 @@ public class RemoteControlChatSessionTests
         // persist through ReloadForTests, since the setter writes the file.
         ClaudeBuddySettings.PeerLinkEnabled = false;
 
-        await session.SendAsync("run the tests");
+        var outcome = await session.SendAsync("run the tests");
 
         var said = Said(session);
         Assert.Equal(2, said.Count);
@@ -119,6 +119,39 @@ public class RemoteControlChatSessionTests
 
         Assert.Equal(ChatRole.System, said[1].Role);
         Assert.Contains("switched off", said[1].Text);
+
+        Assert.Equal(ChatSendOutcome.Failed, outcome);
+    }
+
+    // CB-35: replying is allowed, but this session never became a live view
+    // (no roster wiring in this test, so TryUpgrade has nothing to upgrade
+    // to) — the one refusal that is neither "the setting is off" nor
+    // anything a live view's own typing can fail with. NoWayToSendNote is
+    // what a direct link says once the relay fallback that used to answer
+    // this is gone: there is no terminal to type into and no messaging
+    // channel behind a conversation that was never confirmed live.
+    [AvaloniaFact]
+    public async Task WithNoLiveViewSendingSaysThereIsNothingToTypeInto()
+    {
+        var before = ClaudeBuddySettings.PeerLinkEnabled;
+        try
+        {
+            ClaudeBuddySettings.ReloadForTests();
+            ClaudeBuddySettings.PeerLinkEnabled = true;
+
+            var session = NewSession();
+            Assert.False(session.IsMirroring);
+
+            var outcome = await session.SendAsync("are you there?");
+
+            Assert.Contains(Said(session),
+                t => t.Role == ChatRole.System && t.Text.Contains("nothing to type into"));
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
+        }
+        finally
+        {
+            ClaudeBuddySettings.PeerLinkEnabled = before;
+        }
     }
 
     // The panel opens with one line explaining what it is, so an empty remote

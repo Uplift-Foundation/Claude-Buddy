@@ -1087,6 +1087,13 @@ namespace ClaudeBuddy.Tests
         // else said in the room. Which member carries it is therefore not a
         // routing decision at all — only a question of whose transcript the send
         // sits in.
+        // CB-35: the user's own message goes on first, then the note — the
+        // same shape the no-address refusal below always had. This test used
+        // to assert the note was the *only* thing added; that disagreed with
+        // the no-address case about where the user's own words go for what is
+        // otherwise the same kind of failure, which CB-35 asks to fix by
+        // aligning this path (and the no-members one below) to the
+        // no-address shape rather than the other way round.
         [Fact]
         public async Task WithReplyingOffTheMessageIsRefusedInTheRoom()
         {
@@ -1098,11 +1105,25 @@ namespace ClaudeBuddy.Tests
             var room = Room((nova, "Nova", "#ff0000"));
             var before = room.History.Count;
 
-            await room.SendAsync("anyone about?");
+            var outcome = await room.SendAsync("anyone about?");
 
-            var note = Assert.Single(room.History.Skip(before));
-            Assert.Equal(ChatRole.System, note.Role);
-            Assert.Contains("Replying is off", note.Text);
+            var added = room.History.Skip(before).ToList();
+            Assert.Collection(added,
+                mine =>
+                {
+                    Assert.Equal(ChatRole.User, mine.Role);
+                    Assert.Equal("anyone about?", mine.Text);
+                },
+                note =>
+                {
+                    Assert.Equal(ChatRole.System, note.Role);
+                    Assert.Contains("Replying is off", note.Text);
+                });
+
+            // CB-35: the return value is what lets ChatPanel.Send() retain the
+            // typed text in the composer — the note above is only ever a
+            // record of the attempt, not a signal a caller can act on.
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
 
         // A channel every agent has gone quiet in has nobody to send through.
@@ -1116,11 +1137,23 @@ namespace ClaudeBuddy.Tests
 
             var room = new OpenClawRoomChatSession("openclaw:room:discord:1", "#general");
 
-            await room.SendAsync("anyone about?");
+            var outcome = await room.SendAsync("anyone about?");
 
-            var note = Assert.Single(room.History);
-            Assert.Equal(ChatRole.System, note.Role);
-            Assert.Contains("Nobody is in this channel", note.Text);
+            // CB-35: same reordering as the replying-off case above — the
+            // message goes on before the note explaining why nobody heard it.
+            Assert.Collection(room.History,
+                mine =>
+                {
+                    Assert.Equal(ChatRole.User, mine.Role);
+                    Assert.Equal("anyone about?", mine.Text);
+                },
+                note =>
+                {
+                    Assert.Equal(ChatRole.System, note.Role);
+                    Assert.Contains("Nobody is in this channel", note.Text);
+                });
+
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
 
         // --- picking the carrier ---
@@ -1432,7 +1465,7 @@ namespace ClaudeBuddy.Tests
 
             var room = Room((quill, "Quill", "#ff0000"), (aster, "Aster", "#00ff00"));
 
-            await room.SendAsync("anyone about?");
+            var outcome = await room.SendAsync("anyone about?");
 
             Assert.Contains(room.History, t =>
                 t.Role == ChatRole.System
@@ -1441,6 +1474,8 @@ namespace ClaudeBuddy.Tests
             // Nothing reached either member: no transcript, no send.
             Assert.Empty(quill.History);
             Assert.Empty(aster.History);
+
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
 
         // A member that *can* post, with no gateway to post through. A different
@@ -1457,11 +1492,13 @@ namespace ClaudeBuddy.Tests
 
             var room = Room((quill, "Quill", "#ff0000"));
 
-            await room.SendAsync("anyone about?");
+            var outcome = await room.SendAsync("anyone about?");
 
             var note = Assert.Single(room.History, t => t.Role == ChatRole.System);
             Assert.StartsWith("Couldn't post to #general:", note.Text);
             Assert.Contains("Nothing was sent", note.Text);
+
+            Assert.Equal(ChatSendOutcome.Failed, outcome);
         }
 
         // A note has to survive the next rebuild, and until now none did.
@@ -1612,11 +1649,17 @@ namespace ClaudeBuddy.Tests
             Assert.Contains(room.History, t => t.Mine);
         }
 
-        // The same sentence twice in a row says nothing the first one did not.
-        // Three attempts with replying off used to leave three identical notes
-        // stacked, which reads as three separate problems and is one.
+        // CB-35 removed the dedupe this test used to name
+        // ("TheSameNoteTwiceRunningIsSaidOnce"): SendAsync now adds the
+        // user's own message before every refusal it produces (see its own
+        // comment), so a repeated identical note is never adjacent to its
+        // twin any more — there is always a fresh message between them, the
+        // same as there always was for the no-address refusal. Three
+        // attempts with replying off now read as three attempts, each with
+        // its own message and its own explanation, which is the behaviour
+        // CB-35 asks this path to match the others in.
         [Fact]
-        public async Task TheSameNoteTwiceRunningIsSaidOnce()
+        public async Task EachRefusedAttemptKeepsItsOwnMessageAndNote()
         {
             ClaudeBuddySettings.ReloadForTests();
             ClaudeBuddySettings.OpenClawReplyEnabled = false;
@@ -1629,7 +1672,11 @@ namespace ClaudeBuddy.Tests
             await room.SendAsync("second try");
             await room.SendAsync("third try");
 
-            Assert.Single(room.History, t => t.Role == ChatRole.System);
+            Assert.Equal(3, room.History.Count(t => t.Role == ChatRole.System));
+            Assert.Equal(3, room.History.Count(t => t.Role == ChatRole.User));
+            Assert.Equal(
+                new[] { "first try", "second try", "third try" },
+                room.History.Where(t => t.Role == ChatRole.User).Select(t => t.Text));
         }
 
         // ...but a note with your own message between it and the last identical
