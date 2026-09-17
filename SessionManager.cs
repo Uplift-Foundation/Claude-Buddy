@@ -2061,6 +2061,25 @@ namespace ClaudeBuddy
                 // keeps the fork itself, listed by the daemon as a live job,
                 // from reading its own inherited marker).
                 //
+                // CB-22: read that gate for what it actually admits, not for
+                // "husks". NotAJob or Unknown passes it, and on a machine with
+                // nothing background-ish running — no `worthAsking` case above
+                // — every ClaudeCode session reads Unknown, so every live
+                // session with a transcript path pays this stat every scan,
+                // ordinary terminal sessions included, not only a genuine
+                // husk. That is CB-20's own doing (the gate used to require a
+                // daemon-confirmed job), reasoned at the time to be
+                // sub-millisecond and left unmeasured. HuskScanCostTests now
+                // measures it: 15 live sessions with transcripts named, one of
+                // them mid-generation so its cached answer can never be
+                // reused, scanned 300 times on the Mac this was written on —
+                // 1.12-1.16ms/scan against 0.75-0.82ms/scan for the same
+                // fifteen with no transcript path at all, so roughly
+                // 0.34-0.37ms/scan is this check, comfortably inside the
+                // two-second poll interval. Left ungated rather than
+                // restricted to a narrower status-file state, on the strength
+                // of that number rather than the original estimate.
+                //
                 // Two sources, asked cheapest-and-surest first. SessionPark
                 // reads Claude Code's own session record, which names the job
                 // that took the conversation and is cleared when the window

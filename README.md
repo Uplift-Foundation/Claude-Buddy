@@ -2382,6 +2382,8 @@ outside the app (a launchd agent, an installer replacing the bundle) stopped it.
   than twice. A recycled pid reads as alive, which errs toward keeping an orb
   rather than dropping a live session's, and the timer still catches that unless
   the lifetime is Forever.
+
+  "The daemon does not vouch for" is every ClaudeCode session reading `NotAJob` or `Unknown`, and on a machine with nothing background-ish running that is every ordinary terminal session — the husk test runs, and pays its `FileInfo` stat, for all of them every scan, not only for a real husk. That widened from CB-20's own change and went unmeasured until CB-22's `HuskScanCostTests`: 15 live sessions with transcripts named, one mid-generation so its cached answer can never be reused, scanned 300 times — 1.12-1.16ms/scan, against 0.75-0.82ms/scan for the same fifteen with no transcript path at all, so roughly 0.34-0.37ms/scan is this check. Negligible against the two-second poll interval, so it stays ungated by status-file state rather than narrowed further.
 - **Stacking layout and staleness**: `SessionManager.cs` has the stacking
   math (`ReflowPositions()`, which steps over orbs the user has dragged —
   those live in `orbPositions` in `settings.json`, keyed by the session's
