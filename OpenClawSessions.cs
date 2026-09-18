@@ -1898,7 +1898,16 @@ namespace ClaudeBuddy
                             ms2 <= 0
                                 ? DateTimeOffset.Now
                                 : DateTimeOffset.FromUnixTimeMilliseconds(ms2).ToLocalTime(),
-                            null, null, false, bytes, ImageSourcePath: null));
+                            null, null, false, bytes, ImageSourcePath: null,
+
+                            // CB-98: only a real inline picture is a candidate
+                            // for the cross-arm dedup below — a url-carrying
+                            // block (the shape this gateway has never actually
+                            // sent, see the comment above) has no bytes to
+                            // compare against a mirror's, so it stays None
+                            // like every other turn this loop has no opinion
+                            // on.
+                            Arm: bytes is { Length: > 0 } ? MediaSourceArm.Inline : MediaSourceArm.None));
                     }
                 }
 
@@ -2017,7 +2026,16 @@ namespace ClaudeBuddy
                         // it delivered something — a delivery-mirror is never
                         // a guess about what an agent's prose might mean, so a
                         // failed fetch behind it is always worth explaining.
-                        Confidence: MediaConfidence.High));
+                        Confidence: MediaConfidence.High,
+
+                        // CB-98: every delivery-mirror turn is a candidate for
+                        // the cross-arm dedup below, regardless of whether
+                        // this page happens to carry an inline block too —
+                        // FetchHistoryPageAsync is the one that decides
+                        // whether it is worth fetching this turn's bytes to
+                        // check, and it only does that when an Inline-arm
+                        // turn is actually present on the same page.
+                        Arm: MediaSourceArm.Mirror));
                     continue;
                 }
 
@@ -2248,6 +2266,70 @@ namespace ClaudeBuddy
             // and no drawable picture — an empty bubble — while making the guard
             // itself unexecutable.
             return bytes.Length == 0 ? null : bytes;
+        }
+
+        // CB-98's cross-arm case, second instance: a picture that reaches one
+        // page of history through *both* an agent's own inline image block
+        // and the gateway's separate delivery-mirror record of having
+        // delivered the same file. TurnsFromHistory already collapses the
+        // sibling case — a named MEDIA: path plus its mirror — because both
+        // arms resolve to the identical *path* and the merge can key on that.
+        // An inline block has no path at all (CB-91: bare base64, no filename
+        // anywhere in the block), so there is nothing to key that merge on
+        // inside TurnsFromHistory, and the two turns stayed unmerged there.
+        //
+        // What the two arms *can* share, once both are fetched, is identical
+        // bytes. Measured over 42 real delivery-mirror records: 7 were this
+        // exact cross-arm duplicate, and 5 were two genuine, separate
+        // mirror-only deliveries of a same-named file — both patterns fetch
+        // to byte-identical content, so bytes alone cannot tell them apart.
+        // That was tried and rejected while this ticket was worked. Pairing
+        // bytes *only* across two different arms is what makes the signal
+        // safe: two mirror turns are never compared against each other here,
+        // because this method only ever looks for a mirror's bytes among the
+        // Inline-arm turns, never among the Mirror-arm ones.
+        //
+        // Pure and synchronous on purpose, taking already-fetched bytes
+        // rather than fetching anything itself — an inline block's bytes are
+        // free (HistoryTurn.ImageBytes already holds them, set at parse
+        // time), but a mirror's bytes are not: they live behind a network
+        // fetch, so the caller (FetchHistoryPageAsync) is the one that
+        // decides whether that fetch is worth making at all, and only makes
+        // it when this page actually carries an Inline-arm turn to compare
+        // against. This method's job is only the comparison, which is why it
+        // is cheap to give a fixture of plain byte arrays and never needs a
+        // gateway to test.
+        //
+        // Returns the *mirror* turn's own index for each duplicate found —
+        // never the inline one's — because the mirror copy is the one this
+        // drops, matching CB-98's original choice for the named-path case:
+        // the inline turn is the richer bubble (it already has its picture,
+        // with no fetch that can fail) and the mirror's whole content is a
+        // bare filename that bubble already implies.
+        internal static IReadOnlyList<int> CrossArmDuplicateMirrorIndices(
+            IReadOnlyList<HistoryTurn> turns, IReadOnlyDictionary<int, byte[]> mirrorBytesByIndex)
+        {
+            var inlineBytes = new List<byte[]>();
+            for (var i = 0; i < turns.Count; i++)
+            {
+                if (turns[i].Arm == MediaSourceArm.Inline && turns[i].ImageBytes is { Length: > 0 } b)
+                    inlineBytes.Add(b);
+            }
+
+            if (inlineBytes.Count == 0) return Array.Empty<int>();
+
+            var doomed = new List<int>();
+            foreach (var (index, fetched) in mirrorBytesByIndex)
+            {
+                if (index < 0 || index >= turns.Count) continue;
+                if (turns[index].Arm != MediaSourceArm.Mirror) continue;
+                if (fetched is not { Length: > 0 }) continue;
+
+                if (inlineBytes.Any(b => b.AsSpan().SequenceEqual(fetched)))
+                    doomed.Add(index);
+            }
+
+            return doomed;
         }
 
         // Which of a freshly-fetched page's turns is the picture a live reply
@@ -3412,6 +3494,49 @@ namespace ClaudeBuddy
                         // only until something else in this area moved.
                         Confidence = MediaConfidence.High
                     };
+                }
+
+                // CB-98's cross-arm case, second instance: an inline image
+                // block and a delivery-mirror record on the same page can
+                // describe one delivery seen twice — see
+                // CrossArmDuplicateMirrorIndices for the full reasoning and
+                // why the comparison lives here rather than inside the pure
+                // parser.
+                //
+                // Gated on an Inline-arm turn actually being present, checked
+                // before fetching anything: the overwhelming majority of
+                // pages carry no inline block at all (CB-91's real traffic is
+                // almost entirely the delivery-mirror and named-path arms),
+                // and fetching every delivery-mirror turn's bytes on every
+                // page just to find nothing to compare them against would be
+                // a real network cost paid on every scroll for no benefit.
+                // FetchMediaAsync's own cache means a mirror turn fetched here
+                // is not fetched again when the panel goes on to draw it.
+                if (turns.Any(t => t.Arm == MediaSourceArm.Inline))
+                {
+                    var mirrorBytesByIndex = new Dictionary<int, byte[]>();
+                    for (var i = 0; i < turns.Count; i++)
+                    {
+                        if (turns[i].Arm != MediaSourceArm.Mirror
+                            || string.IsNullOrEmpty(turns[i].ImageUrl))
+                        {
+                            continue;
+                        }
+
+                        var fetched = await FetchMediaAsync(turns[i].ImageUrl!, ct);
+                        if (fetched is { Length: > 0 }) mirrorBytesByIndex[i] = fetched;
+                    }
+
+                    var doomed = CrossArmDuplicateMirrorIndices(turns, mirrorBytesByIndex);
+                    if (doomed.Count > 0)
+                    {
+                        // Highest index first, same reason TurnsFromHistory's
+                        // own removal loop does: dropping a low index first
+                        // would shift every later index out from under the
+                        // ones still queued for removal.
+                        foreach (var index in doomed.OrderByDescending(x => x))
+                            turns.RemoveAt(index);
+                    }
                 }
 
                 // The message count, not the turn count: it is what the next

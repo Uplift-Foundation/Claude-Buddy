@@ -84,7 +84,41 @@ namespace ClaudeBuddy
         // text. Defaults High so an arm with no opinion — an inline image
         // block, a turn built outside this parser — keeps today's behaviour:
         // a failure explains itself unless something here says not to.
-        MediaConfidence Confidence = MediaConfidence.High);
+        MediaConfidence Confidence = MediaConfidence.High,
+
+        // CB-98's cross-arm case, second instance: which of TurnsFromHistory's
+        // picture-drawing arms produced this turn. The named-path arm already
+        // has its own collapse against a delivery-mirror, keyed on the two
+        // arms resolving to the identical *path* -- see the merge at the end
+        // of TurnsFromHistory. An inline image block carries no path at all
+        // (CB-91: bare base64, no filename anywhere in the block), so it has
+        // nothing to key that merge on, and stayed unmerged.
+        //
+        // What the two arms *can* share, once both are fetched, is identical
+        // bytes -- but bytes alone proved to be the wrong signal the first
+        // time this ticket was worked: two genuinely separate mirror
+        // deliveries of the same file are just as byte-identical as one
+        // delivery seen twice, and collapsing on bytes alone would silently
+        // eat the second, real one (see TwoMirrorsOfOneFileStayTwoTurns).
+        // Arm is what tells them apart -- pairing bytes only across two
+        // *different* arms is safe precisely because a mirror is never
+        // compared against another mirror.
+        //
+        // Set here, at parse time, by the two arms that can produce a
+        // cross-arm duplicate; left at the default for every other turn. Read
+        // later by OpenClawSessions.CrossArmDuplicateMirrorIndices, once the
+        // mirror side's bytes exist to compare -- see that method's header
+        // for why the comparison cannot happen inside this pure parser.
+        MediaSourceArm Arm = MediaSourceArm.None);
+
+    // See HistoryTurn.Arm. Internal and small on purpose: this exists only to
+    // let the post-parse dedup pass in OpenClawSessions tell an inline image
+    // block from a delivery-mirror record apart, not to describe every way a
+    // turn can carry a picture -- the named-path arm does not need a value
+    // here, because its own collapse already keys on the resolved path rather
+    // than on bytes, and giving it one anyway would be a distinction nothing
+    // reads.
+    internal enum MediaSourceArm { None, Inline, Mirror }
 
     // One OpenClaw session, as something the chat panel can talk to.
     //
