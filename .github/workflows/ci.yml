@@ -108,6 +108,36 @@ jobs:
       # a deliberate edit when the real total moves meaningfully, never to
       # make a red run pass.
       #
+      # CB-84: reproduced the "one test fewer" symptom directly — 6 short
+      # runs out of 30 on osx-arm64, `dotnet test` exiting 0 every time. Every
+      # one carried the same assembly error, and it is a *different* shape
+      # from CB-119's EnsureIsolatedApplication cleanup case above: this one
+      # throws during the next test's SETUP, not the previous test's
+      # teardown — `Dispatcher.VerifyAccess` throwing "The calling thread
+      # cannot access this object because a different thread owns it." out of
+      # `Avalonia.Rendering.DefaultRenderLoop.Add`, called while
+      # `HeadlessUnitTestSession.EnsureIsolatedApplication()` builds the next
+      # isolated test's Compositor. xUnit v3 files it the same way CB-119
+      # describes — an assembly error that replaces a test's own result — so
+      # this guard already covers it without any change; the point of this
+      # paragraph is only to save the next person from re-diagnosing it from
+      # scratch. The victim test name is not fixed: across those 6 hits it
+      # was AccountOrbsTests, RemoteMirrorChatSessionTests and
+      # SettingsWindowCoverageTests, in different runs — which is what says
+      # this is a scheduling race in Avalonia's own per-test isolation, not a
+      # defect in any one test. Tried bumping Avalonia/Avalonia.Headless/
+      # Avalonia.Headless.XUnit/Avalonia.Themes.Fluent 12.1.1 -> 12.1.2 on the
+      # theory that "Core – Fix dispatcher frame capturing wrong dispatcher"
+      # (AvaloniaUI/Avalonia#22086) was this bug; it was not — the identical
+      # stack trace reproduced on 12.1.2 as well (5th of 12 runs), so the bump
+      # was reverted rather than landed as an unverified fix. No seam exists
+      # at the application or test level to force the previous isolated
+      # scope's render-loop thread to finish before the next one's setup
+      # runs — `HeadlessUnitTestSession` and `DefaultRenderLoop` are sealed
+      # Avalonia.Headless types with no extensibility point for it — so this
+      # guard, not a code fix, is the correct mitigation until upstream
+      # Avalonia addresses it.
+      #
       # All filename options use space-separated `--flag value`, not
       # `--flag=value`: the MTP CLI parser mis-consumes arguments when two or
       # more `--report-*-filename=...` options appear together in the `=`
