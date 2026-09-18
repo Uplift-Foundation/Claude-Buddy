@@ -129,8 +129,9 @@ jobs:
       # Avalonia.Headless.XUnit/Avalonia.Themes.Fluent 12.1.1 -> 12.1.2 on the
       # theory that "Core – Fix dispatcher frame capturing wrong dispatcher"
       # (AvaloniaUI/Avalonia#22086) was this bug; it was not — the identical
-      # stack trace reproduced on 12.1.2 as well (5th of 12 runs), so the bump
-      # was reverted rather than landed as an unverified fix. No seam exists
+      # stack trace reproduced on 12.1.2 too, twice in a 12-run batch (runs 5
+      # and 7, no improvement over the 12.1.1 rate), so the bump was reverted
+      # rather than landed as an unverified fix. No seam exists
       # at the application or test level to force the previous isolated
       # scope's render-loop thread to finish before the next one's setup
       # runs — `HeadlessUnitTestSession` and `DefaultRenderLoop` are sealed
