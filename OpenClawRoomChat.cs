@@ -132,6 +132,35 @@ namespace ClaudeBuddy
             ? "Message the channel…"
             : "Replying is off";
 
+        // How many panels are open on this room — CB-92.
+        //
+        // A room owns no transcript of its own worth measuring: `_history` is a
+        // merge of its members', rebuilt from them, so what it costs is what
+        // they cost. What it does own is the answer to "is anybody looking at
+        // this member", which for a member of an open room is yes even though
+        // no panel is bound to that member directly. So the count is forwarded
+        // rather than accounted for: an open room holds its members resident,
+        // and closing it lets them start ageing.
+        private int _panels;
+
+        internal void PanelOpened()
+        {
+            _panels++;
+            if (_panels != 1) return;
+
+            foreach (var member in _members) member.Chat.PanelOpened();
+        }
+
+        internal void PanelClosed()
+        {
+            if (_panels == 0) return;
+
+            _panels--;
+            if (_panels != 0) return;
+
+            foreach (var member in _members) member.Chat.PanelClosed();
+        }
+
         // Called on every scan, because who is in a room changes: an agent that
         // has not spoken lately drops out of the session list, and one that
         // joins has to start being listened to.
@@ -148,19 +177,51 @@ namespace ClaudeBuddy
                 for (var i = 0; i < _members.Count; i++)
                 {
                     var match = members.FirstOrDefault(m => m.Chat.GatewayKey == _members[i].Chat.GatewayKey);
-                    if (match.Chat is not null) _members[i] = new Member(match.Chat, match.Agent, match.Colour);
+                    if (match.Chat is null) continue;
+
+                    // The same key can now arrive on a *different* object:
+                    // CB-92 lets an idle conversation be dropped from
+                    // OpenClawSessions.Chats, and the next lookup builds a
+                    // fresh session for that key. Matching on the key alone and
+                    // swapping the record — which is all this did — would leave
+                    // the room subscribed to the instance nobody feeds any more
+                    // and unsubscribed from the one that now carries the
+                    // conversation, so the channel would quietly stop updating.
+                    // Nothing before eviction existed could produce that, which
+                    // is why the check was not needed until now.
+                    if (!ReferenceEquals(match.Chat, _members[i].Chat))
+                    {
+                        Unsubscribe(_members[i].Chat);
+                        if (_panels > 0) _members[i].Chat.PanelClosed();
+
+                        Subscribe(match.Chat);
+                        if (_panels > 0) match.Chat.PanelOpened();
+                    }
+
+                    _members[i] = new Member(match.Chat, match.Agent, match.Colour);
                 }
 
                 return;
             }
 
-            foreach (var member in _members) Unsubscribe(member.Chat);
+            foreach (var member in _members)
+            {
+                Unsubscribe(member.Chat);
+
+                // A member leaving a room this panel is open on is that
+                // member's panel closing, as far as residency is concerned —
+                // otherwise a session that dropped out of a channel would be
+                // held open by a room that no longer shows it.
+                if (_panels > 0) member.Chat.PanelClosed();
+            }
+
             _members.Clear();
 
             foreach (var (chat, agent, colour) in members)
             {
                 _members.Add(new Member(chat, agent, colour));
                 Subscribe(chat);
+                if (_panels > 0) chat.PanelOpened();
             }
 
             Rebuild();

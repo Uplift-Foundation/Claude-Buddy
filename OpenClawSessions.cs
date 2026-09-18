@@ -59,6 +59,11 @@ namespace ClaudeBuddy
         // clicked and kept afterwards so its transcript survives the panel being
         // dismissed and reopened. Only sessions someone has actually opened are
         // in here — a gateway with 59 sessions does not get 59 transcripts.
+        //
+        // "Kept afterwards" used to mean forever: until CB-92 there was no line
+        // anywhere that removed an entry, so every conversation ever opened was
+        // still resident — with every picture in it decoded — for the life of
+        // the process. SweepChats below is what lets one go again.
         private static readonly Dictionary<string, OpenClawChatSession> Chats =
             new(StringComparer.Ordinal);
 
@@ -655,6 +660,12 @@ namespace ClaudeBuddy
             if (!sessionId.StartsWith(Prefix, StringComparison.Ordinal)) return null;
 
             var key = sessionId[Prefix.Length..];
+
+            // Every conversation in this process came through here, so this is
+            // also where the ones nobody is looking at get let go of — CB-92.
+            // The one being asked for is held out: evicting it a line before
+            // rebuilding it would be correct and pointless.
+            SweepChats(DateTime.UtcNow, key);
 
             lock (Gate)
             {
@@ -3332,6 +3343,111 @@ namespace ClaudeBuddy
         internal static List<OpenClawChatSession> OpenChats()
         {
             lock (Gate) return Chats.Values.ToList();
+        }
+
+        // What one sweep actually did, for the caller that wants to know and
+        // for the tests that have to. Bytes rather than a count of chats: the
+        // whole point of CB-92 is that a conversation's cost is not its turn
+        // count, so a sweep reporting "released 3 chats" would be measuring the
+        // same wrong thing the rejected fix did.
+        internal readonly record struct SweepResult(
+            IReadOnlyList<string> Evicted, IReadOnlyList<string> Released, long FreedBytes);
+
+        // Let go of conversations nobody is looking at — CB-92.
+        //
+        // Called when a panel unbinds and again whenever one is opened, which
+        // between them cover every way a session gets made: a panel, a room
+        // merging its members, and the orb's own speak button asking for the
+        // last thing an agent said. None of those is a timer, deliberately —
+        // a background tick would have to reach a dispatcher and an idle app
+        // would spend it doing nothing, whereas both of these fire exactly when
+        // the set of conversations on screen has just changed.
+        //
+        // `exceptKey` is the conversation the caller is in the middle of
+        // resolving. Without it, opening a panel on a session that had been
+        // idle for longer than the grace would evict it and immediately rebuild
+        // it — correct, and a wasted round trip the user watches.
+        internal static SweepResult SweepChats(DateTime now, string? exceptKey = null) =>
+            SweepChats(now, exceptKey,
+                OpenClawChatMemory.DefaultBudgetBytes, OpenClawChatMemory.DefaultGrace);
+
+        // The bounds as arguments, so a test can say "no grace" or "no budget"
+        // instead of waiting two minutes or decoding thirty-two megabytes of
+        // fixture. The values themselves live on OpenClawChatMemory, next to
+        // the reasoning for them.
+        internal static SweepResult SweepChats(
+            DateTime now, string? exceptKey, long budgetBytes, TimeSpan grace)
+        {
+            lock (Gate)
+            {
+                var candidates = new List<OpenClawChatMemory.ChatResidency>();
+                foreach (var (key, chat) in Chats)
+                {
+                    if (exceptKey is not null && string.Equals(key, exceptKey, StringComparison.Ordinal))
+                        continue;
+
+                    candidates.Add(new OpenClawChatMemory.ChatResidency(
+                        key, chat.HasOpenPanel, chat.IdleSince, chat.ResidentImageBytes));
+                }
+
+                var plan = OpenClawChatMemory.Decide(candidates, now, budgetBytes, grace);
+
+                long freed = 0;
+
+                // Indexed rather than probed with TryGetValue, in both loops.
+                // The candidates were read out of this dictionary under this
+                // lock and the lock has not been let go of since, so a key the
+                // plan names is a key that is here — a defensive `continue`
+                // would be a branch no test could ever take, which is a worse
+                // thing to have than a throw that cannot fire.
+                foreach (var key in plan.Evict)
+                {
+                    var chat = Chats[key];
+
+                    // Released as well as dropped. The dictionary entry is not
+                    // the only thing that can be holding this transcript: a
+                    // room keeps its members' sessions by reference, and a
+                    // speak request has one in hand while it waits. Clearing
+                    // the pictures gives back the bytes whoever else is holding
+                    // it, which is the part that was actually running out.
+                    freed += chat.ReleaseImages();
+                    Chats.Remove(key);
+                }
+
+                foreach (var key in plan.Release) freed += Chats[key].ReleaseImages();
+
+                return new SweepResult(plan.Evict, plan.Release, freed);
+            }
+        }
+
+        // The panel telling us it has bound, or let go of, a conversation.
+        //
+        // Here rather than in ChatPanel so the panel does not have to know
+        // which of the two OpenClaw session shapes it is holding, nor that
+        // letting go is also when the sweep runs. Anything else — a local CLI
+        // session, a remote-control one — is simply not ours and falls through.
+        internal static void PanelOpened(IRemoteChatSession session)
+        {
+            switch (session)
+            {
+                case OpenClawChatSession chat: chat.PanelOpened(); break;
+                case OpenClawRoomChatSession room: room.PanelOpened(); break;
+                default: return;
+            }
+
+            SweepChats(DateTime.UtcNow, (session as OpenClawChatSession)?.GatewayKey);
+        }
+
+        internal static void PanelClosed(IRemoteChatSession session)
+        {
+            switch (session)
+            {
+                case OpenClawChatSession chat: chat.PanelClosed(); break;
+                case OpenClawRoomChatSession room: room.PanelClosed(); break;
+                default: return;
+            }
+
+            SweepChats(DateTime.UtcNow);
         }
 
         // The conversation as it already stands. Without this a panel opens
