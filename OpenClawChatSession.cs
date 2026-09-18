@@ -127,6 +127,65 @@ namespace ClaudeBuddy
         // keep session ids in one namespace.
         public string GatewayKey { get; }
 
+        // How many panels are bound to this conversation right now, and when
+        // the last one let go — CB-92. A count rather than a flag because a
+        // pinned panel and the transient can both be on the same session for a
+        // moment while one is being rebound to the other, and a flag would have
+        // the second close claim nobody is looking when somebody is.
+        private int _panels;
+
+        // Seeded at construction rather than left default so a session nobody
+        // ever opens — the orb's speak button makes one, and so does a room
+        // merging its members — ages on the same clock as one whose panel
+        // closed. The alternative, treating "never had a panel" as never idle,
+        // is precisely the case that accumulated silently.
+        internal DateTime IdleSince { get; private set; } = DateTime.UtcNow;
+
+        internal bool HasOpenPanel => _panels > 0;
+
+        internal void PanelOpened() => _panels++;
+
+        internal void PanelClosed()
+        {
+            if (_panels > 0) _panels--;
+            if (_panels == 0) IdleSince = DateTime.UtcNow;
+        }
+
+        // What this transcript's decoded pictures are costing.
+        internal long ResidentImageBytes => OpenClawChatMemory.ResidentBytes(_history);
+
+        // Give the pictures back, keep the words. Returns what was freed, which
+        // is what makes "this actually released memory" something a test can
+        // assert rather than something a comment claims.
+        //
+        // Safe to do behind a closed panel because the gateway is the source of
+        // truth for a transcript: opening this conversation again runs
+        // LoadHistoryAsync, which replaces the history wholesale through
+        // SetHistory, pictures and all. Nothing here is the only copy of
+        // anything — which is exactly why the bytes were worth holding onto
+        // until now and not a moment longer.
+        internal long ReleaseImages()
+        {
+            long freed = 0;
+
+            foreach (var turn in _history)
+            {
+                if (turn.ImageBytes is not { Length: > 0 } bytes) continue;
+
+                freed += bytes.Length;
+
+                // Through the property, so the setter's change notification
+                // fires. Inert for anything on screen — TurnView only listens
+                // for bytes *arriving* late (see its PropertyChanged handler),
+                // and a turn whose picture is already decoded keeps the Bitmap
+                // it drew — and this only ever runs for a session with no panel
+                // bound anyway.
+                turn.ImageBytes = null;
+            }
+
+            return freed;
+        }
+
         // Settable, because the name can improve after the session was created:
         // agents.list arrives moments after the connection does, so a panel
         // opened in that window would otherwise keep the raw id ("main") in its

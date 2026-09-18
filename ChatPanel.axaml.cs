@@ -589,6 +589,14 @@ namespace ClaudeBuddy
             // talking.
             _soleSpeaker.Name = null;
             _soleSpeaker.IsRoom = false;
+
+            // An OpenClaw conversation is now allowed to be let go of — CB-92.
+            // Nothing here disposes anything: this says that no window is
+            // showing this transcript any more, which is what starts the clock
+            // on giving its decoded pictures, and eventually the transcript
+            // itself, back. Last, so everything above still runs against a
+            // session this panel is provably finished with.
+            OpenClawSessions.PanelClosed(_session);
         }
 
         private void Bind(OrbWindow orb, IRemoteChatSession session)
@@ -603,6 +611,12 @@ namespace ClaudeBuddy
 
             _owner = orb;
             _session = session;
+
+            // Somebody is looking at this conversation, so it is not a
+            // candidate for release while the window is up — and binding is
+            // also the moment the set of open conversations changed, which is
+            // when the sweep for the others is worth running (CB-92).
+            OpenClawSessions.PanelOpened(session);
 
             // Set before RefreshSoleSpeaker/turn construction below, so every
             // TurnView built for this session — including the ones the
