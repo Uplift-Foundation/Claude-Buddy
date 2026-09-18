@@ -8,10 +8,14 @@ measuring the *same* ClaudeBuddy assembly, and no single number in any of them
 is the truth — a line exercised only by a UI test is reported as unhit by the
 unit-test run.
 
-So the merge is a union: a line counts as covered if any suite covered it, and a
-branch point takes the best taken-count any suite recorded. Summing the reports
-instead would be wrong in both directions at once, double-counting the
-denominator while undercounting the numerator.
+So the merge is a union over hits: a line counts as covered if any suite covered
+it, and a branch point takes the best taken-count any suite recorded. Summing
+the reports instead would be wrong in both directions at once, double-counting
+the denominator while undercounting the numerator.
+
+It is *not* a union over what exists. coverlet's report is the authority on
+which lines and which branch points are real, and the other engine may only
+contribute hits against them — see merge_secondary().
 
 Usage:
     tools/merge-coverage.py <report.xml> [more.xml ...] [--base <git-ref>]
@@ -143,6 +147,66 @@ def load(reports, root, keep=None):
     return lines, branches
 
 
+def merge_secondary(lines, branches, more_lines, more_branches, keep):
+    """Fold the secondary (MTP) reports into the authority's (coverlet's) view.
+
+    `lines`/`branches` are coverlet's, and are mutated in place. `keep` is the
+    per-file set of lines coverlet instrumented, or None when there was nothing
+    to be the authority over (a run with coverlet reports only).
+
+    Lines and branches obey the *same* authority rule, and the second half of
+    that used not to be true. coverlet's report says which lines exist, because
+    it is the engine that honours [ExcludeFromCodeCoverage] on a method — and by
+    exactly the same argument its report says which *branch points* exist, since
+    a line it instrumented and recorded no branch on has no branch on it. The
+    MTP engines disagree about this constantly. Measured over one run of all
+    four suites, 158 branch points in 42 files existed in the MTP reports and in
+    neither coverlet report — 416 arcs, 328 of them claimed as taken. What the
+    lines look like is the giveaway, and it is the signature CB-6 already wrote
+    down: OpenClawSessions.cs:285 is `lock (Gate) return agentIds` reported
+    (0/6), :328 is `List<string> ids;` reported (0/2), and OrbGlyph.cs:62 is the
+    second half of a two-line *comment* reported (4/4). A declaration and a
+    comment cannot hold a branch. The arcs belong to compiler-generated code
+    that engine attributes to whichever statement line is nearest; coverlet,
+    instrumenting the same assembly, puts them somewhere else or nowhere.
+
+    It moves the number in BOTH directions, which is why it survived. Dropping
+    them took the whole app from 9361/10483 (89.3%) to 9033/10067 (89.7%), and
+    per file it went up for OpenClawSessions.cs (91.6% -> 92.4%) and down for
+    OrbGlyph.cs (94.4% -> 93.8%), because a phantom point reported 4/4 flatters
+    a file exactly as a phantom 0/6 punishes one. Neither direction was ever a
+    statement about the tests.
+
+    A file coverlet never reported at all is the one case where the secondary
+    reports may still introduce branch points, for the same reason `keep` is
+    consulted per file rather than globally: there is no authority to defer to,
+    and dropping the file would be worse than trusting the only engine that saw
+    it.
+    """
+    for path, hits in more_lines.items():
+        for number, covered in hits.items():
+            lines[path][number] = lines[path].get(number, False) or covered
+
+    for path, arcs in more_branches.items():
+        authoritative = keep is not None and path in keep
+        for number, (taken, total) in arcs.items():
+            previous = branches[path].get(number)
+            if previous is None:
+                if authoritative:
+                    continue
+                previous = (0, total)
+            # Max on BOTH halves, not just the numerator. The two engines do
+            # not always agree on how many arcs a line has — the same `if` can
+            # be reported as 2 arcs by one and 4 by the other — and keeping the
+            # last-seen total while maxing the taken count can pair a taken from
+            # the wider reading with a total from the narrower one and print a
+            # line as fully covered when neither suite covered it fully. Taking
+            # the widest denominator anyone reported *for a branch point that
+            # really exists* is the conservative reading.
+            branches[path][number] = (
+                max(previous[0], taken), max(previous[1], total))
+
+
 def exclusions(root):
     """path -> number of [ExcludeFromCodeCoverage] sites in it.
 
@@ -232,8 +296,9 @@ def main():
     # member-level exclusions existed to matter: 157 sites, every one of which the
     # MTP reports were quietly putting back into the denominator.
     #
-    # So coverlet's view of *which lines exist* is the authority, and the MTP
-    # reports contribute hits for those lines only. Not the other way round, and
+    # So coverlet's view of *which lines exist* is the authority — and, since
+    # CB-100, of which *branch points* exist too; merge_secondary() has why. The
+    # MTP reports contribute hits for those only. Not the other way round, and
     # not a union: a union means the attribute does nothing wherever it is on a
     # method, which is exactly the kind of claim-that-is-not-true this script was
     # extended to stop making.
@@ -250,14 +315,7 @@ def main():
     lines, branches = load(coverlet, root)
     if others:
         more_lines, more_branches = load(others, root, keep)
-        for path, hits in more_lines.items():
-            for number, covered in hits.items():
-                lines[path][number] = lines[path].get(number, False) or covered
-        for path, arcs in more_branches.items():
-            for number, (taken, total) in arcs.items():
-                previous = branches[path].get(number, (0, total))
-                branches[path][number] = (
-                    max(previous[0], taken), max(previous[1], total))
+        merge_secondary(lines, branches, more_lines, more_branches, keep)
 
     app = sorted(p for p in lines if is_app_file(p))
 
