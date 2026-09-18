@@ -169,7 +169,8 @@ namespace ClaudeBuddy
         // gives at the same fork: a bare window for someone whose windows are all
         // inside tmux puts the thing *outside* what they use to move between
         // windows, which is worse than an extra pane inside it.
-        // Excluded from coverage: writes a script and opens a terminal on it.
+        // Excluded from coverage: opens a terminal, via AppleScript for the two
+        // apps that support it and a script file for the two that don't.
         [ExcludeFromCodeCoverage]
         private static string? OpenAgentsView(string cwd)
         {
@@ -177,44 +178,16 @@ namespace ClaudeBuddy
 
             if (PlaceInTmux(command, cwd) is { Length: > 0 } pane) return pane;
 
-            try
-            {
-                System.IO.Directory.CreateDirectory(ClaudeBuddySettings.Directory);
-                var script = Path.Combine(ClaudeBuddySettings.Directory, "open-agents-roster.sh");
+            // cd is for after the roster is quit rather than for the roster
+            // itself, the same as every other launch this file makes: the
+            // useful place to land is the directory whose orb was clicked.
+            LaunchInTerminal(TerminalApp(), cwd, "exec " + command);
 
-                // The cd is for after the roster is quit rather than for the
-                // roster itself, the same as every other script this file writes:
-                // the useful place to land is the directory whose orb was clicked.
-                // Skipped with no cwd, because `cd ''` fails and `|| exit 1` would
-                // take the roster down with it.
-                var body = "#!/bin/sh\n";
-                if (!string.IsNullOrEmpty(cwd))
-                {
-                    body += "cd " + TerminalScripts.ShellQuote(cwd) + " || exit 1\n";
-                }
-
-                File.WriteAllText(script, body + "exec " + command + "\n");
-                File.SetUnixFileMode(script,
-                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-
-                var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
-                psi.ArgumentList.Add("-a");
-                psi.ArgumentList.Add(TerminalApp());
-                psi.ArgumentList.Add(script);
-                Process.Start(psi);
-
-                // The window takes a moment to appear, and until it does the
-                // process scan above says nothing is open — which is what would
-                // otherwise let a second click open a second roster.
-                Forget(cwd);
-                return null;
-            }
-            catch
-            {
-                // Same contract as everything else on this path: failing to open
-                // a window is a click that did nothing, never a crash.
-                return null;
-            }
+            // The window takes a moment to appear, and until it does the
+            // process scan above says nothing is open — which is what would
+            // otherwise let a second click open a second roster.
+            Forget(cwd);
+            return null;
         }
 
         // The `claude agents` view: brought forward if one is running, opened if
@@ -630,11 +603,11 @@ namespace ClaudeBuddy
         // its own help is explicit that the session keeps running whether you
         // stay attached or drop out, so a click can never disturb the work.
         //
-        // Driven through a script file rather than AppleScript's `do script`
-        // because that verb is Terminal.app's own vocabulary; `open -a <app>
-        // <executable file>` is understood by every terminal this file's
-        // neighbours already name, so one path covers all of them instead of
-        // one per app.
+        // Driven through LaunchInTerminal, which is AppleScript's own "run this
+        // command" verb for iTerm2 and Terminal.app and a script file for
+        // everything else — see its comment, and CB-80, for why the file-open
+        // path used to put a permission dialog in front of the user on every
+        // single click rather than once.
         // Returns the tmux pane the session was attached into, when it went
         // into tmux at all — the caller focuses it through the same path it
         // uses for any other pane, rather than this file growing its own copy
@@ -713,68 +686,34 @@ namespace ClaudeBuddy
                 return pane;
             }
 
-            try
-            {
-                System.IO.Directory.CreateDirectory(ClaudeBuddySettings.Directory);
-                var script = Path.Combine(ClaudeBuddySettings.Directory, "open-agents-view.sh");
+            // attach wants the *job* id, which is the first segment of the
+            // session uuid and not the uuid itself — `claude logs` with a full
+            // id answers "No job matching", with the short one it prints the
+            // session's output. `claude agents --json` shows both side by side
+            // ("id": "162e0b4b", "sessionId": "162e0b4b-3c45-..."), which is
+            // where the relationship is confirmed rather than assumed.
+            //
+            // An absolute claude path, not a bare name resolved by a login
+            // shell. That was the original approach and it silently didn't
+            // work: `zsh -lc` skips .zshrc (non-interactive), which is where a
+            // PATH addition for ~/.local/bin normally lives, so the command
+            // died with "command not found" whenever the app was launched from
+            // Finder rather than a terminal. See ClaudeBinary.
+            if (ClaudeCommand("attach", jobId) is not { } ownWindowCommand) return null;
 
-                // Single-quoted, with any embedded quote closed and reopened
-                // the shell way, so a directory with a space or an apostrophe
-                // still arrives as one word.
-                var quoted = "'" + cwd.Replace("'", "'\\''") + "'";
+            var app = TerminalApp();
+            lock (Gate) Launched[jobId] = app;
 
-                // An absolute path, not a bare name resolved by a login shell.
-                // That was the original approach and it silently didn't work:
-                // `zsh -lc` skips .zshrc (non-interactive), which is where a
-                // PATH addition for ~/.local/bin normally lives, so the script
-                // died with "command not found" whenever the app was launched
-                // from Finder rather than a terminal. See ClaudeBinary.
-                var claude = ClaudeBinary.Path;
-                if (claude is null) return null;
+            // The cd matters even though attach names the session outright:
+            // Ctrl+Z drops you back to a shell in this window, and the useful
+            // place to land is the directory whose orb you clicked.
+            LaunchInTerminal(app, cwd, "exec " + ownWindowCommand);
 
-                var quotedClaude = "'" + claude.Replace("'", "'\\''") + "'";
-
-                // attach wants the *job* id, which is the first segment of the
-                // session uuid and not the uuid itself — `claude logs` with a
-                // full id answers "No job matching", with the short one it
-                // prints the session's output. `claude agents --json` shows
-                // both side by side ("id": "162e0b4b", "sessionId":
-                // "162e0b4b-3c45-..."), which is where the relationship is
-                // confirmed rather than assumed.
-                var quotedId = "'" + jobId.Replace("'", "'\\''") + "'";
-
-                // The cd matters even though attach names the session outright:
-                // Ctrl+Z drops you back to a shell in this window, and the
-                // useful place to land is the directory whose orb you clicked.
-                File.WriteAllText(script,
-                    "#!/bin/sh\n"
-                    + "cd " + quoted + " || exit 1\n"
-                    + "exec " + quotedClaude + " attach " + quotedId + "\n");
-
-                File.SetUnixFileMode(script,
-                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-
-                var app = TerminalApp();
-                lock (Gate) Launched[jobId] = app;
-
-                var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
-                psi.ArgumentList.Add("-a");
-                psi.ArgumentList.Add(app);
-                psi.ArgumentList.Add(script);
-                Process.Start(psi);
-
-                // The window takes a moment to appear and the cache would
-                // otherwise keep saying "nothing here" for its full window,
-                // leaving the next click to open a second one.
-                Forget(cwd);
-                return null;
-            }
-            catch
-            {
-                // Same contract as everything else on this path: failing to
-                // open a window is a click that did nothing, never a crash.
-                return null;
-            }
+            // The window takes a moment to appear and the cache would
+            // otherwise keep saying "nothing here" for its full window,
+            // leaving the next click to open a second one.
+            Forget(cwd);
+            return null;
         }
 
         // Windows has no tmux destination to reuse, so a background or
@@ -855,11 +794,13 @@ namespace ClaudeBuddy
         // things went right on that path and the last one had nowhere to go.
         //
         // Here rather than in TerminalFocuser because opening a terminal on a
-        // script file is this file's mechanism, and a second copy of it there
-        // would be a second thing to keep right about which terminal app the
-        // user has and how `open -a` behaves. The command itself is built by
-        // TerminalScripts.TmuxAttachScript, which is pure and tested; what is
-        // left here is the file and the launch.
+        // command is this file's mechanism, and a second copy of it there would
+        // be a second thing to keep right about which terminal app the user has
+        // and how to launch one. The command itself is built by
+        // TerminalScripts.TmuxAttachCommand, which is pure and tested; what is
+        // left here is the launch, through the same LaunchInTerminal every other
+        // call site in this file uses — see its comment and CB-80 for why that
+        // is no longer a script file for iTerm2 or Terminal.app.
         //
         // Deliberately no "already open?" guard, unlike AttachSession, and the
         // asymmetry is the point: the moment a client attaches to that server,
@@ -867,7 +808,7 @@ namespace ClaudeBuddy
         // click never reaches this. AttachSession needs a guard because a window
         // running `claude attach` is not discoverable that way.
         //
-        // Excluded from coverage: writes a script and opens a terminal on it.
+        // Excluded from coverage: opens a terminal and runs the attach in it.
         [ExcludeFromCodeCoverage]
         public static string? AttachTmuxSocket(
             string tmuxBinary, string? socket, string pane, string cwd)
@@ -912,37 +853,12 @@ namespace ClaudeBuddy
 
             // No tmux of the user's own to split into. A terminal window of its
             // own is what is left, and it keeps the shape it already had.
-            try
-            {
-                System.IO.Directory.CreateDirectory(ClaudeBuddySettings.Directory);
-
-                // Its own name, not open-agents-view.sh: the two can be launched
-                // moments apart, and a shared file would mean the second write
-                // deciding what the first window runs.
-                var script = Path.Combine(ClaudeBuddySettings.Directory, "attach-tmux-socket.sh");
-
-                File.WriteAllText(script,
-                    TerminalScripts.TmuxAttachScript(tmuxBinary, socket, session, cwd));
-                File.SetUnixFileMode(script,
-                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-
-                var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
-                psi.ArgumentList.Add("-a");
-                psi.ArgumentList.Add(TerminalApp());
-                psi.ArgumentList.Add(script);
-                Process.Start(psi);
-
-                // Null rather than a pane: this went into a window of its own, so
-                // there is nothing for the caller to select. Same contract as
-                // AttachSession's own terminal fallback.
-                return null;
-            }
-            catch
-            {
-                // Same contract as everything else on this path: failing to open
-                // a window is a click that did nothing, never a crash.
-                return null;
-            }
+            //
+            // Null rather than a pane: this went into a window of its own, so
+            // there is nothing for the caller to select. Same contract as
+            // AttachSession's own terminal fallback.
+            LaunchInTerminal(TerminalApp(), cwd, command);
+            return null;
         }
 
         // Runs the attach in a new window of whichever tmux session already has
@@ -1122,6 +1038,77 @@ namespace ClaudeBuddy
         private static void Forget(string cwd)
         {
             lock (Gate) Cache.Remove(cwd.TrimEnd('/'));
+        }
+
+        // Runs `command` in a brand-new window of `app`, on the directory
+        // `cwd` names. The one place all three "open a terminal of its own"
+        // call sites in this file now go through, so there is one mechanism to
+        // get right about how a window gets opened rather than three inline
+        // copies of it.
+        //
+        // CB-80: every one of those three used to write a shell script to a
+        // fixed-name temp file and hand it to `/usr/bin/open -a <app> <script>`
+        // — asking the terminal to *open an executable file*, which is exactly
+        // what iTerm2's Automation gate exists to ask permission for. It asked
+        // on every single click rather than once, because the file this app
+        // writes gets a fresh mtime on every launch even when its name and
+        // contents don't change, and iTerm2 does not remember a decision made
+        // about a file that no longer matches what it last saw.
+        //
+        // TerminalScripts.RunScriptFor answers with an AppleScript that asks
+        // the terminal to *run a command* instead — iTerm2's `create window
+        // with default profile command` and Terminal.app's `do script`, proven
+        // by CB-79's probes not to raise that dialog. Run synchronously through
+        // TryRun rather than fire-and-forget, so the return value is real
+        // confirmation the window was created rather than merely that
+        // osascript launched — the same distinction TerminalFocuser.RunOsaScript
+        // draws for the click-focus path, drawn here because this path already
+        // waits on other subprocesses and a `Process.Start` that never checked
+        // its own success was the original shape of this method.
+        //
+        // Ghostty and WezTerm have no comparable scripting surface and neither
+        // warns today, so RunScriptFor answers null for them and this falls
+        // back to the old script-file mechanism — but with a name unique to
+        // this call (a GUID) rather than the fixed name each of the three call
+        // sites used to write to. That fixed name was a real race: two clicks
+        // moments apart could have the second write land on disk before the
+        // first `open` had read the file, so the window that opened first ran
+        // whatever the second click asked for. attach-tmux-socket.sh's own
+        // comment reasoned about exactly this for one caller — kept here as the
+        // record of why a GUID replaces it for all three at once, rather than
+        // three separate fixed names.
+        [ExcludeFromCodeCoverage]
+        private static bool LaunchInTerminal(string app, string? cwd, string command)
+        {
+            if (TerminalScripts.RunScriptFor(app, cwd, command) is { } appleScript)
+            {
+                return TryRun("/usr/bin/osascript", out _, "-e", appleScript);
+            }
+
+            try
+            {
+                System.IO.Directory.CreateDirectory(ClaudeBuddySettings.Directory);
+                var script = Path.Combine(ClaudeBuddySettings.Directory, Guid.NewGuid() + ".sh");
+
+                File.WriteAllText(script,
+                    "#!/bin/sh\n" + TerminalScripts.ShellCommandLine(cwd, command) + "\n");
+                File.SetUnixFileMode(script,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+                var psi = new ProcessStartInfo("/usr/bin/open") { UseShellExecute = false };
+                psi.ArgumentList.Add("-a");
+                psi.ArgumentList.Add(app);
+                psi.ArgumentList.Add(script);
+                Process.Start(psi);
+
+                return true;
+            }
+            catch
+            {
+                // Same contract as everything else on this path: failing to
+                // open a window is a click that did nothing, never a crash.
+                return false;
+            }
         }
 
         // `open -a` on a running app just brings it forward — the same trick

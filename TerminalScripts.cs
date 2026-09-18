@@ -51,6 +51,20 @@ namespace ClaudeBuddy
         internal static string ShellQuote(string value) =>
             "'" + value.Replace("'", "'\\''") + "'";
 
+        // `command`, prefixed with a `cd` guard when a directory was recorded —
+        // as one line rather than a multi-line script, because the callers below
+        // hand this straight into an AppleScript string literal rather than a
+        // file on disk.
+        //
+        // Same rule as TmuxAttachScript's own cd guard, stated once rather than
+        // three times: skipped with no cwd, because `cd ''` fails and `|| exit 1`
+        // would take the whole command down with it. `command` is trusted as-is
+        // — every caller either already built it with ShellQuote (ClaudeCommand)
+        // or is TmuxAttachCommand's own output, which begins "unset TMUX; exec
+        // …" and must not be wrapped in a second `exec` of its own.
+        internal static string ShellCommandLine(string? cwd, string command) =>
+            string.IsNullOrEmpty(cwd) ? command : "cd " + ShellQuote(cwd) + " || exit 1; " + command;
+
         // One tmux client, as `list-clients` describes it.
         internal readonly record struct TmuxClient(
             string Tty, string Session, string Activity, bool ControlMode);
@@ -477,6 +491,63 @@ namespace ClaudeBuddy
         // them.
         internal static string EscapeForAppleScript(string text) =>
             text.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+        // Which of AgentTeamViewer's three "open a terminal window of its own"
+        // call sites goes through AppleScript's own "run this" verb, and which
+        // still writes a script file for `open -a` to launch.
+        //
+        // CB-80: `open -a <app> <script>` hands iTerm2 an *executable file to
+        // open*, which is exactly what its Automation gate exists to ask about
+        // — and it asked on every single click rather than once, because the
+        // file this app writes has a fresh mtime each time even when its name
+        // doesn't change. `create window with default profile command "…"` asks
+        // iTerm2 to *run a command* instead, which is a different verb the gate
+        // does not cover — confirmed by CB-79's probes, which this rule exists
+        // to carry into code. Terminal.app's equivalent is `do script`.
+        //
+        // Ghostty and WezTerm have no comparable scripting surface and neither
+        // warns today, so they fall back to the script-file mechanism this
+        // exists to avoid for the two apps that have a better one — the null
+        // here is what tells AgentTeamViewer's launcher to take that path.
+        internal static string? RunScriptFor(string appBundlePath, string? cwd, string command)
+        {
+            var line = ShellCommandLine(cwd, command);
+
+            return Path.GetFileName(appBundlePath) switch
+            {
+                "iTerm.app" => ITermRunScript(line),
+                "Terminal.app" => TerminalRunScript(line),
+                _ => null
+            };
+        }
+
+        // `create window with default profile command` is iTerm2's "run this",
+        // not "open this file" — the verb switch CB-80 exists for. Returns the
+        // new session's tty on stdout, so the caller has real confirmation a
+        // window was actually created rather than only that osascript launched
+        // (the same distinction RunOsaScript's own comment draws for the
+        // fire-and-forget focus path).
+        internal static string ITermRunScript(string line) => $$"""
+            tell application "iTerm"
+                set w to (create window with default profile command "{{EscapeForAppleScript(line)}}")
+                tell current session of w
+                    return tty
+                end tell
+            end tell
+            """;
+
+        // `do script` without an "in" clause opens a brand-new window and runs
+        // `line` in it, the same arrival `open -a Terminal.app <script>` gave —
+        // but as a command Terminal.app is asked to run rather than a file it is
+        // asked to open, which is the distinction that avoids iTerm2's gate and,
+        // as far as CB-79's probes went, Terminal.app never raised the dialog
+        // either way.
+        internal static string TerminalRunScript(string line) => $$"""
+            tell application "Terminal"
+                set t to do script "{{EscapeForAppleScript(line)}}"
+                return tty of t
+            end tell
+            """;
 
         // property is "id" (a session UUID recorded by the hook) or "tty" (the
         // live tty of an attached tmux client). Both are iTerm2 session
