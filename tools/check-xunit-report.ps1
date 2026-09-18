@@ -22,6 +22,15 @@
     schema buries the same information behind a `Counters` node with no
     per-error name at all) and fails loudly on two independent conditions:
 
+    CB-84 reproduced the same symptom (a short, exit-0 run) from a second,
+    distinct cause: an exception thrown while EnsureIsolatedApplication
+    builds the NEXT test's Compositor, rather than while the PREVIOUS test's
+    cleanup runs — a Dispatcher.VerifyAccess ownership mismatch inside
+    Avalonia.Rendering.DefaultRenderLoop.Add. xUnit v3 files this the same
+    way as the case above (an assembly error, not a test failure), so it
+    needed no change here — see ci.yml's UI tests step comment for the full
+    diagnosis, including why an Avalonia patch bump did not fix it.
+
       1. `errors != "0"` on any <assembly> — the primary check. A direct
          read of a signal the runner already emits, no upkeep required.
       2. total tests below -MinimumExpectedTests — the secondary belt.
