@@ -56,6 +56,131 @@ namespace ClaudeBuddy.Tests
             Assert.Equal(new[] { "-S", "/s" }, TerminalScripts.TmuxArgs("/s"));
         }
 
+        // --- ShellCommandLine: the cd guard, as one line -----------------------
+        //
+        // The same rule TmuxAttachScript states as two lines of a script file,
+        // stated once as a single line for the callers that hand a command
+        // straight into an AppleScript string literal instead of a file on disk
+        // (CB-80).
+
+        [Fact]
+        public void WithACwdTheLineStartsWithTheCdGuard()
+        {
+            var line = TerminalScripts.ShellCommandLine("/Users/user/proj", "exec '/usr/bin/claude' 'agents'");
+
+            Assert.Equal(
+                "cd '/Users/user/proj' || exit 1; exec '/usr/bin/claude' 'agents'", line);
+        }
+
+        // `cd ''` fails, and `|| exit 1` would take the whole command down with
+        // it — the one thing this line exists to run. No cwd means no guard.
+        [Theory]
+        [InlineData("")]
+        [InlineData(null)]
+        public void WithNoCwdTheLineIsJustTheCommand(string? cwd)
+        {
+            Assert.Equal("exec 'x'", TerminalScripts.ShellCommandLine(cwd, "exec 'x'"));
+        }
+
+        // TmuxAttachCommand's own output already begins "unset TMUX; exec …", and
+        // wrapping it in a second `exec` would try to exec a program literally
+        // named "unset". ShellCommandLine trusts the command as handed in rather
+        // than reshaping it.
+        [Fact]
+        public void ATmuxAttachCommandIsPrefixedNotRewrapped()
+        {
+            var command = TerminalScripts.TmuxAttachCommand("/usr/bin/tmux", null, "claude-swarm");
+
+            var line = TerminalScripts.ShellCommandLine("/tmp/x", command);
+
+            Assert.Equal("cd '/tmp/x' || exit 1; " + command, line);
+            Assert.StartsWith("cd '/tmp/x' || exit 1; unset TMUX; exec ", line);
+        }
+
+        // --- RunScriptFor / ITermRunScript / TerminalRunScript: CB-80 ---------
+        //
+        // `open -a <app> <script file>` asks a terminal to open an *executable
+        // file*, which is exactly what iTerm2's Automation gate exists to ask
+        // about — and it asked on every click rather than once, because the
+        // file this app writes has a fresh mtime each launch. These build the
+        // AppleScript that asks the terminal to *run a command* instead, which
+        // CB-79's probes found does not raise that dialog.
+
+        [Fact]
+        public void ITermIsAskedToRunACommandNotOpenAFile()
+        {
+            var script = TerminalScripts.RunScriptFor("/Applications/iTerm.app", "/tmp/x", "exec 'x'");
+
+            Assert.NotNull(script);
+            Assert.Contains("tell application \"iTerm\"", script);
+            Assert.Contains("create window with default profile command", script);
+            Assert.DoesNotContain("open -a", script);
+        }
+
+        [Fact]
+        public void TerminalAppIsAskedToRunACommandNotOpenAFile()
+        {
+            var script = TerminalScripts.RunScriptFor("/System/Applications/Utilities/Terminal.app", "/tmp/x", "exec 'x'");
+
+            Assert.NotNull(script);
+            Assert.Contains("tell application \"Terminal\"", script);
+            Assert.Contains("do script", script);
+        }
+
+        // Ghostty and WezTerm have no comparable scripting surface, so this
+        // answers null — the signal AgentTeamViewer's launcher reads as "fall
+        // back to the script-file mechanism" for those two apps only.
+        [Theory]
+        [InlineData("/Applications/Ghostty.app")]
+        [InlineData("/Applications/WezTerm.app")]
+        [InlineData("/Applications/Unknown Terminal.app")]
+        public void AnUnscriptableTerminalGetsNoAppleScript(string app)
+        {
+            Assert.Null(TerminalScripts.RunScriptFor(app, "/tmp/x", "exec 'x'"));
+        }
+
+        // The command line is embedded in the AppleScript string literal, so it
+        // has to go through the same escaping the rest of this file relies on —
+        // otherwise a directory or session name with a double quote in it closes
+        // the literal early and everything after it is read as AppleScript.
+        [Fact]
+        public void TheCommandLineIsEscapedForTheAppleScriptLiteral()
+        {
+            var script = TerminalScripts.RunScriptFor(
+                "/Applications/iTerm.app", "/tmp/say \"hi\"", "exec 'x'");
+
+            Assert.Contains("say \\\"hi\\\"", script);
+        }
+
+        [Fact]
+        public void TheITermRunScriptReturnsTheNewSessionsTty()
+        {
+            var script = TerminalScripts.ITermRunScript("exec 'x'");
+
+            Assert.Contains("tell current session of w", script);
+            Assert.Contains("return tty", script);
+        }
+
+        [Fact]
+        public void TheTerminalRunScriptReturnsTheNewTabsTty()
+        {
+            var script = TerminalScripts.TerminalRunScript("exec 'x'");
+
+            Assert.Contains("return tty of t", script);
+        }
+
+        // do script with no "in" clause opens a brand-new window rather than
+        // reusing the frontmost one — the same fresh-window arrival
+        // `open -a Terminal.app <script>` gave.
+        [Fact]
+        public void TheTerminalRunScriptDoesNotTargetAnExistingWindow()
+        {
+            var script = TerminalScripts.TerminalRunScript("exec 'x'");
+
+            Assert.DoesNotContain("in window", script);
+            Assert.DoesNotContain("in front window", script);
+        }
+
         // --- ShellQuote and TmuxAttachScript: attaching a detached server ---
         //
         // The script that answers a click on an agent-team member whose pane is
