@@ -80,6 +80,7 @@ namespace ClaudeBuddy
             "speakVoice", "neuralVoiceEnabled", "neuralVoice",
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
+            "speakScope",
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "grokHomes", "profiles", "orbPositions",
             "chatPanelSizes", "pinnedChatPanels", "arrangeAnchor", "chatTextScale",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
@@ -518,6 +519,13 @@ namespace ClaudeBuddy
             // lets all three sit in one list.
             public string? SpeakEngine { get; set; }
 
+            // What the speaker reads: the whole reply, or two or three
+            // sentences of it. A string rather than a bool because "full" and
+            // "summary" are named modes a settings file should say out loud,
+            // and because a third is easy to imagine and a bool would have to
+            // be replaced rather than extended.
+            public string? SpeakScope { get; set; }
+
             // Which of those names is selected. A fourth voice key rather than
             // reusing SpeakVoice or NeuralVoice for the same reason those two are
             // separate: the name spaces have nothing in common, and a value left
@@ -719,6 +727,30 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.SpeakEngine ?? "system"; }
             set { Load(); lock (Gate) _model.SpeakEngine = value; Save(); }
+        }
+
+        // Defaults to the whole reply, which is what this app has always spoken.
+        // An unrecognised value reads as Full for the same reason: a settings
+        // file written by a newer build, or edited by hand, should degrade to
+        // the behaviour nobody had to ask for rather than to silence.
+        public static SpeakScope SpeakScope
+        {
+            get
+            {
+                Load();
+                lock (Gate)
+                {
+                    return string.Equals(_model.SpeakScope, "summary", StringComparison.OrdinalIgnoreCase)
+                        ? ClaudeBuddy.SpeakScope.Summary
+                        : ClaudeBuddy.SpeakScope.Full;
+                }
+            }
+            set
+            {
+                Load();
+                lock (Gate) _model.SpeakScope = value == ClaudeBuddy.SpeakScope.Summary ? "summary" : "full";
+                Save();
+            }
         }
 
         // Turning this on or off takes effect immediately rather than at the
@@ -1479,7 +1511,8 @@ namespace ClaudeBuddy
                         SpeakCommand = Text(root["speakCommand"]),
                         SpeakVoicesCommand = Text(root["speakVoicesCommand"]),
                         SpeakCommandVoice = Text(root["speakCommandVoice"]),
-                        SpeakEngine = Text(root["speakEngine"])
+                        SpeakEngine = Text(root["speakEngine"]),
+                        SpeakScope = Text(root["speakScope"])
                     };
 
                     // Same shape as claudeCodeProfileDirs below: read as an array
@@ -1912,6 +1945,7 @@ namespace ClaudeBuddy
                         ["speakVoicesCommandArgs"] = voicesArgs,
                         ["speakCommandVoice"] = _model.SpeakCommandVoice,
                         ["speakEngine"] = _model.SpeakEngine,
+                        ["speakScope"] = _model.SpeakScope,
                         // Grouped rather than three top-level keys: it reads as
                         // one setting in the file the way it reads as one card in
                         // the window. A null entry — which is what a colour left
