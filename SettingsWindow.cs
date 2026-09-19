@@ -1022,28 +1022,33 @@ namespace ClaudeBuddy
                     // about this feature that looks alarming and is not. It
                     // arrives unannounced, it names an item the user has never
                     // heard of, and a prompt nobody expected is a prompt people
-                    // decline — after which the feature simply never works and
-                    // nothing on screen says why. Naming it costs a sentence and
-                    // saves that whole path.
+                    // decline — after which the feature never works and nothing
+                    // on screen says why.
                     //
-                    // What this deliberately does NOT say is that "Always Allow"
-                    // ends the matter. An earlier draft did. Measured on a real
-                    // machine: the secret read succeeded, and some hours later —
-                    // after the CLI had refreshed its login, which moved the
-                    // item's modification stamp — the same read stopped
-                    // answering. Whether the rewrite is what re-armed the prompt
-                    // is *not* established, so this claims neither a cause nor a
-                    // frequency. Promising "you will not be asked again" and then
-                    // asking again is worse than the vaguer sentence: the user
-                    // concludes the app is broken rather than that macOS did
-                    // something reasonable.
+                    // **This used to promise that "Always Allow" stops it asking
+                    // again, and that promise is withdrawn.** On a machine where
+                    // the read had been succeeding, a later secret read blocked
+                    // indefinitely, and in between the credential's stamp moved
+                    // — the CLI had refreshed its token. So a refresh appears
+                    // able to put the prompt back. Appears: what is established
+                    // is that the read can block and that the credential was
+                    // rewritten, and the causal link between them is inferred
+                    // rather than demonstrated.
+                    //
+                    // The copy therefore promises less rather than explaining a
+                    // mechanism nobody has shown. No frequency, no "once", no
+                    // "every few hours" — a number here would be the same
+                    // mistake in a more precise costume, and the status line
+                    // below is what tells the user where the read actually got
+                    // to on this machine today.
                     "Shows an orb for each Claude Code session running in Anthropic's cloud. "
                     + "Reads the login the Claude Code CLI already stores on this machine, so "
-                    + "there is nothing to sign in to — macOS will ask for permission to read "
-                    + "that item from your Keychain, and choosing “Always Allow” means "
-                    + "you should not be asked each time. Claude Code refreshing its login can "
-                    + "bring the prompt back. Read-only: clicking one opens it in "
-                    + "your browser, which is the only place a cloud session can be typed into.")
+                    + "there is nothing to sign in to — macOS will ask permission to read that "
+                    + "item from your Keychain. Choose \u201CAlways Allow\u201D so you are not "
+                    + "asked every time; Claude Code refreshing its own login can bring the "
+                    + "prompt back. If no orbs appear, the line below says how far the read "
+                    + "got. Read-only: clicking one opens it in your browser, which is the "
+                    + "only place a cloud session can be typed into.")
             };
 
             // Progressive disclosure, the same as every other section here: off
