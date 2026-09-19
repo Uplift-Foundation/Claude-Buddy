@@ -2746,6 +2746,47 @@ namespace ClaudeBuddy
                 return remote;
             }
 
+            // A session in Anthropic's cloud. Cached for the reason the
+            // remote-control branch above gives and then some: there is no file
+            // on this machine to rebuild it from *and* re-reading costs a
+            // network round trip against a rate-limited endpoint, so a rebuilt
+            // panel would be slower as well as emptier.
+            if (status.Source == SessionSource.ClaudeCloud)
+            {
+                // The roster row, which is what the session is constructed from
+                // — it carries the title and the id in the shape the events
+                // endpoint wants. Matched on the same "cloud:" key the scan
+                // minted rather than by slicing the prefix off, so the two
+                // cannot drift apart.
+                var row = ClaudeCloudSessions.Snapshot()
+                    .FirstOrDefault(s => "cloud:" + s.Id == sessionId);
+
+                if (_cloudChats.TryGetValue(sessionId, out var existingCloud))
+                {
+                    // Re-read on every open. Reconciliation is by uuid, so this
+                    // is the refresh path rather than a second way in: a turn
+                    // that grew while the panel was shut updates in place, and
+                    // nothing is duplicated.
+                    //
+                    // **A panel left open does not refresh itself**, and that is
+                    // a real gap rather than an oversight being hidden. The only
+                    // ticker available here is the two-second scan, and pointing
+                    // a rate-limited events endpoint at it would spend the
+                    // account's budget on a window nobody is looking at.
+                    StartCloudLoad(existingCloud);
+                    return existingCloud;
+                }
+
+                // No row and no cached session means the roster has dropped it —
+                // the orb is on its way out, and there is nothing to read.
+                if (row is null) return null;
+
+                var cloud = new ClaudeCloudChatSession(row, CloudChatApi, CloudChatCredentials);
+                _cloudChats[sessionId] = cloud;
+                StartCloudLoad(cloud);
+                return cloud;
+            }
+
             // Both local CLIs from here down. Which transcript format to read
             // and which pair of settings governs it is the whole of the
             // difference, and it lives in CliChatFormat.
@@ -2778,6 +2819,56 @@ namespace ClaudeBuddy
         // but what was said should still be there when it comes back.
         private readonly Dictionary<string, RemoteControlChatSession> _remoteChats =
             new(StringComparer.Ordinal);
+
+        // Cloud chat sessions, kept for the same reason the remote ones above
+        // are: the transcript came over the network and there is nothing on this
+        // disk to read it back from.
+        private readonly Dictionary<string, ClaudeCloudChatSession> _cloudChats =
+            new(StringComparer.Ordinal);
+
+        // One HTTP client and one credential source for every cloud panel, not
+        // one each. HttpCloudApi owns an HttpClient, which .NET wants reused, and
+        // on macOS the credential source is a Keychain read — a second one per
+        // panel would be a second consent surface for the same item.
+        //
+        // Built on first use rather than in the constructor, so a Buddy with the
+        // feature switched off never constructs either. Excluded from coverage
+        // for what they are rather than what they decide: an HttpClient and, on
+        // this platform, a Keychain query. Which of the two credential sources
+        // SourceFor returns is covered where it lives.
+        [ExcludeFromCodeCoverage]
+        private ICloudApi CloudChatApi => _cloudChatApi ??= new HttpCloudApi();
+
+        [ExcludeFromCodeCoverage]
+        private ICloudCredentialSource CloudChatCredentials =>
+            _cloudChatCredentials ??= ClaudeCliCredentials.SourceFor(
+                OperatingSystem.IsMacOS(),
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+        private ICloudApi? _cloudChatApi;
+        private ICloudCredentialSource? _cloudChatCredentials;
+
+        // Kick off the read and walk away.
+        //
+        // Not awaited, because RemoteChatFor is what a click calls and a click
+        // must not block on a network round trip. The session publishes its own
+        // state to the panel — Connecting until this finishes, then Connected or
+        // Error — so there is nothing for a caller to do with the answer that the
+        // panel is not already told.
+        //
+        // A false return means nothing could be read, and it is deliberately not
+        // turned into an empty transcript: the session leaves itself in Error, and
+        // the panel says so. An unreadable conversation and an empty one look
+        // identical on screen, and only one of them is worth explaining.
+        //
+        // Excluded from coverage: its body is a fire-and-forget Task over a real
+        // HTTP call. What it would exercise — LoadAsync's own arms — is covered
+        // directly against a fake ICloudApi.
+        [ExcludeFromCodeCoverage]
+        private static void StartCloudLoad(ClaudeCloudChatSession session)
+        {
+            _ = Task.Run(() => session.LoadAsync(CancellationToken.None));
+        }
 
         // Namespaced away from both Claude Code's UUIDs and the gateway's own
         // keys, because it is neither: nothing on the gateway answers to it.

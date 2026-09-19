@@ -17,8 +17,18 @@ namespace ClaudeBuddy.Tests;
 // No clicks, for the reason the other orb captures give: OrbWindow's pointer
 // handling reaches TerminalFocuser, unguarded at its own entry point.
 [Collection("Settings")]
-public class CloudSessionScreenshots
+public class CloudSessionScreenshots : IDisposable
 {
+    // ChatPanel is one window shared by every test in the process, so each
+    // capture that opens one hides its own session again rather than relying on
+    // isolation that does not exist. Same rule as ChatPanelScreenshots.
+    private readonly List<string> _panelsToClean = new();
+
+    public void Dispose()
+    {
+        foreach (var id in _panelsToClean) ChatPanel.HideFor(id);
+    }
+
     private static SessionStatus CloudStatus(int? contextPercent) => new()
     {
         Source = SessionSource.ClaudeCloud,
@@ -54,6 +64,45 @@ public class CloudSessionScreenshots
         orb.UpdateFrom(CloudStatus(contextPercent: null));
 
         ScreenshotHelper.Capture(orb, "orb-window-cloud-session-no-ring.png");
+    }
+
+    // The chat panel for a cloud session: a transcript with no box under it, and
+    // a sentence where the box was.
+    //
+    // This is the capture that matters most of the four, because what it shows
+    // is a *judgement* rather than a mechanism — whether one line of grey text
+    // is enough for somebody who clicked an orb expecting to be able to reply,
+    // and whether the panel reads as deliberate rather than as one that failed
+    // to finish drawing. No test can answer that; the picture can.
+    [AvaloniaFact]
+    public void ACloudSessionsPanelShowsItsTranscriptAndNoComposer()
+    {
+        var id = "screenshot-cloud-" + Guid.NewGuid();
+        _panelsToClean.Add(id);
+
+        var fake = new FakeChatSession(new[]
+        {
+            new ChatTurn { Role = ChatRole.User, Text = "refactor the transcript parser" },
+            new ChatTurn
+            {
+                Role = ChatRole.Assistant,
+                Text = "Pulled the envelope handling out into its own type and left the row "
+                       + "mapping alone — the second half was already covered.",
+            },
+        })
+        {
+            SessionId = id,
+            DisplayName = "Refactor the parser",
+            IsReadOnly = true,
+            ComposerHint = "This conversation is read-only here.",
+            ReplyUrl = "https://claude.ai/code/session_01abc",
+            MachineName = "Anthropic's cloud",
+        };
+
+        ChatPanel.OpenFor(new OrbWindow(Guid.NewGuid().ToString()), fake);
+        ScreenshotHelper.Flush();
+        ScreenshotHelper.CaptureAlreadyShown(
+            ChatPanelTestAccess.Instance!, "chat-panel-cloud-read-only.png");
     }
 
     // The settings group, switched off: one row and the help text that names the

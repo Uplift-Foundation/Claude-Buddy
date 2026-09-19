@@ -1888,6 +1888,15 @@ namespace ClaudeBuddy
         // The flyout's keyboard button. Same destination a gateway orb's click
         // reaches, arrived at differently because for a local session the click
         // is already spoken for.
+        //
+        // ...and for a cloud session too, which is the reason this deliberately
+        // does *not* carry the TryOpenInBrowser guard that GoToSession and the
+        // dictation path both do. A cloud orb's click is spoken for — it goes to
+        // claude.ai, where the session can actually be replied to — so the
+        // keyboard button is the way to the panel, which is where it can be
+        // read. Guarding here as well would leave both gestures going to the
+        // browser and the panel reachable by nothing, which is what the first
+        // draft of CB-164's chat wiring did.
         // Excluded from coverage: needs SessionManager.Instance to hand back a
         // session, and this suite deliberately never sets it — making one current
         // starts the status-directory watcher, the two-second scan timer and a
@@ -1901,12 +1910,6 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         internal void OpenChat()
         {
-            // A cloud session has no panel to open — nothing here can read or
-            // write its conversation — so the keyboard button goes where the
-            // click goes, which is the browser. Better than a button that is
-            // present and inert.
-            if (TryOpenInBrowser()) return;
-
             var chat = SessionManager.Instance?.RemoteChatFor(SessionId);
             if (chat is null) return;
 
