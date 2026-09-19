@@ -1987,6 +1987,10 @@ namespace ClaudeBuddy
             // only thing being invented is the namespaced id.
             foreach (var remote in RemoteControlSessions.Snapshot())
             {
+                // Received data only. A remote cwd is intentionally absent
+                // from this ScanEntry, so ApplyPersona below returns before any
+                // local candidate path can be constructed for it.
+                PeerPersonas.Set(remote.Key, remote.Persona);
                 found.Add(new ScanEntry(
                     remote.Key,
                     new SessionStatus
@@ -2380,6 +2384,7 @@ namespace ClaudeBuddy
                 // small; the picture behind it is not, and Forget drops both.
                 _personas.Remove(id);
                 LocalPersonas.Forget(id);
+                PeerPersonas.Forget(id);
             }
 
             // After the removal pass, so an orb has already gone before its file

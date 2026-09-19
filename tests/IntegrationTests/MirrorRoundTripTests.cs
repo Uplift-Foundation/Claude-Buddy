@@ -752,6 +752,30 @@ public class MirrorRoundTripTests : IDisposable
     }
 
     [Fact]
+    public async Task ARosterCarriesThePersonaResolvedOnTheServingMachine()
+    {
+        // The receiver has no access to this directory. This assertion reaches
+        // the same result only because RemoteMirrorServer resolved the local
+        // CLAUDE.md before serialising the roster.
+        File.WriteAllText(Path.Combine(_dir, "CLAUDE.md"), """
+            ## Persona
+            **Name:** Faraday
+            - Voice: Samantha (Kokoro TTS, rate 1.2)
+            """);
+
+        var harness = new Harness(_dir);
+        harness.AddSession("job-hunter", WriteTranscript("persona.jsonl", Conversation(2)));
+
+        await harness.HandshakeAsync("job-hunter");
+
+        var persona = harness.Client.StateFor("job-hunter").Entry!.Persona;
+        Assert.NotNull(persona);
+        Assert.Equal("Faraday", persona!.Name);
+        Assert.Equal("Samantha", persona.Voice);
+        Assert.Equal(1.2, persona.Rate);
+    }
+
+    [Fact]
     public async Task TypingIntoASessionTheFarBuddyHasNeverHeardOfIsRefused()
     {
         var harness = new Harness(_dir);

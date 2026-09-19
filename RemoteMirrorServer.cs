@@ -442,7 +442,8 @@ namespace ClaudeBuddy
                     Commands(status),
                     status.State,
                     _seams.CanDeliver?.Invoke(status),
-                    RouteFor(resolved.Value.SessionId)));
+                    RouteFor(resolved.Value.SessionId),
+                    ResolvePeerPersona(status)));
             }
 
             // AgentRoster is Claude Code's authority, not a universal session
@@ -464,7 +465,8 @@ namespace ClaudeBuddy
                     if (hasTranscript && !LivelyEnough(status)) continue;
                     entries.Add(new MirrorProtocol.MirrorRosterEntry(name, MirrorProtocol.CliFor(status.Source),
                         hasTranscript, _seams.CanType(status), string.IsNullOrWhiteSpace(status.Color) ? null : status.Color,
-                        Commands(status), status.State, _seams.CanDeliver?.Invoke(status), RouteFor(session.SessionId)));
+                        Commands(status), status.State, _seams.CanDeliver?.Invoke(status), RouteFor(session.SessionId),
+                        ResolvePeerPersona(status)));
                 }
             }
 
@@ -472,6 +474,26 @@ namespace ClaudeBuddy
                 fromPeer, frame.Id, MirrorProtocol.EncodeRoster(entries),
                 new Dictionary<string, string>(), sub: null)
                 .ConfigureAwait(false);
+        }
+
+        // This is intentionally on the serving side of the protocol. The
+        // receiving Buddy must never ask LocalPersona to resolve a remote cwd:
+        // equal path text on two machines says nothing about equal contents.
+        //
+        // LocalPersona already validates the markdown's avatar path while it
+        // is still meaningful, and PersonaFiles applies its byte bound again
+        // while reading. Sending no persona on any unreadable input is more
+        // honest than sending a partial path for the receiver to reinterpret.
+        internal static MirrorProtocol.PeerPersona? ResolvePeerPersona(SessionStatus status)
+        {
+            if (!status.IsLocalCli || string.IsNullOrWhiteSpace(status.Cwd)) return null;
+
+            var candidates = LocalPersona.CandidateFiles(
+                status.Cwd, LocalPersona.UserConfigDirs(), status.Source, status.Agent);
+            var local = LocalPersona.ResolveFrom(candidates, status.Cwd);
+            var avatar = local.AvatarPath is null ? null : PersonaFiles.ReadAvatarFile(local.AvatarPath);
+            var peer = new MirrorProtocol.PeerPersona(local.Name, local.Voice, local.Rate, avatar);
+            return peer.IsEmpty ? null : peer;
         }
 
         // The commands that session can actually run, read off this machine's

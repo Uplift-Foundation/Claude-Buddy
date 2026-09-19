@@ -223,7 +223,7 @@ namespace ClaudeBuddy
         // the peer list has an opinion about.
         internal sealed record Remote(
             string Name, string Ref, string Status, DateTime Seen, string Account, string? Color = null,
-            string? Cli = null, string? Route = null)
+            string? Cli = null, string? Route = null, MirrorProtocol.PeerPersona? Persona = null)
         {
             // The account is in the key, not just the record.
             //
@@ -925,7 +925,7 @@ namespace ClaudeBuddy
                     now,
                     account,
                     string.IsNullOrWhiteSpace(k.Entry.Color) ? null : k.Entry.Color,
-                    k.Entry.Cli, k.Entry.Route))
+                    k.Entry.Cli, k.Entry.Route, k.Entry.Persona))
                 .ToList();
 
         // Excluded from coverage: reads the live link. What it decides is

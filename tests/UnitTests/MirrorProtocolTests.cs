@@ -522,6 +522,34 @@ public class MirrorProtocolTests
         Assert.Null(rows[1].Route);
     }
 
+    [Fact]
+    public void ARosterPersonaRoundTripsAsDataRatherThanAFileReference()
+    {
+        var portrait = new byte[] { 137, 80, 78, 71 };
+        var rows = MirrorProtocol.DecodeRoster(MirrorProtocol.EncodeRoster(new[]
+        {
+            new MirrorProtocol.MirrorRosterEntry("far-session", MirrorProtocol.CliClaudeCode,
+                true, true, Persona: new MirrorProtocol.PeerPersona("Ava", "Samantha", 1.15, portrait))
+        }));
+
+        var persona = Assert.Single(rows!).Persona;
+        Assert.NotNull(persona);
+        Assert.Equal("Ava", persona!.Name);
+        Assert.Equal("Samantha", persona.Voice);
+        Assert.Equal(1.15, persona.Rate);
+        Assert.Equal(portrait, persona.Avatar);
+    }
+
+    [Fact]
+    public void ARosterFromBeforePeerPersonasStillReadsWithoutOne()
+    {
+        var json = "[{\"name\":\"legacy\",\"cli\":\"claude\",\"transcript\":true,\"pane\":true}]";
+
+        var rows = MirrorProtocol.DecodeRoster(MirrorProtocol.Gzip(Encoding.UTF8.GetBytes(json)));
+
+        Assert.Null(Assert.Single(rows!).Persona);
+    }
+
     // A newer Buddy on the other machine may send fields this one has never
     // heard of. Refusing the whole roster over one would turn an upgrade on one
     // machine into a broken feature on the other.

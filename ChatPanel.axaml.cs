@@ -2267,19 +2267,23 @@ namespace ClaudeBuddy
         internal static TextToSpeech.VoiceOption? VoiceFor(
             IRemoteChatSession? session,
             IEnumerable<TextToSpeech.VoiceOption>? options = null) =>
-            session?.SessionId.StartsWith("openclaw:agent:", StringComparison.Ordinal) != true
-                ? null
-                : options is null
+            session?.SessionId.StartsWith("rc:", StringComparison.Ordinal) == true
+                ? (options is null ? null : PeerPersonas.VoiceForSession(session.SessionId, options))
+                : session?.SessionId.StartsWith("openclaw:agent:", StringComparison.Ordinal) == true
+                    ? options is null
                     ? OpenClawSessions.VoiceForSession(session.SessionId)
-                    : OpenClawSessions.VoiceForSession(session.SessionId, options);
+                    : OpenClawSessions.VoiceForSession(session.SessionId, options)
+                    : null;
 
         // Same eligibility as VoiceFor: a rate with no voice behind it has
         // nothing to qualify, and a room's shared global voice has no single
         // agent's rate to use either.
         internal static double? RateFor(IRemoteChatSession? session) =>
-            session?.SessionId.StartsWith("openclaw:agent:", StringComparison.Ordinal) != true
-                ? null
-                : OpenClawSessions.RateForSession(session.SessionId);
+            session?.SessionId.StartsWith("rc:", StringComparison.Ordinal) == true
+                ? PeerPersonas.RateForSession(session.SessionId)
+                : session?.SessionId.StartsWith("openclaw:agent:", StringComparison.Ordinal) == true
+                    ? OpenClawSessions.RateForSession(session.SessionId)
+                    : null;
 
         // TextToSpeech.Speak is itself excluded from coverage ("starts a speech
         // engine and makes the machine make a noise" — see its own comment) —

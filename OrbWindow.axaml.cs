@@ -312,7 +312,9 @@ namespace ClaudeBuddy
             // break. The rule itself is LocalPersona.OrbLabel, pure and tested,
             // for the same reason OrbGlyph is: it was checkable only by looking
             // at the screen otherwise.
-            var personaName = status.IsLocalCli ? LocalPersonas.For(SessionId)?.Name : null;
+            var personaName = status.IsLocalCli
+                ? LocalPersonas.For(SessionId)?.Name
+                : status.Source == SessionSource.RemoteControl ? PeerPersonas.For(SessionId)?.Name : null;
             var name = LocalPersona.OrbLabel(status.Agent, personaName, status.Title, folder);
 
             // Whoever the orb is named for, followed by what the session is —
@@ -893,12 +895,20 @@ namespace ClaudeBuddy
             // SessionIdentity for why the grammar deliberately has no such
             // field — so a local orb with no picture keeps falling back to its
             // letters, which is what it did before any of this.
+            if (status.Source == SessionSource.RemoteControl)
+            {
+                var persona = PeerPersonas.For(SessionId);
+                return persona?.Avatar is null
+                    ? null
+                    : OpenClawAvatars.For(PeerPersonas.AvatarKey(SessionId), persona.Avatar);
+            }
+
             if (!status.IsLocalCli) return null;
 
-            var persona = LocalPersonas.For(SessionId);
-            return persona?.AvatarPath is null
+            var localPersona = LocalPersonas.For(SessionId);
+            return localPersona?.AvatarPath is null
                 ? null
-                : OpenClawAvatars.ForFile(LocalPersonas.AvatarKey(SessionId), persona.AvatarPath);
+                : OpenClawAvatars.ForFile(LocalPersonas.AvatarKey(SessionId), localPersona.AvatarPath);
         }
 
         private void ShowAvatar(OpenClawAvatars.Avatar avatar)
