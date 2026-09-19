@@ -23,6 +23,7 @@ namespace ClaudeBuddy
         // chat panel is bound to an IRemoteChatSession and has no status to
         // read a source off, and this is the discriminator it already has.
         private const string GatewayPrefix = "openclaw:";
+        private const string PeerPrefix = "rc:";
 
         // Emoji is a gateway-only field: OpenClaw keeps one per agent, and a
         // CLAUDE.md persona deliberately has no equivalent — the grammar names
@@ -54,6 +55,9 @@ namespace ClaudeBuddy
         internal static bool IsGateway(string? sessionId) =>
             sessionId is not null && sessionId.StartsWith(GatewayPrefix, StringComparison.Ordinal);
 
+        internal static bool IsPeer(string? sessionId) =>
+            sessionId is not null && sessionId.StartsWith(PeerPrefix, StringComparison.Ordinal);
+
         // Just the name, without asking anybody for a picture.
         //
         // Its own entry point rather than For().Name because the two are asked
@@ -67,6 +71,7 @@ namespace ClaudeBuddy
         internal static string? NameFor(string? sessionId) =>
             string.IsNullOrEmpty(sessionId) ? null
                 : IsGateway(sessionId) ? OpenClawSessions.IdentityForSession(sessionId)?.Name
+                : IsPeer(sessionId) ? PeerPersonas.For(sessionId)?.Name
                 : LocalPersonas.For(sessionId)?.Name;
 
         // The local half of that alone: what a CLAUDE.md persona is called, and
@@ -100,8 +105,19 @@ namespace ClaudeBuddy
                     Gateway: true);
             }
 
-            var persona = LocalPersonas.For(sessionId);
-            if (persona is null) return Unknown;
+            if (IsPeer(sessionId))
+            {
+                var persona = PeerPersonas.For(sessionId);
+                if (persona is null) return Unknown;
+                return new Face(
+                    persona.Name,
+                    null,
+                    persona.Avatar is null ? null : OpenClawAvatars.For(PeerPersonas.AvatarKey(sessionId), persona.Avatar),
+                    Gateway: false);
+            }
+
+            var localPersona = LocalPersonas.For(sessionId);
+            if (localPersona is null) return Unknown;
 
             // Decoded through the same cache the gateway's pictures use, under
             // a key that cannot collide with an agent id — which is what
@@ -109,11 +125,11 @@ namespace ClaudeBuddy
             // on every poll tick is what that cache was built to avoid, and a
             // persona is read on the same two-second cadence.
             return new Face(
-                persona.Name,
+                localPersona.Name,
                 null,
-                persona.AvatarPath is null
+                localPersona.AvatarPath is null
                     ? null
-                    : OpenClawAvatars.ForFile(LocalPersonas.AvatarKey(sessionId), persona.AvatarPath),
+                    : OpenClawAvatars.ForFile(LocalPersonas.AvatarKey(sessionId), localPersona.AvatarPath),
                 Gateway: false);
         }
     }
