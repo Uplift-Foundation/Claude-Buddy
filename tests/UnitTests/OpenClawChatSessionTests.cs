@@ -263,6 +263,162 @@ namespace ClaudeBuddy.Tests
             Assert.Empty(session.History);
         }
 
+        // --- CB-95: a delivery lands while the panel is already open ---
+        //
+        // OnAgentEvent's "chat"/"session.message" cases only trigger a
+        // chat.history refetch — a live gateway round trip, excluded from
+        // coverage the same way TryResolveLiveImage's identical fetch already
+        // is. AppendNewTail is the half of the fix that decides what to do
+        // with the page once it comes back, and it needs no gateway at all to
+        // exercise.
+
+        [Fact]
+        public void ADeliveredMessageIsAppendedPastTheKnownTail()
+        {
+            var session = Session();
+            var added = new List<ChatTurn>();
+            session.SetHistory(Turns("one"));
+            session.TurnAdded += added.Add;
+
+            session.AppendNewTail(Turns("one", "two"));
+
+            Assert.Equal(new[] { "one", "two" }, session.History.Select(t => t.Text));
+            Assert.Equal(new[] { "two" }, added.Select(t => t.Text));
+        }
+
+        // Several deliveries landing before the panel gets around to asking
+        // are all appended, in order, rather than only the last one.
+        [Fact]
+        public void SeveralNewDeliveriesAreAllAppendedInOrder()
+        {
+            var session = Session();
+            session.SetHistory(Turns("one"));
+
+            session.AppendNewTail(Turns("one", "two", "three"));
+
+            Assert.Equal(new[] { "one", "two", "three" }, session.History.Select(t => t.Text));
+        }
+
+        // The common case: the doorbell fires for a reason other than a
+        // delivery (findings.md's own census recorded three "chat" events for
+        // one delivered message), and the refetched page is identical to what
+        // the transcript already has. Nothing is appended and nothing fires —
+        // the property that makes this safe to call on every such event
+        // rather than only on ones known to matter.
+        [Fact]
+        public void ARefetchWithNothingNewAppendsNothing()
+        {
+            var session = Session();
+            var added = new List<ChatTurn>();
+            session.SetHistory(Turns("one", "two"));
+            session.TurnAdded += added.Add;
+
+            session.AppendNewTail(Turns("one", "two"));
+
+            Assert.Equal(new[] { "one", "two" }, session.History.Select(t => t.Text));
+            Assert.Empty(added);
+        }
+
+        // An empty transcript — a panel bound before its first history read
+        // completes — takes the whole page rather than needing an anchor to
+        // extend past.
+        [Fact]
+        public void AnEmptyTranscriptTakesTheWholePage()
+        {
+            var session = Session();
+
+            session.AppendNewTail(Turns("a", "b"));
+
+            Assert.Equal(new[] { "a", "b" }, session.History.Select(t => t.Text));
+        }
+
+        // The anchor — this transcript's own last turn — is not found on the
+        // refetched page at all: more turns arrived than one page holds, or a
+        // page boundary moved it off. Appending nothing is the safe answer
+        // rather than guessing where the new content starts, which would risk
+        // a duplicated or reordered transcript.
+        [Fact]
+        public void AnUnmatchableAnchorAppendsNothingRatherThanGuessing()
+        {
+            var session = Session();
+            var added = new List<ChatTurn>();
+            session.SetHistory(Turns("something not on the page"));
+            session.TurnAdded += added.Add;
+
+            session.AppendNewTail(Turns("x", "y"));
+
+            Assert.Equal(new[] { "something not on the page" }, session.History.Select(t => t.Text));
+            Assert.Empty(added);
+        }
+
+        [Fact]
+        public void AnEmptyPageAppendsNothing()
+        {
+            var session = Session();
+            session.SetHistory(Turns("one"));
+
+            session.AppendNewTail(Turns());
+
+            Assert.Equal(new[] { "one" }, session.History.Select(t => t.Text));
+        }
+
+        // The role has to match too, not just the text: a user's own turn and
+        // an assistant's turn that happen to say the same thing are not the
+        // same turn, and matching on text alone could anchor on the wrong one.
+        [Fact]
+        public void TheAnchorMatchOnBothRoleAndText()
+        {
+            var session = Session();
+            session.SetHistory(new List<HistoryTurn>
+            {
+                new(ChatRole.User, "same words", null, "", DateTimeOffset.UnixEpoch, null, null)
+            });
+
+            // The page's last turn says the identical text but as the
+            // assistant, so it is not a match for the user's turn already on
+            // screen — appending nothing is correct even though the text is
+            // byte-identical.
+            session.AppendNewTail(new List<HistoryTurn>
+            {
+                new(ChatRole.Assistant, "same words", null, "", DateTimeOffset.UnixEpoch, null, null)
+            });
+
+            Assert.Equal(ChatRole.User, session.History[0].Role);
+            Assert.Single(session.History);
+        }
+
+        // A delivery goes out over the wire and comes into effect through
+        // OnAgentEvent, not just through AppendNewTail called directly — this
+        // pins that the "chat" and "session.message" event names actually
+        // reach the switch's new arm rather than falling through to nothing,
+        // the same regression AnUnknownEventNameIsIgnored above guards
+        // against for names that should be ignored. No gateway is configured
+        // in this suite (TestBootstrap points settings at a fresh temp
+        // directory), so the chat.history refetch itself resolves to no
+        // gateway and returns without changing anything — the same "no
+        // gateway" seam ALiveMediaLineFailureStillExplainsWhy already relies
+        // on for the picture-refetch twin of this path. What this pins is
+        // that the event is accepted rather than ignored, not what a real
+        // gateway would hand back.
+        [Theory]
+        [InlineData("chat")]
+        [InlineData("session.message")]
+        public async Task ADeliveryDoorbellIsAcceptedAndDoesNotThrow(string eventName)
+        {
+            var session = Session();
+            session.SetHistory(Turns("one"));
+
+            session.OnAgentEvent(eventName, Event("""{"state":"delta","deltaText":"hi"}"""));
+
+            await Task.Delay(50);
+
+            // No gateway to answer means no append happened — the event
+            // reached RefreshTailAsync and RefreshTailAsync's own null guard
+            // did its job, rather than the process crashing or the switch
+            // arm silently not existing.
+            Assert.Equal(new[] { "one" }, session.History.Select(t => t.Text));
+        }
+
         // --- the history cap ---
 
         // Generous on purpose: at 60 a busy conversation dropped its own
