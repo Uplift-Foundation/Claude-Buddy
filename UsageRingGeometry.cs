@@ -1,5 +1,6 @@
 using System;
 using Avalonia;
+using Avalonia.Media;
 
 namespace ClaudeBuddy
 {
@@ -77,6 +78,52 @@ namespace ClaudeBuddy
             // render as 30% — and it is invisible in a still screenshot of any
             // single value, which is why it has a test per side of the boundary.
             return new Arc(start, end, sweep, sweep > 180, false, false);
+        }
+
+        // The arc above, turned into something Avalonia will draw.
+        //
+        // Here rather than in a window for the reason the arithmetic is: there
+        // are now two kinds of orb drawing one of these — an account's usage
+        // rings and a cloud session's context ring — and a second copy of the
+        // conversion is how the two quietly stop agreeing about what 100% looks
+        // like. Nothing below touches a window, a setting or a screen; a
+        // Geometry is a value, and a headless test can read one back.
+        //
+        // The full case is an ellipse and not an arc, and that is not tidiness:
+        // an arc sweeping 360 degrees has coincident endpoints and renders as
+        // an empty figure, so the one orb at 100% would be the one showing no
+        // ring at all. Arc.IsFull exists for exactly this.
+        internal static Geometry? GeometryFor(Point centre, double radius, double percent)
+        {
+            var arc = ArcFor(centre, radius, percent);
+
+            if (arc.IsEmpty) return null;
+
+            if (arc.IsFull)
+            {
+                return new EllipseGeometry(
+                    new Rect(centre.X - radius, centre.Y - radius, radius * 2, radius * 2));
+            }
+
+            var figure = new PathFigure
+            {
+                StartPoint = arc.Start,
+                IsClosed = false,
+                IsFilled = false
+            };
+
+            figure.Segments!.Add(new ArcSegment
+            {
+                Point = arc.End,
+                Size = new Size(radius, radius),
+                IsLargeArc = arc.LargeArc,
+                SweepDirection = SweepDirection.Clockwise,
+                RotationAngle = 0
+            });
+
+            var geometry = new PathGeometry();
+            geometry.Figures!.Add(figure);
+            return geometry;
         }
 
         internal static Point PointOnRing(Point centre, double radius, double angleDegrees)

@@ -148,6 +148,23 @@ namespace ClaudeBuddy
                 is ClickFallback.AttachBackground
                 or ClickFallback.AttachById;
 
+        // Whether "take me to this session" means opening a browser.
+        //
+        // True for a cloud session and nothing else. The address itself is not
+        // consulted, deliberately: a cloud session whose URL never arrived
+        // should open nothing and stop there rather than fall through to a
+        // terminal focus, which would send the click hunting a pane for a
+        // conversation that has never been on this disk and land it on whatever
+        // happened to match. Opening nothing is the honest failure; opening
+        // somebody else's terminal is not.
+        //
+        // Here rather than inside the orb for the reason everything else in this
+        // file is here: the orb knows which session was clicked and nothing
+        // else, and a rule that lives next to the Process.Start it guards is a
+        // rule no test can reach.
+        internal static bool OpensInABrowser(SessionStatus? status) =>
+            status?.Source == SessionSource.ClaudeCloud;
+
         // Whether this orb should offer "Open agents view" on its right-click menu.
         //
         // The roster's new home. It is a good destination and a bad default: it is

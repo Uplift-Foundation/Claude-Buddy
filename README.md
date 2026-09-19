@@ -1808,6 +1808,18 @@ machine is perfectly reachable while Claude Buddy cannot open a socket to it.
 Check System Settings → Privacy & Security → Local Network. `docs/` and CB-38
 have the full diagnosis.
 
+## Claude Code in the cloud (off by default)
+
+The section above is about your Claude Code sessions on machines you own. This one is about the ones that are not on a machine at all — Claude Code sessions running in Anthropic's cloud, which have no process here, no terminal, no working directory and no transcript file on this disk. Turn it on in Settings → *Claude Code in the cloud*, and each one gets an orb like everything else, wearing a ☁ badge that says it is not local.
+
+There is nothing to sign in to. It reads the login the Claude Code CLI already stores on this machine, which means that on macOS the first read raises a Keychain prompt naming an item you have probably never looked at. **Choose "Always Allow".** Declining it is the one way to make this feature quietly do nothing: the switch stays on, no orb ever appears, and nothing on screen says why — the status line under the switch is where the real answer goes, so read that first if the orbs do not turn up.
+
+**Clicking a cloud orb opens the session in your browser**, because that is the only place a cloud session can be read or typed into. Everything else an orb offers assumes a terminal to jump to or a conversation this app can carry, and a cloud session has neither, so the right-click menu says as much rather than offering a reset that would not reach anything: its state belongs to Anthropic's cloud and not to this machine.
+
+Two things a cloud orb draws that a local one does not. It wears a ring showing how full its context window is, in the same green/amber/red the usage orbs use, so a session close to the end of its window is visible before you open it — and no ring at all when nothing reported a number, which is not the same as a session at zero. And its hover text is the roster's own words for what it is doing, with the last thing it was seen to do beside them, in the slot a local orb spends on its directory.
+
+Like every other source here it is read-only, and off means off: with the switch down the app asks the OS for no credential and opens no connection.
+
 ## 1. Install it
 
 Either download an installer or build from source — both are fully supported,

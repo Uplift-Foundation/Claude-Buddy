@@ -488,4 +488,49 @@ public class ClickRoutingTests
 
         Assert.False(ClickRouting.RecordedItsOwnPane(Status()));
     }
+
+    // --- the browser destination (CB-164) ---
+
+    // A cloud session has no terminal anywhere and no conversation this app can
+    // carry, so the only honest answer to "take me to this session" is the
+    // address claude.ai serves it at.
+    [Fact]
+    public void ACloudSessionOpensInABrowser()
+    {
+        Assert.True(ClickRouting.OpensInABrowser(
+            new SessionStatus { Source = SessionSource.ClaudeCloud }));
+    }
+
+    // And nothing else does. This rule sits in front of the remote-chat and
+    // terminal-focus branches, so a source leaking into it would silently
+    // replace the oldest gesture in the app.
+    [Theory]
+    [InlineData(SessionSource.ClaudeCode)]
+    [InlineData(SessionSource.Codex)]
+    [InlineData(SessionSource.Grok)]
+    [InlineData(SessionSource.OpenClaw)]
+    [InlineData(SessionSource.RemoteControl)]
+    public void NothingElseOpensInABrowser(SessionSource source)
+    {
+        Assert.False(ClickRouting.OpensInABrowser(new SessionStatus { Source = source }));
+    }
+
+    // True even with no address, deliberately. Falling through on an empty URL
+    // would send the click to TerminalFocuser, which would go hunting a pane for
+    // a conversation that has never existed on this disk — opening nothing is
+    // the honest failure, and opening somebody else's terminal is not.
+    [Fact]
+    public void ACloudSessionWithNoUrlStillRefusesTheTerminal()
+    {
+        Assert.True(ClickRouting.OpensInABrowser(
+            new SessionStatus { Source = SessionSource.ClaudeCloud, Url = "" }));
+    }
+
+    // An orb with no status yet is not a cloud session, so it falls through to
+    // whatever the existing branches make of it.
+    [Fact]
+    public void NoStatusDoesNotOpenABrowser()
+    {
+        Assert.False(ClickRouting.OpensInABrowser(null));
+    }
 }

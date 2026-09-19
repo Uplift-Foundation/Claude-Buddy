@@ -195,6 +195,41 @@ namespace ClaudeBuddy
         // turn aloud). Empty from hooks older than this field.
         [JsonPropertyName("transcript_path")]
         public string TranscriptPath { get; set; } = "";
+
+        // Where this session lives when it does not live on this machine: a
+        // https://claude.ai/code/session_… address for a cloud session, empty
+        // for everything else. [JsonIgnore] for the reason Source and Kind are
+        // — it is the scan's conclusion rather than a hook's, and
+        // ResetSessionToIdle writes this object back over a hook-owned file.
+        //
+        // Carried rather than rebuilt at the click, because the address is made
+        // out of the session id and the orb is the only thing that still holds
+        // it by then. See ClaudeCloudSessions.Session.Url.
+        [JsonIgnore]
+        public string Url { get; set; } = "";
+
+        // How full this session's context window is, as a percentage, when
+        // whatever lists the session says so. Null is "nobody said", which is
+        // not the same as zero and must not draw an empty ring — see
+        // OrbWindow.ApplyContextRing.
+        //
+        // Deliberately not folded into State. State is what the session is
+        // doing; this is how much room it has left to keep doing it, which is
+        // the one fact about a session you cannot see by looking at it and
+        // cannot find out without opening it.
+        [JsonIgnore]
+        public int? ContextPercent { get; set; }
+
+        // Two lines of hover text for a session whose roster says more than its
+        // state does: what it is doing in its own words, and the last thing it
+        // was seen to do. Null where nothing was said, and the tooltip simply
+        // omits the line rather than printing a placeholder — an orb claiming
+        // "unknown" is worse than an orb claiming nothing.
+        [JsonIgnore]
+        public string? StatusDetail { get; set; }
+
+        [JsonIgnore]
+        public string? RecentAction { get; set; }
     }
 
     // What produced a session. ClaudeCode, Codex and Grok are local processes
@@ -2043,6 +2078,68 @@ namespace ClaudeBuddy
                         Kind = SessionKind.Remote,
                     },
                     remote.Seen));
+            }
+
+            // Claude Code sessions running in Anthropic's cloud. Empty and free
+            // unless claudeCloudEnabled is on — ClaudeCloudSessions.Snapshot
+            // holds that gate itself, so this block needs no second one.
+            //
+            // Simpler than either branch above, and for the same reason the
+            // remote-control one is: a cloud session is one conversation in one
+            // place. There are no rooms, no leads, and no local anything.
+            foreach (var session in ClaudeCloudSessions.Snapshot())
+            {
+                found.Add(new ScanEntry(
+                    "cloud:" + session.Id,
+                    new SessionStatus
+                    {
+                        Source = SessionSource.ClaudeCloud,
+                        Kind = SessionKind.Cloud,
+                        State = session.State,
+                        Title = session.Title,
+
+                        // Deliberately absent, exactly as the remote-control
+                        // block above leaves it: ApplyPersona returns early on
+                        // an empty cwd, so no local candidate path is ever
+                        // constructed for a session that has no directory on
+                        // this machine — or on any machine the user owns.
+                        Cwd = "",
+
+                        // Hashed from the session id, so the orb wears the same
+                        // colour next launch with nothing stored. A cloud
+                        // session has no /color to read and no cwd to
+                        // auto-colour from, so this is the only stable answer
+                        // available — the same reasoning, and the same
+                        // function, the remote-control fallback uses.
+                        Color = OpenClawSessions.ColourForAgent(session.Id),
+
+                        Url = session.Url,
+                        ContextPercent = session.ContextPercent,
+                        StatusDetail = session.StatusDetail,
+                        RecentAction = session.RecentAction,
+
+                        // The roster's "this one wants you" flag, spent on the
+                        // channel that already means it. NeedsInput dims the orb
+                        // as well as marking it, which reads oddly at first for
+                        // something asking for attention — but it is the same
+                        // treatment a local background job holding a question
+                        // gets, the "?" is the loud half of that pair, and a
+                        // second presence value meaning almost this one is how
+                        // two orbs end up saying the same thing differently.
+                        Presence = session.NeedsAction
+                            ? OrbPresence.NeedsInput
+                            : OrbPresence.Present,
+                    },
+
+                    // The session's own last activity, never `now`. The account
+                    // API lists every cloud session the account has ever had —
+                    // 578 rows on the machine this was measured against — so
+                    // stamping the time of the read would give all of them a
+                    // permanent orb. Stamping real activity lets the user's own
+                    // "Keep orbs for" setting do the filtering, which is the
+                    // same argument the gateway block above makes at length and
+                    // the same trap it was written to avoid.
+                    session.LastActivity));
             }
 
             // Before InheritTerminalInfo, so this describes the files as the

@@ -124,6 +124,36 @@
              code-behind so colour changes reach it. -->
         <Ellipse x:Name="Glow" Width="56" Height="56"/>
 
+        <!-- How full this session's context window is, for the sessions whose
+             roster says. Outside the orb rather than inside it, because the
+             orb's own three channels are already spoken for — its fill is the
+             state, its ring is the identity, its glow is the state again — and
+             a fourth drawn on top of any of them would be a fourth meaning
+             competing for the same pixels.
+
+             A Canvas rather than shapes dropped straight into Root: the arc's
+             geometry is in absolute coordinates about the orb's centre at
+             (28,28), and a Path laid out by a Grid is measured to its own
+             bounds and then centred, which silently moves the arc somewhere
+             else depending on how much of the circle it happens to sweep. The
+             account orbs are a Canvas for the same reason.
+
+             Hidden entirely until something reports a percentage. Nobody
+             saying is not the same as zero, and a full track drawn around a
+             session with no reading claims a measurement that was never taken.
+             The arithmetic is UsageRingGeometry's — the same one the account
+             orbs use, not a second copy of the trig. -->
+        <Canvas x:Name="ContextRingLayer"
+                Width="56" Height="56"
+                IsVisible="False"
+                IsHitTestVisible="False">
+            <Ellipse x:Name="ContextTrack"
+                     Canvas.Left="6" Canvas.Top="6"
+                     Width="44" Height="44"
+                     Stroke="#17FFFFFF" StrokeThickness="3"/>
+            <Path x:Name="ContextArc" StrokeThickness="3" StrokeLineCap="Round"/>
+        </Canvas>
+
         <!-- The buddy itself -->
         <Ellipse x:Name="Orb"
                  Width="36" Height="36"
