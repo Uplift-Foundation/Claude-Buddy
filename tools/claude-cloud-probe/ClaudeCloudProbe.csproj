@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RollForward>LatestMajor</RollForward>
+    <AssemblyName>ClaudeCloudProbe</AssemblyName>
+    <RootNamespace>ClaudeBuddy</RootNamespace>
+    <!-- Matches ClaudeBuddy.csproj, which publishes self-contained: the SDK
+         refuses to let a framework-dependent executable reference a
+         self-contained one. Same note as tools/peer-probe. -->
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The shipped credential source and the shipped request builder,
+         referenced rather than reimplemented. This probe exists to settle a
+         question about what the *app* can do, so a probe that built its own
+         request could answer differently from the app and be believed — the one
+         thing a diagnostic must never do. The header set in particular is the
+         difference between a 200 and a 400, and there must be exactly one copy
+         of it.
+
+         Both are internal, so ClaudeBuddy.csproj grants this assembly
+         InternalsVisibleTo alongside tools/peer-probe. -->
+    <ProjectReference Include="../../ClaudeBuddy.csproj" />
+  </ItemGroup>
+
+</Project>

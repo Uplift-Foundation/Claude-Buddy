@@ -510,7 +510,44 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
 
-                <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="5">
+                <!-- Said in place of the box, for a session that can be read
+                     and not written to. Hidden by default, and swapped for the
+                     row below by ApplyComposerAffordances.
+
+                     A sentence rather than a disabled TextBox, which is the
+                     opposite of what IRemoteChatComposer argues for elsewhere in
+                     this panel — and the difference is measured rather than
+                     stylistic. A disabled box still says "this is where you
+                     reply, later"; for a cloud session there is no input
+                     endpoint at all, so the honest thing is to say where the
+                     reply does go. See IRemoteChatReadOnly. -->
+                <StackPanel x:Name="ReadOnlyBox"
+                            IsVisible="False"
+                            Orientation="Horizontal"
+                            Spacing="6"
+                            Margin="2,2,2,4">
+                    <TextBlock x:Name="ReadOnlyNote"
+                               FontSize="11"
+                               Opacity="0.7"
+                               Foreground="#EEFFFFFF"
+                               TextWrapping="Wrap"
+                               VerticalAlignment="Center"/>
+                    <!-- The way to the place it *can* be replied to, as a link
+                         rather than an address spelled out in the sentence
+                         beside it. An orb click goes to the session; so does
+                         this. The blue and the hover underline are the same ones
+                         the settings window's own links wear — one link look for
+                         the app, not a second answer to a question already
+                         settled. -->
+                    <TextBlock x:Name="ReadOnlyLink"
+                               IsVisible="False"
+                               FontSize="11"
+                               Foreground="#4A90D9"
+                               Cursor="Hand"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <Grid x:Name="ComposerRow" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="5">
                     <!-- AcceptsReturn so the TextBox owns newline insertion,
                          caret placement and undo; Enter-to-send is
                          intercepted on the tunnel route instead, and so is a

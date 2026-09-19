@@ -203,6 +203,16 @@ namespace ClaudeBuddy
             Turns.ItemsSource = _turns;
             Attachments.ItemsSource = _pendingImages;
 
+            // Wired once here rather than per bind: the handler reads
+            // _readOnlyUrl, which ApplyComposerAffordances sets, so the
+            // subscription never needs to change. Hover underline the same way
+            // SettingsWindow's links do it — one link look for the app.
+            ReadOnlyLink.PointerPressed += OnReadOnlyLinkPressed;
+            ReadOnlyLink.PointerEntered += (_, _) =>
+                ReadOnlyLink.TextDecorations = TextDecorations.Underline;
+            ReadOnlyLink.PointerExited += (_, _) =>
+                ReadOnlyLink.TextDecorations = null;
+
             // Bubbles size themselves off Scroll's actual width (see
             // TurnView.MaxBubbleWidth) rather than a fixed pixel cap, since
             // the panel is user-resizable now. Two hooks cover the two ways a
@@ -857,6 +867,54 @@ namespace ClaudeBuddy
         {
             Input.Watermark = (session as IRemoteChatComposer)?.ComposerHint ?? "Message…";
             AttachButton.IsVisible = (session as IRemoteChatElsewhere)?.CanOpenElsewhere ?? false;
+
+            // A session that can be read and not written to loses the box
+            // entirely, and gets a sentence where it was.
+            //
+            // **Hidden, not disabled** — the opposite of what the watermark
+            // above does for a session that merely cannot be typed into *yet*,
+            // and the difference is measured rather than aesthetic. A cloud
+            // session has no input route at any address: `/input`, `/messages`,
+            // `/turns` and `/conversation` are all 404. A box that accepts a
+            // paragraph and only then admits the transport never had anywhere to
+            // put it has already lost the paragraph, which is CB-59's rule at
+            // its sharpest.
+            //
+            // The hint is kept rather than dropped with the box, because it says
+            // where the session *can* be replied to. Hiding the box and
+            // explaining nothing would leave a panel that looks truncated.
+            var readOnly = session is IRemoteChatReadOnly { IsReadOnly: true };
+
+            ComposerRow.IsVisible = !readOnly;
+            ReadOnlyBox.IsVisible = readOnly;
+            ReadOnlyNote.Text = readOnly
+                ? (session as IRemoteChatComposer)?.ComposerHint ?? ""
+                : "";
+
+            // ...and the way to where it can be replied to. Null means there is
+            // nowhere, and then the sentence stands on its own rather than a
+            // link to nothing sitting beside it.
+            _readOnlyUrl = readOnly ? (session as IRemoteChatReadOnly)?.ReplyUrl : null;
+            ReadOnlyLink.IsVisible = _readOnlyUrl is not null;
+            ReadOnlyLink.Text = _readOnlyUrl is null ? "" : "Open in your browser";
+        }
+
+        // Where the read-only link goes. Held rather than read back off the
+        // TextBlock, because what is *shown* is a label and what is opened is an
+        // address, and putting a URL on screen to have somewhere to keep it is
+        // how the two come to disagree.
+        private string? _readOnlyUrl;
+
+        // Excluded from coverage: the guard is reachable and asserted through
+        // ReadOnlyLink's visibility, and the half behind it launches a real
+        // browser. Which ProcessStartInfo that is, per platform, is
+        // CloudSessionLink.StartInfoFor and is covered there.
+        [ExcludeFromCodeCoverage]
+        private void OnReadOnlyLinkPressed(object? sender, PointerPressedEventArgs e)
+        {
+            if (_readOnlyUrl is null) return;
+
+            CloudSessionLink.Open(_readOnlyUrl);
         }
 
         // The same decoded frames the orb draws, at a size worth looking at.

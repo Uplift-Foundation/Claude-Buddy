@@ -79,6 +79,16 @@ namespace ClaudeBuddy
                     // belongs here for the identical reason (CB-130). Does
                     // nothing unless openclawEnabled is on.
                     OpenClawSessions.Restart();
+
+                    // And Claude Code's own cloud sessions, here for the
+                    // identical reason and with the identical shape: an HTTPS
+                    // poll and nothing that touches a window. The headless
+                    // machine CB-130 was about is exactly the one likeliest to
+                    // be watching cloud sessions rather than local ones, so
+                    // this is the last place it should be parked behind a
+                    // screen-lock wait. Does nothing unless claudeCloudEnabled
+                    // is on.
+                    ClaudeCloudSessions.Restart();
                 },
 
                 // Avalonia's macOS render timer is a CVDisplayLink, and

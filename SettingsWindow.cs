@@ -316,6 +316,14 @@ namespace ClaudeBuddy
 
             root.Children.Add(Group("OpenClaw agents", Card(OpenClawRows())));
 
+            // Straight after the CLI sections, beside "Other machines" below
+            // and for the same reason: it is about the same Claude Code
+            // sessions the section above governs, running somewhere that is not
+            // this machine. The difference between the two is only whose
+            // machine it is, which is why they sit together rather than one of
+            // them living beside the gateway.
+            root.Children.Add(Group("Claude Code in the cloud", Card(ClaudeCloudRows())));
+
             // Straight after the CLI sections and before the Desktop app,
             // because that is what it is about: the same Claude Code sessions
             // those two sections govern, just not on this machine.
@@ -1003,6 +1011,95 @@ namespace ClaudeBuddy
             ClaudeBuddySettings.GrokAutoRefreshEnabled = enabled;
         }
 
+        internal Control[] ClaudeCloudRows()
+        {
+            var rows = new List<Control>
+            {
+                Row("Show cloud sessions",
+                    Switch(ClaudeBuddySettings.ClaudeCloudEnabled, OnClaudeCloudToggled),
+
+                    // The Keychain prompt is named because it is the one thing
+                    // about this feature that looks alarming and is not. It
+                    // arrives unannounced, it names an item the user has never
+                    // heard of, and a prompt nobody expected is a prompt people
+                    // decline — after which the feature simply never works and
+                    // nothing on screen says why. Naming it costs a sentence and
+                    // saves that whole path.
+                    //
+                    // What this deliberately does NOT say is that "Always Allow"
+                    // ends the matter. An earlier draft did. Measured on a real
+                    // machine: the secret read succeeded, and some hours later —
+                    // after the CLI had refreshed its login, which moved the
+                    // item's modification stamp — the same read stopped
+                    // answering. Whether the rewrite is what re-armed the prompt
+                    // is *not* established, so this claims neither a cause nor a
+                    // frequency. Promising "you will not be asked again" and then
+                    // asking again is worse than the vaguer sentence: the user
+                    // concludes the app is broken rather than that macOS did
+                    // something reasonable.
+                    "Shows an orb for each Claude Code session running in Anthropic's cloud. "
+                    + "Reads the login the Claude Code CLI already stores on this machine, so "
+                    + "there is nothing to sign in to — macOS will ask for permission to read "
+                    + "that item from your Keychain, and choosing “Always Allow” means "
+                    + "you should not be asked each time. Claude Code refreshing its login can "
+                    + "bring the prompt back. Read-only: clicking one opens it in "
+                    + "your browser, which is the only place a cloud session can be typed into.")
+            };
+
+            // Progressive disclosure, the same as every other section here: off
+            // means the app asks the OS for no credential and opens no socket,
+            // so there is nothing further to configure and nothing further to
+            // show. See ClaudeCloudSessions.Snapshot, which holds that gate
+            // itself rather than leaving it to the scan.
+            if (!ClaudeBuddySettings.ClaudeCloudEnabled) return rows.ToArray();
+
+            // Kept as a field and ticked rather than rebuilt, for the reason the
+            // gateway's own status line is: this changes while you are looking
+            // at it — a Keychain prompt gets answered, a poll comes back, a
+            // token turns out to have expired — and a line that was only true
+            // when the window opened is worse than no line at all.
+            _claudeCloudStatus = new TextBlock
+            {
+                Text = ClaudeCloudSessions.StatusText,
+                FontSize = 12,
+                Opacity = 0.75,
+                TextWrapping = TextWrapping.Wrap
+            };
+
+            rows.Add(NoteRow(_claudeCloudStatus));
+
+            // Because the first failure this hits is almost always the Keychain
+            // prompt being dismissed, and the fix for that is to ask again.
+            // Without a button the only way back is to toggle the switch off and
+            // on, which is a thing users discover rather than a thing the window
+            // offers.
+            var retry = new Button
+            {
+                Content = "Retry",
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left
+            };
+            retry.Click += (_, _) => OnClaudeCloudRetryClicked();
+            rows.Add(Row("", retry));
+
+            return rows.ToArray();
+        }
+
+        // Immediately, not at the next launch: turning it off should take the
+        // orbs off the screen and stop the app reaching for the credential while
+        // the user is still looking at the switch. Same as OnOpenClawToggled.
+        private void OnClaudeCloudToggled(bool enabled)
+        {
+            ClaudeBuddySettings.ClaudeCloudEnabled = enabled;
+            ClaudeCloudSessions.Restart();
+            Rebuild();
+        }
+
+        private void OnClaudeCloudRetryClicked()
+        {
+            ClaudeCloudSessions.Restart();
+            Rebuild();
+        }
+
         internal Control[] OpenClawRows()
         {
             var rows = new List<Control>
@@ -1209,6 +1306,7 @@ namespace ClaudeBuddy
         }
 
         private TextBlock? _openClawStatus;
+        private TextBlock? _claudeCloudStatus;
         private TextBlock? _remoteControlStatus;
         private DispatcherTimer? _openClawStatusTimer;
 
@@ -1216,6 +1314,7 @@ namespace ClaudeBuddy
         // reflected because there is nothing private about what a label says —
         // the fields are private only so that nothing outside assigns them.
         internal string? OpenClawStatusText => _openClawStatus?.Text;
+        internal string? ClaudeCloudStatusText => _claudeCloudStatus?.Text;
         internal string? RemoteControlStatusText => _remoteControlStatus?.Text;
         internal string? PeerLinkStatusText => _peerLinkStatus?.Text;
 
@@ -1240,6 +1339,17 @@ namespace ClaudeBuddy
             {
                 var gateway = OpenClawSessions.StatusText;
                 if (_openClawStatus.Text != gateway) _openClawStatus.Text = gateway;
+            }
+
+            if (_claudeCloudStatus is not null)
+            {
+                // Changes under you for a reason the others do not have: the
+                // first read is gated on a Keychain prompt the user is looking
+                // at a different window to answer, so this line goes from
+                // "checking" to a real answer at a moment nothing else in this
+                // window knows about.
+                var cloud = ClaudeCloudSessions.StatusText;
+                if (_claudeCloudStatus.Text != cloud) _claudeCloudStatus.Text = cloud;
             }
 
             if (_remoteControlStatus is not null)

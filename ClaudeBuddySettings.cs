@@ -85,6 +85,7 @@ namespace ClaudeBuddy
             "chatPanelSizes", "pinnedChatPanels", "arrangeAnchor", "chatTextScale",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
+            "claudeCloudEnabled",
             // Still written, though nothing reads it into the model any more —
             // see OpenClawHeartbeatMode. Listed here so it does not also
             // round-trip through _unknownKeys, which Save would reject as a
@@ -249,6 +250,11 @@ namespace ClaudeBuddy
             // the settings row that turns it on. Same discipline as
             // VoiceInputEnabled and the mic permission prompt.
             public bool OpenClawEnabled { get; set; }
+
+            // Off by default, and it must stay that way: switching it on is what
+            // asks the OS for the Claude Code login, and nobody should meet a
+            // Keychain prompt they did not ask for.
+            public bool ClaudeCloudEnabled { get; set; }
 
             // Where the gateway lives. An address rather than a name on purpose:
             // the certificate it serves is self-signed with no subjectAltName,
@@ -760,6 +766,12 @@ namespace ClaudeBuddy
         {
             get { Load(); lock (Gate) return _model.OpenClawEnabled; }
             set { Load(); lock (Gate) _model.OpenClawEnabled = value; Save(); }
+        }
+
+        public static bool ClaudeCloudEnabled
+        {
+            get { Load(); lock (Gate) return _model.ClaudeCloudEnabled; }
+            set { Load(); lock (Gate) _model.ClaudeCloudEnabled = value; Save(); }
         }
 
         public static string OpenClawHost
@@ -1447,6 +1459,7 @@ namespace ClaudeBuddy
                             root["orbLifetimeMinutes"]?.GetValue<int>() ?? DefaultOrbLifetimeMinutes,
                         VoiceInputEnabled = root["voiceInputEnabled"]?.GetValue<bool>() ?? false,
                         OpenClawEnabled = root["openclawEnabled"]?.GetValue<bool>() ?? false,
+                        ClaudeCloudEnabled = root["claudeCloudEnabled"]?.GetValue<bool>() ?? false,
                         OpenClawHost = Text(root["openclawHost"]),
                         OpenClawPort = root["openclawPort"]?.GetValue<int>() ?? DefaultOpenClawPort,
                         OpenClawFingerprint = Text(root["openclawFingerprint"]),
@@ -1880,6 +1893,7 @@ namespace ClaudeBuddy
                         ["orbLifetimeMinutes"] = _model.OrbLifetimeMinutes,
                         ["voiceInputEnabled"] = _model.VoiceInputEnabled,
                         ["openclawEnabled"] = _model.OpenClawEnabled,
+                        ["claudeCloudEnabled"] = _model.ClaudeCloudEnabled,
                         ["openclawHost"] = _model.OpenClawHost,
                         ["openclawPort"] = _model.OpenClawPort,
                         ["openclawFingerprint"] = _model.OpenClawFingerprint,

@@ -15,7 +15,8 @@ namespace ClaudeBuddy.Tests;
 //     sorting of its own.
 internal sealed class FakeChatSession :
     IRemoteChatSession, IRemoteChatImages, IRemoteChatSlashCommands,
-    IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatFetchWait, IRemoteChatRoom
+    IRemoteChatComposer, IRemoteChatElsewhere, IRemoteChatFetchWait, IRemoteChatRoom,
+    IRemoteChatReadOnly
 {
     public string SessionId { get; init; } = "fake-session";
     public string DisplayName { get; init; } = "Fake Session";
@@ -42,6 +43,18 @@ internal sealed class FakeChatSession :
     public string ComposerHint { get; set; } = "Message…";
 
     public bool CanOpenElsewhere { get; set; }
+
+    // False by default, so every test that predates CB-164 still gets an
+    // ordinary panel with a composer in it. Implemented unconditionally and
+    // settable for the reason IsRoom above is: one fake has to be able to drive
+    // both sides of the panel's decision, which a bare marker interface could
+    // not express.
+    public bool IsReadOnly { get; set; }
+
+    // Null by default, which is the "read-only with nowhere to go" case — the
+    // panel then shows the sentence and no link. A test that wants the link
+    // sets it.
+    public string? ReplyUrl { get; set; }
 
     // Counted rather than performed. The real one opens or focuses a real
     // window, which is the half this suite must never execute — what is being

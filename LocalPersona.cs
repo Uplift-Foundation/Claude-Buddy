@@ -137,7 +137,15 @@ namespace ClaudeBuddy
             string? cwd, IEnumerable<string> userConfigDirs, SessionSource source, string agentName = "")
         {
             var files = new List<string>();
-            if (source is SessionSource.OpenClaw or SessionSource.RemoteControl) return files;
+            // ClaudeCloud joins these two for the same reason, and the reason is
+            // worth restating because this guard names sources one by one rather
+            // than asking IsLocalCli: a cloud session's cwd is a path inside a
+            // container that does not exist on this disk. Falling through would
+            // walk *this* machine for a persona and hand whatever it found to
+            // somebody else's conversation, which is CB-140 again.
+            if (source is SessionSource.OpenClaw
+                or SessionSource.RemoteControl
+                or SessionSource.ClaudeCloud) return files;
 
             // OrdinalIgnoreCase for the reason BackgroundJobs.ExtraAccountDirs
             // is: Windows paths are, and one file reached under two
