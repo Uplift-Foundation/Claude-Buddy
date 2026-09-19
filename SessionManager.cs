@@ -490,7 +490,9 @@ namespace ClaudeBuddy
 
             StartWatching();
 
-            _pollTimer.Tick += (_, _) => ScanAndUpdate();
+            // CB-106: goes through ScheduleScan, not ScanAndUpdate directly, so
+            // the file reads it triggers every two seconds run off this thread.
+            _pollTimer.Tick += (_, _) => _ = ScheduleScan();
 
             // Piggybacks the scan tick rather than adding a timer of its own.
             // AccountOrbs decides whether there is anything to do — it holds the
@@ -538,10 +540,10 @@ namespace ClaudeBuddy
             _debounce.Tick += (_, _) =>
             {
                 _debounce.Stop();
-                ScanAndUpdate();
+                _ = ScheduleScan();
             };
 
-            ScanAndUpdate();
+            _ = ScheduleScan();
         }
 
         // Excluded from coverage: creates a FileSystemWatcher on the status
@@ -1639,25 +1641,97 @@ namespace ClaudeBuddy
         // the whole of the scan, and calling it from anywhere but the timer, the
         // watcher's debounce or Start would mean two passes racing over the same
         // dictionaries on the same thread's re-entrancy.
+        //
+        // Split into ReadStatusFiles (the disk-bound half) and ScanAndUpdateCore
+        // (the reconciliation half) for CB-106: ScheduleScan below runs the
+        // former on a background thread so the Avalonia dispatcher is never the
+        // thread waiting on a file open. This wrapper still does both, inline
+        // and synchronous, on whichever thread calls it — which is what the
+        // many tests that scan a scratch directory and assert in the same line
+        // rely on, and is fine for them since a test's own status directory
+        // never sees the ambient disk contention CB-106 was about.
         internal void ScanAndUpdate()
         {
             SyncAutoColorMarker();
-
-            var seen = new HashSet<string>();
             var now = DateTime.UtcNow;
-            bool setChanged = false;
+            ScanAndUpdateCore(ReadStatusFiles(now), now);
+        }
 
-            // Which files a persona could be written in, per working directory,
-            // for the length of this one pass. Local rather than a field on
-            // purpose: building the list is pure string work over a path walk —
-            // cheap enough to redo every couple of seconds — where a field
-            // keyed by directory would accumulate an entry for every directory
-            // any session has ever run in, for the life of the process, to save
-            // nothing measurable. Several sessions in one repo is the common
-            // case and is what this actually saves.
-            var candidatesByCwd =
-                new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>>();
+        // Guards ScheduleScan against a tick landing while the previous scan's
+        // background read is still in flight.
+        private bool _scanInFlight;
 
+        // The production entry point: Start() wires the poll timer and the
+        // file-watcher debounce to this instead of to ScanAndUpdate directly.
+        //
+        // CB-106: a live sample caught the main thread pinned for 8-11 seconds
+        // inside a raw sync() syscall, reached from Avalonia's native macOS
+        // run-loop signaller straight through to unsymbolized managed frames —
+        // i.e. from managed code the dispatcher was running. ScanAndUpdate's
+        // file-reading half (Directory.EnumerateFiles, File.GetLastWriteTimeUtc,
+        // FileStream opens, and the transcript-repair hunt, which reads more
+        // files still) was, until this change, the one thing this app ran
+        // unconditionally on that thread every two seconds, forever, uncached —
+        // and it was the only candidate that needed no specific user action to
+        // land inside the disk-pressure window the ticket described (heavy
+        // concurrent dotnet build/swiftc activity from unrelated processes on
+        // the same machine): it runs on every tick, not just the rare one where
+        // someone happens to flip a settings toggle or click "reset to idle".
+        // An ordinary small read can block for seconds waiting on kernel
+        // writeback under that kind of system-wide contention regardless of
+        // which syscall a stack sample happens to land on, which is why this
+        // fix does not chase the literal symbol sync() into Avalonia's native
+        // (and unsymbolized) macOS backend — nothing in this repository calls
+        // it directly, and moving *our* blocking I/O off the UI thread is the
+        // part actually within reach here.
+        //
+        // Guarded rather than queued: a tick that lands mid-scan means the
+        // previous scan is still waiting on the very contention this exists to
+        // survive, and starting a second read on top of it would only add to
+        // it. Skipping it is safe — nothing here is lost, only deferred to the
+        // next tick two seconds later.
+        //
+        // async/await rather than a manual ContinueWith: called from the
+        // Avalonia UI thread, `await` resumes on the SynchronizationContext it
+        // captured — Avalonia's own — so ScanAndUpdateCore below still runs on
+        // the UI thread it always has, with the only change being that the
+        // thread is free to pump other work while Task.Run's file reads are
+        // in flight instead of blocked inside them.
+        internal async Task ScheduleScan()
+        {
+            if (_scanInFlight) return;
+            _scanInFlight = true;
+            try
+            {
+                var now = DateTime.UtcNow;
+                var found = await Task.Run(() =>
+                {
+                    SyncAutoColorMarker();
+                    return ReadStatusFiles(now);
+                }).ConfigureAwait(true);
+
+                ScanAndUpdateCore(found, now);
+            }
+            finally
+            {
+                _scanInFlight = false;
+            }
+        }
+
+        // The disk-bound half of a scan: opens and parses every status file,
+        // repairs a missing transcript path and reads an identity off it when
+        // one is needed. Pure aside from the small per-session caches
+        // (_transcriptHunts, _personas) it reads and writes, which only this
+        // method and its caller's single-threaded continuation touch — see
+        // ScheduleScan's guard for why two of these never run concurrently.
+        //
+        // `now` is a parameter rather than DateTime.UtcNow read here, so a
+        // background read and the reconciliation pass that follows it agree on
+        // one instant — ScanAndUpdate's callers already expected that when this
+        // was one method, and JudgeLiveness/SweepDeadFiles downstream compare
+        // against it too.
+        private List<ScanEntry> ReadStatusFiles(DateTime now)
+        {
             IEnumerable<string> files;
             try
             {
@@ -1745,6 +1819,33 @@ namespace ClaudeBuddy
 
                 found.Add(new ScanEntry(sessionId, status, written));
             }
+
+            return found;
+        }
+
+        // The reconciliation half of a scan: joins the gateway's and the
+        // remote-control bridge's sessions onto the file-derived list ReadStatusFiles
+        // produced, then decides what deserves an orb and reconciles the
+        // windows, the arrows and the tray with the answer. Everything from
+        // here on touches Avalonia windows and the tray, so — unlike
+        // ReadStatusFiles — this stays on whichever thread calls it:
+        // ScanAndUpdate above calls it inline; ScheduleScan calls it after
+        // hopping back onto the UI thread its await resumed on.
+        private void ScanAndUpdateCore(List<ScanEntry> found, DateTime now)
+        {
+            var seen = new HashSet<string>();
+            bool setChanged = false;
+
+            // Which files a persona could be written in, per working directory,
+            // for the length of this one pass. Local rather than a field on
+            // purpose: building the list is pure string work over a path walk —
+            // cheap enough to redo every couple of seconds — where a field
+            // keyed by directory would accumulate an entry for every directory
+            // any session has ever run in, for the life of the process, to save
+            // nothing measurable. Several sessions in one repo is the common
+            // case and is what this actually saves.
+            var candidatesByCwd =
+                new Dictionary<(string Cwd, SessionSource Source, string Agent), IReadOnlyList<string>>();
 
             // The gateway's sessions join the same list the status files
             // produced, so everything downstream — ordering, stacking, pinning,
