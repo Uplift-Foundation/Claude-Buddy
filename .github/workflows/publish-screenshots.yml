@@ -164,26 +164,56 @@ jobs:
           # Relying on it alone would mean this comment step silently never
           # fires for the one case it exists for. Fall back to searching by
           # head branch + fork owner, both of which ARE present on the
-          # workflow_run event regardless of fork origin. (This is the one
-          # part of the whole pipeline not yet confirmed by a real run: the
-          # three workflow_run firings so far were all plain pushes to main/
-          # develop, which correctly skip this block entirely — see the
-          # `event == 'pull_request'` guard below. First real PR after this
-          # file landed on main is what exercises it.) A manual
-          # workflow_dispatch run skips all of that and just uses whatever
-          # PR number was passed in, if any.
+          # workflow_run event regardless of fork origin.
+          #
+          # That fallback used to be a REST `pulls?head=owner:branch` call,
+          # and it never matched a single fork PR (CB-117): reproduced by
+          # hand against the live API on PRs #163-165, any `head` value
+          # containing a colon comes back empty, and the colon is mandatory
+          # to scope the match to one owner. `state=all` and percent-encoding
+          # the colon didn't help either — this is the REST endpoint simply
+          # not resolving a fork owner, not a formatting mistake. `gh pr
+          # list`, which goes through GraphQL, resolves the same fork heads
+          # correctly (verified live: matched #164 for
+          # wtvamp:bugfix/usage-orb-inherits-config-dir and #163 for
+          # wtvamp:feature/agent-notes-read-code-from-a-pinned-ref, and
+          # returned nothing for the same branch under a wrong owner — see
+          # CB-117 for the full table). `gh pr list --head` only matches on
+          # branch name, so the owner is re-applied with a `select` on
+          # `headRepositoryOwner.login`; dropping it would let two forks
+          # that happen to push the same branch name collide on `[0]`.
+          #
+          # A manual workflow_dispatch run skips all of that and just uses
+          # whatever PR number was passed in, if any.
           pr_number="${{ github.event.inputs.pr_number }}"
           if [ -z "$pr_number" ]; then
             pr_number="${{ github.event.workflow_run.pull_requests[0].number }}"
           fi
+          head_owner="${{ github.event.workflow_run.head_repository.owner.login }}"
+          head_branch="${{ github.event.workflow_run.head_branch }}"
           if [ -z "$pr_number" ] && [ "${{ github.event.workflow_run.event }}" = "pull_request" ]; then
-            head_owner="${{ github.event.workflow_run.head_repository.owner.login }}"
-            head_branch="${{ github.event.workflow_run.head_branch }}"
             if [ -n "$head_owner" ] && [ -n "$head_branch" ]; then
-              pr_number="$(gh api "repos/${repo}/pulls?head=${head_owner}:${head_branch}&state=open" --jq '.[0].number // empty')"
+              pr_number="$(gh pr list --repo "$repo" --head "$head_branch" --state open \
+                --json number,headRepositoryOwner \
+                --jq "[.[] | select(.headRepositoryOwner.login==\"$head_owner\")][0].number // empty")"
             fi
           fi
 
+          # A no-match used to be indistinguishable from a successful
+          # comment — this is the whole reason CB-117 went unnoticed across
+          # three PRs. Log the resolution unconditionally, and when a
+          # pull_request run genuinely expected a PR and didn't find one,
+          # say so in the step summary rather than exiting quietly: a run
+          # that published images and told nobody should not look like one
+          # that commented. A workflow_run from a push to main/develop
+          # legitimately has no PR, so only the pull_request case is worth
+          # flagging as a miss.
+          echo "resolved pr_number='${pr_number}' (event=${{ github.event.workflow_run.event }}, head=${head_owner}:${head_branch})"
+
           if [ -n "$pr_number" ]; then
             echo "$body" | gh pr comment "$pr_number" --repo "$repo" --body-file -
+          elif [ "${{ github.event.workflow_run.event }}" = "pull_request" ]; then
+            {
+              echo "_Screenshots published to the branch, but no open PR was found for ${head_owner}:${head_branch} — the comment was not posted._"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
