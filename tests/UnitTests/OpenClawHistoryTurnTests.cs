@@ -372,6 +372,47 @@ public class OpenClawHistoryTurnTests
         Assert.Equal("sample_sunrise_100200300.png", turn.ImageAlt);
     }
 
+    // CB-99: provider and role are retained by chat.history today, but old
+    // gateways can omit either. Absence keeps the pre-existing delivery path
+    // working; a present disagreement is not ours to render as a picture.
+    [Theory]
+    [InlineData("claude-cli", "assistant")]
+    [InlineData("openclaw", "user")]
+    public void ADeliveryMirrorWithMismatchedPresentProvenanceStaysText(
+        string provider, string role)
+    {
+        var turns = Turns($$"""
+        [{"role":"{{role}}","provider":"{{provider}}","model":"delivery-mirror",
+          "content":[{"type":"text","text":"sample_sunrise_100200300.png"}]}]
+        """);
+
+        var turn = Assert.Single(turns);
+        Assert.Null(turn.ImageUrl);
+        Assert.Equal("sample_sunrise_100200300.png", turn.Text);
+    }
+
+    [Fact]
+    public void ADeliveryMirrorMissingProviderKeepsTheCompatiblePicturePath()
+    {
+        var turns = Turns("""
+        [{"role":"assistant","model":"delivery-mirror",
+          "content":[{"type":"text","text":"sample_sunrise_100200300.png"}]}]
+        """);
+
+        Assert.NotNull(Assert.Single(turns).ImageUrl);
+    }
+
+    [Fact]
+    public void ADeliveryMirrorMissingRoleKeepsTheCompatiblePicturePath()
+    {
+        var turns = Turns("""
+        [{"provider":"openclaw","model":"delivery-mirror",
+          "content":[{"type":"text","text":"sample_sunrise_100200300.png"}]}]
+        """);
+
+        Assert.NotNull(Assert.Single(turns).ImageUrl);
+    }
+
     // The defect QA measured, end to end. A browser capture lives one
     // directory below the shared media root, so gluing its bare name to that
     // root fetched a 404 for a file that was on disk and servable the whole

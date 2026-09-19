@@ -26,6 +26,30 @@ namespace ClaudeBuddy.Tests;
 [Collection("Settings")]
 public class OpenClawGatewayPayloadTests
 {
+    // CB-99: history is an external payload, so prove the full record carries
+    // the two provenance fields into the delivery predicate. A missing field
+    // preserves compatibility, while a present mismatch must not initiate a
+    // media request.
+    [Fact]
+    public void HistoryDeliveryProvenanceIsAppliedWithoutBreakingLegacyRows()
+    {
+        var messages = JsonDocument.Parse("""
+        [
+          {"model":"delivery-mirror","content":[{"type":"text","text":"legacy.png"}]},
+          {"role":"assistant","provider":"another-provider","model":"delivery-mirror",
+           "content":[{"type":"text","text":"wrong-provider.png"}]},
+          {"role":"user","provider":"openclaw","model":"delivery-mirror",
+           "content":[{"type":"text","text":"wrong-role.png"}]}
+        ]
+        """).RootElement;
+
+        var turns = OpenClawSessions.TurnsFromHistory(messages, "agent:main:main");
+
+        Assert.NotNull(turns.Single(t => t.Text == "legacy.png").ImageUrl);
+        Assert.Null(turns.Single(t => t.Text == "wrong-provider.png").ImageUrl);
+        Assert.Null(turns.Single(t => t.Text == "wrong-role.png").ImageUrl);
+    }
+
     // Nine agents standing in one channel, which is what the room this was
     // diagnosed against actually looked like. Their activity times span five
     // months, so the recency window has something real to cut.
