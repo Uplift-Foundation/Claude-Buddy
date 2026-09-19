@@ -67,7 +67,7 @@ internal static class Program
         return args[0] switch
         {
             "stamp" => Stamp(),
-            "read" => Read(flags),
+            "read" => await ReadAsync(flags),
             "list" => await ListAsync(flags),
             "roster" => await RosterAsync(),
             _ => UnknownCommand(args[0]),
@@ -100,10 +100,75 @@ internal static class Program
     private static ICloudCredentialSource Source() =>
         ClaudeCliCredentials.SourceFor(OperatingSystem.IsMacOS(), Home);
 
+    // How long this tool waits for the credential store before giving up.
+    //
+    // **Deliberately much shorter than the app's 45 seconds, and the reason is
+    // who is waiting.** ClaudeCliCredentials.UnmeasuredReadBudget is generous
+    // because the arm is a background poll that may be waiting on a person
+    // reading a consent dialog, and cutting one of those off costs them a round
+    // trip through the settings window. Nobody is reading a dialog here: they are
+    // watching a cursor blink in a terminal, having run a *diagnostic*, most
+    // likely because the credential read is already misbehaving.
+    //
+    // **A diagnostic that hangs when the thing it diagnoses is broken is the
+    // worst possible shape for one** — it turns a legible answer into an
+    // indefinite wait at exactly the moment somebody needs the answer. That is
+    // what this constant exists to prevent, and it is why the probe does not
+    // simply reuse the app's number.
+    //
+    // Unmeasured, like the app's. Ten seconds is "longer than a working read has
+    // ever taken by three orders of magnitude, and shorter than a person's
+    // patience".
+    private static readonly TimeSpan UnmeasuredProbeReadBudget = TimeSpan.FromSeconds(10);
+
+    // Every secret read in this file goes through here.
+    //
+    // **There is no unbudgeted path left, and that is the point rather than the
+    // tidiness.** The app was fixed first and this file was left calling the
+    // source's read method directly at three call sites, so `roster` still hung
+    // for a hundred seconds against a Keychain the app itself handled correctly in
+    // 45. A diagnostic that hangs on the condition it diagnoses is worse than no
+    // diagnostic, because it consumes the attention of whoever is trying to find
+    // out what is wrong.
+    //
+    // CredentialBudgetTests guards it: nothing in the app or this tool may reach a
+    // credential source's read except through ClaudeCliCredentials.
+    private static async Task<CredentialRead> ReadCredentialAsync()
+    {
+        var read = await ClaudeCliCredentials.ReadWithinAsync(
+            Source(), UnmeasuredProbeReadBudget, CancellationToken.None);
+
+        if (read.Outcome == CredentialOutcome.NoAnswer)
+        {
+            // The extra sentence the app cannot usefully show on a one-line status
+            // row, and which is the whole reason somebody ran this.
+            Console.Error.WriteLine(
+                $"the credential store did not answer within {UnmeasuredProbeReadBudget.TotalSeconds:0}s.");
+            Console.Error.WriteLine(
+                "The read may be waiting on a Keychain prompt that cannot be displayed here —");
+            Console.Error.WriteLine(
+                "this has been measured in contexts with no window server session (no one logged");
+            Console.Error.WriteLine(
+                "in at the screen, or a background job). Try `stamp`, which asks only for");
+            Console.Error.WriteLine(
+                "attributes, never prompts, and has kept answering when this call does not.");
+        }
+
+        return read;
+    }
+
     // Attributes only on macOS, an mtime elsewhere. Neither returns secret
     // material and neither prompts, so this is the subcommand to run first: it
     // says whether there is anything to read at all before anyone is asked to
     // approve reading it.
+    //
+    // **Deliberately not routed through ReadCredentialAsync, and deliberately not
+    // wrapped in anything at all.** This is the attributes-only query. It has
+    // never been observed to hang — including in the contexts where the data read
+    // does not return at all — which makes it the one thing that still answers
+    // when the other one will not, and therefore the first thing to run when
+    // diagnosing this. Putting a budget or a thread hop around it could only make
+    // that less true.
     private static int Stamp()
     {
         var stamp = Source().Stamp();
@@ -117,7 +182,7 @@ internal static class Program
         return 0;
     }
 
-    private static int Read(string[] flags)
+    private static async Task<int> ReadAsync(string[] flags)
     {
         if (!flags.Contains("--keys-only"))
         {
@@ -127,7 +192,7 @@ internal static class Program
             return 2;
         }
 
-        var read = Source().Read();
+        var read = await ReadCredentialAsync();
 
         Console.WriteLine($"outcome  {read.Outcome}");
         Console.WriteLine($"meaning  {ClaudeCliCredentials.Describe(read.Outcome)}");
@@ -187,7 +252,7 @@ internal static class Program
             return 2;
         }
 
-        var read = Source().Read();
+        var read = await ReadCredentialAsync();
         if (read.Outcome != CredentialOutcome.Found || read.AccessToken is null)
         {
             Console.Error.WriteLine(
@@ -245,7 +310,7 @@ internal static class Program
     // cheaper to read here than to diagnose from a screenshot of missing orbs.
     private static async Task<int> RosterAsync()
     {
-        var read = Source().Read();
+        var read = await ReadCredentialAsync();
         if (read.Outcome != CredentialOutcome.Found || read.AccessToken is null)
         {
             Console.Error.WriteLine(

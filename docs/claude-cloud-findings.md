@@ -169,6 +169,10 @@ dotnet run --project tools/claude-cloud-probe -- roster
 
 It references the app rather than building its own request, so its answer is the app's answer rather than a second opinion. `stamp` prompts for nothing. `read` prints a length and a four-character prefix and has no mode that prints a token. `list --shape` prints field names and JSON types with every value stripped, so a fixture can be designed without a single session title. `roster` prints the `environment_kind` histogram and the status sentence — **the cheapest available check that the filter still matches something**, and much cheaper than diagnosing it from a screenshot of missing orbs.
 
+**Every secret read in the probe is budgeted, at 10 seconds rather than the app's 45.** That is deliberate and the reason is who is waiting: the app may be waiting on a person reading a consent dialog, while a person running a diagnostic is watching a cursor blink — most likely *because* the credential read is already misbehaving. A diagnostic that hangs on the condition it diagnoses is worse than no diagnostic. This was not free: the app was fixed first and the probe was left calling the source directly at three call sites, so `roster` still hung for a hundred seconds against a Keychain the app itself handled in 45. `tests/IntegrationTests/CredentialBudgetTests` is a source-text guard against that recurring — it is the one class of bug here that no behavioural test can reach, because the probe has no behaviour a suite can drive.
+
+`stamp` is deliberately **not** budgeted and not wrapped in anything. It is the attributes-only query, it has never been observed to hang, and it is the one thing that still answers when the data read does not — which makes it the first thing to run.
+
 On macOS `read`, `list` and `roster` raise a Keychain consent prompt naming *this binary*, which is a separate unsigned executable — expected, and not the shipped app's grant. It is run by a human on purpose.
 
 ## Not established
