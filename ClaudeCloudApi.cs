@@ -402,8 +402,18 @@ namespace ClaudeBuddy
                 // Denied is the user saying no, and NotLoggedIn is there being
                 // nothing to read. Retrying either means prompting again, which
                 // CB-164 rules out in as many words.
+                //
+                // NoAnswer joins them, and it is the one that would look most like
+                // a candidate for a retry: the store did not say no, it said
+                // nothing. It stops anyway, for two independent reasons. A call
+                // that may be blocked waiting on a human is the definition of what
+                // must not be re-issued on a timer — that is a queue of consent
+                // prompts. And each attempt abandons a thread inside a P/Invoke
+                // that cannot be cancelled, so a backoff loop leaks one per tick
+                // for as long as the app runs.
                 case CredentialOutcome.Denied:
                 case CredentialOutcome.NotLoggedIn:
+                case CredentialOutcome.NoAnswer:
                     return null;
 
                 case CredentialOutcome.Unreadable:

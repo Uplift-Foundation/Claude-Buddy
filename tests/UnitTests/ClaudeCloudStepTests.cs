@@ -35,6 +35,55 @@ public class ClaudeCloudStepTests
         }
     }
 
+    // A credential store that never answers.
+    //
+    // **This is the measured failure, not an invented one.** On a real Mac with no
+    // window server session, the Keychain's *data* query does not return — killed
+    // at 30 seconds and at 60 — while the attributes-only query answers instantly.
+    // So the fake blocks in Read() and not in Stamp(), which is the asymmetry that
+    // matters: an arm that could not get past Stamp() would have failed loudly
+    // long before this.
+    //
+    // The gate is released in Dispose so the borrowed thread is not left parked
+    // for the rest of the test run. Production has no such luxury, which is why
+    // the leak is written down in ReadWithinAsync rather than claimed away.
+    private sealed class HangingCredentials : ICloudCredentialSource, IDisposable
+    {
+        private readonly ManualResetEventSlim _gate = new(false);
+
+        internal int Reads;
+        internal int Stamps;
+
+        public string? Stamp()
+        {
+            Stamps++;
+            return "stamp-1";
+        }
+
+        public CredentialRead Read()
+        {
+            Interlocked.Increment(ref Reads);
+            _gate.Wait();
+            return new CredentialRead(CredentialOutcome.Found, Token, null, "too late");
+        }
+
+        public void Dispose()
+        {
+            _gate.Set();
+            _gate.Dispose();
+        }
+    }
+
+    // A store whose Read throws rather than hangs. A source that throws is a bug
+    // in the source; the arm still has to survive it.
+    private sealed class ThrowingCredentials : ICloudCredentialSource
+    {
+        public string? Stamp() => "stamp-1";
+
+        public CredentialRead Read() =>
+            throw new InvalidOperationException("SENSITIVE-EXCEPTION-TEXT");
+    }
+
     private sealed class FakeCredentials : ICloudCredentialSource
     {
         internal string? StampValue { get; set; } = "stamp-1";
@@ -637,6 +686,178 @@ public class ClaudeCloudStepTests
             ClaudeCloudSessions.ArmState.Initial, Now, CancellationToken.None);
 
         Assert.Equal("638000000000000000", step.Next.CredentialStamp);
+    }
+
+    // --- the store that never answers ----------------------------------------
+
+    // **The regression that matters.** Before the budget existed, this call did
+    // not return: StepAsync blocked inside the credential read, RunAsync's thread
+    // parked, StatusText stayed on "checking…" and the user got no orbs and no
+    // error. Silent, and indistinguishable from having no cloud sessions — the
+    // worst failure shape this repository has.
+    [Fact]
+    public async Task AStoreThatNeverAnswersDoesNotParkTheArm()
+    {
+        var api = new FakeApi(_ => throw new InvalidOperationException("must not be called"));
+        using var credentials = new HangingCredentials();
+
+        // **Raced against a wall clock, on a thread of its own.** Two deliberate
+        // choices, and the second one was learned the hard way.
+        //
+        // Racing rather than awaiting, because the regression this test exists for
+        // would otherwise show up as a CI leg that hangs until the runner's own
+        // timeout kills it — no failure, no message, nothing naming the test. A
+        // regression should fail in a second and say which assertion it was.
+        //
+        // **And Task.Run, because racing alone was not enough.** An async method
+        // runs synchronously up to its first real await, and in the un-budgeted
+        // version the credential read happens before any await — so
+        // `StepAsync(...)` blocked on the *calling* thread and never got as far as
+        // returning a Task to race. The control run proved it: with the budget
+        // removed, this test hung rather than failing, which is precisely the
+        // failure shape it was written to rule out. Verified afterwards by
+        // removing the budget again and watching it fail in ten seconds.
+        var step = Task.Run(() => ClaudeCloudSessions.StepAsync(api, credentials,
+            ClaudeCloudSessions.ArmState.Initial, Now, CancellationToken.None,
+            readBudget: TimeSpan.FromMilliseconds(50)));
+
+        var finished = await Task.WhenAny(step, Task.Delay(TimeSpan.FromSeconds(10)));
+
+        Assert.True(ReferenceEquals(finished, step),
+            "StepAsync did not return: the credential read parked the arm, which is the "
+            + "exact failure the read budget exists to prevent.");
+
+        await step;
+        Assert.Empty(api.Paths);
+        Assert.Equal(1, credentials.Reads);
+    }
+
+    // And it says what happened, in words that describe the observation rather
+    // than assert a mechanism nobody has proven.
+    [Fact]
+    public async Task AStoreThatNeverAnswersSaysSoOnTheStatusRow()
+    {
+        var api = new FakeApi(_ => throw new InvalidOperationException("must not be called"));
+        using var credentials = new HangingCredentials();
+
+        var step = await ClaudeCloudSessions.StepAsync(api, credentials,
+            ClaudeCloudSessions.ArmState.Initial, Now, CancellationToken.None,
+            readBudget: TimeSpan.FromMilliseconds(50));
+
+        Assert.Equal(ClaudeCliCredentials.Describe(CredentialOutcome.NoAnswer), step.Status);
+        Assert.Contains("did not answer", step.Status, StringComparison.Ordinal);
+        Assert.False(string.IsNullOrWhiteSpace(step.Next.Status));
+    }
+
+    // **And it does not retry.** A call that may be blocked waiting on a human is
+    // the definition of what must not be re-issued on a timer, and every attempt
+    // abandons a thread inside a P/Invoke that cannot be cancelled. So it halts,
+    // exactly as Denied does, and comes back only when the stamp moves or the user
+    // asks again.
+    [Fact]
+    public async Task AStoreThatNeverAnswersHaltsRatherThanSchedulingARetry()
+    {
+        var api = new FakeApi(_ => throw new InvalidOperationException("must not be called"));
+        using var credentials = new HangingCredentials();
+
+        var step = await ClaudeCloudSessions.StepAsync(api, credentials,
+            ClaudeCloudSessions.ArmState.Initial, Now, CancellationToken.None,
+            readBudget: TimeSpan.FromMilliseconds(50));
+
+        Assert.True(step.Next.Halted);
+        Assert.Null(step.Next.Backoff);
+
+        // The stamp-recheck cadence, which reads no secret and opens no socket —
+        // not a retry of the thing that hung.
+        Assert.Equal(ClaudeCloudSessions.HaltedRecheckInterval, step.Wait);
+        Assert.True(step.Wait >= ClaudeCloudSessions.HaltedRecheckInterval);
+    }
+
+    // The halt is a real halt: a second tick at the same stamp reads nothing at
+    // all, so the hung call is not made twice.
+    [Fact]
+    public async Task AHaltedArmDoesNotReachTheStoreASecondTime()
+    {
+        var api = new FakeApi(_ => throw new InvalidOperationException("must not be called"));
+        using var credentials = new HangingCredentials();
+
+        var first = await ClaudeCloudSessions.StepAsync(api, credentials,
+            ClaudeCloudSessions.ArmState.Initial, Now, CancellationToken.None,
+            readBudget: TimeSpan.FromMilliseconds(50));
+
+        var second = await ClaudeCloudSessions.StepAsync(api, credentials, first.Next, Now,
+            CancellationToken.None, readBudget: TimeSpan.FromMilliseconds(50));
+
+        Assert.Equal(1, credentials.Reads);
+        Assert.Equal(2, credentials.Stamps);
+        Assert.Null(second.Snapshot);
+        Assert.True(second.Next.Halted);
+    }
+
+    // Backoff agrees, which is where the "no timer" half is actually enforced.
+    [Fact]
+    public void NoAnswerIsAStopAndNotADelay()
+    {
+        Assert.Null(Backoff.Next(CredentialOutcome.NoAnswer, null));
+        Assert.Null(Backoff.Next(CredentialOutcome.NoAnswer, TimeSpan.FromSeconds(2)));
+    }
+
+    // The budget is generous rather than snappy, because the only thing a longer
+    // wait waits for is a person reading a consent dialog.
+    [Fact]
+    public void TheReadBudgetIsAPositiveUnmeasuredPlaceholder()
+    {
+        Assert.True(ClaudeCliCredentials.UnmeasuredReadBudget > TimeSpan.Zero);
+        Assert.True(ClaudeCliCredentials.UnmeasuredReadBudget >= TimeSpan.FromSeconds(30));
+    }
+
+    // A read that returns inside its budget is completely unaffected — the
+    // negative control, without which every test above is equally consistent with
+    // the budget having broken the ordinary path.
+    [Fact]
+    public async Task AStoreThatAnswersInTimeIsUntouchedByTheBudget()
+    {
+        var api = new FakeApi(_ => Ok(Envelope(new[] { Row("session_a") })));
+
+        var step = await ClaudeCloudSessions.StepAsync(api, new FakeCredentials(),
+            ClaudeCloudSessions.ArmState.Initial, Now, CancellationToken.None,
+            readBudget: TimeSpan.FromSeconds(30));
+
+        Assert.False(step.Next.Halted);
+        Assert.Single(step.Snapshot!);
+    }
+
+    // A source that throws is a bug in the source, not a crash in the arm — and
+    // the exception's own text does not reach the screen. This is the one call
+    // site in the app holding a secret; nothing that came out of it is rendered.
+    [Fact]
+    public async Task AStoreThatThrowsIsSurvivedAndItsTextIsNotShown()
+    {
+        var api = new FakeApi(_ => throw new InvalidOperationException("must not be called"));
+
+        var step = await ClaudeCloudSessions.StepAsync(api, new ThrowingCredentials(),
+            ClaudeCloudSessions.ArmState.Initial, Now, CancellationToken.None,
+            readBudget: TimeSpan.FromSeconds(5));
+
+        Assert.Empty(api.Paths);
+        Assert.DoesNotContain("SENSITIVE-EXCEPTION-TEXT", step.Status, StringComparison.Ordinal);
+        Assert.Equal(ClaudeCliCredentials.Describe(CredentialOutcome.Unreadable), step.Status);
+    }
+
+    // Cancellation is cancellation, not a timeout. A feature switched off while a
+    // read is in flight must not publish "the Keychain did not answer".
+    [Fact]
+    public async Task CancellingWhileAReadIsInFlightThrowsRatherThanReportingNoAnswer()
+    {
+        using var credentials = new HangingCredentials();
+        using var cts = new CancellationTokenSource();
+
+        var pending = ClaudeCliCredentials.ReadWithinAsync(credentials,
+            TimeSpan.FromMinutes(5), cts.Token);
+
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
     }
 
     // --- the initial state ---------------------------------------------------

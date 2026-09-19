@@ -122,6 +122,27 @@ The stored blob's shape, as parsed: `claudeAiOauth.accessToken` and `claudeAiOau
 
 `ClaudeCliCredentials.OrganizationUuidFrom` survives, but **nothing sends what it returns**. It was there because `x-organization-uuid` was believed mandatory; it is diagnostic now, and `tools/claude-cloud-probe` prints only whether one was found.
 
+### The attributes-only query is prompt-free and the data query is not, and the difference is load-bearing
+
+**Measured on a real Mac, and this is the finding that changed the code rather than only the documentation.** In a context with no window server session, `SecItemCopyMatching` with `kSecReturnData` — the query that reads the secret — **does not return**. Killed at 30 seconds and at 60, on two separately built binaries, so it is not code identity. The attributes-only query (`kSecReturnAttributes`, what `Stamp()` uses) answers instantly in the same context, every time.
+
+Earlier the same day the data query had succeeded from the same kind of context, returning in about a second. Between that success and the hang, the item's modification stamp moved — 811497348 → 811525914 — which is the CLI having refreshed its token and rewritten the item.
+
+**The mechanism is not established.** A rewrite resetting the item's ACL fits the timing. So does "the earlier success rode a grant that has since lapsed". Nobody has told the two apart, and nothing in the code is written as though the question were settled. What *is* established: it blocks, it is reproducible, and it is the secret read that it happens to.
+
+The consequence is what mattered, and it was the same under either story. `MacOSKeychain.OutcomeForStatus` maps `errSecInteractionNotAllowed` (−25308) to `Denied`, which is the right mapping for "wanted to prompt, could not" — **when it arrives**. Here it never arrives, so no OSStatus is produced and no branch runs. Called on the supervisor's own thread, that parked `RunAsync` forever: the status stayed on "checking…", there were no orbs and no error, and the whole thing was indistinguishable from an account with no cloud sessions. Silent failure that looks like a working empty state is the worst shape in this repository.
+
+`ClaudeCliCredentials.ReadWithinAsync` is the fix. It runs the read on a borrowed thread, waits `UnmeasuredReadBudget` (45s), and reports a new `CredentialOutcome.NoAnswer` when the call does not come back. Four things about it are deliberate:
+
+- **`NoAnswer` is named for the observation, not a mechanism.** `Unavailable` was rejected because it reads as retryable; `NoPrompt` because it asserts the unproven cause.
+- **It stops the arm rather than backing off**, exactly as `Denied` does, and comes back only when `Stamp()` moves or the user asks again. Two independent reasons: a call that may be waiting on a human is the definition of what must not be re-issued on a timer, and each attempt abandons a thread that cannot be recovered.
+- **The abandoned thread is leaked and that is written down rather than claimed away.** A blocked P/Invoke cannot be cancelled. There is no way to make the hung call stop; there is only a way to stop waiting for it.
+- **The budget is generous rather than snappy.** The only thing a longer wait waits for is a person reading a consent dialog, and cutting one of those off costs them a round trip through the settings window. 45 seconds is unmeasured; what would settle it is how long people actually take to answer an unexpected Keychain dialog, and whether the hang has any upper bound at all.
+
+There is a plausible fix one level lower — `kSecUseAuthenticationUI` set to `kSecUseAuthenticationUIFail` forces the call to return `errSecInteractionNotAllowed` instead of waiting for a UI it cannot show — and it is **deliberately not applied**, because it would suppress the consent prompt in the windowed case too, and that prompt is the entire user grant. Applying it only when there is no window server session would need the mechanism proven first.
+
+**One product consequence:** a CLI token refresh may re-prompt, so the settings copy cannot promise "Always Allow once and you are done".
+
 **The Keychain is read by P/Invoke into Security.framework, never by shelling out to `security find-generic-password`.** The macOS consent dialog names the calling binary. Going through the command-line tool would put `security` on that screen, and an "Always Allow" answered there would grant `/usr/bin/security` — every script on the machine — instead of Claude Buddy. CB-164 rejected minting our own OAuth token precisely because the consent screen would have named the wrong application; a helper binary is the same mistake with a broader blast radius.
 
 ## Token custody, and one honest limit
@@ -165,6 +186,8 @@ On macOS `read`, `list` and `roster` raise a Keychain consent prompt naming *thi
 **Rate limits or terms on calling this endpoint from a third-party desktop client.** Not investigated. `Backoff` is written to be a well-behaved guest — a 60-second floor on any 429 whatever `Retry-After` says — but that is caution, not knowledge.
 
 **Whether a 404 on a per-session read means the session ended.** Treated as "no news" and left for the next deep walk to resolve, because the alternative would drop an orb on one unlucky request.
+
+**Why the Keychain data query blocks with no window server session.** Reproducible and fixed around; the cause is open. See the section above for the two stories that fit the evidence equally well, and for the lower-level fix that is not being applied until one of them is ruled out.
 
 **Whether `kSecAttrAccount` needs constraining.** The query matches on service alone. The CLI appears to write one item under this service and the account name it uses was not measured, so pinning it would be an assumption that fails silently with `ItemNotFound` the day it is wrong.
 

@@ -379,6 +379,54 @@ public class ClaudeCloudEventsTests
         Assert.Equal(RemoteChatState.Error, chat.State);
     }
 
+    // The panel's read is budgeted for the same reason the arm's is: the secret
+    // read can block indefinitely with no window server session, and a panel whose
+    // load never returns is a spinner that never stops.
+    [Fact]
+    public async Task AStoreThatNeverAnswersLeavesThePanelInErrorRatherThanLoadingForever()
+    {
+        var api = new FakeApi(_ => throw new InvalidOperationException("must not be called"));
+        using var gate = new ManualResetEventSlim(false);
+
+        var chat = new ClaudeCloudChatSession(Session(), api,
+            new HangingCredentials(gate), action => action())
+        {
+            ReadBudget = TimeSpan.FromMilliseconds(50),
+        };
+
+        // Task.Run for the reason the arm's equivalent test spells out: an async
+        // method runs synchronously up to its first real await, so an un-budgeted
+        // read would block the calling thread before there was a Task to race.
+        var load = Task.Run(() => chat.LoadAsync(CancellationToken.None));
+        var finished = await Task.WhenAny(load, Task.Delay(TimeSpan.FromSeconds(10)));
+
+        Assert.True(ReferenceEquals(finished, load),
+            "LoadAsync did not return: the credential read parked the panel.");
+
+        Assert.False(await load);
+        Assert.Equal(RemoteChatState.Error, chat.State);
+        Assert.Empty(api.Paths);
+        Assert.Empty(chat.History);
+    }
+
+    // Blocks in Read and answers instantly in Stamp, which is the measured
+    // asymmetry — the data query hangs with no window server session and the
+    // attributes-only query does not.
+    private sealed class HangingCredentials : ICloudCredentialSource
+    {
+        private readonly ManualResetEventSlim _gate;
+
+        internal HangingCredentials(ManualResetEventSlim gate) => _gate = gate;
+
+        public string? Stamp() => "stamp-1";
+
+        public CredentialRead Read()
+        {
+            _gate.Wait();
+            return new CredentialRead(CredentialOutcome.Found, Token, null, "too late");
+        }
+    }
+
     [Fact]
     public async Task NoCredentialMeansNoRequestAtAll()
     {

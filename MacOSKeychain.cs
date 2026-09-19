@@ -33,6 +33,40 @@ namespace ClaudeBuddy
     //   prompts, and it is called only when a stamp change or a deliberate action
     //   says it is worth asking.
     //
+    // **That split is load-bearing rather than an optimisation, and the second
+    // query can block forever.** Measured on a real Mac during CB-164: in a
+    // context with no window server session, `SecItemCopyMatching` with
+    // kSecReturnData **does not return** — killed at 30 seconds and at 60, on two
+    // separately built binaries, so it is not code identity. The attributes-only
+    // query answers instantly in the same context, every time. Earlier the same
+    // day the data query had succeeded from the same kind of context, and between
+    // the two the item's modification stamp moved, i.e. the CLI refreshed its
+    // token.
+    //
+    // **The mechanism is not established and nothing here is written as though it
+    // were.** A rewrite resetting the item's ACL fits the timing; so does an
+    // earlier grant having lapsed. What is established is that it blocks, that it
+    // is reproducible, and that the secret read is the half it happens to.
+    //
+    // The consequence for the mapping below: **OutcomeForStatus assumes the API
+    // returns.** errSecInteractionNotAllowed (−25308) is exactly the code for
+    // "wanted to prompt, could not", and mapping it to Denied is right — when it
+    // arrives. In this context it never arrives, so no OSStatus is produced and
+    // no branch below runs. That gap cannot be closed here, because there is no
+    // status to map; it is closed one level up, by
+    // ClaudeCliCredentials.ReadWithinAsync, which waits on this call from another
+    // thread and reports CredentialOutcome.NoAnswer when it does not come back.
+    // The P/Invoke and the mapping are unchanged on purpose — neither was wrong.
+    //
+    // There is a plausible fix at this level and it is deliberately not applied:
+    // kSecUseAuthenticationUI set to kSecUseAuthenticationUIFail forces the call
+    // to return errSecInteractionNotAllowed rather than wait for a UI it cannot
+    // show. It is not applied because it would suppress the consent prompt in the
+    // *windowed* case too, and that prompt is the entire user grant this file
+    // exists to put in front of the right binary. Applying it only when there is
+    // no window server session would need the mechanism proven first. Evaluate it
+    // if and when somebody pins the cause down.
+    //
     // Nothing here logs, caches or stores what it reads. The JSON comes back as a
     // string handed straight to the caller; see the custody rules in
     // ClaudeCliCredentials for what that string may and may not be used for, and

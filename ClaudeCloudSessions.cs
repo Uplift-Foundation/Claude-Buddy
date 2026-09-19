@@ -157,12 +157,19 @@ namespace ClaudeBuddy
             TimeSpan Wait);
 
         // One tick. Every decision this arm makes is here.
+        //
+        // `readBudget` is how long the credential read is given before the arm
+        // gives up on it — a parameter rather than a constant read inside so a
+        // test can drive the give-up path in milliseconds instead of waiting
+        // three quarters of a minute. Production passes nothing and gets
+        // ClaudeCliCredentials.UnmeasuredReadBudget.
         internal static async Task<StepResult> StepAsync(
             ICloudApi api,
             ICloudCredentialSource credentials,
             ArmState state,
             DateTime now,
-            CancellationToken ct)
+            CancellationToken ct,
+            TimeSpan? readBudget = null)
         {
             var stamp = credentials.Stamp();
 
@@ -173,7 +180,17 @@ namespace ClaudeBuddy
                 return new StepResult(state, null, state.Status, HaltedRecheckInterval);
             }
 
-            var read = credentials.Read();
+            // **Never `credentials.Read()` directly.** On macOS that is a P/Invoke
+            // into Security.framework which, in a context with no window server
+            // session, was measured not to return at all — at 30 seconds and at 60.
+            // Called on this thread it parks the supervisor forever, leaving the
+            // status on "checking…" and the user with no orbs and no error, which
+            // is indistinguishable from having no cloud sessions. The budget is the
+            // only thing standing between that measurement and a silent app.
+            var read = await ClaudeCliCredentials.ReadWithinAsync(
+                credentials, readBudget ?? ClaudeCliCredentials.UnmeasuredReadBudget, ct)
+                .ConfigureAwait(false);
+
             if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token)
             {
                 var wait = Backoff.Next(read.Outcome, state.Backoff);

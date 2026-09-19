@@ -141,6 +141,13 @@ namespace ClaudeBuddy
 
         private RemoteChatState _state = RemoteChatState.Connecting;
 
+        // How long a credential read is given before this panel gives up on it.
+        // An init-only property rather than a constructor parameter so the shape
+        // the UI layer constructs stays four arguments; tests set it to
+        // milliseconds to drive the give-up path. See
+        // ClaudeCliCredentials.ReadWithinAsync for why a budget exists at all.
+        internal TimeSpan ReadBudget { get; init; } = ClaudeCliCredentials.UnmeasuredReadBudget;
+
         // The seam that keeps this class testable without an Avalonia app.
         //
         // Requirement 1 on any IRemoteChatSession is that every event is raised on
@@ -216,7 +223,12 @@ namespace ClaudeBuddy
         // identical on screen and only one of them is worth saying something about.
         internal async Task<bool> LoadAsync(CancellationToken ct)
         {
-            var read = _credentials.Read();
+            // Budgeted for the same reason the arm's read is: the secret read can
+            // block indefinitely with no window server session, and a panel whose
+            // load never returns is a spinner that never stops.
+            var read = await ClaudeCliCredentials
+                .ReadWithinAsync(_credentials, ReadBudget, ct).ConfigureAwait(false);
+
             if (read.Outcome != CredentialOutcome.Found || read.AccessToken is not { } token)
             {
                 Publish(RemoteChatState.Error);
