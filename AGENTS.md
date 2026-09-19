@@ -41,7 +41,7 @@ Then it writes a plan, and **plans on a stronger model than the one that impleme
 
 Those are the `model:` values the Agent and Workflow tools accept; `effort:` is the other dial and moves the same way — high while planning, lower for mechanical stages.
 
-**If the PM isn't confident the requirement and plan support autonomous implementation, it asks a human before spending a team.** Ask on GitHub with a link to the CB ticket, and — this repo is public, the Jira site is not — enough of the requirement inline that the question stands alone for someone who can't open the link. Repo admins are the escalation point (`wtvamp`, `lunarjuice` at time of writing; `gh api repos/Uplift-Foundation/Claude-Buddy/collaborators` is the live list). If it *is* confident, it hands straight to the architects and engineers and no human is in the loop.
+**If the PM isn't confident the requirement and plan support autonomous implementation, it asks a human before spending a team.** Ask on GitHub with a link to the CB ticket, and — the Jira site needs its own login separate from GitHub's — enough of the requirement inline that the question stands alone for someone who can't open the link. Repo admins are the escalation point (`wtvamp`, `lunarjuice` at time of writing; `gh api repos/Uplift-Foundation/Claude-Buddy/collaborators` is the live list). If it *is* confident, it hands straight to the architects and engineers and no human is in the loop.
 
 ### Build and QA, in a loop
 
@@ -53,7 +53,7 @@ Engineers and architects build, QA tests, back and forth until it stops coming b
 
 The feature goes up as a PR against `develop`, per **Pull requests** below.
 
-**Don't attach screenshots by hand — they're already automatic.** `ci.yml` captures a PNG per `tests/UiScreenshots` scenario on both runners, and `publish-screenshots.yml` picks them up on a `workflow_run` trigger, pushes them to the `screenshots` branch and comments on the PR with real `raw.githubusercontent.com` URLs labelled per rid. (Two workflows because a `pull_request` run from a fork gets a read-only token, and every PR here is one.) A feature with a visible surface adds its capture there; that comment is what gets reviewed.
+**Don't attach screenshots by hand — they're already automatic.** `ci.yml` captures a PNG per `tests/UiScreenshots` scenario on both runners, and `publish-screenshots.yml` picks them up on a `workflow_run` trigger, pushes them to the `screenshots` branch and comments on the PR with real `github.com/.../raw/...` URLs labelled per rid — `github.com`, not `raw.githubusercontent.com` (CB-118): the latter is a separate origin blind to the viewer's `github.com` session, so it 404s in a browser for a private repo even with full read access, while `github.com/<owner>/<repo>/raw/<branch>/<path>` is same-origin with the comment page and 302s through a freshly signed raw URL on every load. (Two workflows because a `pull_request` run from a fork gets a read-only token, and every PR here is one.) A feature with a visible surface adds its capture there; that comment is what gets reviewed.
 
 The PM agent reviews it — **both** rids, since that is exactly where a macOS-only implementation shows itself — and **if it can approve the feature as done autonomously, it should**: approving the PR itself, and moving the ticket accordingly.
 
