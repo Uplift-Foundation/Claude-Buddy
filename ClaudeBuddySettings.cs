@@ -81,7 +81,7 @@ namespace ClaudeBuddy
             "speakCommand", "speakCommandArgs",
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "grokHomes", "profiles", "orbPositions",
-            "chatPanelSizes", "arrangeAnchor", "chatTextScale",
+            "chatPanelSizes", "pinnedChatPanels", "arrangeAnchor", "chatTextScale",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
             // Still written, though nothing reads it into the model any more —
@@ -558,6 +558,21 @@ namespace ClaudeBuddy
             // an agent's panel and its orb agree about what counts as the same
             // agent, rather than drifting apart on a retitle.
             public Dictionary<string, PanelSize> ChatPanelSizes { get; init; } =
+                new(StringComparer.OrdinalIgnoreCase);
+
+            // CB-111: which chat panels were pinned when the app last quit,
+            // and where each one was — the two things CB-110 deliberately did
+            // not persist, because a pin then died with the process. Presence
+            // in this dictionary *is* "pinned"; there is no separate bool,
+            // the same way a size is only ever recorded for a panel that was
+            // actually resized. Keyed by PositionKey rather than session id
+            // for the identical reason ChatPanelSizes is — see its own
+            // comment — and stored as an OrbPlacement rather than a new
+            // record because a pinned panel's saved spot is exactly the same
+            // shape of value an orb's is: physical pixels on the virtual
+            // desktop, clamped back onto a real screen by whoever restores
+            // it rather than by this file.
+            public Dictionary<string, OrbPlacement> PinnedChatPanels { get; init; } =
                 new(StringComparer.OrdinalIgnoreCase);
 
             // Distinct from Profiles above (Claude Desktop, the Electron app):
@@ -1170,6 +1185,62 @@ namespace ClaudeBuddy
             Save();
         }
 
+        // ---- pinned chat panels (CB-111) -------------------------------------
+
+        // Null means "not pinned, or pinned with nothing saved yet" — the same
+        // reading OrbPositionFor gives, and for the same reason: this is not a
+        // setting anyone edits, it is a record of the one thing pinning is
+        // asked to remember.
+        public static OrbPlacement? PinnedChatPanelPositionFor(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+
+            Load();
+            lock (Gate) return _model.PinnedChatPanels.GetValueOrDefault(key);
+        }
+
+        // Called once when a panel is pinned (its position at that instant is
+        // worth remembering even though it hasn't moved) and again on every
+        // drag of an already-pinned panel — ChatPanel only calls this while
+        // _pinned is true, so an unpinned panel being dragged around (there is
+        // no such gesture today, but if one existed) would never reach here.
+        public static void SetPinnedChatPanelPosition(string key, int x, int y)
+        {
+            // No key means no stable identity to save under, same guard as
+            // SetChatPanelSize and for the same reason: a local CLI session
+            // with no cwd has nowhere to be found again next run.
+            if (string.IsNullOrEmpty(key)) return;
+
+            Load();
+            lock (Gate)
+            {
+                var existing = _model.PinnedChatPanels.GetValueOrDefault(key);
+                if (existing is not null && existing.X == x && existing.Y == y) return;
+                _model.PinnedChatPanels[key] = new OrbPlacement(x, y);
+            }
+
+            Save();
+        }
+
+        // Unpinning is the only thing that clears this — not the panel
+        // closing, not the session ending, not the app quitting. Those three
+        // all reach the same Window.Closed path (ChatPanel.Dissolve via
+        // CloseFor, or the desktop lifetime's own Shutdown() closing every
+        // window), and a save that could not tell "the app is quitting" apart
+        // from "this conversation is over" would erase every pin on every
+        // restart — which is the one thing this ticket exists to stop. See
+        // ReturnOrbToStack's identical choice for OrbPositions.
+        public static void ClearPinnedChatPanelPosition(string key)
+        {
+            Load();
+            lock (Gate)
+            {
+                if (!_model.PinnedChatPanels.Remove(key)) return;
+            }
+
+            Save();
+        }
+
         // ---- extra Claude Code (CLI) profile directories ---------------------
 
         // A copy, so callers can't mutate the store without going through
@@ -1538,6 +1609,30 @@ namespace ClaudeBuddy
                         }
                     }
 
+                    if (root["pinnedChatPanels"] is JsonObject pinned)
+                    {
+                        // Number(), not GetValue<int>() the way orbPositions
+                        // above still does — this dictionary is new with
+                        // CB-111 rather than a retrofit of a live block (see
+                        // Number's own comment on why that distinction
+                        // matters), so there is no reason for it to start out
+                        // with the same hole: a hand-edited `"x": "wide"`
+                        // would otherwise throw out of this loop and be
+                        // caught by Load's one catch-all, resetting every
+                        // other setting in the file rather than costing only
+                        // this one pin.
+                        foreach (var (key, node) in pinned)
+                        {
+                            if (node is not JsonObject entry) continue;
+
+                            var x = Number(entry["x"]);
+                            var y = Number(entry["y"]);
+                            if (x is null || y is null) continue;
+
+                            model.PinnedChatPanels[key] = new OrbPlacement((int)x.Value, (int)y.Value);
+                        }
+                    }
+
                     if (root["arrangeAnchor"] is JsonObject anchor)
                     {
                         var ax = anchor["x"]?.GetValue<int>();
@@ -1710,6 +1805,16 @@ namespace ClaudeBuddy
                         };
                     }
 
+                    var pinnedChatPanels = new JsonObject();
+                    foreach (var (key, placement) in _model.PinnedChatPanels)
+                    {
+                        pinnedChatPanels[key] = new JsonObject
+                        {
+                            ["x"] = placement.X,
+                            ["y"] = placement.Y
+                        };
+                    }
+
                     var arrangeAnchor = _model.ArrangeAnchor is { } anchor
                         ? new JsonObject { ["x"] = anchor.X, ["y"] = anchor.Y }
                         : null;
@@ -1824,6 +1929,7 @@ namespace ClaudeBuddy
                         ["profiles"] = profiles,
                         ["orbPositions"] = positions,
                         ["chatPanelSizes"] = panelSizes,
+                        ["pinnedChatPanels"] = pinnedChatPanels,
                         ["arrangeAnchor"] = arrangeAnchor
                     };
 

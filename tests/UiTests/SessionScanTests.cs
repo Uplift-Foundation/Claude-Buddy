@@ -644,6 +644,74 @@ public class SessionScanTests
         }
     }
 
+    // --- pinned chat panels (CB-111) ----------------------------------------
+
+    // The scan-driven half of CB-111, proven the same way
+    // AnOrbGoesBackToWhereItWasDraggedAndReturningItToTheStackForgets proves
+    // it for the orb itself: a second SessionManager over the same directory
+    // is what a restarted app's first scan looks like, and that is the only
+    // restart this process can actually perform. The panel is closed with
+    // CloseFor rather than unpinned first — CloseFor is what OrbWindow's own
+    // Closed handler reaches, which is also what the desktop lifetime's
+    // Shutdown() reaches for every window when the app quits — so this is
+    // the real path a pin has to survive, not a shortcut around it.
+    [AvaloniaFact]
+    public void APinnedChatPanelReopensAtItsSavedPositionAfterARestart()
+    {
+        using var scratch = new Scratch();
+        scratch.Write("session-a", title: "a name");
+
+        var key = SessionManager.PositionKeyFor(
+            new SessionStatus { Source = SessionSource.ClaudeCode, Cwd = "/Users/user/project", Title = "a name" },
+            "session-a");
+
+        try
+        {
+            var manager = Scan(scratch);
+            var window = WindowFor(manager, "session-a");
+
+            var chat = manager.RemoteChatFor("session-a");
+            Assert.NotNull(chat);
+
+            ChatPanel.OpenFor(window, chat!);
+            Dispatcher.UIThread.RunJobs();
+
+            var panel = ChatPanel.PanelFor("session-a")!;
+            panel.TogglePin();
+            panel.Position = new PixelPoint(444, 333);
+            Dispatcher.UIThread.RunJobs();
+
+            var saved = ClaudeBuddySettings.PinnedChatPanelPositionFor(key);
+            Assert.NotNull(saved);
+            Assert.Equal(444, saved!.X);
+            Assert.Equal(333, saved.Y);
+
+            // The app quitting, simulated: every window closes, nothing is
+            // unpinned.
+            ChatPanel.CloseFor("session-a");
+            Dispatcher.UIThread.RunJobs();
+            Assert.Null(ChatPanel.PanelFor("session-a"));
+
+            var restored = Scan(scratch);
+            Dispatcher.UIThread.RunJobs();
+
+            var restoredPanel = ChatPanel.PanelFor("session-a");
+            Assert.NotNull(restoredPanel);
+            Assert.True(restoredPanel!.IsPinned);
+            Assert.Equal(new PixelPoint(444, 333), restoredPanel.Position);
+            Assert.True(ChatPanel.IsOpenFor("session-a"));
+
+            // Not a stray manager-independent fact — the restored window is
+            // the one actually reflected in the new manager's own registry.
+            Assert.NotNull(WindowFor(restored, "session-a"));
+        }
+        finally
+        {
+            ChatPanel.CloseFor("session-a");
+            ClaudeBuddySettings.ClearPinnedChatPanelPosition(key);
+        }
+    }
+
     private static OrbWindow WindowFor(SessionManager manager, string sessionId)
     {
         var field = typeof(SessionManager).GetField(
