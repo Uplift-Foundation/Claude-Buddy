@@ -131,8 +131,18 @@ namespace ClaudeBuddy
 
         // The organisation the account belongs to, out of `~/.claude.json`.
         //
-        // `x-organization-uuid` is one of the six headers the endpoint refuses a
-        // request without, so this is load-bearing rather than decorative.
+        // **Not sent anywhere, and that correction is the point of this comment.**
+        // It used to say `x-organization-uuid` was one of six headers the endpoint
+        // refuses a request without. That was measured against claude.ai, which is
+        // the wrong host — against api.anthropic.com the header is ignored, along
+        // with the other three claude.ai-specific ones, and only Authorization and
+        // anthropic-version are required. `CloudRequestContext` no longer has a
+        // field to put this in.
+        //
+        // Kept because it is the only place in the app that can name the account's
+        // organisation, and `tools/claude-cloud-probe` still prints whether one was
+        // found — a useful thing to know when diagnosing whose credential is in the
+        // store. It is diagnostic now rather than load-bearing.
         internal static string? OrganizationUuidFrom(string? claudeJson)
         {
             if (string.IsNullOrWhiteSpace(claudeJson)) return null;
