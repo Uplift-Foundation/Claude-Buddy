@@ -2,6 +2,8 @@ using System;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace ClaudeBuddy
 {
@@ -79,6 +81,28 @@ namespace ClaudeBuddy
         // failure an undocumented dependency produces, and it is the one worth
         // surfacing differently from a transient read error.
         Malformed,
+
+        // **The store never answered at all.** Not an error code — the absence of
+        // one. Measured on a real Mac: in a context with no window server session,
+        // the *data* query into Security.framework does not return, at 30 seconds
+        // and at 60. The attributes-only query is unaffected and answers instantly,
+        // every time, which is what makes this a property of the secret read rather
+        // than of the Keychain being unreachable.
+        //
+        // **Named for the observation, not for a mechanism.** The obvious story is
+        // that a CLI token refresh rewrote the item and reset its ACL, and the
+        // timing fits — the stamp moved between a working read and a hanging one.
+        // But so does "the earlier success rode a grant that has since lapsed", and
+        // nobody has told the two apart. `Unavailable` was rejected as a name
+        // because it reads as retryable and this must never be retried on a timer;
+        // `NoPrompt` was rejected because it asserts the unproven cause.
+        //
+        // What is *not* in doubt is the consequence, and it is the worst failure
+        // shape this repository has: before CB-164 put a budget around the read,
+        // the supervisor thread simply parked, the status stayed on "checking…"
+        // forever, and the user got no orbs and no error — indistinguishable from
+        // having no cloud sessions.
+        NoAnswer,
     }
 
     // One reading of the credential store.
@@ -131,8 +155,18 @@ namespace ClaudeBuddy
 
         // The organisation the account belongs to, out of `~/.claude.json`.
         //
-        // `x-organization-uuid` is one of the six headers the endpoint refuses a
-        // request without, so this is load-bearing rather than decorative.
+        // **Not sent anywhere, and that correction is the point of this comment.**
+        // It used to say `x-organization-uuid` was one of six headers the endpoint
+        // refuses a request without. That was measured against claude.ai, which is
+        // the wrong host — against api.anthropic.com the header is ignored, along
+        // with the other three claude.ai-specific ones, and only Authorization and
+        // anthropic-version are required. `CloudRequestContext` no longer has a
+        // field to put this in.
+        //
+        // Kept because it is the only place in the app that can name the account's
+        // organisation, and `tools/claude-cloud-probe` still prints whether one was
+        // found — a useful thing to know when diagnosing whose credential is in the
+        // store. It is diagnostic now rather than load-bearing.
         internal static string? OrganizationUuidFrom(string? claudeJson)
         {
             if (string.IsNullOrWhiteSpace(claudeJson)) return null;
@@ -259,8 +293,84 @@ namespace ClaudeBuddy
             CredentialOutcome.Denied => "access to the Claude Code login was denied",
             CredentialOutcome.Unreadable => "the Claude Code login could not be read",
             CredentialOutcome.Malformed => "the Claude Code login is not in a shape this version understands",
+            CredentialOutcome.NoAnswer =>
+                "the Keychain did not answer — this can happen when no one is logged in at the screen",
             _ => "the Claude Code login is in an unknown state",
         };
+
+        // How long to wait for a read before giving up on it.
+        //
+        // **Generous rather than snappy, deliberately.** A read that can answer
+        // answers in milliseconds; the only thing a longer budget waits for is a
+        // human looking at a consent dialog, and cutting one of those off is the
+        // expensive mistake here — the arm halts on a timeout and stays halted
+        // until the stamp moves or the user asks again, so abandoning a prompt
+        // somebody was about to approve costs them a round trip through the
+        // settings window. Waiting 45 seconds in the broken case costs nobody
+        // anything, because this is a background poll behind an ambient overlay
+        // and it runs off the supervisor's thread.
+        //
+        // **The number itself is unmeasured.** Two things would settle it: how
+        // long a person actually takes to answer a Keychain dialog they were not
+        // expecting, and whether the hang has any upper bound at all (it was
+        // killed at 30s and 60s, never observed to return). Named Unmeasured for
+        // the reason CB-122 exists.
+        internal static readonly TimeSpan UnmeasuredReadBudget = TimeSpan.FromSeconds(45);
+
+        // Read the credential, or give up.
+        //
+        // **The read happens on a borrowed thread and the caller's never blocks.**
+        // That is the whole point: `ICloudCredentialSource.Read()` is a P/Invoke on
+        // macOS and a blocked P/Invoke cannot be cancelled, so there is no way to
+        // make the hung call stop. What there is a way to do is stop *waiting* for
+        // it, which is what keeps the supervisor alive to say what happened.
+        //
+        // **The abandoned thread is leaked, and that is a real cost written down
+        // rather than claimed away.** A pool thread parked inside Security.framework
+        // never comes back. One is survivable. A poll that retried this every thirty
+        // seconds would lose one thread per attempt for as long as the app ran, which
+        // is the second independent reason `NoAnswer` stops the arm rather than
+        // backing off — the first being that retrying a call which may be waiting on
+        // a human is how a pile of consent prompts gets queued up.
+        internal static async Task<CredentialRead> ReadWithinAsync(
+            ICloudCredentialSource source, TimeSpan budget, CancellationToken ct)
+        {
+            // Not cancelled by ct: cancelling the wait is the point, and handing ct
+            // to the work as well would only mean the abandoned thread carried a
+            // token nothing can act on.
+            var read = Task.Run(source.Read, CancellationToken.None);
+
+            using var timer = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var finished = await Task.WhenAny(read, Task.Delay(budget, timer.Token))
+                .ConfigureAwait(false);
+
+            if (!ReferenceEquals(finished, read))
+            {
+                ct.ThrowIfCancellationRequested();
+
+                return new CredentialRead(CredentialOutcome.NoAnswer, null, null,
+                    "the credential store did not answer");
+            }
+
+            // The delay is still pending whenever the read won the race. Cancelled
+            // rather than left to fire, because this runs on a poll and an orphaned
+            // timer per tick is a slow leak of exactly the kind nobody notices.
+            timer.Cancel();
+
+            try
+            {
+                return await read.ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // A source that throws is a bug in the source, not a state the arm
+                // should crash on. The exception's own text is deliberately not
+                // carried into the detail: this is the one call site in the app
+                // holding a secret, and nothing that came out of it goes on screen.
+                return new CredentialRead(CredentialOutcome.Unreadable, null, null,
+                    "the credential store failed while being read");
+            }
+        }
 
         // Which store this platform keeps it in.
         //

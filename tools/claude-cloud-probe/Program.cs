@@ -6,21 +6,22 @@ using ClaudeBuddy;
 //
 // ## What the question is
 //
-// CB-164 measured that claude.ai's `/v1/code/sessions` accepts an OAuth Bearer
-// token as a first-class scheme — a well-formed-but-invalid one is refused with
-// "OAuth access token is invalid.", where no credential, an empty Bearer and a
-// bogus x-api-key all fall through to a generic "Authentication failed". That
-// asymmetry is the measurement, and the negative controls are what make it one.
+// CB-164 settled the load-bearing one — the Claude Code CLI's own stored token
+// is accepted at `GET https://api.anthropic.com/v2/ccr-sessions`, returning 200
+// with two headers and no cookie. What is left for this tool is everything that
+// needs a real credential and a real roster: confirming the store still holds
+// what we think it holds on a given machine, and capturing the *shape* of a
+// payload without capturing anybody's session titles.
 //
-// **What it does not establish is whether the Claude Code CLI's own stored token
-// is accepted here.** A token minted for one audience can be perfectly
-// well-formed and still refused by another, and that refusal reads *identically*
-// to the placeholder's. Telling the two apart needs the real token, and nothing
-// short of sending it will do it.
+// It runs the shipped code — the same credential source the app uses, the same
+// request builder, the same status mapping — so its answer is the app's answer
+// rather than a second opinion.
 //
-// This tool is the way to send it. It runs the shipped code — the same
-// credential source the app would use, the same six headers, the same status
-// mapping — so its answer is the app's answer rather than a second opinion.
+// **The host matters and is the trap this ticket paid for.** Aimed at claude.ai,
+// the identical request is answered by a Cloudflare challenge that looks exactly
+// like an auth failure — the same 403 for a real token and a bogus one. If this
+// tool ever reports something that reads as "the account is not allowed", check
+// the host before checking the account.
 //
 // ## Why it is a separate binary rather than something the app does
 //
@@ -66,8 +67,9 @@ internal static class Program
         return args[0] switch
         {
             "stamp" => Stamp(),
-            "read" => Read(flags),
+            "read" => await ReadAsync(flags),
             "list" => await ListAsync(flags),
+            "roster" => await RosterAsync(),
             _ => UnknownCommand(args[0]),
         };
     }
@@ -80,6 +82,7 @@ internal static class Program
             "  read --keys-only   which fields were found, and the outcome (no token value)\n" +
             "  list --raw         make the real call; print status and body\n" +
             "  list --shape       make the real call; print field names and types only\n" +
+            "  roster             make the real call; print the environment-kind histogram\n" +
             "\n" +
             "On macOS, `read` and `list` raise a Keychain consent prompt naming this\n" +
             "binary. That prompt is the point: answer it yourself.");
@@ -97,10 +100,75 @@ internal static class Program
     private static ICloudCredentialSource Source() =>
         ClaudeCliCredentials.SourceFor(OperatingSystem.IsMacOS(), Home);
 
+    // How long this tool waits for the credential store before giving up.
+    //
+    // **Deliberately much shorter than the app's 45 seconds, and the reason is
+    // who is waiting.** ClaudeCliCredentials.UnmeasuredReadBudget is generous
+    // because the arm is a background poll that may be waiting on a person
+    // reading a consent dialog, and cutting one of those off costs them a round
+    // trip through the settings window. Nobody is reading a dialog here: they are
+    // watching a cursor blink in a terminal, having run a *diagnostic*, most
+    // likely because the credential read is already misbehaving.
+    //
+    // **A diagnostic that hangs when the thing it diagnoses is broken is the
+    // worst possible shape for one** — it turns a legible answer into an
+    // indefinite wait at exactly the moment somebody needs the answer. That is
+    // what this constant exists to prevent, and it is why the probe does not
+    // simply reuse the app's number.
+    //
+    // Unmeasured, like the app's. Ten seconds is "longer than a working read has
+    // ever taken by three orders of magnitude, and shorter than a person's
+    // patience".
+    private static readonly TimeSpan UnmeasuredProbeReadBudget = TimeSpan.FromSeconds(10);
+
+    // Every secret read in this file goes through here.
+    //
+    // **There is no unbudgeted path left, and that is the point rather than the
+    // tidiness.** The app was fixed first and this file was left calling the
+    // source's read method directly at three call sites, so `roster` still hung
+    // for a hundred seconds against a Keychain the app itself handled correctly in
+    // 45. A diagnostic that hangs on the condition it diagnoses is worse than no
+    // diagnostic, because it consumes the attention of whoever is trying to find
+    // out what is wrong.
+    //
+    // CredentialBudgetTests guards it: nothing in the app or this tool may reach a
+    // credential source's read except through ClaudeCliCredentials.
+    private static async Task<CredentialRead> ReadCredentialAsync()
+    {
+        var read = await ClaudeCliCredentials.ReadWithinAsync(
+            Source(), UnmeasuredProbeReadBudget, CancellationToken.None);
+
+        if (read.Outcome == CredentialOutcome.NoAnswer)
+        {
+            // The extra sentence the app cannot usefully show on a one-line status
+            // row, and which is the whole reason somebody ran this.
+            Console.Error.WriteLine(
+                $"the credential store did not answer within {UnmeasuredProbeReadBudget.TotalSeconds:0}s.");
+            Console.Error.WriteLine(
+                "The read may be waiting on a Keychain prompt that cannot be displayed here —");
+            Console.Error.WriteLine(
+                "this has been measured in contexts with no window server session (no one logged");
+            Console.Error.WriteLine(
+                "in at the screen, or a background job). Try `stamp`, which asks only for");
+            Console.Error.WriteLine(
+                "attributes, never prompts, and has kept answering when this call does not.");
+        }
+
+        return read;
+    }
+
     // Attributes only on macOS, an mtime elsewhere. Neither returns secret
     // material and neither prompts, so this is the subcommand to run first: it
     // says whether there is anything to read at all before anyone is asked to
     // approve reading it.
+    //
+    // **Deliberately not routed through ReadCredentialAsync, and deliberately not
+    // wrapped in anything at all.** This is the attributes-only query. It has
+    // never been observed to hang — including in the contexts where the data read
+    // does not return at all — which makes it the one thing that still answers
+    // when the other one will not, and therefore the first thing to run when
+    // diagnosing this. Putting a budget or a thread hop around it could only make
+    // that less true.
     private static int Stamp()
     {
         var stamp = Source().Stamp();
@@ -114,7 +182,7 @@ internal static class Program
         return 0;
     }
 
-    private static int Read(string[] flags)
+    private static async Task<int> ReadAsync(string[] flags)
     {
         if (!flags.Contains("--keys-only"))
         {
@@ -124,7 +192,7 @@ internal static class Program
             return 2;
         }
 
-        var read = Source().Read();
+        var read = await ReadCredentialAsync();
 
         Console.WriteLine($"outcome  {read.Outcome}");
         Console.WriteLine($"meaning  {ClaudeCliCredentials.Describe(read.Outcome)}");
@@ -144,6 +212,10 @@ internal static class Program
             Console.WriteLine("token    none");
         }
 
+        // Printed as a presence, never as a value, and nothing sends it — see
+        // ClaudeCliCredentials.OrganizationUuidFrom. It is here because knowing
+        // *whether* the config names an organisation is useful when working out
+        // whose credential is in the store.
         var orgUuid = OrganizationUuid();
         Console.WriteLine($"org      {(orgUuid is null ? "(not found in ~/.claude.json)" : "found")}");
 
@@ -180,7 +252,7 @@ internal static class Program
             return 2;
         }
 
-        var read = Source().Read();
+        var read = await ReadCredentialAsync();
         if (read.Outcome != CredentialOutcome.Found || read.AccessToken is null)
         {
             Console.Error.WriteLine(
@@ -189,18 +261,16 @@ internal static class Program
             return 1;
         }
 
-        var orgUuid = OrganizationUuid();
-        if (orgUuid is null)
-        {
-            Console.Error.WriteLine(
-                "no organizationUuid in ~/.claude.json. The endpoint refuses a request without\n" +
-                "the x-organization-uuid header, so there is nothing to send.");
-            return 1;
-        }
-
+        // **No organisation gate any more.** This used to refuse to make the call
+        // at all without an `organizationUuid` out of `~/.claude.json`, because
+        // `x-organization-uuid` was believed mandatory. It is claude.ai's header;
+        // api.anthropic.com ignores it. A probe that refuses to run for want of a
+        // value nothing sends is a diagnostic that reports its own assumption as
+        // the machine's problem.
         using var api = new HttpCloudApi();
-        var result = await api.ListAsync(
-            new CloudRequestContext(read.AccessToken, orgUuid, CloudRequest.SessionsPath),
+        var result = await api.GetAsync(
+            new CloudRequestContext(read.AccessToken,
+                CloudRequest.ListPath(CloudRequest.MaxPageSize, null)),
             CancellationToken.None);
 
         Console.WriteLine($"outcome  {result.Outcome.Kind}");
@@ -222,6 +292,72 @@ internal static class Program
 
         Console.WriteLine("shape:");
         Console.WriteLine(Shape(result.Body));
+        return 0;
+    }
+
+    // The whole roster, reduced to counts.
+    //
+    // **This is the subcommand that answers "is the filter still right".** It
+    // walks every page the way the app does, runs the shipped
+    // ClaudeCloudRoster.Reduce over the result and prints the environment-kind
+    // histogram plus the status sentence the settings window would show. No
+    // titles, no ids, no timestamps — a count per kind is a fact about the
+    // account's shape and names nobody.
+    //
+    // A run showing 573 bridge and 5 anthropic_cloud is the measurement CB-164
+    // was built on. A run showing a kind this version does not know is the
+    // earliest warning that the filter has stopped matching, and it is much
+    // cheaper to read here than to diagnose from a screenshot of missing orbs.
+    private static async Task<int> RosterAsync()
+    {
+        var read = await ReadCredentialAsync();
+        if (read.Outcome != CredentialOutcome.Found || read.AccessToken is null)
+        {
+            Console.Error.WriteLine(
+                $"no usable credential: {ClaudeCliCredentials.Describe(read.Outcome)}");
+            return 1;
+        }
+
+        using var api = new HttpCloudApi();
+
+        var pages = new List<ClaudeCloudRoster.Page>();
+        string? after = null;
+
+        for (var i = 0; i < CloudRequest.MaxPagesPerWalk; i++)
+        {
+            var result = await api.GetAsync(
+                new CloudRequestContext(read.AccessToken,
+                    CloudRequest.ListPath(CloudRequest.MaxPageSize, after)),
+                CancellationToken.None);
+
+            if (result.Outcome.Kind != CloudOutcomeKind.Ok)
+            {
+                Console.Error.WriteLine($"page {i + 1}: {result.Outcome.Kind} {result.Outcome.Status}");
+                if (result.Outcome.Detail is { } why) Console.Error.WriteLine($"  {why}");
+                return 1;
+            }
+
+            var page = ClaudeCloudRoster.ParsePage(result.Body);
+            pages.Add(page);
+
+            if (!page.HasMore || page.LastId is null) { after = null; break; }
+            after = page.LastId;
+        }
+
+        var reduction = ClaudeCloudRoster.Reduce(pages, after is not null);
+
+        Console.WriteLine($"pages     {pages.Count}");
+        Console.WriteLine($"inspected {reduction.Inspected}");
+        Console.WriteLine($"truncated {reduction.Truncated}");
+        Console.WriteLine("kinds:");
+        foreach (var kind in reduction.Kinds.OrderByDescending(k => k.Value))
+        {
+            var known = ClaudeCloudRoster.IsKnownKind(kind.Key) ? "" : "   <- unknown to this version";
+            Console.WriteLine($"  {kind.Key,-20} {kind.Value}{known}");
+        }
+
+        Console.WriteLine($"orbs      {reduction.Sessions.Count}");
+        Console.WriteLine($"status    {ClaudeCloudRoster.Describe(reduction)}");
         return 0;
     }
 

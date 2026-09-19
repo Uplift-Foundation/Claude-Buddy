@@ -87,10 +87,82 @@ public class ClaudeCloudOutcomeTests
         Assert.Equal(400, outcome.Status);
     }
 
+    // --- the 403, and the misdiagnosis it used to carry ----------------------
+
+    // Both are Blocked and neither retries. What changed is what they *say*: the
+    // detail used to read "this account may not list cloud sessions" for every
+    // 403, which is a confident claim about an account's permissions — and what
+    // had actually happened was a Cloudflare challenge in front of claude.ai,
+    // refusing a non-browser client and saying nothing about the account at all.
+    // A wrong explanation that reads as a finding is worse than no explanation,
+    // because it ends the inquiry. These tests pin the distinction.
     [Fact]
-    public void AFourOhThreeIsBlocked()
+    public void AFourOhThreeIsBlockedEitherWay()
     {
         Assert.Equal(CloudOutcomeKind.Blocked, CloudOutcomes.OutcomeFor(403, null).Kind);
+        Assert.Equal(CloudOutcomeKind.Blocked,
+            CloudOutcomes.OutcomeFor(403, PermissionBody).Kind);
+    }
+
+    // A real API refusal: a JSON error object with a request_id. Something
+    // assigned it an id, so something in the API saw it.
+    private const string PermissionBody =
+        """{"type":"error","error":{"type":"permission_error","message":"not allowed"},"request_id":"req_abc123"}""";
+
+    [Fact]
+    public void AJsonPermissionErrorWithARequestIdIsTheApiRefusingUs()
+    {
+        Assert.False(CloudOutcomes.LooksLikeEdgeBlock(PermissionBody));
+        Assert.Equal(CloudOutcomes.AccountBlockedDetail,
+            CloudOutcomes.OutcomeFor(403, PermissionBody).Detail);
+    }
+
+    // An HTML challenge page. Not JSON at all, which is nobody's API error format.
+    [Fact]
+    public void AnHtmlBodyIsAnEdgeBlock()
+    {
+        const string html = "<!DOCTYPE html><html><head><title>Just a moment…</title></head></html>";
+
+        Assert.True(CloudOutcomes.LooksLikeEdgeBlock(html));
+        Assert.Equal(CloudOutcomes.EdgeBlockedDetail, CloudOutcomes.OutcomeFor(403, html).Detail);
+    }
+
+    // The header Cloudflare sets. It is a header rather than a body, which is why
+    // LooksLikeEdgeBlock takes it as an argument instead of sniffing for it.
+    [Fact]
+    public void TheCfMitigatedHeaderIsAnEdgeBlockWhateverTheBodySays()
+    {
+        Assert.True(CloudOutcomes.LooksLikeEdgeBlock(PermissionBody, cfMitigated: true));
+        Assert.Equal(CloudOutcomes.EdgeBlockedDetail,
+            CloudOutcomes.OutcomeFor(403, PermissionBody, null, cfMitigated: true).Detail);
+    }
+
+    // Shaped like an error and carrying no request_id. Every real refusal measured
+    // on this API carried one, so a body without one never reached anything that
+    // assigns them.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("""{"error":"forbidden"}""")]
+    [InlineData("""{"error":{"type":"permission_error"},"request_id":null}""")]
+    [InlineData("""{"error":{"type":"permission_error"},"request_id":""}""")]
+    [InlineData("""["not","an","object"]""")]
+    public void AnythingWithoutARealRequestIdReadsAsAnEdgeBlock(string? body)
+    {
+        Assert.True(CloudOutcomes.LooksLikeEdgeBlock(body));
+        Assert.Equal(CloudOutcomes.EdgeBlockedDetail, CloudOutcomes.OutcomeFor(403, body).Detail);
+    }
+
+    // The wording no longer claims anything about the account when it does not
+    // know anything about the account. Asserted as an absence because that is the
+    // regression worth catching.
+    [Fact]
+    public void AnEdgeBlockNoLongerBlamesTheAccount()
+    {
+        var detail = CloudOutcomes.OutcomeFor(403, "<html></html>").Detail ?? "";
+
+        Assert.DoesNotContain("account", detail, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -143,16 +215,18 @@ public class ClaudeCloudOutcomeTests
         Assert.Equal("""{"data":[]}""", result.Body);
     }
 
-    // Constructed at the call site and never stored — see the custody rules. The
-    // test asserts the three fields survive the trip and nothing else, because
-    // there is nothing else it should do.
+    // Constructed at the call site and never stored — see the custody rules.
+    //
+    // **Two fields, not three.** `OrganizationUuid` was here because
+    // `x-organization-uuid` was believed mandatory; it is claude.ai's header and
+    // api.anthropic.com ignores it. The field was removed rather than left unused,
+    // so re-adding the header is a compile error rather than a quiet widening.
     [Fact]
     public void ARequestContextCarriesExactlyWhatOneCallNeeds()
     {
-        var context = new CloudRequestContext("token", "org", CloudRequest.SessionsPath);
+        var context = new CloudRequestContext("token", CloudRequest.SessionsPath);
 
         Assert.Equal("token", context.AccessToken);
-        Assert.Equal("org", context.OrganizationUuid);
         Assert.Equal(CloudRequest.SessionsPath, context.Path);
     }
 

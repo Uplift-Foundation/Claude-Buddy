@@ -1,26 +1,27 @@
 using System;
-using System.IO;
-using System.Linq;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
 
 // Covers the exact shape of the request the cloud arm sends.
 //
-// **This is a test about six header values and it is the most load-bearing test
-// in the cloud arm.** CB-164 measured that claude.ai's /v1/code/sessions returns
-// 400 without them — a bare request is refused, which is also the negative
-// control establishing that the 200 the browser gets is a real answer rather
-// than an open endpoint. So a typo in any one of them is not a subtle
-// degradation; it is the whole feature failing, against an undocumented API
-// where the failure looks like the API having changed.
+// **This file used to pin six headers against claude.ai and every one of those
+// assertions was wrong.** They were the headers claude.ai's own web client
+// sends, asserted twice over — once off a built request and once against the
+// constants — which made a confidently wrong fact look doubly confirmed. The
+// host was the error, not the headers: claude.ai answers a non-browser client
+// with a Cloudflare challenge whatever it is sent, and against
+// api.anthropic.com only Authorization and anthropic-version do anything. Two
+// independent copies of a wrong measurement are still one wrong measurement,
+// which is worth remembering before adding a third.
 //
-// It is also why the probe references the app rather than building its own
-// request: there is exactly one copy of this header set and this asserts on it.
+// The request builder is still the single copy of this shape, and the probe
+// still references the app rather than building its own: a diagnostic that
+// assembled the request itself could answer differently from the app and be
+// believed.
 public class ClaudeCloudRequestTests
 {
     private const string Token = "sk-ant-oat01-CANARY-ACCESS-abcdef0123456789";
-    private const string Org = "11111111-2222-3333-4444-555555555555";
 
     private static string? Header(System.Net.Http.HttpRequestMessage request, string name) =>
         request.Headers.TryGetValues(name, out var values) ? string.Join(",", values) : null;
@@ -28,7 +29,7 @@ public class ClaudeCloudRequestTests
     [Fact]
     public void TheAuthorizationHeaderIsABearerTokenAndNothingElse()
     {
-        using var request = CloudRequest.Build(Token, Org, CloudRequest.SessionsPath);
+        using var request = CloudRequest.Build(Token, CloudRequest.SessionsPath);
 
         Assert.NotNull(request.Headers.Authorization);
         Assert.Equal("Bearer", request.Headers.Authorization!.Scheme);
@@ -36,98 +37,183 @@ public class ClaudeCloudRequestTests
     }
 
     [Fact]
-    public void TheSixRequiredHeadersAreExactlyWhatWasMeasured()
+    public void TheVersionHeaderIsTheOtherHalfOfTheMeasuredSet()
     {
-        using var request = CloudRequest.Build(Token, Org, CloudRequest.SessionsPath);
+        using var request = CloudRequest.Build(Token, CloudRequest.SessionsPath);
 
-        Assert.Equal("web_claude_ai", Header(request, "anthropic-client-platform"));
         Assert.Equal("2023-06-01", Header(request, "anthropic-version"));
-        Assert.Equal("ccr-byoc-2025-07-29", Header(request, "anthropic-beta"));
-        Assert.Equal("ccr", Header(request, "anthropic-client-feature"));
-        Assert.Equal(Org, Header(request, "x-organization-uuid"));
-
-        // content-type rides the (empty) body, because .NET will not accept a
-        // content header on the request's general collection. No charset
-        // parameter — the browser sends a bare application/json and an empty
-        // ByteArrayContent is what reproduces that exactly.
-        Assert.NotNull(request.Content);
-        Assert.Equal("application/json", request.Content!.Headers.ContentType?.ToString());
-    }
-
-    // The constants are the single source of truth, and the literals above are a
-    // second, independent statement of the same thing. If a refactor changes one,
-    // the test above fails; this one guards the other direction — that the
-    // constants the probe and the app both read are the values the literals name.
-    [Fact]
-    public void TheHeaderConstantsAgreeWithTheLiteralsAbove()
-    {
-        Assert.Equal("anthropic-client-platform", CloudRequest.ClientPlatformHeader);
-        Assert.Equal("web_claude_ai", CloudRequest.ClientPlatformValue);
         Assert.Equal("anthropic-version", CloudRequest.VersionHeader);
         Assert.Equal("2023-06-01", CloudRequest.VersionValue);
-        Assert.Equal("anthropic-beta", CloudRequest.BetaHeader);
-        Assert.Equal("ccr-byoc-2025-07-29", CloudRequest.BetaValue);
-        Assert.Equal("anthropic-client-feature", CloudRequest.ClientFeatureHeader);
-        Assert.Equal("ccr", CloudRequest.ClientFeatureValue);
-        Assert.Equal("x-organization-uuid", CloudRequest.OrganizationHeader);
     }
 
-    // **No cookie, ever.** The browser observation this endpoint was discovered
-    // through rode a session cookie; ours rides the CLI's OAuth token. Sending
-    // both would make it impossible to say which one was accepted, and the whole
-    // point of the probe is to answer exactly that.
+    // The four that were carried over from claude.ai and are not sent.
+    //
+    // A test for absence rather than for presence, because the failure being
+    // guarded against is somebody re-adding one from the old findings doc — at
+    // which point a header set that reads fine goes back to describing a host
+    // this arm does not talk to.
+    [Theory]
+    [InlineData("anthropic-beta")]
+    [InlineData("anthropic-client-feature")]
+    [InlineData("anthropic-client-platform")]
+    [InlineData("x-organization-uuid")]
+    public void TheClaudeAiHeadersAreNotSent(string name)
+    {
+        using var request = CloudRequest.Build(Token, CloudRequest.SessionsPath);
+
+        Assert.Null(Header(request, name));
+    }
+
+    // **No cookie, ever.** Ours rides the CLI's OAuth token and nothing else.
+    // Sending both would make it impossible to say which one was accepted.
     [Fact]
     public void NoCookieIsSent()
     {
-        using var request = CloudRequest.Build(Token, Org, CloudRequest.SessionsPath);
+        using var request = CloudRequest.Build(Token, CloudRequest.SessionsPath);
 
         Assert.False(request.Headers.Contains("Cookie"));
         Assert.DoesNotContain(request.Headers,
             h => string.Equals(h.Key, "cookie", StringComparison.OrdinalIgnoreCase));
     }
 
+    // And no body. The empty ByteArrayContent that used to be attached was there
+    // to reproduce a browser's GET byte for byte against the wrong host.
     [Fact]
-    public void ItIsAGetToClaudeAiOverHttps()
+    public void NoBodyRidesAGet()
     {
-        using var request = CloudRequest.Build(Token, Org, CloudRequest.SessionsPath);
+        using var request = CloudRequest.Build(Token, CloudRequest.SessionsPath);
+
+        Assert.Null(request.Content);
+    }
+
+    [Fact]
+    public void ItIsAGetToTheAccountApiOverHttps()
+    {
+        using var request = CloudRequest.Build(Token, CloudRequest.SessionsPath);
 
         Assert.Equal(System.Net.Http.HttpMethod.Get, request.Method);
         Assert.NotNull(request.RequestUri);
         Assert.Equal("https", request.RequestUri!.Scheme);
-        Assert.Equal("claude.ai", request.RequestUri.Host);
-        Assert.Equal("/v1/code/sessions", request.RequestUri.AbsolutePath);
+        Assert.Equal("api.anthropic.com", request.RequestUri.Host);
+        Assert.Equal("/v2/ccr-sessions", request.RequestUri.AbsolutePath);
     }
 
-    // Both status values, because the roster the web client shows is their union
-    // and a Buddy showing fewer sessions than the page a click leads to would be
-    // quietly wrong.
     [Fact]
-    public void TheListingPathAsksForActiveAndPausedSessions()
+    public void TheHostConstantIsTheAccountApiAndNotClaudeAi()
     {
-        using var request = CloudRequest.Build(Token, Org, CloudRequest.SessionsPath);
+        Assert.Equal("https://api.anthropic.com", CloudRequest.Host);
+        Assert.DoesNotContain("claude.ai", CloudRequest.Host, StringComparison.Ordinal);
+        Assert.Equal("/v2/ccr-sessions", CloudRequest.SessionsPath);
+    }
 
-        var query = request.RequestUri!.Query;
-        Assert.Contains("statuses=active", query, StringComparison.Ordinal);
-        Assert.Contains("statuses=paused", query, StringComparison.Ordinal);
-        Assert.Contains("limit=50", query, StringComparison.Ordinal);
+    // --- the paths -----------------------------------------------------------
+
+    [Fact]
+    public void TheListingPathCarriesALimitAndNothingElse()
+    {
+        Assert.Equal("/v2/ccr-sessions?limit=100", CloudRequest.ListPath(100, null));
+        Assert.Equal("/v2/ccr-sessions?limit=100", CloudRequest.ListPath(100, "   "));
+    }
+
+    [Fact]
+    public void TheListingPathFollowsACursorWhenGivenOne()
+    {
+        Assert.Equal("/v2/ccr-sessions?limit=100&after_id=session_abc",
+            CloudRequest.ListPath(100, "session_abc"));
+    }
+
+    // **Measured: `limit=200` is refused** with "must be greater than or equal to
+    // 0 and less than 101". So a caller asking for more gets the ceiling rather
+    // than a 400, which is the difference between a walk that is slower than it
+    // could be and one that returns nothing at all.
+    [Theory]
+    [InlineData(101, 100)]
+    [InlineData(200, 100)]
+    [InlineData(int.MaxValue, 100)]
+    [InlineData(0, 1)]
+    [InlineData(-5, 1)]
+    [InlineData(50, 50)]
+    public void TheLimitIsClampedToWhatTheEndpointAccepts(int asked, int sent)
+    {
+        Assert.Equal($"/v2/ccr-sessions?limit={sent}", CloudRequest.ListPath(asked, null));
+    }
+
+    [Fact]
+    public void TheMaximumPageSizeIsTheMeasuredCeiling()
+    {
+        Assert.Equal(100, CloudRequest.MaxPageSize);
+    }
+
+    [Fact]
+    public void ASingleSessionPathHangsOffTheCollection()
+    {
+        Assert.Equal("/v2/ccr-sessions/session_01ABC", CloudRequest.SessionPath("session_01ABC"));
+    }
+
+    [Fact]
+    public void AnEventsPathPagesTheSameWay()
+    {
+        Assert.Equal("/v2/ccr-sessions/session_01ABC/events?limit=100",
+            CloudRequest.EventsPath("session_01ABC", 100, null));
+
+        Assert.Equal("/v2/ccr-sessions/session_01ABC/events?limit=100&after_id=evt_9",
+            CloudRequest.EventsPath("session_01ABC", 100, "evt_9"));
+    }
+
+    // An id arrives from a payload nobody here owns and ends up in a path. Escaped
+    // rather than trusted — a path is the one place an external string turns into
+    // a different request.
+    [Fact]
+    public void AnIdWithPathCharactersInItIsEscaped()
+    {
+        Assert.Equal("/v2/ccr-sessions/session_a%2F..%2Fadmin",
+            CloudRequest.SessionPath("session_a/../admin"));
+
+        Assert.Equal("/v2/ccr-sessions/session_a%3Fx%3D1/events?limit=100",
+            CloudRequest.EventsPath("session_a?x=1", 100, null));
+    }
+
+    [Fact]
+    public void ACursorWithQueryCharactersInItIsEscaped()
+    {
+        Assert.Contains("after_id=session_a%26limit%3D1",
+            CloudRequest.ListPath(100, "session_a&limit=1"), StringComparison.Ordinal);
     }
 
     [Fact]
     public void ThePathIsWhateverTheCallerAsksFor()
     {
-        using var request = CloudRequest.Build(Token, Org, "/v1/code/sessions?limit=1");
+        using var request = CloudRequest.Build(Token, "/v2/ccr-sessions?limit=1");
 
-        Assert.Equal("https://claude.ai/v1/code/sessions?limit=1",
+        Assert.Equal("https://api.anthropic.com/v2/ccr-sessions?limit=1",
             request.RequestUri!.ToString());
     }
 
-    // Not a cadence, a placeholder. Asserting that it is positive and finite is
-    // all a test can honestly say about a number nobody has measured; the comment
-    // on the constant says the rest.
+    // --- the cadences --------------------------------------------------------
+
+    // Not cadences, placeholders. That they are positive and finite is all a test
+    // can honestly say about numbers nobody has measured; the comment on the
+    // constants names the three questions that would settle them.
     [Fact]
-    public void ThePollIntervalIsAPositiveUnmeasuredPlaceholder()
+    public void BothIntervalsArePositiveUnmeasuredPlaceholders()
     {
-        Assert.True(CloudRequest.UnmeasuredPollInterval > TimeSpan.Zero);
+        Assert.True(CloudRequest.UnmeasuredWalkInterval > TimeSpan.Zero);
+        Assert.True(CloudRequest.UnmeasuredFirstPageInterval > TimeSpan.Zero);
+    }
+
+    // The deep walk is the expensive one and the first-page poll is the cheap one,
+    // so the walk being the rarer of the two is the one relationship between them
+    // that is a decision rather than a guess.
+    [Fact]
+    public void TheWalkIsRarerThanTheFirstPagePoll()
+    {
+        Assert.True(CloudRequest.UnmeasuredWalkInterval > CloudRequest.UnmeasuredFirstPageInterval);
+    }
+
+    [Fact]
+    public void ThePageCapIsPositive()
+    {
+        Assert.True(CloudRequest.MaxPagesPerWalk > 0);
     }
 
     // The constant naming the credential store, kept beside the request tests
