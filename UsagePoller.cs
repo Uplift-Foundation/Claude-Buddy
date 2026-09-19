@@ -148,16 +148,23 @@ namespace ClaudeBuddy
 
         // Every account to ask, this app's own first.
         //
-        // null leads, meaning "leave the environment alone", which is how the
-        // account this app runs under is read and the only one nearly every
-        // machine has. The rest come from BackgroundJobs.ExtraAccountDirs rather
-        // than being re-derived here: it already holds ~/.claude out by path so a
-        // settings list naming ".claude" explicitly does not ask the same account
-        // twice, and it is already covered.
-        internal static List<string?> ConfigDirs(string home, IReadOnlyList<string> extras)
+        // null leads, meaning "leave the environment alone", which is how
+        // whichever account this app itself runs under is read — the default
+        // one on nearly every machine, but not always: see the comment on
+        // BackgroundJobs.ExtraAccountDirs (CB-114). The rest come from that same
+        // function rather than being re-derived here, both so a settings list
+        // naming an account explicitly does not ask it twice and so the default
+        // account still gets its orb when it wasn't the one the null read
+        // reached. `inheritedConfigDir` is CLAUDE_CONFIG_DIR as this app's own
+        // process sees it, passed straight through.
+        internal static List<string?> ConfigDirs(
+            string home, IReadOnlyList<string> extras, string? inheritedConfigDir = null)
         {
             var dirs = new List<string?> { null };
-            foreach (var dir in BackgroundJobs.ExtraAccountDirs(home, extras)) dirs.Add(dir);
+            foreach (var dir in BackgroundJobs.ExtraAccountDirs(home, extras, inheritedConfigDir))
+            {
+                dirs.Add(dir);
+            }
             return dirs;
         }
     }
@@ -252,10 +259,11 @@ namespace ClaudeBuddy
             if (claude is null) return Array.Empty<AccountUsage>();
 
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var inherited = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
             var readings = new List<AccountUsage>();
 
             foreach (var configDir in
-                     UsageAccounts.ConfigDirs(home, ClaudeBuddySettings.ClaudeCodeProfileDirs))
+                     UsageAccounts.ConfigDirs(home, ClaudeBuddySettings.ClaudeCodeProfileDirs, inherited))
             {
                 var label = UsageAccounts.LabelFrom(
                     ReadAccountFile(home, configDir), configDir);

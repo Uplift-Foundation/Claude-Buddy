@@ -298,4 +298,103 @@ public class BackgroundJobsAccountsTests
             },
             Extras(".claude-board", ".claude-work"));
     }
+
+    // --- ExtraAccountDirs: the inherited CLAUDE_CONFIG_DIR (CB-114) ---------
+    //
+    // BackgroundJobs.Read's null read asks whatever account *this app's own
+    // process* inherited, which is the default one on nearly every machine but
+    // not always. These cover the matrix CB-114 asks for: unset, set to the
+    // default account itself, set to some other account, and set to an account
+    // already named in ClaudeCodeProfileDirs — each a distinct outcome for
+    // de-duplication rather than a variation on one.
+    //
+    // Passed as a plain parameter rather than through
+    // Environment.SetEnvironmentVariable, so none of these need the
+    // ConfigDirEnv collection: ExtraAccountDirs stays pure, and the one place
+    // that reads the real variable (BackgroundJobs.Read) is excluded from
+    // coverage the same way ReadOne already is.
+
+    private static List<string> ExtrasWithInherited(string? inherited, params string[] configured) =>
+        BackgroundJobs.ExtraAccountDirs(Home, configured, inherited);
+
+    // The bug itself: an app that inherited a non-default account has that
+    // account's own directory covered by the null read already, but the
+    // default account was never asked by anything — until now.
+    [Fact]
+    public void AnInheritedAccountBringsTheDefaultAccountBackIn()
+    {
+        Assert.Equal(
+            new[] { Path.Combine(Home, ".claude") },
+            ExtrasWithInherited(Path.Combine(Home, ".claude-board")));
+    }
+
+    // Unset is the ordinary, single-account machine, and behaves exactly as it
+    // always did: the null read already reached the default account, so
+    // nothing is added for it.
+    [Fact]
+    public void AnUnsetInheritedConfigDirAsksNothingExtraForTheDefaultAccount()
+    {
+        Assert.Empty(ExtrasWithInherited(null));
+    }
+
+    // Blank is the same as unset — Claude Code itself falls back to the
+    // default account rather than treating "" as a real directory, and this
+    // has to agree with that rather than asking for a listing that belongs to
+    // nobody.
+    [Fact]
+    public void ABlankInheritedConfigDirIsTreatedAsUnset()
+    {
+        Assert.Empty(ExtrasWithInherited("   "));
+    }
+
+    // Set to the default account itself is the same case as unset, once
+    // resolved — the null read already covers it and it must not be asked
+    // twice.
+    [Fact]
+    public void AnInheritedConfigDirEqualToTheDefaultAsksNothingExtra()
+    {
+        Assert.Empty(ExtrasWithInherited(Path.Combine(Home, ".claude")));
+    }
+
+    // The inherited account can also be one of the configured extras — the
+    // null read has already asked it by inheritance, so it must not appear a
+    // second time just because it is also named in settings.
+    [Fact]
+    public void AnInheritedAccountAlreadyInTheConfiguredListIsNotAskedTwice()
+    {
+        Assert.Equal(
+            new[] { Path.Combine(Home, ".claude") },
+            ExtrasWithInherited(Path.Combine(Home, ".claude-board"), ".claude-board"));
+    }
+
+    // The default account, when it is added back at all, leads the configured
+    // extras rather than landing wherever it happens to fall — so it never
+    // moves around depending on how many other accounts are configured.
+    [Fact]
+    public void TheDefaultAccountLeadsTheExtrasWhenItIsAddedBack()
+    {
+        Assert.Equal(
+            new[] { Path.Combine(Home, ".claude"), Path.Combine(Home, ".claude-work") },
+            ExtrasWithInherited(Path.Combine(Home, ".claude-board"), ".claude-work"));
+    }
+
+    // Windows paths are case-insensitive, and the inherited value arrives
+    // however the environment happened to spell it — it still has to collapse
+    // onto the same account as one spelled differently in settings.
+    [Fact]
+    public void AnInheritedAccountsCapitalizationDoesNotBuyASecondLaunch()
+    {
+        Assert.Equal(
+            new[] { Path.Combine(Home, ".claude") },
+            ExtrasWithInherited(Path.Combine(Home, ".claude-board").ToUpperInvariant(), ".Claude-Board"));
+    }
+
+    // A trailing separator on the inherited value must not defeat the
+    // de-duplication against the default account, which Path.Combine never
+    // produces one of.
+    [Fact]
+    public void ATrailingSeparatorOnTheInheritedValueIsTrimmed()
+    {
+        Assert.Empty(ExtrasWithInherited(Path.Combine(Home, ".claude") + "/"));
+    }
 }

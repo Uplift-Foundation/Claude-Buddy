@@ -229,12 +229,22 @@ namespace ClaudeBuddy
         // account's listing altogether, while its process was alive the whole
         // time in a pty belonging to ~/.claude-board's own daemon.
         //
-        // The default account is read exactly as it was before — with no
-        // CLAUDE_CONFIG_DIR of this app's own invention — so this can only add
-        // rows to the answer it already gave. Which account this app itself runs
-        // under stays whatever the environment says it is; forcing ~/.claude
-        // here would quietly re-point the read for anyone running the whole app
-        // under a non-default config directory.
+        // The null read asks whatever account *this app's own process*
+        // inherited, which is not always the default one — CB-114. On a machine
+        // where Buddy itself was launched with CLAUDE_CONFIG_DIR=~/.claude-board
+        // set (the app inherits it same as any child process would), the null
+        // read above asks the board account and ExtraAccountDirs used to seed
+        // its de-dup set with a hardcoded ~/.claude on the assumption that the
+        // null read had already covered it. It hadn't: ~/.claude was held out of
+        // the explicit list *and* missed by the inheriting read, so the default
+        // account was never asked at all, while ~/.claude-board was asked twice.
+        //
+        // ExtraAccountDirs now takes the inherited value explicitly and seeds
+        // its de-dup set with whichever account the null read actually reached,
+        // adding the default account back in whenever that isn't it. Which
+        // account this app itself runs under still stays whatever the
+        // environment says it is — the null read is untouched — but the
+        // enumeration this asks *besides* that one now knows what it was.
         //
         // Excluded from coverage: the loop is process launches. What it decides
         // with the answers is Merge and ExtraAccountDirs below, both pure and
@@ -255,12 +265,14 @@ namespace ClaudeBuddy
             if (claude is null) return null;
 
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var inherited = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
 
             // null first: this app's own environment, which is the account it has
             // always read and the only one nearly every machine has.
             var merged = ReadOne(claude, configDir: null);
 
-            foreach (var dir in ExtraAccountDirs(home, ClaudeBuddySettings.ClaudeCodeProfileDirs))
+            foreach (var dir in ExtraAccountDirs(
+                home, ClaudeBuddySettings.ClaudeCodeProfileDirs, inherited))
             {
                 merged = Merge(merged, ReadOne(claude, dir));
             }
@@ -272,26 +284,57 @@ namespace ClaudeBuddy
         // under.
         //
         // The same list TranscriptReader and the hook installer already walk —
-        // ~/.claude plus ClaudeCodeProfileDirs — with ~/.claude itself held out,
-        // because Read has already asked it and asking again would be a second
-        // subprocess for an answer already in hand. Held out by *path* rather
-        // than by name, so a list naming ".claude" explicitly — which the
-        // settings UI permits — doesn't double the work.
+        // ~/.claude plus ClaudeCodeProfileDirs — with whichever account the null
+        // read already reached held out, because Read has already asked it and
+        // asking again would be a second subprocess for an answer already in
+        // hand. Held out by *path* rather than by name, so a list naming that
+        // directory explicitly — which the settings UI permits — doesn't double
+        // the work.
+        //
+        // `inheritedConfigDir` is CLAUDE_CONFIG_DIR as this app's own process
+        // sees it — Read's null read asks that account, whatever it is, not
+        // necessarily the default one. Unset (null, the default for every
+        // caller before CB-114) means Read's null call reached the default
+        // account, exactly as it always did. Set to something else means the
+        // null call reached *that* account instead, so the default account
+        // (~/.claude) is no longer implicitly covered and has to be added back
+        // to the explicit list — the fix this ticket is for. Set to the default
+        // account itself is the same case as unset, once resolved.
         //
         // Blank entries are skipped rather than resolving to $HOME, which is not
         // a config directory and whose listing would be some third account's or
         // nobody's.
-        internal static List<string> ExtraAccountDirs(string home, IReadOnlyList<string> extras)
+        internal static List<string> ExtraAccountDirs(
+            string home, IReadOnlyList<string> extras, string? inheritedConfigDir = null)
         {
+            var defaultDir = Path.Combine(home, ".claude");
+
+            // A blank CLAUDE_CONFIG_DIR is the same as an unset one: Claude Code
+            // itself falls back to the default account rather than treating an
+            // empty string as a real directory, and a trailing separator is
+            // trimmed so it still matches defaultDir, which Path.Combine never
+            // produces one of.
+            var resolvedInherited = string.IsNullOrWhiteSpace(inheritedConfigDir)
+                ? defaultDir
+                : inheritedConfigDir.Trim().TrimEnd(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
             // OrdinalIgnoreCase for the reason OrbPositions is keyed that way:
             // Windows paths are, and one account reached under two
-            // capitalizations is still one account.
+            // capitalizations is still one account. Seeded with the account the
+            // null read actually reached, not assumed to be ~/.claude.
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                Path.Combine(home, ".claude")
+                resolvedInherited
             };
 
             var dirs = new List<string>();
+
+            // The default account is asked explicitly whenever it wasn't the one
+            // the null read already covered — the fix itself. When it was
+            // (the ordinary, single-account machine), seen already holds it and
+            // this is a no-op.
+            if (seen.Add(defaultDir)) dirs.Add(defaultDir);
 
             foreach (var extra in extras)
             {

@@ -140,4 +140,29 @@ public class UsageAccountsTests
         Assert.Single(dirs);
         Assert.Null(dirs[0]);
     }
+
+    // ConfigDirs shares ExtraAccountDirs, so an inherited CLAUDE_CONFIG_DIR
+    // (CB-114) changes the orbs the same way it changes the background-job
+    // listing: the default account gets asked, and therefore gets an orb, even
+    // when it was not the account this app's own process inherited. The full
+    // matrix is BackgroundJobsAccountsTests' — this just confirms the sharing
+    // actually reaches usage orbs rather than staying a BackgroundJobs-only
+    // fix.
+    [Fact]
+    public void AnInheritedAccountGetsTheDefaultAccountsOrbToo()
+    {
+        var dirs = UsageAccounts.ConfigDirs(
+            Home, Array.Empty<string>(), inheritedConfigDir: Path.Combine(Home, ".claude-board"));
+
+        Assert.Equal(new List<string?> { null, Path.Combine(Home, ".claude") }, dirs);
+    }
+
+    [Fact]
+    public void AnUnsetInheritedConfigDirChangesNothing()
+    {
+        var dirs = UsageAccounts.ConfigDirs(Home, Array.Empty<string>(), inheritedConfigDir: null);
+
+        Assert.Single(dirs);
+        Assert.Null(dirs[0]);
+    }
 }
