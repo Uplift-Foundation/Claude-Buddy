@@ -84,6 +84,11 @@ namespace ClaudeBuddy
         [JsonIgnore]
         public SessionSource Source { get; set; } = SessionSource.ClaudeCode;
 
+        // The CLI behind a remote-control session. Source remains RemoteControl
+        // so no local terminal or persona path is accidentally enabled.
+        [JsonIgnore]
+        public string RemoteCli { get; set; } = "";
+
         // Whether this session is a CLI running in a terminal on this machine.
         //
         // Most of the rules in this file that name ClaudeCode mean this and not
@@ -1987,6 +1992,7 @@ namespace ClaudeBuddy
                     new SessionStatus
                     {
                         Source = SessionSource.RemoteControl,
+                        RemoteCli = remote.Cli ?? MirrorProtocol.CliClaudeCode,
 
                         // The peer list's own word, translated into the two
                         // states an orb draws. Anything that isn't recognisably

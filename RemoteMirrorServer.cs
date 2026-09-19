@@ -441,7 +441,31 @@ namespace ClaudeBuddy
                     string.IsNullOrWhiteSpace(status.Color) ? null : status.Color,
                     Commands(status),
                     status.State,
-                    _seams.CanDeliver?.Invoke(status)));
+                    _seams.CanDeliver?.Invoke(status),
+                    RouteFor(resolved.Value.SessionId)));
+            }
+
+            // AgentRoster is Claude Code's authority, not a universal session
+            // registry. Codex and Grok status files have no matching agent row,
+            // so offer those live local CLIs directly when the peer asks for the
+            // complete roster. Their route, not their display title, is the
+            // round-trip identity and prevents two same-titled sessions from
+            // being confused on fetch or input.
+            if (everything)
+            {
+                foreach (var session in sessions.Where(s => s.Status.Source is SessionSource.Codex or SessionSource.Grok))
+                {
+                    if (entries.Any(e => string.Equals(e.Route, RouteFor(session.SessionId), StringComparison.Ordinal))) continue;
+                    var status = session.Status;
+                    var name = string.IsNullOrWhiteSpace(status.Title)
+                        ? (string.IsNullOrWhiteSpace(status.Cwd) ? MirrorProtocol.CliFor(status.Source) : Path.GetFileName(status.Cwd))
+                        : status.Title;
+                    var hasTranscript = !string.IsNullOrEmpty(status.TranscriptPath) && File.Exists(status.TranscriptPath);
+                    if (hasTranscript && !LivelyEnough(status)) continue;
+                    entries.Add(new MirrorProtocol.MirrorRosterEntry(name, MirrorProtocol.CliFor(status.Source),
+                        hasTranscript, _seams.CanType(status), string.IsNullOrWhiteSpace(status.Color) ? null : status.Color,
+                        Commands(status), status.State, _seams.CanDeliver?.Invoke(status), RouteFor(session.SessionId)));
+                }
             }
 
             await SendTransferAsync(
@@ -545,8 +569,18 @@ namespace ClaudeBuddy
         private static (string SessionId, SessionStatus Status)? Resolve(
             string name,
             IReadOnlyList<AgentRoster.Entry> agents,
-            IReadOnlyList<(string SessionId, SessionStatus Status)> sessions) =>
-            Pick(name, agents, sessions);
+            IReadOnlyList<(string SessionId, SessionStatus Status)> sessions)
+        {
+            if (!name.StartsWith(RoutePrefix, StringComparison.Ordinal))
+                return Pick(name, agents, sessions);
+
+            var id = name[RoutePrefix.Length..];
+            var matched = sessions.Where(s => string.Equals(s.SessionId, id, StringComparison.Ordinal)).ToList();
+            return matched.Count == 1 ? matched[0] : null;
+        }
+
+        internal const string RoutePrefix = "sid:";
+        internal static string RouteFor(string sessionId) => RoutePrefix + sessionId;
 
         // Every session worth offering, and what to call each one.
         //

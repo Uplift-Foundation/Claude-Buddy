@@ -507,6 +507,21 @@ public class MirrorProtocolTests
         Assert.Null(back[1].Color);
     }
 
+    [Fact]
+    public void ARosterRouteRoundTripsWithoutChangingAnOlderRow()
+    {
+        var rows = MirrorProtocol.DecodeRoster(MirrorProtocol.EncodeRoster(new[]
+        {
+            new MirrorProtocol.MirrorRosterEntry("same title", MirrorProtocol.CliGrok,
+                true, false, Route: "sid:grok-session"),
+            new MirrorProtocol.MirrorRosterEntry("legacy", MirrorProtocol.CliClaudeCode,
+                true, true)
+        }));
+
+        Assert.Equal("sid:grok-session", rows![0].Route);
+        Assert.Null(rows[1].Route);
+    }
+
     // A newer Buddy on the other machine may send fields this one has never
     // heard of. Refusing the whole roster over one would turn an upgrade on one
     // machine into a broken feature on the other.

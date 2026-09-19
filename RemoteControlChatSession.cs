@@ -231,10 +231,10 @@ namespace ClaudeBuddy
             _mirroring = true;
             _canType = entry.HasPane;
             _canDeliver = entry.CanDeliver ?? false;
-            _format = CliChatFormat.For(
-                entry.Cli.Equals(MirrorProtocol.CliCodex, StringComparison.OrdinalIgnoreCase)
-                    ? SessionSource.Codex
-                    : SessionSource.ClaudeCode);
+            _format = CliChatFormat.For(entry.Cli.Equals(MirrorProtocol.CliGrok, StringComparison.OrdinalIgnoreCase)
+                ? SessionSource.Grok
+                : entry.Cli.Equals(MirrorProtocol.CliCodex, StringComparison.OrdinalIgnoreCase)
+                    ? SessionSource.Codex : SessionSource.ClaudeCode);
 
             client.Delivered += OnDelivered;
             client.Failed += OnMirrorFailed;
