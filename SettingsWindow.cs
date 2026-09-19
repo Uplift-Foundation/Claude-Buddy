@@ -1751,6 +1751,14 @@ namespace ClaudeBuddy
                 + "provides, (Kokoro) for the high-quality engine above, and (custom) for "
                 + "anything your own speakCommand lists."));
 
+            rows.Add(Row("Speaks", SpeakScopePicker(),
+                "What the speaker reads. The full response is everything the assistant "
+                + "said, which is what it has always done. A vibe code summary condenses "
+                + "the whole response to two or three sentences — useful when a reply "
+                + "would take minutes to read aloud. The summary is written by a separate "
+                + "throwaway Claude Code call, so it never appears in your own "
+                + "conversation, and it adds a few seconds before the speaker starts."));
+
             // Still shown, because the system voices are always among the choices
             // now rather than being shadowed by whatever else is installed — so a
             // voice added through Windows' own settings is genuinely usable.
@@ -1814,6 +1822,36 @@ namespace ClaudeBuddy
 
             return combo;
         }
+
+        // Two named modes rather than a switch, because "off" is not what Full
+        // is — both are real choices about what gets read, and a toggle labelled
+        // "summarise" would put the long-standing behaviour on the unlabelled
+        // side of it.
+        //
+        // Nothing is enumerated or spawned to build this, unlike the voice
+        // picker above, so it is safe to construct eagerly and the settings
+        // tests can drive it.
+        internal static ComboBox SpeakScopePicker()
+        {
+            var combo = new ComboBox
+            {
+                ItemsSource = new[] { FullLabel, SummaryLabel },
+                SelectedIndex = ClaudeBuddySettings.SpeakScope == SpeakScope.Summary ? 1 : 0,
+                MinWidth = 220
+            };
+
+            combo.SelectionChanged += (_, _) =>
+                ClaudeBuddySettings.SpeakScope =
+                    combo.SelectedIndex == 1 ? SpeakScope.Summary : SpeakScope.Full;
+
+            return combo;
+        }
+
+        internal const string FullLabel = "Full response";
+
+        // The requester's own phrase. It reads well as a label and says what the
+        // mode is for in a way "Summary" does not.
+        internal const string SummaryLabel = "Vibe code summary";
 
         // Excluded from coverage: AllVoiceOptions() enumerates the machine's
         // installed voices, which on macOS means running `say -v ?` as a real

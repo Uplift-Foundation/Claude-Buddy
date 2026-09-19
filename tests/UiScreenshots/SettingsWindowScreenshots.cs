@@ -77,6 +77,56 @@ public class SettingsWindowScreenshots
         ScreenshotHelper.CaptureControl(card, "settings-claude-desktop-group.png");
     }
 
+    // The speech group, so the mode picker CB-165 added is in frame.
+    //
+    // Its own capture for the same reason the Claude Desktop group has one:
+    // the voice rows sit below the fold of a scrolling settings page and would
+    // not appear in the whole-window shot at all.
+    //
+    // Unlike that one, this row has no platform gate — the picker is two names
+    // in a combo box and nothing behind it is OS-specific — so the two rids
+    // should show the same card. A Windows rid missing the row is the
+    // regression worth seeing here, and it is the failure mode the repo's
+    // parity rule exists for.
+    [AvaloniaFact]
+    public void SpeechGroupShowsTheSpeakScopePicker()
+    {
+        var wasScope = ClaudeBuddySettings.SpeakScope;
+        try
+        {
+            // Captured on the non-default mode deliberately: it shows the
+            // picker holding a saved choice rather than its initial state, so
+            // the capture would change if the round trip stopped working.
+            ClaudeBuddySettings.SpeakScope = SpeakScope.Summary;
+
+            var ctor = typeof(SettingsWindow).GetConstructor(
+                BindingFlags.NonPublic | BindingFlags.Instance,
+                types: Type.EmptyTypes)
+                ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+            var window = (Avalonia.Controls.Window)ctor.Invoke(null);
+
+            window.Show();
+            ScreenshotHelper.Flush();
+
+            var anchor = window.GetLogicalDescendants()
+                .OfType<TextBlock>()
+                .FirstOrDefault(block => block.Text == "Speaks");
+
+            Assert.NotNull(anchor);
+
+            var card = anchor!.GetLogicalAncestors().OfType<Control>()
+                .FirstOrDefault(control => control.Bounds.Height > 60 && control.Bounds.Width > 200)
+                ?? (Control)anchor;
+
+            ScreenshotHelper.CaptureControl(card, "settings-speak-scope.png");
+        }
+        finally
+        {
+            ClaudeBuddySettings.SpeakScope = wasScope;
+        }
+    }
+
     // The direct link's card, switched on, so the pairing controls are in frame.
     //
     // **Unlike every other scenario in this file, this one has no platform

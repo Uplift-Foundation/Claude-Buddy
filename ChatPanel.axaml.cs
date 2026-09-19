@@ -2255,9 +2255,46 @@ namespace ClaudeBuddy
             }
 
             var last = _turns.LastOrDefault(t => t.Role == ChatRole.Assistant);
-            if (last is null || string.IsNullOrWhiteSpace(last.Text)) return;
+            var plan = SpeechPlan.For(last?.Text, ClaudeBuddySettings.SpeakScope);
+            if (plan.Silent) return;
 
-            Speak(last.Text, VoiceFor(_session), RateFor(_session));
+            if (!plan.NeedsSummary)
+            {
+                Speak(plan.Text!, VoiceFor(_session), RateFor(_session));
+                return;
+            }
+
+            _ = SpeakSummaryAsync(plan.Text!);
+        }
+
+        // The summary leg, which is the one with a wait in it.
+        //
+        // The hourglass goes up before the round trip rather than after, because
+        // starting it is itself part of the wait being announced — the same
+        // argument StartNeural's own comment makes about loading a model. The
+        // measured round trip is several seconds, and a speaker that goes silent
+        // for that long with no indication is the failure this ticket's
+        // refinement notes predicted.
+        //
+        // Cancellation is honoured at the one point it can be: if the user
+        // pressed the button again while the summariser was running, TextToSpeech
+        // is back to Idle, and speaking then would start audio they have already
+        // asked to stop.
+        internal async Task SpeakSummaryAsync(string reply)
+        {
+            TextToSpeech.Enter(TextToSpeech.SpeakState.Preparing);
+
+            var text = await SpeechSummary.SummarizeOrSayWhyAsync(reply).ConfigureAwait(true);
+
+            // The user pressed the button again while the summariser was
+            // running, so TextToSpeech is back to Idle and speaking now would
+            // start audio they have already asked to stop. This is the only
+            // point at which that can be honoured: the round trip is several
+            // seconds and there is nothing else watching it.
+            if (TextToSpeech.State != TextToSpeech.SpeakState.Preparing) return;
+
+            TextToSpeech.Enter(TextToSpeech.SpeakState.Idle);
+            Speak(text, VoiceFor(_session), RateFor(_session));
         }
 
         // A panel can hold several remote session kinds. Only OpenClaw agent
