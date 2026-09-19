@@ -502,7 +502,12 @@ namespace ClaudeBuddy
             // the two are different claims, and a session offered as
             // undeliverable when the far machine simply never answered would
             // be a live-view session that quietly cannot be reached.
-            [property: JsonPropertyName("deliver")] bool? CanDeliver = null);
+            [property: JsonPropertyName("deliver")] bool? CanDeliver = null,
+
+            // A stable server-side address, deliberately distinct from Name.
+            // Titles are presentation and can collide; route is what fetch,
+            // watch and input must send back. Optional for peers predating it.
+            [property: JsonPropertyName("route")] string? Route = null);
 
         public const string CliClaudeCode = "claude";
         public const string CliCodex = "codex";

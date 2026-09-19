@@ -222,7 +222,8 @@ namespace ClaudeBuddy
         // carries which account it was seen through and when, neither of which
         // the peer list has an opinion about.
         internal sealed record Remote(
-            string Name, string Ref, string Status, DateTime Seen, string Account, string? Color = null)
+            string Name, string Ref, string Status, DateTime Seen, string Account, string? Color = null,
+            string? Cli = null, string? Route = null)
         {
             // The account is in the key, not just the record.
             //
@@ -232,7 +233,7 @@ namespace ClaudeBuddy
             // one chat panel, with messages going to whichever the dictionary
             // happened to hold. The prefix keeps them apart from local sessions
             // for the same reason OpenClaw's keys do.
-            public string Key => "rc:" + Account + ":" + Name;
+            public string Key => "rc:" + Account + ":" + (Route ?? Name);
 
             // "running" is the one that matters, and it is the one the first
             // version of this missed.
@@ -923,7 +924,8 @@ namespace ClaudeBuddy
                     k.Entry.Status ?? "idle",
                     now,
                     account,
-                    string.IsNullOrWhiteSpace(k.Entry.Color) ? null : k.Entry.Color))
+                    string.IsNullOrWhiteSpace(k.Entry.Color) ? null : k.Entry.Color,
+                    k.Entry.Cli, k.Entry.Route))
                 .ToList();
 
         // Excluded from coverage: reads the live link. What it decides is

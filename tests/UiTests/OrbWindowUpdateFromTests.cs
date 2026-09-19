@@ -94,16 +94,18 @@ public class OrbWindowUpdateFromTests
     }
 
     [AvaloniaFact]
-    public void RemoteSessionsCarryNoCliMark()
+    public void RemoteSessionsCarryTheMarkForTheirActualCli()
     {
         var remote = PlainStatus();
         remote.Source = SessionSource.RemoteControl;
+        remote.RemoteCli = MirrorProtocol.CliGrok;
 
         var remoteOrb = new OrbWindow(Guid.NewGuid().ToString());
         remoteOrb.UpdateFrom(remote);
 
-        Assert.False(remoteOrb.CliMarkVisible);
-        Assert.Null(remoteOrb.CliMarkName);
+        Assert.True(remoteOrb.CliMarkVisible);
+        Assert.Equal("grok", remoteOrb.CliMarkName);
+        Assert.False(remote.IsLocalCli);
     }
 
     [AvaloniaFact]

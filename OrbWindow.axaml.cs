@@ -370,7 +370,7 @@ namespace ClaudeBuddy
             // repeat — and without it a room orb is indistinguishable from an
             // ordinary one.
             ApplyKind(status.Kind);
-            ApplyCli(status.Source);
+            ApplyCli(status.Source, status.RemoteCli);
             ApplyHeartbeat(status.Heartbeat);
 
             // A room orb is named for its channel, like every other orb is named
@@ -640,8 +640,15 @@ namespace ClaudeBuddy
         // swap it for a new one when they did.
         internal Control? CurrentThoughtBubble => ToolTip.GetTip(Root) as Control;
 
-        private void ApplyCli(SessionSource source)
+        private void ApplyCli(SessionSource source, string? remoteCli = null)
         {
+            if (source == SessionSource.RemoteControl)
+            {
+                source = string.Equals(remoteCli, MirrorProtocol.CliGrok, StringComparison.OrdinalIgnoreCase)
+                    ? SessionSource.Grok
+                    : string.Equals(remoteCli, MirrorProtocol.CliCodex, StringComparison.OrdinalIgnoreCase)
+                        ? SessionSource.Codex : SessionSource.ClaudeCode;
+            }
             var mark = CliMark.For(source);
             if (mark is null)
             {

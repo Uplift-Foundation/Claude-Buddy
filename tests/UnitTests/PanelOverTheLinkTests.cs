@@ -121,6 +121,20 @@ public class PanelOverTheLinkTests
     }
 
     [Fact]
+    public void ARosterRouteIsTheRemoteAddressWhileTheNameStaysTheLabel()
+    {
+        var entry = new MirrorProtocol.MirrorRosterEntry("same title", MirrorProtocol.CliGrok,
+            true, false, Route: "sid:remote-grok-7");
+        var row = Assert.Single(RemoteControlSessions.RemotesFromRoster(
+            "acct", new[] { ("mini", entry) }, DateTime.UnixEpoch));
+
+        Assert.Equal("same title", row.Name);
+        Assert.Equal("sid:remote-grok-7", row.Route);
+        Assert.Equal(MirrorProtocol.CliGrok, row.Cli);
+        Assert.EndsWith(":sid:remote-grok-7", row.Key);
+    }
+
+    [Fact]
     public void AWorkingSessionDrawsAsWorking()
     {
         var rows = RemoteControlSessions.RemotesFromRoster(

@@ -62,6 +62,21 @@ namespace ClaudeBuddy
         // back to the one that can serve it.
         private readonly Dictionary<string, string> _servedBy = new(StringComparer.OrdinalIgnoreCase);
 
+        private static string EntryKey(MirrorProtocol.MirrorRosterEntry entry) =>
+            string.IsNullOrWhiteSpace(entry.Route) ? entry.Name : entry.Route;
+
+        // New peers address rows by their stable route. Existing callers still
+        // hold the display name, so accept it only when it identifies exactly
+        // one roster row; a shared title stays unresolved rather than sending
+        // input to whichever session happened to arrive last.
+        private string? ExistingKey(string keyOrName)
+        {
+            if (_roster.ContainsKey(keyOrName)) return keyOrName;
+            var matches = _roster.Where(p => string.Equals(p.Value.Name, keyOrName,
+                StringComparison.OrdinalIgnoreCase)).Select(p => p.Key).ToList();
+            return matches.Count == 1 ? matches[0] : null;
+        }
+
         // Which relay answered for a session, for a caller that wants to say
         // *where* it is rather than talk to it. The relay's name carries the far
         // machine's — see RemoteControlBridge.MachineFromRelayName — so this is
@@ -70,7 +85,11 @@ namespace ClaudeBuddy
         // before.
         internal string? RelayFor(string name)
         {
-            lock (_gate) return _servedBy.TryGetValue(name, out var relay) ? relay : null;
+            lock (_gate)
+            {
+                var key = ExistingKey(name);
+                return key is not null && _servedBy.TryGetValue(key, out var relay) ? relay : null;
+            }
         }
 
         // Everything this client currently knows about, with who serves it.
@@ -85,7 +104,7 @@ namespace ClaudeBuddy
             {
                 return _roster.Values
                     .Select(e => (
-                        Peer: _servedBy.TryGetValue(e.Name, out var peer) ? peer : string.Empty,
+                        Peer: _servedBy.TryGetValue(EntryKey(e), out var peer) ? peer : string.Empty,
                         Entry: e))
                     .ToList();
             }
@@ -120,7 +139,8 @@ namespace ClaudeBuddy
         {
             lock (_gate)
             {
-                if (_roster.TryGetValue(name, out var entry))
+                var key = ExistingKey(name);
+                if (key is not null && _roster.TryGetValue(key, out var entry))
                     return new MirrorState(MirrorAvailability.Available, entry);
 
                 return new MirrorState(
@@ -190,9 +210,12 @@ namespace ClaudeBuddy
                     .Select(pair => pair.Key)
                     .ToList())
                 {
+                    var displayName = _roster.TryGetValue(name, out var stale)
+                        ? stale.Name : name;
                     _servedBy.Remove(name);
                     _roster.Remove(name);
                     _answeredNo.Add(name);
+                    _answeredNo.Add(displayName);
                     disconnectedChanged = true;
                 }
             }
@@ -233,7 +256,7 @@ namespace ClaudeBuddy
                     StringComparer.OrdinalIgnoreCase);
                 foreach (var entry in entries)
                 {
-                    if (entry.HasTranscript) offered[entry.Name] = entry;
+                    if (entry.HasTranscript) offered[EntryKey(entry)] = entry;
                 }
 
                 var changed = false;
@@ -251,25 +274,29 @@ namespace ClaudeBuddy
                         .Select(pair => pair.Key)
                         .ToList())
                     {
+                        var displayName = _roster.TryGetValue(name, out var stale)
+                            ? stale.Name : name;
                         _roster.Remove(name);
                         _servedBy.Remove(name);
                         _answeredNo.Add(name);
+                        _answeredNo.Add(displayName);
                         changed = true;
                     }
 
                     foreach (var entry in offered.Values)
                     {
-                        if (!_roster.TryGetValue(entry.Name, out var previous)
+                        var key = EntryKey(entry);
+                        if (!_roster.TryGetValue(key, out var previous)
                             || previous != entry
-                            || !_servedBy.TryGetValue(entry.Name, out var servedBy)
+                            || !_servedBy.TryGetValue(key, out var servedBy)
                             || !string.Equals(servedBy, peer, StringComparison.OrdinalIgnoreCase))
                         {
                             changed = true;
                         }
 
-                        _roster[entry.Name] = entry;
-                        _servedBy[entry.Name] = peer;
-                        _answeredNo.Remove(entry.Name);
+                        _roster[key] = entry;
+                        _servedBy[key] = peer;
+                        _answeredNo.Remove(key);
                     }
                 }
 
@@ -295,7 +322,7 @@ namespace ClaudeBuddy
                 {
                     foreach (var name in wantedNames)
                     {
-                        if (_roster.ContainsKey(name)) continue;
+                        if (ExistingKey(name) is not null) continue;
                         if (_answeredNo.Add(name)) changed = true;
                     }
                 }
@@ -316,7 +343,7 @@ namespace ClaudeBuddy
                     // re-asking every poll would spend a model turn per tick for
                     // an answer that has not changed.
                     ask = wantedNames
-                        .Where(n => !_roster.ContainsKey(n) && !_asking.Contains(n))
+                        .Where(n => ExistingKey(n) is null && !_asking.Contains(n))
                         .ToList();
 
                     foreach (var n in ask) _asking.Add(n);
@@ -359,20 +386,21 @@ namespace ClaudeBuddy
                     {
                         if (!entry.HasTranscript)
                         {
-                            _answeredNo.Add(entry.Name);
+                            _answeredNo.Add(EntryKey(entry));
                             continue;
                         }
 
-                        _roster[entry.Name] = entry;
-                        _servedBy[entry.Name] = relay;
-                        _answeredNo.Remove(entry.Name);
+                        var key = EntryKey(entry);
+                        _roster[key] = entry;
+                        _servedBy[key] = relay;
+                        _answeredNo.Remove(key);
                     }
 
                     // Asked about and not mentioned means that Buddy does not
                     // have it — a session on a third machine, most likely.
                     foreach (var name in ask)
                     {
-                        if (_roster.ContainsKey(name)) continue;
+                        if (ExistingKey(name) is not null) continue;
                         _answeredNo.Add(name);
                     }
                 }
@@ -509,8 +537,9 @@ namespace ClaudeBuddy
 
             lock (_gate)
             {
-                if (!_roster.TryGetValue(name, out var entry)) return false;
-                if (!_servedBy.TryGetValue(name, out var found)) return false;
+                var key = ExistingKey(name);
+                if (key is null || !_roster.TryGetValue(key, out var entry)) return false;
+                if (!_servedBy.TryGetValue(key, out var found)) return false;
 
                 if (_feeds.TryGetValue(name, out var already) && already.Loading) return true;
 
@@ -708,7 +737,8 @@ namespace ClaudeBuddy
 
             lock (_gate)
             {
-                if (!_servedBy.TryGetValue(name, out var found))
+                var key = ExistingKey(name);
+                if (key is null || !_servedBy.TryGetValue(key, out var found))
                     return new InputOutcome(MirrorProtocol.ErrNoSession, null, null);
                 relay = found;
             }
