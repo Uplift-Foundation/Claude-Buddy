@@ -465,14 +465,44 @@ public class ClaudeCloudEventsTests
         Assert.Empty(api.Paths);
     }
 
+    // Still the same claim this made when the address lived in the hint's prose:
+    // the session says it cannot be replied to here, and says where it can be.
+    // The *where* is now IRemoteChatReadOnly.ReplyUrl, which the panel renders as
+    // a link — naming the site in a sentence and leaving the user to go and find
+    // the session among their others was the weaker half of that answer, and the
+    // hint no longer repeats what the link already carries.
     [Fact]
     public void ItDeclaresItselfReadOnlyAndSaysWhereItCanBeRepliedTo()
     {
         var chat = Build(new FakeApi(_ => throw new InvalidOperationException()));
 
-        Assert.True(Assert.IsAssignableFrom<IRemoteChatReadOnly>(chat).IsReadOnly);
-        Assert.Contains("claude.ai/code",
-            Assert.IsAssignableFrom<IRemoteChatComposer>(chat).ComposerHint, StringComparison.Ordinal);
+        var readOnly = Assert.IsAssignableFrom<IRemoteChatReadOnly>(chat);
+
+        Assert.True(readOnly.IsReadOnly);
+        Assert.Contains("claude.ai/code", readOnly.ReplyUrl!, StringComparison.Ordinal);
+
+        // And the hint still says something, since the panel draws it beside the
+        // link — an empty sentence there would leave a bare blue word floating
+        // under the transcript.
+        Assert.False(string.IsNullOrWhiteSpace(
+            Assert.IsAssignableFrom<IRemoteChatComposer>(chat).ComposerHint));
+    }
+
+    // A row that arrived with no address gets no link rather than a link to
+    // nowhere. The roster builds the url from the id so this should not happen,
+    // which is exactly why it is worth pinning: the panel's guard is on null, and
+    // an empty string would sail past it.
+    [Fact]
+    public void ASessionWithNoAddressOffersNoReplyUrl()
+    {
+        var chat = Build(
+            new FakeApi(_ => throw new InvalidOperationException()),
+            session: new ClaudeCloudSessions.Session(
+                "session_a", "a cloud session", "idle",
+                new DateTime(2026, 9, 19, 10, 0, 0, DateTimeKind.Utc),
+                "", "idle", false, null, null, null, null));
+
+        Assert.Null(Assert.IsAssignableFrom<IRemoteChatReadOnly>(chat).ReplyUrl);
     }
 
     // Nothing this app started is in flight — the reply is happening in the cloud

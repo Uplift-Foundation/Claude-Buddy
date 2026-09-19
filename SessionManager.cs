@@ -195,6 +195,41 @@ namespace ClaudeBuddy
         // turn aloud). Empty from hooks older than this field.
         [JsonPropertyName("transcript_path")]
         public string TranscriptPath { get; set; } = "";
+
+        // Where this session lives when it does not live on this machine: a
+        // https://claude.ai/code/session_… address for a cloud session, empty
+        // for everything else. [JsonIgnore] for the reason Source and Kind are
+        // — it is the scan's conclusion rather than a hook's, and
+        // ResetSessionToIdle writes this object back over a hook-owned file.
+        //
+        // Carried rather than rebuilt at the click, because the address is made
+        // out of the session id and the orb is the only thing that still holds
+        // it by then. See ClaudeCloudSessions.Session.Url.
+        [JsonIgnore]
+        public string Url { get; set; } = "";
+
+        // How full this session's context window is, as a percentage, when
+        // whatever lists the session says so. Null is "nobody said", which is
+        // not the same as zero and must not draw an empty ring — see
+        // OrbWindow.ApplyContextRing.
+        //
+        // Deliberately not folded into State. State is what the session is
+        // doing; this is how much room it has left to keep doing it, which is
+        // the one fact about a session you cannot see by looking at it and
+        // cannot find out without opening it.
+        [JsonIgnore]
+        public int? ContextPercent { get; set; }
+
+        // Two lines of hover text for a session whose roster says more than its
+        // state does: what it is doing in its own words, and the last thing it
+        // was seen to do. Null where nothing was said, and the tooltip simply
+        // omits the line rather than printing a placeholder — an orb claiming
+        // "unknown" is worse than an orb claiming nothing.
+        [JsonIgnore]
+        public string? StatusDetail { get; set; }
+
+        [JsonIgnore]
+        public string? RecentAction { get; set; }
     }
 
     // What produced a session. ClaudeCode, Codex and Grok are local processes
@@ -2045,6 +2080,68 @@ namespace ClaudeBuddy
                     remote.Seen));
             }
 
+            // Claude Code sessions running in Anthropic's cloud. Empty and free
+            // unless claudeCloudEnabled is on — ClaudeCloudSessions.Snapshot
+            // holds that gate itself, so this block needs no second one.
+            //
+            // Simpler than either branch above, and for the same reason the
+            // remote-control one is: a cloud session is one conversation in one
+            // place. There are no rooms, no leads, and no local anything.
+            foreach (var session in ClaudeCloudSessions.Snapshot())
+            {
+                found.Add(new ScanEntry(
+                    "cloud:" + session.Id,
+                    new SessionStatus
+                    {
+                        Source = SessionSource.ClaudeCloud,
+                        Kind = SessionKind.Cloud,
+                        State = session.State,
+                        Title = session.Title,
+
+                        // Deliberately absent, exactly as the remote-control
+                        // block above leaves it: ApplyPersona returns early on
+                        // an empty cwd, so no local candidate path is ever
+                        // constructed for a session that has no directory on
+                        // this machine — or on any machine the user owns.
+                        Cwd = "",
+
+                        // Hashed from the session id, so the orb wears the same
+                        // colour next launch with nothing stored. A cloud
+                        // session has no /color to read and no cwd to
+                        // auto-colour from, so this is the only stable answer
+                        // available — the same reasoning, and the same
+                        // function, the remote-control fallback uses.
+                        Color = OpenClawSessions.ColourForAgent(session.Id),
+
+                        Url = session.Url,
+                        ContextPercent = session.ContextPercent,
+                        StatusDetail = session.StatusDetail,
+                        RecentAction = session.RecentAction,
+
+                        // The roster's "this one wants you" flag, spent on the
+                        // channel that already means it. NeedsInput dims the orb
+                        // as well as marking it, which reads oddly at first for
+                        // something asking for attention — but it is the same
+                        // treatment a local background job holding a question
+                        // gets, the "?" is the loud half of that pair, and a
+                        // second presence value meaning almost this one is how
+                        // two orbs end up saying the same thing differently.
+                        Presence = session.NeedsAction
+                            ? OrbPresence.NeedsInput
+                            : OrbPresence.Present,
+                    },
+
+                    // The session's own last activity, never `now`. The account
+                    // API lists every cloud session the account has ever had —
+                    // 578 rows on the machine this was measured against — so
+                    // stamping the time of the read would give all of them a
+                    // permanent orb. Stamping real activity lets the user's own
+                    // "Keep orbs for" setting do the filtering, which is the
+                    // same argument the gateway block above makes at length and
+                    // the same trap it was written to avoid.
+                    session.LastActivity));
+            }
+
             // Before InheritTerminalInfo, so this describes the files as the
             // hooks wrote them. It happens to be immune to the donation — pid and
             // source are not among the fields moved — but this ordering is the one
@@ -2649,6 +2746,47 @@ namespace ClaudeBuddy
                 return remote;
             }
 
+            // A session in Anthropic's cloud. Cached for the reason the
+            // remote-control branch above gives and then some: there is no file
+            // on this machine to rebuild it from *and* re-reading costs a
+            // network round trip against a rate-limited endpoint, so a rebuilt
+            // panel would be slower as well as emptier.
+            if (status.Source == SessionSource.ClaudeCloud)
+            {
+                // The roster row, which is what the session is constructed from
+                // — it carries the title and the id in the shape the events
+                // endpoint wants. Matched on the same "cloud:" key the scan
+                // minted rather than by slicing the prefix off, so the two
+                // cannot drift apart.
+                var row = ClaudeCloudSessions.Snapshot()
+                    .FirstOrDefault(s => "cloud:" + s.Id == sessionId);
+
+                if (_cloudChats.TryGetValue(sessionId, out var existingCloud))
+                {
+                    // Re-read on every open. Reconciliation is by uuid, so this
+                    // is the refresh path rather than a second way in: a turn
+                    // that grew while the panel was shut updates in place, and
+                    // nothing is duplicated.
+                    //
+                    // **A panel left open does not refresh itself**, and that is
+                    // a real gap rather than an oversight being hidden. The only
+                    // ticker available here is the two-second scan, and pointing
+                    // a rate-limited events endpoint at it would spend the
+                    // account's budget on a window nobody is looking at.
+                    StartCloudLoad(existingCloud);
+                    return existingCloud;
+                }
+
+                // No row and no cached session means the roster has dropped it —
+                // the orb is on its way out, and there is nothing to read.
+                if (row is null) return null;
+
+                var cloud = new ClaudeCloudChatSession(row, CloudChatApi, CloudChatCredentials);
+                _cloudChats[sessionId] = cloud;
+                StartCloudLoad(cloud);
+                return cloud;
+            }
+
             // Both local CLIs from here down. Which transcript format to read
             // and which pair of settings governs it is the whole of the
             // difference, and it lives in CliChatFormat.
@@ -2681,6 +2819,56 @@ namespace ClaudeBuddy
         // but what was said should still be there when it comes back.
         private readonly Dictionary<string, RemoteControlChatSession> _remoteChats =
             new(StringComparer.Ordinal);
+
+        // Cloud chat sessions, kept for the same reason the remote ones above
+        // are: the transcript came over the network and there is nothing on this
+        // disk to read it back from.
+        private readonly Dictionary<string, ClaudeCloudChatSession> _cloudChats =
+            new(StringComparer.Ordinal);
+
+        // One HTTP client and one credential source for every cloud panel, not
+        // one each. HttpCloudApi owns an HttpClient, which .NET wants reused, and
+        // on macOS the credential source is a Keychain read — a second one per
+        // panel would be a second consent surface for the same item.
+        //
+        // Built on first use rather than in the constructor, so a Buddy with the
+        // feature switched off never constructs either. Excluded from coverage
+        // for what they are rather than what they decide: an HttpClient and, on
+        // this platform, a Keychain query. Which of the two credential sources
+        // SourceFor returns is covered where it lives.
+        [ExcludeFromCodeCoverage]
+        private ICloudApi CloudChatApi => _cloudChatApi ??= new HttpCloudApi();
+
+        [ExcludeFromCodeCoverage]
+        private ICloudCredentialSource CloudChatCredentials =>
+            _cloudChatCredentials ??= ClaudeCliCredentials.SourceFor(
+                OperatingSystem.IsMacOS(),
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+        private ICloudApi? _cloudChatApi;
+        private ICloudCredentialSource? _cloudChatCredentials;
+
+        // Kick off the read and walk away.
+        //
+        // Not awaited, because RemoteChatFor is what a click calls and a click
+        // must not block on a network round trip. The session publishes its own
+        // state to the panel — Connecting until this finishes, then Connected or
+        // Error — so there is nothing for a caller to do with the answer that the
+        // panel is not already told.
+        //
+        // A false return means nothing could be read, and it is deliberately not
+        // turned into an empty transcript: the session leaves itself in Error, and
+        // the panel says so. An unreadable conversation and an empty one look
+        // identical on screen, and only one of them is worth explaining.
+        //
+        // Excluded from coverage: its body is a fire-and-forget Task over a real
+        // HTTP call. What it would exercise — LoadAsync's own arms — is covered
+        // directly against a fake ICloudApi.
+        [ExcludeFromCodeCoverage]
+        private static void StartCloudLoad(ClaudeCloudChatSession session)
+        {
+            _ = Task.Run(() => session.LoadAsync(CancellationToken.None));
+        }
 
         // Namespaced away from both Claude Code's UUIDs and the gateway's own
         // keys, because it is neither: nothing on the gateway answers to it.

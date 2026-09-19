@@ -8,30 +8,6 @@ using Avalonia.Threading;
 
 namespace ClaudeBuddy
 {
-    // A session that can be read and not written to.
-    //
-    // **The panel hides the composer entirely for one of these**, rather than
-    // showing a disabled box or a box with a discouraging watermark. That is a
-    // departure from IRemoteChatComposer's own reasoning, which argues for leaving
-    // the box enabled and letting SendAsync explain itself — and the argument
-    // holds where typing is *pointless*, which is not the same as there being
-    // nowhere for the text to go. A cloud session has no input endpoint at all:
-    // `/input`, `/messages` and `/turns` are all 404, measured. A box that accepts
-    // a paragraph and then says the transport never had a way to deliver it is
-    // worse than no box, because the paragraph is gone by the time that is said.
-    //
-    // Declared here rather than in RemoteChat.cs beside its siblings because
-    // CB-164's two halves were built in parallel worktrees and RemoteChat.cs
-    // belongs to the other one; moving it up to join the rest is a one-line
-    // follow-up once both have landed, and is worth doing.
-    public interface IRemoteChatReadOnly
-    {
-        // A property rather than a bare marker, for the same reason
-        // IRemoteChatRoom.IsRoom is one: a fake has to be able to flip it per
-        // instance to drive both sides of the panel's decision from one class.
-        bool IsReadOnly { get; }
-    }
-
     // Reading a cloud session's transcript.
     //
     // **`/v2/ccr-sessions/<id>/events` returns Claude Code's own transcript
@@ -116,7 +92,7 @@ namespace ClaudeBuddy
     // it is already showing — by `uuid`, which the transcript rows carry, so a
     // turn that grew a paragraph updates in place rather than appearing twice.
     internal sealed class ClaudeCloudChatSession : IRemoteChatSession, IRemoteChatComposer,
-        IRemoteChatReadOnly
+        IRemoteChatReadOnly, IRemoteChatMachine
     {
         // How much of a long transcript the panel is given. The interface's own
         // contract is that history arrives already bounded and ordered oldest to
@@ -164,6 +140,7 @@ namespace ClaudeBuddy
         {
             SessionId = session.Id;
             DisplayName = string.IsNullOrWhiteSpace(session.Title) ? session.Id : session.Title;
+            ReplyUrl = string.IsNullOrWhiteSpace(session.Url) ? null : session.Url;
             _api = api;
             _credentials = credentials;
             _post = post ?? (action => Dispatcher.UIThread.Post(action));
@@ -208,11 +185,48 @@ namespace ClaudeBuddy
 
         public bool IsReadOnly => true;
 
+        // **Answered, and the answer is not a machine.**
+        //
+        // ChatHeaderMeta.MachineFor treats a session that names no machine as
+        // being on this one, and its comment says why that is a rule rather than
+        // a guess: the only implementer was the mirror, so silence meant a local
+        // CLI session or a gateway conversation, both of which are read where
+        // they run. A cloud session is the first thing that is silent and *not*
+        // here, and left silent it would have put the user's own laptop's name
+        // in the header of a session running in Anthropic's data centre —
+        // quietly, and in the one line of the panel that exists to answer
+        // "where is this".
+        //
+        // So it names the cloud instead. Not a hostname, because there is no
+        // hostname the user could act on and inventing a plausible one would be
+        // worse than the wrong-laptop bug it replaces; the header's job here is
+        // to say "not one of yours", and that is what this says.
+        //
+        // Never null and never changes, so MachineChanged is declared to satisfy
+        // the interface and deliberately never raised — the panel subscribes and
+        // reads the property at bind, which is already the whole answer.
+        public string? MachineName => "Anthropic's cloud";
+
+        public event Action? MachineChanged
+        {
+            add { }
+            remove { }
+        }
+
         // Shown in place of the box, for a panel that renders the hint even when
-        // it has hidden the composer. Says where the session *can* be replied to
-        // rather than only that it cannot be replied to here.
-        public string ComposerHint =>
-            "this cloud session can be read here and replied to at claude.ai/code";
+        // it has hidden the composer. Says that replying happens elsewhere; the
+        // link beside it is what says *where*, so the address is deliberately
+        // not spelled out here as well.
+        public string ComposerHint => "This conversation is read-only here.";
+
+        // The session's own address, which is what the panel's link opens.
+        //
+        // Carried from the roster row rather than rebuilt, for the reason
+        // ClaudeCloudSessions.Session.Url gives: the payload's own session_url is
+        // empty on every row measured, and the id is what the address is made of.
+        // Null for a row that somehow arrived without one, and the panel then
+        // draws no link rather than a link to nowhere.
+        public string? ReplyUrl { get; }
 
         // Read the transcript and reconcile it against what is already shown.
         //
