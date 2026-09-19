@@ -70,6 +70,14 @@ public class CloudSettingsRowsTests
         }
     }
 
+    private static string HelpText() =>
+        string.Join(
+            " ",
+            NewWindow().ClaudeCloudRows()[0]
+                .GetLogicalDescendants()
+                .OfType<TextBlock>()
+                .Select(block => block.Text));
+
     // The Keychain prompt is named in the help text, and that sentence is load
     // bearing: it arrives unannounced, it names an item the user has never heard
     // of, and a prompt nobody expected is a prompt people decline — after which
@@ -80,15 +88,63 @@ public class CloudSettingsRowsTests
         Reset();
         try
         {
-            var help = string.Join(
-                " ",
-                NewWindow().ClaudeCloudRows()[0]
-                    .GetLogicalDescendants()
-                    .OfType<TextBlock>()
-                    .Select(block => block.Text));
+            var help = HelpText();
 
             Assert.Contains("Keychain", help);
             Assert.Contains("Always", help);
+        }
+        finally
+        {
+            Reset();
+        }
+    }
+
+    // **And does not promise the prompt goes away for good.**
+    //
+    // It said so until this was measured otherwise: a secret read that had been
+    // succeeding began blocking indefinitely, and in between the credential's
+    // stamp had moved because the CLI refreshed its token. What is established
+    // is that the read can block and that the credential was rewritten; the link
+    // between them is inferred. So the copy says the prompt can come back, and
+    // this pins the retraction rather than trusting nobody rewrites it into a
+    // promise again — the failure mode being copy that reads as reassuring and
+    // is not true, which is the worst kind of settings text.
+    [AvaloniaFact]
+    public void TheHelpTextDoesNotPromiseTheKeychainPromptIsGoneForGood()
+    {
+        Reset();
+        try
+        {
+            var help = HelpText();
+
+            Assert.DoesNotContain("stops it asking again", help);
+            Assert.DoesNotContain("never ask", help);
+            Assert.DoesNotContain("only once", help);
+
+            // ...and does say the other half, so this cannot be satisfied by
+            // simply deleting the sentence.
+            Assert.Contains("can bring the prompt back", help);
+        }
+        finally
+        {
+            Reset();
+        }
+    }
+
+    // No frequency, either. "Every few hours" would be the same unmeasured claim
+    // in a more precise costume, and a number in settings copy reads as
+    // something somebody counted.
+    [AvaloniaTheory]
+    [InlineData("hour")]
+    [InlineData("day")]
+    [InlineData("week")]
+    [InlineData("minute")]
+    public void TheHelpTextClaimsNoFrequency(string unit)
+    {
+        Reset();
+        try
+        {
+            Assert.DoesNotContain(unit, HelpText(), StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
