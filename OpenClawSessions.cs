@@ -1998,7 +1998,9 @@ namespace ClaudeBuddy
                 // record of having done so is all a client ever sees of it —
                 // see DeliveredPictureName for why that record, rather than
                 // anything the agent wrote, is the signal worth trusting.
-                var delivered = DeliveredPictureName(Str(message, "model"), text);
+                var delivered = DeliveredPictureName(
+                    Str(message, "provider"), Str(message, "role"),
+                    Str(message, "model"), text);
                 if (delivered is not null)
                 {
                     // Carried as the route rather than as a path, because that
@@ -2767,8 +2769,17 @@ namespace ClaudeBuddy
         // good prose off to be fetched as a file. And a bare filename alone is
         // no signal either: an agent can simply mention one mid-conversation.
         // Only the two together mean "a picture was delivered".
-        internal static string? DeliveredPictureName(string? model, string text)
+        // The gateway's own predicate also pins provider and role. They are
+        // deliberately present-only checks: older gateways did not always
+        // serialise either field, and treating absence as a mismatch would
+        // turn an otherwise working picture path into a silent regression.
+        // When either is present, though, accepting a different value would
+        // mistake another producer's similarly-shaped record for ours.
+        internal static string? DeliveredPictureName(
+            string? provider, string? role, string? model, string text)
         {
+            if (provider is not null && provider != "openclaw") return null;
+            if (role is not null && role != "assistant") return null;
             if (model != DeliveryMirrorModel) return null;
 
             // No emptiness guard, deliberately. The one caller has already
@@ -2779,12 +2790,18 @@ namespace ClaudeBuddy
             // live-image resolution rather than writing a test around it.
             var name = text.Trim();
             if (name.Contains('/') || name.Contains('\\')) return null;
-            if (name.Contains(' ') || name.Contains('\n')) return null;
+            if (name.Contains(' ') || name.Contains('\n') || name.Contains('\r') || name.Contains('\t')) return null;
 
             return Array.Exists(ImageExtensions, ext => name.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
                 ? name
                 : null;
         }
+
+        // Keeps the filename rule independently testable. History records go
+        // through the overload above, which supplies and validates their
+        // provenance before reaching this compatibility seam.
+        internal static string? DeliveredPictureName(string? model, string text) =>
+            DeliveredPictureName("openclaw", "assistant", model, text);
 
         // The gateway route that serves a file the agent named by path.
         //
