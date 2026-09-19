@@ -45,6 +45,32 @@ public class PersonaScopedNameTests
         Assert.Null(PersonaMarkdown.NameValue("the value passed to the constructor"));
     }
 
+    // CB-145's own measurement, one field over: `VoiceValue("string")`
+    // accepts the same schema-table type name `NameValue` does, for the same
+    // reason — one short, well-formed token is exactly what the bound is
+    // for, and "string" is exactly that. This is the fact that turned CB-142
+    // into a general defect class rather than a one-off: whichever field
+    // gets added to the table row next will pass its own bound on "string"
+    // too, unless it is scoped the same way.
+    [Fact]
+    public void TheVoiceBoundAloneAlsoAcceptsASchemaTablesTypeName()
+    {
+        var (voice, _) = PersonaMarkdown.VoiceValue("string");
+        Assert.Equal("string", voice);
+    }
+
+    // CB-145's literal repro, run through the real parser end to end rather
+    // than through the bound alone: a two-cell table row naming a Voice, with
+    // no heading anywhere in the file, used to set `voice = "string"` — the
+    // exact defect CB-142 fixed for Name, one field over. This is what
+    // scoping the table row's Voice arm (see `ScopedField` in
+    // PersonaMarkdown.cs) exists to refuse.
+    [Fact]
+    public void ATableRowNamingAVoiceWithAStringValueAndNoHeadingIsRefused()
+    {
+        Assert.Null(PersonaMarkdown.Parse(new[] { "| Voice | string |" }).Voice);
+    }
+
     // --- the positive controls --------------------------------------------
 
     // Both bold spellings, because `BoldField` accepts both and a rule that
@@ -435,10 +461,16 @@ public class PersonaScopedNameTests
 
     // --- what this ticket deliberately did not move ------------------------
 
-    // The out-of-scope guarantee, asserted rather than assumed. A voice and a
-    // picture are read from a bold field and a table row **outside** any
-    // heading, exactly as they were before CB-142, because real profiles
-    // write them that way. The evidence, named so it can be rechecked rather
+    // The out-of-scope guarantee, asserted rather than assumed, but now only
+    // for the **bold field**. CB-145 narrowed this from "a bold field or a
+    // table row" to "a bold field": measuring the table row's voice and
+    // picture separately found no shipped profile using either shape, which
+    // is what let CB-145 scope the table row while leaving the bold field
+    // alone. See `ATableRowVoiceOutsideAPersonaSectionIsRefused` and
+    // `ATableRowPictureOutsideAPersonaSectionIsRefused` below for the table
+    // row's half of the same measurement.
+    //
+    // The evidence for the bold field, named so it can be rechecked rather
     // than doubted: `ARedactedProfileKokoroVoiceReachesTheMatchingNeuralOption`
     // in `tests/IntegrationTests/OpenClawWorkspaceIdentityIntegrationTests.cs`
     // is a redacted **real** `IDENTITY.md` whose only voice line is a bare
@@ -450,7 +482,6 @@ public class PersonaScopedNameTests
     // speaking.
     [Theory]
     [InlineData("**Voice:** af_bella (Kokoro TTS)")]
-    [InlineData("| Voice | af_bella (Kokoro TTS) |")]
     public void AVoiceOutsideAnyPersonaSectionIsStillRead(string line)
     {
         Assert.Equal("af_bella", PersonaMarkdown.Parse(new[] { line }).Voice);
@@ -458,16 +489,51 @@ public class PersonaScopedNameTests
 
     [Theory]
     [InlineData("**Portrait:** leota.png")]
-    [InlineData("| Profile picture | leota.png |")]
     public void APictureOutsideAnyPersonaSectionIsStillRead(string line)
     {
         Assert.Equal("leota.png", PersonaMarkdown.Parse(new[] { line }).Avatar);
     }
 
+    // The table row's half of CB-145: a schema-documentation table and a
+    // table of persona attributes are the same shape without a heading to
+    // tell them apart, which is exactly CB-142's argument for Name — measured
+    // now for Voice and Avatar too, rather than assumed to differ by analogy.
+    // Ticket CB-145's own repro line: `| Voice | string |` with no heading
+    // anywhere in the file resolved to `voice = "string"` before this fix.
+    [Fact]
+    public void ATableRowVoiceOutsideAPersonaSectionIsRefused()
+    {
+        Assert.Null(PersonaMarkdown.Parse(new[] { "| Voice | af_bella (Kokoro TTS) |" }).Voice);
+    }
+
+    [Fact]
+    public void ATableRowPictureOutsideAPersonaSectionIsRefused()
+    {
+        Assert.Null(PersonaMarkdown.Parse(new[] { "| Profile picture | leota.png |" }).Avatar);
+    }
+
+    // ...and read once a heading says the table is about the agent, exactly
+    // as a table-row Name already was before this ticket.
+    [Fact]
+    public void ATableRowVoiceInsideAPersonaSectionIsRead()
+    {
+        var fields = PersonaMarkdown.Parse(new[] { "## Persona", "| Voice | af_bella (Kokoro TTS) |" });
+        Assert.Equal("af_bella", fields.Voice);
+    }
+
+    [Fact]
+    public void ATableRowPictureInsideAPersonaSectionIsRead()
+    {
+        var fields = PersonaMarkdown.Parse(new[] { "## Persona", "| Profile picture | leota.png |" });
+        Assert.Equal("leota.png", fields.Avatar);
+    }
+
     // ...and inside one, which is the arm where a label that is not a name
     // label falls through the new check to the voice and picture arms below
     // it. Without this case the scoped arm could refuse every line it saw and
-    // the suite would not notice.
+    // the suite would not notice. The bold field's voice and the table row's
+    // picture are deliberately mixed here so this one case still exercises
+    // both arms' claim paths under a section.
     [Fact]
     public void AVoiceAndAPictureInsideAPersonaSectionAreStillRead()
     {
@@ -480,6 +546,27 @@ public class PersonaScopedNameTests
 
         Assert.Equal("af_bella", fields.Voice);
         Assert.Equal("leota.png", fields.Avatar);
+    }
+
+    // Unlike Name, a table-row Voice has no word-count bound to be
+    // independent of — the header comment on `VoiceValue` and the explicit
+    // arms says so outright: "any number of parts can be written under the
+    // explicit `- Voice:` grammar, which has never had a word cap." Scope is
+    // therefore the *only* guard CB-145 adds for the table row's Voice, not
+    // one of two independent ones the way Name has both — asserted here so
+    // that fact stays measured rather than assumed the next time this file is
+    // read. `VoiceLabel` plus `Valid` (non-blank, non-placeholder) is the
+    // whole of what a table row still has to pass once inside a section.
+    [Fact]
+    public void ATableRowVoiceHasNoWordCountBoundEvenInsideASection()
+    {
+        var fields = PersonaMarkdown.Parse(new[]
+        {
+            "## Persona",
+            "| Voice | this sentence is far too long to be a voice identifier |",
+        });
+
+        Assert.Equal("this sentence is far too long to be a voice identifier", fields.Voice);
     }
 
     // A recognised name label whose value fails the bound is not claimed — it
