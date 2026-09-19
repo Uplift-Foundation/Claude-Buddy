@@ -1023,13 +1023,26 @@ namespace ClaudeBuddy
                     // arrives unannounced, it names an item the user has never
                     // heard of, and a prompt nobody expected is a prompt people
                     // decline — after which the feature simply never works and
-                    // nothing on screen says why. Saying "Always Allow" here
-                    // costs a sentence and saves that whole path.
+                    // nothing on screen says why. Naming it costs a sentence and
+                    // saves that whole path.
+                    //
+                    // What this deliberately does NOT say is that "Always Allow"
+                    // ends the matter. An earlier draft did. Measured on a real
+                    // machine: the secret read succeeded, and some hours later —
+                    // after the CLI had refreshed its login, which moved the
+                    // item's modification stamp — the same read stopped
+                    // answering. Whether the rewrite is what re-armed the prompt
+                    // is *not* established, so this claims neither a cause nor a
+                    // frequency. Promising "you will not be asked again" and then
+                    // asking again is worse than the vaguer sentence: the user
+                    // concludes the app is broken rather than that macOS did
+                    // something reasonable.
                     "Shows an orb for each Claude Code session running in Anthropic's cloud. "
                     + "Reads the login the Claude Code CLI already stores on this machine, so "
                     + "there is nothing to sign in to — macOS will ask for permission to read "
-                    + "that item from your Keychain the first time, and choosing \u201CAlways "
-                    + "Allow\u201D stops it asking again. Read-only: clicking one opens it in "
+                    + "that item from your Keychain, and choosing “Always Allow” means "
+                    + "you should not be asked each time. Claude Code refreshing its login can "
+                    + "bring the prompt back. Read-only: clicking one opens it in "
                     + "your browser, which is the only place a cloud session can be typed into.")
             };
 
