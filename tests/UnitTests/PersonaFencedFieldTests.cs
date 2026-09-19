@@ -83,11 +83,17 @@ public class PersonaFencedFieldTests
         }).Voice);
     }
 
+    // Under a heading too, not just without one, so this is a test of the
+    // fence gate specifically rather than one that CB-145's table-row scope
+    // guard would also have satisfied on its own — `TheSameUnfencedTableRowIsAFieldUnderAHeading`
+    // below is the same line and the same heading with the fence taken away,
+    // and it reads, which is what proves the fence is the reason here.
     [Fact]
     public void AFencedTableVoiceIsNotAField()
     {
         Assert.Null(PersonaMarkdown.Parse(new[]
         {
+            "## Persona",
             "```markdown",
             "| Voice | af_bella |",
             "```",
@@ -141,19 +147,42 @@ public class PersonaFencedFieldTests
 
     // Unfenced, the very same lines are fields. Without this the refusals
     // above are satisfied by a parser that reads nothing at all.
+    //
+    // The table-row Voice and Avatar cases are deliberately not in this list
+    // any more: CB-145 scoped the table row to a persona section for those
+    // two fields (see `ScopedField` in PersonaMarkdown.cs), so
+    // `AFencedTableVoiceIsNotAField` above is now refused for two independent
+    // reasons rather than one, and `TheSameUnfencedTableRowIsAFieldUnderAHeading`
+    // below covers the unfenced-but-scoped half on its own so the two guards
+    // stay distinguishable.
     [Theory]
     [InlineData("- Name: Aurora", "Aurora", null, null)]
     [InlineData("- **Name:** Aurora", "Aurora", null, null)]
     [InlineData("**Voice:** af_bella", null, "af_bella", null)]
-    [InlineData("| Voice | af_bella |", null, "af_bella", null)]
     [InlineData("- **Voice:** af_bella", null, "af_bella", null)]
     [InlineData("- Avatar: leota.png", null, null, "leota.png")]
-    [InlineData("| Portrait | leota.png |", null, null, "leota.png")]
     [InlineData("**Portrait:** leota.png", null, null, "leota.png")]
     public void TheSameLineOutsideAFenceIsStillAField(
         string line, string? name, string? voice, string? avatar)
     {
         var fields = PersonaMarkdown.Parse(new[] { line });
+
+        Assert.Equal(name, fields.Name);
+        Assert.Equal(voice, fields.Voice);
+        Assert.Equal(avatar, fields.Avatar);
+    }
+
+    // The table row's own positive control, unfenced and under a heading —
+    // the shape `AFencedTableVoiceIsNotAField` and `AFencedTableRowIsNotAName`
+    // (in PersonaScopedNameTests) both refuse for a fence, this confirms the
+    // fence is the only reason: the same line, same heading, no fence, reads.
+    [Theory]
+    [InlineData("| Voice | af_bella |", null, "af_bella", null)]
+    [InlineData("| Portrait | leota.png |", null, null, "leota.png")]
+    public void TheSameUnfencedTableRowIsAFieldUnderAHeading(
+        string line, string? name, string? voice, string? avatar)
+    {
+        var fields = PersonaMarkdown.Parse(new[] { "## Persona", line });
 
         Assert.Equal(name, fields.Name);
         Assert.Equal(voice, fields.Voice);

@@ -944,6 +944,17 @@ public class LocalPersonaUiTests : IDisposable
     // the word "string" (PersonaScopedNameTests measures that rather than
     // assuming it), so without the heading rule this orb would be labelled
     // "St" and its panel titled "string".
+    //
+    // CB-145 added the Voice row to this same fixture rather than a second
+    // one: the defect it fixes is one field over from the Name defect this
+    // test already covers, at exactly this surface — a real scan over a real
+    // schema table — so the table having both rows is what proves neither
+    // field leaks, in the one file a maintainer would actually write.
+    // `VoiceValue("string")` accepts the token the same way `NameValue` does
+    // (measured in `PersonaScopedNameTests.TheVoiceBoundAloneAlsoAcceptsASchemaTablesTypeName`),
+    // so before CB-145 this same fixture set `persona.Voice = "string"`
+    // silently — quieter than the Name defect, since nothing about a wrong
+    // voice shows up on the orb itself.
     [AvaloniaFact]
     public void ARealScanOverASchemaTableLeavesTheOrbItsFolderLetters()
     {
@@ -968,6 +979,7 @@ public class LocalPersonaUiTests : IDisposable
                 "| Field | Type |\n" +
                 "| --- | --- |\n" +
                 "| Name | string |\n" +
+                "| Voice | string |\n" +
                 "| Started | timestamp |\n" +
                 "\n" +
                 "**Name**: the value passed to the constructor, before defaulting\n");
@@ -989,6 +1001,7 @@ public class LocalPersonaUiTests : IDisposable
             manager.ScanAndUpdate();
 
             Assert.Null(LocalPersonas.For(sessionId)?.Name);
+            Assert.Null(LocalPersonas.For(sessionId)?.Voice);
 
             // The letters the session's own title gives, and specifically not
             // the "St" the word "string" would have drawn. Literals for the

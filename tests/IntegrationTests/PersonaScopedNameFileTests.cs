@@ -146,6 +146,41 @@ public class PersonaScopedNameFileTests : IDisposable
         Assert.Null(persona.AvatarPath);
     }
 
+    // CB-145, one field over from the case above, and at the same level: a
+    // `CLAUDE.md` naming no persona at all, whose schema table happens to
+    // have a row labelled `Voice`. `| Voice | string |` used to set
+    // `persona.Voice = "string"`, silently, with no cue anywhere on screen
+    // pointing at this file — quieter than the Name defect CB-142 fixed,
+    // because a wrong name is visible on the orb and a wrong voice just fails
+    // or falls back to speaking with the wrong voice. `VoiceValue("string")`
+    // accepts the token for the same reason `NameValue("string")` does, which
+    // `PersonaScopedNameTests.TheVoiceBoundAloneAlsoAcceptsASchemaTablesTypeName`
+    // asserts by running it rather than by reading the regex.
+    [Fact]
+    public void ASchemaTableInAnOrdinaryClaudeMdNamesNoVoiceEither()
+    {
+        var project = Path.Combine(_root, "ordinary-voice-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(project);
+
+        File.WriteAllText(
+            Path.Combine(project, "CLAUDE.md"),
+            "# Working in this repository\n" +
+            "\n" +
+            "## The session record\n" +
+            "\n" +
+            "| Field | Type |\n" +
+            "| --- | --- |\n" +
+            "| Name | string |\n" +
+            "| Voice | string |\n" +
+            "| Started | timestamp |\n");
+
+        var persona = Resolve(project);
+
+        Assert.Null(persona.Name);
+        Assert.Null(persona.Voice);
+        Assert.Null(persona.AvatarPath);
+    }
+
     // The two guards, shown to be independent against real files rather than
     // against strings. One fixture is refused for its scope and would pass any
     // bound; the other is refused for its bound and sits under `## Persona`.

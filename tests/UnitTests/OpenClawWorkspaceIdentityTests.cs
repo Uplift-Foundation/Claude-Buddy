@@ -73,16 +73,30 @@ public class OpenClawWorkspaceIdentityTests : IDisposable
         Assert.Equal("Bella", fields.Voice);
     }
 
+    // The table-row spelling is not in this list any more: CB-145 scoped a
+    // table row's Voice to a persona section, the same way CB-142 scoped its
+    // Name, because no real workspace `IDENTITY.md` was found using a table
+    // for a voice. `ATableRowVoiceIsReadOnlyUnderAPersonaHeading` below covers
+    // the same value in the same shape, with the heading the arm now
+    // requires.
     [Theory]
     [InlineData("- Voice Name: Ava (Premium)")]
     [InlineData("- Speech Voice: Ava (Premium)")]
     [InlineData("- TTS Voice: Ava (Premium)")]
     [InlineData("**Voice**: Ava (Premium)")]
     [InlineData("**Voice:** Ava (Premium)")]
-    [InlineData("| Voice | Ava (Premium) |")]
     public void DeliberateMarkdownVoiceFieldVariantsAreRead(string line)
     {
         Assert.Equal("Ava (Premium)", OpenClawWorkspaceIdentity.Parse(new[] { line }).Voice);
+    }
+
+    [Fact]
+    public void ATableRowVoiceIsReadOnlyUnderAPersonaHeading()
+    {
+        Assert.Null(OpenClawWorkspaceIdentity.Parse(new[] { "| Voice | Ava (Premium) |" }).Voice);
+
+        var fields = OpenClawWorkspaceIdentity.Parse(new[] { "## Persona", "| Voice | Ava (Premium) |" });
+        Assert.Equal("Ava (Premium)", fields.Voice);
     }
 
     [Fact]
@@ -167,11 +181,15 @@ public class OpenClawWorkspaceIdentityTests : IDisposable
         }).Voice);
     }
 
+    // Wrapped in a persona heading for CB-145 — the table row's Voice is now
+    // scoped, and this test is about the header/data-row mechanic, not about
+    // scope, so the heading is what lets it keep testing that mechanic.
     [Fact]
     public void AMarkdownTableHeaderDoesNotWinOverItsVoiceDataRow()
     {
         var fields = OpenClawWorkspaceIdentity.Parse(new[]
         {
+            "## Persona",
             "| Voice | Value |",
             "| --- | :--- |",
             "| TTS Voice | Ava (Premium) |",

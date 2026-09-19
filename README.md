@@ -1007,15 +1007,21 @@ drawn exactly as it was before.
 
 A bullet, with or without a bold label, carries all three fields, and so does
 YAML front matter — labels are case-insensitive, and the first valid value for
-each field wins. A standalone bold field (`**Name:** Leota`) and a two-cell
-table row carry all three as well, except that a name is read from either only
-underneath a persona heading — described below — because `| Name | string |` in
-an ordinary schema table must not rename an orb. `Avatar`, `Profile
-Picture`, `Profile Pic`, `Profile Image`, `Profile Photo`, `Picture`,
-`Portrait`, `Photo`, `Image` and `Image Animated` (or `image_animated:` in
-front matter) all name the picture; `Voice`, `Voice Name`, `Speech Voice` and
-`TTS Voice` all name the voice; `Name` and `Slug` both name the agent, with
-`Name` winning when a file states both.
+each field wins. A standalone bold field (`**Name:** Leota`) carries all three
+as well, except that a name is read from it only underneath a persona heading
+— described below — because `| Name | string |` in an ordinary schema table
+must not rename an orb, and `**Name**: the value passed to the constructor` is
+exactly as realistic a sentence to write in ordinary prose. A two-cell table
+row scopes its name **and its voice and picture** to a persona heading the
+same way, which the bold field's voice and picture deliberately do not: a real
+IDENTITY.md writes `**Voice:** af_bella (Kokoro TTS)` as a bare bold field with
+no heading above it, so scoping that arm would stop it speaking, while no
+shipped profile has been found writing a voice or a picture as a table row at
+all. `Avatar`, `Profile Picture`, `Profile Pic`, `Profile Image`, `Profile
+Photo`, `Picture`, `Portrait`, `Photo`, `Image` and `Image Animated` (or
+`image_animated:` in front matter) all name the picture; `Voice`, `Voice
+Name`, `Speech Voice` and `TTS Voice` all name the voice; `Name` and `Slug`
+both name the agent, with `Name` winning when a file states both.
 
 **Front matter carries all three fields, and its quotes are YAML's rather than
 part of the value.** A generator that writes
