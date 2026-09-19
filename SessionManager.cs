@@ -2346,6 +2346,12 @@ namespace ClaudeBuddy
                 // if the position turns out to be unusable. Before the reflow
                 // below, which steps over whatever this pins.
                 if (isNew) RestoreOrbPosition(window, status);
+
+                // After RestoreOrbPosition, which is what fills in
+                // window.PositionKey — the same key a pinned panel's saved
+                // spot is filed under, for the same reason ChatPanelSizes
+                // shares it with OrbPositions.
+                if (isNew) RestorePinnedChatPanel(window, window!.PositionKey);
             }
 
             var gone = _windows.Keys.Where(id => !seen.Contains(id)).ToList();
@@ -3195,6 +3201,40 @@ namespace ClaudeBuddy
             if (screen is null) return;
 
             window.PinAt(ClampIntoWork(point, screen.WorkingArea, (int)(56 * screen.Scaling)));
+        }
+
+        // CB-111: bring back a chat panel that was pinned before the app last
+        // quit. Same key, same "does it still land on a screen" guard, and
+        // the same sibling rule as RestoreOrbPosition just above — only here
+        // the sibling question is answered by ChatPanel.IsPinnedFor rather
+        // than by reading _windows, since two orbs sharing a key would each
+        // try to reopen the one saved panel and the panel, not the orb, is
+        // the thing that must not be duplicated.
+        //
+        // Deliberately no directory-only fallback the way RestoreOrbPosition
+        // has for an orb position saved before names were part of the key:
+        // PinnedChatPanels is a CB-111 key from day one, so there is no older
+        // shape of it to fall back to.
+        private void RestorePinnedChatPanel(OrbWindow window, string key)
+        {
+            if (string.IsNullOrEmpty(key)) return;
+            if (ChatPanel.IsPinnedFor(key)) return;
+
+            var saved = ClaudeBuddySettings.PinnedChatPanelPositionFor(key);
+            if (saved is null) return;
+
+            var point = new PixelPoint(saved.X, saved.Y);
+            if (window.Screens.ScreenFromPoint(point) is null) return;
+
+            // Nothing to bind the panel to if this session doesn't resolve to
+            // a live conversation (a room member removed between runs, a
+            // gateway id the daemon no longer recognises). Silently skipped,
+            // the same as RestoreOrbPosition silently skips an orb whose
+            // saved monitor is gone — a missing prerequisite, not an error.
+            var chat = RemoteChatFor(window.SessionId);
+            if (chat is null) return;
+
+            ChatPanel.RestorePinned(window, chat, point);
         }
 
         // An orb's top-left corner, pulled back until the whole orb is inside

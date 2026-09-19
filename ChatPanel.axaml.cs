@@ -371,6 +371,25 @@ namespace ClaudeBuddy
             PointerMoved += OnResizePointerMoved;
             PointerReleased += OnResizePointerReleased;
 
+            // CB-111: a pinned panel's place is worth remembering across a
+            // restart, and BeginMoveDrag (the header's drag gesture — see
+            // HeaderRow.PointerPressed above) hands the whole gesture to the
+            // platform rather than raising anything this class could hook at
+            // the end of a drag the way OnResizePointerReleased does for a
+            // resize. PositionChanged is what the platform gives back instead,
+            // and it fires for every kind of move — Reposition() included — so
+            // the guard is what keeps this from writing a save for a panel
+            // that only followed its orb. ClaudeBuddySettings.
+            // SetPinnedChatPanelPosition already no-ops when the position
+            // hasn't actually changed, so a native drag's stream of identical
+            // in-between events costs nothing once it settles.
+            PositionChanged += (_, _) =>
+            {
+                if (!_pinned || _owner is not { PositionKey.Length: > 0 } owner) return;
+
+                ClaudeBuddySettings.SetPinnedChatPanelPosition(owner.PositionKey, Position.X, Position.Y);
+            };
+
             // See NwSeCursor/NeSwCursor: no StandardCursorType member draws
             // as an actual diagonal on this platform, so these two corner
             // pairs get a cursor bitmap built by hand instead.
@@ -466,6 +485,53 @@ namespace ClaudeBuddy
             if (!ReferenceEquals(panel._owner, orb)) return;
 
             panel.Reposition();
+        }
+
+        // CB-111: whether some panel is already the pinned one for this
+        // PositionKey. SessionManager's own RestoreOrbPosition guards its
+        // sibling case the same way — two orbs sharing one key, which only
+        // happens for two titled sessions in the same directory with the same
+        // title, since PositionKeyFor gives every untitled session its own —
+        // and this is the same guard for a pinned panel: whichever orb gets
+        // there first in a scan wins the one saved spot, rather than both
+        // popping a copy of it.
+        internal static bool IsPinnedFor(string positionKey) =>
+            Panels.Any(p => p._pinned && p._owner?.PositionKey == positionKey);
+
+        // CB-111's startup path: bring back a panel that was pinned before the
+        // app last quit, at the place SessionManager read out of settings.
+        // Builds and binds a fresh window exactly the way a click on the orb
+        // would (OpenFor's transient-reuse rule does not apply here — a
+        // restored panel is pinned from the moment it exists, never the
+        // shared unpinned one), but without taking focus: see Bind's activate
+        // parameter for why a restart must not steal it.
+        //
+        // Position is set, then Pin() records it, rather than the other order
+        // — Bind() already ran its own Reposition() to put the window near
+        // the orb, and pinning before moving would save that transient spot
+        // instead of the one actually being restored.
+        internal static void RestorePinned(OrbWindow orb, IRemoteChatSession session, PixelPoint position)
+        {
+            if (PanelFor(session.SessionId) is not null) return;
+
+            var panel = new ChatPanel();
+            panel.Bind(orb, session, activate: false);
+
+            // Clamped to this panel's own size via ChatPanelPlacement, which
+            // already owns this maths for a freshly placed panel — see
+            // ClampSavedPosition's own comment on why a panel needs its own
+            // width and height here rather than an orb's fixed footprint.
+            if (panel.Screens.ScreenFromPoint(position) is { } screen)
+            {
+                var scale = screen.Scaling;
+                var size = new PixelSize(
+                    (int)(panel.Width * scale), (int)(panel.Height * scale));
+
+                position = ChatPanelPlacement.ClampSavedPosition(position, size, screen.WorkingArea);
+            }
+
+            panel.Position = position;
+            panel.Pin();
         }
 
         // Speech is global rather than per-orb, so the panel is told about it
@@ -599,7 +665,14 @@ namespace ClaudeBuddy
             OpenClawSessions.PanelClosed(_session);
         }
 
-        private void Bind(OrbWindow orb, IRemoteChatSession session)
+        // activate is false only for CB-111's startup restore: a panel that
+        // was pinned before the app last quit is shown again where it was
+        // left, but taking keyboard focus for it would mean every restart
+        // stealing focus into an old conversation, one steal per restored
+        // panel, ending on whichever happened to bind last. An ordinary open
+        // — a click on an orb — always wants the focus, which is what every
+        // other caller still gets by leaving this at its default.
+        private void Bind(OrbWindow orb, IRemoteChatSession session, bool activate = true)
         {
             Unbind();
 
@@ -742,8 +815,11 @@ namespace ClaudeBuddy
             // rather than by WaitForOwnActivation, which sleeps the UI thread up
             // to 600ms — fine at the tail of a TerminalFocuser call, not between
             // a click and a window appearing.
-            Activate();
-            Dispatcher.UIThread.Post(() => Input.Focus(), DispatcherPriority.Input);
+            if (activate)
+            {
+                Activate();
+                Dispatcher.UIThread.Post(() => Input.Focus(), DispatcherPriority.Input);
+            }
 
             // Unconditionally, not the pinned-only rule — this used to be
             // ScrollToEndIfPinned and that is why a panel sometimes opened
@@ -2678,6 +2754,16 @@ namespace ClaudeBuddy
             // does not: it can be dragged to the other side of the screen, and
             // the next click on this orb opens a transient beside it anyway.
             _owner?.SetChatOpen(false);
+
+            // CB-111: recorded the instant this becomes true, not only on the
+            // first drag afterward — a panel pinned and never moved again
+            // still has to come back in the same spot next run, and
+            // PositionChanged (see the constructor) never fires for a window
+            // that hasn't gone anywhere.
+            if (_owner is { PositionKey.Length: > 0 } owner)
+            {
+                ClaudeBuddySettings.SetPinnedChatPanelPosition(owner.PositionKey, Position.X, Position.Y);
+            }
         }
 
         private void Unpin()
@@ -2699,6 +2785,19 @@ namespace ClaudeBuddy
             // until the next Reposition moves it, and the orb goes back to
             // treating the arc's space as spoken for.
             _owner?.SetChatOpen(true);
+
+            // CB-111: the only place a saved position is forgotten. Unpinning
+            // is an explicit "stop keeping this open", and it is the one event
+            // that can actually tell that apart from a session ending or the
+            // app quitting — both of those close this same window (Dissolve,
+            // reached through CloseFor or the desktop lifetime's Shutdown()),
+            // and a clear reachable from there would erase every pin on every
+            // restart, which is the one thing this ticket exists to prevent.
+            // See ClearPinnedChatPanelPosition's own comment.
+            if (_owner is { PositionKey.Length: > 0 } owner)
+            {
+                ClaudeBuddySettings.ClearPinnedChatPanelPosition(owner.PositionKey);
+            }
         }
 
         private void ApplyPinAffordance()

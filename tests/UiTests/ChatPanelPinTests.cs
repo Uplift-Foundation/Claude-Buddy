@@ -903,4 +903,253 @@ public class ChatPanelPinTests : IDisposable
 
         Assert.DoesNotContain(panel, ChatPanel.All);
     }
+
+    // --- CB-111: persisting and restoring a pin across a restart ---
+
+    // An orb with a real PositionKey, the way one actually reaching Pin() in
+    // the running app always does — RestoreOrbPosition fills this in before
+    // an orb's window is ever shown. NewOrb's bare constructor leaves it "",
+    // which is deliberately what PinningWithNoPositionKeySavesNothing below
+    // exercises, so this is a second helper rather than a change to NewOrb.
+    private static OrbWindow NewOrbWithKey() => new(Guid.NewGuid().ToString())
+    {
+        PositionKey = Guid.NewGuid().ToString()
+    };
+
+    [Collection("Settings")]
+    public class PersistenceTests : IDisposable
+    {
+        private readonly List<string> _toClean = new();
+
+        private FakeChatSession NewFake()
+        {
+            var id = "pin-persist-" + Guid.NewGuid();
+            _toClean.Add(id);
+
+            return new FakeChatSession(null) { SessionId = id, DisplayName = "Fake Session" };
+        }
+
+        public void Dispose()
+        {
+            foreach (var id in _toClean) ChatPanel.CloseFor(id);
+            foreach (var panel in ChatPanel.All.Where(p => p.IsPinned).ToList()) Dissolve(panel);
+
+            Flush();
+        }
+
+        // Pin() itself is what records the spot, not just a subsequent drag —
+        // see its own comment on why PositionChanged alone would miss a panel
+        // pinned and never moved again.
+        [AvaloniaFact]
+        public void PinningSavesTheCurrentPositionUnderTheOwningOrbsKey()
+        {
+            var orb = NewOrbWithKey();
+            var panel = Open(orb, NewFake());
+            var before = panel.Position;
+
+            panel.TogglePin();
+            Flush();
+
+            var saved = ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey);
+            Assert.NotNull(saved);
+            Assert.Equal(before.X, saved!.X);
+            Assert.Equal(before.Y, saved.Y);
+        }
+
+        // The header's drag (BeginMoveDrag) can't be synthesized headless —
+        // see ChatPanelPinTests' own class comment on why real dragging isn't
+        // exercised here — so this drives the same PositionChanged event a
+        // real drag ends up firing, by setting Position directly the way the
+        // platform itself would during one.
+        [AvaloniaFact]
+        public void MovingAPinnedPanelUpdatesTheSavedPosition()
+        {
+            var orb = NewOrbWithKey();
+            var panel = OpenPinned(orb, NewFake());
+
+            var moved = new PixelPoint(panel.Position.X + 137, panel.Position.Y + 42);
+            panel.Position = moved;
+            Flush();
+
+            var saved = ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey);
+            Assert.NotNull(saved);
+            Assert.Equal(moved.X, saved!.X);
+            Assert.Equal(moved.Y, saved.Y);
+        }
+
+        // The transient panel moves constantly — every RepositionFor call as
+        // its orb reflows — and none of that is a place anyone asked to keep.
+        // The PositionChanged handler's _pinned guard is the only thing that
+        // stops every one of those from being a settings write.
+        [AvaloniaFact]
+        public void MovingAnUnpinnedPanelSavesNothing()
+        {
+            var orb = NewOrbWithKey();
+            var panel = Open(orb, NewFake());
+
+            panel.Position = new PixelPoint(panel.Position.X + 200, panel.Position.Y);
+            Flush();
+
+            Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey));
+        }
+
+        // Unpin() is the one event CB-111 lets forget a pin — see its own
+        // comment on why the panel closing or the app quitting must not reach
+        // the same clear.
+        [AvaloniaFact]
+        public void UnpinningForgetsTheSavedPosition()
+        {
+            var orb = NewOrbWithKey();
+            var panel = OpenPinned(orb, NewFake());
+            Assert.NotNull(ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey));
+
+            panel.TogglePin();
+            Flush();
+
+            Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey));
+        }
+
+        // The regression this whole feature exists to avoid: closing a
+        // pinned panel — which is exactly what happens to every one of them
+        // when the app quits, since the desktop lifetime's Shutdown() closes
+        // every window — must not erase the very thing a restart is supposed
+        // to bring back. Closed through the close button (Dissolve) rather
+        // than CloseFor, because that is the path a real quit and a real
+        // "session is gone" both funnel through.
+        [AvaloniaFact]
+        public void ClosingAPinnedPanelDoesNotForgetItsSavedPosition()
+        {
+            var orb = NewOrbWithKey();
+            var panel = OpenPinned(orb, NewFake());
+            var saved = ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey);
+            Assert.NotNull(saved);
+
+            Dissolve(panel);
+
+            var stillSaved = ClaudeBuddySettings.PinnedChatPanelPositionFor(orb.PositionKey);
+            Assert.NotNull(stillSaved);
+            Assert.Equal(saved!.X, stillSaved!.X);
+            Assert.Equal(saved.Y, stillSaved.Y);
+        }
+
+        // No stable identity, nothing worth saving under — same guard
+        // SetChatPanelSize already has, exercised here through the real Pin()
+        // path rather than only at the settings layer.
+        [AvaloniaFact]
+        public void PinningWithNoPositionKeySavesNothing()
+        {
+            var orb = NewOrb();
+            Assert.Equal("", orb.PositionKey);
+
+            var panel = OpenPinned(orb, NewFake());
+
+            Assert.True(panel.IsPinned);
+            Assert.Null(ClaudeBuddySettings.PinnedChatPanelPositionFor(""));
+        }
+
+        [AvaloniaFact]
+        public void IsPinnedForFindsAPinnedPanelsKeyAndNothingElse()
+        {
+            var orb = NewOrbWithKey();
+            Assert.False(ChatPanel.IsPinnedFor(orb.PositionKey));
+
+            var panel = OpenPinned(orb, NewFake());
+            Assert.True(ChatPanel.IsPinnedFor(orb.PositionKey));
+            Assert.False(ChatPanel.IsPinnedFor(Guid.NewGuid().ToString()));
+
+            panel.TogglePin();
+            Flush();
+            Assert.False(ChatPanel.IsPinnedFor(orb.PositionKey));
+        }
+
+        // RestorePinned is SessionManager's own entry point at startup — this
+        // drives it directly rather than through a scan, the same way this
+        // whole suite drives TogglePin directly rather than synthesizing the
+        // header click. It has to end up pinned, at the saved spot, and
+        // registered under the session id exactly as an ordinary OpenFor
+        // would leave it.
+        [AvaloniaFact]
+        public void RestorePinnedReopensPinnedAtTheSavedPosition()
+        {
+            var orb = NewOrbWithKey();
+            var fake = NewFake();
+            var target = new PixelPoint(300, 250);
+
+            ChatPanel.RestorePinned(orb, fake, target);
+            Flush();
+
+            var panel = ChatPanel.PanelFor(fake.SessionId);
+            Assert.NotNull(panel);
+            Assert.True(panel!.IsPinned);
+            Assert.Equal(target, panel.Position);
+            Assert.True(ChatPanel.IsOpenFor(fake.SessionId));
+        }
+
+        // The one behaviour this restore path adds beyond an ordinary
+        // OpenFor: it must not take keyboard focus, because a startup that
+        // restores several pins would otherwise steal it once per panel,
+        // ending on whichever bound last. See Bind's activate parameter.
+        [AvaloniaFact]
+        public void RestorePinnedDoesNotFocusTheComposer()
+        {
+            var orb = NewOrbWithKey();
+            var fake = NewFake();
+
+            ChatPanel.RestorePinned(orb, fake, new PixelPoint(300, 250));
+            Flush();
+
+            var panel = ChatPanel.PanelFor(fake.SessionId)!;
+            Assert.False(panel.Input.IsFocused);
+        }
+
+        // A saved top-left corner that still lands on a real screen (so
+        // SessionManager's own coarser guard — ScreenFromPoint returning
+        // null skips the restore entirely, the same as RestoreOrbPosition —
+        // does not apply) but close enough to its edge that the panel's own
+        // width and height would run past it. ChatPanelPlacementTests proves
+        // the clamp maths in isolation; this proves ChatPanel actually calls
+        // it with the panel's own real size rather than an orb's.
+        [AvaloniaFact]
+        public void RestorePinnedClampsAPanelWhoseSizeWouldRunPastTheEdge()
+        {
+            var orb = NewOrbWithKey();
+            var fake = NewFake();
+            var work = orb.Screens.Primary!.WorkingArea;
+
+            // Five pixels inside the bottom-right corner — on screen by
+            // itself, but the default 340x420 panel opening there would
+            // overhang both edges by a few hundred pixels.
+            var nearCorner = new PixelPoint(work.Right - 5, work.Bottom - 5);
+
+            ChatPanel.RestorePinned(orb, fake, nearCorner);
+            Flush();
+
+            var panel = ChatPanel.PanelFor(fake.SessionId)!;
+            var size = new PixelSize((int)panel.Width, (int)panel.Height);
+
+            Assert.True(panel.Position.X + size.Width <= work.Right);
+            Assert.True(panel.Position.Y + size.Height <= work.Bottom);
+            Assert.True(panel.Position.X >= work.X);
+            Assert.True(panel.Position.Y >= work.Y);
+        }
+
+        // The second invariant ChatPanel's class comment names — at most one
+        // panel per session — applies to a restore exactly as it applies to
+        // OpenFor: if something already has this conversation on screen
+        // (a race between a scan and a click, however unlikely), a second
+        // window on the same transcript must not be built.
+        [AvaloniaFact]
+        public void RestorePinnedDoesNothingIfThatSessionIsAlreadyOpen()
+        {
+            var orb = NewOrbWithKey();
+            var fake = NewFake();
+            var existing = Open(orb, fake);
+
+            ChatPanel.RestorePinned(orb, fake, new PixelPoint(300, 250));
+            Flush();
+
+            Assert.Same(existing, ChatPanel.PanelFor(fake.SessionId));
+            Assert.False(existing.IsPinned);
+        }
+    }
 }
