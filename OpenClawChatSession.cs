@@ -343,6 +343,127 @@ namespace ClaudeBuddy
                 case "task" when Str(payload, "action") == "upserted":
                     Complete();
                     break;
+
+                // CB-95: what the gateway calls a *delivery* rather than a
+                // stream — a picture or a plain text message someone else
+                // sent into this conversation, recorded as a chat.history row
+                // (a "delivery-mirror" for media, an ordinary message for
+                // text) rather than as an "agent" stream event. Neither event
+                // name's payload is trusted for its own fields here: the
+                // gateway's documented shape has already been wrong for other
+                // events (see docs/openclaw-findings.md), and chat.history is
+                // the one read this app has actually confirmed against a live
+                // gateway. So this treats the event as a doorbell — something
+                // landed, go and look — and re-reads the newest page the same
+                // way TryResolveLiveImage already does below for pictures.
+                //
+                // AppendNewTail rather than SetHistory: a wholesale replace
+                // while the user is mid-scrollback would throw them back to
+                // the bottom for a delivery they may not even be reading yet
+                // — the objection CB-95 itself raises against "re-read
+                // history on a delivery signal". Appending only the turns the
+                // fetched page adds past what this transcript already has
+                // keeps a read position exactly where it was.
+                case "chat":
+                case "session.message":
+                    RefreshTailAsync();
+                    break;
+            }
+        }
+
+        // Fire-and-forget from OnAgentEvent, which is synchronous — events
+        // arrive through OpenClawSessions.OnEvent's Dispatcher.Post and
+        // nothing there awaits this. No explicit try/catch: FetchPageAsync
+        // already swallows a gateway that will not answer and returns null,
+        // the same contract TryResolveLiveImage already trusts without one of
+        // its own. A delivery that could not be confirmed is not a reason to
+        // disrupt the conversation already on screen — the next successful
+        // delivery, or a reopened panel, catches up regardless.
+        [ExcludeFromCodeCoverage]
+        private async void RefreshTailAsync()
+        {
+            var page = await OpenClawSessions.FetchPageAsync(this, 0, CancellationToken.None);
+            if (page is null) return;
+
+            AppendNewTail(page.Value.Turns);
+        }
+
+        // The actual live-update fix, and the half of it that is pure enough
+        // to test without a gateway: given the newest page of chat.history,
+        // work out which of its turns this transcript does not have yet and
+        // add only those.
+        //
+        // A delivered message lands at the very end of the conversation, so
+        // the freshly-fetched page's own tail either matches this
+        // transcript's tail exactly (nothing new — most calls, since the
+        // "chat"/"session.message" doorbell fires for reasons other than a
+        // delivery too) or extends past it (a real delivery). The anchor is
+        // this transcript's own last turn: its most recent matching
+        // occurrence in the fetched page marks where "already known" ends and
+        // "new" begins. Matching on role and text rather than on an id,
+        // because chat.history hands back the same role/content shape
+        // SetHistory and PrependHistory already build ChatTurns from —
+        // nothing here carries a message id to match on instead.
+        //
+        // An empty transcript takes everything the page has; a transcript
+        // whose anchor cannot be found on the page at all — more turns
+        // arrived than one page holds, or a page boundary moved the anchor
+        // off it — appends nothing rather than guessing, which costs exactly
+        // the staleness this ticket already describes rather than risking a
+        // duplicated or reordered transcript.
+        internal void AppendNewTail(IReadOnlyList<HistoryTurn> freshTurns)
+        {
+            if (freshTurns.Count == 0) return;
+
+            int startIndex;
+
+            if (_history.Count == 0)
+            {
+                startIndex = 0;
+            }
+            else
+            {
+                var anchor = _history[^1];
+                var anchorIndex = -1;
+
+                for (var i = freshTurns.Count - 1; i >= 0; i--)
+                {
+                    if (freshTurns[i].Role != anchor.Role) continue;
+                    if (!string.Equals(freshTurns[i].Text, anchor.Text, StringComparison.Ordinal)) continue;
+
+                    anchorIndex = i;
+                    break;
+                }
+
+                if (anchorIndex < 0) return;
+
+                startIndex = anchorIndex + 1;
+            }
+
+            for (var i = startIndex; i < freshTurns.Count; i++)
+            {
+                var turn = freshTurns[i];
+
+                // Add() rather than a batch insert: it is the one place that
+                // both fires TurnAdded — what makes the panel actually draw
+                // the new bubble without being reopened — and enforces the
+                // 500-turn cap, so a burst of deliveries behaves exactly like
+                // a burst of streamed replies would.
+                Add(new ChatTurn
+                {
+                    Role = turn.Role,
+                    Text = turn.Text,
+                    ImageSourcePath = turn.ImageSourcePath,
+                    Confidence = turn.Confidence,
+                    ImageUrl = turn.ImageUrl,
+                    ImageBytes = turn.ImageBytes,
+                    ImageAlt = turn.ImageAlt,
+                    At = turn.At,
+                    Speaker = turn.Speaker,
+                    SpeakerColor = turn.SpeakerColor,
+                    Mine = turn.Mine,
+                    IsComplete = true
+                });
             }
         }
 
