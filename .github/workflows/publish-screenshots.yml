@@ -19,10 +19,36 @@ name: Publish screenshots
 #
 # (GitHub strips data: URIs from <img src> in both job summaries and PR
 # comments — confirmed by trying it, not assumed — so an actually-visible
-# screenshot needs a real HTTPS URL. raw.githubusercontent.com pointed at a
-# dedicated "screenshots" branch is the established, dependency-free way to
-# get one; real projects use exactly this pattern, e.g. a screenshot-history
-# blog workflow and a "screenshots" branch in openpilot's own UI test PRs.)
+# screenshot needs a real HTTPS URL. A dedicated "screenshots" branch is
+# still the established, dependency-free place to put the PNGs; real
+# projects use exactly this pattern, e.g. a screenshot-history blog workflow
+# and a "screenshots" branch in openpilot's own UI test PRs.)
+#
+# CB-118: the image URL itself has to be a github.com one, not
+# raw.githubusercontent.com. That second domain doesn't see the viewer's
+# github.com session cookie at all — it's a separate origin — so for a
+# private repo it 404s for every human reading the PR in a browser, even
+# one with full read access, while an authenticated `curl`/`gh api` call
+# still succeeds (this is exactly what made the bug invisible to an agent
+# testing it, and what CB-118's repro caught with plain curl). github.com's
+# own `/<owner>/<repo>/raw/<branch>/<path>` endpoint is the fix: it's
+# same-origin with the PR comment page, so the browser's session cookie is
+# sent, and GitHub 302s it to a raw.githubusercontent.com URL carrying a
+# short-lived signed `?token=` — freshly minted on every load, which is
+# exactly why this works from a persistent PR-comment link where a
+# hand-copied `?token=` URL would eventually expire. Confirmed locally
+# (this repo happens to be public again at the time of this fix, so this
+# was the reachable half of the test): an unauthenticated `curl -L` against
+# `github.com/.../raw/refs/heads/screenshots/win-x64/<file>.png` returns
+# 200, redirecting through exactly that signed raw.githubusercontent.com
+# URL. The private-repo half — that the same request 404s without a
+# session and 200s with one — was not re-verified against a real private
+# instance of this repo (flipping visibility to test would affect every
+# other agent and PR using it); it rests on GitHub's own documented
+# behavior of serving that endpoint's redirect off the request's session,
+# which is also how "View raw" from the private-repo blob UI has always
+# worked. If this repo goes private again and a comment image still 404s,
+# start here rather than re-deriving it.
 on:
   workflow_run:
     workflows: [CI]
@@ -149,7 +175,7 @@ jobs:
             for file in "$dir"*.png; do
               [ -e "$file" ] || continue
               name="$(basename "$file" .png)"
-              raw_url="https://raw.githubusercontent.com/${repo}/${branch}/${rid}/$(basename "$file")"
+              raw_url="https://github.com/${repo}/raw/refs/heads/${branch}/${rid}/$(basename "$file")"
               body+="**${name} (${rid})**"$'\n\n'
               body+="![${name}](${raw_url})"$'\n\n'
             done
