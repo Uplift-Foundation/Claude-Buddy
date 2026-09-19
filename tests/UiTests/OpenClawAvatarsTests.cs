@@ -228,4 +228,88 @@ public class OpenClawAvatarsTests
 
         Assert.Same(first, OpenClawAvatars.For(agent.ToUpperInvariant(), Png()));
     }
+
+    // --- CB-148: retrying a failed decode without disturbing a good one ---
+
+    // An agent never seen before is exactly the case a reconnect's warm-up
+    // loop hits for the first time it ever runs — nothing cached yet, real
+    // bytes in hand. It has to end up decoded, the same as a first For call
+    // would, or an agent whose avatar arrives late would never get one.
+    [AvaloniaFact]
+    public void RefreshIfFailedDecodesAnAgentNeverSeenBefore()
+    {
+        var agent = Agent();
+
+        OpenClawAvatars.RefreshIfFailed(agent, Png());
+
+        var avatar = OpenClawAvatars.For(agent, Png());
+        Assert.NotNull(avatar);
+    }
+
+    // The bug this class exists to close: a decode that failed once used to
+    // be permanent, because nothing ever called Forget for a gateway agent.
+    // RefreshIfFailed is what a reconnect calls instead, and a null cache
+    // entry is exactly the state it has to see past.
+    [AvaloniaFact]
+    public void RefreshIfFailedRetriesAnAgentWhoseLastDecodeFailed()
+    {
+        var agent = Agent();
+
+        // Cache a failure the way a truncated read from the gateway would —
+        // bytes that reach Store but don't decode.
+        Assert.Null(OpenClawAvatars.For(agent, new byte[] { 1, 2, 3, 4, 5 }));
+
+        // Real bytes now, as a later, healthy reconnect would hand over.
+        OpenClawAvatars.RefreshIfFailed(agent, Png());
+
+        Assert.NotNull(OpenClawAvatars.For(agent, null));
+    }
+
+    // The other half of the same rule, and the one the acceptance criteria on
+    // CB-148 calls out by name: an agent already rendering correctly must not
+    // be re-decoded on every reconnect. Asserted by identity, the same way
+    // APictureIsDecodedOncePerAgent is — a re-decode would hand back a new
+    // Bitmap even for pixel-identical input.
+    [AvaloniaFact]
+    public void RefreshIfFailedLeavesAWorkingAvatarAlone()
+    {
+        var agent = Agent();
+        var first = OpenClawAvatars.For(agent, Png());
+        Assert.NotNull(first);
+
+        // Different bytes on purpose: if this decoded, the object would
+        // change even though it happens to be the same size.
+        OpenClawAvatars.RefreshIfFailed(agent, Png(width: 64, height: 64));
+
+        Assert.Same(first, OpenClawAvatars.For(agent, null));
+    }
+
+    // A second failure in a row must not throw or misbehave — it just stays
+    // null, the same answer as before, ready to be retried again at the next
+    // reconnect.
+    [AvaloniaFact]
+    public void RefreshIfFailedTwiceInARowStaysNull()
+    {
+        var agent = Agent();
+
+        Assert.Null(OpenClawAvatars.For(agent, new byte[] { 1, 2, 3 }));
+
+        OpenClawAvatars.RefreshIfFailed(agent, new byte[] { 4, 5, 6 });
+
+        Assert.Null(OpenClawAvatars.For(agent, null));
+    }
+
+    // No bytes at all — the ordinary "this agent has no picture" case —
+    // refreshed the same way a reconnect would if the gateway still reports
+    // none. It must not throw, and must not manufacture an avatar out of
+    // nothing.
+    [AvaloniaFact]
+    public void RefreshIfFailedWithNoBytesStaysNull()
+    {
+        var agent = Agent();
+
+        OpenClawAvatars.RefreshIfFailed(agent, null);
+
+        Assert.Null(OpenClawAvatars.For(agent, null));
+    }
 }

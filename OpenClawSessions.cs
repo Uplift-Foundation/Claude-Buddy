@@ -1017,9 +1017,17 @@ namespace ClaudeBuddy
                 // and the orb asks for it from inside the scan, which is the UI
                 // thread. Warming it costs nothing extra and moves that work off
                 // the thread that draws.
+                //
+                // RefreshIfFailed rather than For: this runs on every
+                // reconnect, not only the first one, and For would answer a
+                // stale cache hit — good or bad — without ever looking at
+                // these fresh bytes again. An agent already showing a picture
+                // stays exactly as it was; one stuck on the emoji because an
+                // earlier decode failed gets a real second attempt instead of
+                // needing Warren to restart the app to get one. See CB-148.
                 foreach (var (id, identity) in parsed)
                 {
-                    if (identity.Avatar is not null) OpenClawAvatars.For(id, identity.Avatar);
+                    if (identity.Avatar is not null) OpenClawAvatars.RefreshIfFailed(id, identity.Avatar);
                 }
             }
             catch
