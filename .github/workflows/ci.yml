@@ -260,7 +260,12 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ui-screenshots-${{ matrix.rid }}
-          path: TestResults/screenshots/*.png
+          # Not just *.png: CB-171's glyph diagnostics write a plain-text
+          # report next to the captures, and it is only useful on the rid that
+          # produces the defect — which is not a machine anyone here can run.
+          # publish-screenshots.yml globs *.png of its own accord, so widening
+          # this does not push the text file to the screenshots branch.
+          path: TestResults/screenshots/*
           if-no-files-found: warn
           retention-days: 14
 
