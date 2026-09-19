@@ -43,7 +43,18 @@ namespace ClaudeBuddy
         // Badged whether the job is working or parked. The badge says what a
         // session *is*, which does not change; whether anything is happening in
         // it rides the orb's opacity instead. See SessionStatus.Parked.
-        Background
+        Background,
+
+        // A Claude Code session running in Anthropic's cloud, listed by the
+        // account API (see ClaudeCloudSessions). Here for the reason Background
+        // gives above: this is the one channel that answers "what kind of thing
+        // is this", and a second enum beside it is how an orb ends up wearing
+        // two marks or none.
+        //
+        // It wears no CLI mark. The cloud badge already says the session is not
+        // local, and a Claude spark beside it would read as a local session from
+        // across the room — the same argument CliMark makes for Remote.
+        Cloud
     }
 
     // Working out what kind of conversation a gateway session is, from the two

@@ -25,6 +25,13 @@ namespace ClaudeBuddy
         private const string GatewayPrefix = "openclaw:";
         private const string PeerPrefix = "rc:";
 
+        // A cloud session has no registry behind it at all: no agent list, no
+        // peer persona, and no CLAUDE.md on this disk. It is named here so the
+        // panel can tell it apart from a local id rather than to look anything
+        // up — IsCloud answers "borrow the orb's letters", which is what the
+        // Unknown face already does for everything unrecognised.
+        private const string CloudPrefix = "cloud:";
+
         // Emoji is a gateway-only field: OpenClaw keeps one per agent, and a
         // CLAUDE.md persona deliberately has no equivalent — the grammar names
         // a picture or nothing (see PersonaMarkdown), because an emoji in
@@ -57,6 +64,9 @@ namespace ClaudeBuddy
 
         internal static bool IsPeer(string? sessionId) =>
             sessionId is not null && sessionId.StartsWith(PeerPrefix, StringComparison.Ordinal);
+
+        internal static bool IsCloud(string? sessionId) =>
+            sessionId is not null && sessionId.StartsWith(CloudPrefix, StringComparison.Ordinal);
 
         // Just the name, without asking anybody for a picture.
         //

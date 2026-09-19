@@ -219,7 +219,19 @@ namespace ClaudeBuddy
         // RemoteControlBridge). Its own CLI is Claude Code, but it is not local
         // and there is no terminal here to focus, which is the distinction
         // IsLocalCli draws and the only one the rest of the app cares about.
-        RemoteControl
+        RemoteControl,
+
+        // A Claude Code session running in Anthropic's cloud, listed by the
+        // account API rather than by a hook (see ClaudeCloudSessions). Closest
+        // to OpenClaw of anything here: no process, no terminal and no
+        // transcript file on this disk, so the local-against-the-rest split is
+        // again the one that matters.
+        //
+        // Deliberately not RemoteControl, which models a session on another
+        // machine *of yours* reached through a relay that can type into it.
+        // There is no machine of yours behind this one and nothing here can
+        // type into it, so a click opens the session in a browser instead.
+        ClaudeCloud
     }
 
     // Watches %TEMP%\claude_buddy\<session_id>.txt (one per running Claude
@@ -1054,14 +1066,18 @@ namespace ClaudeBuddy
             // away. Pruning it would hide the orb exactly when it matters
             // most. Use "Reset this session to idle" to clear a genuinely
             // abandoned one manually.
-            // "generating" is exempt for gateway sessions for the same
-            // reason "waiting" is exempt for local ones: it is the state
+            // "generating" is exempt for gateway and cloud sessions for the
+            // same reason "waiting" is exempt for local ones: it is the state
             // where hiding the orb is worst. A local session can't be caught
             // by this because its file is being rewritten as it works, which
-            // a gateway session has no equivalent of.
+            // neither a gateway nor a cloud session has an equivalent of —
+            // both are a roster read on a timer, so "still working" and
+            // "nothing has been heard for a while" look identical from here.
             if (staleAfter is not null
                 && status.State != "waiting"
-                && !(status.Source == SessionSource.OpenClaw && status.State == "generating")
+                && !((status.Source == SessionSource.OpenClaw
+                        || status.Source == SessionSource.ClaudeCloud)
+                    && status.State == "generating")
                 && now - written > staleAfter)
             {
                 return ScanVerdict.Expired;
