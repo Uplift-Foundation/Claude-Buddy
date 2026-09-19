@@ -1808,6 +1808,20 @@ machine is perfectly reachable while Claude Buddy cannot open a socket to it.
 Check System Settings → Privacy & Security → Local Network. `docs/` and CB-38
 have the full diagnosis.
 
+## Claude Code in the cloud (off by default)
+
+The section above is about your Claude Code sessions on machines you own. This one is about the ones that are not on a machine at all — Claude Code sessions running in Anthropic's cloud, which have no process here, no terminal, no working directory and no transcript file on this disk. Turn it on in Settings → *Claude Code in the cloud*, and each one gets an orb like everything else, wearing a ☁ badge that says it is not local.
+
+There is nothing to sign in to. It reads the login the Claude Code CLI already stores on this machine, which means that on macOS the read raises a Keychain prompt naming an item you have probably never looked at. **Choose "Always Allow"**, so you are not asked every time — though Claude Code refreshing its own login can bring the prompt back, so do not be surprised to see it again. Declining it is the one way to make this feature quietly do nothing: the switch stays on, no orb ever appears, and nothing else on screen says why. The status line under the switch is where the real answer goes, so read that first if the orbs do not turn up.
+
+**You can read a cloud session in Claude Buddy's chat panel** — hover the orb and press the keyboard button, the same way you would for any session whose conversation lives somewhere else. It is the same panel every other orb opens — the transcript comes from the session's own events, so it is the same conversation you would see in the browser. What you cannot do is reply there. A cloud session has no input route at any address, so the panel shows no message box at all rather than one that accepts a paragraph and then admits it had nowhere to send it; in its place is a line saying so and a link that opens that exact session in your browser, which is where replying works.
+
+**Clicking a cloud orb opens the session in your browser** for the same reason. Everything else an orb offers assumes a terminal to jump to or a conversation this app can carry, and a cloud session has neither, so the right-click menu says as much rather than offering a reset that would not reach anything: its state belongs to Anthropic's cloud and not to this machine.
+
+Two things a cloud orb draws that a local one does not. It wears a ring showing how full its context window is, in the same green/amber/red the usage orbs use, so a session close to the end of its window is visible before you open it — and no ring at all when nothing reported a number, which is not the same as a session at zero. And its hover text is the roster's own words for what it is doing, with the last thing it was seen to do beside them, in the slot a local orb spends on its directory.
+
+Like every other source here it is read-only, and off means off: with the switch down the app asks the OS for no credential and opens no connection.
+
 ## 1. Install it
 
 Either download an installer or build from source — both are fully supported,

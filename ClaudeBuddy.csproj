@@ -84,6 +84,15 @@
          It replaces tools/mirror-probe, which drove the relay and went with
          it. -->
     <InternalsVisibleTo Include="PeerProbe" />
+
+    <!-- And tools/claude-cloud-probe, by the same rule again. It exists to
+         settle CB-164's last open question — whether the Claude Code CLI's own
+         stored token is accepted by claude.ai's cloud-sessions endpoint — and
+         that answer is only worth anything if the probe presents the *shipped*
+         request. The six required headers are the difference between a 200 and
+         a 400, so there must be exactly one copy of them, and it is the one the
+         app sends. ClaudeCliCredentials and CloudRequest are both internal. -->
+    <InternalsVisibleTo Include="ClaudeCloudProbe" />
   </ItemGroup>
 
   <ItemGroup>

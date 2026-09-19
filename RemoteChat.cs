@@ -352,6 +352,44 @@ namespace ClaudeBuddy
         string ComposerHint { get; }
     }
 
+    // A session that can be read and not written to *at all*.
+    //
+    // **The panel hides the composer entirely for one of these**, rather than
+    // showing a disabled box or the discouraging watermark IRemoteChatComposer
+    // above argues for. That reads as a contradiction of the paragraph directly
+    // overhead and is not one: that reasoning turns on typing being *pointless*,
+    // where SendAsync can still explain itself in the transcript afterwards.
+    // This is the case where there is nowhere for the text to go on any address
+    // — a cloud session's `/input`, `/messages`, `/turns` and `/conversation`
+    // are all 404, measured, not assumed. A box that accepts a paragraph and
+    // only then admits the transport never had a delivery route has already lost
+    // the paragraph, and the person who typed it has no copy.
+    //
+    // ComposerHint is still read for one of these, and shown where the box was.
+    // Hiding the box and explaining nothing leaves a panel that looks truncated;
+    // the hint says where the session *can* be replied to, which is the useful
+    // half of the refusal.
+    public interface IRemoteChatReadOnly
+    {
+        // A property rather than a bare marker interface, for the same reason
+        // IRemoteChatRoom.IsRoom is one: a fake has to be able to flip it per
+        // instance, so one test class can drive both sides of the panel's
+        // decision.
+        bool IsReadOnly { get; }
+
+        // Where this conversation *can* be replied to, as something a browser
+        // will open. Null when there is nowhere, and the panel then says only
+        // that it cannot be replied to here.
+        //
+        // A link rather than an address printed into the hint. Telling somebody
+        // the reply lives at claude.ai/code and leaving them to find the session
+        // is a worse answer than the one this app gives everywhere else — an orb
+        // click goes *to* the session, and the panel should too. The address is
+        // also per-session and long, so as prose it is either truncated or it
+        // swamps the sentence beside it.
+        string? ReplyUrl { get; }
+    }
+
     // A session that cannot be typed into where it is, but can be *opened*
     // somewhere it can be dealt with.
     //

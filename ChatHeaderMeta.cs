@@ -69,11 +69,17 @@ namespace ClaudeBuddy
         // all, and a bool computed inline at the call site would have been
         // asserted by nobody.
         //
-        // A session that reports no machine is on this one. That is not a guess:
-        // IRemoteChatMachine is implemented only by the mirror, so anything
-        // silent about a machine is a local CLI session or a gateway
-        // conversation, and both of those are being read on the machine they are
-        // being read on.
+        // A session that reports no machine is on this one. That is not a guess,
+        // but it *is* a claim about which sessions stay silent, and CB-164 came
+        // within one line of falsifying it: the implementers are the mirror and
+        // the cloud session, so anything silent is a local CLI session or a
+        // gateway conversation, and both of those are read on the machine they
+        // run on. A cloud session is neither — it runs nowhere the user owns —
+        // which is exactly why ClaudeCloudChatSession answers rather than
+        // leaving this to infer a laptop.
+        //
+        // Anything new that is read here and running elsewhere has to implement
+        // IRemoteChatMachine, or this silently names the wrong box.
         internal static (string Name, bool IsLocal) MachineFor(string? reported, string? mine)
         {
             var far = (reported ?? "").Trim();

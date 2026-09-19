@@ -1,0 +1,520 @@
+using System.Reflection;
+using Avalonia.Controls;
+using Avalonia.Headless.XUnit;
+using Avalonia.LogicalTree;
+using Xunit;
+
+namespace ClaudeBuddy.Tests;
+
+// A scan with Claude Code's cloud sessions in it, and what the orbs it makes
+// for them look like.
+//
+// Same harness as GatewayScanTests next door — SessionManager's internal
+// constructor takes a scratch status directory and Start() is never called —
+// and the snapshot arrives through ClaudeCloudSessions.SetSnapshotForTests,
+// because the only thing that publishes one in production is the poll loop,
+// which needs a real credential and a real endpoint and is excluded from
+// coverage for exactly that reason.
+//
+// What is being tested here is mostly the *absence* of things. A cloud session
+// has no process, no terminal, no transcript and no working directory, and
+// nearly every rule in SessionManager and OrbWindow was written for a session
+// that has all four. So the interesting assertions are that the path row is not
+// there, that the reset item refuses, that no CLI mark is drawn, and that a
+// click does not go looking for a pane.
+//
+// No clicks anywhere, per the rule this whole suite keeps: OrbWindow's pointer
+// handling reaches TerminalFocuser, which fires real tmux/ps/osascript
+// processes off-thread on whatever machine runs the suite.
+[Collection("Settings")]
+public class CloudScanTests
+{
+    // The real clock, not a fixed date — ScanAndUpdate reads DateTime.UtcNow for
+    // its lifetime check, so a fixture pinned to a made-up "now" produces
+    // sessions that look hours stale and are expired before an orb exists. That
+    // is how the first draft of GatewayScanTests failed every case, and the note
+    // is repeated here because this file's stale-session control deliberately
+    // relies on the same machinery working.
+    private static DateTime Now => DateTime.UtcNow;
+
+    private sealed class Scratch : IDisposable
+    {
+        public string Dir { get; } = Path.Combine(Path.GetTempPath(), "cb-cloudscan-" + Guid.NewGuid());
+
+        public Scratch() => Directory.CreateDirectory(Dir);
+
+        public void Dispose()
+        {
+            try { Directory.Delete(Dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    private static Dictionary<string, OrbWindow> Orbs(SessionManager manager)
+    {
+        var field = typeof(SessionManager).GetField(
+            "_windows", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        return (Dictionary<string, OrbWindow>)field.GetValue(manager)!;
+    }
+
+    private static SessionManager Manager(string statusDir)
+    {
+        var ctor = typeof(SessionManager).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance, new[] { typeof(string) })!;
+
+        return (SessionManager)ctor.Invoke(new object[] { statusDir });
+    }
+
+    private static ClaudeCloudSessions.Session Session(
+        string id = "session_01abc",
+        string state = "idle",
+        DateTime? lastActivity = null,
+        int? contextPercent = null,
+        bool needsAction = false,
+        string? statusDetail = null,
+        string? recentAction = null) =>
+        new(
+            Id: id,
+            Title: "Refactor the parser",
+            State: state,
+            LastActivity: lastActivity ?? Now.AddSeconds(-5),
+            Url: "https://claude.ai/code/" + id,
+            StatusBucket: "idle",
+            NeedsAction: needsAction,
+            Model: "claude-opus-5",
+            ContextPercent: contextPercent,
+            StatusDetail: statusDetail,
+            RecentAction: recentAction);
+
+    private static void Publish(params ClaudeCloudSessions.Session[] sessions)
+    {
+        ClaudeBuddySettings.ClaudeCloudEnabled = true;
+        ClaudeCloudSessions.SetSnapshotForTests(sessions);
+    }
+
+    private static void PublishNothing()
+    {
+        ClaudeCloudSessions.SetSnapshotForTests(Array.Empty<ClaudeCloudSessions.Session>());
+        ClaudeBuddySettings.ClaudeCloudEnabled = false;
+    }
+
+    private static SessionStatus CloudStatus(
+        int? contextPercent = null,
+        string? statusDetail = null,
+        string? recentAction = null) => new()
+        {
+            Source = SessionSource.ClaudeCloud,
+            Kind = SessionKind.Cloud,
+            State = "idle",
+            Title = "Refactor the parser",
+            Cwd = "",
+            Url = "https://claude.ai/code/session_01abc",
+            ContextPercent = contextPercent,
+            StatusDetail = statusDetail,
+            RecentAction = recentAction,
+        };
+
+    // --- the scan ---
+
+    [AvaloniaFact]
+    public void ACloudSessionGetsAnOrb()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            Assert.Contains("cloud:session_01abc", Orbs(manager).Keys);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // Namespaced for the reason the gateway's ids are: these share a dictionary
+    // with Claude Code's own uuids, and an id that is not obviously foreign is
+    // an id something eventually tries to open a status file for.
+    [AvaloniaFact]
+    public void CloudOrbIdsAreNamespaced()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"), Session("session_02def"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var orbs = Orbs(manager);
+            Assert.Equal(2, orbs.Count);
+            Assert.All(orbs.Keys, id => Assert.StartsWith("cloud:", id));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // Off means off, and it is held one level down — Snapshot() itself returns
+    // nothing rather than the scan filtering afterwards. Asserted here anyway,
+    // because the promise the settings copy makes is about what the user sees.
+    [AvaloniaFact]
+    public void NoOrbsWhenTheSwitchIsOff()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+            ClaudeBuddySettings.ClaudeCloudEnabled = false;
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            Assert.Empty(Orbs(manager));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // **The negative control for the whole mapping.**
+    //
+    // The account API lists every cloud session the account has ever had, so the
+    // one thing that must be true of the scan entry is that its timestamp is the
+    // session's own last activity and not the time of the read. Stamped "now",
+    // this session would be five seconds old and would get an orb; stamped
+    // honestly, it is ten minutes stale against a one-minute lifetime and gets
+    // none.
+    //
+    // Idle deliberately, not generating: JudgeLiveness exempts a *working* cloud
+    // session from the staleness check on purpose, so a fixture in that state
+    // would pass this test no matter which timestamp the mapping used, and would
+    // therefore prove nothing at all.
+    [AvaloniaFact]
+    public void AStaleCloudSessionGetsNoOrb()
+    {
+        using var scratch = new Scratch();
+        var wasLifetime = ClaudeBuddySettings.OrbLifetimeMinutes;
+        try
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = 1;
+            Publish(Session("session_01old", state: "idle", lastActivity: Now.AddMinutes(-10)));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            Assert.Empty(Orbs(manager));
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = wasLifetime;
+            PublishNothing();
+        }
+    }
+
+    // ...and the positive half of the same pair, on the same lifetime, so a
+    // scan that drew nothing for an unrelated reason cannot pass the control
+    // above by accident.
+    [AvaloniaFact]
+    public void ARecentCloudSessionSurvivesTheSameLifetime()
+    {
+        using var scratch = new Scratch();
+        var wasLifetime = ClaudeBuddySettings.OrbLifetimeMinutes;
+        try
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = 1;
+            Publish(Session("session_01new", state: "idle", lastActivity: Now.AddSeconds(-5)));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            Assert.Contains("cloud:session_01new", Orbs(manager).Keys);
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = wasLifetime;
+            PublishNothing();
+        }
+    }
+
+    // No cwd, deliberately, exactly as the remote-control mapping leaves it:
+    // ApplyPersona returns early on an empty one, so nothing builds a local
+    // candidate path for a session that has no directory on this machine.
+    [AvaloniaFact]
+    public void ACloudSessionCarriesNoWorkingDirectory()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var status = manager.StatusFor("cloud:session_01abc");
+
+            Assert.NotNull(status);
+            Assert.Equal(SessionSource.ClaudeCloud, status!.Source);
+            Assert.Equal(SessionKind.Cloud, status.Kind);
+            Assert.True(string.IsNullOrEmpty(status.Cwd), "a cloud session has no directory here");
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // The address survives the mapping, because it is what a click needs and the
+    // orb is the only thing still holding it by then.
+    [AvaloniaFact]
+    public void TheSessionUrlReachesTheStatus()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            Assert.Equal(
+                "https://claude.ai/code/session_01abc",
+                manager.StatusFor("cloud:session_01abc")!.Url);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // The roster's "this one wants you" flag is spent on the presence channel,
+    // which already means exactly that — so the orb wears the same "?" a local
+    // background job holding a question wears, rather than a second mark saying
+    // nearly the same thing in a different shape.
+    [AvaloniaFact]
+    public void ACloudSessionWantingAttentionSaysSoOnThePresenceChannel()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01ask", needsAction: true));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            Assert.Equal(
+                OrbPresence.NeedsInput,
+                manager.StatusFor("cloud:session_01ask")!.Presence);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // ...and one that does not is ordinary, which is the arm that would
+    // otherwise never run — a flag only ever asserted true is a flag nothing
+    // proves is read.
+    [AvaloniaFact]
+    public void ACloudSessionWantingNothingIsPresent()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01calm", needsAction: false));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            Assert.Equal(
+                OrbPresence.Present,
+                manager.StatusFor("cloud:session_01calm")!.Presence);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // A working cloud session is exempt from the staleness check, which is the
+    // other half of the pair AStaleCloudSessionGetsNoOrb relies on — and the
+    // reason that test uses an idle fixture. A roster read on a timer cannot
+    // tell "still working" from "nothing heard for a while", so hiding a
+    // generating orb is the worst available answer.
+    [AvaloniaFact]
+    public void AWorkingCloudSessionSurvivesGoingQuiet()
+    {
+        using var scratch = new Scratch();
+        var wasLifetime = ClaudeBuddySettings.OrbLifetimeMinutes;
+        try
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = 1;
+            Publish(Session("session_01busy", state: "generating",
+                lastActivity: Now.AddMinutes(-10)));
+
+            var manager = Manager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            Assert.Contains("cloud:session_01busy", Orbs(manager).Keys);
+        }
+        finally
+        {
+            ClaudeBuddySettings.OrbLifetimeMinutes = wasLifetime;
+            PublishNothing();
+        }
+    }
+
+    // --- what the orb looks like ---
+
+    [AvaloniaFact]
+    public void ACloudOrbWearsTheCloudBadge()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(CloudStatus());
+
+        Assert.Equal("☁", orb.KindGlyphText);
+        Assert.Equal("in the cloud", orb.KindLabel);
+    }
+
+    // No CLI mark, and that is the point rather than an omission. A Claude spark
+    // reads as "local Claude Code" from across a room, which is the one thing
+    // this session is not — the cloud badge is already saying where it lives.
+    [AvaloniaFact]
+    public void ACloudOrbWearsNoCliMark()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(CloudStatus());
+
+        Assert.Null(orb.CliMarkName);
+    }
+
+    // The menu item is already disabled for anything that is not a local CLI.
+    // What this asserts is the *wording*, because a disabled row still reads as
+    // a promise: left on the default text it would say "Reset this session to
+    // idle" about a session whose state this machine has no say in.
+    [AvaloniaFact]
+    public void TheResetItemRefusesAndSaysWhy()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(CloudStatus());
+
+        Assert.False(orb.ResetIdleItem.IsEnabled);
+        Assert.Contains("cloud", (string)orb.ResetIdleItem.Header!, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Reset this session to idle", (string)orb.ResetIdleItem.Header!);
+    }
+
+    // The path row hides itself when there is nothing to put in it, which for a
+    // cloud session is always.
+    [AvaloniaFact]
+    public void ThePathRowIsHidden()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(CloudStatus());
+
+        Assert.False(orb.SessionPathItem.IsVisible);
+    }
+
+    // --- the context ring ---
+
+    [AvaloniaFact]
+    public void AContextPercentDrawsARing()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(CloudStatus(contextPercent: 40));
+
+        Assert.True(orb.ContextRingLayer.IsVisible);
+        Assert.NotNull(orb.ContextArc.Data);
+    }
+
+    // Nobody reporting a number is not a session at zero, and a track drawn
+    // around an orb with no reading claims a measurement that was never taken.
+    [AvaloniaFact]
+    public void NoContextPercentDrawsNoRingAtAll()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(CloudStatus(contextPercent: null));
+
+        Assert.False(orb.ContextRingLayer.IsVisible);
+        Assert.Null(orb.ContextArc.Data);
+        Assert.Null(orb.ContextRingColour);
+    }
+
+    // The bands are UsageRingGeometry's, shared with the account orbs, so a ring
+    // at 90% is the same red wherever it is drawn. Asserted through the colour
+    // the window reports rather than by reading a brush back off a shape.
+    [AvaloniaTheory]
+    [InlineData(10, AccountOrbWindow.CalmHex)]
+    [InlineData(70, AccountOrbWindow.WarnHex)]
+    [InlineData(95, AccountOrbWindow.DangerHex)]
+    public void TheRingUsesTheSharedColourBands(int percent, string expected)
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(CloudStatus(contextPercent: percent));
+
+        Assert.Equal(expected, orb.ContextRingColour);
+    }
+
+    // A full context window is an ellipse rather than an arc — an arc sweeping
+    // 360 degrees has coincident endpoints and renders as nothing, so the one
+    // session that has actually run out would be the one drawing no ring.
+    [AvaloniaFact]
+    public void AFullContextWindowStillDrawsSomething()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(CloudStatus(contextPercent: 100));
+
+        Assert.True(orb.ContextRingLayer.IsVisible);
+        Assert.IsType<Avalonia.Media.EllipseGeometry>(orb.ContextArc.Data);
+    }
+
+    // A ring survives being handed to an orb that is not a cloud session, since
+    // nothing about the drawing is source-specific — the only reason no other
+    // orb draws one today is that nothing else reports the number.
+    [AvaloniaFact]
+    public void TheRingIsClearedWhenAReadingGoesAway()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(CloudStatus(contextPercent: 40));
+        orb.UpdateFrom(CloudStatus(contextPercent: null));
+
+        Assert.False(orb.ContextRingLayer.IsVisible);
+        Assert.Null(orb.ContextArc.Data);
+    }
+
+    // --- the hover line ---
+
+    [AvaloniaTheory]
+    [InlineData(null, null, null)]
+    [InlineData("Editing files", null, "Editing files")]
+    [InlineData(null, "Ran the tests", "Ran the tests")]
+    [InlineData("Editing files", "Ran the tests", "Editing files · Ran the tests")]
+    [InlineData("  ", "Ran the tests", "Ran the tests")]
+    public void TheCloudHoverLineToleratesAbsence(string? detail, string? recent, string? expected)
+    {
+        Assert.Equal(expected, OrbWindow.CloudTipDetail(detail, recent));
+    }
+
+    // And it actually reaches the bubble, rather than being a pure function
+    // nothing calls — the failure a helper like this has most often.
+    [AvaloniaFact]
+    public void TheHoverBubbleCarriesTheCloudDetail()
+    {
+        var orb = new OrbWindow(Guid.NewGuid().ToString());
+        orb.UpdateFrom(CloudStatus(statusDetail: "Editing files", recentAction: "Ran the tests"));
+
+        var bubble = orb.CurrentThoughtBubble;
+        Assert.NotNull(bubble);
+
+        var lines = bubble!.GetLogicalDescendants()
+            .OfType<TextBlock>()
+            .Select(block => block.Text)
+            .ToList();
+
+        Assert.Contains("Editing files · Ran the tests", lines);
+    }
+}

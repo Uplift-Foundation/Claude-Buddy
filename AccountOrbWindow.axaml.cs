@@ -275,42 +275,12 @@ namespace ClaudeBuddy
 
         // The tested arithmetic, turned into something Avalonia will draw.
         //
-        // The full case is an ellipse and not an arc, and that is not tidiness:
-        // an arc sweeping 360 degrees has coincident endpoints and renders as an
-        // empty figure, so the account at 100% would be the one account showing
-        // no ring at all. UsageRingGeometry flags it for exactly this reason.
-        private static Geometry? ArcGeometry(double radius, double percent)
-        {
-            var arc = UsageRingGeometry.ArcFor(Centre, radius, percent);
-
-            if (arc.IsEmpty) return null;
-
-            if (arc.IsFull)
-            {
-                return new EllipseGeometry(
-                    new Rect(Centre.X - radius, Centre.Y - radius, radius * 2, radius * 2));
-            }
-
-            var figure = new PathFigure
-            {
-                StartPoint = arc.Start,
-                IsClosed = false,
-                IsFilled = false
-            };
-
-            figure.Segments!.Add(new ArcSegment
-            {
-                Point = arc.End,
-                Size = new Size(radius, radius),
-                IsLargeArc = arc.LargeArc,
-                SweepDirection = SweepDirection.Clockwise,
-                RotationAngle = 0
-            });
-
-            var geometry = new PathGeometry();
-            geometry.Figures!.Add(figure);
-            return geometry;
-        }
+        // Delegated rather than done here since a cloud session's context ring
+        // needed the identical conversion: two copies of the arc-versus-ellipse
+        // rule is two places for the 100% case to be got wrong, and only one of
+        // them would have had a test.
+        private static Geometry? ArcGeometry(double radius, double percent) =>
+            UsageRingGeometry.GeometryFor(Centre, radius, percent);
 
         // A ring in the danger band breathes, and this is the whole of the
         // window's part in that: ask UsageRingGeometry what to do, then do it.
