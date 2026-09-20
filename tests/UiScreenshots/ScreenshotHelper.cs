@@ -103,19 +103,52 @@ internal static class ScreenshotHelper
     // could drift apart.
     private static void Save(Visual visual, string fileName)
     {
-        AskForGrayscaleText(visual);
-
         var size = new PixelSize(
             Math.Max(1, (int)Math.Ceiling(visual.Bounds.Width)),
             Math.Max(1, (int)Math.Ceiling(visual.Bounds.Height)));
 
         using var bitmap = new RenderTargetBitmap(size);
+
+        Render(visual, bitmap);
+
+        // Written before it is checked, deliberately. A capture that fails the
+        // check is the one a person most needs to look at — leaving it
+        // unwritten would mean the run that finally caught the defect is also
+        // the only run with no picture of it.
+        bitmap.Save(Path.Combine(OutputDir, fileName));
+
+        Check(visual, bitmap, fileName);
+    }
+
+    // The one way anything in this project puts a visual into a bitmap.
+    //
+    // Public because ChatPanelScreenshots composes two panels into a third
+    // bitmap by rendering each one itself, which would otherwise be the single
+    // capture in the suite that missed both halves of CB-171 — it would keep
+    // LCD text on Windows and go unchecked into the bargain. A second way to
+    // render is exactly how the first one's guarantees stop being guarantees.
+    internal static void Render(Visual visual, RenderTargetBitmap bitmap)
+    {
+        AskForGrayscaleText(visual);
+
         bitmap.Render(visual);
+    }
 
-        var path = Path.Combine(OutputDir, fileName);
-        bitmap.Save(path);
+    // Split from Render so a caller can put the picture on disk in between.
+    //
+    // Reads the bitmap back through an encode to memory rather than through
+    // the saved file: the composite path renders several panels before it
+    // saves anything, so a check that could only run against a file would not
+    // cover them at all.
+    internal static void Check(Visual visual, RenderTargetBitmap bitmap, string label)
+    {
+        using var stream = new MemoryStream();
+        bitmap.Save(stream);
+        stream.Position = 0;
 
-        AssertTextIsLegible(visual, path, fileName);
+        using var decoded = SKBitmap.Decode(stream);
+
+        if (decoded is not null) AssertTextIsLegible(visual, decoded, label);
     }
 
     // CB-171. A screenshot that nobody can read is worse than no screenshot,
@@ -139,12 +172,8 @@ internal static class ScreenshotHelper
     // far too thin to gate a build on. The visual tree already knows exactly
     // where the text is, and asking it turns a statistical rule into a direct
     // one.
-    private static void AssertTextIsLegible(Visual root, string path, string fileName)
+    private static void AssertTextIsLegible(Visual root, SKBitmap image, string fileName)
     {
-        using var image = SKBitmap.Decode(path);
-
-        if (image is null) return;
-
         // Read the whole surface once. SKBitmap.GetPixel is a per-call
         // colour-type conversion, and a chat panel capture is 340x420 with
         // three dozen TextBlocks over it — going through it pixel by pixel
@@ -156,17 +185,30 @@ internal static class ScreenshotHelper
             if (!block.IsVisible || string.IsNullOrWhiteSpace(block.Text)) continue;
             if (block.Bounds.Width < 8 || block.Bounds.Height < 6) continue;
 
-            var origin = block.TranslatePoint(default, root);
+            if (!VisibleRect(block, root, out var visible)) continue;
 
-            if (origin is null) continue;
+            var origin = (Point?)visible.Position;
 
-            var left = (int)Math.Floor(origin.Value.X);
+            var left = (int)Math.Floor(origin!.Value.X);
             var top = (int)Math.Floor(origin.Value.Y);
-            var right = Math.Min(image.Width, left + (int)Math.Ceiling(block.Bounds.Width));
-            var bottom = Math.Min(image.Height, top + (int)Math.Ceiling(block.Bounds.Height));
+            var right = left + (int)Math.Ceiling(visible.Width);
+            var bottom = top + (int)Math.Ceiling(visible.Height);
 
-            left = Math.Max(0, left);
-            top = Math.Max(0, top);
+            // Skipped rather than clamped into the image, and this is the whole
+            // difference between a check and a coincidence. A chat panel opens
+            // at its newest turn, so earlier turns are still in the tree with
+            // positions above the viewport — TranslatePoint hands back a
+            // negative Y for them, quite correctly. Clamping that to zero does
+            // not make the text visible; it moves the sampling window onto a
+            // completely different part of the picture and then reports on
+            // whatever happened to be there. It read a scrolled-out
+            // "why is the build red?" against a flat patch of bubble, found
+            // three levels, and failed a capture that was perfectly legible.
+            //
+            // A block that is not wholly inside the frame is simply not in the
+            // picture this is about, and has nothing to say about how the
+            // picture was drawn.
+            if (left < 0 || top < 0 || right > image.Width || bottom > image.Height) continue;
 
             if (right - left < 8 || bottom - top < 6) continue;
 
@@ -193,14 +235,26 @@ internal static class ScreenshotHelper
 
             if (total - modal < 40) continue;
 
+            // Four, not a rounder-looking number. The defect is exactly two
+            // levels, always — it is a bi-level mask, not a degraded one — so
+            // anything above two catches it. The headroom above that has to
+            // come from the *other* side, and on Windows that side is
+            // narrower than it looks: DirectWrite's grayscale is quantised,
+            // and the diagnostic matrix measured a 34-character string at
+            // only 9 to 17 levels there where macOS gives 148 to 169. A short
+            // label has fewer pixels and fewer levels again, so a floor of six
+            // or eight would eventually go red on a perfectly legible "Retry"
+            // and be read as this bug coming back. Four keeps a margin of two
+            // over the defect while staying well clear of the real minimum.
             Assert.True(
-                distinct >= 6,
+                distinct >= 4,
                 $"{fileName}: the text \"{Trim(block.Text!)}\" rendered with {distinct} "
                 + $"distinct luminance levels in its own {right - left}x{bottom - top} "
-                + "rectangle. Antialiased text at this size carries dozens; two means a "
-                + "bi-level glyph mask, which at 11-13px is the unreadable-blob defect "
-                + "CB-171 exists for. The capture is corrupt, not merely ugly — do not "
-                + "review it, and do not raise this floor to make the run green.");
+                + $"rectangle at ({left},{top}) of a {image.Width}x{image.Height} capture. Antialiased text at this size carries at least nine, and "
+                + "two means a bi-level glyph mask — which at 11-13px is the "
+                + "unreadable-blob defect CB-171 exists for. The capture is corrupt, not "
+                + "merely ugly: do not review it, and do not lower this floor to make the "
+                + "run green.");
         }
     }
 
@@ -273,5 +327,54 @@ internal static class ScreenshotHelper
     private static void AskForGrayscaleText(Visual visual)
     {
         TextOptions.SetTextRenderingMode(visual, TextRenderingMode.Antialias);
+    }
+
+    // Where a block's text actually lands in the captured picture, or false if
+    // none of it does.
+    //
+    // Position alone is not enough, and the difference cost this check two
+    // wrong answers before it was written. A chat panel keeps every earlier
+    // turn in its tree; the scroll viewport is what stops them being drawn,
+    // not their absence. One such turn translated to (132,0) of a 340x420
+    // capture — inside the frame, so an in-bounds test let it through — and
+    // the sampling window landed on the panel header painted across that
+    // strip. Three flat luminance levels, and a perfectly legible capture
+    // reported as corrupt.
+    //
+    // So intersect the block with every ancestor on the way up. A scroll
+    // viewport clips to its own bounds, so a turn scrolled above it drops out
+    // by construction, and so does anything else outside the region its
+    // parents actually gave it. The intersection is conservative: a control
+    // that legitimately draws outside its parent will be skipped rather than
+    // measured, which loses a little coverage and cannot produce a wrong
+    // failure. That is the right way round for something that gates a build.
+    private static bool VisibleRect(Visual block, Visual root, out Rect visible)
+    {
+        visible = default;
+
+        var origin = block.TranslatePoint(default, root);
+
+        if (origin is null) return false;
+
+        var rect = new Rect(origin.Value, block.Bounds.Size);
+
+        for (var ancestor = block.GetVisualParent();
+             ancestor is not null;
+             ancestor = ancestor.GetVisualParent())
+        {
+            var ancestorOrigin = ancestor.TranslatePoint(default, root);
+
+            if (ancestorOrigin is null) return false;
+
+            rect = rect.Intersect(new Rect(ancestorOrigin.Value, ancestor.Bounds.Size));
+
+            if (rect.Width <= 0 || rect.Height <= 0) return false;
+
+            if (ReferenceEquals(ancestor, root)) break;
+        }
+
+        visible = rect;
+
+        return true;
     }
 }

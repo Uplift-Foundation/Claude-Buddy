@@ -633,7 +633,14 @@ public class ChatPanelScreenshots : IDisposable
                     var shot = new RenderTargetBitmap(
                         new PixelSize((int)panel.Width, (int)panel.Height));
                     shots.Add(shot);
-                    shot.Render(panel);
+
+                    // Through the shared path rather than shot.Render(panel):
+                    // this is the only capture in the suite that builds its own
+                    // bitmaps, and rendering them here directly would leave it
+                    // the one picture still drawn with LCD text on Windows and
+                    // the one never checked for legibility. See
+                    // ScreenshotHelper.RenderChecked.
+                    ScreenshotHelper.Render(panel, shot);
 
                     ctx.DrawImage(shot, new Rect(
                         panel.Position.X - minX + Margin,
@@ -644,6 +651,14 @@ public class ChatPanelScreenshots : IDisposable
             }
 
             target.Save(Path.Combine(ScreenshotHelper.OutputDir, fileName));
+
+            // Checked per panel after the composite is on disk, for the same
+            // reason ScreenshotHelper.Save checks after writing: the run that
+            // catches a corrupt capture should still leave the picture of it.
+            foreach (var (panel, shot) in panels.Zip(shots))
+            {
+                ScreenshotHelper.Check(panel, shot, fileName);
+            }
         }
         finally
         {
