@@ -279,24 +279,83 @@ namespace ClaudeBuddy
         // from Fluent on Windows; pinning them by hand is what produced capsule
         // pop-ups and 20pt checkboxes in the first place.
 
+        // Every section the page is built from, keyed by the stable id its
+        // Group() call passes. Tests — and, once the rest of CB-166 lands, the
+        // filter box — address a section by id rather than by walking the tree
+        // for its heading: Body()'s own comments below record that these
+        // headings have already been renamed and merged once, so a lookup keyed
+        // on prose turns the next copy edit into a silent behaviour change.
+        //
+        // Rebuilt from scratch every time, because Body() is: the handlers call
+        // Rebuild() freely and a dictionary that accumulated stale sections
+        // would hand the filter controls that are no longer in any window.
+        private readonly Dictionary<string, SettingsSection> _sections = new();
+
+        internal IReadOnlyDictionary<string, SettingsSection> Sections => _sections;
+
+        // A heading, the cards under it, and whether it is unfolded.
+        //
+        // A StackPanel subclass rather than something wrapping one, so the page
+        // stays a flat stack of these and everything that already walks this
+        // tree — three screenshot scenarios and the row tests — finds the same
+        // controls at the same depth it did before.
+        //
+        // IsOpen is view state and nothing else. Setting it moves the chevron
+        // and the body's visibility; it writes nothing. Persistence belongs to
+        // the header's click handler, where the gesture is — persist on the
+        // gesture, not on the property.
+        //
+        // That split is the one contract between the two halves of this ticket,
+        // and it is not stylistic: the filter force-expands a section holding a
+        // match, so if persistence lived in this setter the first search would
+        // quietly rewrite all thirteen sections to open and the user's folds
+        // would be gone with no gesture that could have caused it. This file
+        // already carries that scar — the ColorRow "arming" comment further
+        // down is here because a control once wrote three colours nobody chose
+        // into settings.json for want of exactly this distinction.
+        internal sealed class SettingsSection : StackPanel
+        {
+            public required string Title { get; init; }
+
+            // The cards as Group() was handed them, not the wrapper the params
+            // overload builds around several of them, so the filter can hide an
+            // emptied card without reaching back through the tree to find it.
+            public IReadOnlyList<Control> Cards { get; set; } = Array.Empty<Control>();
+
+            // Not wired to anything yet: the collapse half of CB-166 owns the
+            // chevron and the body's IsVisible. It is here now so both halves
+            // can build against the shape without colliding inside Group().
+            public bool IsOpen { get; set; } = true;
+
+            // Re-applies whatever the section was last left as, after Body() has
+            // rebuilt the page from nothing. A no-op until IsOpen has a body.
+            public void RestoreOpenState()
+            {
+            }
+        }
+
         private Control Body()
         {
+            // First, so a Rebuild() never leaves a section from the previous
+            // page reachable by id.
+            _sections.Clear();
+
             var root = new StackPanel { Margin = new Thickness(20, 18), Spacing = 18 };
 
-            root.Children.Add(Group("Orbs", Card(OrbsRows())));
+            root.Children.Add(Group("orbs", "Orbs", Card(OrbsRows())));
 
-            root.Children.Add(Group("Clicking an orb", Card(ClickRows())));
+            root.Children.Add(Group("orb-click", "Clicking an orb", Card(ClickRows())));
 
-            root.Children.Add(Group("Auto-organize", Card(AutoOrganizeRows())));
+            root.Children.Add(Group("auto-organize", "Auto-organize", Card(AutoOrganizeRows())));
 
-            root.Children.Add(Group("Orb colours", Card(OrbColourRows())));
+            root.Children.Add(Group("orb-colours", "Orb colours", Card(OrbColourRows())));
 
             // Between the orbs and the voice, because that is where the chat
             // panel sits in the app: it is what an orb opens, and the thing
             // the voice types into.
-            root.Children.Add(Group("Chat panel", Card(ChatRows())));
+            root.Children.Add(Group("chat-panel", "Chat panel", Card(ChatRows())));
 
-            root.Children.Add(Group("Voice", Card(VoiceRows())));
+            root.Children.Add(Group("voice", "Voice", Card(VoiceRows())));
 
             // One section per agent, each starting with whether it is tracked
             // at all and then everything about it — the panel, replying, extra
@@ -308,13 +367,13 @@ namespace ClaudeBuddy
             // Desktop app's own profiles in between. Nothing was wrong with any
             // of them individually; the order was just the order they were
             // added in, which is how a settings window gets that way.
-            root.Children.Add(Group("Claude Code", ClaudeCodeSection()));
+            root.Children.Add(Group("claude-code", "Claude Code", ClaudeCodeSection()));
 
-            root.Children.Add(Group("Codex", CodexSection()));
+            root.Children.Add(Group("codex", "Codex", CodexSection()));
 
-            root.Children.Add(Group("Grok Build", GrokSection()));
+            root.Children.Add(Group("grok", "Grok Build", GrokSection()));
 
-            root.Children.Add(Group("OpenClaw agents", Card(OpenClawRows())));
+            root.Children.Add(Group("openclaw", "OpenClaw agents", Card(OpenClawRows())));
 
             // Straight after the CLI sections, beside "Other machines" below
             // and for the same reason: it is about the same Claude Code
@@ -322,7 +381,7 @@ namespace ClaudeBuddy
             // this machine. The difference between the two is only whose
             // machine it is, which is why they sit together rather than one of
             // them living beside the gateway.
-            root.Children.Add(Group("Claude Code in the cloud", Card(ClaudeCloudRows())));
+            root.Children.Add(Group("claude-cloud", "Claude Code in the cloud", Card(ClaudeCloudRows())));
 
             // Straight after the CLI sections and before the Desktop app,
             // because that is what it is about: the same Claude Code sessions
@@ -330,12 +389,12 @@ namespace ClaudeBuddy
             // One card again. There were briefly two — the direct link and the
             // relay — with the order as the recommendation; the relay is gone
             // and the recommendation went with it.
-            root.Children.Add(Group("Other machines", Card(PeerLinkRows())));
+            root.Children.Add(Group("peer-link", "Other machines", Card(PeerLinkRows())));
 
             // Not an agent CLI at all — the Electron desktop app — so it sits
             // after them with its own profiles, which is where someone looking
             // for them would go first.
-            root.Children.Add(Group("Claude Desktop",
+            root.Children.Add(Group("claude-desktop", "Claude Desktop",
                 Card(ClaudeDesktopRows(OperatingSystem.IsMacOS())),
                 ProfilesCard()));
 
@@ -2245,34 +2304,62 @@ namespace ClaudeBuddy
         // say. Same heading treatment as the single-card form; the cards are
         // spaced the way two groups would be, so the break still reads as a
         // break without inventing a second heading level.
-        private Control Group(string title, params Control[] cards)
+        //
+        // The id is the section's stable handle — see the _sections comment
+        // above Body() for why it is an id and not the heading.
+        private SettingsSection Group(string id, string title, params Control[] cards)
         {
             var stack = new StackPanel { Spacing = 10 };
             foreach (var card in cards) stack.Children.Add(card);
-            return Group(title, (Control)stack);
+
+            var section = Group(id, title, (Control)stack);
+
+            // Past the wrapper, to the cards themselves. The single-card
+            // overload can only see the stack it was handed.
+            section.Cards = cards;
+            return section;
         }
 
-        private Control Group(string title, Control card) => new StackPanel
+        private SettingsSection Group(string id, string title, Control card)
         {
-            Children =
+            var section = new SettingsSection
             {
-                // "Theme" and "Windows" in System Settings are semibold and full
-                // strength, not the dimmed 12pt caption this had. They read as
-                // headings; a dimmed caption reads as a hint.
-                new TextBlock
+                Title = title,
+                Cards = new[] { card },
+                Children =
                 {
-                    Text = title,
-                    FontSize = 13,
-                    FontWeight = FontWeight.SemiBold,
-                    Opacity = 0.9,
-                    // Left inset matches the rows' own 14, because in System
-                    // Settings the group heading sits directly above the first
-                    // row's label rather than out to the left of it.
-                    Margin = new Thickness(14, 0, 0, 7)
-                },
-                card
-            }
-        };
+                    // "Theme" and "Windows" in System Settings are semibold and
+                    // full strength, not the dimmed 12pt caption this had. They
+                    // read as headings; a dimmed caption reads as a hint.
+                    //
+                    // This has to stay a real TextBlock in the logical tree,
+                    // carrying the heading verbatim. Three of the screenshot
+                    // scenarios locate their group by searching the window's
+                    // descendants for a TextBlock whose Text equals the
+                    // heading, and six of them fall back to a zero-bounds
+                    // anchor when the search fails — which yields a 1x1 PNG,
+                    // a green CI run and a PR comment showing a picture of
+                    // nothing. Folding the title into a Button's Content, or
+                    // into a templated header's own presenter, breaks that
+                    // search without breaking any test.
+                    new TextBlock
+                    {
+                        Text = title,
+                        FontSize = 13,
+                        FontWeight = FontWeight.SemiBold,
+                        Opacity = 0.9,
+                        // Left inset matches the rows' own 14, because in System
+                        // Settings the group heading sits directly above the first
+                        // row's label rather than out to the left of it.
+                        Margin = new Thickness(14, 0, 0, 7)
+                    },
+                    card
+                }
+            };
+
+            _sections[id] = section;
+            return section;
+        }
 
         private Control Card(params Control[] rows)
         {
