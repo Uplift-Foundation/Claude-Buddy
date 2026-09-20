@@ -1,3 +1,4 @@
+using System.IO;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
@@ -230,11 +231,60 @@ namespace ClaudeBuddy
             }
         }
 
+        // Where the summariser is run from, and why it is not wherever the app
+        // happens to be.
+        //
+        // `claude -p` discovers the CLAUDE.md at or above its working
+        // directory. Inheriting the app's cwd therefore hands the throwaway
+        // summariser the whole project's instructions — and CB-174 is what that
+        // cost: asked to summarise a reply, it answered *in the project's
+        // persona*, declined to summarise without more context, and volunteered
+        // an unrelated sentence about a release build earlier that day. All of
+        // which was then read aloud.
+        //
+        // The design CB-165 argued for was "a different process, a different
+        // conversation" — this is the line that makes that true rather than
+        // merely intended. Measured both ways on one machine, same binary, same
+        // model, same stdin: from the project directory a persona reply, from a
+        // neutral directory a clean two-sentence summary.
+        //
+        // The temp directory, because it is the one place guaranteed to have no
+        // CLAUDE.md at or above it that belongs to any project. A home-level
+        // ~/.claude/CLAUDE.md was checked and does not colour the output here.
+        internal static string NeutralWorkingDirectory => Path.GetTempPath();
+
+        // The invocation, as a value, so a test can assert it without spawning
+        // anything. Extracted for the reason OrbWindowSpeakTests gives about
+        // Speak: a decision left inside the method that performs the side
+        // effect is a decision nothing can assert — which is exactly how CB-174
+        // shipped, since the prompt and the cleaning were both covered while
+        // the thing actually wrong was never looked at.
+        internal static ProcessStartInfo StartInfoFor(string claude)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = claude,
+                WorkingDirectory = NeutralWorkingDirectory,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+
+            startInfo.ArgumentList.Add("-p");
+            startInfo.ArgumentList.Add("--model");
+            startInfo.ArgumentList.Add(Model);
+
+            return startInfo;
+        }
+
         // Excluded from coverage: spawns the Claude Code CLI as a subprocess.
-        // Everything it decides — the prompt, the tidying, the failure answer —
-        // is pure and covered above; what remains here is process plumbing of
-        // the same shape UsagePoller already carries, and running it in a test
-        // would make a real billed request on the developer's own account.
+        // Everything it decides — the prompt, the tidying, the failure answer,
+        // and now the working directory — is pure and covered above; what
+        // remains here is process plumbing of the same shape UsagePoller already
+        // carries, and running it in a test would make a real billed request on
+        // the developer's own account.
         [ExcludeFromCodeCoverage]
         private static async Task<string?> RunAsync(string reply)
         {
@@ -243,19 +293,7 @@ namespace ClaudeBuddy
 
             try
             {
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = claude,
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                };
-
-                startInfo.ArgumentList.Add("-p");
-                startInfo.ArgumentList.Add("--model");
-                startInfo.ArgumentList.Add(Model);
+                var startInfo = StartInfoFor(claude);
 
                 using var proc = new Process { StartInfo = startInfo };
                 if (!proc.Start()) return null;
