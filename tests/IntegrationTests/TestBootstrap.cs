@@ -25,6 +25,17 @@ internal static class TestBootstrap
             "CLAUDE_BUDDY_SETTINGS_DIR",
             Path.Combine(Path.GetTempPath(), "cb-integrationtests-" + Guid.NewGuid()));
 
+        // No test in this assembly asks the OS for a credential. On macOS the
+        // cloud arm's credential lives in the login Keychain, and reading it from
+        // another application raises a consent dialog — which, headless, nobody
+        // answers: the read waits out its forty-five-second budget, leaks the pool
+        // thread parked inside Security.framework, and repeats for the next test
+        // that gets there. It is invisible in CI, where no such Keychain item
+        // exists and the query fails fast, and it only bites on a machine where
+        // somebody has actually logged in. Set here with the settings seam above,
+        // before any static constructor can run.
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_NO_CREDENTIAL_STORE", "1");
+
         // Where StatusDirectory.Path() puts settings-errors.log. Left unset,
         // every suite run appended Save/Load failure traces to the real
         // $TMPDIR/claude_buddy/settings-errors.log on the developer's machine —
