@@ -19,13 +19,18 @@ internal static class TestBootstrap
         var dir = Path.Combine(Path.GetTempPath(), "cb-unittests-" + Guid.NewGuid());
         Environment.SetEnvironmentVariable("CLAUDE_BUDDY_SETTINGS_DIR", dir);
 
-        // StatusDirectory.Path() (settings-errors.log's home) honors TMPDIR,
-        // not CLAUDE_BUDDY_SETTINGS_DIR — see the IntegrationTests
-        // TestBootstrap's identical line for the full reasoning, including why
-        // this is a short, separate suffix rather than `dir` itself (CB-17).
-        Environment.SetEnvironmentVariable(
-            "TMPDIR",
-            Path.Combine(Path.GetTempPath(), "cbt-" + Guid.NewGuid().ToString("N")[..8]));
+        // Where StatusDirectory.Path() puts settings-errors.log — left unset,
+        // every suite run appends failure traces to the developer's real
+        // $TMPDIR/claude_buddy/settings-errors.log (CB-17).
+        //
+        // CLAUDE_BUDDY_STATUS_ROOT, not TMPDIR: moving TMPDIR from inside the
+        // test process breaks the coverage collector's IPC and cost this repo
+        // its added-line coverage rule for a while. See IntegrationTests'
+        // TestBootstrap for the full reasoning (CB-172).
+        var statusRoot = Path.Combine(
+            Path.GetTempPath(), "cbt-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(statusRoot);
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_STATUS_ROOT", statusRoot);
 
         // ...and no test in this assembly may start a real relay: that is a live
         // Claude Code session in tmux, on the developer's own account, holding a

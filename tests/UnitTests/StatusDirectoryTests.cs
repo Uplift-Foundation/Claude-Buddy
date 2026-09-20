@@ -29,14 +29,14 @@ public class StatusDirectoryTests
         // second instance launched for a manual test.
         Assert.Equal(
             "/set/by/the/caller",
-            StatusDirectory.Root("/set/by/the/caller", () => "/per/user", "/tmp"));
+            StatusDirectory.Root(null, "/set/by/the/caller", () => "/per/user", "/tmp"));
     }
 
     [Fact]
     public void WithNoTmpdirThePlatformIsAsked()
     {
         // The launchd case, which is the one that shipped broken.
-        Assert.Equal("/per/user", StatusDirectory.Root(null, () => "/per/user", "/tmp"));
+        Assert.Equal("/per/user", StatusDirectory.Root(null, null, () => "/per/user", "/tmp"));
     }
 
     [Theory]
@@ -47,7 +47,7 @@ public class StatusDirectoryTests
         // An empty variable is set-but-useless, and joining a folder onto it
         // would produce a relative path that resolves against whatever the
         // working directory happens to be.
-        Assert.Equal("/per/user", StatusDirectory.Root(tmpdir, () => "/per/user", "/tmp"));
+        Assert.Equal("/per/user", StatusDirectory.Root(null, tmpdir, () => "/per/user", "/tmp"));
     }
 
     [Fact]
@@ -56,13 +56,13 @@ public class StatusDirectoryTests
         // On a platform that cannot answer — or when the call fails — this
         // falls back to what .NET said, which is what it did before. Being no
         // worse than the previous behaviour is the floor.
-        Assert.Equal("/tmp", StatusDirectory.Root(null, () => null, "/tmp"));
+        Assert.Equal("/tmp", StatusDirectory.Root(null, null, () => null, "/tmp"));
     }
 
     [Fact]
     public void AnEmptyPlatformAnswerIsNotUsedEither()
     {
-        Assert.Equal("/tmp", StatusDirectory.Root(null, () => "", "/tmp"));
+        Assert.Equal("/tmp", StatusDirectory.Root(null, null, () => "", "/tmp"));
     }
 
     [Fact]
@@ -72,8 +72,53 @@ public class StatusDirectoryTests
         // in the environment would be work for nothing.
         var asked = 0;
 
-        StatusDirectory.Root("/mine", () => { asked++; return "/per/user"; }, "/tmp");
+        StatusDirectory.Root(null, "/mine", () => { asked++; return "/per/user"; }, "/tmp");
 
+        Assert.Equal(0, asked);
+    }
+
+    [Fact]
+    public void TheStatusRootOverrideBeatsAnExplicitTmpdir()
+    {
+        // CB-172. This arm exists so a test suite can have its own status
+        // directory without moving TMPDIR out from under everything else in the
+        // process — the coverage collector's IPC socket lives under TMPDIR, and
+        // moving it mid-process left `tools/coverage.sh` unable to produce a
+        // report from either Microsoft-Testing-Platform suite at all.
+        //
+        // It has to outrank TMPDIR rather than merely fill in for it: the four
+        // TestBootstrap.cs files run inside a process that already has a
+        // perfectly good TMPDIR, and it is precisely that one they must not
+        // disturb.
+        Assert.Equal(
+            "/sandbox",
+            StatusDirectory.Root("/sandbox", "/set/by/the/caller", () => "/per/user", "/tmp"));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void AnEmptyStatusRootFallsThroughToTmpdir(string statusRoot)
+    {
+        // Same reasoning as the empty-TMPDIR case below: set-but-useless is not
+        // a root, and joining a folder onto it would produce a relative path
+        // resolved against whatever the working directory happens to be.
+        Assert.Equal(
+            "/set/by/the/caller",
+            StatusDirectory.Root(statusRoot, "/set/by/the/caller", () => "/per/user", "/tmp"));
+    }
+
+    [Fact]
+    public void TheStatusRootOverrideAloneIsEnough()
+    {
+        // The launchd shape — no TMPDIR at all — with the override set. The
+        // platform must not be consulted, for the same reason it is not when
+        // TMPDIR is set: it is a P/Invoke, and the answer is already in hand.
+        var asked = 0;
+
+        var root = StatusDirectory.Root("/sandbox", null, () => { asked++; return "/per/user"; }, "/tmp");
+
+        Assert.Equal("/sandbox", root);
         Assert.Equal(0, asked);
     }
 

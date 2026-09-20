@@ -39,13 +39,28 @@ namespace ClaudeBuddy
         // Which temp root to use, given what the environment says and what the
         // platform can tell us.
         //
-        // Pure so both arms are a test rather than a launchd job. The order is
-        // the point: an explicit TMPDIR always wins, because a test or a second
-        // instance sets exactly that to get its own sandbox — overruling it
-        // would break every isolated run in this repository. Only when there is
-        // none does the platform get asked, and only then does /tmp remain.
-        internal static string Root(string? tmpdir, Func<string?> perUser, string fallback) =>
-            !string.IsNullOrWhiteSpace(tmpdir) ? tmpdir!
+        // Pure so every arm is a test rather than a launchd job. The order is
+        // the point.
+        //
+        // `statusRoot` is CLAUDE_BUDDY_STATUS_ROOT, and it exists so a test can
+        // get its own status directory **without moving TMPDIR**, which is the
+        // same seam CLAUDE_BUDDY_SETTINGS_DIR and CLAUDE_BUDDY_PROFILE_ROOT
+        // already are for their own directories. Moving TMPDIR looks like the
+        // cheaper trick and is not: it is process-wide, so it reaches every
+        // other thing in the process that asks the OS for a temp path —
+        // including tooling that was handed the old value before the test
+        // assembly was ever loaded. CB-172 is what that cost. See the four
+        // TestBootstrap.cs files for the failure it produced.
+        //
+        // TMPDIR still wins over the platform, because that is the agreement
+        // with the hooks: they are shell and PowerShell, they write where
+        // TMPDIR says, and a second instance launched for a manual test gets
+        // its own sandbox by setting it. Only when there is none does the
+        // platform get asked, and only then does /tmp remain.
+        internal static string Root(
+            string? statusRoot, string? tmpdir, Func<string?> perUser, string fallback) =>
+            !string.IsNullOrWhiteSpace(statusRoot) ? statusRoot!
+            : !string.IsNullOrWhiteSpace(tmpdir) ? tmpdir!
             : perUser() is { Length: > 0 } mine ? mine
             : fallback;
 
@@ -53,6 +68,7 @@ namespace ClaudeBuddy
         // What it decides is Root, which is pure.
         [ExcludeFromCodeCoverage]
         internal static string Path0() => Root(
+            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_STATUS_ROOT"),
             Environment.GetEnvironmentVariable("TMPDIR"),
             PerUserTemp,
             System.IO.Path.GetTempPath());

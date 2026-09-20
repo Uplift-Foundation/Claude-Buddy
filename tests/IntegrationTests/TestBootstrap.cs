@@ -25,27 +25,39 @@ internal static class TestBootstrap
             "CLAUDE_BUDDY_SETTINGS_DIR",
             Path.Combine(Path.GetTempPath(), "cb-integrationtests-" + Guid.NewGuid()));
 
-        // StatusDirectory.Path() — where ClaudeBuddySettings.LogFailure writes
-        // settings-errors.log — honors TMPDIR rather than
-        // CLAUDE_BUDDY_SETTINGS_DIR (see StatusDirectory.Root's own comment:
-        // it's the seam a test uses to get its own sandbox). Left unset, every
-        // suite run appended Save/Load failure traces to the real
+        // Where StatusDirectory.Path() puts settings-errors.log. Left unset,
+        // every suite run appended Save/Load failure traces to the real
         // $TMPDIR/claude_buddy/settings-errors.log on the developer's machine —
         // a user-facing diagnostic file growing without bound from test noise
         // (CB-17).
         //
-        // A short suffix, not the full settings-dir guid: SessionMessengerSocketTests
-        // builds real AF_UNIX sockets under Path.GetTempPath(), which honors
-        // TMPDIR too, and a socket path over 104 bytes throws. Reusing the
-        // (much longer) settings scratch path here pushed that over the limit;
-        // an 8-hex-char suffix, the same budget SessionMessengerSocketTests
-        // already uses for its own directory, leaves it room.
-        var tempDir = Path.Combine(Path.GetTempPath(), "cbt-" + Guid.NewGuid().ToString("N")[..8]);
-        // Path.GetTempPath honours TMPDIR. Once this initializer changes it,
-        // every later CreateTempSubdirectory needs this parent to exist; CI can
-        // initialize before any other test happens to create it for us.
-        Directory.CreateDirectory(tempDir);
-        Environment.SetEnvironmentVariable("TMPDIR", tempDir);
+        // CLAUDE_BUDDY_STATUS_ROOT, not TMPDIR. This used to move TMPDIR, which
+        // reached far further than the one directory it was aiming at: TMPDIR
+        // is process-wide, and the Microsoft.Testing.Platform coverage
+        // collector puts its IPC socket under it. The collector's server end
+        // had already computed that path from the *original* TMPDIR before this
+        // assembly was loaded; the client end, running after this initializer,
+        // computed a different one — so `tools/coverage.sh` never got a
+        // cobertura report out of either MTP suite, and the whole 100%-of-added-
+        // lines rule in CLAUDE.md was unenforceable while that was true.
+        //
+        // It surfaced as two unrelated-looking errors, which is why it took
+        // three attempts to pin down. MTP runs this executable twice (a test
+        // host controller and the test host under it), so the initializer fired
+        // twice and nested a second cbt- directory inside the first: on macOS
+        // that put the socket path at 117 bytes against a 104-byte sun_path cap
+        // and threw ArgumentOutOfRangeException. Shorten TMPDIR and the length
+        // check passes, the client still looks in the wrong place, and you get
+        // a TimeoutException instead. One cause, two faces.
+        //
+        // Measured, not assumed: a one-test project with nothing in it but this
+        // module initializer reproduces both in about four seconds, and a
+        // five-minute test without one passes clean — so neither suite duration
+        // nor Avalonia was ever involved.
+        var statusRoot = Path.Combine(
+            Path.GetTempPath(), "cbt-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(statusRoot);
+        Environment.SetEnvironmentVariable("CLAUDE_BUDDY_STATUS_ROOT", statusRoot);
 
         // ...and no test here may start a real relay by accident — a live Claude
         // Code session in tmux, on the developer's own account. Unless the
