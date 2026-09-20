@@ -206,15 +206,20 @@ public class ClaudeCloudCredentialsFileTests : IDisposable
         Assert.Null(Source().Stamp());
     }
 
-    // ## The two OS-refusal arms, each reachable on one platform only
+    // ## The two OS-refusal arms
     //
-    // Denied and Unreadable are both real and neither can be provoked on both
-    // runners, because the refusals themselves are platform behaviour: Unix
-    // enforces the permission bits against the file's own owner, and Windows
-    // enforces a share-mode lock that Unix does not have. So each arm is
-    // exercised on the leg that can reach it and skipped on the other. Both are
-    // covered across the CI matrix; neither is covered on a single leg, which is
-    // stated in the PR body rather than left for someone to find in a report.
+    // Denied is genuinely one-legged: it is enforced by the Unix permission bits
+    // against the file's own owner, and an administrator on Windows is not
+    // refused by an ACL it can rewrite. So that one runs on Unix and returns
+    // early on Windows.
+    //
+    // **Unreadable is not, and this file used to claim it was.** The reasoning
+    // was that a share-mode lock is a Windows concept Unix does not have, which
+    // is true of the *kernel* and not of .NET: FileStream emulates FileShare on
+    // Unix with flock, so a handle opened FileShare.None makes the next
+    // File.ReadAllText throw IOException on macOS exactly as it does on Windows.
+    // Measured, not assumed — the skip was costing four lines of coverage on
+    // every macOS leg for an arm that is reachable there.
 
     [Fact]
     public void AFileTheUserCannotReadIsDeniedRatherThanRetried()
@@ -255,12 +260,28 @@ public class ClaudeCloudCredentialsFileTests : IDisposable
     [Fact]
     public void AFileHeldExclusivelyByAnotherHandleIsUnreadable()
     {
-        if (!OperatingSystem.IsWindows()) return;
-
         Write(Blob(InAnHour));
 
         using var held = new FileStream(Path_, FileMode.Open, FileAccess.Read, FileShare.None);
 
         Assert.Equal(CredentialOutcome.Unreadable, Source().Read().Outcome);
+    }
+
+    // The negative control for it, and the reason the case above is worth having
+    // rather than being a restatement of what FileStream does: released, the same
+    // file reads. Without this, a bug that reported Unreadable for every file
+    // would pass the case above and nothing else here would notice, since every
+    // other fixture asserts on the parse rather than on the read succeeding.
+    [Fact]
+    public void TheSameFileReadsOnceTheHandleIsReleased()
+    {
+        Write(Blob(InAnHour));
+
+        using (new FileStream(Path_, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.Equal(CredentialOutcome.Unreadable, Source().Read().Outcome);
+        }
+
+        Assert.Equal(CredentialOutcome.Found, Source().Read().Outcome);
     }
 }

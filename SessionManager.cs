@@ -2848,6 +2848,23 @@ namespace ClaudeBuddy
         private ICloudApi? _cloudChatApi;
         private ICloudCredentialSource? _cloudChatCredentials;
 
+        // The only way into RemoteChatFor's ClaudeCloud arm from a test.
+        //
+        // Both properties above build the real thing on first use: an HttpClient
+        // pointed at claude.ai, and — on this platform — a Keychain query that
+        // puts a consent dialog in front of whoever is running the suite. Neither
+        // is something a headless run may do, so the arm that constructs a cloud
+        // session was unreachable and therefore uncovered, which is what this
+        // seam is for. It sets the same two fields the properties memoise into,
+        // so production still builds each of them exactly once and nothing about
+        // the app's behaviour changes when nobody calls this.
+        internal void UseCloudChatDependenciesForTests(
+            ICloudApi api, ICloudCredentialSource credentials)
+        {
+            _cloudChatApi = api;
+            _cloudChatCredentials = credentials;
+        }
+
         // Kick off the read and walk away.
         //
         // Not awaited, because RemoteChatFor is what a click calls and a click

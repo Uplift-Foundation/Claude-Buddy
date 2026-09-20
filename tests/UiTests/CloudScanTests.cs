@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Threading;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
@@ -516,5 +517,148 @@ public class CloudScanTests
             .ToList();
 
         Assert.Contains("Editing files · Ran the tests", lines);
+    }
+
+    // --- opening a conversation with one -----------------------------------------
+
+    // RemoteChatFor's ClaudeCloud arm, driven through the manager rather than by
+    // constructing a session directly.
+    //
+    // Constructing ClaudeCloudChatSession by hand — which is what the panel suite
+    // next door does — tests the session and never enters this branch at all, so
+    // the four outcomes below were unmeasured while the class they produce was
+    // well covered. They are reached here through the real dictionary and the
+    // real roster lookup, with the network and the Keychain swapped out at the
+    // seam SessionManager exposes for it.
+
+    private sealed class SilentApi : ICloudApi
+    {
+        public Task<CloudApiResult> GetAsync(CloudRequestContext context, CancellationToken token) =>
+            Task.FromResult(new CloudApiResult(CloudOutcomes.OutcomeFor(401, ""), null));
+    }
+
+    private sealed class NoCredentials : ICloudCredentialSource
+    {
+        public string? Stamp() => null;
+
+        public CredentialRead Read() =>
+            new(CredentialOutcome.NotLoggedIn, null, null, "no credential in a test");
+    }
+
+    // The fake reports "not logged in", so the load StartCloudLoad kicks off ends
+    // immediately and without a socket. What is under test is which session comes
+    // back, not what it manages to read.
+    private static SessionManager CloudManager(string statusDir)
+    {
+        var manager = Manager(statusDir);
+        manager.UseCloudChatDependenciesForTests(new SilentApi(), new NoCredentials());
+        return manager;
+    }
+
+    [AvaloniaFact]
+    public void RemoteChatForACloudSessionBuildsOneFromTheRosterRow()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var manager = CloudManager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var chat = manager.RemoteChatFor("cloud:session_01abc");
+
+            Assert.NotNull(chat);
+
+            // Built from the row and not from the orb: the title is the roster's,
+            // and the id is the bare cloud id rather than the namespaced orb key.
+            Assert.Equal("Refactor the parser", chat!.DisplayName);
+            Assert.Equal("session_01abc", chat.SessionId);
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // Cached, for the reason the branch's own comment gives: there is no file on
+    // this machine to rebuild the transcript from, so a second construction would
+    // be a second network round trip and an emptier panel.
+    [AvaloniaFact]
+    public void RemoteChatForACloudSessionIsCachedOnceCreated()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var manager = CloudManager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var first = manager.RemoteChatFor("cloud:session_01abc");
+            Assert.NotNull(first);
+
+            Assert.Same(first, manager.RemoteChatFor("cloud:session_01abc"));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // A row that has left the roster while the orb is still on screen. The scan
+    // publishes it once so the status exists, then publishes an empty roster
+    // underneath it — which is exactly the shape of a session being archived
+    // between a scan and a click.
+    //
+    // Null rather than an empty session: there is nothing to read, and a panel
+    // that opened on nothing would look identical to one whose read had failed.
+    [AvaloniaFact]
+    public void RemoteChatForACloudSessionWhoseRowHasGoneIsNull()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var manager = CloudManager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            ClaudeCloudSessions.SetSnapshotForTests(Array.Empty<ClaudeCloudSessions.Session>());
+
+            Assert.Null(manager.RemoteChatFor("cloud:session_01abc"));
+        }
+        finally
+        {
+            PublishNothing();
+        }
+    }
+
+    // ...but a session already built survives its row leaving, which is the
+    // negative control for the case above. The cache is checked before the row is,
+    // deliberately: a conversation someone has open must not empty itself because
+    // the roster moved on.
+    [AvaloniaFact]
+    public void ACachedCloudSessionOutlivesItsRosterRow()
+    {
+        using var scratch = new Scratch();
+        try
+        {
+            Publish(Session("session_01abc"));
+
+            var manager = CloudManager(scratch.Dir);
+            manager.ScanAndUpdate();
+
+            var first = manager.RemoteChatFor("cloud:session_01abc");
+            Assert.NotNull(first);
+
+            ClaudeCloudSessions.SetSnapshotForTests(Array.Empty<ClaudeCloudSessions.Session>());
+
+            Assert.Same(first, manager.RemoteChatFor("cloud:session_01abc"));
+        }
+        finally
+        {
+            PublishNothing();
+        }
     }
 }
