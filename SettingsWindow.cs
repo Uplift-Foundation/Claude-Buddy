@@ -127,19 +127,82 @@ namespace ClaudeBuddy
 
         // Split out from the KeyDown handler above so the decision is testable
         // without ever calling Close() — see CloseFromKeyboardShortcut below for
-        // why that matters.
+        // why that matters. Kept as its own method, with its original
+        // signature, rather than folded into VerdictFor's callers: the existing
+        // ShouldCloseOnKeyDownMatchesEscapeAndCmdW theory asserts this exact
+        // five-row table and must keep passing unmodified. It's now a
+        // projection of VerdictFor with the query fixed at null — an inactive
+        // filter is the one state where "does this key close the window" has
+        // never depended on anything else, so the projection reproduces the
+        // original table exactly.
         internal static bool ShouldCloseOnKeyDown(Key key, KeyModifiers modifiers) =>
-            key == Key.Escape || (key == Key.W && modifiers.HasFlag(KeyModifiers.Meta));
+            VerdictFor(key, modifiers, null) == SettingsKeyVerdict.Close;
 
-        // Excluded from coverage: its only job is to call Close() on the two
-        // shortcuts that should close a preferences window. ShouldCloseOnKeyDown
-        // — which key combinations those are — is a static and is covered
-        // directly; this is the half that cannot run, for the FontManager reason
-        // below.
+        // The wider decision ShouldCloseOnKeyDown above is a slice of: what a
+        // key press means once there's a filter box that can also be focused
+        // or cleared. Query is whatever the filter box currently holds, or
+        // null once there's no box to read it from (a window not yet built —
+        // never true after the constructor — or ShouldCloseOnKeyDown's own
+        // projection).
+        internal static SettingsKeyVerdict VerdictFor(Key key, KeyModifiers modifiers, string? query)
+        {
+            // Cmd-W always closes, whatever the filter holds — no gesture that
+            // already closed this window before CB-166 is allowed to stop
+            // closing it now.
+            if (key == Key.W && modifiers.HasFlag(KeyModifiers.Meta)) return SettingsKeyVerdict.Close;
+
+            if (key == Key.Escape)
+            {
+                // Escape with a modifier held is a stray chord, not "clear the
+                // filter" — it still closes, so no existing close gesture is
+                // ever taken away by this ticket.
+                if (modifiers != KeyModifiers.None) return SettingsKeyVerdict.Close;
+
+                return SettingsFilter.IsActive(query)
+                    ? SettingsKeyVerdict.ClearFilter
+                    : SettingsKeyVerdict.Close;
+            }
+
+            if (key == Key.F && (modifiers.HasFlag(KeyModifiers.Meta) || modifiers.HasFlag(KeyModifiers.Control)))
+            {
+                return SettingsKeyVerdict.FocusFilter;
+            }
+
+            return SettingsKeyVerdict.Ignore;
+        }
+
+        // The safe three-quarters of OnWindowKeyDown below, split out so a test
+        // can drive Escape-clears-the-filter and Cmd/Ctrl-F-focuses-it without
+        // going anywhere near Close(). Returns the verdict it acted on so the
+        // caller decides what to do with the one branch this can't take itself.
+        internal SettingsKeyVerdict HandleKeyDown(Key key, KeyModifiers modifiers)
+        {
+            var verdict = VerdictFor(key, modifiers, _filterBox?.Text);
+
+            switch (verdict)
+            {
+                case SettingsKeyVerdict.ClearFilter:
+                    if (_filterBox is not null) _filterBox.Text = "";
+                    break;
+                case SettingsKeyVerdict.FocusFilter:
+                    _filterBox?.Focus();
+                    break;
+            }
+
+            return verdict;
+        }
+
+        // Excluded from coverage: its only job past HandleKeyDown is to call
+        // Close() on the one verdict that means it — HandleKeyDown carries
+        // every other branch and is fully tested; this is just the one call
+        // this suite may never make.
         [ExcludeFromCodeCoverage]
         private void OnWindowKeyDown(object? sender, KeyEventArgs e)
         {
-            if (ShouldCloseOnKeyDown(e.Key, e.KeyModifiers)) CloseFromKeyboardShortcut();
+            if (HandleKeyDown(e.Key, e.KeyModifiers) == SettingsKeyVerdict.Close)
+            {
+                CloseFromKeyboardShortcut();
+            }
         }
 
         // Excluded from coverage: Window.Close() corrupts a process-wide Avalonia
@@ -254,6 +317,17 @@ namespace ClaudeBuddy
             }
         }
 
+        // The filter box and the empty-state line, both outside what Rebuild()
+        // replaces below. Neither is rebuilt on a theme change or a toggle
+        // flip — only Body()'s content changes, so a query typed mid-edit
+        // survives every one of the many things in this window that call
+        // Rebuild(). The query itself is deliberately never read from or
+        // written to ClaudeBuddySettings: it's a transient view of the page,
+        // not a preference.
+        private TextBox? _filterBox;
+        private TextBlock? _emptyState;
+        private ScrollViewer? _scrollViewer;
+
         internal void Rebuild()
         {
             // Held against System Settings side by side, Apple's content pane is
@@ -267,11 +341,76 @@ namespace ClaudeBuddy
                 ? Color.FromArgb(0xD9, 0x1E, 0x1E, 0x20)
                 : Color.FromArgb(0xD9, 0xF2, 0xF2, 0xF5));
 
-            Content = new ScrollViewer
+            if (_scrollViewer is null)
             {
-                Content = Body(),
-                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled
-            };
+                // Built once, on the first Rebuild() the constructor makes, and
+                // never again — everything after this swaps only the
+                // ScrollViewer's Content. A search box that got torn down and
+                // rebuilt on every toggle flip would lose focus and drop
+                // whatever was typed, on every one of the many handlers in
+                // this file that call Rebuild().
+                _filterBox = new TextBox
+                {
+                    Watermark = "Search settings",
+                    Margin = new Thickness(20, 18, 20, 0)
+                };
+                // TextChanged, not LostFocus: this commits nothing and reaches
+                // nothing outside the window's own tree, unlike the gateway
+                // boxes' commit-on-LostFocus — so there's no reason to wait
+                // for focus to leave before a keystroke takes effect.
+                _filterBox.TextChanged += (_, _) => ApplyFilter();
+                DockPanel.SetDock(_filterBox, Dock.Top);
+
+                _emptyState = new TextBlock
+                {
+                    Opacity = 0.55,
+                    FontSize = 13,
+                    Margin = new Thickness(20, 4, 20, 0),
+                    IsVisible = false
+                };
+                DockPanel.SetDock(_emptyState, Dock.Top);
+
+                _scrollViewer = new ScrollViewer
+                {
+                    HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled
+                };
+
+                Content = new DockPanel
+                {
+                    Children = { _filterBox, _emptyState, _scrollViewer }
+                };
+            }
+
+            _scrollViewer.Content = Body();
+
+            // Several toggle handlers, and every gateway commit, call Rebuild()
+            // outright rather than mutating the tree in place — so whatever was
+            // typed before has to be re-applied to the page Body() just handed
+            // back, or a folded-open search result would silently re-fold and
+            // an active query would silently stop filtering anything.
+            ApplyFilter();
+        }
+
+        // Applies the current query to every section and updates the
+        // empty-state line. Query is read off the box rather than threaded
+        // through as a parameter because every caller already has a reference
+        // to this window and none of them has a reason to filter to anything
+        // but what's actually typed.
+        private void ApplyFilter()
+        {
+            var query = _filterBox?.Text;
+
+            var anyVisible = false;
+            foreach (var section in _sections.Values)
+            {
+                if (section.ApplyFilter(query)) anyVisible = true;
+            }
+
+            if (_emptyState is not null)
+            {
+                _emptyState.Text = SettingsFilter.EmptyStateText(query);
+                _emptyState.IsVisible = SettingsFilter.IsActive(query) && !anyVisible;
+            }
         }
 
         // No control metrics here on purpose. Heights, corner radii, fills and
@@ -331,6 +470,157 @@ namespace ClaudeBuddy
             // rebuilt the page from nothing. A no-op until IsOpen has a body.
             public void RestoreOpenState()
             {
+            }
+
+            // Applies query to every card, then decides whether the section
+            // itself should show. Cards is walked rather than Children because
+            // Children also holds the header and the chevron, which have
+            // nothing to filter.
+            //
+            // A section holding a match force-expands so the match is actually
+            // visible, and does it through IsOpen rather than
+            // ClaudeBuddySettings — IsOpen's own setter writes nothing (see the
+            // type-level comment above), so a search never persists a fold it
+            // only changed to show a result. Clearing the filter restores
+            // whatever was on disk before the search touched anything.
+            //
+            // A card that isn't a SettingsCard (there shouldn't be one — Card()
+            // is the only thing this window hands to Group()) contributes
+            // nothing either way, which is the safe default: better to leave an
+            // unrecognised card showing than to guess at whether it matched.
+            internal bool ApplyFilter(string? query)
+            {
+                var titleMatches = SettingsFilter.Matches(query, Title);
+
+                var anyCardMatch = false;
+                foreach (var card in Cards)
+                {
+                    if (card is SettingsCard settingsCard)
+                    {
+                        anyCardMatch |= settingsCard.ApplyFilter(query, titleMatches);
+                    }
+                }
+
+                var visible = SettingsFilter.SectionVisible(anyCardMatch, titleMatches);
+                IsVisible = visible;
+
+                if (SettingsFilter.IsActive(query))
+                {
+                    if (visible) IsOpen = true;
+                }
+                else
+                {
+                    RestoreOpenState();
+                }
+
+                return visible;
+            }
+        }
+
+        // A row that knows what it's searchable as. Not Tag — Row(ProfileView)
+        // already hangs (folder, options) off a ComboBox's Tag for the colour
+        // picker's own handler, so a second use of the same property on the
+        // row itself would collide with it.
+        //
+        // A Grid subclass rather than a wrapper, because two tests
+        // (SettingsWindowCoverageTests' ColumnLabelsHasFiveColumns and
+        // RowForProfileSeedsEachColumnFromStoredSettings) cast a row builder's
+        // result straight to Grid, and every row builder here already returns
+        // a Grid under the hood.
+        internal sealed class SettingsRow : Grid
+        {
+            // What this row searches against — null for a row this file never
+            // gave one, which SettingsFilter.Matches treats as "can't match an
+            // active query".
+            public string? SearchText { get; set; }
+
+            // A row with no label of its own — a column heading, a status
+            // line, the profiles card's small print — that shows only when a
+            // real sibling in the same card matched, rather than being judged
+            // on SearchText it doesn't have.
+            public bool IsCardChrome { get; set; }
+        }
+
+        // A card's rows and the hairlines Card() interleaved between them,
+        // held onto by reference so ApplyFilter can toggle IsVisible on both
+        // without re-parenting anything or walking back through the tree to
+        // find them — walking would mean guessing which children are rows and
+        // which are separators, which is exactly the ambiguity this avoids.
+        internal sealed class SettingsCard : Border
+        {
+            // As Card() was handed them — one entry per row, not counting the
+            // hairlines, which are tracked separately below so a wrong
+            // hairline is a unit-test failure (SeparatorsBefore) rather than
+            // something only visible on screen.
+            public IReadOnlyList<Control> Rows { get; init; } = Array.Empty<Control>();
+
+            // Separators[i] is the hairline immediately before Rows[i + 1].
+            // One shorter than Rows, because there's nothing before the first
+            // row to draw a line under.
+            public IReadOnlyList<Border> Separators { get; init; } = Array.Empty<Border>();
+
+            // Applies query to every row in this card and returns whether any
+            // *searchable* row matched directly — chrome rows and rows this
+            // file never gave a SearchText don't count, because a chrome row
+            // matching only means a sibling matched, and an unsearchable row
+            // "matching" would mean this method invented an answer it doesn't
+            // have. The section above uses the return value to decide whether
+            // the section itself should stay visible.
+            internal bool ApplyFilter(string? query, bool titleMatches)
+            {
+                var n = Rows.Count;
+                var texts = new string?[n];
+                var chrome = new bool[n];
+                var searchable = new bool[n];
+
+                for (var i = 0; i < n; i++)
+                {
+                    if (Rows[i] is SettingsRow row)
+                    {
+                        texts[i] = row.SearchText;
+                        chrome[i] = row.IsCardChrome;
+                        searchable[i] = true;
+                    }
+                }
+
+                var visible = SettingsFilter.VisibleRows(query, texts, chrome, titleMatches);
+
+                // A row this file can't search — a free-form control handed to
+                // Card() directly, like the WSL list or a profile-directory
+                // editor — is left showing whenever its card is, rather than
+                // being hidden by a filter it has no way to answer.
+                for (var i = 0; i < n; i++)
+                {
+                    if (!searchable[i]) visible[i] = true;
+                }
+
+                for (var i = 0; i < n; i++)
+                {
+                    Rows[i].IsVisible = visible[i];
+                }
+
+                var separatorsBefore = SettingsFilter.SeparatorsBefore(visible).ToHashSet();
+                for (var i = 0; i < Separators.Count; i++)
+                {
+                    // Separators[i] sits before Rows[i + 1].
+                    Separators[i].IsVisible = separatorsBefore.Contains(i + 1);
+                }
+
+                // An empty card is a floating rounded pill with nothing in it,
+                // which reads as a rendering bug rather than "nothing here
+                // matched" — hide the card itself rather than leave that up.
+                IsVisible = n == 0 || visible.Any(v => v);
+
+                var anyMatch = false;
+                for (var i = 0; i < n; i++)
+                {
+                    if (searchable[i] && !chrome[i] && SettingsFilter.Matches(query, texts[i]))
+                    {
+                        anyMatch = true;
+                    }
+                }
+
+                return anyMatch;
             }
         }
 
@@ -2361,20 +2651,23 @@ namespace ClaudeBuddy
             return section;
         }
 
-        private Control Card(params Control[] rows)
+        private SettingsCard Card(params Control[] rows)
         {
             var stack = new StackPanel();
+            var separators = rows.Length > 1 ? new Border[rows.Length - 1] : Array.Empty<Border>();
 
             for (var i = 0; i < rows.Length; i++)
             {
                 if (i > 0)
                 {
-                    stack.Children.Add(new Border
+                    var separator = new Border
                     {
                         Height = 1,
                         Background = Hairline,
                         Margin = new Thickness(14, 0, 0, 0)
-                    });
+                    };
+                    separators[i - 1] = separator;
+                    stack.Children.Add(separator);
                 }
 
                 stack.Children.Add(rows[i]);
@@ -2383,16 +2676,22 @@ namespace ClaudeBuddy
             // 12, measured off System Settings' own groups — 18 plus a drop
             // shadow made these read as floating panels, which is a popover's
             // treatment, not a grouped row's.
-            return new Border
+            return new SettingsCard
             {
                 Background = CardBackground,
                 CornerRadius = new CornerRadius(12),
                 ClipToBounds = true,
-                Child = stack
+                Child = stack,
+                Rows = rows,
+                Separators = separators
             };
         }
 
-        // A line of text on its own, full width.
+        // A line of text on its own, full width. Card-chrome: it carries no
+        // SearchText of its own and shows only when a labelled sibling in the
+        // same card matched — a status line without the switch it explains
+        // would read as an orphaned error message rather than as a search
+        // result.
         //
         // Not Row(): that puts its control in an Auto-width column so it can sit
         // right-aligned beside a label, and a TextBlock in an Auto column is
@@ -2402,18 +2701,19 @@ namespace ClaudeBuddy
         // without a setting above it.
         private static Control NoteRow(Control content)
         {
-            var grid = new Grid { Margin = new Thickness(14, 10) };
+            var grid = new SettingsRow { Margin = new Thickness(14, 10), IsCardChrome = true };
             grid.Children.Add(content);
             return grid;
         }
 
         private static Control Row(string label, Control control, string? help = null)
         {
-            var grid = new Grid
+            var grid = new SettingsRow
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto"),
                 RowDefinitions = new RowDefinitions(help is null ? "Auto" : "Auto,Auto"),
-                Margin = new Thickness(14, 10)
+                Margin = new Thickness(14, 10),
+                SearchText = SettingsFilter.TextOf(label, help)
             };
 
             var text = new TextBlock
@@ -2642,22 +2942,29 @@ namespace ClaudeBuddy
 
             var rows = new List<Control> { ColumnLabels() };
             rows.AddRange(snapshot.Profiles.Select(Row));
-            rows.Add(new TextBlock
+
+            // Card-chrome, same as the column headings above: it explains the
+            // profile rows rather than being one, so it shows only when at
+            // least one of them does.
+            rows.Add(NoteRow(new TextBlock
             {
                 Text = "Colour applies to the menu swatch, the Dock icon and the window tint. "
                        + "Leave a name empty to use the folder name.",
                 TextWrapping = TextWrapping.Wrap,
                 Opacity = 0.55,
-                FontSize = 11,
-                Margin = new Thickness(14, 10)
-            });
+                FontSize = 11
+            }));
 
             return Card(rows.ToArray());
         }
 
+        // Card-chrome: these headings have no text of their own to search and
+        // exist only to explain the profile rows beneath them, so they follow
+        // whichever of those rows the filter matched.
         internal static Control ColumnLabels()
         {
             var grid = RowGrid();
+            grid.IsCardChrome = true;
             Add(grid, 0, Label("Name"));
             Add(grid, 1, Label("Colour"));
             Add(grid, 2, Label("Swatch"));
@@ -2674,7 +2981,7 @@ namespace ClaudeBuddy
             };
         }
 
-        internal static Grid RowGrid() => new()
+        internal static SettingsRow RowGrid() => new()
         {
             ColumnDefinitions = new ColumnDefinitions("*,130,64,54,44,84"),
             Margin = new Thickness(14, 8)
@@ -2766,6 +3073,7 @@ namespace ClaudeBuddy
             var folder = Path.GetFileName(profile.Directory);
             var settings = ClaudeBuddySettings.For(folder);
             var grid = RowGrid();
+            grid.SearchText = SettingsFilter.TextOf(profile.DisplayName, folder);
 
             var name = new TextBox
             {
