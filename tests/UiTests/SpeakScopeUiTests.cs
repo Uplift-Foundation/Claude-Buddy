@@ -432,6 +432,23 @@ public class SpeakScopeUiTests : IDisposable
         Assert.Equal(SpeechSummary.Unavailable, _spoken?.Text);
     }
 
+    // A panel that has not bound a session yet still has a speak button on it,
+    // and pressing it must do nothing rather than throw. Both null arms of the
+    // call meet here — no assistant turn to read and no session to resolve a
+    // voice for — which is the state every panel is in between construction
+    // and its first Bind.
+    [AvaloniaFact]
+    public void AnUnboundPanelSpeaksNothing()
+    {
+        ClaudeBuddySettings.SpeakScope = SpeakScope.Full;
+        CaptureUtterances();
+
+        new ChatPanel().SpeakLatest();
+        Flush();
+
+        Assert.Null(_spoken);
+    }
+
     // The summary leg is started rather than awaited — the button returns while
     // the summariser runs, which is the whole reason the hourglass exists. So a
     // case that presses the button has to let the continuation run before it
