@@ -6,6 +6,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
+using Avalonia.VisualTree;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
@@ -187,6 +188,24 @@ public class GlyphRenderingDiagnostics
 
                     report.AppendLine(
                         $"  {size,4} {weight,-10} {mode,-18} {levels,6} {ink,7} {aa,6:F2}");
+
+                    // The one row that is a contract rather than an
+                    // observation. Grayscale is what ScreenshotHelper now asks
+                    // for on every capture, and it is the only mode that
+                    // produced a real mask on the Windows runner — so if it
+                    // ever stops doing so, every screenshot this suite
+                    // publishes becomes unreadable again and nothing else here
+                    // would say a word about it.
+                    if (mode == TextRenderingMode.Antialias)
+                    {
+                        Assert.True(
+                            levels > 6,
+                            $"Grayscale antialiasing produced {levels} luminance levels at "
+                            + $"{size}px {weight} on this runner. Two means a bi-level mask, "
+                            + "which is CB-171's defect arriving through the mode chosen to "
+                            + "avoid it — the capture path needs a different answer, not a "
+                            + "lower floor here.");
+                    }
                 }
             }
         }
@@ -302,6 +321,36 @@ public class GlyphRenderingDiagnostics
                 report.AppendLine(
                     $"      {ancestor.GetType().Name}: edge={edge} text={text} hint={hint}");
             }
+        }
+
+        // The same headings again, measured the way the capture path measures
+        // them: the option set on an ancestor and that ancestor rendered, not
+        // the block. ImmediateRenderer pushes TextOptions from the render root
+        // downwards, so a setting above the root is not in scope at all — which
+        // is exactly why ScreenshotHelper sets it on the visual it is about to
+        // render rather than once on the application. Written this way round
+        // because the first attempt set it on the window, rendered the block,
+        // and would have reported the fix as not working when what was broken
+        // was the measurement.
+        report.AppendLine("  ...with grayscale asked for on the rendered ancestor:");
+
+        foreach (var wanted in new[] { "Claude Code in the cloud", "Speaks", "Other machines" })
+        {
+            var block = window.GetLogicalDescendants()
+                .OfType<TextBlock>()
+                .FirstOrDefault(b => b.Text == wanted);
+
+            var host = block?.GetVisualParent();
+
+            if (block is null || host is null) continue;
+
+            TextOptions.SetTextRenderingMode(host, TextRenderingMode.Antialias);
+            ScreenshotHelper.Flush();
+
+            var (levels, ink, aa) = Coverage((Control)host);
+
+            report.AppendLine(
+                $"      {wanted,-26} host={host.GetType().Name} levels={levels} ink={ink} aa={aa:F2}");
         }
 
         return report.ToString();

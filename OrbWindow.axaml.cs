@@ -804,6 +804,42 @@ namespace ClaudeBuddy
             _ => null
         };
 
+        // The kinds whose badge is drawn rather than typed, as SVG path data
+        // in a 16x16 box — the same shape CliMark's marks take, and stretched
+        // uniformly into the badge the same way.
+        //
+        // Only the cloud so far, and the test for whether a glyph belongs here
+        // is not "is it in the font". U+2601 *is* reachable on both platforms:
+        // asked directly, the font manager resolves it to Hiragino Sans on
+        // macOS and to Segoe UI Emoji on Windows, so this was never a tofu
+        // box. It is that neither face draws a cloud at 13px. The macOS one
+        // collapses to an undifferentiated white lump; the Windows one is a
+        // colour-emoji glyph, which means it arrives at its own size and in
+        // its own colours — it overflows the 22px disc and comes out lavender
+        // against a badge whose whole design is one white mark on near-black.
+        //
+        // @ and # stay as text deliberately. They are ASCII, every font has
+        // them, they are the characters the surfaces themselves use, and
+        // redrawing them as paths would be worse at every size.
+        //
+        // The clock, gear and arrows are the open question this does not
+        // answer: they resolve to colour-emoji faces on Windows too, so they
+        // are legible but wrong-coloured there. Left alone here because a
+        // hand-drawn stopwatch or gear is a design decision, not a bug fix,
+        // and a bad one reads worse than a mis-coloured emoji. Worth its own
+        // ticket, with the Windows captures as the evidence.
+        internal static string? KindMarkFor(SessionKind kind) => kind switch
+        {
+            // Three lobes and a flat base. Deliberately fat and simple: at
+            // 13px a cloud with fine edges is the lump this replaces, so the
+            // lobes are large enough to survive two or three pixels each.
+            SessionKind.Cloud =>
+                "M4.6,13 C2.3,13 0.5,11.3 0.5,9.2 C0.5,7.4 1.8,5.9 3.5,5.5 "
+                + "C4.0,3.5 5.9,2 8.2,2 C10.4,2 12.2,3.4 12.8,5.3 "
+                + "C14.3,5.7 15.5,7.1 15.5,8.8 C15.5,11.1 13.7,13 11.4,13 Z",
+            _ => null
+        };
+
         // What the chat panel puts in its header. Null where there is no badge,
         // so the panel shows nothing rather than the word "unknown".
         public string? KindLabel => BadgeFor(_lastStatus?.Kind ?? SessionKind.Unknown)?.Label;
@@ -820,7 +856,25 @@ namespace ClaudeBuddy
                 return;
             }
 
-            KindGlyph.Text = badge.Value.Glyph;
+            var mark = KindMarkFor(kind);
+
+            if (mark is null)
+            {
+                KindMark.IsVisible = false;
+                KindGlyph.Text = badge.Value.Glyph;
+                KindGlyph.IsVisible = true;
+            }
+            else
+            {
+                // Cleared rather than left behind: the two share a Panel, and a
+                // stale glyph under a drawn mark would show through the gaps in
+                // it on the one orb that changes kind in place.
+                KindGlyph.Text = null;
+                KindGlyph.IsVisible = false;
+                KindMark.Data = StreamGeometry.Parse(mark);
+                KindMark.IsVisible = true;
+            }
+
             KindBadge.IsVisible = true;
         }
 
@@ -890,6 +944,10 @@ namespace ClaudeBuddy
             KindBadge.Width = KindBadge.Height = BadgeSize * scale;
             KindBadge.CornerRadius = new CornerRadius(BadgeSize * scale / 2);
             KindGlyph.FontSize = BadgeGlyphSize * scale;
+
+            // The drawn mark shrinks with the disc for the same reason
+            // CliGlyph does: a 13px cloud inside a 16px badge overflows it.
+            KindMark.Width = KindMark.Height = BadgeGlyphSize * scale;
 
             var inset = 28 - (18 * scale * 0.7071) - (BadgeSize * scale / 2);
             KindBadge.Margin = new Thickness(0, 0, Math.Max(0, inset), Math.Max(0, inset));
