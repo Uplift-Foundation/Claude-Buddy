@@ -184,8 +184,13 @@ public class ChatPanelInteractionTests : IDisposable
     }
 
     // The platform speech call is intentionally outside headless coverage, but
-    // choosing whether that call receives a workspace voice is a panel decision
-    // and must not drift from the orb's equivalent path.
+    // choosing whether that call receives a workspace voice is a decision worth
+    // pinning. It used to be a *panel* decision with an orb-shaped twin beside
+    // it, and the two drifted — CB-165's second pass replaced both with
+    // SessionIdentity.VoiceFor, which is what this now asks. The arms are
+    // enumerated in SpeechVoiceRoutingTests; what is kept here is the gateway
+    // case against a voice this runner actually publishes, which is the part
+    // that has to hold on every supported RID.
     [AvaloniaFact]
     public void AnOpenClawAgentPanelSelectsItsWorkspaceVoiceOnly()
     {
@@ -205,7 +210,7 @@ public class ChatPanelInteractionTests : IDisposable
 
             var openClaw = new OpenClawChatSession(sessionId, sessionId["openclaw:".Length..], "Voice agent");
 
-            var voice = Assert.IsType<TextToSpeech.VoiceOption>(ChatPanel.VoiceFor(openClaw));
+            var voice = Assert.IsType<TextToSpeech.VoiceOption>(SessionIdentity.VoiceFor(openClaw.SessionId));
             Assert.Equal(TextToSpeech.SpeakEngine.System, voice.Engine);
             Assert.Equal(workspaceVoice, voice.Name);
 
@@ -216,10 +221,10 @@ public class ChatPanelInteractionTests : IDisposable
                 });
             var neural = new TextToSpeech.VoiceOption(
                 TextToSpeech.SpeakEngine.Neural, "af_bella", "af_bella (Kokoro)");
-            Assert.Equal(neural, ChatPanel.VoiceFor(openClaw, new[] { neural }));
-            Assert.Equal(1.3, ChatPanel.RateFor(openClaw));
-            Assert.Null(ChatPanel.VoiceFor(NewFake(sessionId: "fake-voice-" + agent)));
-            Assert.Null(ChatPanel.RateFor(NewFake(sessionId: "fake-voice-" + agent)));
+            Assert.Equal(neural, SessionIdentity.VoiceFor(openClaw.SessionId, new[] { neural }));
+            Assert.Equal(1.3, SessionIdentity.RateFor(openClaw.SessionId));
+            Assert.Null(SessionIdentity.VoiceFor("fake-voice-" + agent, new[] { neural }));
+            Assert.Null(SessionIdentity.RateFor("fake-voice-" + agent));
         }
         finally
         {

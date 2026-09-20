@@ -1777,17 +1777,17 @@ namespace ClaudeBuddy
             SpeakIfThereIsAnything(FindSpeakableText());
         }
 
-        // Excluded from coverage: both of its lines. Reaching SpeakLocal means a
-        // transcript with something in it was found, and what happens next is the
-        // machine running the tests reading it out loud — so a test that covered
-        // this line would be one nobody could run with other people in the room.
-        // Which text is found is FindSpeakableText, which is measured; which
-        // voice says it is VoiceForLocalSpeech, which is measured too.
-        [ExcludeFromCodeCoverage]
+        // No longer excluded from coverage, and that is the fix rather than a
+        // side effect of it. What used to be here spoke `text` verbatim, having
+        // never asked SpeechPlan or the scope setting anything — the "does not
+        // summarise" half of CB-165's second trip through QA — and it was
+        // invisible precisely because the method was excluded for containing the
+        // utterance. Handing the reply to SpeechRequest instead leaves nothing
+        // here that a test cannot see.
         private void SpeakIfThereIsAnything(string? text)
         {
             if (text is null) return;
-            SpeakLocal(text, VoiceForLocalSpeech(SessionId), LocalPersonas.RateForSession(SessionId));
+            SpeechRequest.Speak(text, SessionId);
         }
 
         // Safe to call: SessionManager.Instance is null outside the running app, so
@@ -1802,30 +1802,6 @@ namespace ClaudeBuddy
         [ExcludeFromCodeCoverage]
         private static void OpenSettings() => SettingsWindow.Toggle();
 
-        // Excluded from coverage: makes the machine make a noise. TextToSpeech.Speak
-        // is itself already excluded for that, and scoping the exclusion to this one
-        // call keeps OnSpeakClicked's decisions — already speaking, nothing to say —
-        // measured. An earlier attempt at testing the caller end to end actually
-        // spoke out loud on a developer's machine, which is how narrow this needs
-        // to be.
-        //
-        // The *decision* this is handed — which voice, at what rate — is not
-        // excluded and is not guessed at here: VoiceForLocalSpeech and
-        // LocalPersonas.RateForSession answer it, and both are tested against an
-        // injected option list rather than against whatever this machine has
-        // installed. Which is the whole shape of the exclusion: the choice is
-        // measured, only the noise is not. Same body as the remote path in
-        // SpeakRemoteAsync, deliberately — a persona's voice and a gateway
-        // agent's are the same feature seen from two ends, and "no voice matched"
-        // has to mean the user's own setting in both or one of them silently
-        // stops speaking.
-        [ExcludeFromCodeCoverage]
-        private static void SpeakLocal(string text, TextToSpeech.VoiceOption? voice, double? rate)
-        {
-            if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
-            else TextToSpeech.Speak(text, voice, rate);
-        }
-
         internal async Task SpeakRemoteAsync()
         {
             var title = _lastStatus?.Title ?? "";
@@ -1833,36 +1809,11 @@ namespace ClaudeBuddy
 
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            var voice = VoiceForRemoteSpeech(SessionId);
-            var rate = OpenClawSessions.RateForSession(SessionId);
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
-                else TextToSpeech.Speak(text, voice, rate);
-            });
+            // Back to the UI thread before anything is decided, not merely
+            // before the utterance: SpeechRequest moves TextToSpeech's state,
+            // which every orb's flyout is bound to.
+            Dispatcher.UIThread.Post(() => SpeechRequest.Speak(text, SessionId));
         }
-
-        // The production path asks the process-owned resolver for the current
-        // machine's options. Keeping the list injectable makes the UI decision
-        // testable without downloading Kokoro or launching a custom command.
-        internal static TextToSpeech.VoiceOption? VoiceForRemoteSpeech(
-            string sessionId,
-            IEnumerable<TextToSpeech.VoiceOption>? options = null) =>
-            options is null
-                ? OpenClawSessions.VoiceForSession(sessionId)
-                : OpenClawSessions.VoiceForSession(sessionId, options);
-
-        // The local half of the same seam, and deliberately the same shape: a
-        // persona that names a voice the machine does not have answers null, and
-        // null is the global setting rather than silence. Injectable for the
-        // same reason — a test that had to install Kokoro to assert which voice
-        // a CLAUDE.md picked would be a test nobody runs.
-        internal static TextToSpeech.VoiceOption? VoiceForLocalSpeech(
-            string sessionId,
-            IEnumerable<TextToSpeech.VoiceOption>? options = null) =>
-            options is null
-                ? LocalPersonas.VoiceForSession(sessionId)
-                : LocalPersonas.VoiceForSession(sessionId, options);
 
         // Called by SessionManager when speech starts, changes phase or stops.
         public void SetFlyoutSpeakState(TextToSpeech.SpeakState state) =>

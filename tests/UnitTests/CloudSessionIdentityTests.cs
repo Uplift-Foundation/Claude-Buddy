@@ -10,12 +10,18 @@ namespace ClaudeBuddy.UnitTests;
 // there because the cases that matter for them go on to ask a registry for a
 // name, and the only meaningful assertion about this one is the prefix itself.
 //
-// **It has no production caller today.** CB-164 added it for the panel to tell a
-// cloud id apart from a local one, and the panel ended up not needing to ask —
-// an unrecognised id already borrows the orb's letters, which is the answer this
-// would have given. It is covered rather than deleted because the prefix it
-// encodes is real and is minted by the scan; a case here is what stops the next
-// person reading "cloud:" out of SessionManager and writing their own.
+// CB-164 added it for the panel to tell a cloud id apart from a local one, and
+// the panel ended up not needing to ask — an unrecognised id already borrows the
+// orb's letters, which is the answer this would have given. It was kept rather
+// than deleted because the prefix it encodes is real and is minted by the scan,
+// and a case here is what stops the next person reading "cloud:" out of
+// SessionManager and writing their own.
+//
+// It has a production caller as of CB-165: SessionIdentity.VoiceSourceFor asks
+// it, because a cloud session has no persona registry on this disk and so keeps
+// the user's own voice rather than falling through to the local one. That arm
+// is covered in SpeechVoiceRoutingTests; this file still owns the prefix rule
+// itself.
 public class CloudSessionIdentityTests
 {
     [Theory]

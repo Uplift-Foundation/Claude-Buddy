@@ -2295,16 +2295,14 @@ namespace ClaudeBuddy
             if (outcome == ChatSendOutcome.Sent) Input.Text = "";
         }
 
-        // Excluded from coverage: the one line a test cannot reach is Speak(),
-        // which makes the machine make a noise — and an exclusion stops that line
-        // being counted, not being run, so reaching it is not an option either.
+        // The button. Everything it decides beyond "am I already speaking" now
+        // belongs to SpeechRequest, which the orb's own speak button also enters
+        // — see that file's header for why this is one path and not two.
         //
-        // Everything this method decides is covered around it: already speaking
-        // cancels instead of starting a second voice, and a conversation with no
-        // assistant reply, or a blank one, speaks nothing. Those two arms return
-        // before the call and are exercised in ChatPanelInteractionTests.
-        [ExcludeFromCodeCoverage]
-        private void SpeakLatest()
+        // No longer excluded from coverage: the utterance moved out with the
+        // rest, so what is left here is the cancel branch, the lookup of the
+        // last assistant turn, and a call. All three are reachable headlessly.
+        internal void SpeakLatest()
         {
             if (TextToSpeech.IsSpeaking)
             {
@@ -2313,85 +2311,7 @@ namespace ClaudeBuddy
             }
 
             var last = _turns.LastOrDefault(t => t.Role == ChatRole.Assistant);
-            var plan = SpeechPlan.For(last?.Text, ClaudeBuddySettings.SpeakScope);
-            if (plan.Silent) return;
-
-            if (!plan.NeedsSummary)
-            {
-                Speak(plan.Text!, VoiceFor(_session), RateFor(_session));
-                return;
-            }
-
-            _ = SpeakSummaryAsync(plan.Text!);
-        }
-
-        // The summary leg, which is the one with a wait in it.
-        //
-        // The hourglass goes up before the round trip rather than after, because
-        // starting it is itself part of the wait being announced — the same
-        // argument StartNeural's own comment makes about loading a model. The
-        // measured round trip is several seconds, and a speaker that goes silent
-        // for that long with no indication is the failure this ticket's
-        // refinement notes predicted.
-        //
-        // Cancellation is honoured at the one point it can be: if the user
-        // pressed the button again while the summariser was running, TextToSpeech
-        // is back to Idle, and speaking then would start audio they have already
-        // asked to stop.
-        internal async Task SpeakSummaryAsync(string reply)
-        {
-            TextToSpeech.Enter(TextToSpeech.SpeakState.Preparing);
-
-            var text = await SpeechSummary.SummarizeOrSayWhyAsync(reply).ConfigureAwait(true);
-
-            // The user pressed the button again while the summariser was
-            // running, so TextToSpeech is back to Idle and speaking now would
-            // start audio they have already asked to stop. This is the only
-            // point at which that can be honoured: the round trip is several
-            // seconds and there is nothing else watching it.
-            if (TextToSpeech.State != TextToSpeech.SpeakState.Preparing) return;
-
-            TextToSpeech.Enter(TextToSpeech.SpeakState.Idle);
-            Speak(text, VoiceFor(_session), RateFor(_session));
-        }
-
-        // A panel can hold several remote session kinds. Only OpenClaw agent
-        // sessions have workspace identity metadata; a room deliberately has
-        // no single agent voice, so both it and every other session keep the
-        // user's global speech selection.
-        internal static TextToSpeech.VoiceOption? VoiceFor(
-            IRemoteChatSession? session,
-            IEnumerable<TextToSpeech.VoiceOption>? options = null) =>
-            session?.SessionId.StartsWith("rc:", StringComparison.Ordinal) == true
-                ? (options is null ? null : PeerPersonas.VoiceForSession(session.SessionId, options))
-                : session?.SessionId.StartsWith("openclaw:agent:", StringComparison.Ordinal) == true
-                    ? options is null
-                    ? OpenClawSessions.VoiceForSession(session.SessionId)
-                    : OpenClawSessions.VoiceForSession(session.SessionId, options)
-                    : null;
-
-        // Same eligibility as VoiceFor: a rate with no voice behind it has
-        // nothing to qualify, and a room's shared global voice has no single
-        // agent's rate to use either.
-        internal static double? RateFor(IRemoteChatSession? session) =>
-            session?.SessionId.StartsWith("rc:", StringComparison.Ordinal) == true
-                ? PeerPersonas.RateForSession(session.SessionId)
-                : session?.SessionId.StartsWith("openclaw:agent:", StringComparison.Ordinal) == true
-                    ? OpenClawSessions.RateForSession(session.SessionId)
-                    : null;
-
-        // TextToSpeech.Speak is itself excluded from coverage ("starts a speech
-        // engine and makes the machine make a noise" — see its own comment) —
-        // pulled out here so that exclusion covers only this one call and not
-        // the decision above it, which a headless test can and does exercise
-        // (IsSpeaking -> cancel, no eligible reply -> do nothing). This one
-        // line — actually reaching a real utterance — has no headless seam and
-        // is deliberately left uncovered rather than exercised for real.
-        [ExcludeFromCodeCoverage]
-        private static void Speak(string text, TextToSpeech.VoiceOption? voice, double? rate = null)
-        {
-            if (voice is null) TextToSpeech.Speak(text, ClaudeBuddySettings.SpeakVoice);
-            else TextToSpeech.Speak(text, voice, rate);
+            SpeechRequest.Speak(last?.Text, _session?.SessionId);
         }
 
         private void ApplySpeakState(TextToSpeech.SpeakState state)

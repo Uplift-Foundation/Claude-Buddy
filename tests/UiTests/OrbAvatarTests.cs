@@ -124,7 +124,7 @@ public class OrbAvatarTests
                 });
             var neural = new TextToSpeech.VoiceOption(
                 TextToSpeech.SpeakEngine.Neural, "af_bella", "af_bella (Kokoro)");
-            Assert.Equal(neural, OrbWindow.VoiceForRemoteSpeech(sessionId, new[] { neural }));
+            Assert.Equal(neural, SessionIdentity.VoiceFor(sessionId, new[] { neural }));
             Assert.Equal(1.3, OpenClawSessions.RateForSession(sessionId));
         }
         finally
@@ -157,7 +157,7 @@ public class OrbAvatarTests
             orb.UpdateFrom(Gateway("Gateway Nova"));
 
             Assert.IsType<ImageBrush>(orb.Orb.Fill);
-            Assert.Equal(neural, OrbWindow.VoiceForRemoteSpeech(sessionId, new[] { neural }));
+            Assert.Equal(neural, SessionIdentity.VoiceFor(sessionId, new[] { neural }));
             Assert.Equal(1.3, OpenClawSessions.RateForSession(sessionId));
         }
         finally

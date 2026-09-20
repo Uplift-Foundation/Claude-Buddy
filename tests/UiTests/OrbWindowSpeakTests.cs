@@ -21,16 +21,21 @@ namespace ClaudeBuddy.Tests;
 // unexecuted for the rest of the test, the same way an unfired
 // DispatcherTimer would).
 //
-// OnSpeakClicked's *local* branch has no such boundary — it calls
+// OnSpeakClicked's *local* branch used to have no such boundary — it called
 // TextToSpeech.Speak(text, ...) straight from the UI thread with nothing to
-// intercept it, unlike the gateway branch's dispatcher hop. An earlier
-// version of this file called OnSpeakClicked() end-to-end for a local
-// session with a real transcript to test, and it genuinely started
-// /usr/bin/say on the machine running the suite. Every local-branch test
-// below exercises FindSpeakableText directly instead, and OnSpeakClicked
-// itself is only ever driven with a status that FindSpeakableText answers
-// null for, keeping the local Speak() call itself out of reach — see the
-// per-test comments below for exactly where.
+// intercept it, unlike the gateway branch's dispatcher hop. An earlier version
+// of this file called OnSpeakClicked() end-to-end for a local session with a
+// real transcript, and it genuinely started /usr/bin/say on the machine running
+// the suite. Every local-branch case below therefore exercises FindSpeakableText
+// directly and drives OnSpeakClicked only with a status it answers null for.
+//
+// That is no longer the only way in. CB-165's second pass put both buttons
+// behind SpeechRequest, which carries a test seam standing in for the one
+// excluded line, so the whole path *can* now be pressed for real without a
+// sound — see SpeakScopeUiTests, where the cases that need the click live. The
+// cases here are left as they are deliberately: they are about which text is
+// found, and routing them through a seam they do not need would only make them
+// say less about the lookup they exist for.
 [Collection("Settings")]
 public class OrbWindowSpeakTests
 {
@@ -185,19 +190,15 @@ public class OrbWindowSpeakTests
                 TranscriptPath = path,
             });
 
-            // Deliberately not calling OnSpeakClicked() here. Its local
-            // branch calls TextToSpeech.Speak(text, ...) directly rather than
-            // via Dispatcher.UIThread.Post the way the gateway branch's
-            // SpeakRemoteAsync does — there is no async boundary between
-            // "found some text" and "spawn /usr/bin/say (or the Windows
-            // equivalent) with it" for a local session. An earlier version
-            // of this test called it here, and it genuinely started the
-            // real system speech engine on the machine running the suite
-            // (confirmed the hard way: this test alone added ~650ms and
-            // spoke the fixture's own sentence out loud on macOS). FindSpeakableText
-            // is exercised directly instead, which is the whole of what
-            // OnSpeakClicked's local branch decides before handing off to
-            // the (already excluded, unavoidably OS-touching) Speak() call.
+            // Deliberately not calling OnSpeakClicked() here, even though
+            // SpeechRequest's seam now makes that safe. An earlier version of
+            // this test did call it, before that seam existed, and it started
+            // the real system speech engine on the machine running the suite
+            // (confirmed the hard way: this test alone added ~650ms and spoke
+            // the fixture's own sentence out loud on macOS). What this case is
+            // about is which text gets found, and FindSpeakableText is that
+            // decision whole — pressing the button would add the speech path to
+            // a test that is not asking about it. SpeakScopeUiTests presses it.
             Assert.Equal(
                 "Fixed the nested-team case.",
                 orb.FindSpeakableText());
