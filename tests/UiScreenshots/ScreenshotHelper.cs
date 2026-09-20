@@ -174,10 +174,11 @@ internal static class ScreenshotHelper
     // one.
     private static void AssertTextIsLegible(Visual root, SKBitmap image, string fileName)
     {
-        // Read the whole surface once. SKBitmap.GetPixel is a per-call
-        // colour-type conversion, and a chat panel capture is 340x420 with
-        // three dozen TextBlocks over it — going through it pixel by pixel
-        // turned a suite that runs in seconds into one that does not finish.
+        // Read the whole surface once rather than calling GetPixel per pixel:
+        // that is a colour-type conversion per call, and every TextBlock in a
+        // capture would pay it again over its own rectangle. Converting once
+        // up front is simply the cheaper shape, not a fix for any measured
+        // problem — the suite was never observed to be slow because of it.
         var luma = LumaPlane(image);
 
         foreach (var block in root.GetSelfAndVisualDescendants().OfType<TextBlock>())
@@ -187,10 +188,8 @@ internal static class ScreenshotHelper
 
             if (!VisibleRect(block, root, out var visible)) continue;
 
-            var origin = (Point?)visible.Position;
-
-            var left = (int)Math.Floor(origin!.Value.X);
-            var top = (int)Math.Floor(origin.Value.Y);
+            var left = (int)Math.Floor(visible.X);
+            var top = (int)Math.Floor(visible.Y);
             var right = left + (int)Math.Ceiling(visible.Width);
             var bottom = top + (int)Math.Ceiling(visible.Height);
 
