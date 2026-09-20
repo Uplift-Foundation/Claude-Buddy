@@ -1,5 +1,7 @@
 using System.Threading;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media;
@@ -182,6 +184,48 @@ public class CloudChatPanelTests : IDisposable
         // part worth reading.
         Assert.DoesNotContain("https://", link.Text!);
     }
+
+    // The link looks like one under the pointer.
+    //
+    // Small, and it is the only thing that says the sentence is clickable — the
+    // text is a plain TextBlock in the panel's own foreground, so without the
+    // underline a user has no way of knowing there is anything to press. Driven
+    // with raised routed events rather than a real pointer, the way
+    // SettingsWindow's own link rows are: a synthesized mouse on a machine
+    // someone is using interleaves with their real input.
+    [AvaloniaFact]
+    public void TheReadOnlyLinkUnderlinesUnderThePointerAndClearsWhenItLeaves()
+    {
+        var fake = new FakeChatSession(null)
+        {
+            SessionId = "cloud-hover-" + Guid.NewGuid(),
+            IsReadOnly = true,
+            ComposerHint = "This conversation is read-only here.",
+            ReplyUrl = "https://claude.ai/code/session_01abc",
+        };
+        _toClean.Add(fake.SessionId);
+
+        ChatPanel.OpenFor(NewOrb(), fake);
+        FlushRender();
+
+        var link = ReadOnlyLink(ChatPanelTestAccess.Instance!);
+
+        // Nothing drawn until the pointer is over it, which is the half a test
+        // that only hovered would not catch.
+        Assert.Null(link.TextDecorations);
+
+        Hover(link, InputElement.PointerEnteredEvent);
+        Assert.Equal(TextDecorations.Underline, link.TextDecorations);
+
+        Hover(link, InputElement.PointerExitedEvent);
+        Assert.Null(link.TextDecorations);
+    }
+
+    private static void Hover(Control target, RoutedEvent<PointerEventArgs> which) =>
+        target.RaiseEvent(new PointerEventArgs(
+            which, target,
+            new Pointer(Pointer.GetNextFreeId(), PointerType.Mouse, true),
+            target, default, 0, new PointerPointProperties(), KeyModifiers.None));
 
     // No address, no link — rather than a link that opens nothing. Both halves
     // asserted because a link drawn unconditionally would pass the case above.
