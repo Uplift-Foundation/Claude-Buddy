@@ -454,6 +454,12 @@ namespace ClaudeBuddy
         // into settings.json for want of exactly this distinction.
         internal sealed class SettingsSection : StackPanel
         {
+            // The stable handle Group() keyed _sections with — see the comment
+            // above Body() for why persistence is keyed on this and not on
+            // Title. RestoreOpenState() needs it to read its own fold state
+            // back out of settings without Group() having to hand it in twice.
+            public required string Id { get; init; }
+
             public required string Title { get; init; }
 
             // The cards as Group() was handed them, not the wrapper the params
@@ -461,15 +467,54 @@ namespace ClaudeBuddy
             // emptied card without reaching back through the tree to find it.
             public IReadOnlyList<Control> Cards { get; set; } = Array.Empty<Control>();
 
-            // Not wired to anything yet: the collapse half of CB-166 owns the
-            // chevron and the body's IsVisible. It is here now so both halves
-            // can build against the shape without colliding inside Group().
-            public bool IsOpen { get; set; } = true;
+            private bool _isOpen = true;
+            private Avalonia.Controls.Primitives.ToggleButton? _header;
+            private RotateTransform? _chevronRotation;
+            private Control? _body;
 
-            // Re-applies whatever the section was last left as, after Body() has
-            // rebuilt the page from nothing. A no-op until IsOpen has a body.
+            // View state and nothing else: setting this moves the chevron and
+            // the body's visibility, full stop. It does not touch
+            // ClaudeBuddySettings, on purpose — see the type-level comment
+            // above. The header's click handler is the only writer, and it
+            // writes before it gets here (see Group()'s Click handler).
+            public bool IsOpen
+            {
+                get => _isOpen;
+                set
+                {
+                    _isOpen = value;
+                    if (_header is not null) _header.IsChecked = value;
+                    if (_chevronRotation is not null) _chevronRotation.Angle = value ? 90 : 0;
+                    if (_body is not null) _body.IsVisible = value;
+                }
+            }
+
+            // Group() calls this once, right after building the header and its
+            // chevron, so IsOpen above has real controls to move instead of
+            // just a bool. Kept separate from a constructor because
+            // SettingsSection has no Avalonia dependency of its own beyond
+            // being a StackPanel — the header lives in Group(), not here.
+            internal void WireDisclosure(
+                Avalonia.Controls.Primitives.ToggleButton header,
+                RotateTransform chevronRotation,
+                Control body)
+            {
+                _header = header;
+                _chevronRotation = chevronRotation;
+                _body = body;
+            }
+
+            // Re-applies whatever this section's id was last persisted as,
+            // after Body() has rebuilt the page from nothing. Reads rather
+            // than trusts whatever IsOpen already holds, because a Rebuild()
+            // can be triggered by something that has nothing to do with
+            // folding at all — a gateway TextBox's LostFocus commit, most of
+            // all — and the page that comes back has to show the fold the
+            // user actually left it in, not whatever this instance happened
+            // to default to.
             public void RestoreOpenState()
             {
+                IsOpen = !ClaudeBuddySettings.IsSettingsSectionCollapsed(Id);
             }
 
             // Applies query to every card, then decides whether the section
@@ -2612,40 +2657,104 @@ namespace ClaudeBuddy
 
         private SettingsSection Group(string id, string title, Control card)
         {
-            var section = new SettingsSection
+            // The disclosure chevron: a drawn Path, not a font glyph. Every
+            // screenshot capture runs through AssertTextIsLegible, and a
+            // glyph is a font lookup — CB-173 is an open bug about exactly
+            // that rendering as a colour emoji on Windows. Points right
+            // closed, rotates to point down open; IsOpen above is what turns
+            // this transform.
+            var chevronRotation = new RotateTransform();
+            var chevron = new Shapes.Path
             {
-                Title = title,
-                Cards = new[] { card },
-                Children =
+                Data = Geometry.Parse("M 0,0 L 5,4 L 0,8"),
+                Stroke = new SolidColorBrush(IsDark ? Colors.White : Colors.Black) { Opacity = 0.55 },
+                StrokeThickness = 1.4,
+                StrokeLineCap = PenLineCap.Round,
+                StrokeJoin = PenLineJoin.Round,
+                Width = 5,
+                Height = 8,
+                VerticalAlignment = VerticalAlignment.Center,
+                RenderTransform = chevronRotation,
+                RenderTransformOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative)
+            };
+
+            // "Theme" and "Windows" in System Settings are semibold and full
+            // strength, not the dimmed 12pt caption this had. They read as
+            // headings; a dimmed caption reads as a hint.
+            //
+            // This has to stay a real TextBlock in the logical tree, carrying
+            // the heading verbatim. Three of the screenshot scenarios locate
+            // their group by searching the window's descendants for a
+            // TextBlock whose Text equals the heading and assert on finding
+            // it. Folding the title into the ToggleButton's own Content
+            // property (a string), rather than keeping it as a
+            // TextBlock child the way it is here, breaks that search without
+            // breaking any test.
+            var titleText = new TextBlock
+            {
+                Text = title,
+                FontSize = 13,
+                FontWeight = FontWeight.SemiBold,
+                Opacity = 0.9
+            };
+
+            // A ToggleButton templated down to a bare ContentPresenter —
+            // App.axaml's "settings-disclosure" style, the same trick it
+            // already plays on ToolTip — so this keeps focus, Tab, Space and
+            // Enter, IsChecked and the automation peer without drawing the
+            // themed chrome a real Button or an Expander header would bring.
+            // Not Expander: the macOS theme and Fluent template one
+            // differently, which would put two different headers on the two
+            // rids a PR reviewer compares side by side.
+            var header = new Avalonia.Controls.Primitives.ToggleButton
+            {
+                Classes = { "settings-disclosure" },
+                Cursor = new Cursor(StandardCursorType.Hand),
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                // Left inset matches the rows' own 14, because in System
+                // Settings the group heading sits directly above the first
+                // row's label rather than out to the left of it.
+                Margin = new Thickness(14, 0, 0, 7),
+                Content = new StackPanel
                 {
-                    // "Theme" and "Windows" in System Settings are semibold and
-                    // full strength, not the dimmed 12pt caption this had. They
-                    // read as headings; a dimmed caption reads as a hint.
-                    //
-                    // This has to stay a real TextBlock in the logical tree,
-                    // carrying the heading verbatim. Three of the screenshot
-                    // scenarios locate their group by searching the window's
-                    // descendants for a TextBlock whose Text equals the
-                    // heading, and six of them fall back to a zero-bounds
-                    // anchor when the search fails — which yields a 1x1 PNG,
-                    // a green CI run and a PR comment showing a picture of
-                    // nothing. Folding the title into a Button's Content, or
-                    // into a templated header's own presenter, breaks that
-                    // search without breaking any test.
-                    new TextBlock
-                    {
-                        Text = title,
-                        FontSize = 13,
-                        FontWeight = FontWeight.SemiBold,
-                        Opacity = 0.9,
-                        // Left inset matches the rows' own 14, because in System
-                        // Settings the group heading sits directly above the first
-                        // row's label rather than out to the left of it.
-                        Margin = new Thickness(14, 0, 0, 7)
-                    },
-                    card
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 8,
+                    Children = { chevron, titleText }
                 }
             };
+
+            var section = new SettingsSection
+            {
+                Id = id,
+                Title = title,
+                Cards = new[] { card },
+                Children = { header, card }
+            };
+
+            header.Click += (_, _) =>
+            {
+                // Computed off section.IsOpen — our own state — rather than
+                // read back off header.IsChecked, which Avalonia has already
+                // flipped once by the time Click fires. Trusting that timing
+                // is exactly the kind of thing worth not trusting; this way
+                // the outcome does not depend on it.
+                //
+                // Written before the tree is touched, on purpose. The
+                // gateway TextBoxes commit on LostFocus, and both commits end
+                // in Rebuild() (OnGatewayHostChanged, OnGatewayTokenChanged).
+                // Folding a section that holds a focused control moves focus
+                // off it as soon as the tree changes, which fires that
+                // LostFocus before this handler returns — so if the setting
+                // were written second, the Rebuild() it triggers would read
+                // the old value and come back open while the setting already
+                // says closed.
+                var opening = !section.IsOpen;
+                ClaudeBuddySettings.SetSettingsSectionCollapsed(id, !opening);
+                section.IsOpen = opening;
+            };
+
+            section.WireDisclosure(header, chevronRotation, card);
+            section.RestoreOpenState();
 
             _sections[id] = section;
             return section;

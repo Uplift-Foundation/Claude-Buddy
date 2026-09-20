@@ -20,5 +20,39 @@
                 </ControlTemplate>
             </Setter>
         </Style>
+        <!-- The settings window's collapsible-section header (CB-166): a
+             ToggleButton stripped to a bare ContentPresenter, the same trick
+             as ToolTip above, so the section heading keeps focus, Tab,
+             Space/Enter, IsChecked and the automation peer without either
+             theme's own button chrome (fill, border, pressed state) showing
+             through. Deliberately not an Expander — the macOS theme and
+             Fluent template that control differently, which would draw two
+             different headers on the two rids a PR reviewer compares.
+
+             Unlike ToolTip above, this one has to be clicked, and that is
+             exactly where copying ToolTip's shape verbatim first went wrong:
+             the presenter has to consume the Background TemplateBinding, or
+             nothing paints a surface across the button's bounds and an
+             unpainted area is not hit-testable in Avalonia — a TextBlock's
+             rendered glyphs and a Path's drawn stroke are not surfaces of
+             their own either, so this isn't a dead zone around the label,
+             it's the whole header. Confirmed on a real, arranged window by
+             synthesizing a click over the middle of the heading text and
+             another in the gap between the chevron and the text: without
+             this binding *neither* point toggles the section, and with it
+             both do. -->
+        <Style Selector="ToggleButton.settings-disclosure">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <ContentPresenter Background="{TemplateBinding Background}"
+                                      Content="{TemplateBinding Content}"
+                                      ContentTemplate="{TemplateBinding ContentTemplate}"
+                                      HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"/>
+                </ControlTemplate>
+            </Setter>
+        </Style>
     </Application.Styles>
 </Application>
