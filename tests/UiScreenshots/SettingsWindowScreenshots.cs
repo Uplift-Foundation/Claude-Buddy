@@ -69,12 +69,21 @@ public class SettingsWindowScreenshots
         Assert.NotNull(anchor);
 
         // Up to the card that holds the whole group rather than the single
-        // row, so the new switch is in frame beneath it on macOS.
-        var card = anchor!.GetLogicalAncestors().OfType<Control>()
-            .FirstOrDefault(control => control.Bounds.Height > 60 && control.Bounds.Width > 200)
-            ?? (Control)anchor;
+        // row, so the new switch is in frame beneath it on macOS. Found by
+        // what it contains (a sibling TextBlock carrying the group's own
+        // heading), not by how big it is — see PeerLinkGroupShowsThe
+        // PairingControls' comment for why the bounds heuristic this used to
+        // be was abandoned: it picks a different control per platform, which
+        // makes the two rids look like a gate when there isn't one.
+        var group = anchor!.GetLogicalAncestors().OfType<Control>()
+            .FirstOrDefault(control => control.GetLogicalDescendants()
+                .OfType<TextBlock>()
+                .Any(block => block.Text == "Claude Desktop"));
 
-        ScreenshotHelper.CaptureControl(card, "settings-claude-desktop-group.png");
+        Assert.NotNull(group);
+        AssertWorthCapturing(group!);
+
+        ScreenshotHelper.CaptureControl(group!, "settings-claude-desktop-group.png");
     }
 
     // The speech group, so the mode picker CB-165 added is in frame.
@@ -115,11 +124,19 @@ public class SettingsWindowScreenshots
 
             Assert.NotNull(anchor);
 
-            var card = anchor!.GetLogicalAncestors().OfType<Control>()
-                .FirstOrDefault(control => control.Bounds.Height > 60 && control.Bounds.Width > 200)
-                ?? (Control)anchor;
+            // Found by what it contains, not by how big it is — same reason
+            // as the Claude Desktop group above. The group's own heading is
+            // "Voice", not "Speech"; the scenario name refers to the feature,
+            // the search has to use the string actually on screen.
+            var group = anchor!.GetLogicalAncestors().OfType<Control>()
+                .FirstOrDefault(control => control.GetLogicalDescendants()
+                    .OfType<TextBlock>()
+                    .Any(block => block.Text == "Voice"));
 
-            ScreenshotHelper.CaptureControl(card, "settings-speak-scope.png");
+            Assert.NotNull(group);
+            AssertWorthCapturing(group!);
+
+            ScreenshotHelper.CaptureControl(group!, "settings-speak-scope.png");
         }
         finally
         {
@@ -179,10 +196,12 @@ public class SettingsWindowScreenshots
                 .FirstOrDefault(control => control.GetLogicalDescendants()
                     .OfType<TextBlock>()
                     .Any(block => block.Text is not null
-                        && block.Text.StartsWith("No other machines yet")))
-                ?? (Control)anchor;
+                        && block.Text.StartsWith("No other machines yet")));
 
-            ScreenshotHelper.CaptureControl(card, "settings-peer-link-group.png");
+            Assert.NotNull(card);
+            AssertWorthCapturing(card!);
+
+            ScreenshotHelper.CaptureControl(card!, "settings-peer-link-group.png");
         }
         finally
         {
@@ -215,10 +234,12 @@ public class SettingsWindowScreenshots
         var group = anchor!.GetLogicalAncestors().OfType<Control>()
             .FirstOrDefault(control => control.GetLogicalDescendants()
                 .OfType<TextBlock>()
-                .Any(block => block.Text == "Codex"))
-            ?? (Control)anchor;
+                .Any(block => block.Text == "Codex"));
 
-        ScreenshotHelper.CaptureControl(group, "settings-codex-group.png");
+        Assert.NotNull(group);
+        AssertWorthCapturing(group!);
+
+        ScreenshotHelper.CaptureControl(group!, "settings-codex-group.png");
     }
 
     // The Grok Build group. Same reason the Claude Desktop group is captured
@@ -247,10 +268,12 @@ public class SettingsWindowScreenshots
         var group = anchor!.GetLogicalAncestors().OfType<Control>()
             .FirstOrDefault(control => control.GetLogicalDescendants()
                 .OfType<TextBlock>()
-                .Any(block => block.Text == "Grok Build"))
-            ?? (Control)anchor;
+                .Any(block => block.Text == "Grok Build"));
 
-        ScreenshotHelper.CaptureControl(group, "settings-grok-build-group.png");
+        Assert.NotNull(group);
+        AssertWorthCapturing(group!);
+
+        ScreenshotHelper.CaptureControl(group!, "settings-grok-build-group.png");
     }
 
     // CB-96's row, which only exists once Grok's usage orbs are already on —
@@ -281,11 +304,28 @@ public class SettingsWindowScreenshots
         var group = anchor!.GetLogicalAncestors().OfType<Control>()
             .FirstOrDefault(control => control.GetLogicalDescendants()
                 .OfType<TextBlock>()
-                .Any(block => block.Text == "Grok Build"))
-            ?? (Control)anchor;
+                .Any(block => block.Text == "Grok Build"));
 
-        ScreenshotHelper.CaptureControl(group, "settings-grok-auto-refresh.png");
+        Assert.NotNull(group);
+        AssertWorthCapturing(group!);
+
+        ScreenshotHelper.CaptureControl(group!, "settings-grok-auto-refresh.png");
 
         ClaudeBuddySettings.GrokAccountUsageEnabled = false;
+    }
+
+    // The bounds check used to be the search criterion for two of these
+    // scenarios (see the git history of ClaudeDesktopGroupShowsTheUrlRouting
+    // RowOnMacOs and SpeechGroupShowsTheSpeakScopePicker): "first ancestor
+    // over 60 by 200" silently picked a different control per platform, and
+    // a wrong pick still produced a real bitmap, so nothing failed. As an
+    // assertion after the control is already found by what it contains, the
+    // same measurement instead fails loudly on the one case it actually
+    // guards against — a group whose card collapsed to a sliver because the
+    // heading text moved and the search now lands one level too high or low.
+    private static void AssertWorthCapturing(Control control)
+    {
+        Assert.True(control.Bounds.Height > 60 && control.Bounds.Width > 200,
+            $"capture target measured {control.Bounds.Width}x{control.Bounds.Height}");
     }
 }
