@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace ClaudeBuddy
 {
     // Who a session is, whoever it happens to be talking to.
@@ -142,5 +144,101 @@ namespace ClaudeBuddy
                     : OpenClawAvatars.ForFile(LocalPersonas.AvatarKey(sessionId), localPersona.AvatarPath),
                 Gateway: false);
         }
+        // --- Whose voice reads a reply out loud ---------------------------------
+
+        // The same question as For() above, asked about speech instead of a
+        // face, and answered in the same one place for the same reason.
+        //
+        // It was not answered in one place until CB-165 came back. The orb's
+        // speak button asked LocalPersonas directly; the chat panel's asked
+        // PeerPersonas and OpenClawSessions and nothing else, so a *local*
+        // session — every ordinary Claude Code session, the common case —
+        // resolved to null there and spoke in the user's global voice however
+        // plainly its CLAUDE.md named one. Two buttons labelled the same thing,
+        // one honouring a persona and one ignoring it, is not a defect either
+        // button can be blamed for; it is the absence of this function.
+        internal enum VoiceSource
+        {
+            // A mirrored peer session: the persona travelled over the wire with
+            // it, so the sender's own voice is the right one.
+            Peer,
+
+            // A gateway agent, whose voice is in its workspace identity.
+            GatewayAgent,
+
+            // The user's own selection, deliberately. Three unrelated kinds land
+            // here and none of them is an oversight: a gateway *room* has no
+            // single agent to borrow a voice from (see AvatarForSession, which
+            // draws a composite for exactly the same reason), a cloud session
+            // has no persona registry on this disk at all (CB-164), and a
+            // session with no id is not a session yet.
+            Global,
+
+            // Everything else, which is a local Claude Code session and whose
+            // persona comes from the CLAUDE.md beside its work.
+            Local,
+        }
+
+        // Pure, and separate from the resolution below it, because this is the
+        // part that was wrong and the part a test can pin without a voice engine
+        // on the machine. A case per arm costs nothing; the arm that was missing
+        // cost this ticket a second trip through QA.
+        internal static VoiceSource VoiceSourceFor(string? sessionId)
+        {
+            if (string.IsNullOrEmpty(sessionId)) return VoiceSource.Global;
+            if (IsPeer(sessionId)) return VoiceSource.Peer;
+
+            // Agent or room, told apart by the key rather than by a second
+            // prefix constant: "agent:<id>:…" is what AgentIdOf reads, and a
+            // room key has no agent in that position.
+            if (IsGateway(sessionId))
+            {
+                return OpenClawSessions.AgentIdOf(sessionId) is null
+                    ? VoiceSource.Global
+                    : VoiceSource.GatewayAgent;
+            }
+
+            return IsCloud(sessionId) ? VoiceSource.Global : VoiceSource.Local;
+        }
+
+        // The voice a session speaks in, or null for "the user's own setting".
+        //
+        // Null rather than a resolved global voice, because every caller already
+        // has to handle a persona naming a voice this machine cannot build — see
+        // LocalPersonas.VoiceForSession, whose three ways of answering null all
+        // mean the same thing. Collapsing them here would make "no persona" and
+        // "a persona whose voice is missing" different, and they are not.
+        //
+        // The options list is injected for the reason both of the resolvers this
+        // replaces injected it: enumerating the real ones asks Kokoro to list
+        // itself and runs the user's own listing command, which is two process
+        // launches nobody wants in a test.
+        internal static TextToSpeech.VoiceOption? VoiceFor(
+            string? sessionId, IEnumerable<TextToSpeech.VoiceOption> options) =>
+            VoiceSourceFor(sessionId) switch
+            {
+                VoiceSource.Peer => PeerPersonas.VoiceForSession(sessionId, options),
+                VoiceSource.GatewayAgent => OpenClawSessions.VoiceForSession(sessionId!, options),
+                VoiceSource.Local => LocalPersonas.VoiceForSession(sessionId, options),
+                _ => null,
+            };
+
+        // Excluded from coverage: AllVoiceOptions is the two process launches
+        // above. The decision it feeds is the overload above, which is tested.
+        [ExcludeFromCodeCoverage]
+        internal static TextToSpeech.VoiceOption? VoiceFor(string? sessionId) =>
+            VoiceFor(sessionId, TextToSpeech.AllVoiceOptions());
+
+        // Same arms as VoiceFor, for the same reasons: a rate with no voice
+        // behind it has nothing to qualify, and only the neural engine has such
+        // a knob at all.
+        internal static double? RateFor(string? sessionId) =>
+            VoiceSourceFor(sessionId) switch
+            {
+                VoiceSource.Peer => PeerPersonas.RateForSession(sessionId),
+                VoiceSource.GatewayAgent => OpenClawSessions.RateForSession(sessionId!),
+                VoiceSource.Local => LocalPersonas.RateForSession(sessionId),
+                _ => null,
+            };
     }
 }

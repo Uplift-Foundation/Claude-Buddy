@@ -1185,7 +1185,7 @@ public class LocalPersonaUiTests : IDisposable
     {
         var options = new[] { Neural("af_bella"), Neural("bf_isabella") };
 
-        Assert.Null(OrbWindow.VoiceForLocalSpeech("local-none-" + Guid.NewGuid(), options));
+        Assert.Null(SessionIdentity.VoiceFor("local-none-" + Guid.NewGuid(), options));
     }
 
     // A persona that names no voice is the same answer by a different route —
@@ -1195,7 +1195,7 @@ public class LocalPersonaUiTests : IDisposable
     {
         var sessionId = PublishPersona(Persona());
 
-        Assert.Null(OrbWindow.VoiceForLocalSpeech(sessionId, new[] { Neural("af_bella") }));
+        Assert.Null(SessionIdentity.VoiceFor(sessionId, new[] { Neural("af_bella") }));
     }
 
     // A voice this machine does not have is also the global one. Deliberately
@@ -1207,7 +1207,7 @@ public class LocalPersonaUiTests : IDisposable
     {
         var sessionId = PublishPersona(Persona(voice: "Cadaverous Baritone"));
 
-        Assert.Null(OrbWindow.VoiceForLocalSpeech(sessionId, new[] { Neural("af_bella") }));
+        Assert.Null(SessionIdentity.VoiceFor(sessionId, new[] { Neural("af_bella") }));
     }
 
     // The match that matters, and the rate with it. Kokoro's names carry a
@@ -1221,7 +1221,7 @@ public class LocalPersonaUiTests : IDisposable
         var bella = Neural("af_bella");
         var sessionId = PublishPersona(Persona(voice: "af_bella", rate: 1.3));
 
-        Assert.Equal(bella, OrbWindow.VoiceForLocalSpeech(sessionId, new[] { bella }));
+        Assert.Equal(bella, SessionIdentity.VoiceFor(sessionId, new[] { bella }));
         Assert.Equal(1.3, LocalPersonas.RateForSession(sessionId));
     }
 
@@ -1240,7 +1240,7 @@ public class LocalPersonaUiTests : IDisposable
             new TextToSpeech.VoiceOption(TextToSpeech.SpeakEngine.System, "Daniel", "Daniel"),
         };
 
-        Assert.Null(OrbWindow.VoiceForLocalSpeech(sessionId, systemOnly));
+        Assert.Null(SessionIdentity.VoiceFor(sessionId, systemOnly));
 
         // The rate survives the voice not matching, and is simply never read —
         // the same shape OpenClawSessions.RateForSession has, and for the same
@@ -1280,7 +1280,7 @@ public class LocalPersonaUiTests : IDisposable
         var directory = VoicesDirectory(("af_sky", 1f), ("af_nicole", 3f));
         var sessionId = PublishPersona(Persona(voice: "50% sky and 50% nicole"));
 
-        var option = OrbWindow.VoiceForLocalSpeech(
+        var option = SessionIdentity.VoiceFor(
             sessionId, new[] { Neural("af_sky"), Neural("af_nicole"), Neural("af_bella") });
 
         Assert.NotNull(option);
@@ -1310,7 +1310,7 @@ public class LocalPersonaUiTests : IDisposable
             new TextToSpeech.VoiceOption(TextToSpeech.SpeakEngine.System, "Sky", "Sky"),
         };
 
-        Assert.Null(OrbWindow.VoiceForLocalSpeech(sessionId, systemOnly));
+        Assert.Null(SessionIdentity.VoiceFor(sessionId, systemOnly));
 
         // ...and nothing was built. A blend that cannot be spoken must not
         // leave a file behind for a later run to find and reuse.
@@ -1331,7 +1331,7 @@ public class LocalPersonaUiTests : IDisposable
         var directory = VoicesDirectory(("af_sky", 1f));
         var sessionId = PublishPersona(Persona(voice: "50% sky and 50% nicole"));
 
-        Assert.Null(OrbWindow.VoiceForLocalSpeech(
+        Assert.Null(SessionIdentity.VoiceFor(
             sessionId, new[] { Neural("af_sky"), Neural("af_bella") }));
 
         Assert.Empty(Directory.GetFiles(directory, "*blend*"));
@@ -1354,7 +1354,7 @@ public class LocalPersonaUiTests : IDisposable
 
         try
         {
-            var option = OrbWindow.VoiceForRemoteSpeech(
+            var option = SessionIdentity.VoiceFor(
                 sessionId, new[] { Neural("af_sky"), Neural("af_nicole") });
 
             Assert.Equal("af_blend_sky50-nicole50", option!.Name);
