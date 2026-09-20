@@ -181,11 +181,36 @@
                 HorizontalAlignment="Right" VerticalAlignment="Bottom"
                 Margin="0,0,4,4"
                 IsHitTestVisible="False">
-            <TextBlock x:Name="KindGlyph"
-                       FontSize="13"
-                       Foreground="#F2FFFFFF"
-                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                       IsHitTestVisible="False"/>
+            <!-- Two ways to wear a kind, and a kind picks one. Most of them
+                 are punctuation the user already reads as the thing (@ for a
+                 direct message, # for a channel), so a TextBlock is right and
+                 costs nothing. A cloud is not punctuation: U+2601 resolves
+                 through font fallback to whatever the OS has, which is
+                 Hiragino Sans on macOS and Segoe UI Emoji on Windows, and at
+                 13px neither draws anything a person reads as a cloud — the
+                 macOS one is a white lump and the Windows one is a lavender
+                 blob that overflows the disc and ignores Foreground entirely,
+                 because a colour-emoji glyph carries its own colour. So that
+                 one is drawn, the same way CliMark draws its four marks and
+                 for the same reason: a mark this small has to be designed at
+                 this size, not borrowed from a font at it. See KindMarkFor.
+
+                 Both live in a Panel because a Border takes one child and
+                 exactly one of the two is ever visible. -->
+            <Panel>
+                <TextBlock x:Name="KindGlyph"
+                           FontSize="13"
+                           Foreground="#F2FFFFFF"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           IsHitTestVisible="False"/>
+                <Path x:Name="KindMark"
+                      Width="13" Height="13"
+                      IsVisible="False"
+                      Stretch="Uniform"
+                      Fill="#F2FFFFFF"
+                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                      IsHitTestVisible="False"/>
+            </Panel>
         </Border>
 
         <!-- A beating heart, for a session the gateway's heartbeat drives.
