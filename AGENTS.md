@@ -197,6 +197,24 @@ Better still, **prefer un-stacking over remembering you're stacked**: while a br
 
 Messages here are prose, not changelog lines: a short summary in the imperative, then paragraphs explaining **why** the change is right and what was considered and rejected. Comments in the code follow the same habit — read a few (`OrbWindow.axaml.cs`, `SessionManager.cs`) before writing new ones, and match the density rather than stripping or padding it.
 
+## Install on all three machines before you kick off CI
+
+**Push the branch, install it on every machine, and *then* let CI run.** Not after CI goes green, and not only on the machine the work happened on. CI takes long enough that it is the natural window for a human to actually use the build — but only if the build is already sitting on their machines when that window opens. Install afterwards and the two waits happen back to back for no reason.
+
+The three machines, and all three matter for a different reason:
+
+| Machine | Where | Why it is not optional |
+| --- | --- | --- |
+| **This MacBook** — `Warrens-MacBook-Pro` | local | Where the work was written, so it is the one most likely to pass by accident. Install **signed** (see below) or click-to-focus breaks silently. |
+| **Mac Mini** — `mini` / `macmini`, `192.168.0.127` | LAN, `~/.ssh/config` | The headless, unattended case. It runs Buddy under launchd with no one looking at it, which is where a change that depends on a window server session, a focused app or an answered prompt shows itself. |
+| **Windows PC** — `windows`, `192.168.1.24` | LAN, `~/.ssh/config` | The only real Windows install. CI's `windows-latest` leg proves the suites pass; it proves nothing about the installer, the Fluent theme's own control templates, or how anything looks. |
+
+That Windows box is also the ComfyUI host, so `curl http://192.168.1.24:8000/system_stats` is a quick liveness check for it.
+
+**A green CI leg is not an install.** `windows-latest` runs tests against a checkout; it never runs `tools/ClaudeBuddy.iss`, never puts an icon in a tray, and never shows anybody a window. The parity rule above — a feature no install path wires up is unfinished — is about exactly the gap between those two things, and the only way to close it is to install the thing.
+
+**Say which machines you actually installed on, and which you did not.** Same rule as everywhere else here: "installed on all three" when one of them was asleep is worse than "installed on the MacBook and the mini, Windows box was off". If a machine is unreachable, say so and carry on rather than silently dropping it.
+
 ## Build and run
 
 ```bash
