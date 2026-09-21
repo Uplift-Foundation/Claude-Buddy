@@ -32,6 +32,75 @@ public class SettingsWindowScreenshots
         ScreenshotHelper.Capture(window, "settings-window-constructs-headless.png");
     }
 
+    // One section folded above several open ones, driven through the model
+    // (Sections["orbs"].IsOpen) rather than a click — there's no gesture
+    // being tested here, only the resting look of a mixed page, and going
+    // through IsOpen is what the collapse half's own tests already do for
+    // the same reason.
+    //
+    // This is also where the header-hand-roll-vs-Expander argument in the
+    // ticket's plan gets settled empirically rather than argued: a
+    // hand-rolled ToggleButton header is identical logic on both platforms,
+    // where Expander is templated separately by Devolutions on macOS and by
+    // Fluent on Windows. Both rids should show the same chevron and the same
+    // header chrome here, modulo system font — a divergence in this capture
+    // is the parity regression the hand-roll was chosen to avoid.
+    [AvaloniaFact]
+    public void OneSectionFoldedAboveSeveralOpenOnes()
+    {
+        var ctor = typeof(SettingsWindow).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            types: Type.EmptyTypes)
+            ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+        var window = (SettingsWindow)ctor.Invoke(null);
+
+        window.Sections["orbs"].IsOpen = false;
+
+        ScreenshotHelper.Capture(window, "settings-sections-collapsed.png");
+    }
+
+    // The filter box holding a live query, so a reviewer can see the
+    // search-narrowed page rather than infer it from SettingsFilterTests'
+    // plain facts. "voice" rather than a broader term because it matches
+    // exactly one section by title (SettingsFilter's own rule: a title match
+    // shows the section entire), so the capture is a short, predictable page
+    // rather than however much of the window still matches "code" or "the".
+    //
+    // Note for whoever reads this next to settings-window-constructs-
+    // headless.png: that capture changed shape once the filter box landed —
+    // it now carries a search bar docked above the scroller that didn't
+    // exist before. Expected churn from this ticket, not a regression.
+    [AvaloniaFact]
+    public void FilterNarrowsToTheMatchingSection()
+    {
+        var ctor = typeof(SettingsWindow).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            types: Type.EmptyTypes)
+            ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+        var window = (SettingsWindow)ctor.Invoke(null);
+
+        // Shown and flushed unfiltered first, so every section gets one real
+        // layout pass while still visible — setting the filter on an
+        // unshown window applies IsVisible=false to the non-matching
+        // sections before they have ever been arranged, and a hidden
+        // section's descendants that were never laid out at all can hand
+        // back stale or degenerate bounds that land, coincidentally, inside
+        // the frame the filtered page renders to.
+        window.Show();
+        ScreenshotHelper.Flush();
+
+        var filterBox = window.GetLogicalDescendants()
+            .OfType<TextBox>()
+            .Single(box => box.Watermark == "Search settings");
+
+        filterBox.Text = "voice";
+        ScreenshotHelper.Flush();
+
+        ScreenshotHelper.CaptureAlreadyShown(window, "settings-filter-active.png");
+    }
+
     // The Claude Desktop group, which CB-4 added a row to: the switch that
     // decides whether Claude Buddy claims Claude Desktop's URL schemes.
     //
