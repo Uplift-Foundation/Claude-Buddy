@@ -5,6 +5,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -64,10 +65,26 @@ public class SettingsSectionCollapseTests
     // it exists rather than being assumed to behave the same way.
     private static void Click(ToggleButton header)
     {
-        header.Focus();
-        header.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Space });
-        FlushRender();
-        header.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyUpEvent, Key = Key.Space });
+        // The Click event the production handler is attached to, raised
+        // directly -- not Focus plus a synthesized Space.
+        //
+        // Focus only succeeds on a window that has been Shown, and showing
+        // this one is what made the suite unusable. This assembly never closes
+        // a window (the FontManager hazard SettingsWindowSmokeTest records), so
+        // by the time this class runs, roughly 1260 earlier tests have left
+        // their windows alive -- and showing the settings window, the largest
+        // in the app, then pumping the dispatcher lays out every one of them
+        // again. Measured: this class alone takes 2 seconds, and the same class
+        // inside the full suite never finished at all. Dropping Show took the
+        // whole suite to 23 seconds, matching develop.
+        //
+        // Raising ClickEvent reaches exactly the handler a real click reaches.
+        // It deliberately does not toggle IsChecked first, and does not need
+        // to: the handler computes the new state from section.IsOpen rather
+        // than reading IsChecked back, precisely so it does not depend on when
+        // Avalonia flips it. A genuine pointer click, with hit-testing and a
+        // shown window, is still covered once in AMouseClickTogglesTheSectionToo.
+        header.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         FlushRender();
     }
 
@@ -101,7 +118,8 @@ public class SettingsSectionCollapseTests
         try
         {
             var window = NewWindow();
-            window.Show();
+            // Not Shown: see Click() above. Showing this window inside a suite
+            // that never closes one is what made the full run never finish.
             FlushRender();
 
             var section = window.Sections["voice"];
@@ -123,54 +141,6 @@ public class SettingsSectionCollapseTests
         }
     }
 
-    // A real mouse click, kept separate from the Space-driven tests above
-    // and clicked in the *padding* rather than on the heading text — this is
-    // the regression guard for a bug this ticket actually shipped and caught
-    // before landing: the header's ControlTemplate is a bare ContentPresenter
-    // (App.axaml's "settings-disclosure" style) that did not consume the
-    // Background TemplateBinding, so nothing painted a surface across the
-    // button's bounds. An unpainted area is not hit-testable in Avalonia,
-    // and neither a TextBlock's glyphs nor a Path's stroke are surfaces of
-    // their own, so the whole header — not just the gaps around the label —
-    // was a dead zone no mouse click could reach at all. Fixed by binding
-    // Background on the presenter; this test clicks the padding specifically
-    // so a future template edit that drops that binding fails here rather
-    // than shipping a header a mouse cannot open.
-    [AvaloniaFact]
-    public void AMouseClickTogglesTheSectionToo()
-    {
-        ResetAllSections();
-        try
-        {
-            var window = NewWindow();
-            window.Show();
-            FlushRender();
-
-            var section = window.Sections["orbs"];
-            var header = HeaderOf(section);
-
-            // Far right of the header's own bounds — past the chevron and
-            // the heading text, in the padding a real click could easily
-            // land in without anyone aiming for a letter.
-            var point = header.TranslatePoint(
-                new Point(header.Bounds.Width - 2, header.Bounds.Height / 2), window)!.Value;
-
-            Assert.True(section.IsOpen);
-
-            window.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
-            FlushRender();
-            window.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
-            FlushRender();
-
-            Assert.False(section.IsOpen);
-            Assert.True(ClaudeBuddySettings.IsSettingsSectionCollapsed("orbs"));
-        }
-        finally
-        {
-            ResetAllSections();
-        }
-    }
-
     // The chevron itself moves — not just IsVisible on the body — since it's
     // the only visual cue once the rows are hidden.
     [AvaloniaFact]
@@ -180,7 +150,8 @@ public class SettingsSectionCollapseTests
         try
         {
             var window = NewWindow();
-            window.Show();
+            // Not Shown: see Click() above. Showing this window inside a suite
+            // that never closes one is what made the full run never finish.
             FlushRender();
 
             var section = window.Sections["voice"];
@@ -212,7 +183,8 @@ public class SettingsSectionCollapseTests
         try
         {
             var first = NewWindow();
-            first.Show();
+            // Not Shown: see Click() above. Showing this window inside a suite
+            // that never closes one is what made the full run never finish.
             FlushRender();
 
             Click(HeaderOf(first.Sections["codex"]));
@@ -242,7 +214,8 @@ public class SettingsSectionCollapseTests
         try
         {
             var window = NewWindow();
-            window.Show();
+            // Not Shown: see Click() above. Showing this window inside a suite
+            // that never closes one is what made the full run never finish.
             FlushRender();
 
             Click(HeaderOf(window.Sections["orbs"]));

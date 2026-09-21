@@ -2,6 +2,7 @@ using System.Reflection;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
+using Avalonia.Threading;
 using Xunit;
 
 namespace ClaudeBuddy.Tests;
@@ -34,6 +35,11 @@ public class SettingsWindowFilterTests
     private static void SetFilter(SettingsWindow window, string query)
     {
         FilterBox(window).Text = query;
+
+        // TextChanged is what runs ApplyFilter, and it is raised onto the
+        // dispatcher rather than invoked inline -- so without this the
+        // assertions below read the page as it was before the query.
+        Dispatcher.UIThread.RunJobs();
     }
 
     [AvaloniaFact]

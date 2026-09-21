@@ -1,6 +1,10 @@
+using Avalonia;
 using System.Linq;
 using System.Reflection;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
@@ -364,5 +368,72 @@ public class SettingsWindowScreenshots
 
         Assert.True(containsHeading,
             $"capture target does not contain a heading reading \"{headingText}\"");
+    }
+
+    // A real mouse click on a section header, in the *padding* rather than on
+    // the heading text.
+    //
+    // This is the regression guard for a bug CB-166 introduced and caught
+    // before landing: the header's ControlTemplate is a bare ContentPresenter
+    // (App.axaml's "settings-disclosure" style) which did not consume the
+    // Background TemplateBinding, so nothing painted a surface across the
+    // button's bounds. An unpainted area is not hit-testable in Avalonia, and
+    // neither a TextBlock's glyphs nor a Path's stroke are surfaces of their
+    // own, so the whole header was a dead zone no mouse click could reach.
+    // GetVisualsAt at the header's own centre returned no ToggleButton at all,
+    // while keyboard activation on the focused header worked -- which is what
+    // localised it to the template rather than the handler.
+    //
+    // It lives here, and not beside the rest of the collapse tests in
+    // tests/UiTests, because it is the one case that genuinely needs a shown,
+    // laid-out window: hit-testing has no meaning without one. Showing this
+    // window in tests/UiTests is exactly what could not be done -- that
+    // assembly never closes a window, so by the time the collapse tests run
+    // some 1260 earlier tests have left theirs alive, and showing the largest
+    // window in the app then pumping the dispatcher re-lays-out every one of
+    // them. Measured: with the Show the suite never finished; without it, 23
+    // seconds. This suite shows windows as a matter of course and is unaffected.
+    [AvaloniaFact]
+    public void AMouseClickOnTheHeaderPaddingTogglesTheSection()
+    {
+        var was = ClaudeBuddySettings.IsSettingsSectionCollapsed("orbs");
+        try
+        {
+            ClaudeBuddySettings.SetSettingsSectionCollapsed("orbs", false);
+
+            var ctor = typeof(SettingsWindow).GetConstructor(
+                BindingFlags.NonPublic | BindingFlags.Instance, types: Type.EmptyTypes)
+                ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+            var window = (SettingsWindow)ctor.Invoke(null);
+
+            window.Show();
+            ScreenshotHelper.Flush();
+
+            var section = window.Sections["orbs"];
+            var header = section.GetLogicalDescendants()
+                .OfType<Avalonia.Controls.Primitives.ToggleButton>()
+                .Single(tb => tb.Classes.Contains("settings-disclosure"));
+
+            // Far right of the header's own bounds -- past the chevron and the
+            // heading text, in padding a real click could easily land in
+            // without anyone aiming for a letter.
+            var point = header.TranslatePoint(
+                new Point(header.Bounds.Width - 2, header.Bounds.Height / 2), window)!.Value;
+
+            Assert.True(section.IsOpen);
+
+            window.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+            ScreenshotHelper.Flush();
+            window.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+            ScreenshotHelper.Flush();
+
+            Assert.False(section.IsOpen);
+            Assert.True(ClaudeBuddySettings.IsSettingsSectionCollapsed("orbs"));
+        }
+        finally
+        {
+            ClaudeBuddySettings.SetSettingsSectionCollapsed("orbs", was);
+        }
     }
 }
