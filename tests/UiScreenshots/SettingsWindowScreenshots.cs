@@ -1,6 +1,10 @@
+using Avalonia;
 using System.Linq;
 using System.Reflection;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Xunit;
@@ -32,6 +36,75 @@ public class SettingsWindowScreenshots
         ScreenshotHelper.Capture(window, "settings-window-constructs-headless.png");
     }
 
+    // One section folded above several open ones, driven through the model
+    // (Sections["orbs"].IsOpen) rather than a click — there's no gesture
+    // being tested here, only the resting look of a mixed page, and going
+    // through IsOpen is what the collapse half's own tests already do for
+    // the same reason.
+    //
+    // This is also where the header-hand-roll-vs-Expander argument in the
+    // ticket's plan gets settled empirically rather than argued: a
+    // hand-rolled ToggleButton header is identical logic on both platforms,
+    // where Expander is templated separately by Devolutions on macOS and by
+    // Fluent on Windows. Both rids should show the same chevron and the same
+    // header chrome here, modulo system font — a divergence in this capture
+    // is the parity regression the hand-roll was chosen to avoid.
+    [AvaloniaFact]
+    public void OneSectionFoldedAboveSeveralOpenOnes()
+    {
+        var ctor = typeof(SettingsWindow).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            types: Type.EmptyTypes)
+            ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+        var window = (SettingsWindow)ctor.Invoke(null);
+
+        window.Sections["orbs"].IsOpen = false;
+
+        ScreenshotHelper.Capture(window, "settings-sections-collapsed.png");
+    }
+
+    // The filter box holding a live query, so a reviewer can see the
+    // search-narrowed page rather than infer it from SettingsFilterTests'
+    // plain facts. "voice" rather than a broader term because it matches
+    // exactly one section by title (SettingsFilter's own rule: a title match
+    // shows the section entire), so the capture is a short, predictable page
+    // rather than however much of the window still matches "code" or "the".
+    //
+    // Note for whoever reads this next to settings-window-constructs-
+    // headless.png: that capture changed shape once the filter box landed —
+    // it now carries a search bar docked above the scroller that didn't
+    // exist before. Expected churn from this ticket, not a regression.
+    [AvaloniaFact]
+    public void FilterNarrowsToTheMatchingSection()
+    {
+        var ctor = typeof(SettingsWindow).GetConstructor(
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            types: Type.EmptyTypes)
+            ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+        var window = (SettingsWindow)ctor.Invoke(null);
+
+        // Shown and flushed unfiltered first, so every section gets one real
+        // layout pass while still visible — setting the filter on an
+        // unshown window applies IsVisible=false to the non-matching
+        // sections before they have ever been arranged, and a hidden
+        // section's descendants that were never laid out at all can hand
+        // back stale or degenerate bounds that land, coincidentally, inside
+        // the frame the filtered page renders to.
+        window.Show();
+        ScreenshotHelper.Flush();
+
+        var filterBox = window.GetLogicalDescendants()
+            .OfType<TextBox>()
+            .Single(box => box.Watermark == "Search settings");
+
+        filterBox.Text = "voice";
+        ScreenshotHelper.Flush();
+
+        ScreenshotHelper.CaptureAlreadyShown(window, "settings-filter-active.png");
+    }
+
     // The Claude Desktop group, which CB-4 added a row to: the switch that
     // decides whether Claude Buddy claims Claude Desktop's URL schemes.
     //
@@ -61,20 +134,13 @@ public class SettingsWindowScreenshots
         ScreenshotHelper.Flush();
 
         // Anchor on the row that exists on both platforms, so the capture is
-        // taken from the same place whichever runner it is on.
-        var anchor = window.GetLogicalDescendants()
-            .OfType<TextBlock>()
-            .FirstOrDefault(block => block.Text == "Tint the active window");
-
-        Assert.NotNull(anchor);
-
-        // Up to the card that holds the whole group rather than the single
-        // row, so the new switch is in frame beneath it on macOS.
-        var card = anchor!.GetLogicalAncestors().OfType<Control>()
-            .FirstOrDefault(control => control.Bounds.Height > 60 && control.Bounds.Width > 200)
-            ?? (Control)anchor;
-
-        ScreenshotHelper.CaptureControl(card, "settings-claude-desktop-group.png");
+        // taken from the same place whichever runner it is on. Climb from
+        // there to the group carrying the "Claude Desktop" heading rather
+        // than trusting how big the ancestor measures — a 480x151 capture of
+        // this same group, missing the heading and the footer note, once
+        // passed a bounds-only search on develop without failing anything.
+        CaptureGroup(window, "Tint the active window", "Claude Desktop",
+            "settings-claude-desktop-group.png");
     }
 
     // The speech group, so the mode picker CB-165 added is in frame.
@@ -109,17 +175,16 @@ public class SettingsWindowScreenshots
             window.Show();
             ScreenshotHelper.Flush();
 
-            var anchor = window.GetLogicalDescendants()
-                .OfType<TextBlock>()
-                .FirstOrDefault(block => block.Text == "Speaks");
-
-            Assert.NotNull(anchor);
-
-            var card = anchor!.GetLogicalAncestors().OfType<Control>()
-                .FirstOrDefault(control => control.Bounds.Height > 60 && control.Bounds.Width > 200)
-                ?? (Control)anchor;
-
-            ScreenshotHelper.CaptureControl(card, "settings-speak-scope.png");
+            // The group's own heading is "Voice", not "Speech" — the
+            // scenario name refers to the feature, the search has to use the
+            // string actually on screen. This is the scenario that shipped
+            // the worst of the two silent crops on develop: 452x96 instead
+            // of the full 480x441, missing the heading and three of the four
+            // rows this comment claims to capture, and still comfortably
+            // past a 60x200 bounds floor. Only reading the pixels found it,
+            // which is why the group is now also asserted to contain its own
+            // heading rather than merely measured.
+            CaptureGroup(window, "Speaks", "Voice", "settings-speak-scope.png");
         }
         finally
         {
@@ -155,34 +220,15 @@ public class SettingsWindowScreenshots
             window.Show();
             ScreenshotHelper.Flush();
 
-            var anchor = window.GetLogicalDescendants()
-                .OfType<TextBlock>()
-                .FirstOrDefault(block =>
-                    block.Text == "Let another machine pair with this one");
-
-            Assert.NotNull(anchor);
-
-            // **Found by what it contains, not by how big it is.** The
-            // measure-based search the other two scenarios use — first ancestor
-            // over 60 by 200 — is a guess about layout, and the guess lands on a
-            // different control per platform: the first capture of this card
-            // came back as the whole card on macOS and as one row on Windows,
-            // which makes the two rids look like a platform gate when there
-            // isn't one. Since the whole reason this scenario exists is to let a
-            // reviewer compare the two, an anchor that picks differently on each
-            // defeats it entirely.
-            //
-            // The card is by construction the nearest ancestor holding both the
-            // first row and the last, so ask for that instead. It is the same
-            // control on any platform and at any font size.
-            var card = anchor!.GetLogicalAncestors().OfType<Control>()
-                .FirstOrDefault(control => control.GetLogicalDescendants()
-                    .OfType<TextBlock>()
-                    .Any(block => block.Text is not null
-                        && block.Text.StartsWith("No other machines yet")))
-                ?? (Control)anchor;
-
-            ScreenshotHelper.CaptureControl(card, "settings-peer-link-group.png");
+            // Used to be found by searching for "No other machines yet"
+            // rather than the group's own heading, because a bounds-based
+            // search — first ancestor over 60 by 200 — landed on the whole
+            // card on macOS and on one row on Windows, making the two rids
+            // look like a platform gate when there isn't one. The heading
+            // search below is immune to that: "Other machines" sits at the
+            // top of the same SettingsSection on both platforms.
+            CaptureGroup(window, "Let another machine pair with this one",
+                "Other machines", "settings-peer-link-group.png");
         }
         finally
         {
@@ -206,19 +252,7 @@ public class SettingsWindowScreenshots
         window.Show();
         ScreenshotHelper.Flush();
 
-        var anchor = window.GetLogicalDescendants()
-            .OfType<TextBlock>()
-            .FirstOrDefault(block => block.Text == "Show Codex sessions");
-
-        Assert.NotNull(anchor);
-
-        var group = anchor!.GetLogicalAncestors().OfType<Control>()
-            .FirstOrDefault(control => control.GetLogicalDescendants()
-                .OfType<TextBlock>()
-                .Any(block => block.Text == "Codex"))
-            ?? (Control)anchor;
-
-        ScreenshotHelper.CaptureControl(group, "settings-codex-group.png");
+        CaptureGroup(window, "Show Codex sessions", "Codex", "settings-codex-group.png");
     }
 
     // The Grok Build group. Same reason the Claude Desktop group is captured
@@ -238,19 +272,8 @@ public class SettingsWindowScreenshots
         window.Show();
         ScreenshotHelper.Flush();
 
-        var anchor = window.GetLogicalDescendants()
-            .OfType<TextBlock>()
-            .FirstOrDefault(block => block.Text == "Show Grok Build sessions");
-
-        Assert.NotNull(anchor);
-
-        var group = anchor!.GetLogicalAncestors().OfType<Control>()
-            .FirstOrDefault(control => control.GetLogicalDescendants()
-                .OfType<TextBlock>()
-                .Any(block => block.Text == "Grok Build"))
-            ?? (Control)anchor;
-
-        ScreenshotHelper.CaptureControl(group, "settings-grok-build-group.png");
+        CaptureGroup(window, "Show Grok Build sessions", "Grok Build",
+            "settings-grok-build-group.png");
     }
 
     // CB-96's row, which only exists once Grok's usage orbs are already on —
@@ -272,20 +295,145 @@ public class SettingsWindowScreenshots
         window.Show();
         ScreenshotHelper.Flush();
 
+        CaptureGroup(window, "Keep Grok usage fresh automatically", "Grok Build",
+            "settings-grok-auto-refresh.png");
+
+        ClaudeBuddySettings.GrokAccountUsageEnabled = false;
+    }
+
+    // The one ancestor-climb every control-scoped scenario above shares,
+    // pulled out because that is exactly where the copies used to drift:
+    // two of them climbed by measuring the ancestor (first one over 60 by
+    // 200), four climbed by content, and nobody noticed the two measuring
+    // ancestors were silently wrong until the baseline comparison below
+    // caught it. One helper means there is only one place left to drift.
+    //
+    // Finds the row named by `anchorText`, climbs to the nearest ancestor
+    // whose descendants include a TextBlock reading `headingText`, and
+    // asserts three separate things before capturing rather than one:
+    // that a group was found at all, that it measures large enough to be
+    // worth a screenshot, and — the assertion that actually has teeth —
+    // that the control being captured still contains the heading it was
+    // found by. That last check looks redundant against the search
+    // predicate immediately above it, and today it is: but it is a
+    // separate, independent statement that survives a future edit to the
+    // search (back to a bounds guess, say) in a way a check folded into
+    // the predicate would not. `settings-speak-scope.png` was 452x96 on
+    // develop — comfortably past 60x200 in both dimensions, showing only
+    // one row of five with no heading in frame at all — which is exactly
+    // the shape of defect no size check catches and this one does.
+    private static void CaptureGroup(
+        Avalonia.Controls.Window window, string anchorText, string headingText, string fileName)
+    {
         var anchor = window.GetLogicalDescendants()
             .OfType<TextBlock>()
-            .FirstOrDefault(block => block.Text == "Keep Grok usage fresh automatically");
+            .FirstOrDefault(block => block.Text == anchorText);
 
         Assert.NotNull(anchor);
 
         var group = anchor!.GetLogicalAncestors().OfType<Control>()
             .FirstOrDefault(control => control.GetLogicalDescendants()
                 .OfType<TextBlock>()
-                .Any(block => block.Text == "Grok Build"))
-            ?? (Control)anchor;
+                .Any(block => block.Text == headingText));
 
-        ScreenshotHelper.CaptureControl(group, "settings-grok-auto-refresh.png");
+        Assert.NotNull(group);
+        AssertWorthCapturing(group!);
+        AssertContainsHeading(group!, headingText);
 
-        ClaudeBuddySettings.GrokAccountUsageEnabled = false;
+        ScreenshotHelper.CaptureControl(group!, fileName);
+    }
+
+    // A 1x1 and a "plausible but cropped" are different failures, so this
+    // stays alongside AssertContainsHeading rather than being replaced by
+    // it — a control could pass the heading check and still have collapsed
+    // to a sliver if the heading itself sits in a thin strip above content
+    // that failed to lay out.
+    private static void AssertWorthCapturing(Control control)
+    {
+        Assert.True(control.Bounds.Height > 60 && control.Bounds.Width > 200,
+            $"capture target measured {control.Bounds.Width}x{control.Bounds.Height}");
+    }
+
+    // The structural check: a control can measure comfortably past
+    // AssertWorthCapturing's floor and still be the wrong control, missing
+    // the very heading a reviewer expects the capture to show — that is
+    // what settings-claude-desktop-group.png (480x151, heading and footer
+    // both cropped) and settings-speak-scope.png (452x96, four of five
+    // rows missing) both did on develop, silently, through a green suite.
+    private static void AssertContainsHeading(Control control, string headingText)
+    {
+        var containsHeading = control.GetLogicalDescendants()
+            .OfType<TextBlock>()
+            .Any(block => block.Text == headingText);
+
+        Assert.True(containsHeading,
+            $"capture target does not contain a heading reading \"{headingText}\"");
+    }
+
+    // A real mouse click on a section header, in the *padding* rather than on
+    // the heading text.
+    //
+    // This is the regression guard for a bug CB-166 introduced and caught
+    // before landing: the header's ControlTemplate is a bare ContentPresenter
+    // (App.axaml's "settings-disclosure" style) which did not consume the
+    // Background TemplateBinding, so nothing painted a surface across the
+    // button's bounds. An unpainted area is not hit-testable in Avalonia, and
+    // neither a TextBlock's glyphs nor a Path's stroke are surfaces of their
+    // own, so the whole header was a dead zone no mouse click could reach.
+    // GetVisualsAt at the header's own centre returned no ToggleButton at all,
+    // while keyboard activation on the focused header worked -- which is what
+    // localised it to the template rather than the handler.
+    //
+    // It lives here, and not beside the rest of the collapse tests in
+    // tests/UiTests, because it is the one case that genuinely needs a shown,
+    // laid-out window: hit-testing has no meaning without one. Showing this
+    // window in tests/UiTests is exactly what could not be done -- that
+    // assembly never closes a window, so by the time the collapse tests run
+    // some 1260 earlier tests have left theirs alive, and showing the largest
+    // window in the app then pumping the dispatcher re-lays-out every one of
+    // them. Measured: with the Show the suite never finished; without it, 23
+    // seconds. This suite shows windows as a matter of course and is unaffected.
+    [AvaloniaFact]
+    public void AMouseClickOnTheHeaderPaddingTogglesTheSection()
+    {
+        var was = ClaudeBuddySettings.IsSettingsSectionCollapsed("orbs");
+        try
+        {
+            ClaudeBuddySettings.SetSettingsSectionCollapsed("orbs", false);
+
+            var ctor = typeof(SettingsWindow).GetConstructor(
+                BindingFlags.NonPublic | BindingFlags.Instance, types: Type.EmptyTypes)
+                ?? throw new MissingMethodException("SettingsWindow", ".ctor()");
+
+            var window = (SettingsWindow)ctor.Invoke(null);
+
+            window.Show();
+            ScreenshotHelper.Flush();
+
+            var section = window.Sections["orbs"];
+            var header = section.GetLogicalDescendants()
+                .OfType<Avalonia.Controls.Primitives.ToggleButton>()
+                .Single(tb => tb.Classes.Contains("settings-disclosure"));
+
+            // Far right of the header's own bounds -- past the chevron and the
+            // heading text, in padding a real click could easily land in
+            // without anyone aiming for a letter.
+            var point = header.TranslatePoint(
+                new Point(header.Bounds.Width - 2, header.Bounds.Height / 2), window)!.Value;
+
+            Assert.True(section.IsOpen);
+
+            window.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+            ScreenshotHelper.Flush();
+            window.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+            ScreenshotHelper.Flush();
+
+            Assert.False(section.IsOpen);
+            Assert.True(ClaudeBuddySettings.IsSettingsSectionCollapsed("orbs"));
+        }
+        finally
+        {
+            ClaudeBuddySettings.SetSettingsSectionCollapsed("orbs", was);
+        }
     }
 }

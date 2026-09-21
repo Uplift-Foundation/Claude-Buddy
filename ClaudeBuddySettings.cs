@@ -82,6 +82,7 @@ namespace ClaudeBuddy
             "speakVoicesCommand", "speakVoicesCommandArgs", "speakCommandVoice", "speakEngine",
             "speakScope",
             "orbColors", "claudeCodeProfileDirs", "codexHomes", "grokHomes", "profiles", "orbPositions",
+            "collapsedSettingsSections",
             "chatPanelSizes", "pinnedChatPanels", "arrangeAnchor", "chatTextScale",
             "openclawEnabled", "openclawHost", "openclawPort", "openclawFingerprint",
             "openclawReplyEnabled", "openclawActiveWithinMinutes",
@@ -600,6 +601,13 @@ namespace ClaudeBuddy
             // means in practice: a repair/reinstall re-reads whatever's saved
             // here rather than needing its own separate wizard UI for it.
             public List<string> ClaudeCodeProfileDirs { get; init; } = new();
+
+            // Section ids the user has folded shut, keyed the same way Group()
+            // keys _sections in SettingsWindow — a stable id, not the heading
+            // text, so renaming a section's prose can't reset its fold state.
+            // Absent or empty means every section is open, which is also the
+            // default a fresh install has nothing to migrate away from.
+            public List<string> CollapsedSettingsSections { get; init; } = new();
 
             // The Codex analogue: directory names under $HOME that a second
             // account is run out of via CODEX_HOME. Separate from the list
@@ -1314,6 +1322,50 @@ namespace ClaudeBuddy
             Save();
         }
 
+        // ---- settings-window section fold state -------------------------------
+
+        // View state that persists: whether a section id is currently folded.
+        // Called from the disclosure header's click handler only — never from
+        // SettingsSection.IsOpen's setter, which is the one contract CB-166's
+        // two halves share. See the comment on IsOpen in SettingsWindow.cs for
+        // why: the filter force-expands a folded section to show a match, and
+        // if that setter wrote here too, the first search would silently
+        // persist all thirteen sections as open.
+        public static bool IsSettingsSectionCollapsed(string id)
+        {
+            Load();
+            lock (Gate) return _model.CollapsedSettingsSections.Contains(id, StringComparer.Ordinal);
+        }
+
+        public static void SetSettingsSectionCollapsed(string id, bool collapsed)
+        {
+            Load();
+            bool changed;
+            lock (Gate)
+            {
+                var already = _model.CollapsedSettingsSections.Contains(id, StringComparer.Ordinal);
+                if (collapsed && !already)
+                {
+                    _model.CollapsedSettingsSections.Add(id);
+                    changed = true;
+                }
+                else if (!collapsed && already)
+                {
+                    _model.CollapsedSettingsSections.Remove(id);
+                    changed = true;
+                }
+                else
+                {
+                    // Already in the state being asked for — a triangle emits one
+                    // event per click, and rebuilding the page (via a Rebuild()
+                    // triggered elsewhere) must never cost a disk write on its own.
+                    changed = false;
+                }
+            }
+
+            if (changed) Save();
+        }
+
         public static IReadOnlyList<string> CodexHomes
         {
             get { Load(); lock (Gate) return _model.CodexHomes.ToList(); }
@@ -1563,6 +1615,26 @@ namespace ClaudeBuddy
                             if (node?.GetValue<string>() is { Length: > 0 } dirName)
                             {
                                 model.ClaudeCodeProfileDirs.Add(dirName);
+                            }
+                        }
+                    }
+
+                    if (root["collapsedSettingsSections"] is JsonArray collapsedSections)
+                    {
+                        foreach (var node in collapsedSections)
+                        {
+                            // Per entry, not per array: a hand-edited settings.json
+                            // with one garbage id — a number, an object — must cost
+                            // only that id, not the other twelve, or the catch below
+                            // turns one bad line into a full reset of everything
+                            // this file holds. JsonValue.TryGetValue returns false
+                            // instead of throwing for a non-string scalar, and a
+                            // JsonObject/JsonArray entry never matches the pattern
+                            // at all, so nothing here needs its own try/catch.
+                            if (node is JsonValue value && value.TryGetValue<string>(out var id) &&
+                                id.Length > 0)
+                            {
+                                model.CollapsedSettingsSections.Add(id);
                             }
                         }
                     }
@@ -1868,6 +1940,9 @@ namespace ClaudeBuddy
                     var profileDirs = new JsonArray();
                     foreach (var dirName in _model.ClaudeCodeProfileDirs) profileDirs.Add(dirName);
 
+                    var collapsedSections = new JsonArray();
+                    foreach (var id in _model.CollapsedSettingsSections) collapsedSections.Add(id);
+
                     var codexHomeDirs = new JsonArray();
                     foreach (var dirName in _model.CodexHomes) codexHomeDirs.Add(dirName);
 
@@ -1972,6 +2047,7 @@ namespace ClaudeBuddy
                             ["waiting"] = _model.WaitingColor
                         },
                         ["claudeCodeProfileDirs"] = profileDirs,
+                        ["collapsedSettingsSections"] = collapsedSections,
                         ["codexHomes"] = codexHomeDirs,
                         ["grokHomes"] = grokHomeDirs,
                         ["profiles"] = profiles,

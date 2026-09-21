@@ -317,6 +317,27 @@ namespace ClaudeBuddy
         // the reason CB-122 exists.
         internal static readonly TimeSpan UnmeasuredReadBudget = TimeSpan.FromSeconds(45);
 
+        // Whether this process is forbidden from asking the OS for a credential.
+        //
+        // The same env-var seam shape as CLAUDE_BUDDY_SETTINGS_DIR,
+        // CLAUDE_BUDDY_PROFILE_ROOT and CLAUDE_BUDDY_BUNDLE_ROOT, and for the same
+        // reason all three exist: without it a test reaches something real that
+        // belongs to the person running it. Those three protect a settings file, a
+        // profile directory and an icon cache. This one protects their Keychain,
+        // and unlike the others the failure is not a dirtied file — it is a consent
+        // dialog nobody answers and a suite that never finishes.
+        //
+        // Read on every call rather than cached, so a test can set it in a
+        // [ModuleInitializer] before any static constructor here has run and not
+        // have to care about ordering. The read is a dictionary lookup against
+        // process environment; it is not on a hot path.
+        //
+        // Not a bool parameter threaded through the call sites: the callers are a
+        // poll loop and a chat path several layers up, and a flag that has to be
+        // passed correctly from each of them is a flag that will eventually not be.
+        internal static bool CredentialStoreDisabled =>
+            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_NO_CREDENTIAL_STORE") is { Length: > 0 };
+
         // Read the credential, or give up.
         //
         // **The read happens on a borrowed thread and the caller's never blocks.**
@@ -458,10 +479,40 @@ namespace ClaudeBuddy
         // The attributes-only query. It returns no data, so it is not the query
         // the consent prompt guards — which is the whole point of Stamp() being a
         // separate call from Read() rather than a field on it.
-        public string? Stamp() => MacOSKeychain.ModificationStamp(ClaudeCliCredentials.KeychainService);
+        public string? Stamp() =>
+            ClaudeCliCredentials.CredentialStoreDisabled
+                ? null
+                : MacOSKeychain.ModificationStamp(ClaudeCliCredentials.KeychainService);
 
         public CredentialRead Read()
         {
+            // A test process never asks the OS for this.
+            //
+            // The seam is here rather than at SourceFor because SourceFor's
+            // answer is itself a tested decision — ClaudeCloudCredentialPlatformTests
+            // asserts macOS gets this class, and it should keep doing so.
+            // Constructing one queries nothing; only this call does.
+            //
+            // The cost of not having it was measured, not imagined. A headless
+            // suite that reaches here waits out UnmeasuredReadBudget — forty-five
+            // seconds — for a consent dialog with nobody in front of it, leaks the
+            // pool thread parked inside Security.framework (see ReadWithinAsync on
+            // why that thread never comes back), and does it again for the next
+            // test that gets this far. Two abandoned UiTests hosts were found on a
+            // developer's machine at forty-three and eighty minutes, re-parented to
+            // launchd and still burning CPU.
+            //
+            // **It is invisible in CI, which is what let it survive.** A runner has
+            // no "Claude Code-credentials" item, so the query fails fast and the
+            // suite is green. The prompt only exists on a machine where somebody
+            // has actually logged in — the machine of whoever is trying to get work
+            // done. Green there, hung here, which is the worst shape a test has.
+            if (ClaudeCliCredentials.CredentialStoreDisabled)
+            {
+                return new CredentialRead(CredentialOutcome.NotLoggedIn, null, null,
+                    "the credential store is disabled for this process");
+            }
+
             var (outcome, json, detail) = MacOSKeychain.ReadGenericPassword(
                 ClaudeCliCredentials.KeychainService);
             if (outcome != CredentialOutcome.Found)

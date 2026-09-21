@@ -351,6 +351,31 @@ internal static class ScreenshotHelper
     {
         visible = default;
 
+        // Hidden is not the same as clipped, and bounds cannot tell them apart.
+        //
+        // Intersecting ancestors below handles a control the viewport crops.
+        // It does nothing for one that was laid out and then had IsVisible set
+        // false: Avalonia keeps the bounds from its last arrange, so the rect
+        // still looks perfectly reasonable and still lands inside the frame —
+        // it is simply not drawn there any more. The sampler then reads
+        // whatever *is* drawn at those coordinates and attributes it to this
+        // block.
+        //
+        // CB-166's settings filter is what made that reachable. A capture of
+        // the window with "voice" typed in reported that "Go to the session"
+        // rendered with two luminance levels at (326,367). That string belongs
+        // to a combo in the "Clicking an orb" section, which the filter had
+        // hidden; the pixels actually at (326,367) were the Voice section's own
+        // "Full response" combo, rendering correctly. A true capture failing on
+        // text that is not in it, because of text that is not drawn.
+        //
+        // Checked before the ancestor walk rather than inside it so the block's
+        // own IsVisible is covered too, and checked with IsVisible rather than
+        // IsEffectivelyVisible only as a fallback — walking it explicitly keeps
+        // this honest if a block is reparented under a hidden ancestor the
+        // property has not been recomputed for.
+        if (!block.IsVisible) return false;
+
         var origin = block.TranslatePoint(default, root);
 
         if (origin is null) return false;
@@ -361,6 +386,8 @@ internal static class ScreenshotHelper
              ancestor is not null;
              ancestor = ancestor.GetVisualParent())
         {
+            if (!ancestor.IsVisible) return false;
+
             var ancestorOrigin = ancestor.TranslatePoint(default, root);
 
             if (ancestorOrigin is null) return false;

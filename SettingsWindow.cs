@@ -127,19 +127,82 @@ namespace ClaudeBuddy
 
         // Split out from the KeyDown handler above so the decision is testable
         // without ever calling Close() — see CloseFromKeyboardShortcut below for
-        // why that matters.
+        // why that matters. Kept as its own method, with its original
+        // signature, rather than folded into VerdictFor's callers: the existing
+        // ShouldCloseOnKeyDownMatchesEscapeAndCmdW theory asserts this exact
+        // five-row table and must keep passing unmodified. It's now a
+        // projection of VerdictFor with the query fixed at null — an inactive
+        // filter is the one state where "does this key close the window" has
+        // never depended on anything else, so the projection reproduces the
+        // original table exactly.
         internal static bool ShouldCloseOnKeyDown(Key key, KeyModifiers modifiers) =>
-            key == Key.Escape || (key == Key.W && modifiers.HasFlag(KeyModifiers.Meta));
+            VerdictFor(key, modifiers, null) == SettingsKeyVerdict.Close;
 
-        // Excluded from coverage: its only job is to call Close() on the two
-        // shortcuts that should close a preferences window. ShouldCloseOnKeyDown
-        // — which key combinations those are — is a static and is covered
-        // directly; this is the half that cannot run, for the FontManager reason
-        // below.
+        // The wider decision ShouldCloseOnKeyDown above is a slice of: what a
+        // key press means once there's a filter box that can also be focused
+        // or cleared. Query is whatever the filter box currently holds, or
+        // null once there's no box to read it from (a window not yet built —
+        // never true after the constructor — or ShouldCloseOnKeyDown's own
+        // projection).
+        internal static SettingsKeyVerdict VerdictFor(Key key, KeyModifiers modifiers, string? query)
+        {
+            // Cmd-W always closes, whatever the filter holds — no gesture that
+            // already closed this window before CB-166 is allowed to stop
+            // closing it now.
+            if (key == Key.W && modifiers.HasFlag(KeyModifiers.Meta)) return SettingsKeyVerdict.Close;
+
+            if (key == Key.Escape)
+            {
+                // Escape with a modifier held is a stray chord, not "clear the
+                // filter" — it still closes, so no existing close gesture is
+                // ever taken away by this ticket.
+                if (modifiers != KeyModifiers.None) return SettingsKeyVerdict.Close;
+
+                return SettingsFilter.IsActive(query)
+                    ? SettingsKeyVerdict.ClearFilter
+                    : SettingsKeyVerdict.Close;
+            }
+
+            if (key == Key.F && (modifiers.HasFlag(KeyModifiers.Meta) || modifiers.HasFlag(KeyModifiers.Control)))
+            {
+                return SettingsKeyVerdict.FocusFilter;
+            }
+
+            return SettingsKeyVerdict.Ignore;
+        }
+
+        // The safe three-quarters of OnWindowKeyDown below, split out so a test
+        // can drive Escape-clears-the-filter and Cmd/Ctrl-F-focuses-it without
+        // going anywhere near Close(). Returns the verdict it acted on so the
+        // caller decides what to do with the one branch this can't take itself.
+        internal SettingsKeyVerdict HandleKeyDown(Key key, KeyModifiers modifiers)
+        {
+            var verdict = VerdictFor(key, modifiers, _filterBox?.Text);
+
+            switch (verdict)
+            {
+                case SettingsKeyVerdict.ClearFilter:
+                    if (_filterBox is not null) _filterBox.Text = "";
+                    break;
+                case SettingsKeyVerdict.FocusFilter:
+                    _filterBox?.Focus();
+                    break;
+            }
+
+            return verdict;
+        }
+
+        // Excluded from coverage: its only job past HandleKeyDown is to call
+        // Close() on the one verdict that means it — HandleKeyDown carries
+        // every other branch and is fully tested; this is just the one call
+        // this suite may never make.
         [ExcludeFromCodeCoverage]
         private void OnWindowKeyDown(object? sender, KeyEventArgs e)
         {
-            if (ShouldCloseOnKeyDown(e.Key, e.KeyModifiers)) CloseFromKeyboardShortcut();
+            if (HandleKeyDown(e.Key, e.KeyModifiers) == SettingsKeyVerdict.Close)
+            {
+                CloseFromKeyboardShortcut();
+            }
         }
 
         // Excluded from coverage: Window.Close() corrupts a process-wide Avalonia
@@ -254,6 +317,17 @@ namespace ClaudeBuddy
             }
         }
 
+        // The filter box and the empty-state line, both outside what Rebuild()
+        // replaces below. Neither is rebuilt on a theme change or a toggle
+        // flip — only Body()'s content changes, so a query typed mid-edit
+        // survives every one of the many things in this window that call
+        // Rebuild(). The query itself is deliberately never read from or
+        // written to ClaudeBuddySettings: it's a transient view of the page,
+        // not a preference.
+        private TextBox? _filterBox;
+        private TextBlock? _emptyState;
+        private ScrollViewer? _scrollViewer;
+
         internal void Rebuild()
         {
             // Held against System Settings side by side, Apple's content pane is
@@ -267,11 +341,76 @@ namespace ClaudeBuddy
                 ? Color.FromArgb(0xD9, 0x1E, 0x1E, 0x20)
                 : Color.FromArgb(0xD9, 0xF2, 0xF2, 0xF5));
 
-            Content = new ScrollViewer
+            if (_scrollViewer is null)
             {
-                Content = Body(),
-                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled
-            };
+                // Built once, on the first Rebuild() the constructor makes, and
+                // never again — everything after this swaps only the
+                // ScrollViewer's Content. A search box that got torn down and
+                // rebuilt on every toggle flip would lose focus and drop
+                // whatever was typed, on every one of the many handlers in
+                // this file that call Rebuild().
+                _filterBox = new TextBox
+                {
+                    Watermark = "Search settings",
+                    Margin = new Thickness(20, 18, 20, 0)
+                };
+                // TextChanged, not LostFocus: this commits nothing and reaches
+                // nothing outside the window's own tree, unlike the gateway
+                // boxes' commit-on-LostFocus — so there's no reason to wait
+                // for focus to leave before a keystroke takes effect.
+                _filterBox.TextChanged += (_, _) => ApplyFilter();
+                DockPanel.SetDock(_filterBox, Dock.Top);
+
+                _emptyState = new TextBlock
+                {
+                    Opacity = 0.55,
+                    FontSize = 13,
+                    Margin = new Thickness(20, 4, 20, 0),
+                    IsVisible = false
+                };
+                DockPanel.SetDock(_emptyState, Dock.Top);
+
+                _scrollViewer = new ScrollViewer
+                {
+                    HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled
+                };
+
+                Content = new DockPanel
+                {
+                    Children = { _filterBox, _emptyState, _scrollViewer }
+                };
+            }
+
+            _scrollViewer.Content = Body();
+
+            // Several toggle handlers, and every gateway commit, call Rebuild()
+            // outright rather than mutating the tree in place — so whatever was
+            // typed before has to be re-applied to the page Body() just handed
+            // back, or a folded-open search result would silently re-fold and
+            // an active query would silently stop filtering anything.
+            ApplyFilter();
+        }
+
+        // Applies the current query to every section and updates the
+        // empty-state line. Query is read off the box rather than threaded
+        // through as a parameter because every caller already has a reference
+        // to this window and none of them has a reason to filter to anything
+        // but what's actually typed.
+        private void ApplyFilter()
+        {
+            var query = _filterBox?.Text;
+
+            var anyVisible = false;
+            foreach (var section in _sections.Values)
+            {
+                if (section.ApplyFilter(query)) anyVisible = true;
+            }
+
+            if (_emptyState is not null)
+            {
+                _emptyState.Text = SettingsFilter.EmptyStateText(query);
+                _emptyState.IsVisible = SettingsFilter.IsActive(query) && !anyVisible;
+            }
         }
 
         // No control metrics here on purpose. Heights, corner radii, fills and
@@ -279,24 +418,279 @@ namespace ClaudeBuddy
         // from Fluent on Windows; pinning them by hand is what produced capsule
         // pop-ups and 20pt checkboxes in the first place.
 
+        // Every section the page is built from, keyed by the stable id its
+        // Group() call passes. Tests — and, once the rest of CB-166 lands, the
+        // filter box — address a section by id rather than by walking the tree
+        // for its heading: Body()'s own comments below record that these
+        // headings have already been renamed and merged once, so a lookup keyed
+        // on prose turns the next copy edit into a silent behaviour change.
+        //
+        // Rebuilt from scratch every time, because Body() is: the handlers call
+        // Rebuild() freely and a dictionary that accumulated stale sections
+        // would hand the filter controls that are no longer in any window.
+        private readonly Dictionary<string, SettingsSection> _sections = new();
+
+        internal IReadOnlyDictionary<string, SettingsSection> Sections => _sections;
+
+        // A heading, the cards under it, and whether it is unfolded.
+        //
+        // A StackPanel subclass rather than something wrapping one, so the page
+        // stays a flat stack of these and everything that already walks this
+        // tree — three screenshot scenarios and the row tests — finds the same
+        // controls at the same depth it did before.
+        //
+        // IsOpen is view state and nothing else. Setting it moves the chevron
+        // and the body's visibility; it writes nothing. Persistence belongs to
+        // the header's click handler, where the gesture is — persist on the
+        // gesture, not on the property.
+        //
+        // That split is the one contract between the two halves of this ticket,
+        // and it is not stylistic: the filter force-expands a section holding a
+        // match, so if persistence lived in this setter the first search would
+        // quietly rewrite all thirteen sections to open and the user's folds
+        // would be gone with no gesture that could have caused it. This file
+        // already carries that scar — the ColorRow "arming" comment further
+        // down is here because a control once wrote three colours nobody chose
+        // into settings.json for want of exactly this distinction.
+        internal sealed class SettingsSection : StackPanel
+        {
+            // The stable handle Group() keyed _sections with — see the comment
+            // above Body() for why persistence is keyed on this and not on
+            // Title. RestoreOpenState() needs it to read its own fold state
+            // back out of settings without Group() having to hand it in twice.
+            public required string Id { get; init; }
+
+            public required string Title { get; init; }
+
+            // The cards as Group() was handed them, not the wrapper the params
+            // overload builds around several of them, so the filter can hide an
+            // emptied card without reaching back through the tree to find it.
+            public IReadOnlyList<Control> Cards { get; set; } = Array.Empty<Control>();
+
+            private bool _isOpen = true;
+            private Avalonia.Controls.Primitives.ToggleButton? _header;
+            private RotateTransform? _chevronRotation;
+            private Control? _body;
+
+            // View state and nothing else: setting this moves the chevron and
+            // the body's visibility, full stop. It does not touch
+            // ClaudeBuddySettings, on purpose — see the type-level comment
+            // above. The header's click handler is the only writer, and it
+            // writes before it gets here (see Group()'s Click handler).
+            public bool IsOpen
+            {
+                get => _isOpen;
+                set
+                {
+                    _isOpen = value;
+                    if (_header is not null) _header.IsChecked = value;
+                    if (_chevronRotation is not null) _chevronRotation.Angle = value ? 90 : 0;
+                    if (_body is not null) _body.IsVisible = value;
+                }
+            }
+
+            // Group() calls this once, right after building the header and its
+            // chevron, so IsOpen above has real controls to move instead of
+            // just a bool. Kept separate from a constructor because
+            // SettingsSection has no Avalonia dependency of its own beyond
+            // being a StackPanel — the header lives in Group(), not here.
+            internal void WireDisclosure(
+                Avalonia.Controls.Primitives.ToggleButton header,
+                RotateTransform chevronRotation,
+                Control body)
+            {
+                _header = header;
+                _chevronRotation = chevronRotation;
+                _body = body;
+            }
+
+            // Re-applies whatever this section's id was last persisted as,
+            // after Body() has rebuilt the page from nothing. Reads rather
+            // than trusts whatever IsOpen already holds, because a Rebuild()
+            // can be triggered by something that has nothing to do with
+            // folding at all — a gateway TextBox's LostFocus commit, most of
+            // all — and the page that comes back has to show the fold the
+            // user actually left it in, not whatever this instance happened
+            // to default to.
+            public void RestoreOpenState()
+            {
+                IsOpen = !ClaudeBuddySettings.IsSettingsSectionCollapsed(Id);
+            }
+
+            // Applies query to every card, then decides whether the section
+            // itself should show. Cards is walked rather than Children because
+            // Children also holds the header and the chevron, which have
+            // nothing to filter.
+            //
+            // A section holding a match force-expands so the match is actually
+            // visible, and does it through IsOpen rather than
+            // ClaudeBuddySettings — IsOpen's own setter writes nothing (see the
+            // type-level comment above), so a search never persists a fold it
+            // only changed to show a result. Clearing the filter restores
+            // whatever was on disk before the search touched anything.
+            //
+            // A card that isn't a SettingsCard (there shouldn't be one — Card()
+            // is the only thing this window hands to Group()) contributes
+            // nothing either way, which is the safe default: better to leave an
+            // unrecognised card showing than to guess at whether it matched.
+            internal bool ApplyFilter(string? query)
+            {
+                var titleMatches = SettingsFilter.Matches(query, Title);
+
+                var anyCardMatch = false;
+                foreach (var card in Cards)
+                {
+                    if (card is SettingsCard settingsCard)
+                    {
+                        anyCardMatch |= settingsCard.ApplyFilter(query, titleMatches);
+                    }
+                }
+
+                var visible = SettingsFilter.SectionVisible(anyCardMatch, titleMatches);
+                IsVisible = visible;
+
+                if (SettingsFilter.IsActive(query))
+                {
+                    if (visible) IsOpen = true;
+                }
+                else
+                {
+                    RestoreOpenState();
+                }
+
+                return visible;
+            }
+        }
+
+        // A row that knows what it's searchable as. Not Tag — Row(ProfileView)
+        // already hangs (folder, options) off a ComboBox's Tag for the colour
+        // picker's own handler, so a second use of the same property on the
+        // row itself would collide with it.
+        //
+        // A Grid subclass rather than a wrapper, because two tests
+        // (SettingsWindowCoverageTests' ColumnLabelsHasFiveColumns and
+        // RowForProfileSeedsEachColumnFromStoredSettings) cast a row builder's
+        // result straight to Grid, and every row builder here already returns
+        // a Grid under the hood.
+        internal sealed class SettingsRow : Grid
+        {
+            // What this row searches against — null for a row this file never
+            // gave one, which SettingsFilter.Matches treats as "can't match an
+            // active query".
+            public string? SearchText { get; set; }
+
+            // A row with no label of its own — a column heading, a status
+            // line, the profiles card's small print — that shows only when a
+            // real sibling in the same card matched, rather than being judged
+            // on SearchText it doesn't have.
+            public bool IsCardChrome { get; set; }
+        }
+
+        // A card's rows and the hairlines Card() interleaved between them,
+        // held onto by reference so ApplyFilter can toggle IsVisible on both
+        // without re-parenting anything or walking back through the tree to
+        // find them — walking would mean guessing which children are rows and
+        // which are separators, which is exactly the ambiguity this avoids.
+        internal sealed class SettingsCard : Border
+        {
+            // As Card() was handed them — one entry per row, not counting the
+            // hairlines, which are tracked separately below so a wrong
+            // hairline is a unit-test failure (SeparatorsBefore) rather than
+            // something only visible on screen.
+            public IReadOnlyList<Control> Rows { get; init; } = Array.Empty<Control>();
+
+            // Separators[i] is the hairline immediately before Rows[i + 1].
+            // One shorter than Rows, because there's nothing before the first
+            // row to draw a line under.
+            public IReadOnlyList<Border> Separators { get; init; } = Array.Empty<Border>();
+
+            // Applies query to every row in this card and returns whether any
+            // *searchable* row matched directly — chrome rows and rows this
+            // file never gave a SearchText don't count, because a chrome row
+            // matching only means a sibling matched, and an unsearchable row
+            // "matching" would mean this method invented an answer it doesn't
+            // have. The section above uses the return value to decide whether
+            // the section itself should stay visible.
+            internal bool ApplyFilter(string? query, bool titleMatches)
+            {
+                var n = Rows.Count;
+                var texts = new string?[n];
+                var chrome = new bool[n];
+                var searchable = new bool[n];
+
+                for (var i = 0; i < n; i++)
+                {
+                    if (Rows[i] is SettingsRow row)
+                    {
+                        texts[i] = row.SearchText;
+                        chrome[i] = row.IsCardChrome;
+                        searchable[i] = true;
+                    }
+                }
+
+                var visible = SettingsFilter.VisibleRows(query, texts, chrome, titleMatches);
+
+                // A row this file can't search — a free-form control handed to
+                // Card() directly, like the WSL list or a profile-directory
+                // editor — is left showing whenever its card is, rather than
+                // being hidden by a filter it has no way to answer.
+                for (var i = 0; i < n; i++)
+                {
+                    if (!searchable[i]) visible[i] = true;
+                }
+
+                for (var i = 0; i < n; i++)
+                {
+                    Rows[i].IsVisible = visible[i];
+                }
+
+                var separatorsBefore = SettingsFilter.SeparatorsBefore(visible).ToHashSet();
+                for (var i = 0; i < Separators.Count; i++)
+                {
+                    // Separators[i] sits before Rows[i + 1].
+                    Separators[i].IsVisible = separatorsBefore.Contains(i + 1);
+                }
+
+                // An empty card is a floating rounded pill with nothing in it,
+                // which reads as a rendering bug rather than "nothing here
+                // matched" — hide the card itself rather than leave that up.
+                IsVisible = n == 0 || visible.Any(v => v);
+
+                var anyMatch = false;
+                for (var i = 0; i < n; i++)
+                {
+                    if (searchable[i] && !chrome[i] && SettingsFilter.Matches(query, texts[i]))
+                    {
+                        anyMatch = true;
+                    }
+                }
+
+                return anyMatch;
+            }
+        }
+
         private Control Body()
         {
+            // First, so a Rebuild() never leaves a section from the previous
+            // page reachable by id.
+            _sections.Clear();
+
             var root = new StackPanel { Margin = new Thickness(20, 18), Spacing = 18 };
 
-            root.Children.Add(Group("Orbs", Card(OrbsRows())));
+            root.Children.Add(Group("orbs", "Orbs", Card(OrbsRows())));
 
-            root.Children.Add(Group("Clicking an orb", Card(ClickRows())));
+            root.Children.Add(Group("orb-click", "Clicking an orb", Card(ClickRows())));
 
-            root.Children.Add(Group("Auto-organize", Card(AutoOrganizeRows())));
+            root.Children.Add(Group("auto-organize", "Auto-organize", Card(AutoOrganizeRows())));
 
-            root.Children.Add(Group("Orb colours", Card(OrbColourRows())));
+            root.Children.Add(Group("orb-colours", "Orb colours", Card(OrbColourRows())));
 
             // Between the orbs and the voice, because that is where the chat
             // panel sits in the app: it is what an orb opens, and the thing
             // the voice types into.
-            root.Children.Add(Group("Chat panel", Card(ChatRows())));
+            root.Children.Add(Group("chat-panel", "Chat panel", Card(ChatRows())));
 
-            root.Children.Add(Group("Voice", Card(VoiceRows())));
+            root.Children.Add(Group("voice", "Voice", Card(VoiceRows())));
 
             // One section per agent, each starting with whether it is tracked
             // at all and then everything about it — the panel, replying, extra
@@ -308,13 +702,13 @@ namespace ClaudeBuddy
             // Desktop app's own profiles in between. Nothing was wrong with any
             // of them individually; the order was just the order they were
             // added in, which is how a settings window gets that way.
-            root.Children.Add(Group("Claude Code", ClaudeCodeSection()));
+            root.Children.Add(Group("claude-code", "Claude Code", ClaudeCodeSection()));
 
-            root.Children.Add(Group("Codex", CodexSection()));
+            root.Children.Add(Group("codex", "Codex", CodexSection()));
 
-            root.Children.Add(Group("Grok Build", GrokSection()));
+            root.Children.Add(Group("grok", "Grok Build", GrokSection()));
 
-            root.Children.Add(Group("OpenClaw agents", Card(OpenClawRows())));
+            root.Children.Add(Group("openclaw", "OpenClaw agents", Card(OpenClawRows())));
 
             // Straight after the CLI sections, beside "Other machines" below
             // and for the same reason: it is about the same Claude Code
@@ -322,7 +716,7 @@ namespace ClaudeBuddy
             // this machine. The difference between the two is only whose
             // machine it is, which is why they sit together rather than one of
             // them living beside the gateway.
-            root.Children.Add(Group("Claude Code in the cloud", Card(ClaudeCloudRows())));
+            root.Children.Add(Group("claude-cloud", "Claude Code in the cloud", Card(ClaudeCloudRows())));
 
             // Straight after the CLI sections and before the Desktop app,
             // because that is what it is about: the same Claude Code sessions
@@ -330,12 +724,12 @@ namespace ClaudeBuddy
             // One card again. There were briefly two — the direct link and the
             // relay — with the order as the recommendation; the relay is gone
             // and the recommendation went with it.
-            root.Children.Add(Group("Other machines", Card(PeerLinkRows())));
+            root.Children.Add(Group("peer-link", "Other machines", Card(PeerLinkRows())));
 
             // Not an agent CLI at all — the Electron desktop app — so it sits
             // after them with its own profiles, which is where someone looking
             // for them would go first.
-            root.Children.Add(Group("Claude Desktop",
+            root.Children.Add(Group("claude-desktop", "Claude Desktop",
                 Card(ClaudeDesktopRows(OperatingSystem.IsMacOS())),
                 ProfilesCard()));
 
@@ -2245,49 +2639,144 @@ namespace ClaudeBuddy
         // say. Same heading treatment as the single-card form; the cards are
         // spaced the way two groups would be, so the break still reads as a
         // break without inventing a second heading level.
-        private Control Group(string title, params Control[] cards)
+        //
+        // The id is the section's stable handle — see the _sections comment
+        // above Body() for why it is an id and not the heading.
+        private SettingsSection Group(string id, string title, params Control[] cards)
         {
             var stack = new StackPanel { Spacing = 10 };
             foreach (var card in cards) stack.Children.Add(card);
-            return Group(title, (Control)stack);
+
+            var section = Group(id, title, (Control)stack);
+
+            // Past the wrapper, to the cards themselves. The single-card
+            // overload can only see the stack it was handed.
+            section.Cards = cards;
+            return section;
         }
 
-        private Control Group(string title, Control card) => new StackPanel
+        private SettingsSection Group(string id, string title, Control card)
         {
-            Children =
+            // The disclosure chevron: a drawn Path, not a font glyph. Every
+            // screenshot capture runs through AssertTextIsLegible, and a
+            // glyph is a font lookup — CB-173 is an open bug about exactly
+            // that rendering as a colour emoji on Windows. Points right
+            // closed, rotates to point down open; IsOpen above is what turns
+            // this transform.
+            var chevronRotation = new RotateTransform();
+            var chevron = new Shapes.Path
             {
-                // "Theme" and "Windows" in System Settings are semibold and full
-                // strength, not the dimmed 12pt caption this had. They read as
-                // headings; a dimmed caption reads as a hint.
-                new TextBlock
-                {
-                    Text = title,
-                    FontSize = 13,
-                    FontWeight = FontWeight.SemiBold,
-                    Opacity = 0.9,
-                    // Left inset matches the rows' own 14, because in System
-                    // Settings the group heading sits directly above the first
-                    // row's label rather than out to the left of it.
-                    Margin = new Thickness(14, 0, 0, 7)
-                },
-                card
-            }
-        };
+                Data = Geometry.Parse("M 0,0 L 5,4 L 0,8"),
+                Stroke = new SolidColorBrush(IsDark ? Colors.White : Colors.Black) { Opacity = 0.55 },
+                StrokeThickness = 1.4,
+                StrokeLineCap = PenLineCap.Round,
+                StrokeJoin = PenLineJoin.Round,
+                Width = 5,
+                Height = 8,
+                VerticalAlignment = VerticalAlignment.Center,
+                RenderTransform = chevronRotation,
+                RenderTransformOrigin = new RelativePoint(0.5, 0.5, RelativeUnit.Relative)
+            };
 
-        private Control Card(params Control[] rows)
+            // "Theme" and "Windows" in System Settings are semibold and full
+            // strength, not the dimmed 12pt caption this had. They read as
+            // headings; a dimmed caption reads as a hint.
+            //
+            // This has to stay a real TextBlock in the logical tree, carrying
+            // the heading verbatim. Three of the screenshot scenarios locate
+            // their group by searching the window's descendants for a
+            // TextBlock whose Text equals the heading and assert on finding
+            // it. Folding the title into the ToggleButton's own Content
+            // property (a string), rather than keeping it as a
+            // TextBlock child the way it is here, breaks that search without
+            // breaking any test.
+            var titleText = new TextBlock
+            {
+                Text = title,
+                FontSize = 13,
+                FontWeight = FontWeight.SemiBold,
+                Opacity = 0.9
+            };
+
+            // A ToggleButton templated down to a bare ContentPresenter —
+            // App.axaml's "settings-disclosure" style, the same trick it
+            // already plays on ToolTip — so this keeps focus, Tab, Space and
+            // Enter, IsChecked and the automation peer without drawing the
+            // themed chrome a real Button or an Expander header would bring.
+            // Not Expander: the macOS theme and Fluent template one
+            // differently, which would put two different headers on the two
+            // rids a PR reviewer compares side by side.
+            var header = new Avalonia.Controls.Primitives.ToggleButton
+            {
+                Classes = { "settings-disclosure" },
+                Cursor = new Cursor(StandardCursorType.Hand),
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                // Left inset matches the rows' own 14, because in System
+                // Settings the group heading sits directly above the first
+                // row's label rather than out to the left of it.
+                Margin = new Thickness(14, 0, 0, 7),
+                Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 8,
+                    Children = { chevron, titleText }
+                }
+            };
+
+            var section = new SettingsSection
+            {
+                Id = id,
+                Title = title,
+                Cards = new[] { card },
+                Children = { header, card }
+            };
+
+            header.Click += (_, _) =>
+            {
+                // Computed off section.IsOpen — our own state — rather than
+                // read back off header.IsChecked, which Avalonia has already
+                // flipped once by the time Click fires. Trusting that timing
+                // is exactly the kind of thing worth not trusting; this way
+                // the outcome does not depend on it.
+                //
+                // Written before the tree is touched, on purpose. The
+                // gateway TextBoxes commit on LostFocus, and both commits end
+                // in Rebuild() (OnGatewayHostChanged, OnGatewayTokenChanged).
+                // Folding a section that holds a focused control moves focus
+                // off it as soon as the tree changes, which fires that
+                // LostFocus before this handler returns — so if the setting
+                // were written second, the Rebuild() it triggers would read
+                // the old value and come back open while the setting already
+                // says closed.
+                var opening = !section.IsOpen;
+                ClaudeBuddySettings.SetSettingsSectionCollapsed(id, !opening);
+                section.IsOpen = opening;
+            };
+
+            section.WireDisclosure(header, chevronRotation, card);
+            section.RestoreOpenState();
+
+            _sections[id] = section;
+            return section;
+        }
+
+        private SettingsCard Card(params Control[] rows)
         {
             var stack = new StackPanel();
+            var separators = rows.Length > 1 ? new Border[rows.Length - 1] : Array.Empty<Border>();
 
             for (var i = 0; i < rows.Length; i++)
             {
                 if (i > 0)
                 {
-                    stack.Children.Add(new Border
+                    var separator = new Border
                     {
                         Height = 1,
                         Background = Hairline,
                         Margin = new Thickness(14, 0, 0, 0)
-                    });
+                    };
+                    separators[i - 1] = separator;
+                    stack.Children.Add(separator);
                 }
 
                 stack.Children.Add(rows[i]);
@@ -2296,16 +2785,22 @@ namespace ClaudeBuddy
             // 12, measured off System Settings' own groups — 18 plus a drop
             // shadow made these read as floating panels, which is a popover's
             // treatment, not a grouped row's.
-            return new Border
+            return new SettingsCard
             {
                 Background = CardBackground,
                 CornerRadius = new CornerRadius(12),
                 ClipToBounds = true,
-                Child = stack
+                Child = stack,
+                Rows = rows,
+                Separators = separators
             };
         }
 
-        // A line of text on its own, full width.
+        // A line of text on its own, full width. Card-chrome: it carries no
+        // SearchText of its own and shows only when a labelled sibling in the
+        // same card matched — a status line without the switch it explains
+        // would read as an orphaned error message rather than as a search
+        // result.
         //
         // Not Row(): that puts its control in an Auto-width column so it can sit
         // right-aligned beside a label, and a TextBlock in an Auto column is
@@ -2315,18 +2810,19 @@ namespace ClaudeBuddy
         // without a setting above it.
         private static Control NoteRow(Control content)
         {
-            var grid = new Grid { Margin = new Thickness(14, 10) };
+            var grid = new SettingsRow { Margin = new Thickness(14, 10), IsCardChrome = true };
             grid.Children.Add(content);
             return grid;
         }
 
         private static Control Row(string label, Control control, string? help = null)
         {
-            var grid = new Grid
+            var grid = new SettingsRow
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto"),
                 RowDefinitions = new RowDefinitions(help is null ? "Auto" : "Auto,Auto"),
-                Margin = new Thickness(14, 10)
+                Margin = new Thickness(14, 10),
+                SearchText = SettingsFilter.TextOf(label, help)
             };
 
             var text = new TextBlock
@@ -2555,22 +3051,29 @@ namespace ClaudeBuddy
 
             var rows = new List<Control> { ColumnLabels() };
             rows.AddRange(snapshot.Profiles.Select(Row));
-            rows.Add(new TextBlock
+
+            // Card-chrome, same as the column headings above: it explains the
+            // profile rows rather than being one, so it shows only when at
+            // least one of them does.
+            rows.Add(NoteRow(new TextBlock
             {
                 Text = "Colour applies to the menu swatch, the Dock icon and the window tint. "
                        + "Leave a name empty to use the folder name.",
                 TextWrapping = TextWrapping.Wrap,
                 Opacity = 0.55,
-                FontSize = 11,
-                Margin = new Thickness(14, 10)
-            });
+                FontSize = 11
+            }));
 
             return Card(rows.ToArray());
         }
 
+        // Card-chrome: these headings have no text of their own to search and
+        // exist only to explain the profile rows beneath them, so they follow
+        // whichever of those rows the filter matched.
         internal static Control ColumnLabels()
         {
             var grid = RowGrid();
+            grid.IsCardChrome = true;
             Add(grid, 0, Label("Name"));
             Add(grid, 1, Label("Colour"));
             Add(grid, 2, Label("Swatch"));
@@ -2587,7 +3090,7 @@ namespace ClaudeBuddy
             };
         }
 
-        internal static Grid RowGrid() => new()
+        internal static SettingsRow RowGrid() => new()
         {
             ColumnDefinitions = new ColumnDefinitions("*,130,64,54,44,84"),
             Margin = new Thickness(14, 8)
@@ -2679,6 +3182,7 @@ namespace ClaudeBuddy
             var folder = Path.GetFileName(profile.Directory);
             var settings = ClaudeBuddySettings.For(folder);
             var grid = RowGrid();
+            grid.SearchText = SettingsFilter.TextOf(profile.DisplayName, folder);
 
             var name = new TextBox
             {

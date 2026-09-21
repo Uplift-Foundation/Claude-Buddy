@@ -171,7 +171,21 @@ public class CloudSessionScreenshots : IDisposable
 
             Assert.NotNull(heading);
 
-            var group = (Control)heading!.GetLogicalParent()!;
+            // Climbing to the section type rather than taking the heading's
+            // immediate parent. That shortcut held while Group() built a
+            // StackPanel with the heading as its first child -- CB-166 wrapped
+            // the heading in a ToggleButton so the section could fold, and the
+            // parent became the chevron-and-heading stack instead: a 162x18
+            // capture of the title alone, with the card gone.
+            //
+            // It failed on the Windows leg and passed on macOS, which is worth
+            // knowing. Both rids captured the same wrong 162x18 region; only
+            // Windows tripped AssertTextIsLegible on it, because a strip that
+            // small and that dense renders bi-level there. A structural anchor
+            // does not depend on either of those accidents.
+            var group = heading!.GetLogicalAncestors()
+                .OfType<SettingsWindow.SettingsSection>()
+                .First();
 
             ScreenshotHelper.CaptureControl(group, name);
         }

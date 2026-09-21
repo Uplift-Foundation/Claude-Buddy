@@ -259,11 +259,28 @@ public class CloudSettingsRowsTests
 
             retry.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 
-            // Restart clears the snapshot and puts the arm back to "checking"
-            // when the feature is on, which is what says the button did
-            // something rather than merely existing.
-            Assert.Equal("checking…", ClaudeCloudSessions.StatusText);
+            // Restart clears the snapshot and moves the arm off whatever it was
+            // showing, which is what says the button did something rather than
+            // merely existing.
+            //
+            // Asserting the snapshot and "no longer stale" rather than the exact
+            // word "checking…", because that word is a transient this test has no
+            // right to observe. Restart sets it synchronously and then starts a
+            // poll loop that overwrites it as soon as the credential read answers.
+            //
+            // It used to assert the exact word and pass — but only because the
+            // read did not answer. On a developer's Mac that read is a login
+            // Keychain query raising a consent dialog no headless suite can
+            // answer, so the arm sat on "checking…" for the full forty-five-second
+            // budget and the assertion always won the race. The green was a
+            // symptom of the hang, not evidence of the behaviour. Now that a test
+            // process refuses the credential store outright
+            // (CLAUDE_BUDDY_NO_CREDENTIAL_STORE, see ClaudeCliCredentials), the
+            // read returns instantly and the loop moves the state on before this
+            // line runs — so the test had to start asserting something that is
+            // actually true rather than something that was merely slow.
             Assert.Empty(ClaudeCloudSessions.Snapshot());
+            Assert.NotEqual("something stale", ClaudeCloudSessions.StatusText);
         }
         finally
         {
