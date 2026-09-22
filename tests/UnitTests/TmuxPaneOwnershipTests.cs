@@ -140,6 +140,35 @@ public class TmuxPaneOwnershipTests
         Assert.Equal(TmuxPaneOwnership.Unknown, TmuxPaneOwnershipRules.For(A, 10, processes));
     }
 
+    // Which loosenings this actually catches, stated exactly rather than
+    // generally, because a test whose reach is overestimated is worse than one
+    // whose reach is known. Mutating SessionIdFrom's comparison to
+    // Contains("session-id") does turn the fixture above red -- the parent uuid
+    // leaks in and the pane resolves to the lead. Mutating it to
+    // EndsWith("--session-id") does *not*, and that is not the test being weak:
+    // "--parent-session-id" ends in "t-session-id", so the double-dash flag is
+    // genuinely not a suffix of it and nothing leaks. The dashes are load-bearing
+    // and this pins that, so nobody reads the green as permission to drop them.
+    [Fact]
+    public void ParentSessionIdSharesNoDoubleDashSuffixWithTheRealFlag()
+    {
+        Assert.False("--parent-session-id".EndsWith("--session-id", StringComparison.Ordinal));
+        Assert.True("--parent-session-id".EndsWith("-session-id", StringComparison.Ordinal));
+        Assert.True("--parent-session-id".Contains("session-id", StringComparison.Ordinal));
+    }
+
+    // The old line this replaced compared OrdinalIgnoreCase, and a session id
+    // that only differs in case is the same conversation -- refusing it would
+    // reintroduce the dead click for anyone whose id reaches the rule in a
+    // different case than the status file recorded.
+    [Fact]
+    public void PermitsActionComparesTheOwnerCaseInsensitively()
+    {
+        Assert.True(TmuxPaneOwnershipRules.PermitsAction(A, A.ToUpperInvariant()));
+        Assert.True(TmuxPaneOwnershipRules.PermitsAction(A.ToUpperInvariant(), A));
+        Assert.False(TmuxPaneOwnershipRules.PermitsAction(A, B.ToUpperInvariant()));
+    }
+
     [Fact]
     public void PermitsActionAllowsWhenTheProbeItselfProducedNothing()
     {
