@@ -68,18 +68,46 @@ namespace ClaudeBuddy
         // continuations need. Starting the UI last is the shape that already
         // existed and is what makes the first three worth ordering at all.
         //
+        // `claimSingleInstance` sits between `installCrashLog` and
+        // `claimUiThread`, and both sides of that placement matter (CB-178).
+        // After `installCrashLog`, so that a genuinely unexpected failure in
+        // the claim itself (not the ordinary "someone else holds it" answer —
+        // an actual thrown exception) still gets written down. Before
+        // everything else, including `claimUiThread`, because a duplicate
+        // instance should do *nothing* else: not claim the UI thread, not
+        // start a relay, not touch the screen-lock wait. It used to run
+        // inside Avalonia startup instead — see App.axaml.cs's history and
+        // SingleInstance.cs's header comment — where the loser called
+        // `desktop.Shutdown()` after Avalonia had already begun unwinding
+        // toward `Dispatcher.MainLoop`, which is what turned "another Buddy
+        // is running" into an uncaught `InvalidOperationException` and a
+        // SIGABRT. A step that can return `false` and stop the sequence
+        // before any of that exists is the fix: nothing after this line runs
+        // for the loser, so there is no dispatcher left for anything to shut
+        // down.
+        //
         // Passed as delegates rather than called directly because every one of
         // them is unrunnable in a test — a real relay, a real screen-lock query,
-        // and a lifetime that owns the process until it exits — while the order
-        // is the part that broke and the part a test can hold on to.
+        // a real named mutex, and a lifetime that owns the process until it
+        // exits — while the order (and, now, the short-circuit) is the part
+        // that broke and the part a test can hold on to.
         internal static void Run(
             Action installCrashLog,
+            Func<bool> claimSingleInstance,
             Action claimUiThread,
             Action serveOnLaunch,
             Action waitForUnlock,
             Action startUi)
         {
             installCrashLog();
+            if (!claimSingleInstance())
+            {
+                // Another live Buddy holds the single-instance claim. Exit
+                // the sequence here, with nothing else started and nothing
+                // thrown — this return is the whole fix for CB-178: it is a
+                // normal return from Main, so the process exits 0.
+                return;
+            }
             claimUiThread();
             serveOnLaunch();
             waitForUnlock();
