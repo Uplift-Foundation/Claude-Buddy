@@ -144,8 +144,11 @@ namespace ClaudeBuddy
                 },
 
                 // Avalonia's macOS render timer is a CVDisplayLink, and
-                // CVDisplayLinkStart fails with -6661 (kCVReturnInvalidDisplay)
-                // while the screen is locked, which killed startup outright. A
+                // creating one fails with -6661 (kCVReturnInvalidArgument —
+                // see MacOSScreenLock for why this was called
+                // kCVReturnInvalidDisplay, which is -6670, and why the
+                // conclusion holds anyway) while the screen is locked, which
+                // killed startup outright. A
                 // Login Item starts before you type your password, so every
                 // reboot hit this and the app was simply missing afterwards
                 // with no visible reason.

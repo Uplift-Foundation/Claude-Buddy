@@ -41,31 +41,42 @@ namespace ClaudeBuddy
         // UIThread.VerifyAccess(). If a pool thread got there first, that throws
         // and takes the process with it.
         //
-        // A pool thread does get there first on an unattended machine, and only
-        // there. The path CB-28 was written against was
-        // RemoteControlSessions.StartAsync reaching its
+        // **The mechanism this comment used to describe no longer exists, and
+        // it is removed rather than re-pointed at a surviving class.** It named
+        // RemoteControlSessions.StartAsync reaching a
         // `Dispatcher.UIThread.Post(EnsureTimer)` after an awaited
-        // `bridge.StartAsync()`, so that post ran on the pool — and **that
-        // path no longer exists.** The bridge went with the relay, and
-        // `StartAsync` and `EnsureTimer` now survive only in comments; see
-        // ServePump.cs's header, which has the rest of what went with it.
+        // `bridge.StartAsync()`, so that post landed on the pool. Neither
+        // method has a definition anywhere any more — both went with the
+        // bridge and survive only in comments; ServePump.cs's header has the
+        // rest of what went with it. Naming a dead path as the reason for a
+        // live ordering requirement is worse than naming no path at all, and
+        // re-homing it to whichever class looks like the closest fit would
+        // have been the same mistake with a live class in it.
         //
-        // The hazard did not go with it, which is why this still has to happen
-        // first. `serveOnLaunch` starts OpenClawSessions and
-        // ClaudeCloudSessions on `Task.Run` loops and PeerSessions on plain
-        // Timers, and all three reach `Dispatcher.UIThread.Post` from a pool
-        // thread to push their results at the UI. Any one of them is the same
-        // race in the same shape, against a different caller.
+        // **Nor is there a surviving race to re-home it to.** The sequence
+        // below runs synchronously on this thread, so the dispatcher has an
+        // owner before `serveOnLaunch` can spawn anything that might post to
+        // it — and in fact before this step, since `installCrashLog` subscribes
+        // to `Dispatcher.UIThread.UnhandledException` (CrashLog.cs, whose own
+        // comment says the same thing from the other side: that subscribe
+        // would be enough on its own, and the claim is kept as its own step so
+        // that reading that line never becomes load-bearing). Nothing in
+        // production touches the dispatcher at type-load either — no module
+        // initializer, no static constructor — so a pool thread cannot get
+        // there first.
         //
-        // On an ordinary machine Main is already inside
-        // StartWithClassicDesktopLifetime by then and has claimed the
-        // dispatcher; on a machine whose screen never unlocks Main is asleep
-        // in WaitForUnlock and cannot have. That is the whole of the race, and
-        // it is why the crash was always at the two-hour mark — back when two
-        // hours was when that sleep ended. A reported lock now runs to a
-        // twelve-hour cap instead (see ScreenLockWait), so the window in which
-        // a pool thread could win is six times longer rather than shorter: the
-        // claim below matters more than it did, not less.
+        // What remains is the reason the claim is hoisted out to here at all,
+        // and it is not contingent on any particular caller: `serveOnLaunch` is
+        // the first thing in the sequence that can touch the dispatcher from a
+        // thread that is not this one, and this runs before it. On an ordinary
+        // machine Main would be inside StartWithClassicDesktopLifetime by then
+        // and would have claimed it anyway; on a machine whose screen never
+        // unlocks Main is asleep in WaitForUnlock and cannot have. That
+        // asymmetry is the whole of it — and a reported lock now waits up to
+        // twelve hours rather than two (see ScreenLockWait), so this step
+        // covers a longer stretch than it used to. Longer is not riskier here:
+        // posts simply queue for longer against a dispatcher that already has
+        // an owner.
         //
         // Idempotent, and cheap enough not to think about: after the first call
         // it is a static field read.

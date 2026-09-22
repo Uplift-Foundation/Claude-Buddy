@@ -11,7 +11,7 @@ namespace ClaudeBuddy.Tests;
 // signature discarded. So a machine whose screen was authoritatively locked
 // slept two hours and then started the UI anyway, which is an
 // InvalidOperationException out of AvaloniaNativeRenderTimer (-6661,
-// kCVReturnInvalidDisplay) during AppBuilder.Setup() — before App exists, so
+// kCVReturnInvalidArgument) during AppBuilder.Setup() — before App exists, so
 // before there is anything to catch it with.
 //
 // The rule is three-way now, and these are its arms. What the tests cannot
@@ -323,6 +323,47 @@ public class ScreenLockWaitTests
         // assertion, because a run which starts at 03:00 is the crash.
         Assert.Equal(6, probes);
         Assert.Equal(new DateTime(2026, 9, 22, 5, 0, 0, DateTimeKind.Utc), clock);
+    }
+
+    [Fact]
+    public void A_sleep_across_the_transition_credits_the_state_it_was_spent_in()
+    {
+        // The case that separates this design from the one that looks
+        // identical in a one-line description. Three hours are spent locked,
+        // and the machine is asleep for the whole of the third — so the
+        // transition to no-session is only *noticed* on the wake, with three
+        // hours already on the clock.
+        //
+        // Credit that interval to the state observed at its **end** and all
+        // three hours land on the no-session arm, which starts immediately
+        // into a -6661: the same defect through a different path. Latching
+        // each state at the moment it is first seen credits it to the state
+        // it was actually spent in, so the no-session arm begins its own two
+        // hours at the wake.
+        var clock = new DateTime(2026, 9, 22, 0, 0, 0, DateTimeKind.Utc);
+        var probes = 0;
+
+        ScreenLockWait.Wait(
+            probe: () =>
+            {
+                probes++;
+                return probes == 1
+                    ? ScreenLockState.Locked
+                    : ScreenLockState.NoWindowServerSession;
+            },
+            now: () => clock,
+            // One three-hour sleep: Thread.Sleep is not scheduled during deep
+            // sleep, so the whole stretch passes between two polls.
+            sleep: slept => clock += slept,
+            cap: TimeSpan.FromHours(2),
+            lockedCap: TimeSpan.FromHours(12),
+            interval: TimeSpan.FromHours(3));
+
+        // Woke at 03:00 with no session, waited its own two hours from there,
+        // started at 06:00. End-state crediting returns at 03:00 — and 03:00
+        // is the crash.
+        Assert.Equal(new DateTime(2026, 9, 22, 6, 0, 0, DateTimeKind.Utc), clock);
+        Assert.Equal(3, probes);
     }
 
     [Fact]

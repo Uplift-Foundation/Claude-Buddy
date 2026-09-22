@@ -20,7 +20,8 @@ namespace ClaudeBuddy
     // step as an `Action`, so the lambda's value went nowhere and `startUi()`
     // ran into a screen the app had just confirmed was locked. The result is
     // an `InvalidOperationException` out of `AvaloniaNativeRenderTimer`
-    // (-6661, kCVReturnInvalidDisplay) during `AppBuilder.Setup()`, which
+    // (-6661, kCVReturnInvalidArgument — MacOSScreenLock's header has why
+    // that name was wrong here for months) during `AppBuilder.Setup()`, which
     // kills the process before `App.OnFrameworkInitializationCompleted` has
     // run: no tray icon, no SessionManager, nothing to catch it with.
     //
