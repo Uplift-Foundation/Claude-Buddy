@@ -50,10 +50,11 @@ namespace ClaudeBuddy
         // dispatcher; on a machine whose screen never unlocks Main is asleep
         // in WaitForUnlock and cannot have. That is the whole of the race, and
         // it is why the crash was always at the two-hour mark — back when two
-        // hours was when that sleep ended. A reported lock now waits without a
-        // cap (see ScreenLockWait), so the sleep no longer has a deadline for
-        // a race to be timed off; the claim below still has to happen first,
-        // and for a longer window than before rather than a shorter one.
+        // hours was when that sleep ended. A reported lock now runs to a
+        // twelve-hour cap instead (see ScreenLockWait), so the deadline a race
+        // could be timed off is six times further out; the claim below still
+        // has to happen first, and for a longer window than before rather than
+        // a shorter one.
         //
         // Idempotent, and cheap enough not to think about: after the first call
         // it is a static field read.
@@ -69,8 +70,9 @@ namespace ClaudeBuddy
         // happened inside `startUi` and left nothing behind (CB-44).
         // `serveOnLaunch` brings up the peer link and the gateway and cloud
         // pollers, whose continuations land on the pool; `waitForUnlock` then
-        // holds this thread for as long as the screen stays locked, which is
-        // all the time those continuations need and then some. Starting the UI
+        // holds this thread for as long as the screen stays locked, up to
+        // twelve hours, which is all the time those continuations need and
+        // then some. Starting the UI
         // last is the shape that already existed and is what makes the first
         // three worth ordering at all.
         //

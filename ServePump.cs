@@ -25,8 +25,8 @@ namespace ClaudeBuddy
     // `MacOSScreenLock.WaitForUnlock` and starts PeerSessions' two plain
     // System.Threading.Timers plus OpenClawSessions' and ClaudeCloudSessions'
     // Task.Run loops — none of which need a dispatcher. That matters more
-    // since the wait on a reported lock lost its two-hour cap: startup can now
-    // sit here for as long as the screen stays locked.
+    // since the wait on a reported lock went from a two-hour cap to a
+    // twelve-hour one: startup can now sit here for the better part of a day.
     //
     // The history, kept because the shape is still the right one if a relay
     // comes back. On a machine whose screen never unlocks, Program.Main

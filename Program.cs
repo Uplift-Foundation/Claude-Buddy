@@ -90,7 +90,7 @@ namespace ClaudeBuddy
                 // certain to be free, which is the only moment it is:
                 // everything after this line either starts something that
                 // posts to the dispatcher from the thread pool, or holds this
-                // thread for two hours while it does.
+                // thread for hours while it does.
                 claimUiThread: Startup.ClaimUiThread,
 
                 // The serve path before the screen-lock wait below, because it
@@ -123,8 +123,8 @@ namespace ClaudeBuddy
                     // machine kept permanently locked (a headless server Buddy,
                     // paired to hand another machine its resolved agent
                     // voices) never restarted it in any practical timeframe: it
-                    // restarts on every relaunch, so the two-hour cap this
-                    // file's waitForUnlock imposes never actually elapses.
+                    // restarts on every relaunch, so the cap this file's
+                    // waitForUnlock imposes never actually elapses.
                     // Opening the gateway connection is a WebSocket client and
                     // a background poll loop, the same shape as PeerSessions
                     // above rather than anything that touches a window, so it
