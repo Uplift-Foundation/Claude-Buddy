@@ -8,8 +8,6 @@ namespace ClaudeBuddy
 {
     public partial class App : Application
     {
-        private Mutex? _singleInstanceMutex;
-
         public override void Initialize()
         {
             AvaloniaXamlLoader.Load(this);
@@ -46,23 +44,26 @@ namespace ClaudeBuddy
         // tests/UiTests host the *real* App class instead of a stand-in (see
         // that suite's TestAppBuilder, whose own comment records the same
         // finding from a spike). Nothing here could be made to run without
-        // giving the test host a desktop lifetime, and then it would take a
-        // machine-wide single-instance mutex, start a real SessionManager
-        // polling the temp directory, and put a tray icon in the menu bar of the
-        // machine running the suite.
+        // giving the test host a desktop lifetime, and then it would start a
+        // real SessionManager polling the temp directory and put a tray icon in
+        // the menu bar of the machine running the suite.
+        //
+        // The single-instance mutex used to be claimed here, first, with the
+        // loser calling desktop.Shutdown() and returning — which ran inside
+        // Avalonia's own startup, before its main loop existed, and
+        // Shutdown() tearing the dispatcher down there was what turned a
+        // routine "someone else is already running" into an uncaught
+        // InvalidOperationException and a SIGABRT (CB-178). That decision now
+        // happens in Program.Main, through Startup.Run, entirely before
+        // BuildAvaloniaApp().StartWithClassicDesktopLifetime is ever called —
+        // a duplicate instance now returns from Main normally, having never
+        // reached this method at all. See SingleInstance.cs for the claim
+        // itself and Startup.cs for where it's sequenced.
         [ExcludeFromCodeCoverage]
         public override void OnFrameworkInitializationCompleted()
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
-                // Prevent launching multiple buddies by accident.
-                _singleInstanceMutex = new Mutex(true, "ClaudeBuddy_SingleInstance_Mutex", out bool isNew);
-                if (!isNew)
-                {
-                    desktop.Shutdown();
-                    return;
-                }
-
                 // Orb windows come and go with sessions; the app itself only
                 // exits via the context menu.
                 desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
