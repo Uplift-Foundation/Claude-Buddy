@@ -12,10 +12,19 @@ namespace ClaudeBuddy
     [ExcludeFromCodeCoverage]
     internal static class Program
     {
-        // How long to wait for the screen to unlock before starting anyway. Long
-        // enough to cover coming back to the machine after a while, short enough
-        // that a misread lock state can't keep the app off the menu bar for a
-        // whole session.
+        // How long to wait before starting anyway *when the lock state cannot
+        // be read at all* — a daemon or background-job context, where
+        // CGSessionCopyCurrentDictionary returns null and there is no window
+        // server session to ask. Long enough to cover coming back to the
+        // machine after a while, short enough that an unknowable state can't
+        // keep the app off the menu bar for a whole session.
+        //
+        // It no longer caps a wait on a screen the window server has *told*
+        // us is locked. It used to, and starting when it expired was the
+        // 2026-09-22 -6661 crash: the cap is only defensible while the
+        // reading might be wrong, and an authoritative lock is not. See
+        // ScreenLockWait for the three states and why only one of them is
+        // capped.
         private static readonly TimeSpan LockWait = TimeSpan.FromHours(2);
         private static readonly TimeSpan LockPoll = TimeSpan.FromSeconds(2);
 
@@ -130,6 +139,14 @@ namespace ClaudeBuddy
                 // locked still get picked up, because the hook writes status
                 // files to disk and SessionManager reads them on its first
                 // scan.
+                //
+                // This step used to hand back a bool saying "the cap expired
+                // and the screen is still locked", and this lambda's
+                // conversion to Startup.Run's `Action` threw it away — so the
+                // UI started on a screen the app had just confirmed was
+                // locked, which is exactly the -6661 above. It returns void
+                // now and the decision lives in ScreenLockWait, one arm per
+                // state, so there is nothing here left to discard.
                 waitForUnlock: () => MacOSScreenLock.WaitForUnlock(LockWait, LockPoll),
 
                 startUi: () => BuildAvaloniaApp().StartWithClassicDesktopLifetime(args));

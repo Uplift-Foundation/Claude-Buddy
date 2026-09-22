@@ -10,8 +10,12 @@ namespace ClaudeBuddy
     // conflated.
     //
     // On a machine whose screen never unlocks, Program.Main starts the relay,
-    // then sleeps in MacOSScreenLock.WaitForUnlock for up to two hours before
-    // Avalonia starts. Both DispatcherTimers are created by a
+    // then sleeps in MacOSScreenLock.WaitForUnlock before Avalonia starts —
+    // for as long as the screen stays locked, with no cap, which is what makes
+    // this pump load-bearing rather than a stopgap for one long window. It
+    // used to be capped at two hours, and startup crashed with a -6661 when
+    // the cap expired into a still-locked screen; removing the cap is only
+    // survivable because this tick already covers the no-dispatcher window. Both DispatcherTimers are created by a
     // Dispatcher.UIThread.Post, so for those two hours the post only queues: the
     // relay is up, registered, and visible to every other machine, and nothing
     // ever reads a byte of its transcript. Measured on the mini on 29 Aug 2026 —

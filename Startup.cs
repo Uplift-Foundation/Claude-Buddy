@@ -47,9 +47,13 @@ namespace ClaudeBuddy
         // `await bridge.StartAsync().ConfigureAwait(false)`, so that post runs
         // on the pool. On an ordinary machine Main is already inside
         // StartWithClassicDesktopLifetime by then and has claimed the
-        // dispatcher; on a machine whose screen never unlocks Main is asleep in
-        // WaitForUnlock for two hours and cannot have. That is the whole of the
-        // race, and it is why the crash was always at the two-hour mark.
+        // dispatcher; on a machine whose screen never unlocks Main is asleep
+        // in WaitForUnlock and cannot have. That is the whole of the race, and
+        // it is why the crash was always at the two-hour mark — back when two
+        // hours was when that sleep ended. A reported lock now waits without a
+        // cap (see ScreenLockWait), so the sleep no longer has a deadline for
+        // a race to be timed off; the claim below still has to happen first,
+        // and for a longer window than before rather than a shorter one.
         //
         // Idempotent, and cheap enough not to think about: after the first call
         // it is a static field read.
@@ -64,8 +68,8 @@ namespace ClaudeBuddy
         // in the startup below it — the two crashes that prompted all of this
         // happened inside `startUi` and left nothing behind (CB-44). `serveOnLaunch` brings up a
         // relay whose continuations land on the pool; `waitForUnlock` then holds
-        // this thread for up to two hours, which is all the time those
-        // continuations need. Starting the UI last is the shape that already
+        // this thread for as long as the screen stays locked, which is all the
+        // time those continuations need and then some. Starting the UI last is the shape that already
         // existed and is what makes the first three worth ordering at all.
         //
         // `claimSingleInstance` sits between `installCrashLog` and
