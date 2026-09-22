@@ -45,9 +45,69 @@ namespace ClaudeBuddy
         // writes into the developer's real log directory, and the one thing a
         // crash log must not do is fill up with test noise.
         internal static string Directory =>
-            Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR") is { Length: > 0 } scratch
-                ? scratch
-                : DefaultDirectory;
+            Scoped.Value is { Length: > 0 } flowed
+                ? flowed
+                : Environment.GetEnvironmentVariable("CLAUDE_BUDDY_LOG_DIR") is { Length: > 0 } scratch
+                    ? scratch
+                    : DefaultDirectory;
+
+        // A second test seam, narrower than the environment variable above and
+        // added because the variable's width is itself the defect (CB — see the
+        // branch that introduced this).
+        //
+        // CLAUDE_BUDDY_LOG_DIR is process-wide, so a test class that points it
+        // at a scratch directory has published that directory to every other
+        // test running at the same time. That would be harmless if only the
+        // classes that know about the variable could write here — but the write
+        // is reached transitively. PersonaFiles.Reject calls PersonaLog.Record,
+        // which calls Directory.CreateDirectory(CrashLog.Directory), so *any*
+        // test that refuses a persona picture creates whatever directory the
+        // variable currently names. CrashLogFileTests asserts its own scratch
+        // directory does not exist yet, and a parallel class refusing a picture
+        // could create it first.
+        //
+        // Three separate pull requests tried to fix that by enumerating the
+        // classes that can reach Reject and moving each one into the same xUnit
+        // collection, and each of the three found one more class the previous
+        // had missed — twice by grepping for an API name, which cannot see
+        // through a call it does not spell out. The enumeration is the wrong
+        // instrument: it has to be redone correctly every time somebody adds a
+        // test, and it fails silently when it is not.
+        //
+        // An AsyncLocal ends it instead of narrowing it. xUnit constructs a test
+        // class and runs its method in one execution-context flow, so a value
+        // set in the constructor is visible to the test and to nothing else —
+        // a scratch log directory set this way has no process-wide name at all,
+        // and no other test can create it however many rejection paths it
+        // reaches. Forgetting to isolate stops being a race and becomes a
+        // no-op: a class that sets nothing falls through to the environment
+        // variable, which TestBootstrap points at one shared assembly-wide
+        // scratch directory that nothing asserts about.
+        //
+        // The variable stays, and stays first in line after this: it is how a
+        // developer redirects the log of a real running app, and how the
+        // installers and scripts do it. This only takes precedence over it
+        // inside a flow that asked for it.
+        private static readonly AsyncLocal<string?> Scoped = new();
+
+        internal static IDisposable ScopeForTests(string directory) => new DirectoryScope(directory);
+
+        private sealed class DirectoryScope : IDisposable
+        {
+            private readonly string? _was;
+
+            internal DirectoryScope(string directory)
+            {
+                _was = Scoped.Value;
+                Scoped.Value = directory;
+            }
+
+            // Restores rather than clears, so a nested scope — a single case
+            // pointing the log somewhere unwritable inside a class that already
+            // has one — puts the class's directory back rather than dropping
+            // the whole flow to the environment variable.
+            public void Dispose() => Scoped.Value = _was;
+        }
 
         // Excluded from coverage: reads the real user profile. Every test runs
         // with CLAUDE_BUDDY_LOG_DIR pointed at a scratch directory, which is the
